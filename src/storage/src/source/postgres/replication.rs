@@ -101,8 +101,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
-use tokio::sync::{mpsc, watch};
-use tokio::time::Instant;
+use tokio::sync::watch;
 use tracing::trace;
 
 use crate::metrics::source::postgres::PgSourceMetrics;
@@ -122,10 +121,13 @@ pub(super) use stream::ensure_replication_prerequisites;
 use decode::{ExtractMode, TxEvent, extract_transaction};
 use schema::{SchemaValidationError, spawn_schema_validator};
 use stream::raw_stream;
-use truncate::{JobMsg, RetractionJob, Tail, replay_retraction, retraction_job};
+use truncate::{Replay, Retractions};
 
 /// A logical replication message from the server.
 type LogicalReplMsg = ReplicationMessage<LogicalReplicationMessage>;
+
+/// The data output ports of the replication operator, one per export.
+type DataOutputs = SharedFuel<MzOffset, CapacityContainerBuilder<Vec<(ReplData, MzOffset, Diff)>>>;
 
 /// The payload of a data port.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -441,7 +443,7 @@ pub(crate) fn render<'scope>(
                 futures::stream::poll_fn(move |cx| uppers.borrow_mut().as_mut().poll_next(cx))
             };
 
-            let (latest_uppers_tx, mut latest_uppers) = watch::channel(None);
+            let (latest_uppers_tx, latest_uppers) = watch::channel(None);
             let stream_result = raw_stream(
                 &config,
                 &connection,
@@ -504,25 +506,18 @@ pub(crate) fn render<'scope>(
             // creating excessive progress tracking traffic when there are multiple small
             // transactions ready to go.
             let mut data_upper = resume_lsn;
-            let export_ids: BTreeMap<usize, GlobalId> = table_info
-                .values()
-                .flat_map(|outputs| outputs.iter().map(|(idx, info)| (*idx, info.export_id)))
-                .collect();
-            let mut tails: BTreeMap<usize, Tail> = export_ids
-                .keys()
-                .map(|idx| (*idx, Tail::default()))
-                .collect();
-            // Retractions read back concurrently with the replication stream. Each job retains a
-            // capability at the LSN of its TRUNCATE until it completes.
-            let (job_tx, mut job_rx) = mpsc::channel::<(u64, JobMsg)>(16);
-            let mut jobs: BTreeMap<u64, RetractionJob> = BTreeMap::new();
-            let mut next_job_id = 0_u64;
-            // A job whose buffered updates are incomplete, waiting for the stream to be replayed.
-            let mut pending_replay: Option<(u64, MzOffset, Option<MzOffset>)> = None;
+            let mut retractions = Retractions::new(
+                &config,
+                &table_info,
+                truncate_retract,
+                tail_max,
+                latest_uppers,
+            );
+            // A retraction that waits for the replication stream to be replayed.
+            let mut pending_replay: Option<Replay> = None;
             loop {
-                if let Some((job_id, from, skip_tx)) = pending_replay.take() {
-                    let job = jobs.remove(&job_id).expect("known job");
-                    let started = Instant::now();
+                if let Some(replay) = pending_replay.take() {
+                    let from = replay.from();
                     // The slot accepts one connection, so the current stream must end first.
                     stream_slot = None;
                     let mut attempts = 0;
@@ -580,72 +575,31 @@ pub(crate) fn render<'scope>(
                         }
                     };
                     let stream = stream_slot.insert(Box::pin(new_stream.peekable()));
-                    let (transactions, replayed) = replay_retraction(
-                        stream.as_mut(),
-                        &job,
-                        from,
-                        skip_tx,
-                        data_upper,
-                        &metadata_client,
-                        &metrics,
-                        &connection.publication,
-                        &mut data_outputs,
-                    )
-                    .await?;
-                    tracing::info!(
-                        %id,
-                        "timely-{worker_id} retracted truncate of output {} at {}: replayed \
-                            {transactions} transactions from {from} to {data_upper}, {replayed} \
-                            updates, in {:?}, {:?} since truncate",
-                        job.output_index,
-                        job.lsn,
-                        started.elapsed(),
-                        job.started.elapsed(),
-                    );
+                    retractions
+                        .replay(
+                            replay,
+                            stream.as_mut(),
+                            data_upper,
+                            &metadata_client,
+                            &metrics,
+                            &connection.publication,
+                            &mut data_outputs,
+                        )
+                        .await?;
                 }
                 let stream = stream_slot.as_mut().expect("live replication stream");
                 let event = tokio::select! {
-                    Some((job_id, msg)) = job_rx.recv() => {
-                        let job = jobs.get_mut(&job_id).expect("job messages only for live jobs");
-                        match msg {
-                            JobMsg::Updates(updates) => {
-                                for (data, diff) in updates {
-                                    let update = (data, job.lsn, diff);
-                                    data_outputs.give(job.output_index, &job.cap, update).await;
-                                }
-                            }
-                            JobMsg::Done { snapshot, tail } => {
-                                let job = jobs.remove(&job_id).expect("known job");
-                                tracing::info!(
-                                    %id,
-                                    "timely-{worker_id} retracted truncate of output {} at {}: \
-                                        {snapshot} snapshot updates, {tail} tail updates, {:?}",
-                                    job.output_index,
-                                    job.lsn,
-                                    job.started.elapsed(),
-                                );
-                            }
-                            JobMsg::NeedsReplay { snapshot, from, skip_tx } => {
-                                tracing::info!(
-                                    %id,
-                                    "timely-{worker_id} truncate of output {} at {}: \
-                                        {snapshot} snapshot updates, replaying from {from}",
-                                    job.output_index,
-                                    job.lsn,
-                                );
-                                pending_replay = Some((job_id, from, skip_tx));
-                            }
-                            JobMsg::Failed(err) => {
-                                return Err(TransientError::from(anyhow::anyhow!(
-                                    "truncate retraction failed: {err}"
-                                )));
-                            }
-                        }
+                    msg = retractions.next_job_msg() => Err(msg),
+                    event = stream.next() => Ok(event),
+                };
+                let event = match event {
+                    Ok(Some(event)) => event,
+                    Ok(None) => break,
+                    Err(msg) => {
+                        pending_replay = retractions.on_job_msg(msg, &mut data_outputs).await?;
                         continue;
                     }
-                    event = stream.next() => event,
                 };
-                let Some(event) = event else { break };
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
                 match event {
@@ -699,11 +653,12 @@ pub(crate) fn render<'scope>(
                                                         .await;
                                                 }
                                             }
-                                            if truncate_retract {
-                                                if let Some(tail) = tails.get_mut(&output_index) {
-                                                    tail.push(&event, commit_lsn, diff, tail_max);
-                                                }
-                                            }
+                                            retractions.on_emit(
+                                                output_index,
+                                                &event,
+                                                commit_lsn,
+                                                diff,
+                                            );
                                             let update = (ReplData::Raw(event), commit_lsn, diff);
                                             data_outputs
                                                 .give(
@@ -715,7 +670,6 @@ pub(crate) fn render<'scope>(
                                         }
                                         TxEvent::Truncate(targets) => {
                                             for (output_index, info) in targets {
-                                                let cap = &data_cap_sets[output_index][0];
                                                 // A snapshot taken at `snapshot_lsn` already
                                                 // reflects a TRUNCATE at or below it, and the
                                                 // rewind cancels every update up to it. An entry
@@ -728,65 +682,15 @@ pub(crate) fn render<'scope>(
                                                 }) {
                                                     continue;
                                                 }
-                                                let tail = tails
-                                                    .get_mut(&output_index)
-                                                    .expect("tail per output");
-                                                if tail
-                                                    .base
-                                                    .is_some_and(|base| tail.complete_from(base))
-                                                {
-                                                    // An earlier TRUNCATE emptied the export, so
-                                                    // the tail alone describes its contents.
-                                                    for (event, _, diff) in tail.updates.iter() {
-                                                        let update = (
-                                                            ReplData::Raw(event.clone()),
-                                                            commit_lsn,
-                                                            -*diff,
-                                                        );
-                                                        data_outputs
-                                                            .give(output_index, cap, update)
-                                                            .await;
-                                                    }
-                                                    tail.reset(commit_lsn);
-                                                    continue;
-                                                }
-                                                let frozen = std::mem::take(tail);
-                                                tail.reset(commit_lsn);
-                                                let export_id = export_ids[&output_index];
-                                                let job_id = next_job_id;
-                                                next_job_id += 1;
-                                                let handle = mz_ore::task::spawn(
-                                                    || {
-                                                        format!(
-                                                            "pg_truncate_retraction:{export_id}"
-                                                        )
-                                                    },
-                                                    retraction_job(
-                                                        Arc::clone(&config.persist_clients),
-                                                        config.source_exports[&export_id]
-                                                            .storage_metadata
-                                                            .clone(),
-                                                        export_id,
-                                                        commit_lsn,
-                                                        frozen,
-                                                        latest_uppers.clone(),
-                                                        job_id,
-                                                        job_tx.clone(),
-                                                    ),
-                                                )
-                                                .abort_on_drop();
-                                                jobs.insert(
-                                                    job_id,
-                                                    RetractionJob {
+                                                retractions
+                                                    .on_truncate(
                                                         output_index,
-                                                        lsn: commit_lsn,
-                                                        cap: data_cap_sets[output_index]
-                                                            .delayed(&commit_lsn),
                                                         info,
-                                                        started: Instant::now(),
-                                                        _handle: handle,
-                                                    },
-                                                );
+                                                        commit_lsn,
+                                                        &data_cap_sets[output_index],
+                                                        &mut data_outputs,
+                                                    )
+                                                    .await;
                                             }
                                         }
                                     }
@@ -895,19 +799,7 @@ pub(crate) fn render<'scope>(
                 let will_yield = stream.as_mut().peek().now_or_never().is_none();
                 if will_yield {
                     trace!(%id, "timely-{worker_id} yielding at lsn={data_upper}");
-                    if latest_uppers.has_changed().unwrap_or(false) {
-                        if let Some(uppers) = &*latest_uppers.borrow_and_update() {
-                            for (output_index, tail) in tails.iter_mut() {
-                                let upper = uppers
-                                    .exports
-                                    .get(&export_ids[output_index])
-                                    .and_then(|upper| upper.as_option());
-                                if let Some(upper) = upper {
-                                    tail.trim(*upper);
-                                }
-                            }
-                        }
-                    }
+                    retractions.on_resume_uppers();
                     rewinds.retain(|_, req| data_upper <= req.snapshot_lsn);
                     // A port with a pending rewind must stay at the minimum capability since
                     // negated rewind data for its export is emitted at offset 0.
