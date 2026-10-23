@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::crd::{ManagedResource, MaterializeCertSpec, new_resource_id};
+use crate::crd::{ConsoleAppearance, ManagedResource, MaterializeCertSpec, new_resource_id};
 use mz_server_core::listeners::AuthenticatorKind;
 
 pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
@@ -185,6 +185,9 @@ pub mod v1alpha1 {
         pub balancerd_externally_scaled: Option<bool>,
         /// Number of console pods to create.
         pub console_replicas: Option<i32>,
+        /// Appearance overrides for this instance's console.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub console_appearance: Option<ConsoleAppearance>,
 
         /// Name of the kubernetes service account to use.
         /// If not set, we will create one with the same name as this Materialize object.
@@ -875,6 +878,7 @@ pub mod v1alpha1 {
                     balancerd_replicas: value.spec.balancerd_replicas,
                     balancerd_externally_scaled: value.spec.balancerd_externally_scaled,
                     console_replicas: value.spec.console_replicas,
+                    console_appearance: value.spec.console_appearance,
                     service_account_name: value.spec.service_account_name,
                     service_account_annotations: value.spec.service_account_annotations,
                     service_account_labels: value.spec.service_account_labels,
@@ -1007,6 +1011,12 @@ pub mod v1alpha1 {
             skip_serializing_if = "Option::is_none"
         )]
         pub console_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub console_appearance: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -1209,6 +1219,7 @@ pub mod v1alpha1 {
                 balancerd_replicas,
                 balancerd_externally_scaled,
                 console_replicas,
+                console_appearance,
                 service_account_name,
                 service_account_annotations,
                 service_account_labels,
@@ -1245,6 +1256,7 @@ pub mod v1alpha1 {
                 balancerd_replicas: present_opt(balancerd_replicas),
                 balancerd_externally_scaled: present_opt(balancerd_externally_scaled),
                 console_replicas: present_opt(console_replicas),
+                console_appearance: present_opt(console_appearance),
                 service_account_name: present_opt(service_account_name),
                 service_account_annotations: present_opt(service_account_annotations),
                 service_account_labels: present_opt(service_account_labels),
@@ -1332,6 +1344,7 @@ pub mod v1alpha1 {
                 balancerd_replicas,
                 balancerd_externally_scaled,
                 console_replicas,
+                console_appearance,
                 service_account_name,
                 service_account_annotations,
                 service_account_labels,
@@ -1365,6 +1378,7 @@ pub mod v1alpha1 {
                 balancerd_replicas,
                 balancerd_externally_scaled,
                 console_replicas,
+                console_appearance,
                 service_account_name,
                 service_account_annotations,
                 service_account_labels,
@@ -1513,6 +1527,11 @@ pub mod v1 {
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
         pub console_replicas: Option<i32>,
+        /// Appearance overrides for this instance's console.
+        ///
+        /// This field is excluded from the rollout hash and changes will not trigger a rollout.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub console_appearance: Option<ConsoleAppearance>,
 
         /// Name of the kubernetes service account to use.
         /// If not set, we will create one with the same name as this Materialize object.
@@ -1651,6 +1670,7 @@ pub mod v1 {
                 balancerd_replicas: None,
                 balancerd_externally_scaled: None,
                 console_replicas: None,
+                console_appearance: None,
                 service_account_name: self.spec.service_account_name.clone(),
                 service_account_annotations: self.spec.service_account_annotations.clone(),
                 service_account_labels: self.spec.service_account_labels.clone(),
@@ -2129,6 +2149,7 @@ pub mod v1 {
                     balancerd_replicas: value.spec.balancerd_replicas,
                     balancerd_externally_scaled: value.spec.balancerd_externally_scaled,
                     console_replicas: value.spec.console_replicas,
+                    console_appearance: value.spec.console_appearance,
                     service_account_name: value.spec.service_account_name,
                     service_account_annotations,
                     service_account_labels: value.spec.service_account_labels,
@@ -2284,6 +2305,12 @@ pub mod v1 {
             skip_serializing_if = "Option::is_none"
         )]
         pub console_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub console_appearance: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -2467,6 +2494,7 @@ pub mod v1 {
                 balancerd_replicas,
                 balancerd_externally_scaled,
                 console_replicas,
+                console_appearance,
                 service_account_name,
                 service_account_annotations,
                 service_account_labels,
@@ -2500,6 +2528,7 @@ pub mod v1 {
                 balancerd_replicas: present_opt(balancerd_replicas),
                 balancerd_externally_scaled: present_opt(balancerd_externally_scaled),
                 console_replicas: present_opt(console_replicas),
+                console_appearance: present_opt(console_appearance),
                 service_account_name: present_opt(service_account_name),
                 service_account_annotations: present_opt(service_account_annotations),
                 service_account_labels: present_opt(service_account_labels),
@@ -2584,6 +2613,7 @@ pub mod v1 {
                 balancerd_replicas,
                 balancerd_externally_scaled,
                 console_replicas,
+                console_appearance,
                 service_account_name,
                 service_account_annotations,
                 service_account_labels,
@@ -2628,6 +2658,7 @@ pub mod v1 {
                 balancerd_replicas,
                 balancerd_externally_scaled,
                 console_replicas,
+                console_appearance,
                 service_account_name,
                 service_account_annotations,
                 service_account_labels,
@@ -2863,6 +2894,7 @@ mod tests {
 
     use super::v1alpha1::{Materialize, MaterializeSpec, MaterializeStatus};
     use super::{DEFAULT_ROLLOUT_REQUEST_TIMEOUT, FORCE_ROLLOUT_ANNOTATION, RolloutRequestTimeout};
+    use crate::crd::ConsoleAppearance;
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
@@ -3593,5 +3625,32 @@ mod tests {
             assert!(!field_value.is_null(), "unexpected null for {key}");
         }
         assert!(!value.as_object().unwrap().contains_key("status"));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `sha256_compress` on OS `linux`
+    fn console_appearance_does_not_affect_the_rollout_hash() {
+        // Appearance reaches only the console deployment, so it must not roll
+        // environmentd.
+        let mut mz = super::v1::Materialize {
+            spec: super::v1::MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+
+        // An unset appearance serializes away entirely, so instances that
+        // don't configure one hash the same as they did before the field
+        // existed and are not rolled by adopting a new operator.
+        let spec = serde_json::to_value(&mz.spec).unwrap();
+        assert!(!spec.as_object().unwrap().contains_key("consoleAppearance"));
+
+        let hash = mz.generate_rollout_hash();
+        mz.spec.console_appearance = Some(ConsoleAppearance {
+            display_name: Some("prod".to_owned()),
+        });
+        assert_eq!(mz.generate_rollout_hash(), hash);
     }
 }
