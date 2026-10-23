@@ -1,7 +1,7 @@
 # With emit_execution_time_notice on, a statement's execution time arrives as a
 # notice with code MZ012 before the statement's CommandComplete, or before the
 # PortalSuspended of a portal executed in steps. The detail's `kind` says where
-# the measured interval ends.
+# the measured interval ends, or with `staged` that a later commit still has work.
 
 # Durations vary between runs.
 replace
@@ -33,7 +33,7 @@ Query {"query": "INSERT INTO t VALUES (1), (2)"}
 until err_field_typs=CD
 ReadyForQuery
 ----
-NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}]}
 CommandComplete {"tag":"INSERT 0 2"}
 ReadyForQuery {"status":"I"}
 
@@ -50,7 +50,7 @@ ReadyForQuery
 ----
 ParseComplete
 BindComplete
-NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}]}
 CommandComplete {"tag":"INSERT 0 1"}
 ReadyForQuery {"status":"I"}
 
@@ -70,12 +70,12 @@ ReadyForQuery
 ParseComplete
 BindComplete
 DataRow {"fields":["4"]}
-NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"a"}]}
 DataRow {"fields":["4"]}
-NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 
@@ -94,7 +94,7 @@ CommandComplete {"tag":"PREPARE"}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"a"}]}
 DataRow {"fields":["5"]}
-NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 
@@ -256,7 +256,7 @@ NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kin
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
 
-# Non-row writes report completed, including writes that read a table.
+# A write that reads a table is applied when it executes, so it reports completed.
 send
 Parse {"query": "UPDATE t SET a = a + 10"}
 Bind
@@ -291,6 +291,47 @@ ParseComplete
 BindComplete
 NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
 CommandComplete {"tag":"DELETE 12"}
+ReadyForQuery {"status":"I"}
+
+# DDL that a later commit applies reports staged: renames in a multi-statement
+# query only dry-run until its implicit commit, and a single DDL statement in
+# BEGIN ... COMMIT runs at COMMIT. A lone DDL statement runs when it executes.
+send
+Query {"query": "CREATE VIEW v AS SELECT 1"}
+Query {"query": "ALTER VIEW v RENAME TO v2"}
+Query {"query": "ALTER VIEW v2 RENAME TO v3; ALTER VIEW v3 RENAME TO v4"}
+Query {"query": "BEGIN"}
+Query {"query": "CREATE VIEW w AS SELECT 1"}
+Query {"query": "COMMIT"}
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"CREATE VIEW"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"ALTER VIEW"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"ALTER VIEW"}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"ALTER VIEW"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"CREATE VIEW"}
+ReadyForQuery {"status":"T"}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"COMMIT"}
 ReadyForQuery {"status":"I"}
 
 # Neither COPY direction emits an execution time notice.

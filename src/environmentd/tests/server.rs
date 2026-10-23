@@ -1773,7 +1773,7 @@ fn test_execution_time_result_ready_boundary() {
         "queries": [{"query": "INSERT INTO dt VALUES (1)"}]
     }));
     let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
-    assert_eq!(kinds, ["completed"], "{details:?}");
+    assert_eq!(kinds, ["staged"], "{details:?}");
     assert!(
         elapsed >= Duration::from_micros(micros(&details[0])) + HOLD,
         "{details:?}, request took {elapsed:?}"
@@ -1788,11 +1788,7 @@ fn test_execution_time_result_ready_boundary() {
         ]
     }));
     let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
-    assert_eq!(
-        kinds,
-        ["completed", "completed", "completed"],
-        "{details:?}"
-    );
+    assert_eq!(kinds, ["completed", "staged", "completed"], "{details:?}");
     assert!(micros(&details[2]) >= hold_micros, "{details:?}");
 
     // pgwire's simple query protocol commits before the statement's `CommandComplete` too.
@@ -1816,7 +1812,7 @@ fn test_execution_time_result_ready_boundary() {
         .map(|notice| serde_json::from_str(notice.detail().unwrap()).unwrap())
         .collect();
     let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
-    assert_eq!(kinds, ["completed"], "{details:?}");
+    assert_eq!(kinds, ["staged"], "{details:?}");
     assert!(
         elapsed >= Duration::from_micros(micros(&details[0])) + HOLD,
         "{details:?}, request took {elapsed:?}"

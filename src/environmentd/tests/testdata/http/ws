@@ -456,7 +456,8 @@ ws-text fixtiming=true
 {"type":"CommandComplete","payload":"SET"}
 {"type":"ReadyForQuery","payload":"I"}
 
-# Non-row statements report completed at result readiness, excluding implicit commit.
+# Non-row statements report completed at result readiness, excluding implicit commit,
+# and a write that leaves its rows to that commit reports staged.
 
 ws-text fixtiming=true
 {"queries": [{"query": "CREATE TABLE timing_t (a int)"}, {"query": "INSERT INTO timing_t VALUES (1)"}, {"query": "SELECT a FROM timing_t"}, {"query": "SELECT a FROM timing_t WHERE a < 0"}]}
@@ -465,7 +466,7 @@ ws-text fixtiming=true
 {"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
 {"type":"CommandComplete","payload":"CREATE TABLE"}
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
-{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
 {"type":"CommandComplete","payload":"INSERT 0 1"}
 {"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
@@ -487,7 +488,7 @@ ws-text fixtiming=true
 {"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
 {"type":"CommandComplete","payload":"BEGIN"}
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
-{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
 {"type":"CommandComplete","payload":"INSERT 0 1"}
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
 {"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
@@ -516,26 +517,27 @@ ws-text fixtiming=true
 {"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":["3"]}
-{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
 {"type":"CommandComplete","payload":"SELECT 1"}
 {"type":"ReadyForQuery","payload":"I"}
 
-# Each statement in a simple request reports its own result-ready boundary.
+# Each statement in a simple request reports its own result-ready boundary. The statements
+# after the write report staged too, because their transaction still holds it.
 
 ws-text fixtiming=true
 {"query": "INSERT INTO timing_t VALUES (4); SET application_name = 'timing2'; SELECT 1"}
 ----
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
-{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
 {"type":"CommandComplete","payload":"INSERT 0 1"}
 {"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
-{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
 {"type":"CommandComplete","payload":"SET"}
 {"type":"ParameterStatus","payload":{"name":"application_name","value":"timing2"}}
 {"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
 {"type":"Row","payload":["1"]}
-{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
 {"type":"CommandComplete","payload":"SELECT 1"}
 {"type":"ReadyForQuery","payload":"I"}
 
