@@ -1420,8 +1420,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 input_key_val,
             } => {
                 let input = expect_input(input);
-                // If `mfp` is non-trivial, we should apply it and produce a collection.
-                if mfp.is_identity() {
+                // With an input key, `mfp` reads the arrangement's (key, value) layout, so even an
+                // identity `mfp` must go through `as_collection_core` to reorder the columns.
+                if mfp.is_identity() && input_key_val.is_none() {
                     input
                 } else {
                     let (oks, errs) =
