@@ -20,6 +20,13 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.47.1
+*Released to Materialize Cloud: 2026-10-29* <br>
+*Released to Materialize Self-Managed: 2026-10-30* <br>
+
+### Bug Fixes {#v26.47.1-bug-fixes}
+- Fixed `DISTINCT ON` and per-group `LIMIT 1` queries returning no rows when an equality filter on a non-key column is applied on top of them, a regression present since v26.34.0.
+
 ## v26.47.0
 *Released to Materialize Cloud: 2026-10-22* <br>
 *Released to Materialize Self-Managed: 2026-10-23* <br>
