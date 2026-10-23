@@ -19,6 +19,7 @@ use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::response::ComputeResponse;
+use mz_controller_types::ClusterId;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_repr::Timestamp;
@@ -68,6 +69,32 @@ async fn protection_publication_installation_and_supersession() {
     }
 
     Box::pin(exercise_liveness()).await;
+}
+
+// Keep repeated catalog-control transactions out of the scenario's poll frame.
+fn set_publication_paused<'a>(
+    driver: &'a mut ReplicaEnactment,
+    catalog: &'a mut Catalog,
+    effects: &'a mut ReplicaEffects,
+    cluster: ClusterId,
+    build: &'a str,
+    paused: bool,
+) -> impl std::future::Future<Output = ()> + 'a {
+    Box::pin(async move {
+        driver
+            .transact(
+                catalog,
+                effects,
+                cluster,
+                build,
+                vec![Op::UpdateSystemConfiguration {
+                    name: "unsafe_pause_catalog_read_protection_publication".into(),
+                    value: mz_sql::session::vars::OwnedVarInput::Flat(paused.to_string()),
+                }],
+            )
+            .await
+            .unwrap();
+    })
 }
 
 async fn exercise_liveness() {
@@ -280,19 +307,15 @@ async fn exercise_liveness() {
     );
     let acquisition_due = Instant::now();
     driver.publication_clock.as_mut().unwrap().due = acquisition_due;
-    driver
-        .transact(
-            &mut catalog,
-            &mut effects,
-            cluster,
-            &build,
-            vec![Op::UpdateSystemConfiguration {
-                name: "unsafe_pause_catalog_read_protection_publication".into(),
-                value: mz_sql::session::vars::OwnedVarInput::Flat("true".into()),
-            }],
-        )
-        .await
-        .unwrap();
+    set_publication_paused(
+        &mut driver,
+        &mut catalog,
+        &mut effects,
+        cluster,
+        &build,
+        true,
+    )
+    .await;
     let mut holds = driver
         .acquire(
             &mut catalog,
@@ -343,19 +366,15 @@ async fn exercise_liveness() {
         );
         assert!(!driver.publication_clock.as_ref().unwrap().due());
     }
-    driver
-        .transact(
-            &mut catalog,
-            &mut effects,
-            cluster,
-            &build,
-            vec![Op::UpdateSystemConfiguration {
-                name: "unsafe_pause_catalog_read_protection_publication".into(),
-                value: mz_sql::session::vars::OwnedVarInput::Flat("false".into()),
-            }],
-        )
-        .await
-        .unwrap();
+    set_publication_paused(
+        &mut driver,
+        &mut catalog,
+        &mut effects,
+        cluster,
+        &build,
+        false,
+    )
+    .await;
     driver.configure_publication(
         catalog
             .system_config()
@@ -509,19 +528,15 @@ async fn exercise_liveness() {
     );
     assert!(!driver.protection.publication_pending());
     assert!(!driver.publication_clock.as_ref().unwrap().due());
-    driver
-        .transact(
-            &mut catalog,
-            &mut effects,
-            cluster,
-            &build,
-            vec![Op::UpdateSystemConfiguration {
-                name: "unsafe_pause_catalog_read_protection_publication".into(),
-                value: mz_sql::session::vars::OwnedVarInput::Flat("false".into()),
-            }],
-        )
-        .await
-        .unwrap();
+    set_publication_paused(
+        &mut driver,
+        &mut catalog,
+        &mut effects,
+        cluster,
+        &build,
+        false,
+    )
+    .await;
     driver.publication_clock.as_mut().unwrap().due = Instant::now();
     driver
         .publish(&mut catalog, &mut effects, cluster, &build, true, None)
