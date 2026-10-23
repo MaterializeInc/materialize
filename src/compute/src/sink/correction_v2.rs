@@ -143,12 +143,12 @@
 //! sub-chains grows with the number of distinct times, so we instead materialize the affected
 //! updates, advance their times, and sort and consolidate them in bounded runs that we then merge.
 
+use std::cell::Cell;
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
-use std::sync::atomic::{self, AtomicUsize};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 use columnar::bytes::indexed;
 use columnar::{Columnar, Index, Len, Ref};
@@ -165,7 +165,7 @@ use timely::PartialOrder;
 use timely::container::PushInto;
 use timely::progress::Antichain;
 
-use crate::sink::correction::{ChannelLogging, SizeMetrics};
+use crate::sink::correction::{CorrectionLogging, SizeMetrics};
 
 /// Convenient alias for use in data trait bounds.
 ///
@@ -283,7 +283,7 @@ impl<D: Data> CorrectionV2<D> {
     pub fn new(
         metrics: SinkMetrics,
         worker_metrics: SinkWorkerMetrics,
-        logging: Option<ChannelLogging>,
+        logging: Option<CorrectionLogging>,
         chain_proportionality: f64,
         chunk_size: usize,
     ) -> Self {
@@ -890,28 +890,25 @@ impl<D: Data> Drop for CorrectionV2<D> {
 #[derive(Clone, Debug)]
 struct Accounting {
     /// The totals, shared with every clone.
-    totals: Arc<Totals>,
+    totals: Rc<Totals>,
     /// Introspection logging, absent when the sink is not logging.
-    logging: Option<ChannelLogging>,
+    logging: Option<CorrectionLogging>,
 }
 
 /// The running totals behind an [`Accounting`].
-///
-/// Atomics because the buffer must stay `Send`, not because the counters are contended: the sink
-/// touches its buffer from one thread at a time, which is why `Relaxed` suffices.
 #[derive(Debug, Default)]
 struct Totals {
     /// Number of updates the buffer holds.
-    records: AtomicUsize,
+    records: Cell<usize>,
     /// Serialized size of what the buffer holds, in bytes.
-    size: AtomicUsize,
+    size: Cell<usize>,
     /// Number of allocations holding it: one per chunk, plus the staging vector while it has one.
-    allocations: AtomicUsize,
+    allocations: Cell<usize>,
 }
 
 impl Accounting {
     /// Construct accounting that reports to the given logging, if any.
-    fn new(logging: Option<ChannelLogging>) -> Self {
+    fn new(logging: Option<CorrectionLogging>) -> Self {
         Self {
             totals: Default::default(),
             logging,
@@ -923,23 +920,20 @@ impl Accounting {
     /// The reported capacity equals the size: chunk bodies are exactly sized when minted, and the
     /// staging vector's slack is bounded by one chunk's worth of updates and not tracked.
     fn totals(&self) -> (usize, SizeMetrics) {
-        let size = self.totals.size.load(atomic::Ordering::Relaxed);
+        let size = self.totals.size.get();
         let metrics = SizeMetrics {
             size,
             capacity: size,
-            allocations: self.totals.allocations.load(atomic::Ordering::Relaxed),
+            allocations: self.totals.allocations.get(),
         };
-        (self.totals.records.load(atomic::Ordering::Relaxed), metrics)
+        (self.totals.records.get(), metrics)
     }
 
     /// Account for a chain the buffer now holds.
     fn chain_created<D: Data>(&self, chain: &Chain<D>) {
-        let relaxed = atomic::Ordering::Relaxed;
-        self.totals.records.fetch_add(chain.update_count, relaxed);
-        self.totals.size.fetch_add(chain.size, relaxed);
-        self.totals
-            .allocations
-            .fetch_add(chain.chunks.len(), relaxed);
+        add(&self.totals.records, chain.update_count);
+        add(&self.totals.size, chain.size);
+        add(&self.totals.allocations, chain.chunks.len());
         if let Some(logging) = &self.logging {
             logging.chain_created(chain.update_count);
         }
@@ -1010,10 +1004,9 @@ impl Accounting {
 ///
 /// Panics if the result would be negative, which means a retirement was never matched by an
 /// announcement.
-fn add_signed(counter: &AtomicUsize, diff: isize) {
-    let relaxed = atomic::Ordering::Relaxed;
+fn add_signed(counter: &Cell<usize>, diff: isize) {
     if diff >= 0 {
-        counter.fetch_add(usize::try_from(diff).expect("non-negative"), relaxed);
+        add(counter, usize::try_from(diff).expect("non-negative"));
     } else {
         sub_checked(counter, usize::try_from(-diff).expect("positive"));
     }
@@ -1025,9 +1018,14 @@ fn add_signed(counter: &AtomicUsize, diff: isize) {
 ///
 /// Panics if the result would be negative, which means a retirement was never matched by an
 /// announcement.
-fn sub_checked(counter: &AtomicUsize, sub: usize) {
-    let prev = counter.fetch_sub(sub, atomic::Ordering::Relaxed);
-    assert!(prev >= sub, "total retired below zero");
+fn sub_checked(counter: &Cell<usize>, sub: usize) {
+    let next = counter.get().checked_sub(sub);
+    counter.set(next.expect("total retired below zero"));
+}
+
+/// Add `add` to `counter`.
+fn add(counter: &Cell<usize>, add: usize) {
+    counter.set(counter.get() + add);
 }
 
 /// A bucket of `Chain`s, for use in a [`BucketChain`].
@@ -2155,7 +2153,13 @@ mod tests {
     use mz_persist_client::metrics::Metrics;
     use mz_repr::{Diff, Timestamp};
 
+    use std::cell::RefCell;
+    use std::time::{Duration, Instant};
+
+    use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
+
     use super::*;
+    use crate::logging::compute::Logger as ComputeLogger;
     use crate::sink::correction::CorrectionV1;
 
     #[mz_ore::test]
@@ -2645,20 +2649,66 @@ mod tests {
         );
     }
 
+    /// Differential events logged by a [`CorrectionLogging`] built with [`recording_logging`].
+    type EventLog = Rc<RefCell<Vec<DifferentialEvent>>>;
+
+    /// Construct logging for operator 0 that records its differential events.
+    ///
+    /// Events reach the log when the returned logger is flushed.
+    fn recording_logging() -> (
+        CorrectionLogging,
+        differential_dataflow::logging::Logger,
+        EventLog,
+    ) {
+        let events = EventLog::default();
+        let sink = Rc::clone(&events);
+        let differential_logger = timely::logging_core::Logger::<DifferentialEventBuilder>::new(
+            Instant::now(),
+            Duration::ZERO,
+            move |_time, data| {
+                if let Some(data) = data.take() {
+                    sink.borrow_mut().extend(data.into_iter().map(|(_, e)| e));
+                }
+            },
+        )
+        .into_typed();
+        let compute_logger = ComputeLogger::new(Instant::now(), Duration::ZERO, |_, _| {});
+        let logging =
+            CorrectionLogging::new(compute_logger, differential_logger.clone(), 0, vec![0]);
+        (logging, differential_logger, events)
+    }
+
+    /// Return the net `(batches, records)` in `events`.
+    fn net_chains(events: &[DifferentialEvent]) -> (isize, isize) {
+        let (mut batches, mut records) = (0_isize, 0_isize);
+        for event in events {
+            match event {
+                DifferentialEvent::Batch(e) => {
+                    batches += 1;
+                    records += isize::try_from(e.length).expect("fits");
+                }
+                DifferentialEvent::Drop(e) => {
+                    batches -= 1;
+                    records -= isize::try_from(e.length).expect("fits");
+                }
+                _ => {}
+            }
+        }
+        (batches, records)
+    }
+
     /// Every chain announced to introspection is retired by the time the buffer drops, the
     /// stage's included, whether or not the stage still holds updates.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // slow under Miri
     fn logged_chains_balance_on_drop() {
-        use crate::sink::correction::LoggingEvent;
-
         for staged in [false, true] {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let (logging, differential_logger, events) = recording_logging();
             let sink_metrics = sink_metrics();
             let mut v2 = CorrectionV2::<String>::new(
                 sink_metrics.clone(),
                 sink_metrics.for_worker(0),
-                Some(ChannelLogging::new(tx)),
+                Some(logging.clone()),
                 3.0,
                 // One byte ships every insert, one mebibyte ships none of them.
                 if staged { 1 << 20 } else { 1 },
@@ -2667,24 +2717,46 @@ mod tests {
                 v2.insert(&mut vec![(format!("{t}"), Timestamp::from(t), Diff::ONE)]);
             }
             assert_eq!(v2.stage.data.is_empty(), !staged);
-            drop(v2);
 
-            let (mut batches, mut records) = (0_isize, 0_isize);
-            while let Ok(event) = rx.try_recv() {
-                match event {
-                    LoggingEvent::ChainCreated(n) => {
-                        batches += 1;
-                        records += isize::try_from(n).expect("fits");
-                    }
-                    LoggingEvent::ChainDropped(n) => {
-                        batches -= 1;
-                        records -= isize::try_from(n).expect("fits");
-                    }
-                    _ => {}
-                }
-            }
-            assert_eq!((batches, records), (0, 0), "staged={staged}");
+            differential_logger.flush();
+            let (batches, records) = net_chains(&events.borrow());
+            assert!(batches > 0, "staged={staged}");
+            assert_eq!(records, 100, "staged={staged}");
+
+            // The buffer balances its chains itself, so the logger has nothing left to retract.
+            drop(v2);
+            differential_logger.flush();
+            assert_eq!(net_chains(&events.borrow()), (0, 0), "staged={staged}");
+            let logged = events.borrow().len();
+            drop(logging);
+            differential_logger.flush();
+            assert_eq!(events.borrow().len(), logged, "staged={staged}");
         }
+    }
+
+    /// Dropping the last logging handle retracts the chains that were logged but not dropped.
+    #[mz_ore::test]
+    fn logging_retracts_unbalanced_chains_on_drop() {
+        let (logging, differential_logger, events) = recording_logging();
+        let clone = logging.clone();
+        logging.chain_created(3);
+        clone.chain_created(4);
+        clone.chain_created(5);
+        logging.chain_dropped(4);
+        differential_logger.flush();
+        assert_eq!(net_chains(&events.borrow()), (2, 8));
+
+        drop(logging);
+        differential_logger.flush();
+        assert_eq!(
+            net_chains(&events.borrow()),
+            (2, 8),
+            "a handle is still live"
+        );
+
+        drop(clone);
+        differential_logger.flush();
+        assert_eq!(net_chains(&events.borrow()), (0, 0));
     }
 
     /// Reads must not observe updates at or beyond their `upper`, even when the `upper` is not

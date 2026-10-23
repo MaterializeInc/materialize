@@ -10,10 +10,11 @@
 //! The `Correction` data structure used by `persist_sink::write_batches` to stash updates before
 //! they are written into batches.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::num::NonZeroIsize;
 use std::ops::{AddAssign, Bound, RangeBounds, SubAssign};
+use std::rc::Rc;
 
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::logging::{BatchEvent, DropEvent};
@@ -27,7 +28,6 @@ use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
 use timely::PartialOrder;
 use timely::progress::Antichain;
-use tokio::sync::mpsc;
 
 use crate::logging::compute::{
     ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
@@ -54,7 +54,7 @@ impl<D: Data> Correction<D> {
     pub fn new(
         metrics: SinkMetrics,
         worker_metrics: SinkWorkerMetrics,
-        logging: Option<ChannelLogging>,
+        logging: Option<CorrectionLogging>,
         config: &ConfigSet,
     ) -> Self {
         if ENABLE_CORRECTION_V2.get(config) {
@@ -100,10 +100,8 @@ impl<D: Data> Correction<D> {
         }
     }
 
-    /// Consolidate the updates before the given `upper`.
-    ///
-    /// This is the expensive half of [`Correction::updates_before`], split out so callers that
-    /// must not run unbounded CPU work inline can perform it elsewhere.
+    /// Consolidate the updates before the given `upper`, for reading them with
+    /// [`Correction::consolidated_updates_before`].
     pub fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
         match self {
             Self::V1(c) => c.consolidate_before(upper),
@@ -563,90 +561,79 @@ impl AddAssign<Self> for SizeMetrics {
     }
 }
 
-/// A logging event sent from the Tokio task back to the Timely thread.
-#[derive(Debug)]
-pub enum LoggingEvent {
-    /// A chain with the given number of updates was created.
-    ChainCreated(usize),
-    /// A chain with the given number of updates was dropped.
-    ChainDropped(usize),
-    /// The heap size of the correction buffer changed by the given amount.
-    SizeDiff(NonZeroIsize),
-    /// The heap capacity of the correction buffer changed by the given amount.
-    CapacityDiff(NonZeroIsize),
-    /// The number of allocations of the correction buffer changed by the given amount.
-    AllocationsDiff(NonZeroIsize),
-}
-
-/// Channel-based logging for corrections on a Tokio task. `Send`-safe.
+/// Introspection logging for a correction buffer, applied directly to the Timely loggers.
 ///
-/// Sends logging events to the Timely thread, where they are applied to the real `Logging`
-/// instance. This allows corrections on the Tokio task to participate in introspection logging
-/// without holding `Rc<RefCell<..>>`.
+/// Cloning yields another handle to the same logger. The operator is registered for heap size
+/// logging on construction. When the last handle drops, everything logged through the handles
+/// that is not yet balanced is retracted and the operator is deregistered.
+///
+/// Handles are not `Send`, so the correction buffers holding them must stay on the Timely worker
+/// thread that created them.
 #[derive(Clone, Debug)]
-pub struct ChannelLogging(mpsc::UnboundedSender<LoggingEvent>);
+pub struct CorrectionLogging(Rc<CorrectionLogger>);
 
-impl ChannelLogging {
-    /// Construct a new `ChannelLogging` sending events on the given channel.
-    pub fn new(tx: mpsc::UnboundedSender<LoggingEvent>) -> Self {
-        Self(tx)
+impl CorrectionLogging {
+    /// Construct logging for the operator with the given ID and address.
+    pub fn new(
+        compute_logger: ComputeLogger,
+        differential_logger: differential_dataflow::logging::Logger,
+        operator_id: usize,
+        address: Vec<usize>,
+    ) -> Self {
+        Self(Rc::new(CorrectionLogger::new(
+            compute_logger,
+            differential_logger,
+            operator_id,
+            address,
+        )))
     }
 
     /// Report the creation of a chain with the given number of updates.
     pub fn chain_created(&self, updates: usize) {
-        let _ = self.0.send(LoggingEvent::ChainCreated(updates));
+        self.0.chain_created(updates);
     }
 
     /// Report the dropping of a chain with the given number of updates.
     pub fn chain_dropped(&self, updates: usize) {
-        let _ = self.0.send(LoggingEvent::ChainDropped(updates));
+        self.0.chain_dropped(updates);
     }
 
     /// Report a change in heap size by the given amount.
     pub fn report_size_diff(&self, diff: isize) {
-        if let Some(diff) = NonZeroIsize::new(diff) {
-            let _ = self.0.send(LoggingEvent::SizeDiff(diff));
-        }
+        self.0.report_size_diff(diff);
     }
 
     /// Report a change in heap capacity by the given amount.
     pub fn report_capacity_diff(&self, diff: isize) {
-        if let Some(diff) = NonZeroIsize::new(diff) {
-            let _ = self.0.send(LoggingEvent::CapacityDiff(diff));
-        }
+        self.0.report_capacity_diff(diff);
     }
 
     /// Report a change in the number of allocations by the given amount.
     pub fn report_allocations_diff(&self, diff: isize) {
-        if let Some(diff) = NonZeroIsize::new(diff) {
-            let _ = self.0.send(LoggingEvent::AllocationsDiff(diff));
-        }
+        self.0.report_allocations_diff(diff);
     }
 }
 
-/// State for correction buffer logging on the Timely thread.
-///
-/// Drains [`LoggingEvent`]s sent by [`ChannelLogging`] from the Tokio task and applies them
-/// to the compute and differential loggers. Emits `ArrangementHeapSizeOperator` on construction
-/// and `ArrangementHeapSizeOperatorDrop` on drop.
+/// The logger shared by the [`CorrectionLogging`] handles.
 // TODO: Correction buffer logging currently reuses the arrangement batch and size logging. This
 // isn't strictly correct as a correction buffer is not an arrangement. Consider refactoring this
 // to be about "operator sizes" instead.
-pub(super) struct CorrectionLogger {
+struct CorrectionLogger {
     compute_logger: ComputeLogger,
     differential_logger: differential_dataflow::logging::Logger,
     operator_id: usize,
-    rx: mpsc::UnboundedReceiver<LoggingEvent>,
+    // The counters are `Cell`s so that logging takes `&self` and holds no borrow while the
+    // Timely loggers run.
     /// Net number of batches logged (BatchEvent - DropEvent).
-    net_batches: isize,
+    net_batches: Cell<isize>,
     /// Net number of records logged across all batch/drop/merge events.
-    net_records: isize,
+    net_records: Cell<isize>,
     /// Cumulative heap size delta, for retraction on drop.
-    net_size: isize,
+    net_size: Cell<isize>,
     /// Cumulative heap capacity delta, for retraction on drop.
-    net_capacity: isize,
+    net_capacity: Cell<isize>,
     /// Cumulative heap allocations delta, for retraction on drop.
-    net_allocations: isize,
+    net_allocations: Cell<isize>,
 }
 
 impl fmt::Debug for CorrectionLogger {
@@ -658,12 +645,11 @@ impl fmt::Debug for CorrectionLogger {
 }
 
 impl CorrectionLogger {
-    pub fn new(
+    fn new(
         compute_logger: ComputeLogger,
         differential_logger: differential_dataflow::logging::Logger,
         operator_id: usize,
         address: Vec<usize>,
-        rx: mpsc::UnboundedReceiver<LoggingEvent>,
     ) -> Self {
         compute_logger.log(&ComputeEvent::ArrangementHeapSizeOperator(
             ArrangementHeapSizeOperator {
@@ -676,87 +662,97 @@ impl CorrectionLogger {
             compute_logger,
             differential_logger,
             operator_id,
-            rx,
-            net_batches: 0,
-            net_records: 0,
-            net_size: 0,
-            net_capacity: 0,
-            net_allocations: 0,
+            net_batches: Cell::new(0),
+            net_records: Cell::new(0),
+            net_size: Cell::new(0),
+            net_capacity: Cell::new(0),
+            net_allocations: Cell::new(0),
         }
     }
 
-    /// Drain logging events from the channel and apply them locally.
-    pub fn apply_events(&mut self) {
-        use LoggingEvent::*;
-
-        while let Ok(event) = self.rx.try_recv() {
-            match event {
-                ChainCreated(length) => {
-                    self.net_batches += 1;
-                    self.net_records += isize::try_from(length).expect("must fit");
-                    self.differential_logger.log(BatchEvent {
-                        operator: self.operator_id,
-                        length,
-                    });
-                }
-                ChainDropped(length) => {
-                    self.net_batches -= 1;
-                    self.net_records -= isize::try_from(length).expect("must fit");
-                    self.differential_logger.log(DropEvent {
-                        operator: self.operator_id,
-                        length,
-                    });
-                }
-                SizeDiff(delta_size) => {
-                    self.net_size += delta_size.get();
-                    self.compute_logger.log(&ComputeEvent::ArrangementHeapSize(
-                        ArrangementHeapSize {
-                            operator_id: self.operator_id,
-                            delta_size: delta_size.get(),
-                        },
-                    ));
-                }
-                CapacityDiff(delta_capacity) => {
-                    self.net_capacity += delta_capacity.get();
-                    self.compute_logger
-                        .log(&ComputeEvent::ArrangementHeapCapacity(
-                            ArrangementHeapCapacity {
-                                operator_id: self.operator_id,
-                                delta_capacity: delta_capacity.get(),
-                            },
-                        ));
-                }
-                AllocationsDiff(delta_allocations) => {
-                    self.net_allocations += delta_allocations.get();
-                    self.compute_logger
-                        .log(&ComputeEvent::ArrangementHeapAllocations(
-                            ArrangementHeapAllocations {
-                                operator_id: self.operator_id,
-                                delta_allocations: delta_allocations.get(),
-                            },
-                        ));
-                }
-            }
-        }
+    fn chain_created(&self, length: usize) {
+        add_cell(&self.net_batches, 1);
+        add_cell(
+            &self.net_records,
+            isize::try_from(length).expect("must fit"),
+        );
+        self.differential_logger.log(BatchEvent {
+            operator: self.operator_id,
+            length,
+        });
     }
+
+    fn chain_dropped(&self, length: usize) {
+        add_cell(&self.net_batches, -1);
+        add_cell(
+            &self.net_records,
+            -isize::try_from(length).expect("must fit"),
+        );
+        self.differential_logger.log(DropEvent {
+            operator: self.operator_id,
+            length,
+        });
+    }
+
+    fn report_size_diff(&self, delta_size: isize) {
+        if delta_size == 0 {
+            return;
+        }
+        add_cell(&self.net_size, delta_size);
+        self.compute_logger
+            .log(&ComputeEvent::ArrangementHeapSize(ArrangementHeapSize {
+                operator_id: self.operator_id,
+                delta_size,
+            }));
+    }
+
+    fn report_capacity_diff(&self, delta_capacity: isize) {
+        if delta_capacity == 0 {
+            return;
+        }
+        add_cell(&self.net_capacity, delta_capacity);
+        self.compute_logger
+            .log(&ComputeEvent::ArrangementHeapCapacity(
+                ArrangementHeapCapacity {
+                    operator_id: self.operator_id,
+                    delta_capacity,
+                },
+            ));
+    }
+
+    fn report_allocations_diff(&self, delta_allocations: isize) {
+        if delta_allocations == 0 {
+            return;
+        }
+        add_cell(&self.net_allocations, delta_allocations);
+        self.compute_logger
+            .log(&ComputeEvent::ArrangementHeapAllocations(
+                ArrangementHeapAllocations {
+                    operator_id: self.operator_id,
+                    delta_allocations,
+                },
+            ));
+    }
+}
+
+/// Add `diff` to the counter in `cell`.
+fn add_cell(cell: &Cell<isize>, diff: isize) {
+    cell.set(cell.get() + diff);
 }
 
 impl Drop for CorrectionLogger {
     fn drop(&mut self) {
-        // Drain any events that arrived before the drop. Note that the Tokio task
-        // may still be running (abort is async), so some events may not have arrived
-        // yet. We retract any remaining batch/record counts below.
-        self.apply_events();
-
         // Retract any outstanding batch and record counts that weren't balanced by
-        // ChainDropped events. This handles the case where the Tokio task is aborted
-        // and its Correction destructors haven't run yet (abort is async).
+        // `chain_dropped` calls, so the operator leaves no introspection state behind even if
+        // a buffer did not retire all of its chains.
         //
         // Each DropEvent retracts one batch and `length` records, so we emit one per
         // outstanding batch, with the first carrying all outstanding records.
-        for i in 0..self.net_batches {
+        let net_batches = self.net_batches.get();
+        let net_records = self.net_records.get();
+        for i in 0..net_batches {
             let length = if i == 0 {
-                usize::try_from(self.net_records).unwrap_or(0)
+                usize::try_from(net_records).unwrap_or(0)
             } else {
                 0
             };
@@ -767,28 +763,31 @@ impl Drop for CorrectionLogger {
         }
 
         // Retract any outstanding heap size/capacity/allocations deltas.
-        if self.net_size != 0 {
+        let net_size = self.net_size.get();
+        if net_size != 0 {
             self.compute_logger
                 .log(&ComputeEvent::ArrangementHeapSize(ArrangementHeapSize {
                     operator_id: self.operator_id,
-                    delta_size: -self.net_size,
+                    delta_size: -net_size,
                 }));
         }
-        if self.net_capacity != 0 {
+        let net_capacity = self.net_capacity.get();
+        if net_capacity != 0 {
             self.compute_logger
                 .log(&ComputeEvent::ArrangementHeapCapacity(
                     ArrangementHeapCapacity {
                         operator_id: self.operator_id,
-                        delta_capacity: -self.net_capacity,
+                        delta_capacity: -net_capacity,
                     },
                 ));
         }
-        if self.net_allocations != 0 {
+        let net_allocations = self.net_allocations.get();
+        if net_allocations != 0 {
             self.compute_logger
                 .log(&ComputeEvent::ArrangementHeapAllocations(
                     ArrangementHeapAllocations {
                         operator_id: self.operator_id,
-                        delta_allocations: -self.net_allocations,
+                        delta_allocations: -net_allocations,
                     },
                 ));
         }
