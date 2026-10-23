@@ -21,7 +21,12 @@ fi
 # halts that are safe to repeat inside this container. Restarting here avoids
 # Kubernetes crash backoff. Every other failure, including mz_ore::halt!
 # (166), exits the container and leaves the restart to Kubernetes.
-restart_in_place=168
+restart_in_place=75
+
+# tini -g forwards shutdown signals to both this shell and environmentd.
+# Exit even if environmentd handles the signal by halting or exiting cleanly.
+trap 'exit 143' TERM
+trap 'exit 130' INT
 
 while true; do
     if environmentd "$@"; then
@@ -33,5 +38,7 @@ while true; do
             exit "$status"
         fi
         echo "environmentd requested a restart in place; restarting" >&2
+        # Keeps the restarted process from booting writable, see preflight_0dt.
+        export MZ_RESTARTED_IN_PLACE=true
     fi
 done

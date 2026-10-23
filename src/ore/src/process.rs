@@ -19,7 +19,11 @@
 pub const HALT_EXIT_CODE: i32 = 166;
 
 /// The exit code of [`restart_in_place!`](crate::restart_in_place).
-pub const RESTART_IN_PLACE_EXIT_CODE: i32 = 168;
+///
+/// This is `EX_TEMPFAIL` from `sysexits.h`. Shells, tini and Kubernetes report
+/// a process killed by signal N as exit code 128 + N, so a code below 128 can
+/// only come from an explicit exit.
+pub const RESTART_IN_PLACE_EXIT_CODE: i32 = 75;
 
 /// Halts the process.
 ///
@@ -61,10 +65,11 @@ macro_rules! halt {
 /// halts repeatedly.
 ///
 /// The restarted process runs even if Kubernetes has replaced the process's pod
-/// in the meantime, for example after a node failure. Only use this macro where
-/// booting a second process next to the replacement cannot take over from it,
-/// e.g., a deployment that reboots in read-only mode. Use [`halt!`](crate::halt)
-/// everywhere else, in particular after the process has been fenced out.
+/// in the meantime, for example after a node failure. Only use this macro while
+/// the deployment is read-only, where the entrypoint's restart marker keeps the
+/// restarted process from booting writable next to the replacement. Use
+/// [`halt!`](crate::halt) everywhere else, in particular after the process has
+/// been fenced out.
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
 #[cfg(feature = "tracing")]
 #[macro_export]

@@ -932,6 +932,7 @@ impl Listeners {
                 frontegg_oauth_issuer_url: None,
                 unsafe_mode: config.unsafe_mode,
                 all_features: false,
+                restarted_in_place: false,
                 metrics_registry: metrics_registry.clone(),
                 now: config.now,
                 environment_id: config.environment_id,

@@ -424,8 +424,8 @@ def main() -> int:
         while True:
             last_start_time = datetime.now(UTC)
             proc = subprocess.run(command, env=env)
-            # 166: `halt!`, 168: `restart_in_place!`.
-            if proc.returncode in (166, 168):
+            # 166: `halt!`, 75: `restart_in_place!`.
+            if proc.returncode in (166, 75):
                 wait = max(
                     timedelta(seconds=5) - (datetime.now(UTC) - last_start_time),
                     timedelta(seconds=0),
