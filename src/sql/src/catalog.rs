@@ -32,6 +32,7 @@ use mz_ore::str::StrExt;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, ColumnName, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
@@ -178,6 +179,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
         &self,
         network_policy_name: &str,
     ) -> Result<&dyn CatalogNetworkPolicy, CatalogError>;
+
+    /// Resolves a query policy by its environment-wide name.
+    fn resolve_query_policy(&self, name: &str) -> Result<&dyn CatalogQueryPolicy, CatalogError>;
+    /// Gets a query policy by ID. Panics if the policy does not exist.
+    fn get_query_policy(&self, id: &QueryPolicyId) -> &dyn CatalogQueryPolicy;
+    /// Returns all query policies in this catalog snapshot.
+    fn get_query_policies(&self) -> Vec<&dyn CatalogQueryPolicy>;
 
     /// Gets a role by its ID.
     fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole>;
@@ -711,6 +719,9 @@ impl From<PlannedRoleAttributes> for RoleAttributesRaw {
 pub struct RoleVars {
     /// Map of variable names to their value.
     pub map: BTreeMap<String, OwnedVarInput>,
+    /// A durable restriction on the effective role, not a session-variable default.
+    /// Admission reads it from the catalog for each query, including existing sessions.
+    pub query_policy: Option<QueryPolicyId>,
 }
 
 /// A role in a [`SessionCatalog`].
@@ -732,6 +743,22 @@ pub trait CatalogRole {
 
     /// Returns all variables that this role has a default value stored for.
     fn vars(&self) -> &BTreeMap<String, OwnedVarInput>;
+}
+
+/// A query policy in the environment-wide namespace.
+pub trait CatalogQueryPolicy {
+    /// Returns the environment-wide policy name.
+    fn name(&self) -> &str;
+    /// Returns the policy's stable ID.
+    fn id(&self) -> QueryPolicyId;
+    /// Returns the role that owns this policy.
+    fn owner_id(&self) -> RoleId;
+    /// Returns the policy's access privileges.
+    fn privileges(&self) -> &PrivilegeMap;
+    /// Returns whether matching rules warn or reject queries.
+    fn mode(&self) -> crate::plan::QueryPolicyMode;
+    /// Returns the rules evaluated for queries subject to this policy.
+    fn rules(&self) -> &[crate::plan::QueryPolicyRule];
 }
 
 /// A network policy in a [`SessionCatalog`].
@@ -1421,6 +1448,12 @@ pub enum CatalogError {
     RoleAlreadyExists(String),
     /// Network Policy already exists.
     NetworkPolicyAlreadyExists(String),
+    /// A query policy with this name already exists.
+    QueryPolicyAlreadyExists(String),
+    /// The named or identified query policy does not exist.
+    UnknownQueryPolicy(String),
+    /// A query policy cannot be removed while attached to a cluster or role.
+    QueryPolicyInUse(String),
     /// Unknown cluster.
     UnknownCluster(String),
     /// Unexpected builtin cluster.
@@ -1494,6 +1527,13 @@ impl fmt::Display for CatalogError {
             Self::RoleAlreadyExists(name) => write!(f, "role '{name}' already exists"),
             Self::NetworkPolicyAlreadyExists(name) => {
                 write!(f, "network policy '{name}' already exists")
+            }
+            Self::QueryPolicyAlreadyExists(name) => {
+                write!(f, "query policy '{name}' already exists")
+            }
+            Self::UnknownQueryPolicy(name) => write!(f, "unknown query policy '{name}'"),
+            Self::QueryPolicyInUse(name) => {
+                write!(f, "query policy '{name}' is attached to a cluster or role")
             }
             Self::UnknownCluster(name) => write!(f, "unknown cluster '{}'", name),
             Self::UnknownNetworkPolicy(name) => write!(f, "unknown network policy '{}'", name),
@@ -1592,6 +1632,7 @@ pub enum ObjectType {
     Schema,
     Func,
     NetworkPolicy,
+    QueryPolicy,
 }
 
 impl ObjectType {
@@ -1614,7 +1655,8 @@ impl ObjectType {
             | ObjectType::Cluster
             | ObjectType::ClusterReplica
             | ObjectType::Role
-            | ObjectType::NetworkPolicy => false,
+            | ObjectType::NetworkPolicy
+            | ObjectType::QueryPolicy => false,
         }
     }
 }
@@ -1640,6 +1682,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
             mz_sql_parser::ast::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
+            mz_sql_parser::ast::ObjectType::QueryPolicy => ObjectType::QueryPolicy,
         }
     }
 }
@@ -1664,6 +1707,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Cluster(_) => ObjectType::Cluster,
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
             CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
+            CommentObjectId::QueryPolicy(_) => ObjectType::QueryPolicy,
         }
     }
 }
@@ -1688,6 +1732,7 @@ impl Display for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
+            ObjectType::QueryPolicy => "QUERY POLICY",
         })
     }
 }
@@ -1771,6 +1816,7 @@ impl ErrorMessageObjectDescription {
                 .get_network_policy(network_policy_id)
                 .name()
                 .to_string(),
+            ObjectId::QueryPolicy(id) => catalog.get_query_policy(id).name().to_string(),
         };
         ErrorMessageObjectDescription::Object {
             object_type: catalog.get_object_type(object_id),
