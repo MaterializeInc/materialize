@@ -146,11 +146,19 @@ contains: canceling statement due to statement timeout
 > SELECT * FROM mz_introspection.mz_compute_operator_durations_histogram_raw WHERE id > ${baseline-max-id} LIMIT 10
 > SELECT id, worker_id, address::text FROM mz_introspection.mz_dataflow_addresses_per_worker WHERE id > ${baseline-max-id}
 > SELECT * FROM mz_introspection.mz_dataflow_channels_per_worker WHERE id > ${baseline-max-id}
-> SELECT * FROM mz_introspection.mz_dataflow_operator_reachability_raw WHERE id > ${baseline-max-id} LIMIT 10
 > SELECT * FROM mz_introspection.mz_dataflow_operators_per_worker WHERE id > ${baseline-max-id}
 > SELECT * FROM mz_introspection.mz_message_counts_received_raw WHERE channel_id > ${baseline-max-id} LIMIT 10
 > SELECT * FROM mz_introspection.mz_message_counts_sent_raw WHERE channel_id > ${baseline-max-id} LIMIT 10
 > SELECT * FROM mz_introspection.mz_scheduling_elapsed_raw WHERE id > ${baseline-max-id} LIMIT 10
+
+# The raw reachability log is readable only by the system user. Testdrive cannot
+# assert on query results over that connection, so make any leftover row fail
+# the fast-path query with a division by zero instead. `postgres-execute` does
+# not retry, so this check runs after the retried checks above have observed
+# the cancellation.
+$ postgres-execute connection=mz_system
+SET cluster = test;
+SELECT 1 / (id - id) FROM mz_introspection.mz_dataflow_operator_reachability_raw WHERE id > ${baseline-max-id} LIMIT 10;
 
 # Cleanup.
 > DROP CLUSTER test CASCADE
