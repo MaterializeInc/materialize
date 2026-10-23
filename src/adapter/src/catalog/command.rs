@@ -19,6 +19,7 @@
 //! uses a pinned publication command instead of retrying its external mutation. Catalog
 //! rollback cannot undo either secret writes or changes in external services.
 
+pub(crate) mod connection;
 pub(crate) mod source;
 pub(crate) mod source_statement;
 
