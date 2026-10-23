@@ -717,13 +717,20 @@ impl ValueWindowExpr {
             .output_sql_type(self.args.typ(outers, inner, params))
     }
 
-    /// Converts into `mz_expr::AggregateFunc`.
+    /// Converts into `mz_expr::AggregateFunc`, together with the argument
+    /// expression the function should be applied to.
+    ///
+    /// The returned argument expression is not always `self.args`: constant
+    /// `lag`/`lead` arguments move into the function. See
+    /// [`ValueWindowFunc::into_expr`].
     pub fn into_expr(self) -> (Box<HirScalarExpr>, mz_expr::AggregateFunc) {
-        (
-            self.args,
-            self.func
-                .into_expr(self.order_by, self.window_frame, self.ignore_nulls),
-        )
+        let (args, func) = self.func.into_expr(
+            *self.args,
+            self.order_by,
+            self.window_frame,
+            self.ignore_nulls,
+        );
+        (Box::new(args), func)
     }
 }
 
@@ -799,42 +806,135 @@ impl ValueWindowFunc {
         }
     }
 
+    /// Converts into `mz_expr::AggregateFunc`, rewriting `args` to match.
+    ///
+    /// `lag`/`lead` take three arguments, and normally all three are encoded
+    /// into a per-row record that the window reduce arranges. When `offset`
+    /// and `default` are literals they move into the returned function
+    /// instead, and the returned `args` is the `value` argument alone. See
+    /// [`mz_expr::ConstantLagLeadArgs`].
     pub fn into_expr(
         self,
+        args: HirScalarExpr,
         order_by: Vec<ColumnOrder>,
         window_frame: WindowFrame,
         ignore_nulls: bool,
-    ) -> mz_expr::AggregateFunc {
+    ) -> (HirScalarExpr, mz_expr::AggregateFunc) {
         match self {
             // Lag and Lead are fundamentally the same function, just with opposite directions
-            ValueWindowFunc::Lag => mz_expr::AggregateFunc::LagLead {
-                order_by,
-                lag_lead: mz_expr::LagLeadType::Lag,
-                ignore_nulls,
-            },
-            ValueWindowFunc::Lead => mz_expr::AggregateFunc::LagLead {
-                order_by,
-                lag_lead: mz_expr::LagLeadType::Lead,
-                ignore_nulls,
-            },
-            ValueWindowFunc::FirstValue => mz_expr::AggregateFunc::FirstValue {
-                order_by,
-                window_frame,
-            },
-            ValueWindowFunc::LastValue => mz_expr::AggregateFunc::LastValue {
-                order_by,
-                window_frame,
-            },
-            ValueWindowFunc::Fused(funcs) => mz_expr::AggregateFunc::FusedValueWindowFunc {
-                funcs: funcs
+            ValueWindowFunc::Lag => {
+                Self::into_lag_lead_expr(mz_expr::LagLeadType::Lag, args, order_by, ignore_nulls)
+            }
+            ValueWindowFunc::Lead => {
+                Self::into_lag_lead_expr(mz_expr::LagLeadType::Lead, args, order_by, ignore_nulls)
+            }
+            ValueWindowFunc::FirstValue => (
+                args,
+                mz_expr::AggregateFunc::FirstValue {
+                    order_by,
+                    window_frame,
+                },
+            ),
+            ValueWindowFunc::LastValue => (
+                args,
+                mz_expr::AggregateFunc::LastValue {
+                    order_by,
+                    window_frame,
+                },
+            ),
+            ValueWindowFunc::Fused(funcs) => {
+                // Fusion wrapped the constituent calls' arguments in one
+                // record, one field per call. Rewrite each field alongside its
+                // own function, so a constituent `lag`/`lead` hoists its
+                // constants independently of the others.
+                let (field_names, argss) = match args {
+                    HirScalarExpr::CallVariadic {
+                        func: mz_expr::VariadicFunc::RecordCreate(record_create),
+                        exprs,
+                        name: _,
+                    } if exprs.len() == funcs.len() => (record_create.field_names, exprs),
+                    _ => unreachable!(
+                        "`transform_hir::fuse_window_functions` builds the arguments of a \
+                         fused call as a record with one field per constituent call, and \
+                         runs immediately before lowering"
+                    ),
+                };
+                let (argss, funcs): (Vec<_>, Vec<_>) = funcs
                     .into_iter()
-                    .map(|func| {
-                        func.into_expr(order_by.clone(), window_frame.clone(), ignore_nulls)
+                    .zip_eq(argss)
+                    .map(|(func, args)| {
+                        func.into_expr(args, order_by.clone(), window_frame.clone(), ignore_nulls)
                     })
-                    .collect(),
-                order_by,
-            },
+                    .unzip();
+                (
+                    HirScalarExpr::call_variadic(
+                        mz_expr::func::variadic::RecordCreate { field_names },
+                        argss,
+                    ),
+                    mz_expr::AggregateFunc::FusedValueWindowFunc { funcs, order_by },
+                )
+            }
         }
+    }
+
+    /// Builds a `lag`/`lead` aggregate, describing a literal `offset` and
+    /// `default` in the function rather than encoding them per row.
+    ///
+    /// Describing them needs both to be literals: the encoded-argument shape
+    /// is either the full `(value, offset, default)` record or the bare
+    /// `value`, with nothing in between, so one non-literal argument keeps all
+    /// three per row. Lowering narrows the shape further where it can, once
+    /// the argument's MIR form is known; see
+    /// `HirScalarExpr::describe_window_args`.
+    fn into_lag_lead_expr(
+        lag_lead: mz_expr::LagLeadType,
+        encoded_args: HirScalarExpr,
+        order_by: Vec<ColumnOrder>,
+        ignore_nulls: bool,
+    ) -> (HirScalarExpr, mz_expr::AggregateFunc) {
+        let (encoded_args, args) = match encoded_args {
+            HirScalarExpr::CallVariadic {
+                func: mz_expr::VariadicFunc::RecordCreate(record_create),
+                exprs,
+                name,
+            } => {
+                let [value, offset, default] = <[HirScalarExpr; 3]>::try_from(exprs)
+                    .expect("lag/lead encode exactly three arguments");
+                let args = match (offset.as_literal(), default.as_literal()) {
+                    (Some(offset_datum), Some(default_datum)) => Some(mz_expr::LagLeadArgs {
+                        offset: match offset_datum {
+                            Datum::Null => None,
+                            offset => Some(offset.unwrap_int32()),
+                        },
+                        default: StableRow(Row::pack([default_datum])),
+                        value: None,
+                    }),
+                    _ => None,
+                };
+                match args {
+                    Some(args) => (value, Some(args)),
+                    // Rebuild the record we destructured.
+                    None => (
+                        HirScalarExpr::CallVariadic {
+                            func: mz_expr::VariadicFunc::RecordCreate(record_create),
+                            exprs: vec![value, offset, default],
+                            name,
+                        },
+                        None,
+                    ),
+                }
+            }
+            encoded_args => (encoded_args, None),
+        };
+        (
+            encoded_args,
+            mz_expr::AggregateFunc::LagLead {
+                order_by,
+                lag_lead,
+                ignore_nulls,
+                args,
+            },
+        )
     }
 }
 
