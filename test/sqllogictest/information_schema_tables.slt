@@ -94,7 +94,7 @@ VIEW
 materialize
 mz_catalog
 mz_array_types
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_audit_events
@@ -106,7 +106,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_base_types
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_cluster_replica_frontiers
@@ -174,11 +174,11 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_list_types
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_map_types
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_materialized_views
@@ -194,7 +194,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_pseudo_types
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_recent_storage_usage
@@ -262,7 +262,7 @@ VIEW
 materialize
 mz_catalog
 mz_types
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_views
@@ -306,6 +306,10 @@ VIEW
 materialize
 mz_internal
 mz_builtin_tables
+VIEW
+materialize
+mz_internal
+mz_builtin_types
 VIEW
 materialize
 mz_internal
@@ -834,7 +838,7 @@ BASE TABLE
 materialize
 mz_internal
 mz_type_pg_metadata
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_wallclock_global_lag
