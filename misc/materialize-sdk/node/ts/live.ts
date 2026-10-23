@@ -55,8 +55,11 @@ export class LiveSubscription implements AsyncIterableIterator<Event> {
   private readonly events: Event[] = [];
   private failed: unknown;
   private done = false;
+  /** The error the connection itself reported, which explains the failure of
+   * every request after it. */
+  private lost: unknown;
   private closed = false;
-  /** The latest \`next\`, which the following one waits for. */
+  /** The latest `next`, which the following one waits for. */
   private reading: Promise<unknown> = Promise.resolve();
 
   private constructor(
@@ -72,10 +75,18 @@ export class LiveSubscription implements AsyncIterableIterator<Event> {
   ): Promise<LiveSubscription> {
     const {
       maxRows = 1000,
-      fetchTimeoutMs = 1000,
+      fetchTimeoutMs: timeout = 1000,
       maxPendingBytes = 64 * 2 ** 20,
       maxTimestampBytes = MAX_TIMESTAMP_BYTES,
     } = options;
+    // Checked here, so that an invalid option fails before connecting.
+    if (!Number.isSafeInteger(maxRows) || maxRows < 1) {
+      throw new UsageError(`maxRows is a positive integer, not ${maxRows}`);
+    }
+    if (!Number.isFinite(timeout) || timeout < 0) {
+      throw new UsageError(`fetchTimeoutMs is at least 0, not ${timeout}`);
+    }
+    const fetchTimeoutMs = Math.round(timeout);
     if (!(maxTimestampBytes <= MAX_TIMESTAMP_BYTES)) {
       throw new UsageError(
         `maxTimestampBytes is at most ${MAX_TIMESTAMP_BYTES}, not ${maxTimestampBytes}`,
@@ -100,18 +111,22 @@ export class LiveSubscription implements AsyncIterableIterator<Event> {
       ...(typeof connection === "string"
         ? { connectionString: connection }
         : connection),
-      // \`end\` waits for pipelined queries to drain, so it could not stop an
+      // `end` waits for pipelined queries to drain, so it could not stop an
       // untimed FETCH on a quiet stream.
       pipeline: false,
     });
-    // NOTE: \`pg.defaults.binary\` would turn on binary results for every query,
+    // NOTE: `pg.defaults.binary` would turn on binary results for every query,
     // and the core decodes only the text format. The client is the
     // subscription's own, so overriding it changes nothing else.
     (client as unknown as { binary: boolean }).binary = false;
-    // NOTE: a client without an `error` listener crashes the process when its
-    // connection drops while idle. The next query fails anyway.
-    client.on("error", () => {});
     const live = new LiveSubscription(client, subscription, fetchInput);
+    // NOTE: a client without an `error` listener crashes the process when its
+    // connection drops while idle. The server can also end the session with
+    // an error between requests, such as an expired authentication, which
+    // only this listener receives.
+    client.on("error", (error) => {
+      live.lost ??= error;
+    });
     try {
       await client.connect().catch((error: unknown) => {
         throw live.failure(error);
@@ -148,7 +163,7 @@ export class LiveSubscription implements AsyncIterableIterator<Event> {
       result = await this.nextEvent();
     } catch (error) {
       // The binding still waits for the failed FETCH, so every later call
-      // throws the first failure again. \`for await\` does not call \`return\`
+      // throws the first failure again. `for await` does not call `return`
       // after a failure, so the connection closes here.
       this.failed = error;
       await this.close().catch(() => {});
@@ -173,6 +188,7 @@ export class LiveSubscription implements AsyncIterableIterator<Event> {
 
   /** Closes the connection, which ends the subscribe on the server. */
   async close(): Promise<void> {
+    this.done = true;
     if (!this.closed) {
       this.closed = true;
       await this.client.end();
@@ -190,7 +206,11 @@ export class LiveSubscription implements AsyncIterableIterator<Event> {
           JSON.stringify(await this.run(fetch.sql, "FETCH")),
         ),
       );
-      this.events.push(...pushed.events.map(eventFromJson));
+      // One push per event: a FETCH can release more events than a call
+      // takes arguments.
+      for (const event of pushed.events) {
+        this.events.push(eventFromJson(event));
+      }
     }
     return { done: false, value: this.events.shift()! };
   }
@@ -230,7 +250,8 @@ export class LiveSubscription implements AsyncIterableIterator<Event> {
     };
   }
 
-  private failure(error: unknown): ServerError {
+  private failure(failed: unknown): ServerError {
+    const error = this.lost ?? failed;
     // A host with several addresses fails with an AggregateError, whose own
     // message is empty.
     const message =

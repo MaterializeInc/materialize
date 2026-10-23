@@ -25,7 +25,7 @@ import psycopg
 from psycopg import generators, pq
 
 from materialize_sdk._core import Subscription
-from materialize_sdk._errors import ServerError
+from materialize_sdk._errors import ServerError, UsageError
 from materialize_sdk._values import Event, event_from_json
 
 
@@ -48,6 +48,11 @@ class LiveSubscription:
         max_pending_bytes: int | None = 64 << 20,
         max_timestamp_bytes: int | None = 1 << 30,
     ) -> None:
+        # Checked here, so that an invalid option fails before connecting.
+        if isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows < 1:
+            raise UsageError(f"max_rows is a positive integer, not {max_rows!r}")
+        if not fetch_timeout >= 0:
+            raise UsageError(f"fetch_timeout is at least 0, not {fetch_timeout!r}")
         options: dict[str, Any] = {
             "subscribe": {
                 "target": {"kind": "query", "sql": query},
@@ -65,11 +70,12 @@ class LiveSubscription:
         )
         self._events: deque[Event] = deque()
         self._failed: BaseException | None = None
+        self._closed = False
         try:
             self._connection = psycopg.connect(conninfo, autocommit=True)
         # TODO: libpq keeps no SQLSTATE for a failed connection, so a refused
-        # password classifies as transient here, where node-postgres reports
-        # 28P01 and the Node package classifies it as credentials.
+        # password classifies as transient here, where the Rust and Node
+        # packages see 28P01 and classify it as credentials.
         except psycopg.Error as error:
             raise self._error(error) from error
         try:
@@ -85,6 +91,8 @@ class LiveSubscription:
     def __next__(self) -> Event:
         if self._failed is not None:
             raise self._failed
+        if self._closed:
+            raise StopIteration
         try:
             return self._next()
         except StopIteration:
@@ -117,7 +125,9 @@ class LiveSubscription:
         return self._subscription.as_of
 
     def close(self) -> None:
-        """Closes the connection, which ends the subscribe on the server."""
+        """Closes the connection, which ends the subscribe on the server and
+        the iteration."""
+        self._closed = True
         self._connection.close()
 
     def __enter__(self) -> LiveSubscription:

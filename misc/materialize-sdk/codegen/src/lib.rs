@@ -515,7 +515,12 @@ fn tag_of(variants: &[Value], name: &str) -> String {
         common = common.intersection(&consts(v)).cloned().collect();
     }
     assert_eq!(common.len(), 1, "{name}: no single tag among {common:?}");
-    common.pop_first().unwrap()
+    let tag = common.pop_first().unwrap();
+    assert!(
+        is_identifier(&tag),
+        "{name}: tag {tag:?} is not a snake_case identifier"
+    );
+    tag
 }
 
 /// The fields of an object schema, in the order of `required`, which is the
