@@ -15,14 +15,13 @@ use mz_audit_log::VersionedStorageUsage;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
-    MZ_CLUSTER_REPLICA_SIZES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_INDEX_COLUMNS, MZ_LICENSE_KEYS,
-    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_ROLE_AUTH, MZ_SESSIONS,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
+    MZ_MAP_TYPES, MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_ROLE_AUTH, MZ_SESSIONS,
     MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA, MZ_TYPES,
     MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::memory::error::Error;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Func, Index, Type};
-use mz_expr::MirScalarExpr;
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Func, Type};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
@@ -31,8 +30,7 @@ use mz_persist_client::batch::ProtoBatch;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker};
-use mz_sql::ast::{CreateIndexStatement, Statement};
+use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row, RowPacker};
 use mz_sql::catalog::{CatalogType, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::SchemaSpecifier;
@@ -137,7 +135,6 @@ impl CatalogState {
         let privileges_row = self.pack_privilege_array_row(entry.privileges());
         let privileges = privileges_row.unpack_first();
         let updates = match entry.item() {
-            CatalogItem::Index(index) => self.pack_index_update(id, index, diff),
             CatalogItem::Source(source) => {
                 match &source.data_source {
                     DataSourceDesc::Webhook { .. } => {
@@ -163,13 +160,14 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            // Tables, views, materialized views, and metric sinks are exposed
-            // through materialized views derived from `mz_catalog_raw`, and
-            // logs and secrets never had builtin-table rows, so none pack a row
-            // here.
+            // Tables, views, materialized views, indexes, and metric sinks
+            // are exposed through materialized views derived from
+            // `mz_catalog_raw`, and logs and secrets never had builtin-table
+            // rows, so none pack a row here.
             CatalogItem::Table(_)
             | CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
+            | CatalogItem::Index(_)
             | CatalogItem::Log(_)
             | CatalogItem::Secret(_)
             | CatalogItem::MetricSink(_) => vec![],
@@ -179,70 +177,6 @@ impl CatalogState {
             // mz_catalog_raw, so connections need no special packing here.
             CatalogItem::Connection(_) => vec![],
         };
-
-        updates
-    }
-
-    fn pack_index_update(
-        &self,
-        id: CatalogItemId,
-        index: &Index,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut updates = vec![];
-
-        let create_stmt = mz_sql::parse::parse(&index.create_sql)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "create_sql cannot be invalid: `{}` --- error: `{}`",
-                    index.create_sql, e
-                )
-            })
-            .into_element()
-            .ast;
-
-        let key_sqls = match &create_stmt {
-            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts
-                .as_ref()
-                .expect("key_parts is filled in during planning"),
-            _ => unreachable!(),
-        };
-
-        let on_entry = self.get_entry_by_global_id(&index.on);
-        let on_desc = on_entry
-            .relation_desc()
-            .expect("can only create indexes on items with a valid description");
-        let repr_col_types: Vec<ReprColumnType> = on_desc
-            .typ()
-            .column_types
-            .iter()
-            .map(ReprColumnType::from)
-            .collect();
-        for (i, key) in index.keys.iter().enumerate() {
-            let nullable = key.typ(&repr_col_types).nullable;
-            let seq_in_index = u64::cast_from(i + 1);
-            let key_sql = key_sqls
-                .get(i)
-                .expect("missing sql information for index key")
-                .to_ast_string_simple();
-            let (field_number, expression) = match key {
-                MirScalarExpr::Column(col, _) => {
-                    (Datum::UInt64(u64::cast_from(*col + 1)), Datum::Null)
-                }
-                _ => (Datum::Null, Datum::String(&key_sql)),
-            };
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_INDEX_COLUMNS,
-                Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::UInt64(seq_in_index),
-                    field_number,
-                    expression,
-                    Datum::from(nullable),
-                ]),
-                diff,
-            ));
-        }
 
         updates
     }

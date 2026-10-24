@@ -827,9 +827,9 @@ const CATALOG_SERVER_CLUSTER_CTE: &str = "\
         WHERE data->>'kind' = 'Cluster' AND data->'value'->>'name' = 'mz_catalog_server'
     )";
 
-/// Helper CTEs over `GidMapping` rows used to look up the system id of a
-/// builtin index by name and of the relation it indexes by (schema, name).
-const GID_MAPPING_CTES: &str = "\
+/// CTE over `GidMapping` rows that looks up the system id of a builtin index
+/// by name.
+const BUILTIN_INDEX_GID_MAPPINGS_CTE: &str = "\
     builtin_index_gid_mappings AS (
         SELECT
             's' || (data->'value'->>'catalog_id') AS id,
@@ -838,7 +838,11 @@ const GID_MAPPING_CTES: &str = "\
         WHERE
             data->>'kind' = 'GidMapping' AND
             data->'key'->>'object_type' = '6'
-    ),
+    )";
+
+/// CTE over `GidMapping` rows that looks up the system id of a builtin
+/// relation by (schema, name).
+const ON_GID_MAPPINGS_CTE: &str = "\
     on_gid_mappings AS (
         SELECT
             's' || (data->'value'->>'catalog_id') AS id,
@@ -847,6 +851,14 @@ const GID_MAPPING_CTES: &str = "\
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'GidMapping'
     )";
+
+/// Both `GidMapping` CTEs, as `mz_indexes` lists them.
+///
+/// NOTE: the joiner indents `on_gid_mappings` by four spaces so that the
+/// rendered SQL keeps the layout `mz_indexes`' catalog fingerprint was computed
+/// with. Changing it needs a replacement step in `builtin_schema_migration.rs`.
+static GID_MAPPING_CTES: LazyLock<String> =
+    LazyLock::new(|| format!("{BUILTIN_INDEX_GID_MAPPINGS_CTE},\n    {ON_GID_MAPPINGS_CTE}"));
 
 pub static MZ_INDEXES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     // Reconstructs `CREATE INDEX ... IN CLUSTER [<id>] ON [<id> AS "schema"."name"] (<keys>)`
@@ -897,6 +909,7 @@ pub static MZ_INDEXES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
         ) AS t
     )");
 
+    let gid_mapping_ctes: &str = &GID_MAPPING_CTES;
     let sql = format!(
         "
 IN CLUSTER mz_catalog_server
@@ -913,7 +926,7 @@ WITH (
 WITH
 {USER_INDEXES_CTE},
 {CATALOG_SERVER_CLUSTER_CTE},
-{GID_MAPPING_CTES},
+{gid_mapping_ctes},
 {builtin_indexes_cte},
 {introspection_source_indexes_cte}
 SELECT * FROM user_indexes
@@ -1001,53 +1014,133 @@ SELECT * FROM introspection_source_indexes
         }),
     }
 });
-pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_index_columns",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_INDEX_COLUMNS_OID,
-    desc: RelationDesc::builder()
-        .with_column("index_id", SqlScalarType::String.nullable(false))
-        .with_column("index_position", SqlScalarType::UInt64.nullable(false))
-        .with_column("on_position", SqlScalarType::UInt64.nullable(true))
-        .with_column("on_expression", SqlScalarType::String.nullable(true))
-        .with_column("nullable", SqlScalarType::Bool.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "index_id",
-            "The ID of the index which contains this column. Corresponds to `mz_indexes.id`.",
-        ),
-        (
-            "index_position",
-            "The 1-indexed position of this column within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)",
-        ),
-        (
-            "on_position",
-            "If not `NULL`, specifies the 1-indexed position of a column in the relation on which this index is built that determines the value of this index column.",
-        ),
-        (
-            "on_expression",
-            "If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.",
-        ),
-        (
-            "nullable",
-            "Can this column of the index evaluate to `NULL`?",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "index_column",
-        description: "A column or expression in an index, with its position",
-        links: &const {
-            [OntologyLink {
-                name: "belongs_to_index",
-                target: "index",
-                properties: LinkProperties::fk("index_id", "id", Cardinality::ManyToOne),
-            }]
-        },
-        column_semantic_types: &[("index_id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    let sql = format!(
+        "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL index_id,
+    ASSERT NOT NULL index_position,
+    ASSERT NOT NULL nullable
+) AS
+WITH
+    -- An index's keys are one row whose value lists them in key order.
+    index_keys AS (
+        SELECT
+            mz_internal.parse_catalog_id(k.data->'key'->'id') AS index_id,
+            k.data->'value'->'columns' AS columns,
+            mz_internal.parse_catalog_create_sql(i.data->'value'->'definition'->'V1'->>'create_sql')->'key_parts' AS key_parts
+        FROM
+            mz_internal.mz_catalog_raw AS k
+            JOIN mz_internal.mz_catalog_raw AS i ON
+                i.data->>'kind' = 'Item' AND
+                i.data->'key'->'gid' = k.data->'key'->'id'
+        WHERE k.data->>'kind' = 'IndexColumns'
+    ),
+    key_parts AS (
+        SELECT k.index_id, p.ordinality, p.value AS expression
+        FROM
+            index_keys AS k,
+            jsonb_array_elements_text(k.key_parts) WITH ORDINALITY AS p(value, ordinality)
+    ),
+    user_index_columns AS (
+        SELECT
+            k.index_id,
+            -- WITH ORDINALITY numbers the list from one, which is what index_position reports
+            ik.ordinality::uint8 AS index_position,
+            (ik.value->>'column')::uint8 + 1::uint8 AS on_position,
+            -- Either on_position is null or on_expression is, thus we use a case
+            CASE
+                WHEN ik.value->>'column' IS NULL
+                THEN p.expression
+            END AS on_expression,
+            (ik.value->>'nullable')::bool AS nullable
+        FROM
+            index_keys AS k
+            CROSS JOIN LATERAL jsonb_array_elements(k.columns) WITH ORDINALITY AS ik(value, ordinality)
+            LEFT JOIN key_parts AS p ON p.index_id = k.index_id AND p.ordinality = ik.ordinality
+    ),
+{BUILTIN_INDEX_GID_MAPPINGS_CTE},
+    builtin_index_columns AS (
+        SELECT
+            bigm.id AS index_id,
+            bic.index_position,
+            bic.on_position,
+            NULL::text AS on_expression,
+            bic.nullable
+        FROM mz_internal.mz_builtin_index_columns AS bic
+        JOIN builtin_index_gid_mappings AS bigm ON bigm.name = bic.name
+        WHERE bic.type = 'index'
+    ),
+    introspection_source_index_columns AS (
+        SELECT
+            'si' || (isi.data->'value'->>'catalog_id') AS index_id,
+            bic.index_position,
+            bic.on_position,
+            NULL::text AS on_expression,
+            bic.nullable
+        FROM mz_internal.mz_catalog_raw AS isi
+        JOIN mz_internal.mz_builtin_index_columns AS bic ON bic.name = isi.data->'key'->>'name'
+        WHERE
+            isi.data->>'kind' = 'ClusterIntrospectionSourceIndex' AND
+            bic.type = 'log'
+    )
+SELECT * FROM user_index_columns
+UNION ALL
+SELECT * FROM builtin_index_columns
+UNION ALL
+SELECT * FROM introspection_source_index_columns"
+    );
+
+    BuiltinMaterializedView {
+        name: "mz_index_columns",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_INDEX_COLUMNS_OID,
+        desc: RelationDesc::builder()
+            .with_column("index_id", SqlScalarType::String.nullable(false))
+            .with_column("index_position", SqlScalarType::UInt64.nullable(false))
+            .with_column("on_position", SqlScalarType::UInt64.nullable(true))
+            .with_column("on_expression", SqlScalarType::String.nullable(true))
+            .with_column("nullable", SqlScalarType::Bool.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "index_id",
+                "The ID of the index which contains this column. Corresponds to `mz_indexes.id`.",
+            ),
+            (
+                "index_position",
+                "The 1-indexed position of this column within the index. (The order of columns in an index does not necessarily match the order of columns in the relation on which the index is built.)",
+            ),
+            (
+                "on_position",
+                "If not `NULL`, specifies the 1-indexed position of a column in the relation on which this index is built that determines the value of this index column.",
+            ),
+            (
+                "on_expression",
+                "If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.",
+            ),
+            (
+                "nullable",
+                "Can this column of the index evaluate to `NULL`?",
+            ),
+        ]),
+        sql: Box::leak(sql.into_boxed_str()),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "index_column",
+            description: "A column or expression in an index, with its position",
+            links: &const {
+                [OntologyLink {
+                    name: "belongs_to_index",
+                    target: "index",
+                    properties: LinkProperties::fk("index_id", "id", Cardinality::ManyToOne),
+                }]
+            },
+            column_semantic_types: &[("index_id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 pub static MZ_TABLES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
