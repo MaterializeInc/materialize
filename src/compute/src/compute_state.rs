@@ -186,10 +186,6 @@ pub struct ComputeState {
     pub collections: BTreeMap<GlobalId, CollectionState>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
-    /// The indexes whose arrangement carries the last column in the diff, as
-    /// [`mz_compute_client::logging::LogVariant::diff_is_count`] describes. Every reader of their
-    /// traces, an import into a dataflow or a peek, must convert.
-    pub diff_is_count_indexes: BTreeSet<GlobalId>,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the subscribe instance)
@@ -331,7 +327,6 @@ impl ComputeState {
         Self {
             collections: Default::default(),
             traces,
-            diff_is_count_indexes: Default::default(),
             subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
             queued_peeks: Default::default(),
@@ -920,8 +915,7 @@ impl<'a> ActiveComputeState<'a> {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.
                 let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
-                let diff_is_count = self.compute_state.diff_is_count_indexes.contains(id);
-                PendingPeek::index(peek, trace_bundle, diff_is_count)
+                PendingPeek::index(peek, trace_bundle)
             }
             PeekTarget::Persist { metadata, .. } => {
                 let metadata = metadata.clone();
@@ -986,7 +980,6 @@ impl<'a> ActiveComputeState<'a> {
 
         // If this collection is an index, remove its trace.
         self.compute_state.traces.remove(&id);
-        self.compute_state.diff_is_count_indexes.remove(&id);
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
@@ -1043,9 +1036,6 @@ impl<'a> ActiveComputeState<'a> {
                 .remove(&log)
                 .expect("`logging::initialize` does not invent logs");
             self.compute_state.traces.set(id, trace);
-            if log.diff_is_count() {
-                self.compute_state.diff_is_count_indexes.insert(id);
-            }
 
             // Initialize compute and logging state for the logging index.
             let is_subscribe_or_copy = false;
@@ -1595,7 +1585,7 @@ impl PendingPeek {
         })
     }
 
-    fn index(peek: Peek, mut trace_bundle: TraceBundle, diff_is_count: bool) -> Self {
+    fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {
         let empty_frontier = Antichain::new();
         let timestamp_frontier = Antichain::from_elem(peek.timestamp);
         trace_bundle
@@ -1614,7 +1604,6 @@ impl PendingPeek {
         PendingPeek::Index(IndexPeek {
             peek,
             trace_bundle,
-            diff_is_count,
             span: tracing::Span::current(),
         })
     }
@@ -1857,8 +1846,6 @@ pub struct IndexPeek {
     peek: Peek,
     /// The data from which the trace derives.
     trace_bundle: TraceBundle,
-    /// Whether the trace carries its last column in the diff, so the walk converts it.
-    diff_is_count: bool,
     /// The `tracing::Span` tracking this peek's operation
     span: tracing::Span,
 }
@@ -1938,8 +1925,9 @@ impl IndexPeek {
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus {
         let peek = &self.peek;
+        let diff_is_count = self.trace_bundle.diff_is_count();
         let (oks, errs) = self.trace_bundle.oks_errs_mut();
-        let mut scan = PeekScan::new(peek, errs, oks, self.diff_is_count, max_result_size, stash);
+        let mut scan = PeekScan::new(peek, errs, oks, diff_is_count, max_result_size, stash);
 
         let outcome = scan.step(row_iteration_limit, fuel);
 

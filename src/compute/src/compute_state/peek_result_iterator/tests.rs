@@ -472,12 +472,9 @@ fn trace_of_updates(
     (cursor, storage)
 }
 
-/// A diff-is-count walk yields each key whose accumulation at the peek timestamp is non-zero once,
-/// with the accumulation as a column between the arranged value and any literal.
-#[mz_ore::test]
-fn diff_is_count_appends_accumulation() {
-    let peek_timestamp = Timestamp::from(1);
-    let updates = [
+/// Updates for the diff-is-count tests, peeked at time 1.
+fn diff_is_count_updates() -> Vec<(Row, Timestamp, Diff)> {
+    vec![
         // Negative accumulations are counts like any other.
         (row(1), Timestamp::from(0), Diff::from(-2)),
         // Accumulates to zero at the peek timestamp, so the key is absent.
@@ -486,45 +483,89 @@ fn diff_is_count_appends_accumulation() {
         // Only the update at or before the peek timestamp counts.
         (row(3), Timestamp::from(1), Diff::from(3)),
         (row(3), Timestamp::from(2), Diff::from(7)),
-    ];
+    ]
+}
 
-    let walk = |constraints: Option<&mut [Row]>, arity: usize| {
-        let (cursor, storage) = trace_of_updates(&updates);
-        let map_filter_project = mz_expr::MapFilterProject::new(arity)
-            .into_plan()
-            .expect("valid plan")
-            .into_nontemporal()
-            .expect("non-temporal plan");
-        PeekResultIterator::<TestTrace>::from_cursor(
-            GlobalId::User(1),
-            map_filter_project,
-            peek_timestamp,
-            constraints,
-            cursor,
-            storage,
-            true,
-            None,
-            0,
-        )
-        .collect::<Result<Vec<_>, _>>()
-        .expect("walk succeeds")
-    };
-    let one = NonZeroI64::new(1).expect("non-zero");
+/// Walks [`diff_is_count_updates`] as a diff-is-count trace at time 1 through `map_filter_project`.
+fn walk_diff_is_count(
+    map_filter_project: mz_expr::MapFilterProject,
+    constraints: Option<&mut [Row]>,
+) -> Vec<(Row, NonZeroI64)> {
+    let (cursor, storage) = trace_of_updates(&diff_is_count_updates());
+    let map_filter_project = map_filter_project
+        .into_plan()
+        .expect("valid plan")
+        .into_nontemporal()
+        .expect("non-temporal plan");
+    PeekResultIterator::<TestTrace>::from_cursor(
+        GlobalId::User(1),
+        map_filter_project,
+        Timestamp::from(1),
+        constraints,
+        cursor,
+        storage,
+        true,
+        None,
+        0,
+    )
+    .collect::<Result<Vec<_>, _>>()
+    .expect("walk succeeds")
+}
 
+fn one() -> NonZeroI64 {
+    NonZeroI64::new(1).expect("non-zero")
+}
+
+/// A diff-is-count walk yields each key whose accumulation at the peek timestamp is non-zero once,
+/// with the accumulation as a column between the arranged value and any literal.
+#[mz_ore::test]
+fn diff_is_count_appends_accumulation() {
     // Key and count.
-    let rows = walk(None, 2);
+    let rows = walk_diff_is_count(mz_expr::MapFilterProject::new(2), None);
     let expected = vec![
-        (Row::pack_slice(&[Datum::UInt8(1), Datum::Int64(-2)]), one),
-        (Row::pack_slice(&[Datum::UInt8(3), Datum::Int64(3)]), one),
+        (Row::pack_slice(&[Datum::UInt8(1), Datum::Int64(-2)]), one()),
+        (Row::pack_slice(&[Datum::UInt8(3), Datum::Int64(3)]), one()),
     ];
     assert_eq!(rows, expected);
 
     // Key, count, and literal, in that order.
     let mut constraints = vec![row(2), row(3)];
-    let rows = walk(Some(&mut constraints), 3);
+    let rows = walk_diff_is_count(mz_expr::MapFilterProject::new(3), Some(&mut constraints));
     let expected = vec![(
         Row::pack_slice(&[Datum::UInt8(3), Datum::Int64(3), Datum::UInt8(3)]),
-        one,
+        one(),
     )];
+    assert_eq!(rows, expected);
+}
+
+/// The `map_filter_project` sees the count at column `key_arity`, so a filter on it applies to the
+/// accumulation.
+#[mz_ore::test]
+fn diff_is_count_filters_on_count() {
+    let key_arity = 1;
+    let predicate = MirScalarExpr::column(key_arity).call_binary(
+        MirScalarExpr::literal(Ok(Datum::Int64(0)), ReprScalarType::Int64),
+        mz_expr::func::Lt,
+    );
+    let rows = walk_diff_is_count(
+        mz_expr::MapFilterProject::new(key_arity + 1).filter([predicate]),
+        None,
+    );
+    let expected = vec![(Row::pack_slice(&[Datum::UInt8(1), Datum::Int64(-2)]), one())];
+    assert_eq!(rows, expected);
+}
+
+/// Projecting the count alone yields it once per key with a non-zero accumulation.
+#[mz_ore::test]
+fn diff_is_count_projects_count() {
+    let key_arity = 1;
+    let rows = walk_diff_is_count(
+        mz_expr::MapFilterProject::new(key_arity + 1).project([key_arity]),
+        None,
+    );
+    let expected = vec![
+        (Row::pack_slice(&[Datum::Int64(-2)]), one()),
+        (Row::pack_slice(&[Datum::Int64(3)]), one()),
+    ];
     assert_eq!(rows, expected);
 }

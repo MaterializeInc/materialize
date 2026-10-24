@@ -154,7 +154,7 @@ impl Harness {
 
     /// Queues `peek` over `bundle`, as a peek whose frontiers were not yet ready is queued.
     fn add_pending(&mut self, peek: Peek, bundle: TraceBundle) {
-        let PendingPeek::Index(pending) = PendingPeek::index(peek, bundle, false) else {
+        let PendingPeek::Index(pending) = PendingPeek::index(peek, bundle) else {
             unreachable!("built as an index peek")
         };
         let uuid = pending.peek.uuid;

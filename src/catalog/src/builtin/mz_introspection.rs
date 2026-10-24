@@ -1940,7 +1940,9 @@ WHERE
     AND addr1.id = reachability.id
     AND addr1.worker_id = reachability.worker_id
     AND addr2.worker_id = reachability.worker_id
-GROUP BY addr2.id, reachability.worker_id, port, update_type, time",
+GROUP BY addr2.id, reachability.worker_id, port, update_type, time
+-- Drops groups whose counts cancel. `_raw` is a set, so this is not needed for correctness.
+HAVING pg_catalog.sum(reachability.count) <> 0",
         access: vec![PUBLIC_SELECT],
         ontology: None,
     });

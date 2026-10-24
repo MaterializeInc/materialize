@@ -69,16 +69,16 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*)]
         Project ()
-          Distinct project=[#4{id}, #0{worker_id}..=#3{time}]
-            Project (#1{worker_id}, #3{port}..=#5{time}, #9{id})
-              Join on=(#0{id} = #6{id} AND #1{worker_id} = #7{worker_id} = #10{worker_id} AND #11{address} = case when (0 = uint8_to_numeric(#2{source})) then #8{address} else (#8{address} || #2{source}) end) type=delta
-                ArrangeBy keys=[[#0{id}, #1{worker_id}], [#1{worker_id}]]
-                  Project (#0{id}..=#5{time})
+          Filter (#5{sum_count} != 0)
+            Reduce group_by=[#5{id}, #0{worker_id}..=#3{time}] aggregates=[sum(#4{count})]
+              Project (#1{worker_id}, #3{port}..=#6{count}, #10{id})
+                Join on=(#0{id} = #7{id} AND #1{worker_id} = #8{worker_id} = #11{worker_id} AND #12{address} = case when (0 = uint8_to_numeric(#2{source})) then #9{address} else (#9{address} || #2{source}) end) type=delta
+                  ArrangeBy keys=[[#0{id}, #1{worker_id}], [#1{worker_id}]]
                     ReadIndex on=mz_dataflow_operator_reachability_raw mz_dataflow_operator_reachability_raw_u2_primary_idx=[*** full scan ***]
-                ArrangeBy keys=[[#0{id}, #1{worker_id}]]
-                  ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[delta join lookup]
-                ArrangeBy keys=[[#1{worker_id}, #2{address}]]
-                  ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[*** full scan ***]
+                  ArrangeBy keys=[[#0{id}, #1{worker_id}]]
+                    ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[delta join lookup]
+                  ArrangeBy keys=[[#1{worker_id}, #2{address}]]
+                    ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[*** full scan ***]
   Return
     Union
       Get l0
@@ -107,16 +107,18 @@ Explained Query:
     cte l0 =
       Reduce aggregates=[count(*)]
         Project ()
-          Distinct project=[#3{id}, #0{port}..=#2{time}]
-            Project (#3{port}..=#5{time}, #9{id})
-              Join on=(#0{id} = #6{id} AND #1{worker_id} = #7{worker_id} = #10{worker_id} AND #11{address} = case when (0 = uint8_to_numeric(#2{source})) then #8{address} else (#8{address} || #2{source}) end) type=delta
-                ArrangeBy keys=[[#0{id}, #1{worker_id}], [#1{worker_id}]]
-                  Project (#0{id}..=#5{time})
-                    ReadIndex on=mz_dataflow_operator_reachability_raw mz_dataflow_operator_reachability_raw_u2_primary_idx=[*** full scan ***]
-                ArrangeBy keys=[[#0{id}, #1{worker_id}]]
-                  ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[delta join lookup]
-                ArrangeBy keys=[[#1{worker_id}, #2{address}]]
-                  ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[*** full scan ***]
+          Distinct project=[#0{id}..=#3{time}]
+            Project (#0{id}, #2{port}..=#4{time})
+              Filter (#5{sum_count} != 0)
+                Reduce group_by=[#5{id}, #0{worker_id}..=#3{time}] aggregates=[sum(#4{count})]
+                  Project (#1{worker_id}, #3{port}..=#6{count}, #10{id})
+                    Join on=(#0{id} = #7{id} AND #1{worker_id} = #8{worker_id} = #11{worker_id} AND #12{address} = case when (0 = uint8_to_numeric(#2{source})) then #9{address} else (#9{address} || #2{source}) end) type=delta
+                      ArrangeBy keys=[[#0{id}, #1{worker_id}], [#1{worker_id}]]
+                        ReadIndex on=mz_dataflow_operator_reachability_raw mz_dataflow_operator_reachability_raw_u2_primary_idx=[*** full scan ***]
+                      ArrangeBy keys=[[#0{id}, #1{worker_id}]]
+                        ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[delta join lookup]
+                      ArrangeBy keys=[[#1{worker_id}, #2{address}]]
+                        ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[*** full scan ***]
   Return
     Union
       Get l0
@@ -155,6 +157,39 @@ SELECT DISTINCT time FROM mz_introspection.mz_dataflow_operator_reachability_per
 
 statement ok
 SELECT count(*) FROM mz_introspection.mz_dataflow_operator_reachability
+
+# A filter on the count column stays on the fast path, which appends the count before the filter.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT * FROM mz_introspection.mz_dataflow_operator_reachability_raw WHERE count <> 0 LIMIT 1
+----
+Explained Query (fast path):
+  Finish limit=1 output=[#0..=#6]
+    Filter (#6{count} != 0)
+      ReadIndex on=mz_introspection.mz_dataflow_operator_reachability_raw mz_dataflow_operator_reachability_raw_u2_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - mz_introspection.mz_dataflow_operator_reachability_raw_u2_primary_idx (fast path limit)
+
+Target cluster: reach
+
+EOF
+
+statement ok
+SELECT * FROM mz_introspection.mz_dataflow_operator_reachability_raw WHERE count <> 0 LIMIT 1
+
+# A subscribe imports the log index into a dataflow without its snapshot.
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE mz_introspection.mz_dataflow_operator_reachability_raw WITH (SNAPSHOT = false)
+
+statement ok
+FETCH ALL c WITH (timeout = '0s')
+
+statement ok
+COMMIT
 
 statement ok
 DROP CLUSTER reach CASCADE

@@ -398,7 +398,6 @@ pub fn build_compute_dataflow(
                     let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization {
                         SnapshotMode::Include
                     } else {
-                        compute_state.metrics.inc_subscribe_snapshot_optimization();
                         SnapshotMode::Exclude
                     };
                     context.import_index(
@@ -498,7 +497,6 @@ pub fn build_compute_dataflow(
                     let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization {
                         SnapshotMode::Include
                     } else {
-                        compute_state.metrics.inc_subscribe_snapshot_optimization();
                         SnapshotMode::Exclude
                     };
                     context.import_index(
@@ -699,7 +697,7 @@ where
             // A diff-is-count index always takes its snapshot, because the conversion reads the
             // accumulation of every key. Excluding the snapshot is an optimization whose
             // consumers drop the snapshot's updates themselves, so including it stays correct.
-            let diff_is_count = compute_state.diff_is_count_indexes.contains(&idx_id);
+            let diff_is_count = traces.diff_is_count();
             let bundle = match snapshot_mode {
                 _ if diff_is_count => {
                     let ok_arranged = oks
@@ -727,6 +725,7 @@ where
                     )
                 }
                 SnapshotMode::Exclude => {
+                    compute_state.metrics.inc_subscribe_snapshot_optimization();
                     // When we import an index without a snapshot, we have two balancing considerations:
                     // - It's easy to filter out irrelevant batches from the stream, but hard to filter them out from an arrangement.
                     //   (The `TraceFrontier` wrapper allows us to set an "until" frontier, but not a lower.)

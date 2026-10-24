@@ -236,6 +236,7 @@ pub struct TraceBundle {
     oks: PaddedTrace<RowRowAgent<Timestamp, Diff>>,
     errs: PaddedTrace<ErrAgent<Timestamp, Diff>>,
     to_drop: Option<Rc<dyn Any>>,
+    diff_is_count: bool,
 }
 
 impl TraceBundle {
@@ -249,7 +250,25 @@ impl TraceBundle {
             oks: oks.into(),
             errs: errs.into(),
             to_drop: None,
+            diff_is_count: false,
         }
+    }
+
+    /// Marks the `oks` trace as carrying the relation's last column in the diff.
+    pub fn with_diff_is_count(self, diff_is_count: bool) -> TraceBundle {
+        TraceBundle {
+            diff_is_count,
+            ..self
+        }
+    }
+
+    /// Whether the `oks` trace carries the relation's last column in the diff, as
+    /// [`mz_compute_client::logging::LogVariant::diff_is_count`] describes.
+    ///
+    /// Every reader of such a trace, an import into a dataflow or a peek, must convert it, because
+    /// its updates are not a collection's multiplicities.
+    pub fn diff_is_count(&self) -> bool {
+        self.diff_is_count
     }
 
     /// Adds tokens to be dropped when the trace bundle is dropped.
@@ -311,6 +330,7 @@ impl TraceBundle {
             oks: self.oks.into_padded(),
             errs: self.errs.into_padded(),
             to_drop: self.to_drop,
+            diff_is_count: self.diff_is_count,
         }
     }
 }
