@@ -960,6 +960,10 @@ impl PeekClient {
 
         let (df_desc, df_meta) = global_lir_plan.unapply();
 
+        if !caller.is_background() {
+            crate::query_policy::check_query_policies(catalog, session, cluster_id, &df_desc)?;
+        }
+
         crate::coord::sequencer::emit_optimizer_notices(
             &**catalog,
             session,

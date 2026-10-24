@@ -1314,6 +1314,7 @@ impl Coordinator {
                             DropObjectInfo::NetworkPolicy(_) => {
                                 new_network_policies -= 1;
                             }
+                            DropObjectInfo::QueryPolicy(_) => {}
                             DropObjectInfo::Item(id) => {
                                 let entry = self.catalog().get_entry(id);
                                 *new_objects_per_schema
@@ -1386,6 +1387,8 @@ impl Coordinator {
                 | Op::AlterRetainHistory { .. }
                 | Op::AlterSourceTimestampInterval { .. }
                 | Op::AlterNetworkPolicy { .. }
+                | Op::CreateQueryPolicy { .. }
+                | Op::AlterQueryPolicy { .. }
                 | Op::AlterAddColumn { .. }
                 | Op::AlterMaterializedViewApplyReplacement { .. }
                 | Op::UpdatePrivilege { .. }

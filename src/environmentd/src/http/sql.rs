@@ -1740,6 +1740,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedMaterializedView { .. }
         | ExecuteResponse::CreatedType
         | ExecuteResponse::CreatedNetworkPolicy
+        | ExecuteResponse::CreatedQueryPolicy
         | ExecuteResponse::Comment
         | ExecuteResponse::Deleted(_)
         | ExecuteResponse::DiscardedTemp
