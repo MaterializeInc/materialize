@@ -24,22 +24,29 @@ class DropIndex(Check):
                 > CREATE MATERIALIZED VIEW drop_index_view AS SELECT f1, f2 FROM drop_index_table WHERE f1 > 0;
                 """))
 
+    # An index cannot be dropped while a materialized view or a newer index reads
+    # from it, so each phase drops the view and then the indexes newest first,
+    # and recreates the view afterwards.
     def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(dedent(s))
             for s in [
                 """
                 > INSERT INTO drop_index_table VALUES (4,4,4);
+                > DROP MATERIALIZED VIEW drop_index_view;
                 > DROP INDEX drop_index_index1;
                 > INSERT INTO drop_index_table VALUES (5,5,5);
                 > CREATE INDEX drop_index_index2 ON drop_index_table (f1, f2);
+                > CREATE MATERIALIZED VIEW drop_index_view AS SELECT f1, f2 FROM drop_index_table WHERE f1 > 0;
                 > INSERT INTO drop_index_table VALUES (6,6,6);
                 """,
                 """
                 > INSERT INTO drop_index_table VALUES (7,7,7);
-                > DROP INDEX drop_index_table_primary_idx;
-                > INSERT INTO drop_index_table VALUES (8,8,8);
+                > DROP MATERIALIZED VIEW drop_index_view;
                 > DROP INDEX drop_index_index2;
+                > INSERT INTO drop_index_table VALUES (8,8,8);
+                > DROP INDEX drop_index_table_primary_idx;
+                > CREATE MATERIALIZED VIEW drop_index_view AS SELECT f1, f2 FROM drop_index_table WHERE f1 > 0;
                 > INSERT INTO drop_index_table VALUES (9,9,9);
                 """,
             ]
