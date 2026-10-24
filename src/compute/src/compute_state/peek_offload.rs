@@ -18,11 +18,16 @@
 //! This driver performs the only IO, so the scan stays free of async colouring. A walk
 //! whose rows outgrow an inline answer hands over a full batch, the driver writes it to the peek
 //! stash, and the walk carries on from where it stopped.
+//!
+//! The walk is generic over [`OffloadScan`], so a description scan runs under the same permits,
+//! cancellation, and slicing, see [`offload_description_scan`].
 
 use std::sync::{Arc, Mutex};
 use std::thread::Thread;
 use std::time::{Duration, Instant};
 
+use differential_dataflow::trace::Navigable;
+use futures::future::BoxFuture;
 use mz_compute_client::protocol::command::Peek;
 use mz_compute_client::protocol::response::{PeekError, PeekResponse};
 use mz_compute_types::dyncfgs::{
@@ -38,6 +43,9 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::compute_state::PeekRowIterationConfig;
+use crate::compute_state::description_scan::{
+    DescriptionScan, DescriptionScanOutcome, DescriptionUpdates,
+};
 use crate::compute_state::peek_metrics::PeekWalkMetrics;
 use crate::compute_state::peek_scan::{IndexPeekScan, RowBatch, ScanOutcome, rows_response};
 use crate::compute_state::peek_stash::{StashTarget, StashUpload};
@@ -101,7 +109,7 @@ impl PeekPermits {
     }
 
     /// Waits for a permit.
-    async fn acquire(self: &Arc<Self>) -> WalkPermit {
+    pub(super) async fn acquire(self: &Arc<Self>) -> WalkPermit {
         let permit = Arc::clone(&self.semaphore)
             .acquire_owned()
             .await
@@ -141,7 +149,7 @@ impl PeekPermits {
     ///
     /// Raising it takes effect at once. Lowering it interrupts no walk: the permits free right now
     /// go, and the rest go as the walks holding them finish, see [`WalkPermit`].
-    fn resize(&self, fraction: f64) {
+    pub(super) fn resize(&self, fraction: f64) {
         let target = Self::permits_for(self.workers, fraction);
 
         let mut bound = self.bound.lock().expect("lock poisoned");
@@ -265,12 +273,8 @@ impl OffloadedPeek {
                 let start = Instant::now();
 
                 let queued = metrics.queued_for_permit();
-                let permit = tokio::select! {
-                    permit = permits.acquire() => permit,
-                    // Cancellation while the walk waits its turn drops the receiving end of the
-                    // result channel. The scan leaves the queue with this task, releasing the
-                    // cursors and the accumulated rows it was holding, and never takes a permit.
-                    () = result_tx.closed() => return,
+                let Some(permit) = admit(&permits, &mut result_tx).await else {
+                    return;
                 };
                 queued.admitted();
 
@@ -327,13 +331,13 @@ impl OffloadedPeek {
     /// to `stash`. `None` means the peek was cancelled, which is the one way the walk ends without
     /// an answer.
     async fn walk(
-        mut state: WalkState,
+        mut state: PeekWalkState,
         peek_uuid: Uuid,
         stash: Option<&StashTarget>,
         config: &OffloadConfig,
         metrics: &PeekWalkMetrics,
         order_by: Arc<[ColumnOrder]>,
-    ) -> (WalkState, Option<PeekResponse>) {
+    ) -> (PeekWalkState, Option<PeekResponse>) {
         // Opened by the first batch the scan hands over, so a walk that never crosses the stash
         // threshold neither opens a shard nor writes a byte. Whether it is open is also what
         // decides how the peek is answered: an upload answers with a handle, and no upload means
@@ -341,29 +345,20 @@ impl OffloadedPeek {
         let mut upload: Option<StashUpload> = None;
 
         loop {
-            // Stepped on the blocking pool, because the walk is CPU-bound for its whole length and
-            // would otherwise hold an async worker there. Not `block_in_place`, which parks a core
-            // for the same span. The scan crosses to the pool and back, which it can because it
-            // owns `Arc`-backed batch snapshots and holds no trace handle.
-            let walk_config = config.clone();
-            let (stepped, outcome) = mz_ore::task::spawn_blocking(
-                || "peek_offload::walk",
-                move || state.step_until_blocked(&walk_config),
-            )
-            .await;
+            let (stepped, slice) = state.slice(config).await;
             state = stepped;
             let scan = &mut state.scan;
 
             // A cancelled walk gives up its upload by dropping it, which deletes what it wrote,
             // so this is an ordinary return.
-            let Some(outcome) = outcome else {
+            let Some(slice) = slice else {
                 return (state, None);
             };
 
             // This driver finishes the walk the worker started, so it reports every phase of it,
             // the slices that ran on the worker included. The worker reported none of them.
-            match outcome {
-                ScanOutcome::Finished(Ok(rows)) => {
+            match slice {
+                Slice::Finished(ScanOutcome::Finished(Ok(rows))) => {
                     let phases = scan.phases();
                     metrics.observe_error_phase(&phases);
                     metrics.observe_ok_phase(&phases);
@@ -389,65 +384,130 @@ impl OffloadedPeek {
                     };
                     return (state, Some(response));
                 }
-                ScanOutcome::Finished(Err(error)) => {
+                Slice::Finished(ScanOutcome::Finished(Err(error))) => {
                     metrics.observe_error_phase(&scan.phases());
                     // The peek is answered with the error rather than with the rows written so
                     // far, so nothing will ever read them, and the upload's drop deletes them.
                     return (state, Some(PeekResponse::Error(error)));
                 }
-                ScanOutcome::Suspended => {
-                    // `step_until_blocked` returns a suspension only with a batch, and a scan that
-                    // has one makes no progress until it is taken.
-                    if let Some(batch) = scan.take_batch() {
-                        let Some(stash) = stash else {
-                            // Only an eligible scan fills a batch, and eligibility is what gave
-                            // this walk its target, so this is a defect at the offload site.
-                            // Answered as well as logged, because the walk has stopped either way.
-                            soft_panic_or_log!(
-                                "offloaded walk holds a batch and has no stash target"
-                            );
-                            metrics.observe_error_phase(&scan.phases());
-                            return (
-                                state,
-                                Some(PeekResponse::Error(PeekError::unstructured(
-                                    "internal error: offloaded peek walk has nowhere to write its rows",
-                                ))),
-                            );
-                        };
+                Slice::Finished(ScanOutcome::Suspended) => {
+                    soft_panic_or_log!("offloaded walk finished a slice suspended");
+                    metrics.observe_error_phase(&scan.phases());
+                    return (
+                        state,
+                        Some(PeekResponse::Error(PeekError::unstructured(
+                            "internal error: offloaded peek walk stopped without an answer",
+                        ))),
+                    );
+                }
+                Slice::Batch(batch) => {
+                    let Some(stash) = stash else {
+                        // Only an eligible scan fills a batch, and eligibility is what gave
+                        // this walk its target, so this is a defect at the offload site.
+                        // Answered as well as logged, because the walk has stopped either way.
+                        soft_panic_or_log!("offloaded walk holds a batch and has no stash target");
+                        metrics.observe_error_phase(&scan.phases());
+                        return (
+                            state,
+                            Some(PeekResponse::Error(PeekError::unstructured(
+                                "internal error: offloaded peek walk has nowhere to write its rows",
+                            ))),
+                        );
+                    };
 
-                        let open = match &mut upload {
-                            Some(open) => open,
-                            none => match stash.open(config.batch_max_runs.get()).await {
-                                Ok(opened) => none.insert(opened),
-                                Err(error) => {
-                                    warn!(%peek_uuid, %error, "peek stash failed to open a shard");
-                                    metrics.observe_error_phase(&scan.phases());
-                                    return (
-                                        state,
-                                        Some(PeekResponse::Error(PeekError::unstructured(
-                                            error.to_string(),
-                                        ))),
-                                    );
-                                }
-                            },
-                        };
+                    let open = match &mut upload {
+                        Some(open) => open,
+                        none => match stash.open(config.batch_max_runs.get()).await {
+                            Ok(opened) => none.insert(opened),
+                            Err(error) => {
+                                warn!(%peek_uuid, %error, "peek stash failed to open a shard");
+                                metrics.observe_error_phase(&scan.phases());
+                                return (
+                                    state,
+                                    Some(PeekResponse::Error(PeekError::unstructured(
+                                        error.to_string(),
+                                    ))),
+                                );
+                            }
+                        },
+                    };
 
-                        if let Err(error) = open.push(batch).await {
-                            // Persist rejects only a batch handed to it wrongly, so this is a
-                            // defect in the upload rather than a blip.
-                            warn!(%peek_uuid, %error, "peek stash rejected a batch");
-                            metrics.observe_error_phase(&scan.phases());
-                            return (
-                                state,
-                                Some(PeekResponse::Error(PeekError::unstructured(
-                                    error.to_string(),
-                                ))),
-                            );
-                        }
+                    if let Err(error) = open.push(batch).await {
+                        // Persist rejects only a batch handed to it wrongly, so this is a
+                        // defect in the upload rather than a blip.
+                        warn!(%peek_uuid, %error, "peek stash rejected a batch");
+                        metrics.observe_error_phase(&scan.phases());
+                        return (
+                            state,
+                            Some(PeekResponse::Error(PeekError::unstructured(
+                                error.to_string(),
+                            ))),
+                        );
                     }
                 }
             }
         }
+    }
+}
+
+/// A scan the offload driver can step away from the worker that opened it.
+///
+/// The scan performs no IO. It holds what it produces until the driver takes it, and makes no
+/// progress while it holds a batch the driver has not taken.
+pub(super) trait OffloadScan: Send + 'static {
+    /// What the scan hands out while it runs.
+    type Batch: Send + 'static;
+    /// What a step reports.
+    type Outcome: Send + 'static;
+
+    /// Advances the scan until it ends, a batch is ready, or `fuel` runs out. `config` carries
+    /// the parameters in effect for this step.
+    fn step(&mut self, config: &OffloadConfig, fuel: &mut usize) -> Self::Outcome;
+
+    /// Whether `outcome` leaves the scan to be stepped again, rather than ending it.
+    fn suspended(outcome: &Self::Outcome) -> bool;
+
+    /// Takes the batch the scan holds, if it has one ready.
+    fn take_batch(&mut self) -> Option<Self::Batch>;
+}
+
+impl OffloadScan for IndexPeekScan {
+    type Batch = RowBatch;
+    type Outcome = ScanOutcome;
+
+    fn step(&mut self, config: &OffloadConfig, fuel: &mut usize) -> ScanOutcome {
+        IndexPeekScan::step(self, config.row_iteration.current_limit(), fuel)
+    }
+
+    fn suspended(outcome: &ScanOutcome) -> bool {
+        matches!(outcome, ScanOutcome::Suspended)
+    }
+
+    fn take_batch(&mut self) -> Option<RowBatch> {
+        IndexPeekScan::take_batch(self)
+    }
+}
+
+/// Where a slice of an offloaded walk stopped.
+enum Slice<S: OffloadScan> {
+    /// The scan handed out a batch and waits to be stepped again.
+    Batch(S::Batch),
+    /// The scan reported an outcome that is not a suspension.
+    Finished(S::Outcome),
+}
+
+/// Waits for a permit for a walk whose result goes through `result_tx`. `None` means the walk
+/// was cancelled while it queued.
+async fn admit<R>(
+    permits: &Arc<PeekPermits>,
+    result_tx: &mut oneshot::Sender<R>,
+) -> Option<WalkPermit> {
+    tokio::select! {
+        permit = permits.acquire() => Some(permit),
+        // Cancellation while the walk waits its turn drops the receiving end of the
+        // result channel. The scan leaves the queue with this task, releasing the
+        // cursors and the accumulated rows it was holding, and never takes a permit.
+        () = result_tx.closed() => None,
     }
 }
 
@@ -457,22 +517,40 @@ impl OffloadedPeek {
 /// on a blocking thread that an abort cannot interrupt, and the permit accounts for that thread
 /// until the scan leaves it. Fields drop in declaration order, so the scan and its batches go
 /// before the permit that accounts for them.
-struct WalkState {
-    scan: IndexPeekScan,
+struct WalkState<S, R> {
+    scan: S,
     _permit: WalkPermit,
-    /// The sending end of the peek's result channel. Its receiver is dropped by cancellation and
+    /// The sending end of the walk's result channel. Its receiver is dropped by cancellation and
     /// by nothing else, so a closed channel is the cancellation signal.
-    result_tx: oneshot::Sender<(PeekResponse, Duration)>,
+    result_tx: oneshot::Sender<R>,
 }
 
-impl WalkState {
-    /// Steps the scan until it ends, offers a batch, or the peek is cancelled, whichever comes
+/// The state of an offloaded index peek walk.
+type PeekWalkState = WalkState<IndexPeekScan, (PeekResponse, Duration)>;
+
+impl<S: OffloadScan, R: Send + 'static> WalkState<S, R> {
+    /// Steps the scan on the blocking pool until it blocks, see
+    /// [`WalkState::step_until_blocked`].
+    async fn slice(self, config: &OffloadConfig) -> (Self, Option<Slice<S>>) {
+        // Stepped on the blocking pool, because the walk is CPU-bound for its whole length and
+        // would otherwise hold an async worker there. Not `block_in_place`, which parks a core
+        // for the same span. The scan crosses to the pool and back, which it can because it
+        // owns `Arc`-backed batch snapshots and holds no trace handle.
+        let walk_config = config.clone();
+        mz_ore::task::spawn_blocking(
+            || "peek_offload::walk",
+            move || self.step_until_blocked(&walk_config),
+        )
+        .await
+    }
+
+    /// Steps the scan until it ends, offers a batch, or the walk is cancelled, whichever comes
     /// first. `None` is the cancellation.
     ///
     /// Runs on a blocking thread, and reads the configuration and checks for cancellation every
     /// `yield_granularity` positions rather than returning to the async task, which costs a
     /// round trip through the runtime that a walk with nothing to await has no use for.
-    fn step_until_blocked(mut self, config: &OffloadConfig) -> (Self, Option<ScanOutcome>) {
+    fn step_until_blocked(mut self, config: &OffloadConfig) -> (Self, Option<Slice<S>>) {
         loop {
             if self.result_tx.is_closed() {
                 return (self, None);
@@ -481,12 +559,14 @@ impl WalkState {
             // A granularity of zero would spend no fuel, and a scan stepped with no fuel makes no
             // progress, so the walk would spin without ever reaching an answer.
             let mut fuel = config.yield_granularity.get().max(1);
-            let row_iteration_limit = config.row_iteration.current_limit();
 
-            match self.scan.step(row_iteration_limit, &mut fuel) {
-                // Out of fuel with nothing to hand over: a cancellation check, not a stop.
-                ScanOutcome::Suspended if !self.scan.batch_ready() => {}
-                outcome => return (self, Some(outcome)),
+            let outcome = self.scan.step(config, &mut fuel);
+            if !S::suspended(&outcome) {
+                return (self, Some(Slice::Finished(outcome)));
+            }
+            // Out of fuel with nothing to hand over: a cancellation check, not a stop.
+            if let Some(batch) = self.scan.take_batch() {
+                return (self, Some(Slice::Batch(batch)));
             }
         }
     }
@@ -539,6 +619,89 @@ async fn stashed_answer(peek_uuid: Uuid, mut upload: StashUpload, tail: RowBatch
             PeekResponse::Error(PeekError::unstructured(error.to_string()))
         }
     }
+}
+
+/// Offloads `scan` to a task that runs it away from the worker, hands each batch it cuts to
+/// `sink`, and wakes `worker` once the outcome is ready.
+///
+/// The outcome is `Ok` once `sink` has accepted every update of the description. It is `Err` with
+/// the error of the first hand-out `sink` rejects, which ends the walk. Dropping the receiver
+/// cancels the walk, and dropping the handle aborts it. Either way the scan, the batches it holds,
+/// and its permit are released.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the batched subscribe sink is not wired up")
+)]
+pub(super) fn offload_description_scan<Ok, Err, Sink>(
+    scan: DescriptionScan<Ok, Err>,
+    mut sink: Sink,
+    permits: Arc<PeekPermits>,
+    config: OffloadConfig,
+    worker: Thread,
+) -> (oneshot::Receiver<Result<(), String>>, AbortOnDropHandle<()>)
+where
+    Ok: Navigable,
+    Err: Navigable,
+    Sink: FnMut(DescriptionUpdates) -> BoxFuture<'static, Result<(), String>> + Send + 'static,
+    DescriptionScan<Ok, Err>:
+        OffloadScan<Batch = DescriptionUpdates, Outcome = DescriptionScanOutcome>,
+{
+    let (mut result_tx, result_rx) = oneshot::channel();
+    permits.resize(config.permit_fraction.get());
+
+    let task_handle = mz_ore::task::spawn(|| "peek_offload::description_scan", async move {
+        let Some(permit) = admit(&permits, &mut result_tx).await else {
+            return;
+        };
+        let mut state = WalkState {
+            scan,
+            _permit: permit,
+            result_tx,
+        };
+
+        let result = loop {
+            let (stepped, slice) = state.slice(&config).await;
+            state = stepped;
+            let Some(slice) = slice else {
+                return;
+            };
+            match slice {
+                Slice::Batch(batch) => {
+                    if let Err(error) = sink(batch).await {
+                        break Err(error);
+                    }
+                }
+                Slice::Finished(DescriptionScanOutcome::Finished) => {
+                    if let Some(tail) = OffloadScan::take_batch(&mut state.scan) {
+                        if let Err(error) = sink(tail).await {
+                            break Err(error);
+                        }
+                    }
+                    break Ok(());
+                }
+                Slice::Finished(DescriptionScanOutcome::Suspended) => {
+                    soft_panic_or_log!("offloaded description scan finished a slice suspended");
+                    break Err("internal error: offloaded description scan stopped early".into());
+                }
+            }
+        };
+
+        // Released before the outcome is sent, so a receiver that sees it finds the batches and
+        // the permit already given back.
+        let WalkState {
+            scan,
+            _permit: permit,
+            result_tx,
+        } = state;
+        drop(scan);
+        drop(permit);
+        if result_tx.send(result).is_err() {
+            debug!("dropping the outcome of a cancelled description scan");
+        }
+        worker.unpark();
+    });
+
+    (result_rx, task_handle.abort_on_drop())
 }
 
 #[cfg(test)]
