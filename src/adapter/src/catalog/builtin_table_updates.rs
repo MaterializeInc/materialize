@@ -9,6 +9,8 @@
 
 mod notice;
 
+use std::collections::BTreeSet;
+
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_audit_log::VersionedStorageUsage;
@@ -24,11 +26,13 @@ use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
     CatalogItem, DataSourceDesc, Func, Index, Table, TableDataSource, Type,
 };
+use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::now::EpochMillis;
 use mz_persist_client::batch::ProtoBatch;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
@@ -46,7 +50,6 @@ use smallvec::smallvec;
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
-use crate::active_compute_sink::ActiveSubscribe;
 use crate::catalog::CatalogState;
 use crate::coord::ConnMeta;
 
@@ -668,24 +671,22 @@ impl CatalogState {
     pub fn pack_subscribe_update(
         &self,
         id: GlobalId,
-        subscribe: &ActiveSubscribe,
         session_uuid: Uuid,
+        cluster_id: ClusterId,
+        start_time: EpochMillis,
+        depends_on: &BTreeSet<GlobalId>,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer.push(Datum::String(&id.to_string()));
         packer.push(Datum::Uuid(session_uuid));
-        packer.push(Datum::String(&subscribe.cluster_id.to_string()));
+        packer.push(Datum::String(&cluster_id.to_string()));
 
-        let start_dt = mz_ore::now::to_datetime(subscribe.start_time);
+        let start_dt = mz_ore::now::to_datetime(start_time);
         packer.push(Datum::TimestampTz(start_dt.try_into().expect("must fit")));
 
-        let depends_on: Vec<_> = subscribe
-            .depends_on
-            .iter()
-            .map(|id| id.to_string())
-            .collect();
+        let depends_on: Vec<_> = depends_on.iter().map(|id| id.to_string()).collect();
         packer.push_list(depends_on.iter().map(|s| Datum::String(s)));
 
         BuiltinTableUpdate::row(&*MZ_SUBSCRIPTIONS, row, diff)

@@ -183,6 +183,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
+use crate::batched_subscribe::ForwarderEvent;
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
 use crate::client::{Client, Handle, truncate_sql_for_logging};
 use crate::command::{Command, ExecuteResponse};
@@ -434,6 +435,8 @@ pub enum Message {
         span: Span,
         stage: IntrospectionSubscribeStage,
     },
+    /// A batched subscribe's forwarder ended the client's stream.
+    BatchedSubscribeForwarder(ForwarderEvent),
     MetricSinkStageReady {
         span: Span,
         stage: MetricSinkStage,
@@ -563,6 +566,7 @@ impl Message {
             Message::IntrospectionSubscribeStageReady { .. } => {
                 "introspection_subscribe_stage_ready"
             }
+            Message::BatchedSubscribeForwarder(_) => "batched_subscribe_forwarder",
             Message::MetricSinkStageReady { .. } => "metric_sink_stage_ready",
             Message::SecretStageReady { .. } => "secret_stage_ready",
             Message::ClusterStageReady { .. } => "cluster_stage_ready",
@@ -572,6 +576,12 @@ impl Message {
             Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
+    }
+}
+
+impl From<ForwarderEvent> for Message {
+    fn from(event: ForwarderEvent) -> Self {
+        Message::BatchedSubscribeForwarder(event)
     }
 }
 

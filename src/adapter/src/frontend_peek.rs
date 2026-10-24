@@ -45,6 +45,7 @@ use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
 use tracing::{Span, debug, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command};
@@ -1152,6 +1153,10 @@ impl PeekClient {
                     index_id,
                     plan.with_snapshot,
                     plan.up_to,
+                    plan.batched
+                        .then(|| optimize::subscribe::BatchedSubscribeOptions {
+                            stash_id: Uuid::new_v4(),
+                        }),
                     debug_name,
                     optimizer_config,
                     self.optimizer_metrics.clone(),

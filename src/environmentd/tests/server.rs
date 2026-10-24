@@ -1601,6 +1601,91 @@ fn test_subscribe_single_large_batch_not_retired() {
     assert_eq!(returned.len(), rows);
 }
 
+/// Drives inserts into `t` past a batched subscribe whose client never reads, and returns the
+/// error chain that ends the subscribe.
+#[allow(clippy::disallowed_methods)]
+fn batched_subscribe_fell_behind_error(server: &test_util::TestServerWithRuntime) -> String {
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    writer.batch_execute("CREATE TABLE t (a bigint)").unwrap();
+
+    let mut reader_client = server.connect(postgres::NoTls).unwrap();
+    let mut copy = reader_client
+        .copy_out("COPY (SUBSCRIBE t WITH (BATCHED)) TO STDOUT")
+        .unwrap();
+    for _ in 0..200 {
+        writer
+            .batch_execute("INSERT INTO t SELECT generate_series(1, 1000)")
+            .unwrap();
+    }
+
+    let mut buf = Vec::new();
+    let io_err = std::io::Read::read_to_end(&mut copy, &mut buf).unwrap_err();
+    let mut chain = io_err.to_string();
+    let mut source = std::error::Error::source(&io_err);
+    while let Some(err) = source {
+        chain.push_str(" | ");
+        chain.push_str(&err.to_string());
+        source = err.source();
+    }
+    chain
+}
+
+/// Tests that a batched subscribe whose client does not read is retired once its unread stashed
+/// shares exceed `batched_subscribe_max_unread_stash_bytes`.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_unread_stash_bound() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_subscribe_batched".into(), "true".into())
+        .with_system_parameter_default(
+            "compute_batched_subscribe_inline_max_bytes".into(),
+            "0".into(),
+        )
+        .with_system_parameter_default(
+            "compute_peek_response_stash_read_batch_size_bytes".into(),
+            "1024".into(),
+        )
+        .with_system_parameter_default(
+            "batched_subscribe_max_unread_stash_bytes".into(),
+            "65536".into(),
+        )
+        // Out of reach, so that only the stash bound can retire the subscribe.
+        .with_system_parameter_default(
+            "subscribe_max_buffered_bytes".into(),
+            "1099511627776".into(),
+        )
+        .start_blocking();
+
+    let chain = batched_subscribe_fell_behind_error(&server);
+    assert!(
+        chain.contains("fell behind")
+            && chain.contains("exceeding the 64.0 KiB budget")
+            && chain.contains("raise the batched_subscribe_max_unread_stash_bytes system variable"),
+        "expected a fell-behind error for the stash bound, got: {chain}"
+    );
+}
+
+/// Tests that a batched subscribe whose client does not read is retired once its backlog and
+/// unread inline shares exceed `subscribe_max_buffered_bytes`.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_buffer_bound() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_subscribe_batched".into(), "true".into())
+        .with_system_parameter_default("subscribe_max_buffered_bytes".into(), "65536".into())
+        .start_blocking();
+
+    let chain = batched_subscribe_fell_behind_error(&server);
+    assert!(
+        chain.contains("fell behind")
+            && chain.contains("exceeding the 64.0 KiB budget")
+            && chain.contains("raise the subscribe_max_buffered_bytes system variable"),
+        "expected a fell-behind error for the memory bound, got: {chain}"
+    );
+}
+
 #[derive(Debug, Deserialize)]
 struct HttpResponse<R> {
     results: Vec<R>,

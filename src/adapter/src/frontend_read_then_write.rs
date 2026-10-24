@@ -1245,6 +1245,7 @@ impl PeekClient {
             sink_id,
             true, // with_snapshot
             None, // up_to
+            None, // batched
             debug_name,
             optimizer_config,
             self.optimizer_metrics.clone(),

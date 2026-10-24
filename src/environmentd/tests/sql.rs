@@ -15,7 +15,7 @@
 
 #![recursion_limit = "256"]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -840,6 +840,473 @@ fn test_subscribe_progress() {
             }
         }
     }
+}
+
+/// One line of `COPY (SUBSCRIBE ... WITH (PROGRESS)) TO STDOUT` over a relation with one `int`
+/// column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubscribeLine {
+    Progress(u64),
+    Data { ts: u64, diff: i64, a: i32 },
+}
+
+/// Runs `subscribe` through `COPY ... TO STDOUT` until it completes, and parses its lines.
+fn copy_subscribe(client: &mut postgres::Client, subscribe: &str) -> Vec<SubscribeLine> {
+    let mut out = String::new();
+    client
+        .copy_out(&format!("COPY ({subscribe}) TO STDOUT"))
+        .unwrap()
+        .read_to_string(&mut out)
+        .unwrap();
+    out.lines().map(parse_subscribe_line).collect()
+}
+
+fn parse_subscribe_line(line: &str) -> SubscribeLine {
+    let fields: Vec<_> = line.split('\t').collect();
+    let [ts, progressed, diff, a] = fields[..] else {
+        panic!("unexpected subscribe line: {line}");
+    };
+    let ts = ts.parse().unwrap();
+    match progressed {
+        "t" => SubscribeLine::Progress(ts),
+        "f" => SubscribeLine::Data {
+            ts,
+            diff: diff.parse().unwrap(),
+            a: a.parse().unwrap(),
+        },
+        _ => panic!("unexpected subscribe line: {line}"),
+    }
+}
+
+/// The accumulated diff of every row at every time, without zero diffs.
+fn updates_by_time(lines: &[SubscribeLine]) -> BTreeMap<u64, BTreeMap<i32, i64>> {
+    let mut updates: BTreeMap<u64, BTreeMap<i32, i64>> = BTreeMap::new();
+    for line in lines {
+        if let SubscribeLine::Data { ts, diff, a } = line {
+            *updates.entry(*ts).or_default().entry(*a).or_default() += diff;
+        }
+    }
+    for rows in updates.values_mut() {
+        rows.retain(|_, diff| *diff != 0);
+    }
+    updates.retain(|_, rows| !rows.is_empty());
+    updates
+}
+
+/// Returns a timestamp at which `t` can be read, at or after every write to `t` so far.
+fn read_ts(client: &mut postgres::Client) -> u64 {
+    client
+        .query_one("SELECT mz_now()::text, count(*) FROM t", &[])
+        .unwrap()
+        .get::<_, String>(0)
+        .parse()
+        .unwrap()
+}
+
+/// Asserts the shape of a batched subscribe's output: a progress row at `as_of`, then batches
+/// that each end with a progress row, the last one at `upper`. Each batch holds updates at times
+/// within its bounds, consolidated per time and row.
+fn assert_batched_shape(lines: &[SubscribeLine], as_of: u64, upper: u64) {
+    assert_eq!(
+        lines.first(),
+        Some(&SubscribeLine::Progress(as_of)),
+        "{lines:?}"
+    );
+    assert_eq!(
+        lines.last(),
+        Some(&SubscribeLine::Progress(upper)),
+        "{lines:?}"
+    );
+    let mut lower = as_of;
+    let mut batch = BTreeMap::new();
+    for line in &lines[1..] {
+        match *line {
+            SubscribeLine::Data { ts, diff, a } => {
+                assert!(lower <= ts, "update at {ts} before {lower}: {lines:?}");
+                assert_ne!(diff, 0, "{lines:?}");
+                assert_eq!(
+                    batch.insert((ts, a), diff),
+                    None,
+                    "batch not consolidated: {lines:?}"
+                );
+            }
+            SubscribeLine::Progress(next) => {
+                assert!(lower < next, "progress did not advance: {lines:?}");
+                for (ts, _) in batch.keys() {
+                    assert!(*ts < next, "update at {ts} not before {next}: {lines:?}");
+                }
+                batch.clear();
+                lower = next;
+            }
+        }
+    }
+}
+
+/// Fetches from cursor `c` until `done` holds for the lines fetched so far, and returns them.
+fn fetch_until(
+    client: &mut postgres::Client,
+    done: impl Fn(&[SubscribeLine]) -> bool,
+) -> Vec<SubscribeLine> {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut lines = Vec::new();
+    while !done(&lines) {
+        assert!(Instant::now() < deadline, "timed out fetching: {lines:?}");
+        for row in client
+            .query("FETCH ALL c WITH (timeout = '1s')", &[])
+            .unwrap()
+        {
+            let ts = row.get::<_, MzTimestamp>("mz_timestamp").0;
+            let line = if row.get::<_, bool>("mz_progressed") {
+                SubscribeLine::Progress(ts)
+            } else {
+                SubscribeLine::Data {
+                    ts,
+                    diff: row.get::<_, i64>("mz_diff"),
+                    a: row.get::<_, i32>("a"),
+                }
+            };
+            lines.push(line);
+        }
+    }
+    lines
+}
+
+/// Polls until `mz_subscriptions` has `expected` rows.
+fn await_subscriptions(client: &mut postgres::Client, expected: i64) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let count: i64 = client
+            .query_one("SELECT count(*) FROM mz_internal.mz_subscriptions", &[])
+            .unwrap()
+            .get(0);
+        if count == expected {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "mz_subscriptions has {count} rows, expected {expected}"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Starts a server with batched subscribes and `RETAIN HISTORY` enabled.
+fn start_batched_server() -> TestServerWithRuntime {
+    test_util::TestHarness::default()
+        .with_system_parameter_default("enable_subscribe_batched".into(), "true".into())
+        .with_system_parameter_default("enable_logical_compaction_window".into(), "true".into())
+        .start_blocking()
+}
+
+/// Tests that a batched subscribe delivers the updates of a `PROGRESS` subscribe with the same
+/// bounds, in consolidated batches that each end with a progress row.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_progress() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    for has_index in [false, true] {
+        for has_snapshot in [false, true] {
+            info!(msg = "Running test", has_index, has_snapshot);
+            client
+                .batch_execute("CREATE TABLE t (a int) WITH (RETAIN HISTORY FOR '1000 hours')")
+                .unwrap();
+            if has_index {
+                client.batch_execute("CREATE INDEX i ON t (a)").unwrap();
+            }
+            client
+                .batch_execute("INSERT INTO t VALUES (1), (1), (2)")
+                .unwrap();
+            let as_of = read_ts(&mut client);
+            client.batch_execute("INSERT INTO t VALUES (3)").unwrap();
+            client.batch_execute("DELETE FROM t WHERE a = 1").unwrap();
+            client
+                .batch_execute("INSERT INTO t VALUES (2), (4), (4)")
+                .unwrap();
+            client.batch_execute("UPDATE t SET a = a + 10").unwrap();
+            let up_to = read_ts(&mut client) + 1;
+
+            let bounds = format!("SNAPSHOT = {has_snapshot}) AS OF {as_of} UP TO {up_to}");
+            let progress = copy_subscribe(
+                &mut client,
+                &format!("SUBSCRIBE t WITH (PROGRESS, {bounds}"),
+            );
+            let batched =
+                copy_subscribe(&mut client, &format!("SUBSCRIBE t WITH (BATCHED, {bounds}"));
+
+            assert_batched_shape(&batched, as_of, up_to);
+            let updates = updates_by_time(&batched);
+            assert_eq!(updates, updates_by_time(&progress));
+            assert_eq!(updates.contains_key(&as_of), has_snapshot, "{batched:?}");
+            assert_eq!(updates.range(as_of + 1..).count(), 4, "{batched:?}");
+
+            client.batch_execute("DROP TABLE t CASCADE").unwrap();
+        }
+    }
+}
+
+/// The ids of the shards with blobs in the file blob at `blob_dir`.
+fn blob_shards(blob_dir: &std::path::Path) -> BTreeSet<String> {
+    let Ok(entries) = std::fs::read_dir(blob_dir) else {
+        return BTreeSet::new();
+    };
+    entries
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().into_string().ok()?;
+            // `FileBlob` replaces the `/` in keys with `∕`, and every blob key of a shard starts
+            // with the shard id.
+            let shard = name.split('∕').next()?;
+            shard.starts_with('s').then(|| shard.to_string())
+        })
+        .collect()
+}
+
+/// The shards created since `known` was listed that have blobs but no persist state.
+///
+/// Stashed batches are the only blobs written to such shards.
+fn stash_shards(
+    client: &mut postgres::Client,
+    blob_dir: &std::path::Path,
+    known: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let storage_shards: BTreeSet<String> = client
+        .query("SELECT shard_id FROM mz_internal.mz_storage_shards", &[])
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    blob_shards(blob_dir)
+        .into_iter()
+        .filter(|shard| !known.contains(shard) && !storage_shards.contains(shard))
+        .collect()
+}
+
+/// Polls until `done` holds for the [`stash_shards`].
+fn await_stash_shards(
+    client: &mut postgres::Client,
+    blob_dir: &std::path::Path,
+    known: &BTreeSet<String>,
+    done: impl Fn(&BTreeSet<String>) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let shards = stash_shards(client, blob_dir, known);
+        if done(&shards) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out, stash shards: {shards:?}"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Starts a server whose batched subscribes stash every nonempty share and read stashed shares
+/// back in small chunks, so a forwarder stalls mid-read on a client that does not fetch.
+fn start_stashing_server(data_dir: &std::path::Path) -> TestServerWithRuntime {
+    test_util::TestHarness::default()
+        .data_directory(data_dir)
+        .with_system_parameter_default("enable_subscribe_batched".into(), "true".into())
+        .with_system_parameter_default(
+            "compute_batched_subscribe_inline_max_bytes".into(),
+            "0".into(),
+        )
+        .with_system_parameter_default(
+            "compute_peek_response_stash_read_batch_size_bytes".into(),
+            "1024".into(),
+        )
+        .start_blocking()
+}
+
+const STASHED_ROWS: i32 = 20_000;
+
+/// Opens cursor `c` over a batched subscribe of a large snapshot, fetches its first row, and
+/// waits until the snapshot's stash shard has blobs. Returns the shards that existed before.
+#[allow(clippy::disallowed_methods)]
+fn open_stashed_cursor(
+    client: &mut postgres::Client,
+    observer: &mut postgres::Client,
+    blob_dir: &std::path::Path,
+) -> BTreeSet<String> {
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client
+        .batch_execute(&format!(
+            "INSERT INTO t SELECT generate_series(1, {STASHED_ROWS})"
+        ))
+        .unwrap();
+    let known = blob_shards(blob_dir);
+    assert!(!known.is_empty(), "no blobs in {}", blob_dir.display());
+
+    client
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE t WITH (BATCHED)")
+        .unwrap();
+    let first = client.query_one("FETCH 1 c", &[]).unwrap();
+    assert!(first.get::<_, bool>("mz_progressed"));
+
+    // The forwarder waits for the client to fetch before it reads further, so the stash is
+    // still there.
+    await_stash_shards(observer, blob_dir, &known, |shards| !shards.is_empty());
+    known
+}
+
+/// Tests that a batched subscribe reads a stashed snapshot back completely, and deletes the
+/// stashed batches once they are read.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_large_result_is_stashed() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let blob_dir = data_dir.path().join("persist").join("blob");
+    let server = start_stashing_server(data_dir.path());
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut observer = server.connect(postgres::NoTls).unwrap();
+
+    let known = open_stashed_cursor(&mut client, &mut observer, &blob_dir);
+
+    let expected_rows = usize::try_from(STASHED_ROWS).unwrap();
+    let lines = fetch_until(&mut client, |lines| {
+        let data = lines
+            .iter()
+            .filter(|line| matches!(line, SubscribeLine::Data { .. }))
+            .count();
+        data >= expected_rows && matches!(lines.last(), Some(SubscribeLine::Progress(_)))
+    });
+    let mut values: Vec<_> = lines
+        .iter()
+        .filter_map(|line| match line {
+            SubscribeLine::Data { diff, a, .. } => {
+                assert_eq!(*diff, 1);
+                Some(*a)
+            }
+            SubscribeLine::Progress(_) => None,
+        })
+        .collect();
+    values.sort();
+    assert_eq!(values, (1..=STASHED_ROWS).collect::<Vec<_>>());
+
+    await_stash_shards(&mut observer, &blob_dir, &known, |shards| shards.is_empty());
+    client.batch_execute("COMMIT").unwrap();
+}
+
+/// Tests that canceling a batched subscribe deletes the stashed batches it has not read.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_cancel_deletes_stash() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let blob_dir = data_dir.path().join("persist").join("blob");
+    let server = start_stashing_server(data_dir.path());
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut observer = server.connect(postgres::NoTls).unwrap();
+
+    let known = open_stashed_cursor(&mut client, &mut observer, &blob_dir);
+    await_subscriptions(&mut observer, 1);
+
+    client.batch_execute("ROLLBACK").unwrap();
+    await_stash_shards(&mut observer, &blob_dir, &known, |shards| shards.is_empty());
+    await_subscriptions(&mut observer, 0);
+}
+
+/// Tests that a batched subscribe with `UP TO` delivers the updates before it and completes.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_up_to() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a int) WITH (RETAIN HISTORY FOR '1000 hours')")
+        .unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    let as_of = read_ts(&mut client);
+    client.batch_execute("INSERT INTO t VALUES (2)").unwrap();
+    let up_to = read_ts(&mut client) + 1;
+    client.batch_execute("INSERT INTO t VALUES (3)").unwrap();
+
+    let lines = copy_subscribe(
+        &mut client,
+        &format!("SUBSCRIBE t WITH (BATCHED) AS OF {as_of} UP TO {up_to}"),
+    );
+    assert_batched_shape(&lines, as_of, up_to);
+    let rows: Vec<_> = updates_by_time(&lines)
+        .into_values()
+        .flat_map(|rows| rows.into_keys())
+        .collect();
+    assert_eq!(rows, vec![1, 2]);
+}
+
+/// Tests that a batched subscribe that covers no times completes at once.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_as_of_equals_up_to() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a int) WITH (RETAIN HISTORY FOR '1000 hours')")
+        .unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    let ts = read_ts(&mut client);
+
+    let lines = copy_subscribe(
+        &mut client,
+        &format!("SUBSCRIBE t WITH (BATCHED) AS OF {ts} UP TO {ts}"),
+    );
+    assert_eq!(lines, vec![SubscribeLine::Progress(ts)]);
+
+    // A constant relation is read at the maximum timestamp, and a subscribe without a snapshot
+    // reports only the times after it.
+    let lines = copy_subscribe(
+        &mut client,
+        "SUBSCRIBE (SELECT 1 AS a) WITH (BATCHED, SNAPSHOT = false)",
+    );
+    assert_eq!(lines, vec![SubscribeLine::Progress(u64::MAX)]);
+}
+
+/// Tests a batched subscribe read through a cursor, and its row in `mz_subscriptions`.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_cursor() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+
+    writer.batch_execute("CREATE TABLE t (a int)").unwrap();
+    writer.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    client
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE t WITH (BATCHED)")
+        .unwrap();
+    let mut lines = fetch_until(&mut client, |lines| {
+        lines
+            .iter()
+            .any(|line| matches!(line, SubscribeLine::Data { a: 1, diff: 1, .. }))
+            && matches!(lines.last(), Some(SubscribeLine::Progress(_)))
+    });
+    let SubscribeLine::Progress(as_of) = lines[0] else {
+        panic!("first line is not a progress row: {lines:?}");
+    };
+    await_subscriptions(&mut writer, 1);
+
+    writer.batch_execute("INSERT INTO t VALUES (2)").unwrap();
+    lines.extend(fetch_until(&mut client, |lines| {
+        lines
+            .iter()
+            .any(|line| matches!(line, SubscribeLine::Data { a: 2, diff: 1, .. }))
+            && matches!(lines.last(), Some(SubscribeLine::Progress(_)))
+    }));
+    let Some(SubscribeLine::Progress(upper)) = lines.last().copied() else {
+        unreachable!("`fetch_until` ends with a progress row");
+    };
+    assert_batched_shape(&lines, as_of, upper);
+
+    client.batch_execute("COMMIT").unwrap();
+    await_subscriptions(&mut writer, 0);
 }
 
 // Verifies that subscribing to non-nullable columns with progress information

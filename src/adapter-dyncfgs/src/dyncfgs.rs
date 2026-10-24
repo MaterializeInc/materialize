@@ -378,6 +378,15 @@ pub const SUBSCRIBE_MAX_BUFFERED_BYTES: Config<usize> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Bound on the encoded size of the stashed shares a batched SUBSCRIBE has
+/// accepted but not yet read back for its client.
+pub const BATCHED_SUBSCRIBE_MAX_UNREAD_STASH_BYTES: Config<usize> = Config::new(
+    "batched_subscribe_max_unread_stash_bytes",
+    128 * 1024 * 1024 * 1024,
+    "Maximum bytes of stashed results a batched SUBSCRIBE may hold unread for a slow client before it is retired with an error.",
+    ParameterScope::Environment,
+);
+
 /// Number of user IDs to pre-allocate in a batch. Pre-allocating IDs avoids
 /// a persist write + oracle call per DDL statement.
 pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
@@ -600,6 +609,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
         .add(&WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES)
         .add(&SUBSCRIBE_MAX_BUFFERED_BYTES)
+        .add(&BATCHED_SUBSCRIBE_MAX_UNREAD_STASH_BYTES)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&GROUP_COMMIT_MAX_ATTEMPTS)
         .add(&CONSOLE_OIDC_CLIENT_ID)

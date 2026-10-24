@@ -234,6 +234,7 @@ impl Coordinator {
             subscribe_id,
             plan.with_snapshot,
             None,
+            None,
             format!("introspection-subscribe-{subscribe_id}"),
             optimizer_config,
             self.optimizer_metrics(),
