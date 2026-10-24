@@ -119,7 +119,8 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 def staging_version() -> str:
     # Cached: the version cannot change within a run, and `parse_cargo` shells
     # out to cargo, whose failure must not surface inside a region retry loop.
-    return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
+    # Reuse the measured full-stack image. This diagnostic changes only the harness.
+    return f"{MzVersion.parse_cargo()}--pr.g3a8987e80dbd6cb88afc62b4bc1cb5453bfc658f"
 
 
 SERVICES = [
@@ -145,6 +146,7 @@ SCENARIO_TPCH_QUERIES_WEAK = "tpch_queries_weak"
 SCENARIO_TPCH_STRONG = "tpch_strong"
 SCENARIO_SOURCE_INGESTION_STRONG = "source_ingestion_strong"
 SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
+DIAGNOSTIC_LOGGING_MODES = (False, True)
 SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING = "copy_from_stdin_envd_strong_scaling"
 SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES = "envd_objects_scalability_tables"
 SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS = "envd_objects_scalability_mvs"
@@ -1953,7 +1955,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             runner.run_query("SET cluster = 'c'")
             # Keep the default-logging series intact, then repeat on the same
             # clusters with sampling disabled in every benchmark connection.
-            for disable_statement_logging in (False, True):
+            for disable_statement_logging in DIAGNOSTIC_LOGGING_MODES:
                 for protocol in self.options.protocols:
                     for concurrency in self.options.concurrencies:
                         self.measure(
@@ -1980,8 +1982,13 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         suffix = "_logging_disabled" if disable_statement_logging else ""
         name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters"
         name += suffix
+        duration = (
+            min(self.options.duration, 30)
+            if disable_statement_logging
+            else self.options.duration
+        )
         print(
-            f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
+            f"--- {name}: envd={runner.envd_cpus} CPUs, {duration}s measured + {self.options.warmup}s warmup"
         )
         config = self.options.config(
             runner.target.qps_connection_flags(),
@@ -1989,6 +1996,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             protocol,
             disable_statement_logging=disable_statement_logging,
         )
+        config["duration_seconds"] = duration
         result = pgbench.run(config, runner.target.composition)
         validate_qps_result(result, concurrency, protocol)
         if (
@@ -3389,7 +3397,9 @@ class EnvdCpuSweep(Scenario):
     def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
         assert point.envd_cpus is not None
         assert self._fixed_replica_size is not None
-        reconfigure_envd_cpus(runner.target, point.envd_cpus, runner)
+        # This diagnostic boots directly at 32 CPUs so its observer's
+        # namespace-local permissions survive through the measurement.
+        assert point.envd_cpus == 32
         # On Cloud the CPU change recreates the region, which drops the state that
         # `prepare` set up. Re-preparing is cheap, and harmless on Docker, where the
         # state survives the restart.
@@ -3410,12 +3420,8 @@ class EnvdCpuSweep(Scenario):
         self._workload.run(runner)
 
     def teardown(self, runner: ScenarioRunner) -> None:
-        if isinstance(runner.target, CloudTarget):
-            print("--- Resetting Cloud environmentd CPUs to the default")
-            # Recreating rather than enabling on top of the existing region keeps the
-            # region out of the read-only limbo that a 0dt rollover would put it in, so
-            # whatever runs after this scenario finds a usable region.
-            cloud_recreate_region_with_envd_cpus(runner.target, 2)
+        # The diagnostic's final hard cleanup removes the region.
+        pass
 
 
 class EnvdObjectsSweep(Scenario):
@@ -3529,6 +3535,8 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
     soft-disabled region serves nothing at all. We turn the soak off for test regions, like
     mzcompose does for Docker-based tests.
     """
+    if envd_cpus is None:
+        envd_cpus = 32
     args = []
 
     if envd_cpus is not None:
@@ -3539,6 +3547,9 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
         # `--environmentd-extra-arg` with a 403 Forbidden, so this is staging-only.
         args += [
             "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s",
+            "--environmentd-extra-arg=--system-parameter-default=enable_frontend_transaction_completion=true",
+            "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_reuse=true",
+            "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_templates=true",
             # Pin the image built for this PR. Production does not accept a
             # custom version.
             "--version",
@@ -3954,6 +3965,8 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     """
     Run the bench workflow by default
     """
+    global DIAGNOSTIC_LOGGING_MODES
+    DIAGNOSTIC_LOGGING_MODES = (False,)
     add_target_arguments(parser)
     parser.add_argument(
         "--record",
@@ -4066,6 +4079,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     )
 
     args = parser.parse_args()
+    EnvdCpuSweep.ENVD_CPU_SCALES = [32]
     QpsSweep(
         args.qps_concurrencies,
         args.qps_protocols,
@@ -4107,8 +4121,8 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             args.max_scale if target_max is None else min(args.max_scale, target_max)
         )
 
-        if args.cleanup:
-            target.cleanup()
+        # The diagnostic starts from the verified disabled test region.
+        # Keep its precreated observer permissions until measurement finishes.
 
         target.initialize()
 
@@ -4163,8 +4177,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             # columns are silently dropped on upload (CSV writer uses
             # extrasaction="ignore"); to recover them, consult the artifact
             # CSV directly.
-            for stream in streams.values():
-                stream.spec.upload(composition, stream.path, not test_failed)
+            print("Diagnostic profile run: skipping test-analytics uploads")
 
             assert not test_failed
 
@@ -4261,8 +4274,9 @@ class CloudTarget(BenchTarget):
         ]
 
     def initialize(self) -> None:
-        print("Soft-disabling and then enabling region using Mz ...")
-        cloud_disable_enable_and_wait(self)
+        print("Enabling the disabled diagnostic region directly at 32 CPUs")
+        enable_region(self, 32)
+        wait_for_envd(self)
 
         # Create new app password.
         new_app_password_name = "Materialize CLI (mz) - Cluster Spec Sheet"
