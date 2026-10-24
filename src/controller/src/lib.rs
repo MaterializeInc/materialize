@@ -34,7 +34,7 @@ use mz_cluster_client::metrics::ControllerMetrics;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_client::controller::error::{CollectionLookupError, CollectionMissing};
 use mz_compute_client::controller::{
-    ComputeController, ComputeControllerResponse, PeekNotification,
+    AcceptedBatch, ComputeController, ComputeControllerResponse, PeekNotification,
 };
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::{ClusterId, WatchSetId};
@@ -119,6 +119,8 @@ pub enum ControllerResponse {
     PeekNotification(Uuid, PeekNotification, OpenTelemetryContext),
     /// The worker's next response to a specified subscribe.
     SubscribeResponse(GlobalId, SubscribeBatch),
+    /// The next batch of a specified batched subscribe.
+    BatchedSubscribeResponse(GlobalId, AcceptedBatch),
     /// The worker's next response to a specified copy to.
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
     /// Notification that a watch set has finished. See
@@ -531,6 +533,9 @@ impl Controller {
             }
             ComputeControllerResponse::SubscribeResponse(id, tail) => {
                 Some(ControllerResponse::SubscribeResponse(id, tail))
+            }
+            ComputeControllerResponse::BatchedSubscribeResponse(id, batch) => {
+                Some(ControllerResponse::BatchedSubscribeResponse(id, batch))
             }
             ComputeControllerResponse::CopyToResponse(id, tail) => {
                 Some(ControllerResponse::CopyToResponse(id, tail))
