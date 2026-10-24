@@ -1,0 +1,160 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# The reachability log carries its `count` column in the diff of its arrangement. Readers convert
+# it into a set, so operators that require positive multiplicities work on it.
+
+mode cockroach
+
+reset-server
+
+statement ok
+CREATE CLUSTER reach REPLICAS (r1 (SIZE 'scale=1,workers=2', INTROSPECTION INTERVAL '50 milliseconds'));
+
+statement ok
+SET cluster = reach;
+
+statement ok
+CREATE TABLE t (a int);
+
+statement ok
+CREATE DEFAULT INDEX ON t;
+
+statement ok
+INSERT INTO t VALUES (1), (2), (3);
+
+statement ok
+SELECT mz_unsafe.mz_sleep(1)
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT count(*) FROM mz_introspection.mz_dataflow_operator_reachability_raw
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          ReadIndex on=mz_dataflow_operator_reachability_raw mz_dataflow_operator_reachability_raw_u2_primary_idx=[*** full scan ***]
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+
+Used Indexes:
+  - mz_introspection.mz_dataflow_operator_reachability_raw_u2_primary_idx (*** full scan ***)
+
+Target cluster: reach
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT count(*) FROM mz_introspection.mz_dataflow_operator_reachability_per_worker
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          Distinct project=[#4{id}, #0{worker_id}..=#3{time}]
+            Project (#1{worker_id}, #3{port}..=#5{time}, #9{id})
+              Join on=(#0{id} = #6{id} AND #1{worker_id} = #7{worker_id} = #10{worker_id} AND #11{address} = case when (0 = uint8_to_numeric(#2{source})) then #8{address} else (#8{address} || #2{source}) end) type=delta
+                ArrangeBy keys=[[#0{id}, #1{worker_id}], [#1{worker_id}]]
+                  Project (#0{id}..=#5{time})
+                    ReadIndex on=mz_dataflow_operator_reachability_raw mz_dataflow_operator_reachability_raw_u2_primary_idx=[*** full scan ***]
+                ArrangeBy keys=[[#0{id}, #1{worker_id}]]
+                  ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[delta join lookup]
+                ArrangeBy keys=[[#1{worker_id}, #2{address}]]
+                  ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[*** full scan ***]
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+
+Used Indexes:
+  - mz_introspection.mz_dataflow_addresses_per_worker_u2_primary_idx (*** full scan ***, delta join lookup)
+  - mz_introspection.mz_dataflow_operator_reachability_raw_u2_primary_idx (*** full scan ***)
+
+Target cluster: reach
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+SELECT count(*) FROM mz_introspection.mz_dataflow_operator_reachability
+----
+Explained Query:
+  With
+    cte l0 =
+      Reduce aggregates=[count(*)]
+        Project ()
+          Distinct project=[#3{id}, #0{port}..=#2{time}]
+            Project (#3{port}..=#5{time}, #9{id})
+              Join on=(#0{id} = #6{id} AND #1{worker_id} = #7{worker_id} = #10{worker_id} AND #11{address} = case when (0 = uint8_to_numeric(#2{source})) then #8{address} else (#8{address} || #2{source}) end) type=delta
+                ArrangeBy keys=[[#0{id}, #1{worker_id}], [#1{worker_id}]]
+                  Project (#0{id}..=#5{time})
+                    ReadIndex on=mz_dataflow_operator_reachability_raw mz_dataflow_operator_reachability_raw_u2_primary_idx=[*** full scan ***]
+                ArrangeBy keys=[[#0{id}, #1{worker_id}]]
+                  ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[delta join lookup]
+                ArrangeBy keys=[[#1{worker_id}, #2{address}]]
+                  ReadIndex on=mz_dataflow_addresses_per_worker mz_dataflow_addresses_per_worker_u2_primary_idx=[*** full scan ***]
+  Return
+    Union
+      Get l0
+      Map (0)
+        Union
+          Negate
+            Project ()
+              Get l0
+          Constant
+            - ()
+
+Used Indexes:
+  - mz_introspection.mz_dataflow_addresses_per_worker_u2_primary_idx (*** full scan ***, delta join lookup)
+  - mz_introspection.mz_dataflow_operator_reachability_raw_u2_primary_idx (*** full scan ***)
+
+Target cluster: reach
+
+EOF
+
+# Requires positive multiplicities, which the raw arrangement does not have.
+statement ok
+SELECT DISTINCT * FROM mz_introspection.mz_dataflow_operator_reachability_raw
+
+# The fast-path peek of the log index.
+statement ok
+SELECT * FROM mz_introspection.mz_dataflow_operator_reachability_raw
+
+# No row has a zero count.
+query I
+SELECT count(*) FROM mz_introspection.mz_dataflow_operator_reachability_raw WHERE count = 0
+----
+0
+
+statement ok
+SELECT DISTINCT time FROM mz_introspection.mz_dataflow_operator_reachability_per_worker
+
+statement ok
+SELECT count(*) FROM mz_introspection.mz_dataflow_operator_reachability
+
+statement ok
+DROP CLUSTER reach CASCADE

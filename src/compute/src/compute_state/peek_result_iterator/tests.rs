@@ -140,6 +140,7 @@ fn iterator(keys: &[Row], constraints: &mut [Row]) -> PeekResultIterator<TestTra
         Some(constraints),
         cursor,
         storage,
+        false,
         None,
         0,
     )
@@ -168,6 +169,7 @@ fn iterator_without_literals(
         None,
         cursor,
         storage,
+        false,
         None,
         0,
     )
@@ -451,4 +453,78 @@ fn the_row_iteration_limit_ends_the_scan() {
     let mut fuel = usize::MAX;
     assert!(matches!(iterator.step(&mut fuel), Step::Done));
     assert_eq!(usize::MAX - fuel, 0, "a latched walk costs no fuel");
+}
+
+/// Builds a single-batch trace holding `updates` with empty values, and a cursor over it.
+fn trace_of_updates(
+    updates: &[(Row, Timestamp, Diff)],
+) -> (TraceCursor<TestTrace>, TraceStorage<TestTrace>) {
+    let updates: Vec<((Row, Row), Timestamp, Diff)> = updates
+        .iter()
+        .map(|(key, time, diff)| ((key.clone(), Row::default()), *time, *diff))
+        .collect();
+    let mut batcher = OrdValBatcher::<Row, Row, Timestamp, Diff>::new(None, 0);
+    batcher.push_into(updates);
+    let (mut chain, description) = batcher.seal(Antichain::from_elem(Timestamp::MAX));
+    let batch = ArcOrdValBuilder::<Row, Row, Timestamp, Diff>::seal(&mut chain, description);
+    let storage = vec![batch];
+    let cursor = CursorList::new(vec![storage[0].cursor()], &storage);
+    (cursor, storage)
+}
+
+/// A diff-is-count walk yields each key whose accumulation at the peek timestamp is non-zero once,
+/// with the accumulation as a column between the arranged value and any literal.
+#[mz_ore::test]
+fn diff_is_count_appends_accumulation() {
+    let peek_timestamp = Timestamp::from(1);
+    let updates = [
+        // Negative accumulations are counts like any other.
+        (row(1), Timestamp::from(0), Diff::from(-2)),
+        // Accumulates to zero at the peek timestamp, so the key is absent.
+        (row(2), Timestamp::from(0), Diff::from(4)),
+        (row(2), Timestamp::from(1), Diff::from(-4)),
+        // Only the update at or before the peek timestamp counts.
+        (row(3), Timestamp::from(1), Diff::from(3)),
+        (row(3), Timestamp::from(2), Diff::from(7)),
+    ];
+
+    let walk = |constraints: Option<&mut [Row]>, arity: usize| {
+        let (cursor, storage) = trace_of_updates(&updates);
+        let map_filter_project = mz_expr::MapFilterProject::new(arity)
+            .into_plan()
+            .expect("valid plan")
+            .into_nontemporal()
+            .expect("non-temporal plan");
+        PeekResultIterator::<TestTrace>::from_cursor(
+            GlobalId::User(1),
+            map_filter_project,
+            peek_timestamp,
+            constraints,
+            cursor,
+            storage,
+            true,
+            None,
+            0,
+        )
+        .collect::<Result<Vec<_>, _>>()
+        .expect("walk succeeds")
+    };
+    let one = NonZeroI64::new(1).expect("non-zero");
+
+    // Key and count.
+    let rows = walk(None, 2);
+    let expected = vec![
+        (Row::pack_slice(&[Datum::UInt8(1), Datum::Int64(-2)]), one),
+        (Row::pack_slice(&[Datum::UInt8(3), Datum::Int64(3)]), one),
+    ];
+    assert_eq!(rows, expected);
+
+    // Key, count, and literal, in that order.
+    let mut constraints = vec![row(2), row(3)];
+    let rows = walk(Some(&mut constraints), 3);
+    let expected = vec![(
+        Row::pack_slice(&[Datum::UInt8(3), Datum::Int64(3), Datum::UInt8(3)]),
+        one,
+    )];
+    assert_eq!(rows, expected);
 }

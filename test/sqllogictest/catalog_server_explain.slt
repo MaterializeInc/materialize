@@ -6012,7 +6012,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1064 rows)
+            →Constant (1065 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -10556,7 +10556,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1064 rows)
+            →Constant (1065 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -15499,15 +15499,15 @@ EXPLAIN SELECT * FROM "mz_introspection"."mz_dataflow_operator_reachability";
 ----
 Explained Query:
   →Accumulable GroupAggregate
-    Simple aggregates: sum(#4{count})
+    Simple aggregates: sum(numeric_to_bigint(#4))
     Key:
       Project: #0..=#3
     →Map/Filter/Project
       Project: #0, #2..=#5
         →Accumulable GroupAggregate
-          Simple aggregates: count(*)
+          Simple aggregates: sum(#4{count})
           Key:
-            Project: #4, #0..=#3
+            Project: #5, #0..=#3
           →One-Shot Delta Join [%0:mz_dataflow_operator_reachability_raw » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#1{worker_id}, #2{address}]]
             →Unarranged Raw Stream
               →Arranged mz_introspection.mz_dataflow_operator_reachability_raw
@@ -15527,16 +15527,19 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_introspection"."mz_dataflow_operator_reachability_per_worker";
 ----
 Explained Query:
-  →Accumulable GroupAggregate
-    Simple aggregates: count(*)
-    Key:
-      Project: #4, #0..=#3
-    →One-Shot Delta Join [%0:mz_dataflow_operator_reachability_raw » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#1{worker_id}, #2{address}]]
-      →Unarranged Raw Stream
-        →Arranged mz_introspection.mz_dataflow_operator_reachability_raw
-      →Arranged mz_introspection.mz_dataflow_addresses_per_worker
-      →Arrange (#1{worker_id}, #2{address})
-        →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+  →Map/Filter/Project
+    Project: #0..=#4, #6
+    Map: numeric_to_bigint(#5)
+      →Accumulable GroupAggregate
+        Simple aggregates: sum(#4{count})
+        Key:
+          Project: #5, #0..=#3
+        →One-Shot Delta Join [%0:mz_dataflow_operator_reachability_raw » %1:mz_dataflow_addresses_per_worker[#0, #1] » %2:mz_dataflow_addresses_per_worker[#1{worker_id}, #2{address}]]
+          →Unarranged Raw Stream
+            →Arranged mz_introspection.mz_dataflow_operator_reachability_raw
+          →Arranged mz_introspection.mz_dataflow_addresses_per_worker
+          →Arrange (#1{worker_id}, #2{address})
+            →Arranged mz_introspection.mz_dataflow_addresses_per_worker
 
 Used Indexes:
   - mz_introspection.mz_dataflow_addresses_per_worker_s2_primary_idx (*** full scan ***, delta join lookup)

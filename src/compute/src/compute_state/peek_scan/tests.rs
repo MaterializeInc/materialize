@@ -109,6 +109,7 @@ fn ok_iterator_with_copies(keys: &[Row], copies: Diff) -> PeekResultIterator<Tes
         None,
         cursor,
         storage,
+        false,
         None,
         0,
     )
@@ -619,6 +620,7 @@ fn open(
         peek,
         errs,
         oks,
+        false,
         max_result_size,
         StashBounds {
             eligible: peek_stash_eligible,

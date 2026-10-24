@@ -204,6 +204,19 @@ impl LogVariant {
             .unwrap_or_else(|| (0..arity).collect())
     }
 
+    /// Whether the log's arrangement carries its last column, `count`, in the diff.
+    ///
+    /// The arrangement of such a log holds the key columns and an empty value, and the
+    /// accumulated diff of a `(key, time)` is the value of `count`, which can be zero or
+    /// negative. Its updates are not a collection's multiplicities, so no reader may consume the
+    /// arrangement as a collection directly. Each reader instead converts every key with a
+    /// non-zero accumulation into one row that appends the accumulation as `count`, with
+    /// multiplicity one. The key is all columns but `count`, which makes the converted relation a
+    /// set.
+    pub fn diff_is_count(&self) -> bool {
+        matches!(self, LogVariant::Timely(TimelyLog::Reachability))
+    }
+
     /// Relation schemas for the logs.
     ///
     /// This types need to agree with the values that are produced
@@ -291,6 +304,8 @@ impl LogVariant {
                 .with_column("port", SqlScalarType::UInt64.nullable(false))
                 .with_column("update_type", SqlScalarType::String.nullable(false))
                 .with_column("time", SqlScalarType::MzTimestamp.nullable(true))
+                .with_column("count", SqlScalarType::Int64.nullable(false))
+                .with_key(vec![0, 1, 2, 3, 4, 5])
                 .finish(),
 
             LogVariant::Differential(DifferentialLog::ArrangementBatches)

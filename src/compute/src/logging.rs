@@ -179,13 +179,17 @@ impl PermutedRowPacker {
     pub(crate) fn new<V: Into<LogVariant>>(variant: V) -> Self {
         let variant = variant.into();
         let key = variant.index_by();
-        let (_, value) = permutation_for_arrangement(
+        let (_, mut value) = permutation_for_arrangement(
             &key.iter()
                 .cloned()
                 .map(MirScalarExpr::column)
                 .collect::<Vec<_>>(),
             variant.desc().arity(),
         );
+        // The `count` column of such a log travels in the diff, so its arranged value is empty.
+        if variant.diff_is_count() {
+            value.clear();
+        }
         Self {
             key,
             value,

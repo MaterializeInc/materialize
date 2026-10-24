@@ -14,7 +14,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_compute_client::protocol::response::PeekError;
 use mz_repr::fixed_length::ExtendDatums;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;
 
 use crate::compute_state::PeekRowIterationTracker;
@@ -35,6 +35,8 @@ where
     storage: TraceStorage<Tr>,
     map_filter_project: mz_expr::SafeMfpPlan,
     peek_timestamp: mz_repr::Timestamp,
+    /// Whether the trace carries the relation's last column in the diff.
+    diff_is_count: bool,
     row_builder: Row,
     datum_vec: DatumVec,
     literals: Option<Literals<Tr>>,
@@ -184,12 +186,19 @@ where
             DiffGat<'a> = &'a Diff,
         >,
 {
+    /// Opens a walk over `trace_reader` at `peek_timestamp`.
+    ///
+    /// With `diff_is_count`, the trace carries the relation's last column in the diff, as
+    /// [`mz_compute_client::logging::LogVariant::diff_is_count`] describes. The walk then yields
+    /// each value whose accumulation is non-zero once, with the accumulation appended as that
+    /// column, and skips the others.
     pub(super) fn new(
         target_id: GlobalId,
         map_filter_project: mz_expr::SafeMfpPlan,
         peek_timestamp: mz_repr::Timestamp,
         literal_constraints: Option<&mut [Row]>,
         trace_reader: &mut Tr,
+        diff_is_count: bool,
         row_iteration_limit: Option<usize>,
         rows_iterated: usize,
     ) -> Self {
@@ -201,6 +210,7 @@ where
             literal_constraints,
             cursor,
             storage,
+            diff_is_count,
             row_iteration_limit,
             rows_iterated,
         )
@@ -214,6 +224,7 @@ where
         literal_constraints: Option<&mut [Row]>,
         cursor: TraceCursor<Tr>,
         storage: TraceStorage<Tr>,
+        diff_is_count: bool,
         row_iteration_limit: Option<usize>,
         rows_iterated: usize,
     ) -> Self {
@@ -225,6 +236,7 @@ where
             storage,
             map_filter_project,
             peek_timestamp,
+            diff_is_count,
             row_builder: Row::default(),
             datum_vec: DatumVec::new(),
             literals,
@@ -438,6 +450,20 @@ where
         // from a performance perspective.
         let arena = RowArena::new();
 
+        // A trace whose diff is a column needs the accumulation as an input to the
+        // `map_filter_project`, so it reads the accumulation first. Every other trace reads it
+        // only for rows the `map_filter_project` keeps.
+        let count = if self.diff_is_count {
+            let count = accumulate::<Tr>(&mut self.cursor, &self.storage, self.peek_timestamp);
+            // A zero accumulation is a row that is absent, not a row with `count = 0`.
+            if count.is_zero() {
+                return Ok(None);
+            }
+            Some(count)
+        } else {
+            None
+        };
+
         let key_item = self.cursor.key(&self.storage);
         let row_item = self.cursor.val(&self.storage);
 
@@ -447,6 +473,11 @@ where
         let mut borrow = self.datum_vec.borrow();
         key_item.extend_datums(&arena, &mut borrow, None);
         row_item.extend_datums(&arena, &mut borrow, None);
+        if let Some(count) = count {
+            // The column sits after the arranged value and ahead of any literal, where the
+            // arrangement would hold it if the value carried it.
+            borrow.push(Datum::Int64(count.into_inner()));
+        }
 
         if let Some(literals) = &mut self.literals {
             // The peek was created from an IndexedFilter join. We have to add those columns
@@ -460,41 +491,37 @@ where
                 .expect("literal position must be at a matching literal during row extraction");
             maybe_literal.extend_datums(&arena, &mut borrow, None);
         }
-        if let Some(result) = self
+        let Some(result) = self
             .map_filter_project
             .evaluate_into(&mut borrow, &arena, &mut self.row_builder)
             .map(|row| row.cloned())
             .map_err(PeekError::from)?
-        {
-            let mut copies = Diff::ZERO;
-            self.cursor.map_times(&self.storage, |time, diff| {
-                if time.less_equal(&self.peek_timestamp) {
-                    copies += diff;
-                }
-            });
-            let copies: i64 = if copies.is_negative() {
-                let row = &*borrow;
-                tracing::error!(
-                    target = %self.target_id, diff = %copies, ?row,
-                    "index peek encountered negative multiplicities in ok trace",
-                );
-                return Err(PeekError::unstructured(format!(
-                    "Invalid data in source, \
-                             saw retractions ({}) for row that does not exist: {:?}",
-                    -copies, row,
-                )));
-            } else {
-                copies.into_inner()
-            };
-            // if copies > 0 ... otherwise skip
-            if let Some(copies) = NonZeroI64::new(copies) {
-                Ok(Some((result, copies)))
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
+        else {
+            return Ok(None);
+        };
+
+        if count.is_some() {
+            // The converted relation is a set.
+            return Ok(Some((result, NonZeroI64::new(1).expect("one is non-zero"))));
         }
+
+        let copies = accumulate::<Tr>(&mut self.cursor, &self.storage, self.peek_timestamp);
+        let copies: i64 = if copies.is_negative() {
+            let row = &*borrow;
+            tracing::error!(
+                target = %self.target_id, diff = %copies, ?row,
+                "index peek encountered negative multiplicities in ok trace",
+            );
+            return Err(PeekError::unstructured(format!(
+                "Invalid data in source, \
+                         saw retractions ({}) for row that does not exist: {:?}",
+                -copies, row,
+            )));
+        } else {
+            copies.into_inner()
+        };
+        // if copies > 0 ... otherwise skip
+        Ok(NonZeroI64::new(copies).map(|copies| (result, copies)))
     }
 
     /// Steps the key forward, respecting literal constraints and charging `fuel` for the
@@ -530,6 +557,26 @@ where
 
         KeyStep::Advanced
     }
+}
+
+/// Accumulates the diffs of `cursor`'s current value at times up to `peek_timestamp`.
+fn accumulate<Tr>(
+    cursor: &mut TraceCursor<Tr>,
+    storage: &TraceStorage<Tr>,
+    peek_timestamp: mz_repr::Timestamp,
+) -> Diff
+where
+    Tr: TraceReader<Batch: Navigable>,
+    for<'a> BatchCursor<Tr>:
+        Cursor<TimeGat<'a>: PartialOrder<mz_repr::Timestamp>, DiffGat<'a> = &'a Diff>,
+{
+    let mut copies = Diff::ZERO;
+    cursor.map_times(storage, |time, diff| {
+        if time.less_equal(&peek_timestamp) {
+            copies += diff;
+        }
+    });
+    copies
 }
 
 #[cfg(test)]

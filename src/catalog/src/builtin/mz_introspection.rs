@@ -1926,7 +1926,7 @@ pub static MZ_DATAFLOW_OPERATOR_REACHABILITY_PER_WORKER: LazyLock<BuiltinView> =
     port,
     update_type,
     time,
-    pg_catalog.count(*) as count
+    pg_catalog.sum(reachability.count)::int8 as count
 FROM
     mz_introspection.mz_dataflow_operator_reachability_raw reachability,
     mz_introspection.mz_dataflow_addresses_per_worker addr1,

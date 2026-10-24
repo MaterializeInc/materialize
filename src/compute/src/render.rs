@@ -174,7 +174,10 @@ use crate::render::columnar::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, MzTimestamp};
+use crate::typedefs::{
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp, RowRowAgent, RowRowEnter,
+    RowRowSpine,
+};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 
@@ -693,7 +696,24 @@ where
                 self.until.clone(),
             );
 
+            // A diff-is-count index always takes its snapshot, because the conversion reads the
+            // accumulation of every key. Excluding the snapshot is an optimization whose
+            // consumers drop the snapshot's updates themselves, so including it stays correct.
+            let diff_is_count = compute_state.diff_is_count_indexes.contains(&idx_id);
             let bundle = match snapshot_mode {
+                _ if diff_is_count => {
+                    let ok_arranged = oks
+                        .enter(self.scope)
+                        .with_start_signal(start_signal.clone());
+                    let err_arranged = err_arranged
+                        .enter(self.scope)
+                        .with_start_signal(start_signal);
+                    let (oks, errs) = convert_diff_is_count(ok_arranged, err_arranged);
+                    CollectionBundle::from_expressions(
+                        idx.key.clone(),
+                        ArrangementFlavor::Local(oks, errs),
+                    )
+                }
                 SnapshotMode::Include => {
                     let ok_arranged = oks
                         .enter(self.scope)
@@ -750,6 +770,44 @@ where
             );
         }
     }
+}
+
+/// Converts an imported diff-is-count arrangement into the relation it describes, as
+/// [`mz_compute_client::logging::LogVariant::diff_is_count`] defines it.
+///
+/// Reads the imported arrangements directly, so the cost is one reduce over each and the
+/// arrangement of the converted rows, all owned by the importing dataflow.
+fn convert_diff_is_count<'scope, T: RenderTimestamp>(
+    oks: Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>,
+    errs: Arranged<'scope, ErrEnter<mz_repr::Timestamp, T>>,
+) -> (
+    Arranged<'scope, RowRowAgent<T, Diff>>,
+    Arranged<'scope, ErrAgent<T, Diff>>,
+) {
+    let oks = oks.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>(
+        "DiffIsCount",
+        |_key, input: &[(_, Diff)], output: &mut Vec<(Row, Diff)>| {
+            // The arranged value is empty, so a key has at most one value. The reduce hands over
+            // only values with a non-zero accumulation, which is what keeps zero counts out.
+            for (_val, count) in input {
+                output.push((
+                    Row::pack_slice(&[Datum::Int64(count.into_inner())]),
+                    Diff::ONE,
+                ));
+            }
+        },
+    );
+    // `ArrangementFlavor::Local` needs a local error arrangement. This one passes every error
+    // through with its multiplicity.
+    let errs = errs.mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>, _>(
+        "DiffIsCountErrors",
+        |_err, input: &[(_, Diff)], output: &mut Vec<((), Diff)>| {
+            for (_unit, diff) in input {
+                output.push(((), *diff));
+            }
+        },
+    );
+    (oks, errs)
 }
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
