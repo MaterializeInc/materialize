@@ -119,7 +119,8 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 def staging_version() -> str:
     # Cached: the version cannot change within a run, and `parse_cargo` shells
     # out to cargo, whose failure must not surface inside a region retry loop.
-    return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
+    # Reuse the measured full-stack image. This diagnostic changes only the harness.
+    return f"{MzVersion.parse_cargo()}--pr.g3a8987e80dbd6cb88afc62b4bc1cb5453bfc658f"
 
 
 SERVICES = [
@@ -1980,8 +1981,13 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         suffix = "_logging_disabled" if disable_statement_logging else ""
         name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters"
         name += suffix
+        duration = (
+            min(self.options.duration, 30)
+            if disable_statement_logging
+            else self.options.duration
+        )
         print(
-            f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
+            f"--- {name}: envd={runner.envd_cpus} CPUs, {duration}s measured + {self.options.warmup}s warmup"
         )
         config = self.options.config(
             runner.target.qps_connection_flags(),
@@ -1989,6 +1995,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             protocol,
             disable_statement_logging=disable_statement_logging,
         )
+        config["duration_seconds"] = duration
         result = pgbench.run(config, runner.target.composition)
         validate_qps_result(result, concurrency, protocol)
         if (
@@ -3539,6 +3546,9 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
         # `--environmentd-extra-arg` with a 403 Forbidden, so this is staging-only.
         args += [
             "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s",
+            "--environmentd-extra-arg=--system-parameter-default=enable_frontend_transaction_completion=true",
+            "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_reuse=true",
+            "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_templates=true",
             # Pin the image built for this PR. Production does not accept a
             # custom version.
             "--version",
@@ -4066,6 +4076,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     )
 
     args = parser.parse_args()
+    EnvdCpuSweep.ENVD_CPU_SCALES = [32]
     QpsSweep(
         args.qps_concurrencies,
         args.qps_protocols,
@@ -4163,8 +4174,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             # columns are silently dropped on upload (CSV writer uses
             # extrasaction="ignore"); to recover them, consult the artifact
             # CSV directly.
-            for stream in streams.values():
-                stream.spec.upload(composition, stream.path, not test_failed)
+            print("Diagnostic profile run: skipping test-analytics uploads")
 
             assert not test_failed
 
