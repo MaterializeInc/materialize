@@ -1951,9 +1951,18 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 runner.run_query(f"SET cluster = '{cluster}'")
                 runner.run_query("SELECT * FROM qps_gen_view")
             runner.run_query("SET cluster = 'c'")
-            for protocol in self.options.protocols:
-                for concurrency in self.options.concurrencies:
-                    self.measure(runner, size, concurrency, protocol)
+            # Keep the default-logging series intact, then repeat on the same
+            # clusters with sampling disabled in every benchmark connection.
+            for disable_statement_logging in (False, True):
+                for protocol in self.options.protocols:
+                    for concurrency in self.options.concurrencies:
+                        self.measure(
+                            runner,
+                            size,
+                            concurrency,
+                            protocol,
+                            disable_statement_logging,
+                        )
         finally:
             runner.run_query("SET cluster = 'c'")
             runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
@@ -1961,17 +1970,34 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 runner.run_query(f"DROP CLUSTER IF EXISTS qps_{i} CASCADE")
 
     def measure(
-        self, runner: ScenarioRunner, size: str, concurrency: int, protocol: str
+        self,
+        runner: ScenarioRunner,
+        size: str,
+        concurrency: int,
+        protocol: str,
+        disable_statement_logging: bool = False,
     ) -> None:
+        suffix = "_logging_disabled" if disable_statement_logging else ""
         name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters"
+        name += suffix
         print(
             f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
         )
         config = self.options.config(
-            runner.target.qps_connection_flags(), concurrency, protocol
+            runner.target.qps_connection_flags(),
+            concurrency,
+            protocol,
+            disable_statement_logging=disable_statement_logging,
         )
         result = pgbench.run(config, runner.target.composition)
         validate_qps_result(result, concurrency, protocol)
+        if (
+            disable_statement_logging
+            and result.get("statement_logging_sample_rates") != [0] * result["clusters"]
+        ):
+            raise ValueError(
+                "Statement logging was not disabled in every benchmark session"
+            )
         warnings = list(result["driver"]["warnings"])
         replica_cpu = None
         replica_samples = 0
@@ -2023,7 +2049,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             )
         print(json.dumps(result))
         runner.add_result(
-            "peek_qps",
+            f"peek_qps{suffix}",
             name,
             0,
             None,
