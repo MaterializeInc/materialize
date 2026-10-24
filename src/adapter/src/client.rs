@@ -1745,6 +1745,14 @@ impl SessionClient {
                     &plan,
                 )?;
             }
+            if let Some(cluster_id) = target_cluster_id {
+                crate::coord::catalog_serving::check_cluster_workload_restrictions(
+                    catalog.state(),
+                    cluster_id,
+                    session,
+                    &plan,
+                )?;
+            }
             if let Err(e) = mz_sql::rbac::check_plan(
                 &conn_catalog,
                 None,

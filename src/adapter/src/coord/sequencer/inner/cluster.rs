@@ -264,6 +264,25 @@ impl Coordinator {
             }
         }
 
+        // These options create replicas, so every size they can create one of
+        // must allow the workloads already on the cluster.
+        let adds_replicas = !matches!(options.size, Unchanged)
+            || !matches!(options.replication_factor, Unchanged)
+            || !matches!(options.managed, Unchanged)
+            || !matches!(options.auto_scaling_strategy, Unchanged);
+        if let (Managed(managed), true) = (&new_config.variant, adds_replicas) {
+            let hydration_size = managed
+                .auto_scaling_strategy
+                .as_ref()
+                .and_then(|strategy| strategy.on_hydration.as_ref())
+                .map(|on_hydration| on_hydration.hydration_size.as_str());
+            for size in std::iter::once(managed.size.as_str()).chain(hydration_size) {
+                self.catalog()
+                    .state()
+                    .ensure_size_allows_cluster_workloads(cluster, size, session.user())?;
+            }
+        }
+
         match &options.workload_class {
             Set(wc) => new_config.workload_class.clone_from(wc),
             Reset => new_config.workload_class = None,
@@ -1306,6 +1325,12 @@ impl Coordinator {
                     }
                     None => None,
                 };
+                let state = self.catalog().state();
+                state.ensure_size_allows_cluster_workloads(
+                    state.get_cluster(cluster_id),
+                    &size,
+                    session.user(),
+                )?;
                 let location = mz_catalog::durable::ReplicaLocation::Managed {
                     // The user-pinned `AVAILABILITY ZONE`, if any, as a zero- or
                     // one-element list.

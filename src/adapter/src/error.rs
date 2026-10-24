@@ -18,6 +18,7 @@ use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
 
 use mz_compute_types::ComputeInstanceId;
+use mz_controller::clusters::WorkloadClass;
 use mz_controller_types::ClusterId;
 use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
@@ -222,6 +223,20 @@ pub enum AdapterError {
     SubscribeOnlyTransaction,
     /// An error occurred in the optimizer.
     Optimizer(OptimizerError),
+    /// A replica size of the cluster does not allow the workload class.
+    /// `action` completes the sentence "cluster ... cannot", e.g. "run SELECT".
+    WorkloadNotAllowed {
+        cluster: String,
+        action: String,
+        class: WorkloadClass,
+    },
+    /// The replica size does not allow the workload class of an object bound
+    /// to the cluster.
+    WorkloadSizeConflict {
+        cluster: String,
+        size: String,
+        class: WorkloadClass,
+    },
     /// A query depends on items which are not allowed to be referenced from the current cluster.
     UnallowedOnCluster {
         depends_on: SmallVec<[String; 2]>,
@@ -864,6 +879,16 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::PlanError(e) => e.hint(),
+            AdapterError::WorkloadNotAllowed { .. } => Some(
+                "Use a cluster whose replica sizes allow this workload. \
+                mz_cluster_replica_sizes.allowed_workloads lists the workloads each size allows."
+                    .into(),
+            ),
+            AdapterError::WorkloadSizeConflict { .. } => Some(
+                "Choose a size that allows the workloads of the objects on the cluster, \
+                or drop those objects first."
+                    .into(),
+            ),
             AdapterError::UnallowedOnCluster { cluster, .. } => {
                 (cluster != MZ_CATALOG_SERVER_CLUSTER.name).then(||
                     "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
@@ -1050,6 +1075,9 @@ impl AdapterError {
                 OptimizerError::InternalUnsafeMfpPlan(_) => SqlState::INTERNAL_ERROR,
             },
             AdapterError::UnallowedOnCluster { .. } => {
+                SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED
+            }
+            AdapterError::WorkloadNotAllowed { .. } | AdapterError::WorkloadSizeConflict { .. } => {
                 SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED
             }
             AdapterError::Unauthorized(_) => SqlState::INSUFFICIENT_PRIVILEGE,
@@ -1451,6 +1479,26 @@ impl fmt::Display for AdapterError {
                 f.write_str("SUBSCRIBE in transactions must be the only read statement")
             }
             AdapterError::Optimizer(e) => e.fmt(f),
+            AdapterError::WorkloadNotAllowed {
+                cluster,
+                action,
+                class,
+            } => write!(
+                f,
+                "cluster {} cannot {action} because its replica sizes do not allow {class} workloads",
+                cluster.quoted()
+            ),
+            AdapterError::WorkloadSizeConflict {
+                cluster,
+                size,
+                class,
+            } => write!(
+                f,
+                "cannot use cluster size {} on cluster {} because the size does not allow \
+                {class} workloads, which objects on the cluster run",
+                size.quoted(),
+                cluster.quoted()
+            ),
             AdapterError::UnallowedOnCluster {
                 depends_on,
                 cluster,

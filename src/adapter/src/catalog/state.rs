@@ -20,6 +20,7 @@ use ipnet::IpNet;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::CLUSTER_FAMILY_ALLOWED_WORKLOADS;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::SYSTEM_CONN_ID;
@@ -30,13 +31,14 @@ use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::expr_cache::{LocalExpressions, latest_item_version};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
-    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
-    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
-    TableDataSource, Type, View,
+    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, ClusterVariant,
+    CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
+    MetricSink, NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences,
+    Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
+    WorkloadClass,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, OptimizedMirRelationExpr};
@@ -80,7 +82,7 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, User};
 use mz_sql::session::vars::{DEFAULT_DATABASE_NAME, SystemVars, Var, VarInput};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageMetadata;
@@ -92,7 +94,7 @@ use mz_transform::notice::OptimizerNotice;
 use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -2670,6 +2672,177 @@ impl CatalogState {
         Ok(location)
     }
 
+    /// The workload classes allowed per replica size family, from
+    /// `cluster_family_allowed_workloads`.
+    ///
+    /// NOTE: A value that is not a JSON object mapping family names to arrays
+    /// of workload classes is logged and ignored, so a malformed setting
+    /// restricts no family.
+    pub(crate) fn family_allowed_workloads(&self) -> FamilyWorkloads {
+        let value = CLUSTER_FAMILY_ALLOWED_WORKLOADS.get(self.system_config().dyncfgs());
+        serde_json::from_value(value).unwrap_or_else(|e| {
+            error!("invalid cluster_family_allowed_workloads, restricting no family: {e}");
+            FamilyWorkloads::new()
+        })
+    }
+
+    /// Reports whether every replica size that `cluster` uses, or is about to
+    /// use, allows `class`.
+    ///
+    /// NOTE: The managed size is the realized size. While a resize is in
+    /// flight, the size it moves to is only visible as the reconfiguration
+    /// target, and the replicas of that size may not exist yet.
+    fn cluster_allows_workload(
+        &self,
+        cluster: &Cluster,
+        class: WorkloadClass,
+        families: &FamilyWorkloads,
+    ) -> bool {
+        let size_allows = |size: &str| {
+            self.cluster_replica_sizes
+                .0
+                .get(size)
+                .map_or(true, |allocation| {
+                    allocation_allows_workload(allocation, class, families)
+                })
+        };
+        let configured_sizes_allow = match &cluster.config.variant {
+            ClusterVariant::Managed(managed) => {
+                size_allows(&managed.size)
+                    && managed
+                        .reconfiguration
+                        .as_ref()
+                        .filter(|record| record.is_in_progress())
+                        .map_or(true, |record| size_allows(&record.target.size))
+                    && managed
+                        .auto_scaling_strategy
+                        .as_ref()
+                        .and_then(|strategy| strategy.on_hydration.as_ref())
+                        .map_or(true, |on_hydration| {
+                            size_allows(&on_hydration.hydration_size)
+                        })
+                    && managed
+                        .burst
+                        .as_ref()
+                        .map_or(true, |burst| size_allows(&burst.burst_size))
+            }
+            ClusterVariant::Unmanaged => true,
+        };
+        configured_sizes_allow
+            && cluster
+                .replicas()
+                .all(|replica| match &replica.config.location {
+                    ReplicaLocation::Managed(location) => {
+                        allocation_allows_workload(&location.allocation, class, families)
+                    }
+                    ReplicaLocation::Unmanaged(_) => true,
+                })
+    }
+
+    /// Reports whether workload restrictions apply to `user` acting on
+    /// `cluster`. A `user` of `None` is an internal caller and is exempt, as
+    /// are internal users and system clusters.
+    fn workload_restrictions_apply(cluster: &Cluster, user: Option<&User>) -> bool {
+        cluster.id.is_user() && user.is_some_and(|user| !user.is_internal())
+    }
+
+    /// Fails if `user` may not run `class` work on `cluster`. `action`
+    /// completes the sentence "cluster ... cannot", e.g. "run SELECT".
+    pub(crate) fn ensure_cluster_allows_workload(
+        &self,
+        cluster: &Cluster,
+        class: WorkloadClass,
+        user: Option<&User>,
+        action: impl FnOnce() -> String,
+    ) -> Result<(), AdapterError> {
+        if Self::workload_restrictions_apply(cluster, user)
+            && !self.cluster_allows_workload(cluster, class, &self.family_allowed_workloads())
+        {
+            return Err(AdapterError::WorkloadNotAllowed {
+                cluster: cluster.name.clone(),
+                action: action(),
+                class,
+            });
+        }
+        Ok(())
+    }
+
+    /// Fails if `size` does not allow the workload class of an object bound
+    /// to `cluster`, including objects created before the size was
+    /// restricted.
+    pub(crate) fn ensure_size_allows_cluster_workloads(
+        &self,
+        cluster: &Cluster,
+        size: &str,
+        user: &User,
+    ) -> Result<(), AdapterError> {
+        if !Self::workload_restrictions_apply(cluster, Some(user)) {
+            return Ok(());
+        }
+        let Some(allocation) = self.cluster_replica_sizes.0.get(size) else {
+            return Ok(());
+        };
+        let families = self.family_allowed_workloads();
+        for id in &cluster.bound_objects {
+            let Some((_, class)) = self.item_workload(self.get_entry(id).item()) else {
+                continue;
+            };
+            if !allocation_allows_workload(allocation, class, &families) {
+                return Err(AdapterError::WorkloadSizeConflict {
+                    cluster: cluster.name.clone(),
+                    size: size.to_string(),
+                    class,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// The cluster that `item` runs on and the class of its work, or `None`
+    /// if it runs on no cluster.
+    pub(crate) fn item_workload(&self, item: &CatalogItem) -> Option<(ClusterId, WorkloadClass)> {
+        match item {
+            CatalogItem::Source(source) => self.data_source_workload(&source.data_source),
+            CatalogItem::Table(table) => match &table.data_source {
+                TableDataSource::DataSource { desc, .. } => self.data_source_workload(desc),
+                TableDataSource::TableWrites { .. } => None,
+            },
+            CatalogItem::Sink(sink) => Some((sink.cluster_id, WorkloadClass::Sink)),
+            CatalogItem::MaterializedView(mv) => {
+                Some((mv.cluster_id, WorkloadClass::ComputeMaintained))
+            }
+            CatalogItem::Index(index) => Some((index.cluster_id, WorkloadClass::ComputeMaintained)),
+            CatalogItem::MetricSink(metric_sink) => {
+                Some((metric_sink.cluster_id, WorkloadClass::ComputeMaintained))
+            }
+            CatalogItem::Log(_)
+            | CatalogItem::View(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => None,
+        }
+    }
+
+    fn data_source_workload(&self, desc: &DataSourceDesc) -> Option<(ClusterId, WorkloadClass)> {
+        match desc {
+            DataSourceDesc::Ingestion { cluster_id, .. }
+            | DataSourceDesc::OldSyntaxIngestion { cluster_id, .. }
+            | DataSourceDesc::Webhook { cluster_id, .. } => {
+                Some((*cluster_id, WorkloadClass::Ingest))
+            }
+            // An export runs on the cluster of its ingestion, which has no
+            // entry yet while both are created in the same transaction.
+            DataSourceDesc::IngestionExport { ingestion_id, .. } => self
+                .try_get_entry(ingestion_id)
+                .and_then(|entry| entry.cluster_id())
+                .map(|cluster_id| (cluster_id, WorkloadClass::Ingest)),
+            DataSourceDesc::Introspection(_)
+            | DataSourceDesc::Progress
+            | DataSourceDesc::Catalog => None,
+        }
+    }
+
     pub(crate) fn ensure_valid_replica_size(
         &self,
         allowed_sizes: &[String],
@@ -3056,6 +3229,26 @@ impl Catalog {
     pub fn as_optimizer_catalog(self: Arc<Self>) -> Arc<dyn OptimizerCatalog> {
         self
     }
+}
+
+/// The workload classes allowed per replica size family. Families without an
+/// entry allow every class.
+pub(crate) type FamilyWorkloads = BTreeMap<String, BTreeSet<WorkloadClass>>;
+
+/// Reports whether `allocation` allows `class`, both by its own setting and by
+/// its family's entry in `families`.
+pub(super) fn allocation_allows_workload(
+    allocation: &ReplicaAllocation,
+    class: WorkloadClass,
+    families: &FamilyWorkloads,
+) -> bool {
+    allocation
+        .allowed_workloads
+        .as_ref()
+        .map_or(true, |allowed| allowed.contains(&class))
+        && families
+            .get(allocation.family())
+            .map_or(true, |allowed| allowed.contains(&class))
 }
 
 #[cfg(test)]

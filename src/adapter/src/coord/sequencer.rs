@@ -181,6 +181,16 @@ impl Coordinator {
                     return ctx.retire(Err(e));
                 }
             }
+            if let Some(cluster_id) = target_cluster_id {
+                if let Err(e) = catalog_serving::check_cluster_workload_restrictions(
+                    self.catalog().state(),
+                    cluster_id,
+                    ctx.session(),
+                    &plan,
+                ) {
+                    return ctx.retire(Err(e));
+                }
+            }
 
             // The target-connection role only matters for `pg_cancel_backend`,
             // which the frontend sequences.
