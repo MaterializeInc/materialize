@@ -9,14 +9,14 @@
 
 //! Compute layer client and server.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::mem;
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
 use differential_dataflow::lattice::Lattice;
 use mz_expr::row::RowCollection;
-use mz_ore::cast::CastInto;
+use mz_ore::cast::{CastFrom, CastInto};
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, Timestamp, UpdateCollection};
@@ -27,8 +27,9 @@ use uuid::Uuid;
 
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse,
-    StashedPeekResponse, SubscribeBatch, SubscribeResponse,
+    BatchedSubscribeBatch, BatchedSubscribeResponse, ComputeResponse, CopyToResponse,
+    FrontiersResponse, PeekError, PeekResponse, Share, StashedPeekResponse, SubscribeBatch,
+    SubscribeResponse,
 };
 
 /// A client to a compute server.
@@ -142,6 +143,18 @@ pub struct PartitionedComputeState {
     /// the tracking state maintained for it and b) we won't re-initialize tracking for a subscribe
     /// we have already dropped.
     pending_subscribes: BTreeMap<GlobalId, PendingSubscribe>,
+    /// Tracks in-progress batched subscribes, and the descriptions not every shard has reported
+    /// yet.
+    ///
+    /// Tracking of a batched subscribe is initialized when the first `BatchedSubscribeResponse`
+    /// for it is received. Once every shard has ended its output, with a `Batch` reporting the
+    /// empty upper or with a `DroppedAt`, and the merged end was emitted, the tracking state is
+    /// dropped again. The compute protocol forbids responses after a shard's end, so tracking is
+    /// not re-initialized for a subscribe that has shut down.
+    pending_batched_subscribes: BTreeMap<GlobalId, PendingBatchedSubscribe>,
+    /// The most recently finished batched subscribes, so that a response arriving after a
+    /// subscribe finished does not re-initialize its tracking.
+    finished_batched_subscribes: FinishedSet,
 }
 
 impl Partitionable<ComputeCommand, ComputeResponse> for (ComputeCommand, ComputeResponse) {
@@ -154,6 +167,8 @@ impl Partitionable<ComputeCommand, ComputeResponse> for (ComputeCommand, Compute
             frontiers: BTreeMap::new(),
             peek_responses: BTreeMap::new(),
             pending_subscribes: BTreeMap::new(),
+            pending_batched_subscribes: BTreeMap::new(),
+            finished_batched_subscribes: FinishedSet::default(),
             copy_to_responses: BTreeMap::new(),
         }
     }
@@ -354,6 +369,39 @@ impl PartitionedComputeState {
 
         emit_response
     }
+
+    /// Absorb a [`ComputeResponse::BatchedSubscribeResponse`].
+    fn absorb_batched_subscribe_response(
+        &mut self,
+        shard_id: usize,
+        subscribe_id: GlobalId,
+        response: BatchedSubscribeResponse,
+    ) -> Option<ComputeResponse> {
+        let emitted = if self.finished_batched_subscribes.contains(&subscribe_id) {
+            // Every part has ended already. Tracking it again would hold the shares forever,
+            // because no part ends a second time.
+            tracing::error!(
+                %subscribe_id,
+                shard_id,
+                "batched subscribe response after the subscribe finished"
+            );
+            Some(orphan_late_response(response))
+        } else {
+            let tracked = self
+                .pending_batched_subscribes
+                .entry(subscribe_id)
+                .or_insert_with(|| PendingBatchedSubscribe::new(self.parts));
+            let emitted = tracked.absorb(shard_id, response, self.max_result_size);
+            if tracked.is_done() {
+                self.pending_batched_subscribes.remove(&subscribe_id);
+                self.finished_batched_subscribes.insert(subscribe_id);
+            }
+            emitted
+        };
+        emitted.map(|response| {
+            ComputeResponse::BatchedSubscribeResponse(subscribe_id, Box::new(response))
+        })
+    }
 }
 
 impl PartitionedState<ComputeCommand, ComputeResponse> for PartitionedComputeState {
@@ -393,6 +441,9 @@ impl PartitionedState<ComputeCommand, ComputeResponse> for PartitionedComputeSta
             }
             ComputeResponse::CopyToResponse(id, response) => {
                 self.absorb_copy_to_response(shard_id, id, response)
+            }
+            ComputeResponse::BatchedSubscribeResponse(id, response) => {
+                self.absorb_batched_subscribe_response(shard_id, id, *response)
             }
             response @ ComputeResponse::Status(_) => {
                 // Pass through status responses.
@@ -557,6 +608,242 @@ impl PendingSubscribe {
                 }
             }
         }
+    }
+}
+
+/// Assembles the output of a batched subscribe from the responses of every part.
+///
+/// Part `p`'s k-th batch reports the k-th description. A description is emitted once every part
+/// has reported it, with the shares of all parts concatenated and the first fatal error kept.
+/// Error updates travel in the shares like row updates.
+/// Descriptions are emitted in order. Each input adds to one description and only the oldest
+/// description can be emitted, so each input emits at most one response.
+#[derive(Debug)]
+struct PendingBatchedSubscribe {
+    /// The number of parts.
+    parts: usize,
+    /// The descriptions that have not been emitted, oldest first.
+    descriptions: VecDeque<PendingDescription>,
+    /// For each part, the index into `descriptions` of the next description it reports.
+    next: Vec<usize>,
+    /// The parts that have ended their output.
+    ended: BTreeSet<usize>,
+    /// Whether a part ended its output with `DroppedAt`.
+    dropped: bool,
+    /// The inline bytes of the shares in `descriptions`, for `max_result_size` checking.
+    inline_bytes: usize,
+    /// The orphans that parts forwarded with their `DroppedAt`.
+    orphans: Vec<Share>,
+}
+
+/// A description that not every part has reported yet.
+#[derive(Debug)]
+struct PendingDescription {
+    /// The lower frontier, as reported by the first part.
+    lower: Antichain<Timestamp>,
+    /// The upper frontier, as reported by the first part.
+    upper: Antichain<Timestamp>,
+    /// The shares of the parts that have reported the description.
+    shares: Vec<Share>,
+    /// The first fatal error reported for the description.
+    fatal: Option<String>,
+    /// The number of parts that have reported the description.
+    reported: usize,
+}
+
+impl PendingBatchedSubscribe {
+    fn new(parts: usize) -> Self {
+        Self {
+            parts,
+            descriptions: VecDeque::new(),
+            next: vec![0; parts],
+            ended: BTreeSet::new(),
+            dropped: false,
+            inline_bytes: 0,
+            orphans: Vec::new(),
+        }
+    }
+
+    /// Absorbs `response` from `part` and returns the merged response it completes, if any.
+    ///
+    /// Once every part has ended and a part dropped, the merge emits one `DroppedAt` whose orphans
+    /// are the shares of every description not emitted, together with the orphans the parts
+    /// forwarded.
+    fn absorb(
+        &mut self,
+        part: usize,
+        response: BatchedSubscribeResponse,
+        max_result_size: u64,
+    ) -> Option<BatchedSubscribeResponse> {
+        if self.ended.contains(&part) {
+            tracing::error!(part, "batched subscribe response after the part ended");
+            return Some(orphan_late_response(response));
+        }
+
+        let reported_frontier = match response {
+            BatchedSubscribeResponse::Batch(batch) => {
+                let upper = batch.upper.clone();
+                self.absorb_batch(part, batch);
+                upper
+            }
+            BatchedSubscribeResponse::DroppedAt { frontier, orphans } => {
+                self.ended.insert(part);
+                self.dropped = true;
+                self.orphans.extend(orphans);
+                frontier
+            }
+        };
+
+        if self.ended.len() == self.parts {
+            // Completion is the oldest description, reported by every part with an empty upper.
+            // Anything else left over can only follow a drop or a disagreement on descriptions,
+            // and its shares are orphaned. Emitting the oldest description as well would emit
+            // two responses for one input.
+            let completes = !self.dropped
+                && self.descriptions.len() == 1
+                && self.descriptions[0].reported == self.parts;
+            if !completes {
+                return Some(self.drop_pending(reported_frontier));
+            }
+        }
+
+        self.emit_oldest(max_result_size)
+    }
+
+    fn absorb_batch(&mut self, part: usize, batch: BatchedSubscribeBatch) {
+        let index = self.next[part];
+        self.next[part] += 1;
+        if index == self.descriptions.len() {
+            self.descriptions.push_back(PendingDescription {
+                lower: batch.lower.clone(),
+                upper: batch.upper.clone(),
+                shares: Vec::new(),
+                fatal: None,
+                reported: 0,
+            });
+        }
+
+        let description = &mut self.descriptions[index];
+        if description.lower != batch.lower || description.upper != batch.upper {
+            description
+                .fatal
+                .get_or_insert_with(|| "replica processes disagree on batch descriptions".into());
+        }
+        if description.fatal.is_none() {
+            description.fatal = batch.fatal;
+        }
+        self.inline_bytes += batch
+            .shares
+            .iter()
+            .map(Share::inline_byte_len)
+            .sum::<usize>();
+        description.shares.extend(batch.shares);
+        description.reported += 1;
+
+        if batch.upper.is_empty() {
+            self.ended.insert(part);
+        }
+    }
+
+    /// Emits the oldest description if every part has reported it.
+    fn emit_oldest(&mut self, max_result_size: u64) -> Option<BatchedSubscribeResponse> {
+        if self.descriptions.front()?.reported < self.parts {
+            return None;
+        }
+        let mut description = self.descriptions.pop_front().expect("checked above");
+        for next in &mut self.next {
+            *next -= 1;
+        }
+
+        // The limit covers every held share, including those of descriptions not yet complete.
+        if description.fatal.is_none() && u64::cast_from(self.inline_bytes) > max_result_size {
+            description.fatal = Some(format!(
+                "total result exceeds max size of {}",
+                ByteSize::b(max_result_size)
+            ));
+        }
+        self.inline_bytes -= description
+            .shares
+            .iter()
+            .map(Share::inline_byte_len)
+            .sum::<usize>();
+
+        Some(BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+            lower: description.lower,
+            upper: description.upper,
+            shares: description.shares,
+            fatal: description.fatal,
+        }))
+    }
+
+    /// Orphans every description not emitted and returns the merged `DroppedAt`.
+    ///
+    /// The frontier is the lower of the oldest description not emitted, which is the upper of the
+    /// last one emitted. Without such a description, `reported_frontier` is the frontier of the
+    /// part that ended last.
+    fn drop_pending(
+        &mut self,
+        reported_frontier: Antichain<Timestamp>,
+    ) -> BatchedSubscribeResponse {
+        let frontier = match self.descriptions.front() {
+            Some(description) => description.lower.clone(),
+            None => reported_frontier,
+        };
+        let mut orphans: Vec<_> = self
+            .descriptions
+            .drain(..)
+            .flat_map(|description| description.shares)
+            .collect();
+        orphans.append(&mut self.orphans);
+        self.inline_bytes = 0;
+        BatchedSubscribeResponse::DroppedAt { frontier, orphans }
+    }
+
+    /// Whether every part has ended and the merged end was emitted.
+    fn is_done(&self) -> bool {
+        self.ended.len() == self.parts && self.descriptions.is_empty()
+    }
+}
+
+/// Converts a response that arrived after its part ended into a `DroppedAt` that orphans its
+/// shares, so that the receiver deletes their stashed batches.
+fn orphan_late_response(response: BatchedSubscribeResponse) -> BatchedSubscribeResponse {
+    match response {
+        BatchedSubscribeResponse::Batch(batch) => BatchedSubscribeResponse::DroppedAt {
+            frontier: batch.lower,
+            orphans: batch.shares,
+        },
+        dropped @ BatchedSubscribeResponse::DroppedAt { .. } => dropped,
+    }
+}
+
+/// A set of the [`FinishedSet::CAPACITY`] most recently inserted ids.
+#[derive(Debug, Default)]
+struct FinishedSet {
+    ids: BTreeSet<GlobalId>,
+    order: VecDeque<GlobalId>,
+}
+
+impl FinishedSet {
+    /// The number of ids the set retains.
+    ///
+    /// A response for a finished subscribe is a protocol violation, so the set only has to
+    /// cover responses that trail shortly behind the end. Once evicted, a late response
+    /// re-initializes tracking and its shares are held until the state machine is dropped.
+    const CAPACITY: usize = 1024;
+
+    fn insert(&mut self, id: GlobalId) {
+        if self.ids.insert(id) {
+            self.order.push_back(id);
+            if self.order.len() > Self::CAPACITY {
+                let evicted = self.order.pop_front().expect("over capacity");
+                self.ids.remove(&evicted);
+            }
+        }
+    }
+
+    fn contains(&self, id: &GlobalId) -> bool {
+        self.ids.contains(id)
     }
 }
 
