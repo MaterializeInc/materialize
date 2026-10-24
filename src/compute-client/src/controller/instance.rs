@@ -34,6 +34,8 @@ use mz_ore::channel::instrumented_unbounded_channel;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use mz_persist_client::PersistClient;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::PersistLocation;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
@@ -66,8 +68,9 @@ use crate::protocol::command::{
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError as ProtocolPeekError,
-    PeekResponse, StatusResponse, SubscribeBatch, SubscribeResponse,
+    PeekResponse, StashedPeekResponse, StatusResponse, SubscribeBatch, SubscribeResponse,
 };
+use crate::stash::OwnedStash;
 
 #[derive(Error, Debug)]
 #[error("replica exists already: {0}")]
@@ -197,6 +200,12 @@ pub(super) struct Instance {
 
     /// The persist location where we can stash large peek results.
     peek_stash_persist_location: PersistLocation,
+    /// The persist clients `stash_client` is opened from.
+    persist_clients: Arc<PersistClientCache>,
+    /// A client on `peek_stash_persist_location`, opened when the instance starts running.
+    ///
+    /// `None` if opening failed, in which case stashed batches cannot be deleted.
+    stash_client: Option<PersistClient>,
 
     /// A function that produces the current wallclock time.
     now: NowFn,
@@ -873,6 +882,8 @@ impl Instance {
             build_info: _,
             storage_collections: _,
             peek_stash_persist_location: _,
+            persist_clients: _,
+            stash_client: _,
             initialized,
             read_only,
             workload_class,
@@ -942,6 +953,7 @@ impl Instance {
         build_info: &'static BuildInfo,
         storage: StorageCollections,
         peek_stash_persist_location: PersistLocation,
+        persist_clients: Arc<PersistClientCache>,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState)>,
         metrics: InstanceMetrics,
         now: NowFn,
@@ -978,6 +990,8 @@ impl Instance {
             build_info,
             storage_collections: storage,
             peek_stash_persist_location,
+            persist_clients,
+            stash_client: None,
             initialized: false,
             read_only,
             workload_class: None,
@@ -1003,6 +1017,18 @@ impl Instance {
     }
 
     pub(super) async fn run(mut self) {
+        self.stash_client = match self
+            .persist_clients
+            .open(self.peek_stash_persist_location.clone())
+            .await
+        {
+            Ok(client) => Some(client),
+            Err(error) => {
+                tracing::error!(%error, "cannot open a persist client for stashed batches, deleting them is skipped");
+                None
+            }
+        };
+
         self.send(ComputeCommand::Hello {
             // The nonce is protocol iteration-specific and will be set in
             // `ReplicaTask::specialize_command`.
@@ -2024,13 +2050,20 @@ impl Instance {
         };
 
         // The recipient might not be interested in the peek response anymore, which is fine.
-        let _ = peek.peek_response_tx.send(response);
+        if let Err(response) = peek.peek_response_tx.send(response) {
+            self.discard_peek_response(response);
+        }
 
         // NOTE: We need to send the `CancelPeek` command _before_ we release the peek's read hold
         // (by dropping it), to avoid the edge case that caused database-issues#4812.
         self.send(ComputeCommand::CancelPeek { uuid });
 
         drop(peek.read_hold);
+    }
+
+    /// Deletes the batches of a stashed `response` that nobody will read, and drops anything else.
+    fn discard_peek_response(&self, response: PeekResponse) {
+        discard_peek_response(self.stash_client.as_ref(), response);
     }
 
     /// Handles a response from a replica. Replica IDs are re-used across replica restarts, so we
@@ -2043,6 +2076,9 @@ impl Instance {
             .filter(|replica| replica.epoch == epoch)
             .is_none()
         {
+            if let ComputeResponse::PeekResponse(_uuid, response, _otel_ctx) = response {
+                self.discard_peek_response(response);
+            }
             return;
         }
 
@@ -2122,12 +2158,14 @@ impl Instance {
         // We might not be tracking this peek anymore, because we have served a response already or
         // because it was canceled. If this is the case, we ignore the response.
         let Some(peek) = self.peeks.get(&uuid) else {
+            self.discard_peek_response(response);
             return;
         };
 
         // If the peek is targeting a replica, ignore responses from other replicas.
         let target_replica = peek.target_replica.unwrap_or(replica_id);
         if target_replica != replica_id {
+            self.discard_peek_response(response);
             return;
         }
 
@@ -3511,22 +3549,46 @@ where
     result
 }
 
+/// Deletes the batches `response` names if it is stashed, through `client`, and drops anything
+/// else.
+///
+/// With no `client` the batches are left in blob storage.
+fn discard_peek_response(client: Option<&PersistClient>, response: PeekResponse) {
+    // Inline rows, including those of a stashed response, need nothing beyond the drop.
+    let PeekResponse::Stashed(stashed) = response else {
+        return;
+    };
+    let StashedPeekResponse {
+        shard_id, batches, ..
+    } = *stashed;
+    match client {
+        Some(client) => drop(OwnedStash::from_proto(client, shard_id, batches)),
+        None => tracing::warn!(
+            %shard_id,
+            batches = batches.len(),
+            "no persist client for stashed batches, leaving a discarded peek response's batches behind"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
     use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE};
     use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
-    use mz_persist_types::PersistLocation;
-    use mz_repr::{GlobalId, Timestamp};
+    use mz_persist_types::{PersistLocation, ShardId};
+    use mz_repr::{GlobalId, RelationDesc, Timestamp};
     use timely::progress::Antichain;
     use tokio::sync::mpsc;
 
     use crate::protocol::command::{ComputeCommand, InstanceConfig};
+    use crate::protocol::response::{PeekResponse, StashedPeekResponse};
+    use crate::stash::tests::CountedClient;
 
     use super::{
         CollectionReadiness, Instance, ReplicaCollectionIntrospection, ReplicaCollectionState,
-        ReplicaId, classify_collection_readiness,
+        ReplicaId, classify_collection_readiness, discard_peek_response,
     };
 
     fn ac(ts: u64) -> Antichain<Timestamp> {
@@ -3823,5 +3885,28 @@ mod tests {
             ),
             other => panic!("expected UpdateConfiguration, got {other:?}"),
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn discarding_a_stashed_peek_response_deletes_its_batches() {
+        let persist = CountedClient::new().await;
+        let shard_id = ShardId::new();
+        let batches = vec![
+            persist.write_batch(shard_id).await,
+            persist.write_batch(shard_id).await,
+        ];
+        assert!(persist.succeeded("blob_set") > 0);
+
+        let response = PeekResponse::Stashed(Box::new(StashedPeekResponse {
+            num_rows_batches: 8,
+            encoded_size_bytes: 0,
+            relation_desc: RelationDesc::empty(),
+            shard_id,
+            batches,
+            inline_rows: Vec::new(),
+        }));
+        discard_peek_response(Some(&persist.client), response);
+
+        persist.wait_until_nothing_is_left().await;
     }
 }

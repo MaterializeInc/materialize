@@ -612,6 +612,13 @@ fn merge_peek_responses(resp1: PeekResponse, resp2: PeekResponse) -> PeekRespons
     use PeekResponse::*;
 
     // Cancelations and errors short-circuit. Cancelations take precedence over errors.
+    //
+    // TODO: every stashed response this merge drops leaks its batches in blob storage. That is a
+    // stashed response overridden by a cancelation or an error here, both responses when their
+    // shard ids or relation descs differ below, the stashed batches merged so far when
+    // `PendingPeek::absorb` merges in `ResultExceedsMaxSize`, and the partial responses
+    // `peek_responses` still holds when the partitioned state goes away. Deleting them needs a
+    // persist client, which the merge does not have.
     let (resp1, resp2) = match (resp1, resp2) {
         (Canceled, _) | (_, Canceled) => return Canceled,
         (Error(e1), Error(e2)) => return Error(merge_peek_errors(e1, e2)),
