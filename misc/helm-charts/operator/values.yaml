@@ -474,7 +474,9 @@ observability:
 
 telemetry:
   enabled: true
+  # @ignored
   segmentApiKey: hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A
+  # @ignored
   segmentClientSide: true
 
 # Network policies configuration
