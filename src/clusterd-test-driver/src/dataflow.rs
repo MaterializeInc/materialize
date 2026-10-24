@@ -407,6 +407,7 @@ impl DataflowBuilder {
                 stash_id: uuid::Uuid::new_v4(),
                 with_snapshot: true,
                 output_desc: value_desc,
+                mfp: None,
             }),
             with_snapshot: true,
             up_to,

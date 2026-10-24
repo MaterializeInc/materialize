@@ -38,6 +38,7 @@ fn batched_subscribe_dataflow() -> DataflowDescription<(), ()> {
                 stash_id: Uuid::nil(),
                 with_snapshot: true,
                 output_desc: RelationDesc::empty(),
+                mfp: None,
             }),
             with_snapshot: true,
             up_to: Antichain::new(),

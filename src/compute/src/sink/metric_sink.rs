@@ -30,7 +30,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use differential_dataflow::{Hashable, VecCollection};
+use differential_dataflow::Hashable;
 use mz_compute_types::sinks::{ComputeSinkDesc, MetricSinkConnection};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metrics::MetricsRegistry;
@@ -50,7 +50,7 @@ use timely::progress::Antichain;
 use crate::metrics::WorkerMetrics;
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
-use crate::render::sinks::SinkRender;
+use crate::render::sinks::{SinkInput, SinkRender};
 
 impl<'scope> SinkRender<'scope> for MetricSinkConnection {
     fn render_sink(
@@ -60,10 +60,10 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         sink_id: GlobalId,
         _as_of: Antichain<Timestamp>,
         _start_signal: StartSignal,
-        sinked_collection: VecCollection<'scope, Timestamp, Row, Diff>,
-        err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
+        input: SinkInput<'scope>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
+        let (sinked_collection, err_collection) = input.expect_collection();
         let cols = ColumnIndices::resolve(&sink.from_desc);
 
         let scope = sinked_collection.scope();

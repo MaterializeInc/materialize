@@ -12,8 +12,10 @@
 //! The sink reports its input as a chain of descriptions `[lower, upper)`, the first starting at
 //! the dataflow's as-of, each later one at the previous upper. It renders three pieces:
 //!
-//! * Every worker arranges the ok and error inputs and holds the batches the arrangements emit.
-//!   It drops the arrangements' traces, so no trace outlives the held batches.
+//! * Every worker holds the batches of an ok and an error arrangement. On the general path the
+//!   sink arranges its input itself and drops the arrangements' traces, so no trace outlives the
+//!   held batches. On the arranged path it holds the batches of an imported index, which the
+//!   index's trace shares and merges while the sink holds them.
 //! * A mint operator on one worker cuts descriptions at its input frontier, clamped to `up_to`,
 //!   and broadcasts them.
 //! * A write operator on every worker answers each description in the order it was minted. Once
@@ -34,7 +36,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::{BatchReader, TraceReader};
+use differential_dataflow::trace::{BatchReader, Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use mz_compute_client::protocol::response::{
     BatchedSubscribeBatch, BatchedSubscribeResponse, Share, StashedShare,
@@ -43,10 +45,12 @@ use mz_compute_types::sinks::{BatchedSubscribeSinkConnection, ComputeSinkDesc};
 use mz_expr::{MapFilterProject, SafeMfpPlan};
 use mz_ore::cast::CastFrom;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
-use mz_repr::{Diff, GlobalId, Row, Timestamp, UpdateCollection};
+use mz_repr::fixed_length::ExtendDatums;
+use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp, UpdateCollection};
 use mz_row_spine::{RowRowBatcher, RowRowBuilder, RowRowSpine};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnation::ColumnationChunker;
+use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
@@ -69,17 +73,84 @@ use crate::compute_state::peek_stash::{DeliveredBatch, stash_shard_id};
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
-use crate::render::sinks::SinkRender;
+use crate::render::sinks::{IndexErrBatch, IndexOkBatch, SinkInput, SinkRender};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine};
 
 use self::share::{PendingShare, StashSpec, Tiers};
 
 mod share;
 
-/// A batch of the sink's ok arrangement.
+/// A batch of the ok arrangement the sink builds on the general path.
 type OkBatch = <RowRowSpine<Timestamp, Diff> as TraceReader>::Batch;
-/// A batch of the sink's error arrangement.
+/// A batch of the error arrangement the sink builds on the general path.
 type ErrBatch = <ErrSpine<Timestamp, Diff> as TraceReader>::Batch;
+
+/// An ok batch a writer holds and scans, of the sink's own arrangement or of an imported index.
+pub(crate) trait HeldOk:
+    BatchReader<Time = Timestamp>
+    + Navigable<
+        Cursor: Send
+                    + for<'a> Cursor<
+            Key<'a>: ExtendDatums,
+            Val<'a>: ExtendDatums,
+            Time = Timestamp,
+            DiffGat<'a> = &'a Diff,
+        >,
+    > + Clone
+    + Send
+    + 'static
+{
+}
+
+impl<B> HeldOk for B where
+    B: BatchReader<Time = Timestamp>
+        + Navigable<
+            Cursor: Send
+                        + for<'a> Cursor<
+                Key<'a>: ExtendDatums,
+                Val<'a>: ExtendDatums,
+                Time = Timestamp,
+                DiffGat<'a> = &'a Diff,
+            >,
+        > + Clone
+        + Send
+        + 'static
+{
+}
+
+/// An error batch a writer holds and scans, of the sink's own arrangement or of an imported
+/// index.
+pub(crate) trait HeldErr:
+    BatchReader<Time = Timestamp>
+    + Navigable<
+        Cursor: Send
+                    + for<'a> Cursor<
+            Key<'a> = &'a DataflowErrorSer,
+            Time = Timestamp,
+            TimeGat<'a>: PartialOrder<Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >,
+    > + Clone
+    + Send
+    + 'static
+{
+}
+
+impl<B> HeldErr for B where
+    B: BatchReader<Time = Timestamp>
+        + Navigable<
+            Cursor: Send
+                        + for<'a> Cursor<
+                Key<'a> = &'a DataflowErrorSer,
+                Time = Timestamp,
+                TimeGat<'a>: PartialOrder<Timestamp>,
+                DiffGat<'a> = &'a Diff,
+            >,
+        > + Clone
+        + Send
+        + 'static
+{
+}
 
 /// The buffer the sink reports through, drained by `ComputeState::process_batched_subscribes`.
 type ResponseBuffer = Rc<RefCell<Vec<(GlobalId, QueuedResponse)>>>;
@@ -183,60 +254,16 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         _start_signal: StartSignal,
-        sinked_collection: VecCollection<'scope, Timestamp, Row, Diff>,
-        err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
+        input: SinkInput<'scope>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
-        let sinked_collection = sinked_collection
-            .inner
-            .probe_notify_with(vec![output_probe.clone()])
-            .as_collection();
-
-        let Arranged {
-            stream: ok_batches,
-            trace,
-        } = sinked_collection
-            .map(|row| (row, Row::default()))
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                RowRowBatcher<_, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >("BatchedSubscribe oks");
-        drop(trace);
-        let Arranged {
-            stream: err_batches,
-            trace,
-        } = KeyCollection::from(err_collection)
-            .mz_arrange::<
-                ColumnationChunker<_>,
-                ErrBatcher<_, _>,
-                ErrBuilder<_, _>,
-                ErrSpine<_, _>,
-            >("BatchedSubscribe errs");
-        drop(trace);
-
-        let descriptions = mint(
-            sink_id,
-            as_of.clone(),
-            sink.up_to.clone(),
-            ok_batches.clone(),
-            err_batches.clone(),
-        );
-
         let protocol = Rc::new(RefCell::new(Some(Protocol {
             sink_id,
             buffer: Some(Rc::clone(&compute_state.batched_subscribe_response_buffer)),
-            upper: as_of,
+            upper: as_of.clone(),
             fatal: None,
         })));
         let protocol_weak = Rc::downgrade(&protocol);
-        // The plan applies to rows of `from_desc`.
-        let map_filter_project = MapFilterProject::new(sink.from_desc.arity())
-            .into_plan()
-            .expect("an identity plan is valid")
-            .into_nontemporal()
-            .expect("an identity plan is not temporal");
         let stash = match &compute_state.peek_stash_persist_location {
             Some(location) => Some(StashSpec::new(
                 Arc::clone(&compute_state.persist_clients),
@@ -255,19 +282,47 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
             Arc::clone(&compute_state.peek_permits),
             &compute_state.metrics,
         );
-        write(
-            sink_id,
-            descriptions.broadcast(),
-            ok_batches,
-            err_batches,
-            Writer::new(
-                sink_id,
-                map_filter_project,
-                InlineBudget::new(&compute_state.worker_config),
-                tiers,
-                protocol,
-            ),
-        );
+        let budget = InlineBudget::new(&compute_state.worker_config);
+
+        let writer = WriterParts {
+            budget,
+            tiers,
+            protocol,
+        };
+        match input {
+            SinkInput::Collection { oks, errs } => {
+                let oks = oks
+                    .inner
+                    .probe_notify_with(vec![output_probe.clone()])
+                    .as_collection();
+                render_collection(
+                    sink_id,
+                    as_of,
+                    sink.up_to.clone(),
+                    oks,
+                    errs,
+                    self.mfp.clone(),
+                    sink.from_desc.arity(),
+                    writer,
+                );
+            }
+            SinkInput::Arranged {
+                oks,
+                errs,
+                from_mfp,
+            } => {
+                let oks = oks.probe_notify_with(vec![output_probe.clone()]);
+                render_arranged(
+                    sink_id,
+                    as_of,
+                    sink.up_to.clone(),
+                    oks,
+                    errs,
+                    arranged_plan(from_mfp, self.mfp.clone()),
+                    writer,
+                );
+            }
+        }
 
         // Dropping the protocol reports the drop and keeps the write operator from reporting
         // anything while the dataflow shuts down.
@@ -277,6 +332,152 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
             }
         })))
     }
+}
+
+/// Renders the general path over rows of the sink's `from_desc`, which `mfp`, if any, maps to
+/// the output, and whose arity is `from_arity`.
+fn render_collection<'scope>(
+    sink_id: GlobalId,
+    as_of: Antichain<Timestamp>,
+    up_to: Antichain<Timestamp>,
+    oks: VecCollection<'scope, Timestamp, Row, Diff>,
+    errs: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
+    mfp: Option<SafeMfpPlan>,
+    from_arity: usize,
+    writer: WriterParts,
+) {
+    // The plan runs before the arrangement, so rows that it maps to one output row meet on one
+    // worker and consolidate there. Its errors join the error input.
+    let (oks, errs, arity) = match mfp {
+        Some(mfp) => {
+            let arity = mfp_arity(&mfp);
+            let (oks, mfp_errs) = apply_mfp(oks, mfp, sink_id);
+            (oks, errs.concat(mfp_errs), arity)
+        }
+        None => (oks, errs, from_arity),
+    };
+    let Arranged {
+        stream: ok_batches,
+        trace,
+    } = oks
+        .map(|row| (row, Row::default()))
+        .mz_arrange::<
+            ColumnationChunker<_>,
+            RowRowBatcher<_, _>,
+            RowRowBuilder<_, _>,
+            RowRowSpine<_, _>,
+        >("BatchedSubscribe oks");
+    drop(trace);
+    let Arranged {
+        stream: err_batches,
+        trace,
+    } = KeyCollection::from(errs)
+        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+            "BatchedSubscribe errs",
+        );
+    drop(trace);
+    // The plan applies to rows of the arranged collection.
+    let map_filter_project = MapFilterProject::new(arity)
+        .into_plan()
+        .expect("an identity plan is valid")
+        .into_nontemporal()
+        .expect("an identity plan is not temporal");
+    render(
+        sink_id,
+        as_of,
+        up_to,
+        ok_batches,
+        err_batches,
+        writer.build(sink_id, map_filter_project),
+    );
+}
+
+/// Renders the arranged path over the batches of an imported index, whose scans run
+/// `map_filter_project` over the datums of a batch's key followed by those of its value.
+fn render_arranged<'scope>(
+    sink_id: GlobalId,
+    as_of: Antichain<Timestamp>,
+    up_to: Antichain<Timestamp>,
+    oks: Stream<'scope, Timestamp, Vec<IndexOkBatch>>,
+    errs: Stream<'scope, Timestamp, Vec<IndexErrBatch>>,
+    map_filter_project: SafeMfpPlan,
+    writer: WriterParts,
+) {
+    render(
+        sink_id,
+        as_of,
+        up_to,
+        oks,
+        errs,
+        writer.build(sink_id, map_filter_project),
+    );
+}
+
+/// Renders the mint and write operators over the held batches.
+fn render<'scope, Ok: HeldOk, Err: HeldErr>(
+    sink_id: GlobalId,
+    as_of: Antichain<Timestamp>,
+    up_to: Antichain<Timestamp>,
+    ok_batches: Stream<'scope, Timestamp, Vec<Ok>>,
+    err_batches: Stream<'scope, Timestamp, Vec<Err>>,
+    writer: Writer<Ok, Err>,
+) {
+    let descriptions = mint(
+        sink_id,
+        as_of,
+        up_to,
+        ok_batches.clone(),
+        err_batches.clone(),
+    );
+    write(
+        sink_id,
+        descriptions.broadcast(),
+        ok_batches,
+        err_batches,
+        writer,
+    );
+}
+
+/// Returns the plan the scan of an index arrangement runs: `from_mfp`, which reconstructs rows of
+/// the sink's `from_desc`, followed by the connection's `mfp`, if any.
+fn arranged_plan(from_mfp: SafeMfpPlan, mfp: Option<SafeMfpPlan>) -> SafeMfpPlan {
+    match mfp {
+        Some(mfp) => SafeMfpPlan::from_mfp(MapFilterProject::compose(
+            from_mfp.into_mfp(),
+            mfp.into_mfp(),
+        )),
+        None => from_mfp,
+    }
+}
+
+/// The number of columns the rows that `mfp` produces have.
+fn mfp_arity(mfp: &SafeMfpPlan) -> usize {
+    mfp.clone().into_mfp().projection.len()
+}
+
+/// Applies `mfp` to `oks`, and returns the rows it produces and the errors it raises.
+fn apply_mfp<'scope>(
+    oks: VecCollection<'scope, Timestamp, Row, Diff>,
+    mfp: SafeMfpPlan,
+    sink_id: GlobalId,
+) -> (
+    VecCollection<'scope, Timestamp, Row, Diff>,
+    VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
+) {
+    type CB<C> = CapacityContainerBuilder<C>;
+    let mut datum_vec = DatumVec::new();
+    let mut row_builder = Row::default();
+    oks.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(
+        &format!("BatchedSubscribeMfp({sink_id})"),
+        move |row| {
+            let arena = RowArena::new();
+            let mut datums = datum_vec.borrow_with(&row);
+            mfp.evaluate_into(&mut datums, &arena, &mut row_builder)
+                .map(|row| row.cloned())
+                .map_err(DataflowErrorSer::from)
+                .transpose()
+        },
+    )
 }
 
 /// A description the mint operator cuts, broadcast to every worker.
@@ -376,12 +577,12 @@ impl Minter {
 /// Renders the mint operator, which runs on one worker and emits the descriptions it cuts.
 ///
 /// Its input frontier is the meet of the ok and the error arrangements' frontiers.
-fn mint<'scope>(
+fn mint<'scope, Ok: Clone + 'static, Err: Clone + 'static>(
     sink_id: GlobalId,
     as_of: Antichain<Timestamp>,
     up_to: Antichain<Timestamp>,
-    ok_batches: Stream<'scope, Timestamp, Vec<OkBatch>>,
-    err_batches: Stream<'scope, Timestamp, Vec<ErrBatch>>,
+    ok_batches: Stream<'scope, Timestamp, Vec<Ok>>,
+    err_batches: Stream<'scope, Timestamp, Vec<Err>>,
 ) -> Stream<'scope, Timestamp, Vec<Description>> {
     let scope = ok_batches.scope();
     let mint_worker = usize::cast_from(sink_id.hashed()) % scope.peers();
@@ -483,16 +684,39 @@ impl Drop for Protocol {
     }
 }
 
+/// What a writer is built from, besides the plan its scans run.
+struct WriterParts {
+    budget: InlineBudget,
+    tiers: Tiers,
+    protocol: Rc<RefCell<Option<Protocol>>>,
+}
+
+impl WriterParts {
+    fn build<Ok: HeldOk, Err: HeldErr>(
+        self,
+        sink_id: GlobalId,
+        map_filter_project: SafeMfpPlan,
+    ) -> Writer<Ok, Err> {
+        Writer::new(
+            sink_id,
+            map_filter_project,
+            self.budget,
+            self.tiers,
+            self.protocol,
+        )
+    }
+}
+
 /// The state of one worker's write operator.
-struct Writer {
+struct Writer<Ok: HeldOk = OkBatch, Err: HeldErr = ErrBatch> {
     sink_id: GlobalId,
     /// The descriptions received and not yet reported, oldest first.
     pending: VecDeque<Description>,
     /// The held batches, which the descriptions not yet reported need.
-    held_oks: Vec<OkBatch>,
-    held_errs: Vec<ErrBatch>,
+    held_oks: Vec<Ok>,
+    held_errs: Vec<Err>,
     /// The scan of the oldest pending description.
-    scan: Option<Scan>,
+    scan: Option<Scan<Ok, Err>>,
     map_filter_project: SafeMfpPlan,
     budget: InlineBudget,
     /// The bytes a scan buffers before it hands them out.
@@ -504,11 +728,11 @@ struct Writer {
 }
 
 /// The scan of a description, and where it runs.
-enum Scan {
+enum Scan<Ok: HeldOk, Err: HeldErr> {
     /// On the worker, with the updates it has handed out, accounted at `bytes`. Above
     /// `inline_max_bytes`, if set, the share leaves the inline tier.
     OnWorker {
-        scan: DescriptionScan<OkBatch, ErrBatch>,
+        scan: DescriptionScan<Ok, Err>,
         updates: DescriptionUpdates,
         bytes: usize,
         inline_max_bytes: Option<usize>,
@@ -517,7 +741,7 @@ enum Scan {
     Away(PendingShare),
 }
 
-impl Writer {
+impl<Ok: HeldOk, Err: HeldErr> Writer<Ok, Err> {
     fn new(
         sink_id: GlobalId,
         map_filter_project: SafeMfpPlan,
@@ -700,13 +924,15 @@ impl Writer {
 
     /// Opens the scan of `description`, and returns it with the number of updates in the ok
     /// batches it scans.
-    fn open_scan(&self, description: &Description) -> (DescriptionScan<OkBatch, ErrBatch>, usize) {
+    fn open_scan(&self, description: &Description) -> (DescriptionScan<Ok, Err>, usize) {
         let range = description.range();
         let ok_batches = range.select_batches(&self.held_oks);
         let held_updates = ok_batches.iter().map(|batch| batch.len()).sum();
         let err_batches = range.select_batches(&self.held_errs);
         // A since beyond the lower would have advanced the times the scan places in the range.
-        // The arrangement emits freshly sealed batches with a minimal since.
+        // The sink's own arrangement emits freshly sealed batches with a minimal since. An index
+        // import replays its snapshot in batches whose since is at most the as-of, which is the
+        // lower of the first description, and emits fresh batches after.
         let since_ok =
             |since: &Antichain<Timestamp>| PartialOrder::less_equal(since, &description.lower);
         soft_assert_or_log!(
@@ -770,12 +996,12 @@ fn inline_share(updates: DescriptionUpdates) -> Option<OwnedShare> {
 }
 
 /// Renders the write operator, which runs `writer` on every worker.
-fn write<'scope>(
+fn write<'scope, Ok: HeldOk, Err: HeldErr>(
     sink_id: GlobalId,
     descriptions: Stream<'scope, Timestamp, Vec<Description>>,
-    ok_batches: Stream<'scope, Timestamp, Vec<OkBatch>>,
-    err_batches: Stream<'scope, Timestamp, Vec<ErrBatch>>,
-    mut writer: Writer,
+    ok_batches: Stream<'scope, Timestamp, Vec<Ok>>,
+    err_batches: Stream<'scope, Timestamp, Vec<Err>>,
+    mut writer: Writer<Ok, Err>,
 ) {
     let scope = descriptions.scope();
     let mut op = OperatorBuilder::new(format!("BatchedSubscribeWrite({sink_id})"), scope.clone());

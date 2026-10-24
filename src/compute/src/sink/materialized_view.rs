@@ -157,7 +157,7 @@ use tracing::trace;
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
-use crate::render::sinks::SinkRender;
+use crate::render::sinks::{SinkInput, SinkRender};
 use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
 use crate::sink::materialized_view_v2;
 use crate::sink::refresh::apply_refresh;
@@ -171,10 +171,10 @@ impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMet
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         start_signal: StartSignal,
-        mut ok_collection: VecCollection<'scope, Timestamp, Row, Diff>,
-        mut err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
+        input: SinkInput<'scope>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
+        let (mut ok_collection, mut err_collection) = input.expect_collection();
         // Attach probes reporting the compute frontier.
         // The `apply_refresh` operator can round up frontiers, making it impossible to accurately
         // track the progress of the computation, so we need to attach probes before it.
