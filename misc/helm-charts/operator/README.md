@@ -204,8 +204,6 @@ The following table lists the configurable parameters of the Materialize operato
 | `storage.storageClass.reclaimPolicy` |  | ``"Delete"`` |
 | `storage.storageClass.volumeBindingMode` |  | ``"WaitForFirstConsumer"`` |
 | `telemetry.enabled` |  | ``true`` |
-| `telemetry.segmentApiKey` |  | ``"hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A"`` |
-| `telemetry.segmentClientSide` |  | ``true`` |
 | `tls.defaultCertificateSpecs` |  | ``{}`` |
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:
