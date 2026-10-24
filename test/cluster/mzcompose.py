@@ -94,14 +94,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     slow_tests = [
         "crash-on-replica-expiration-index",
+        "test-batched-subscribe-cutover-trims",
+        "test-batched-subscribe-replica-killed-mid-range",
+        "test-batched-subscribe-replica-reconnects-with-batches-in-flight",
         "test-incident-70",
         "test-refresh-mv-restart",
         "test-slow-seqno-hold",
     ]
 
     def process(name: str) -> None:
-        # incident-70, crash-on-replica-expiration-index, refresh-mv-restart
-        # and slow-seqno-hold are slow, run in separate CI step
+        # incident-70, crash-on-replica-expiration-index, refresh-mv-restart,
+        # slow-seqno-hold and the batched subscribe workflows are slow, run in
+        # separate CI step
         # concurrent-connections is too flaky
         # TODO: Reenable test-memory-limiter when database-issues/9502 is fixed
         if name in (
@@ -1915,6 +1919,487 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
         raise RuntimeError("SELECT didn't return the expected error")
 
     killer.join()
+
+
+# Rows in the table a batched subscribe test reads before its writer starts.
+BATCHED_SUBSCRIBE_INITIAL_ROWS = 200_000
+
+
+def _batched_subscribe_setup(
+    c: Composition,
+    workers: tuple[int, int] = (2, 2),
+    computectl1: str = "clusterd1:2101",
+) -> None:
+    """Creates `cluster1` over `clusterd1` and `clusterd2` and a table `t` for it to subscribe to.
+
+    Every share of a batched subscribe is stashed and every scan is offloaded. `t` retains its
+    history, so a reference subscribe can read the same times after the batched one is done.
+    """
+    c.sql(
+        """
+        ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
+        ALTER SYSTEM SET enable_subscribe_batched = true;
+        ALTER SYSTEM SET compute_batched_subscribe_inline_max_bytes = 1;
+        ALTER SYSTEM SET compute_batched_subscribe_offload_min_updates = 1;
+        """,
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(f"""
+        CREATE CLUSTER cluster1 REPLICAS (
+            replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['{computectl1}'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS {workers[0]}
+            ),
+            replica2 (
+                STORAGECTL ADDRESSES ['clusterd2:2100'],
+                STORAGE ADDRESSES ['clusterd2:2103'],
+                COMPUTECTL ADDRESSES ['clusterd2:2101'],
+                COMPUTE ADDRESSES ['clusterd2:2102'],
+                WORKERS {workers[1]}
+            )
+        );
+        CREATE TABLE t (a int) WITH (RETAIN HISTORY FOR '1h');
+        INSERT INTO t SELECT generate_series(1, {BATCHED_SUBSCRIBE_INITIAL_ROWS});
+        """)
+
+
+def _batched_subscribe_replica_ids(c: Composition) -> dict[str, str]:
+    """Maps the names of `cluster1`'s replicas to their ids."""
+    rows = c.sql_query("""
+        SELECT r.name, r.id
+        FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id
+        WHERE c.name = 'cluster1'
+        """)
+    return {name: id for name, id in rows}
+
+
+def _batched_subscribe_cutover_counts(c: Composition) -> dict[tuple[str, str], float]:
+    """Reads the controller's batched subscribe cutover counters, by replica id and outcome."""
+    raw = c.exec("materialized", "curl", "localhost:6878/metrics", capture=True).stdout
+    counts: dict[tuple[str, str], float] = {}
+    pattern = re.compile(r"^mz_compute_batched_subscribe_batches_total\{(.*)\} (\S+)$")
+    for line in raw.splitlines():
+        m = pattern.match(line)
+        if not m:
+            continue
+        labels = dict(re.findall(r'(\w+)="([^"]*)"', m.group(1)))
+        key = (labels["replica_id"], labels["outcome"])
+        counts[key] = counts.get(key, 0) + float(m.group(2))
+    return counts
+
+
+def _batched_subscribe_stashed_bytes(c: Composition, clusterd: str) -> float:
+    """Reads the bytes `clusterd` has written to stashed batched subscribe shares."""
+    port = c.port(clusterd, 6878)
+    raw = requests.get(f"http://localhost:{port}/metrics", timeout=10).text
+    total = 0.0
+    for line in raw.splitlines():
+        if line.startswith("mz_compute_batched_subscribe_share_bytes_total{") and (
+            'tier="stashed"' in line
+        ):
+            total += float(line.split()[-1])
+    return total
+
+
+def _stash_shards(c: Composition) -> set[str]:
+    """Lists the shards that have blobs but no persist state in the shared file blob store.
+
+    Stashed shares are the only blobs written to such shards.
+    """
+    out = c.exec(
+        "materialized", "ls", "/mzdata/persist/blob", capture=True, silent=True
+    ).stdout
+    blob_shards: set[str] = set()
+    stateful_shards = {
+        row[0]
+        for row in c.sql_query("SELECT shard_id FROM mz_internal.mz_storage_shards")
+    }
+    for name in out.split():
+        # `FileBlob` replaces the `/` in keys with `∕`. Every blob key of a shard starts with the
+        # shard id, and the keys of rollups, which only shards with persist state have, continue
+        # with `v<seqno>∕r`.
+        parts = name.split("∕")
+        if not parts[0].startswith("s"):
+            continue
+        blob_shards.add(parts[0])
+        if len(parts) == 3 and parts[1].startswith("v") and parts[2].startswith("r"):
+            stateful_shards.add(parts[0])
+    return blob_shards - stateful_shards
+
+
+def _await_no_stash_shards(c: Composition, known: set[str]) -> None:
+    """Waits until no stash shard other than `known` holds blobs."""
+    deadline = time.time() + 120
+    while True:
+        stash = _stash_shards(c) - known
+        if not stash:
+            return
+        assert time.time() < deadline, f"stash shards still hold blobs: {stash}"
+        time.sleep(1)
+
+
+def _batched_subscribe_as_of(c: Composition) -> int:
+    return int(c.sql_query("SELECT mz_now()::text")[0][0])
+
+
+class _BatchedSubscribeWriter:
+    """Inserts into `t` and retracts some of its rows until stopped."""
+
+    def __init__(self, c: Composition, rows_per_write: int) -> None:
+        self.c = c
+        self.rows_per_write = rows_per_write
+        self.stop = Event()
+        self.thread = PropagatingThread(target=self._run)
+
+    def _run(self) -> None:
+        cursor = self.c.sql_cursor(reuse_connection=False)
+        k = self.rows_per_write
+        n = BATCHED_SUBSCRIBE_INITIAL_ROWS
+        i = 0
+        while not self.stop.is_set():
+            cursor.execute(
+                f"INSERT INTO t SELECT generate_series({n + 1}, {n + k})".encode()
+            )
+            n += k
+            i += 1
+            if i % 5 == 0:
+                cursor.execute(
+                    f"DELETE FROM t WHERE a > {n - 3 * k} AND a <= {n - 3 * k + k // 2}".encode()
+                )
+            time.sleep(0.1)
+
+    def __enter__(self) -> "_BatchedSubscribeWriter":
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.stop.set()
+        self.thread.join()
+
+
+def _read_batched_subscribe(
+    c: Composition,
+    as_of: int,
+    up_to: int,
+    actions: list[tuple[float, Callable[[], None]]],
+) -> dict[tuple[int, tuple], int]:
+    """Runs a batched subscribe to `t` on `cluster1` and returns its updates, consolidated.
+
+    Runs each action once its delay in seconds has passed since the subscribe started. Checks
+    that progress rows strictly increase from `as_of` to `up_to`, that each update lies in the
+    interval its progress rows bound, and that the updates of one interval are consolidated.
+    """
+    cursor = c.sql_cursor(reuse_connection=False)
+    cursor.execute(b"SET cluster = cluster1")
+    cursor.execute(b"BEGIN")
+    cursor.execute(
+        f"DECLARE c CURSOR FOR SUBSCRIBE t WITH (BATCHED) AS OF {as_of} UP TO {up_to}".encode()
+    )
+    start = time.time()
+    pending_actions = sorted(actions, key=lambda action: action[0])
+    updates: dict[tuple[int, tuple], int] = {}
+    interval: dict[tuple[int, tuple], int] = {}
+    progress: int | None = None
+    while progress != up_to:
+        elapsed = time.time() - start
+        while pending_actions and pending_actions[0][0] <= elapsed:
+            _, action = pending_actions.pop(0)
+            action()
+        assert elapsed < 300, f"batched subscribe stalled at progress {progress}"
+        cursor.execute(b"FETCH ALL c WITH (timeout = '1s')")
+        for ts, progressed, diff, *cols in cursor.fetchall():
+            ts = int(ts)
+            if progressed:
+                assert progress is not None or ts == as_of, f"first progress {ts}"
+                assert progress is None or ts > progress, f"progress {progress} -> {ts}"
+                for (t, row), d in interval.items():
+                    assert (
+                        progress is not None and progress <= t < ts
+                    ), f"update at {t} outside [{progress}, {ts})"
+                    updates[(t, row)] = updates.get((t, row), 0) + d
+                interval = {}
+                progress = ts
+            else:
+                key = (ts, tuple(cols))
+                assert progress is not None, "update before the first progress row"
+                assert key not in interval, f"unconsolidated update {key}"
+                assert int(diff) != 0, f"zero diff for {key}"
+                interval[key] = int(diff)
+    assert not interval, f"updates after the progress row at up_to: {interval}"
+    assert not pending_actions, "the subscribe finished before all actions ran"
+    cursor.execute(b"COMMIT")
+    return {k: d for k, d in updates.items() if d != 0}
+
+
+def _read_reference_subscribe(
+    c: Composition, as_of: int, up_to: int
+) -> dict[tuple[int, tuple], int]:
+    """Runs a plain subscribe to `t` and returns its updates before `up_to`, consolidated."""
+    cursor = c.sql_cursor(reuse_connection=False)
+    cursor.execute(b"BEGIN")
+    cursor.execute(
+        f"DECLARE r CURSOR FOR SUBSCRIBE t WITH (PROGRESS) AS OF {as_of}".encode()
+    )
+    updates: dict[tuple[int, tuple], int] = {}
+    deadline = time.time() + 300
+    progress = as_of
+    while progress < up_to:
+        assert time.time() < deadline, f"reference subscribe stalled at {progress}"
+        cursor.execute(b"FETCH ALL r WITH (timeout = '1s')")
+        for ts, progressed, diff, *cols in cursor.fetchall():
+            ts = int(ts)
+            if progressed:
+                progress = max(progress, ts)
+            elif ts < up_to:
+                key = (ts, tuple(cols))
+                updates[key] = updates.get(key, 0) + int(diff)
+    cursor.execute(b"ROLLBACK")
+    return {k: d for k, d in updates.items() if d != 0}
+
+
+def _check_batched_subscribe(
+    c: Composition,
+    actions: list[tuple[float, Callable[[], None]]],
+    duration_ms: int = 40_000,
+    rows_per_write: int = 1000,
+) -> None:
+    """Runs a batched subscribe under `actions` and compares it to a plain subscribe.
+
+    Expects the subscribe to deliver exactly the updates of the plain subscribe at the same
+    times, to have stashed shares, and to leave no stashed batch behind.
+    """
+    known_shards = _stash_shards(c)
+    as_of = _batched_subscribe_as_of(c)
+    up_to = as_of + duration_ms
+    with _BatchedSubscribeWriter(c, rows_per_write):
+        batched = _read_batched_subscribe(c, as_of, up_to, actions)
+    reference = _read_reference_subscribe(c, as_of, up_to)
+
+    assert len(reference) > BATCHED_SUBSCRIBE_INITIAL_ROWS, len(reference)
+    if batched != reference:
+        missing = {k: d for k, d in reference.items() if batched.get(k) != d}
+        extra = {k: d for k, d in batched.items() if reference.get(k) != d}
+        raise AssertionError(
+            f"batched subscribe differs from reference: "
+            f"{len(missing)} expected updates differ, e.g. {list(missing.items())[:5]}; "
+            f"{len(extra)} reported updates differ, e.g. {list(extra.items())[:5]}"
+        )
+    print(f"batched subscribe matches reference: {len(batched)} updates")
+
+    stashed = _batched_subscribe_stashed_bytes(
+        c, "clusterd1"
+    ) + _batched_subscribe_stashed_bytes(c, "clusterd2")
+    assert stashed > 0, "no replica stashed a share"
+    print(f"stashed share bytes: {stashed}")
+    print(f"cutover outcomes: {_batched_subscribe_cutover_counts(c)}")
+    _await_no_stash_shards(c, known_shards)
+
+
+def workflow_test_batched_subscribe_replica_killed_mid_range(c: Composition) -> None:
+    """
+    Test that a batched subscribe survives the loss of one of its replicas while stashed
+    batches are in flight, and the replica's return.
+    """
+    c.up("materialized", "clusterd1", "clusterd2")
+    _batched_subscribe_setup(c)
+
+    def kill_while_stashing() -> None:
+        # The kill follows clusterd1's first stashed share. The writer makes later stashed shares
+        # likely, but nothing checks that one is in flight at the kill.
+        deadline = time.time() + 60
+        while _batched_subscribe_stashed_bytes(c, "clusterd1") == 0:
+            assert time.time() < deadline, "clusterd1 stashed no share"
+            time.sleep(0.1)
+        c.kill("clusterd1")
+
+    _check_batched_subscribe(
+        c,
+        actions=[
+            (1.0, kill_while_stashing),
+            (15.0, lambda: c.up("clusterd1")),
+        ],
+    )
+
+
+def workflow_test_batched_subscribe_replica_reconnects_with_batches_in_flight(
+    c: Composition,
+) -> None:
+    """
+    Test that a batched subscribe stays gapless when a replica's connection drops with batches
+    in flight and comes back while the other replica is stalled.
+    """
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            workers=2,
+            environment_extra=[
+                # The controller connects through a proxy, so the host in the request URI
+                # doesn't match clusterd's fqdn.
+                "CLUSTERD_GRPC_HOST=",
+            ],
+        ),
+    ):
+        c.up("materialized", "clusterd1", "clusterd2", "toxiproxy")
+        toxi_url = f"http://localhost:{c.default_port('toxiproxy')}/proxies"
+        requests.post(
+            toxi_url,
+            json={
+                "name": "clusterd1_2101",
+                "listen": "0.0.0.0:2101",
+                "upstream": "clusterd1:2101",
+            },
+            timeout=10,
+        ).raise_for_status()
+        _batched_subscribe_setup(c, computectl1="toxiproxy:2101")
+        replica1 = _batched_subscribe_replica_ids(c)["replica1"]
+
+        def set_proxy(enabled: bool) -> None:
+            requests.post(
+                f"{toxi_url}/clusterd1_2101", json={"enabled": enabled}, timeout=10
+            ).raise_for_status()
+
+        trimmed_before: list[float] = []
+
+        def disconnect() -> None:
+            trimmed_before.append(
+                _batched_subscribe_cutover_counts(c).get((replica1, "trimmed"), 0)
+            )
+            c.pause("clusterd2")
+            set_proxy(False)
+
+        _check_batched_subscribe(
+            c,
+            actions=[
+                (5.0, disconnect),
+                (9.0, lambda: set_proxy(True)),
+                (20.0, lambda: c.unpause("clusterd2")),
+            ],
+        )
+
+        # replica1 renders anew at a since behind the accepted upper, so the controller trims
+        # its first batch after the reconnect.
+        trimmed_after = _batched_subscribe_cutover_counts(c).get(
+            (replica1, "trimmed"), 0
+        )
+        assert (
+            trimmed_after > trimmed_before[0]
+        ), f"no trimmed batch from replica1: {trimmed_before[0]} -> {trimmed_after}"
+
+
+def workflow_test_batched_subscribe_cutover_trims(c: Composition) -> None:
+    """
+    Test that a batched subscribe stays gapless when the replica that has been extending it
+    fails and a replica with different batch boundaries takes over.
+    """
+    with c.override(
+        Clusterd(name="clusterd1", workers=4),
+        Clusterd(name="clusterd2", workers=1),
+    ):
+        c.up("materialized", "clusterd1", "clusterd2")
+        _batched_subscribe_setup(c, workers=(4, 1))
+        ids = _batched_subscribe_replica_ids(c)
+        services = {ids["replica1"]: "clusterd1", ids["replica2"]: "clusterd2"}
+
+        def extended(counts: dict[tuple[str, str], float], replica: str) -> float:
+            return counts.get((replica, "accepted"), 0) + counts.get(
+                (replica, "trimmed"), 0
+            )
+
+        def await_extension(replica: str, by: int, within: float) -> bool:
+            start = extended(_batched_subscribe_cutover_counts(c), replica)
+            deadline = time.time() + within
+            while time.time() < deadline:
+                if (
+                    extended(_batched_subscribe_cutover_counts(c), replica)
+                    >= start + by
+                ):
+                    return True
+                time.sleep(0.1)
+            return False
+
+        # A stall of about four seconds makes the controller drop the follower's connection,
+        # after which it renders anew, which is the reconnect workflow's scenario. A trim after a
+        # longer stall does not prove a cutover trim.
+        max_stall_s = 2.0
+
+        def take_over(leader: str, follower: str) -> bool:
+            """Kills `leader` and returns whether `follower` takes over with a cutover trim."""
+            # Both replicas mint a description at every frontier step of `t` they observe, so
+            # their boundaries mostly coincide, and a takeover at a shared boundary needs no
+            # trim. Stalling the follower until the leader has extended the subscribe twice
+            # makes the follower's next batch start before the accepted upper. Whether it also
+            # ends beyond it, instead of replaying the leader's boundaries, depends on how much
+            # of the backlog the follower observes as one frontier step.
+            c.pause(services[follower])
+            stalled_at = time.time()
+            leader_extended = await_extension(leader, 2, max_stall_s - 0.5)
+            if leader_extended:
+                c.kill(services[leader])
+            trimmed_at_kill = _batched_subscribe_cutover_counts(c).get(
+                (follower, "trimmed"), 0
+            )
+            c.unpause(services[follower])
+            stall = time.time() - stalled_at
+            if not leader_extended:
+                print(
+                    f"{services[leader]} did not extend twice within the stall, retrying"
+                )
+                return False
+            assert await_extension(follower, 2, 15), "the follower did not take over"
+            trimmed = _batched_subscribe_cutover_counts(c).get((follower, "trimmed"), 0)
+            print(
+                f"killed {services[leader]}, batches of {services[follower]} "
+                f"trimmed: {trimmed_at_kill} -> {trimmed}"
+            )
+            c.up(services[leader])
+            assert await_extension(leader, 1, 60), f"{services[leader]} did not rejoin"
+            if stall >= max_stall_s:
+                print(
+                    f"the follower stalled for {stall:.1f}s, too long to prove a cutover"
+                )
+                return False
+            return trimmed > trimmed_at_kill
+
+        takeover_delay_s = 8.0
+        duration_ms = 180_000
+        # The longest an attempt takes: the observation window, the stall, the takeover, and
+        # the rejoin.
+        attempt_s = 3 + max_stall_s + 15 + 60
+
+        def take_over_until_trimmed() -> None:
+            # The action runs `takeover_delay_s` after the subscribe started. A takeover after
+            # `UP TO` has no subscribe to take over, so every attempt must end before it.
+            subscribe_ends = time.time() - takeover_delay_s + duration_ms / 1000
+            attempt = 0
+            while time.time() + attempt_s < subscribe_ends:
+                before = _batched_subscribe_cutover_counts(c)
+                time.sleep(3)
+                after = _batched_subscribe_cutover_counts(c)
+                gains = {r: extended(after, r) - extended(before, r) for r in services}
+                print(
+                    f"attempt {attempt}: batches that extended in the last 3s: {gains}"
+                )
+                leader = max(gains, key=lambda r: gains[r])
+                follower = next(r for r in services if r != leader)
+                if take_over(leader, follower):
+                    return
+                attempt += 1
+            raise AssertionError(
+                f"no takeover in {attempt} attempts was trimmed before the subscribe ended"
+            )
+
+        # The subscribe lasts long enough for several takeovers, so it writes fewer rows per
+        # round.
+        _check_batched_subscribe(
+            c,
+            actions=[(takeover_delay_s, take_over_until_trimmed)],
+            duration_ms=duration_ms,
+            rows_per_write=200,
+        )
 
 
 def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:

@@ -1309,6 +1309,462 @@ fn test_subscribe_batched_cursor() {
     await_subscriptions(&mut writer, 0);
 }
 
+/// Tests that a live batched subscribe without a snapshot streams the updates after its as-of
+/// over a relation whose snapshot holds an error.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_without_snapshot_skips_its_errors() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+
+    writer.batch_execute("CREATE TABLE t (x int)").unwrap();
+    writer.batch_execute("INSERT INTO t VALUES (0)").unwrap();
+    client
+        .batch_execute(
+            "BEGIN; DECLARE c CURSOR FOR \
+             SUBSCRIBE (SELECT 10 / x AS a FROM t) WITH (BATCHED, SNAPSHOT = false)",
+        )
+        .unwrap();
+    fetch_until(&mut client, |lines| !lines.is_empty());
+    writer.batch_execute("INSERT INTO t VALUES (2)").unwrap();
+    // A subscribe that reports the snapshot's error fails the fetch, and one whose chain stalls
+    // times out.
+    fetch_until(&mut client, |lines| {
+        lines
+            .iter()
+            .any(|line| matches!(line, SubscribeLine::Data { a: 5, diff: 1, .. }))
+    });
+    client.batch_execute("COMMIT").unwrap();
+}
+
+/// Tests that a batched subscribe over an index evaluates its plan only on the rows it reports.
+/// Without a snapshot, a snapshot row the plan fails on does not fail the subscribe. With one,
+/// it does.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_indexed_without_snapshot_skips_its_errors() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+
+    writer.batch_execute("CREATE TABLE t (x int)").unwrap();
+    // The subscribe keeps the key column, so its plan runs in the sink on the arrangement.
+    writer.batch_execute("CREATE INDEX t_idx ON t (x)").unwrap();
+    writer.batch_execute("INSERT INTO t VALUES (0)").unwrap();
+    let subscribe = "SUBSCRIBE (SELECT x, 10 / x AS a FROM t) WITH (BATCHED";
+
+    client
+        .batch_execute(&format!("BEGIN; DECLARE c CURSOR FOR {subscribe})"))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let error = loop {
+        assert!(
+            Instant::now() < deadline,
+            "the snapshot's error never arrived"
+        );
+        match client.query("FETCH ALL c WITH (timeout = '1s')", &[]) {
+            Ok(rows) => assert!(rows.is_empty(), "rows before the error: {rows:?}"),
+            Err(error) => break error,
+        }
+    };
+    assert_eq!(
+        error.as_db_error().map(|error| error.message()),
+        Some("Evaluation error: division by zero"),
+        "unexpected error: {error:?}"
+    );
+    client.batch_execute("ROLLBACK").unwrap();
+
+    client
+        .batch_execute(&format!(
+            "BEGIN; DECLARE c CURSOR FOR {subscribe}, SNAPSHOT = false)"
+        ))
+        .unwrap();
+    fetch_until(&mut client, |lines| !lines.is_empty());
+    writer.batch_execute("INSERT INTO t VALUES (2)").unwrap();
+    // A subscribe that evaluates the plan on the snapshot fails the fetch, and one whose chain
+    // stalls times out.
+    fetch_until(&mut client, |lines| {
+        lines
+            .iter()
+            .any(|line| matches!(line, SubscribeLine::Data { a: 5, diff: 1, .. }))
+    });
+    client.batch_execute("COMMIT").unwrap();
+}
+
+/// Fetches from cursor `c` until the fetch fails, and returns the data rows fetched before it and
+/// the failure's message.
+fn fetch_until_error(client: &mut postgres::Client) -> (Vec<SubscribeLine>, Option<String>) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut data = Vec::new();
+    loop {
+        assert!(Instant::now() < deadline, "the error never arrived");
+        match client.query("FETCH ALL c WITH (timeout = '1s')", &[]) {
+            Ok(rows) => {
+                for row in rows {
+                    if !row.get::<_, bool>("mz_progressed") {
+                        data.push(SubscribeLine::Data {
+                            ts: row.get::<_, MzTimestamp>("mz_timestamp").0,
+                            diff: row.get::<_, i64>("mz_diff"),
+                            a: row.get::<_, i32>("a"),
+                        });
+                    }
+                }
+            }
+            Err(error) => {
+                let message = error.as_db_error().map(|error| error.message().to_string());
+                return (data, message);
+            }
+        }
+    }
+}
+
+/// Tests that a batched subscribe fails on an error inserted after its start and retracted
+/// later, as a plain subscribe does, with the same error, and that no row of the time the error
+/// is inserted at reaches the client.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_fails_on_a_retracted_error_like_a_plain_subscribe() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+
+    writer.batch_execute("CREATE TABLE t (x int)").unwrap();
+    writer.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+    let mut failures = Vec::new();
+    for options in ["BATCHED, SNAPSHOT = false", "PROGRESS, SNAPSHOT = false"] {
+        client
+            .batch_execute(&format!(
+                "BEGIN; DECLARE c CURSOR FOR \
+                 SUBSCRIBE (SELECT 10 / x AS a FROM t) WITH ({options})"
+            ))
+            .unwrap();
+        fetch_until(&mut client, |lines| !lines.is_empty());
+        // The row `2` lands at the time of the error, in the batch that fails.
+        writer
+            .batch_execute("INSERT INTO t VALUES (2), (0)")
+            .unwrap();
+        writer.batch_execute("DELETE FROM t WHERE x = 0").unwrap();
+        let (data, message) = fetch_until_error(&mut client);
+        assert_eq!(data, vec![], "rows before the error with {options}");
+        failures.push(message);
+        client.batch_execute("ROLLBACK").unwrap();
+    }
+    assert_eq!(
+        failures,
+        vec![Some("Evaluation error: division by zero".to_string()); 2],
+        "the batched and the plain subscribe fail alike"
+    );
+}
+
+/// Tests that an error standing before the start and retracted after it fails a batched
+/// subscribe as it fails a plain one, with and without a snapshot. With a snapshot the standing
+/// error fails both at the as-of. Without one only the retraction lies at or after the start.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_fails_on_a_retraction_of_a_standing_error_like_a_plain_subscribe() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+
+    writer.batch_execute("CREATE TABLE t (x int)").unwrap();
+    let mut outcomes = Vec::new();
+    for snapshot in ["true", "false"] {
+        let mut failures = Vec::new();
+        for kind in ["BATCHED", "PROGRESS"] {
+            writer.batch_execute("INSERT INTO t VALUES (0)").unwrap();
+            client
+                .batch_execute(&format!(
+                    "BEGIN; DECLARE c CURSOR FOR \
+                     SUBSCRIBE (SELECT 10 / x AS a FROM t) WITH ({kind}, SNAPSHOT = {snapshot})"
+                ))
+                .unwrap();
+            // The first fetch runs the subscribe, which fixes its as-of before the retraction.
+            let (data, message) = if snapshot == "true" {
+                let failure = fetch_until_error(&mut client);
+                writer.batch_execute("DELETE FROM t WHERE x = 0").unwrap();
+                failure
+            } else {
+                fetch_until(&mut client, |lines| !lines.is_empty());
+                writer.batch_execute("DELETE FROM t WHERE x = 0").unwrap();
+                fetch_until_error(&mut client)
+            };
+            assert_eq!(
+                data,
+                vec![],
+                "rows before the error with {kind}, {snapshot}"
+            );
+            failures.push(message);
+            client.batch_execute("ROLLBACK").unwrap();
+        }
+        assert_eq!(
+            failures[0], failures[1],
+            "batched and plain differ with SNAPSHOT = {snapshot}"
+        );
+        outcomes.push(failures[0].clone());
+    }
+    assert_eq!(
+        outcomes,
+        vec![Some("Evaluation error: division by zero".to_string()); 2]
+    );
+}
+
+/// Tests that a batched subscribe without a snapshot over a relation holding an error keeps
+/// streaming once a replica that renders it anew, at an as-of raised past its start, takes over.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_without_snapshot_survives_a_new_replica() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+
+    writer
+        .batch_execute("CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))")
+        .unwrap();
+    writer.batch_execute("CREATE TABLE t (x int)").unwrap();
+    writer.batch_execute("INSERT INTO t VALUES (0)").unwrap();
+    client
+        .batch_execute(
+            "SET CLUSTER = c; BEGIN; DECLARE c CURSOR FOR \
+             SUBSCRIBE (SELECT 10 / x AS a FROM t) WITH (BATCHED, SNAPSHOT = false)",
+        )
+        .unwrap();
+    // The first progress row is at least the as-of `A` plus one. Waiting for two more ticks puts
+    // the accepted upper `U` at `A + 3` or later, so the read hold `U - 1` is past the start.
+    fetch_until(&mut client, |lines| {
+        let progress: Vec<u64> = lines
+            .iter()
+            .filter_map(|line| match line {
+                SubscribeLine::Progress(upper) => Some(*upper),
+                SubscribeLine::Data { .. } => None,
+            })
+            .collect();
+        progress
+            .first()
+            .zip(progress.last())
+            .is_some_and(|(first, last)| *last >= first + 2)
+    });
+
+    // The new replica renders the reduced history at `U - 1`, where the error from before the
+    // start stands. Dropping the old replica leaves the subscribe to the new one.
+    writer
+        .batch_execute("CREATE CLUSTER REPLICA c.r2 SIZE 'scale=1,workers=1'")
+        .unwrap();
+    writer.batch_execute("DROP CLUSTER REPLICA c.r1").unwrap();
+    writer.batch_execute("INSERT INTO t VALUES (2)").unwrap();
+    // A batch that carries the standing error past the trim fails the fetch.
+    fetch_until(&mut client, |lines| {
+        lines
+            .iter()
+            .any(|line| matches!(line, SubscribeLine::Data { a: 5, diff: 1, .. }))
+    });
+    client.batch_execute("COMMIT").unwrap();
+}
+
+/// The data lines of `lines` split at its progress rows, each group with the time of the progress
+/// row that closes it.
+fn data_intervals(lines: &[SubscribeLine]) -> Vec<(u64, Vec<SubscribeLine>)> {
+    let mut intervals = Vec::new();
+    let mut data = Vec::new();
+    for line in lines {
+        match *line {
+            SubscribeLine::Data { .. } => data.push(*line),
+            SubscribeLine::Progress(upper) => {
+                intervals.push((upper, std::mem::take(&mut data)));
+            }
+        }
+    }
+    assert!(
+        data.is_empty(),
+        "data after the last progress row: {lines:?}"
+    );
+    intervals
+}
+
+/// Tests that a batched subscribe catching up over live inputs reports what a `PROGRESS`
+/// subscribe with the same bounds reports, however the catch-up splits into batches.
+///
+/// The inputs are written to while they are read and in the range the subscribes cover, so their
+/// frontiers advance in steps that the batched sink may cut at.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_catch_up_any_split() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_subscribe_batched".into(), "true".into())
+        .with_system_parameter_default("enable_logical_compaction_window".into(), "true".into())
+        .with_system_parameter_default("enable_index_options".into(), "true".into())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut system = server.connect_internal(postgres::NoTls).unwrap();
+
+    for ddl in [
+        "CREATE CLUSTER c4 SIZE 'scale=1,workers=4'",
+        "CREATE TABLE t (a int) WITH (RETAIN HISTORY FOR '1000 hours')",
+        "CREATE INDEX t_idx IN CLUSTER quickstart ON t (a) WITH (RETAIN HISTORY FOR '1000 hours')",
+        "CREATE MATERIALIZED VIEW mv IN CLUSTER quickstart WITH (RETAIN HISTORY FOR '1000 hours') \
+         AS SELECT a + 1000 AS a FROM t",
+        "CREATE TABLE ev (a int, ins mz_timestamp, del mz_timestamp) \
+         WITH (RETAIN HISTORY FOR '1000 hours')",
+        "CREATE INDEX ev_idx IN CLUSTER quickstart ON ev (a) WITH (RETAIN HISTORY FOR '1000 hours')",
+        "CREATE INDEX ev_idx4 IN CLUSTER c4 ON ev (a) WITH (RETAIN HISTORY FOR '1000 hours')",
+    ] {
+        client.batch_execute(ddl).unwrap();
+    }
+    client
+        .batch_execute("INSERT INTO t SELECT generate_series(1, 100)")
+        .unwrap();
+    let as_of = read_ts(&mut client);
+
+    // `ev` holds 50 rows that each live for 10ms, at 100 distinct times after `as_of`.
+    client
+        .batch_execute(&format!(
+            "INSERT INTO ev SELECT x, {as_of} + 2000 + 20 * x, {as_of} + 2000 + 20 * x + 10
+             FROM generate_series(1, 50) AS x"
+        ))
+        .unwrap();
+    // Writes to `t` spread over more than a second, so the inputs tick between them.
+    for i in 0..20 {
+        client
+            .batch_execute(&format!("INSERT INTO t VALUES ({i} + 200), ({i} + 300)"))
+            .unwrap();
+        client
+            .batch_execute(&format!("DELETE FROM t WHERE a = {i} + 1"))
+            .unwrap();
+        thread::sleep(Duration::from_millis(100));
+    }
+    // Past the last write and the last change of `ev`.
+    let up_to = std::cmp::max(read_ts(&mut client), as_of + 3100) + 1;
+    while read_ts(&mut client) <= up_to {
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    let relations = [
+        "t",
+        "mv",
+        "(SELECT a FROM ev WHERE mz_now() >= ins AND mz_now() < del)",
+    ];
+    for stash in [false, true] {
+        // Stashing writes every nonempty share to the stash and scans every description away
+        // from the worker.
+        let tuning = if stash {
+            [
+                "ALTER SYSTEM SET compute_batched_subscribe_inline_max_bytes = 0",
+                "ALTER SYSTEM SET compute_batched_subscribe_offload_min_updates = 1",
+            ]
+        } else {
+            [
+                "ALTER SYSTEM RESET compute_batched_subscribe_inline_max_bytes",
+                "ALTER SYSTEM RESET compute_batched_subscribe_offload_min_updates",
+            ]
+        };
+        for statement in tuning {
+            system.batch_execute(statement).unwrap();
+        }
+        for cluster in ["quickstart", "c4"] {
+            client
+                .batch_execute(&format!("SET cluster = {cluster}"))
+                .unwrap();
+            for relation in relations {
+                info!(msg = "Running test", stash, cluster, relation);
+                let bounds = format!("AS OF {as_of} UP TO {up_to}");
+                let progress = copy_subscribe(
+                    &mut client,
+                    &format!("SUBSCRIBE {relation} WITH (PROGRESS) {bounds}"),
+                );
+                let batched = copy_subscribe(
+                    &mut client,
+                    &format!("SUBSCRIBE {relation} WITH (BATCHED) {bounds}"),
+                );
+
+                assert_batched_shape(&batched, as_of, up_to);
+                let updates = updates_by_time(&batched);
+                assert_eq!(
+                    updates,
+                    updates_by_time(&progress),
+                    "{relation} on {cluster}"
+                );
+                assert!(updates.len() > 20, "{relation} on {cluster}: {updates:?}");
+                info!(
+                    msg = "Batched catch-up",
+                    relation,
+                    cluster,
+                    intervals = data_intervals(&batched).len()
+                );
+            }
+        }
+    }
+}
+
+/// Tests that a live batched subscribe delivers updates written after its progress rows in
+/// later batches, each update at its own time.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_delivers_several_batches() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+
+    writer.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE t WITH (BATCHED)")
+        .unwrap();
+    let mut lines = fetch_until(&mut client, |lines| !lines.is_empty());
+    let SubscribeLine::Progress(as_of) = lines[0] else {
+        panic!("first line is not a progress row: {lines:?}");
+    };
+
+    let mut write_times = Vec::new();
+    for a in 1..=3 {
+        // The previous progress row is past every earlier write, so this write lands in a later
+        // batch.
+        writer
+            .batch_execute(&format!("INSERT INTO t VALUES ({a})"))
+            .unwrap();
+        write_times.push(read_ts(&mut writer));
+        lines.extend(fetch_until(&mut client, |lines| {
+            lines
+                .iter()
+                .any(|line| matches!(line, SubscribeLine::Data { a: x, .. } if *x == a))
+                && matches!(lines.last(), Some(SubscribeLine::Progress(_)))
+        }));
+    }
+    let Some(SubscribeLine::Progress(upper)) = lines.last().copied() else {
+        unreachable!("`fetch_until` ends with a progress row");
+    };
+    assert_batched_shape(&lines, as_of, upper);
+
+    let data: Vec<_> = data_intervals(&lines)
+        .into_iter()
+        .filter(|(_, data)| !data.is_empty())
+        .collect();
+    assert_eq!(data.len(), 3, "{lines:?}");
+    let mut lower = as_of;
+    for ((upper, data), (a, write_time)) in data.iter().zip((1..=3).zip(write_times)) {
+        let [
+            SubscribeLine::Data {
+                ts,
+                diff: 1,
+                a: got,
+            },
+        ] = data[..]
+        else {
+            panic!("expected one insertion of {a} before {upper}: {lines:?}");
+        };
+        assert_eq!(got, a, "{lines:?}");
+        assert!(lower <= ts && ts <= write_time, "{a} at {ts}: {lines:?}");
+        lower = *upper;
+    }
+
+    client.batch_execute("COMMIT").unwrap();
+}
+
 // Verifies that subscribing to non-nullable columns with progress information
 // turns them into nullable columns. See database-issues#1946.
 #[mz_ore::test]
