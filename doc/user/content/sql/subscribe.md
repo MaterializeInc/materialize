@@ -68,6 +68,7 @@ The following options are valid within the `WITH` clause.
 | ----------- | ---------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `SNAPSHOT`  | `boolean`  | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot). |
 | `PROGRESS`  | `boolean`  | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress).                                              |
+| `BATCHED`   | `boolean`  | `false` | Whether to deliver updates in consolidated batches, for subscribes with large outputs. Implies `PROGRESS`. See [`BATCHED`](#batched). |
 
 ## Details
 
@@ -258,6 +259,35 @@ are no more updates for timestamp `1`, because timestamps are always presented
 in non-decreasing order. The receipt of the explicit progress message at
 timestamp `4` implies that there are no more updates for either timestamp
 `2` or `3`—but that there may be more data arriving at timestamp `4`.
+
+### `BATCHED`
+
+{{< private-preview />}}
+
+If the `BATCHED` option is specified via `WITH (BATCHED)`, Materialize
+delivers the output in consolidated batches. Use it for subscribes whose
+snapshot or update volume is large.
+
+  * `BATCHED` implies [`PROGRESS`](#progress). The output has the same columns
+    as with `PROGRESS`, and `WITH (BATCHED, PROGRESS = false)` is an error.
+    Unlike a plain `SUBSCRIBE`, a batched subscribe emits a progress row at the
+    [`UP TO`](#up-to) timestamp before it completes.
+
+  * `BATCHED` supports only the plain diff output. Combining it with
+    `ENVELOPE UPSERT`, `ENVELOPE DEBEZIUM`, or `WITHIN TIMESTAMP ORDER BY` is
+    an error.
+
+  * Materialize consolidates the updates of each batch per timestamp and row.
+    The updates within a batch arrive in no particular order, including no
+    particular timestamp order. Do not rely on the non-decreasing timestamp
+    order that a plain `SUBSCRIBE` provides.
+
+  * Progress rows are the only signal that a timestamp is complete. A progress
+    row at timestamp `t` means that no further updates arrive for timestamps
+    before `t`.
+
+If the client reads results too slowly, Materialize ends the `SUBSCRIBE` with a
+"fell behind" error, as it does for a plain `SUBSCRIBE`.
 
 ### Connection pooling
 
