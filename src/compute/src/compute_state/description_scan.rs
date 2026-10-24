@@ -62,7 +62,6 @@ impl DescriptionUpdates {
         consolidate_updates(&mut self.errors);
     }
 
-    #[expect(dead_code, reason = "the batched subscribe sink is not wired up")]
     pub(crate) fn extend(&mut self, other: DescriptionUpdates) {
         self.rows.extend(other.rows);
         self.errors.extend(other.errors);
@@ -70,7 +69,6 @@ impl DescriptionUpdates {
 
     /// The bytes the updates are accounted at, see [`update_byte_len`] and
     /// [`error_update_byte_len`].
-    #[expect(dead_code, reason = "the batched subscribe sink is not wired up")]
     pub(crate) fn byte_len(&self) -> usize {
         let rows = self
             .rows
@@ -151,10 +149,6 @@ where
     ///
     /// The buffered updates are handed out once their accounted bytes exceed `cut_bytes`, so a
     /// hand-out can exceed the cut by the updates of one cursor position.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the batched subscribe sink is not wired up")
-    )]
     pub(crate) fn new(
         ok_batches: Vec<Ok>,
         err_batches: Vec<Err>,

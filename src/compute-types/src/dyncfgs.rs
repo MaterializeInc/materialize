@@ -785,6 +785,29 @@ pub const INDEX_PEEK_PERMIT_FRACTION: Config<f64> = Config::new(
     ParameterScope::Replica,
 );
 
+/// The bytes one worker's share of a batched subscribe description may carry inline in the
+/// compute protocol.
+///
+/// A share above it is written to the stash, and the response carries a handle to it. The bytes
+/// are accounted as a description scan accounts the updates it buffers.
+pub const BATCHED_SUBSCRIBE_INLINE_MAX_BYTES: Config<usize> = Config::new(
+    "compute_batched_subscribe_inline_max_bytes",
+    1 << 20,
+    "The bytes one worker's share of a batched subscribe description may carry inline in the \
+     compute protocol. A larger share is written to the stash.",
+    ParameterScope::Replica,
+);
+
+/// The number of updates above which a batched subscribe description is scanned away from the
+/// timely worker, counted as the summed `len` of the held batches the description overlaps.
+pub const BATCHED_SUBSCRIBE_OFFLOAD_MIN_UPDATES: Config<usize> = Config::new(
+    "compute_batched_subscribe_offload_min_updates",
+    1 << 20,
+    "The number of updates in the batches a batched subscribe description overlaps above which \
+     the description is scanned away from the timely worker.",
+    ParameterScope::Replica,
+);
+
 /// The collection interval for the Prometheus metrics introspection source.
 ///
 /// Set to zero to disable scraping and retract any existing data.
@@ -876,6 +899,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&INDEX_PEEK_ACTIVATION_BUDGET)
         .add(&INDEX_PEEK_YIELD_GRANULARITY)
         .add(&INDEX_PEEK_PERMIT_FRACTION)
+        .add(&BATCHED_SUBSCRIBE_INLINE_MAX_BYTES)
+        .add(&BATCHED_SUBSCRIBE_OFFLOAD_MIN_UPDATES)
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)

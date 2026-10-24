@@ -806,6 +806,12 @@ metrics:
   help: "Backing writes elided: chunks freed while unbacked or while queued for a spill thread, dead before their compression completed."
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
+- name: mz_compute_batched_subscribe_share_bytes_total
+  help: "The bytes of the shares batched subscribes reported, by the tier they travelled in: `inline` counts the row bytes carried in the response, `stashed` the encoded bytes of the stash batches."
+  labels:
+  - tier
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_compute_collection_count
   help: The number and hydration status of maintained compute collections.
   labels:
