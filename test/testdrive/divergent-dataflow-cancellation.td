@@ -18,6 +18,15 @@
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_introspection_subscribes = false
 
+# The raw reachability log is readable only by the system user. A view owned by
+# mz_system exposes it to this test's retried queries, and reads through it stay
+# fast-path.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true;
+CREATE VIEW materialize.public.reachability_raw AS SELECT id, worker_id, source, port, update_type, time FROM mz_introspection.mz_dataflow_operator_reachability_raw;
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false;
+GRANT SELECT ON materialize.public.reachability_raw TO materialize;
+
 # Curated metric sinks install one dataflow per definition on every replica. CI
 # runs with the feature on, so the assertions at the end filter them out instead
 # of disabling it and leaving the shipping path untested. The default cluster's
@@ -146,11 +155,14 @@ contains: canceling statement due to statement timeout
 > SELECT * FROM mz_introspection.mz_compute_operator_durations_histogram_raw WHERE id > ${baseline-max-id} LIMIT 10
 > SELECT id, worker_id, address::text FROM mz_introspection.mz_dataflow_addresses_per_worker WHERE id > ${baseline-max-id}
 > SELECT * FROM mz_introspection.mz_dataflow_channels_per_worker WHERE id > ${baseline-max-id}
-> SELECT * FROM mz_introspection.mz_dataflow_operator_reachability_raw WHERE id > ${baseline-max-id} LIMIT 10
 > SELECT * FROM mz_introspection.mz_dataflow_operators_per_worker WHERE id > ${baseline-max-id}
 > SELECT * FROM mz_introspection.mz_message_counts_received_raw WHERE channel_id > ${baseline-max-id} LIMIT 10
 > SELECT * FROM mz_introspection.mz_message_counts_sent_raw WHERE channel_id > ${baseline-max-id} LIMIT 10
 > SELECT * FROM mz_introspection.mz_scheduling_elapsed_raw WHERE id > ${baseline-max-id} LIMIT 10
+> SELECT * FROM reachability_raw WHERE id > ${baseline-max-id} LIMIT 10
 
 # Cleanup.
+$ postgres-execute connection=mz_system
+DROP VIEW materialize.public.reachability_raw
+
 > DROP CLUSTER test CASCADE
