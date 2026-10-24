@@ -1315,6 +1315,7 @@ export interface MzDataflowOperatorReachabilityPerWorker {
 }
 
 export interface MzDataflowOperatorReachabilityRaw {
+  count: Int8;
   id: string;
   port: string;
   source: string;

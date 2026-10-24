@@ -36,7 +36,7 @@ use ::timely::{Container, ContainerBuilder};
 use differential_dataflow::trace::Batcher;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_expr::{MirScalarExpr, permutation_for_arrangement};
-use mz_repr::{Datum, Diff, Row, RowPacker, RowRef, Timestamp};
+use mz_repr::{Datum, Diff, Row, RowPacker, RowRef, SqlScalarType, Timestamp};
 use mz_timely_util::activator::RcActivator;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::consolidate_pact;
@@ -179,13 +179,30 @@ impl PermutedRowPacker {
     pub(crate) fn new<V: Into<LogVariant>>(variant: V) -> Self {
         let variant = variant.into();
         let key = variant.index_by();
-        let (_, value) = permutation_for_arrangement(
+        let (_, mut value) = permutation_for_arrangement(
             &key.iter()
                 .cloned()
                 .map(MirScalarExpr::column)
                 .collect::<Vec<_>>(),
             variant.desc().arity(),
         );
+        // The `count` column of such a log travels in the diff, so its arranged value is empty.
+        if variant.diff_is_count() {
+            // Clearing the value is only sound if `count` is the sole value column.
+            let desc = variant.desc();
+            let arity = desc.arity();
+            assert!(
+                arity > 0 && key.iter().copied().eq(0..arity - 1),
+                "diff-is-count log {variant:?} must be keyed by all columns but the last, \
+                 found key {key:?} for arity {arity}",
+            );
+            let count_type = &desc.typ().column_types[arity - 1];
+            assert!(
+                count_type.scalar_type == SqlScalarType::Int64 && !count_type.nullable,
+                "diff-is-count log {variant:?} must end in a non-null Int64, found {count_type:?}",
+            );
+            value.clear();
+        }
         Self {
             key,
             value,
