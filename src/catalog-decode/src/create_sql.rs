@@ -20,9 +20,9 @@ use mz_repr::strconv;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::item_refs::collect_item_references;
 use mz_sql_parser::ast::{
-    AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
-    CreateSinkConnection, CreateSourceOptionName, CreateSubsourceOptionName, Format,
-    FormatSpecifier, IcebergSinkConfigOptionName, IcebergSinkMode, IndexOptionName,
+    AstInfo, AvroSchema, ColumnOption, ConnectionOption, ConnectionOptionName,
+    CreateConnectionType, CreateSinkConnection, CreateSourceOptionName, CreateSubsourceOptionName,
+    Expr, Format, FormatSpecifier, IcebergSinkConfigOptionName, IcebergSinkMode, IndexOptionName,
     KafkaSinkConfigOptionName, KafkaSourceConfigOptionName, MaterializedViewOptionName,
     PgConfigOptionName, ProtobufSchema, Raw, RawClusterName, RawItemName, RefreshAtOptionValue,
     RefreshEveryOptionValue, RefreshOptionValue, SinkEnvelope, SourceEnvelope, SourceErrorPolicy,
@@ -143,6 +143,15 @@ where
     Ok(())
 }
 
+/// Whether `expr` is a bare `NULL` literal, possibly parenthesized.
+fn is_null_literal<T: AstInfo>(expr: &Expr<T>) -> bool {
+    match expr {
+        Expr::Value(Value::Null) => true,
+        Expr::Nested(inner) => is_null_literal(inner),
+        _ => false,
+    }
+}
+
 /// Records the `REFRESH` options among `options` as `refresh` in `info`, one entry per option in
 /// statement order.
 fn insert_refresh_strategies<'a, T: AstInfo + 'a>(
@@ -252,7 +261,26 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
                 stmt.with_options.iter().map(|o| (&o.name, &o.value)),
                 TableOptionName::RetainHistory,
             )?;
-
+            let column_defaults: Vec<serde_json::Value> = stmt
+                .columns
+                .iter()
+                .map(|column| {
+                    // A column may repeat `DEFAULT`, and `plan_create_table` applies the last one.
+                    column
+                        .options
+                        .iter()
+                        .rev()
+                        .find_map(|option| match &option.option {
+                            ColumnOption::Default(expr) => Some(expr),
+                            _ => None,
+                        })
+                        .filter(|expr| !is_null_literal(expr))
+                        .map_or(serde_json::Value::Null, |expr| {
+                            json!(expr.to_ast_string_stable())
+                        })
+                })
+                .collect();
+            info.insert("column_defaults", json!(column_defaults));
             "table"
         }
         CreateTableFromSource(stmt) => {
@@ -1994,16 +2022,48 @@ mod tests {
         .expect("ok");
         assert_eq!(from_source, json!({ "type": "table", "source_id": "u1" }));
 
-        for sql in [
-            "CREATE TABLE \"materialize\".\"public\".\"t\" (a int4)",
+        let plain = super::item_details("CREATE TABLE \"materialize\".\"public\".\"t\" (a int4)")
+            .expect("ok");
+        assert_eq!(plain, json!({ "type": "table", "column_defaults": [null] }));
+
+        let webhook = super::item_details(
             "CREATE TABLE \"materialize\".\"public\".\"wht\" FROM WEBHOOK BODY FORMAT JSON",
-        ] {
-            assert_eq!(
-                super::item_details(sql).expect("ok"),
-                json!({ "type": "table" }),
-                "for {sql}"
-            );
-        }
+        )
+        .expect("ok");
+        assert_eq!(webhook, json!({ "type": "table" }));
+    }
+
+    #[mz_ore::test]
+    fn item_details_reports_column_defaults() {
+        let sql = r#"CREATE TABLE "materialize"."public"."t" ("a" [s20 AS "pg_catalog"."int4"] DEFAULT 1 + 1, "b" [s46 AS "pg_catalog"."text"] NOT NULL, "c" [s46 AS "pg_catalog"."text"] VERSION ADDED 1)"#;
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(out["column_defaults"], json!(["1 + 1", null, null]));
+
+        // A bare NULL literal is no default, a cast of one is an expression.
+        let sql = r#"CREATE TABLE "materialize"."public"."t" ("a" [s46 AS "pg_catalog"."text"] DEFAULT NULL, "b" [s46 AS "pg_catalog"."text"] DEFAULT (NULL), "c" [s46 AS "pg_catalog"."text"] DEFAULT NULL::[s46 AS "pg_catalog"."text"])"#;
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(
+            out["column_defaults"],
+            json!([null, null, "NULL::[s46 AS \"pg_catalog\".\"text\"]"])
+        );
+
+        // The last of several defaults applies, even when it is a bare NULL.
+        let sql = r#"CREATE TABLE "materialize"."public"."t" ("a" [s20 AS "pg_catalog"."int4"] DEFAULT 1 DEFAULT 2, "b" [s20 AS "pg_catalog"."int4"] DEFAULT 5 DEFAULT NULL)"#;
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(out["column_defaults"], json!(["2", null]));
+
+        let sql =
+            r#"CREATE TABLE "t" FROM SOURCE [u1 AS "materialize"."public"."s"] (REFERENCE = "t")"#;
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(out["column_defaults"], json!(null));
+    }
+
+    #[mz_ore::test]
+    fn item_details_packs_as_jsonb_for_any_column_name() {
+        let sql = r#"CREATE TABLE "materialize"."public"."t" ("$serde_json::private::Number" [s20 AS "pg_catalog"."int4"] DEFAULT 5, "b" [s46 AS "pg_catalog"."text"])"#;
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(out["column_defaults"], json!(["5", null]));
+        mz_repr::adt::jsonb::Jsonb::from_serde_json(out).expect("packs as jsonb");
     }
 
     /// Every error here is fatal to the whole of `mz_tables`/`mz_views`, not to
