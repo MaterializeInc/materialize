@@ -152,7 +152,7 @@ DELETE FROM numbers WHERE number = 2;
   );
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:self signed certificate in certificate chain
+contains:invalid peer certificate: UnknownIssuer
 > DROP CONNECTION pgconn;
 
 # server: hostssl, client: verify-ca => OK
@@ -187,7 +187,7 @@ DELETE FROM numbers WHERE number = 2;
   );
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:self signed certificate in certificate chain
+contains:invalid peer certificate: UnknownIssuer
 > DROP CONNECTION pgconn;
 
 # server: hostssl, client: verify-full => OK
@@ -256,7 +256,7 @@ contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnoss
   );
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:self signed certificate in certificate chain
+contains:invalid peer certificate: UnknownIssuer
 > DROP CONNECTION pgconn;
 
 # server: hostnossl, client: verify-full => ERROR
@@ -268,7 +268,7 @@ contains:self signed certificate in certificate chain
   );
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:self signed certificate in certificate chain
+contains:invalid peer certificate: UnknownIssuer
 > DROP CONNECTION pgconn;
 
 # server: certuser, client: require => OK

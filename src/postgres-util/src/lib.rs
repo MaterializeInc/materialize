@@ -56,9 +56,6 @@ pub enum PostgresError {
     /// A postgres error.
     #[error(transparent)]
     Postgres(#[from] tokio_postgres::Error),
-    /// Error setting up postgres ssl.
-    #[error(transparent)]
-    PostgresSsl(#[from] openssl::error::ErrorStack),
     #[error("query returned more rows than expected")]
     UnexpectedRow,
     /// Cannot find publication
