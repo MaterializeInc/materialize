@@ -1229,6 +1229,44 @@ fn build_schema_with_append_columns(schema: &ArrowSchema) -> ArrowSchema {
     add_field_ids_to_arrow_schema(ArrowSchema::new(fields).with_metadata(schema.metadata().clone()))
 }
 
+/// Advance the batch window without changing any previously issued description.
+///
+/// The observed frontier must be finite and the interval positive.
+fn advance_batch_descriptions(
+    minted_batches: &mut VecDeque<BatchDescription>,
+    observed_frontier: &Antichain<Timestamp>,
+    interval: Timestamp,
+) -> Vec<BatchDescription> {
+    let mut descriptions = Vec::new();
+    while let Some(oldest_desc) = minted_batches.front() {
+        let oldest_upper = &oldest_desc.1;
+        if !PartialOrder::less_equal(oldest_upper, observed_frontier) {
+            break;
+        }
+
+        let newest_upper = minted_batches.back().unwrap().1.clone();
+        let new_lower = newest_upper.clone();
+        // A snapshot can expose a small intermediate frontier before wall-clock
+        // progress. Cover the unissued gap in one batch rather than allocating a
+        // descriptor for every elapsed interval. Already issued boundaries remain
+        // intact, and the window then resumes ordinary intervals beyond progress.
+        let new_upper = Antichain::from_elem(
+            newest_upper
+                .as_option()
+                .unwrap()
+                .step_forward_by(&interval)
+                .max(*observed_frontier.as_option().unwrap()),
+        );
+
+        let new_batch_description = (new_lower.clone(), new_upper.clone());
+        minted_batches.pop_front();
+        minted_batches.push_back(new_batch_description.clone());
+
+        descriptions.push(new_batch_description);
+    }
+    descriptions
+}
+
 /// Generate time-based batch boundaries for grouping writes into Iceberg snapshots.
 /// Batches are minted with configurable windows to balance write efficiency with latency.
 /// We maintain a sliding window of future batch descriptions so writers can start
@@ -1475,29 +1513,15 @@ fn mint_batch_descriptions<'scope>(
                     }
                     // Maintain a sliding window: when the oldest batch becomes ready, retire it
                     // and mint a new future batch to keep the pipeline full
-                    while let Some(oldest_desc) = minted_batches.front() {
-                        let oldest_upper = &oldest_desc.1;
-                        if !PartialOrder::less_equal(oldest_upper, &observed_frontier) {
-                            break;
-                        }
-
-                        let newest_upper = minted_batches.back().unwrap().1.clone();
-                        let new_lower = newest_upper.clone();
-                        let duration_ts = Timestamp::new(commit_interval.as_millis()
-                            .try_into()
-                            .expect("commit interval too large for u64"));
-                        let new_upper = Antichain::from_elem(newest_upper
-                            .as_option()
-                            .unwrap()
-                            .step_forward_by(&duration_ts));
-
-                        let new_batch_description = (new_lower.clone(), new_upper.clone());
-                        minted_batches.pop_front();
-                        minted_batches.push_back(new_batch_description.clone());
-
-                        batch_desc_output.give(&capset[0], new_batch_description);
-
-                        capset.downgrade(new_upper);
+                    let interval = Timestamp::new(commit_interval.as_millis()
+                        .try_into()
+                        .expect("commit interval too large for u64"));
+                    for description in advance_batch_descriptions(
+                        &mut minted_batches, &observed_frontier, interval,
+                    ) {
+                        let upper = description.1.clone();
+                        batch_desc_output.give(&capset[0], description);
+                        capset.downgrade(upper);
                     }
                 }
             }
@@ -2103,6 +2127,69 @@ mod tests {
     use mz_storage_types::sinks::ICEBERG_UINT64_DECIMAL_PRECISION;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn mint_batch_frontier_gap_is_bounded_and_contiguous() {
+        let frontier = |t| Antichain::from_elem(Timestamp::new(t));
+        let mut window = VecDeque::from([
+            (frontier(0), frontier(1)),
+            (frontier(1), frontier(2000)),
+            (frontier(2000), frontier(3000)),
+            (frontier(3000), frontier(4000)),
+        ]);
+        let window_size = window.len();
+        let observed = frontier(1_002_000);
+        let descriptions = advance_batch_descriptions(&mut window, &observed, Timestamp::new(1000));
+        assert!(descriptions.len() <= window_size + 1);
+        assert_eq!(descriptions.first().unwrap().0, frontier(4000));
+        for pair in descriptions.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0);
+        }
+        assert!(
+            descriptions
+                .iter()
+                .all(|(lower, upper)| PartialOrder::less_than(lower, upper))
+        );
+        assert!(descriptions.iter().any(|(_, upper)| upper == &observed));
+        for (lower, upper) in descriptions.iter().skip(1) {
+            assert_eq!(
+                upper,
+                &Antichain::from_elem(
+                    lower
+                        .as_option()
+                        .unwrap()
+                        .step_forward_by(&Timestamp::new(1000))
+                )
+            );
+        }
+        assert_eq!(window.len(), window_size);
+        assert!(PartialOrder::less_than(
+            &observed,
+            &window.front().unwrap().1
+        ));
+        assert_eq!(
+            advance_batch_descriptions(&mut window, &frontier(1_003_000), Timestamp::new(1000)),
+            vec![(frontier(1_006_000), frontier(1_007_000))]
+        );
+    }
+
+    #[mz_ore::test]
+    fn mint_batch_follows_progress_at_normal_intervals() {
+        let frontier = |t| Antichain::from_elem(Timestamp::new(t));
+        let mut window = VecDeque::from([
+            (frontier(2000), frontier(3000)),
+            (frontier(3000), frontier(4000)),
+            (frontier(4000), frontier(5000)),
+        ]);
+        assert!(
+            advance_batch_descriptions(&mut window, &frontier(2999), Timestamp::new(1000))
+                .is_empty()
+        );
+        assert_eq!(
+            advance_batch_descriptions(&mut window, &frontier(3000), Timestamp::new(1000)),
+            vec![(frontier(5000), frontier(6000))]
+        );
+    }
 
     /// The URI a data file is committed under, as the manifest records it.
     fn manifest_uri(configured_path: Option<&str>, location: &str) -> String {
