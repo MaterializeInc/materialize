@@ -11,6 +11,7 @@ use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::objects_v77 as v77;
 use base64::prelude::*;
 use mz_ore::now::SYSTEM_TIME;
+use sha2::{Digest, Sha256};
 
 // Old: SCRAM-SHA-256$<iters>:<salt>$<client_key>:<server_key>
 // New: SCRAM-SHA-256$<iters>:<salt>$<stored_key>:<server_key>, where stored_key = SHA256(client_key)
@@ -36,7 +37,7 @@ fn migrate_scram_client_to_stored(hash_old: &str) -> Option<String> {
         return None;
     }
 
-    let stored_key = openssl::sha::sha256(&first_key);
+    let stored_key = Sha256::digest(&first_key);
     let stored_key_b64 = BASE64_STANDARD.encode(stored_key);
 
     Some(format!(
