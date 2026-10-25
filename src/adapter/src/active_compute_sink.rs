@@ -12,12 +12,13 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use mz_adapter_types::connection::ConnectionId;
+use mz_compute_client::controller::AcceptedBatch;
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::ClusterId;
-use mz_expr::row::RowCollection;
+use mz_expr::row::{RowCollection, RowCollectionBuilder};
 use mz_expr::{RowComparator, compare_columns};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
@@ -26,10 +27,12 @@ use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowRef
 use mz_sql::plan::SubscribeOutput;
 use mz_storage_types::instances::StorageInstanceId;
 use timely::progress::Antichain;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use uuid::Uuid;
 
+use crate::batched_subscribe::Forwarder;
 use crate::coord::peek::{DroppedDependency, PeekResponseUnary};
+use crate::error::SubscribeBudget;
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
 #[derive(Debug)]
@@ -37,6 +40,8 @@ use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 pub enum ActiveComputeSink {
     /// An active subscribe sink.
     Subscribe(ActiveSubscribe),
+    /// An active `SUBSCRIBE ... WITH (BATCHED)` sink.
+    BatchedSubscribe(ActiveBatchedSubscribe),
     /// An active copy to sink.
     CopyTo(ActiveCopyTo),
 }
@@ -46,6 +51,7 @@ impl ActiveComputeSink {
     pub fn cluster_id(&self) -> ClusterId {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => subscribe.cluster_id,
+            ActiveComputeSink::BatchedSubscribe(subscribe) => subscribe.cluster_id,
             ActiveComputeSink::CopyTo(copy_to) => copy_to.cluster_id,
         }
     }
@@ -54,6 +60,7 @@ impl ActiveComputeSink {
     pub fn connection_id(&self) -> Option<&ConnectionId> {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => subscribe.connection_id(),
+            ActiveComputeSink::BatchedSubscribe(subscribe) => Some(&subscribe.conn_id),
             ActiveComputeSink::CopyTo(copy_to) => Some(&copy_to.conn_id),
         }
     }
@@ -62,6 +69,7 @@ impl ActiveComputeSink {
     pub fn depends_on(&self) -> &BTreeSet<GlobalId> {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => &subscribe.depends_on,
+            ActiveComputeSink::BatchedSubscribe(subscribe) => &subscribe.depends_on,
             ActiveComputeSink::CopyTo(copy_to) => &copy_to.depends_on,
         }
     }
@@ -74,6 +82,7 @@ impl ActiveComputeSink {
     pub fn retire(self, reason: ActiveComputeSinkRetireReason) {
         match self {
             ActiveComputeSink::Subscribe(subscribe) => subscribe.retire(reason),
+            ActiveComputeSink::BatchedSubscribe(subscribe) => subscribe.retire(reason),
             ActiveComputeSink::CopyTo(copy_to) => copy_to.retire(reason),
         }
     }
@@ -92,9 +101,13 @@ pub enum ActiveComputeSinkRetireReason {
     /// The compute sink was retired because its coordinator-side buffer exceeded
     /// its budget while the client was not reading fast enough. Carries the
     /// buffered and budget byte counts for the terminal error.
+    ///
+    /// A batched subscribe also retires with this reason when its unread stashed
+    /// shares exceed `batched_subscribe_max_unread_stash_bytes`.
     BufferExceeded {
         buffered_bytes: usize,
         max_buffered_bytes: usize,
+        budget: SubscribeBudget,
     },
 }
 
@@ -106,7 +119,7 @@ pub enum ActiveComputeSinkRetireReason {
 /// those two grow without bound, so the retire check would never trip on a
 /// stalled client that only receives progress messages. The fixed charge makes
 /// the budget bound message *count* as well as payload bytes.
-const SUBSCRIBE_MESSAGE_OVERHEAD_BYTES: usize = 1024;
+pub(crate) const SUBSCRIBE_MESSAGE_OVERHEAD_BYTES: usize = 1024;
 
 /// Footprints of the subscribe messages queued to the client but not yet
 /// drained, oldest first. The producer pushes one per message sent, the
@@ -122,6 +135,10 @@ pub struct SubscribeBacklogAccounting {
     footprints: VecDeque<usize>,
     /// Sum of `footprints`.
     total: usize,
+    /// Signalled whenever a message is popped.
+    drained: Arc<Notify>,
+    /// Set once the terminal message was sent. Later sends are dropped.
+    closed: bool,
 }
 
 impl SubscribeBacklogAccounting {
@@ -136,6 +153,7 @@ impl SubscribeBacklogAccounting {
         if let Some(footprint) = self.footprints.pop_front() {
             self.total = self.total.saturating_sub(footprint);
         }
+        self.drained.notify_waiters();
     }
 
     /// Bytes queued behind the message the client is currently draining. That
@@ -145,6 +163,68 @@ impl SubscribeBacklogAccounting {
         self.total
             .saturating_sub(self.footprints.front().copied().unwrap_or(0))
     }
+
+    /// Waits until the [`backlog_size`](Self::backlog_size) of the shared
+    /// accounting is at most `bytes`.
+    pub async fn wait_until_at_most(this: &Mutex<Self>, bytes: usize) {
+        let drained = Arc::clone(&lock(this).drained);
+        loop {
+            let notified = drained.notified();
+            tokio::pin!(notified);
+            // Registers for `notify_waiters` before checking, so a pop between
+            // the check and the await is not missed.
+            notified.as_mut().enable();
+            if lock(this).backlog_size() <= bytes {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+fn lock(backlog: &Mutex<SubscribeBacklogAccounting>) -> MutexGuard<'_, SubscribeBacklogAccounting> {
+    backlog
+        .lock()
+        .expect("subscribe backlog accounting poisoned")
+}
+
+/// Sends a message to a subscribe client, unless the client has gone away.
+///
+/// `bytes` is the message's payload size. Its footprint (payload plus a fixed
+/// per-message overhead) is recorded in `backlog` here and released by the
+/// receiver side when the message is drained.
+///
+/// Nothing is sent after [`send_last_to_client`].
+pub(crate) fn send_to_client(
+    channel: &mpsc::UnboundedSender<PeekResponseUnary>,
+    backlog: &Mutex<SubscribeBacklogAccounting>,
+    response: PeekResponseUnary,
+    bytes: usize,
+) {
+    let footprint = bytes.saturating_add(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES);
+    // The send happens under the lock, so that it is ordered with `send_last_to_client`.
+    let mut backlog = lock(backlog);
+    if backlog.closed {
+        return;
+    }
+    backlog.push(footprint);
+    let _ = channel.send(response);
+}
+
+/// Sends the terminal message of a subscribe, after which [`send_to_client`] sends nothing to
+/// the client.
+pub(crate) fn send_last_to_client(
+    channel: &mpsc::UnboundedSender<PeekResponseUnary>,
+    backlog: &Mutex<SubscribeBacklogAccounting>,
+    response: PeekResponseUnary,
+) {
+    let mut backlog = lock(backlog);
+    if backlog.closed {
+        return;
+    }
+    backlog.push(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES);
+    let _ = channel.send(response);
+    backlog.closed = true;
 }
 
 /// Ownership and cleanup scope of an active subscribe.
@@ -160,6 +240,88 @@ pub enum ActiveSubscribeOwner {
     /// Always `internal`, since there is no session to attribute a
     /// `mz_subscriptions` row to.
     Background,
+}
+
+/// The layout of the rows a subscribe sends to its client.
+///
+/// Every producer of subscribe output must pack rows through this type so
+/// that the bytes on the wire do not depend on the producer.
+#[derive(Debug)]
+pub struct SubscribeRowFormat {
+    /// Whether progress information should be emitted.
+    pub(crate) emit_progress: bool,
+    /// The number of columns in the relation that was subscribed to.
+    pub(crate) arity: usize,
+    /// How to present the subscribe's output.
+    pub(crate) output: SubscribeOutput,
+}
+
+impl SubscribeRowFormat {
+    /// Packs one update into `builder`, using `buf` as scratch space.
+    ///
+    /// The envelope outputs have no `mz_diff` column, so they ignore `diff`.
+    pub(crate) fn push_diff_row(
+        &self,
+        builder: &mut RowCollectionBuilder,
+        buf: &mut Row,
+        row: &RowRef,
+        time: Timestamp,
+        diff: Diff,
+    ) {
+        let mut packer = buf.packer();
+        // TODO: Change to MzTimestamp.
+        packer.push(Datum::from(numeric::Numeric::from(time)));
+        if self.emit_progress {
+            // When sinking with PROGRESS, the output includes an
+            // additional column that indicates whether a timestamp is
+            // complete. For regular "data" updates this is always
+            // `false`.
+            packer.push(Datum::False);
+        }
+
+        match &self.output {
+            SubscribeOutput::EnvelopeUpsert { .. } | SubscribeOutput::EnvelopeDebezium { .. } => {}
+            SubscribeOutput::Diffs | SubscribeOutput::WithinTimestampOrderBy { .. } => {
+                packer.push(Datum::Int64(diff.into_inner()));
+            }
+        }
+
+        packer.extend_by_row_ref(row);
+
+        builder.push(buf.as_row_ref(), NonZeroUsize::MIN);
+    }
+
+    /// Builds the row that announces `upper` as complete.
+    ///
+    /// Returns `None` if progress is not requested or `upper` is empty.
+    pub(crate) fn progress_row(&self, upper: &Antichain<Timestamp>) -> Option<RowCollection> {
+        if !self.emit_progress {
+            return None;
+        }
+        let upper = upper.as_option()?;
+        let mut row_buf = Row::default();
+        let mut packer = row_buf.packer();
+        packer.push(Datum::from(numeric::Numeric::from(*upper)));
+        packer.push(Datum::True);
+
+        // Fill in the mz_diff or mz_state column
+        packer.push(Datum::Null);
+
+        // Fill all table columns with NULL.
+        for _ in 0..self.arity {
+            packer.push(Datum::Null);
+        }
+
+        if let SubscribeOutput::EnvelopeDebezium { order_by_keys } = &self.output {
+            for _ in 0..(self.arity - order_by_keys.len()) {
+                packer.push(Datum::Null);
+            }
+        }
+
+        let mut builder = RowCollection::builder(0, 0);
+        builder.push(row_buf.as_row_ref(), NonZeroUsize::MIN);
+        Some(builder.build())
+    }
 }
 
 /// A description of an active subscribe from coord's perspective
@@ -186,16 +348,12 @@ pub struct ActiveSubscribe {
     /// Budget for the buffered backlog. A snapshot of `subscribe_max_buffered_bytes`
     /// taken when the subscribe was created.
     pub max_buffered_bytes: usize,
-    /// Whether progress information should be emitted.
-    pub emit_progress: bool,
+    /// How the subscribe's output rows and progress rows are laid out.
+    pub format: SubscribeRowFormat,
     /// The logical timestamp at which the subscribe began execution.
     pub as_of: Timestamp,
-    /// The number of columns in the relation that was subscribed to.
-    pub arity: usize,
     /// The time when the subscribe started.
     pub start_time: EpochMillis,
-    /// How to present the subscribe's output.
-    pub output: SubscribeOutput,
     /// If true, this is an internal subscribe that should not appear in
     /// introspection tables like mz_subscriptions.
     pub internal: bool,
@@ -231,32 +389,12 @@ impl ActiveSubscribe {
     }
 
     fn send_progress_message(&self, upper: &Antichain<Timestamp>) {
-        if !self.emit_progress {
-            return;
-        }
-        if let Some(upper) = upper.as_option() {
-            let mut row_buf = Row::default();
-            let mut packer = row_buf.packer();
-            packer.push(Datum::from(numeric::Numeric::from(*upper)));
-            packer.push(Datum::True);
-
-            // Fill in the mz_diff or mz_state column
-            packer.push(Datum::Null);
-
-            // Fill all table columns with NULL.
-            for _ in 0..self.arity {
-                packer.push(Datum::Null);
-            }
-
-            if let SubscribeOutput::EnvelopeDebezium { order_by_keys } = &self.output {
-                for _ in 0..(self.arity - order_by_keys.len()) {
-                    packer.push(Datum::Null);
-                }
-            }
-
-            let bytes = row_buf.byte_len();
-            let row_iter = Box::new(row_buf.into_row_iter());
-            self.send(PeekResponseUnary::Rows(row_iter), bytes);
+        if let Some(rows) = self.format.progress_row(upper) {
+            let bytes = rows.byte_len();
+            self.send(
+                PeekResponseUnary::Rows(Box::new(rows.into_row_iter())),
+                bytes,
+            );
         }
     }
 
@@ -264,7 +402,7 @@ impl ActiveSubscribe {
     ///
     /// Returns `true` if the subscribe is finished.
     pub fn process_response(&self, batch: SubscribeBatch) -> bool {
-        let comparator = RowComparator::new(self.output.row_order());
+        let comparator = RowComparator::new(self.format.output.row_order());
         let rows = match batch.updates {
             Ok(ref rows) => {
                 let iters = rows.iter().map(|r| r.iter());
@@ -297,31 +435,11 @@ impl ActiveSubscribe {
         let mut right_datum_vec = mz_repr::DatumVec::new();
         let mut push_row = |row: &RowRef, time: Timestamp, diff: Diff| {
             assert!(self.as_of <= time);
-            let mut packer = output_buf.packer();
-            // TODO: Change to MzTimestamp.
-            packer.push(Datum::from(numeric::Numeric::from(time)));
-            if self.emit_progress {
-                // When sinking with PROGRESS, the output includes an
-                // additional column that indicates whether a timestamp is
-                // complete. For regular "data" updates this is always
-                // `false`.
-                packer.push(Datum::False);
-            }
-
-            match &self.output {
-                SubscribeOutput::EnvelopeUpsert { .. }
-                | SubscribeOutput::EnvelopeDebezium { .. } => {}
-                SubscribeOutput::Diffs | SubscribeOutput::WithinTimestampOrderBy { .. } => {
-                    packer.push(Datum::Int64(diff.into_inner()));
-                }
-            }
-
-            packer.extend_by_row_ref(row);
-
-            output_builder.push(output_buf.as_row_ref(), NonZeroUsize::MIN);
+            self.format
+                .push_diff_row(&mut output_builder, &mut output_buf, row, time, diff);
         };
 
-        match &self.output {
+        match &self.format.output {
             SubscribeOutput::WithinTimestampOrderBy { order_by } => {
                 let mut rows: Vec<_> = rows.collect();
                 // Since the diff is inserted as the first column, we can't take advantage of the
@@ -347,7 +465,8 @@ impl ActiveSubscribe {
             }
             SubscribeOutput::EnvelopeUpsert { order_by_keys }
             | SubscribeOutput::EnvelopeDebezium { order_by_keys } => {
-                let debezium = matches!(self.output, SubscribeOutput::EnvelopeDebezium { .. });
+                let debezium =
+                    matches!(self.format.output, SubscribeOutput::EnvelopeDebezium { .. });
                 let mut it = rows.peekable();
                 let mut datum_vec = mz_repr::DatumVec::new();
                 let mut old_datum_vec = mz_repr::DatumVec::new();
@@ -381,13 +500,13 @@ impl ActiveSubscribe {
                     // subtraction must never underflow. If it does, we'd OOM
                     // the coordinator with a giant loop, so check it here.
                     mz_ore::soft_assert_or_log!(
-                        order_by_keys.len() <= self.arity,
+                        order_by_keys.len() <= self.format.arity,
                         "SUBSCRIBE ENVELOPE has more KEY columns ({}) than \
                          relation arity ({}); planner should have rejected this",
                         order_by_keys.len(),
-                        self.arity,
+                        self.format.arity,
                     );
-                    let value_columns = self.arity.saturating_sub(order_by_keys.len());
+                    let value_columns = self.format.arity.saturating_sub(order_by_keys.len());
                     let mut packer = row_buf.packer();
                     match &group[..] {
                         [(row, _, Diff::ONE)] => {
@@ -405,7 +524,7 @@ impl ActiveSubscribe {
                                     packer.push(Datum::Null);
                                 }
                             }
-                            for idx in 0..self.arity {
+                            for idx in 0..self.format.arity {
                                 if !order_by_keys.iter().any(|co| co.column == idx) {
                                     packer.push(datums[idx]);
                                 }
@@ -419,7 +538,7 @@ impl ActiveSubscribe {
                                 packer.push(datums[column_order.column]);
                             }
                             if debezium {
-                                for idx in 0..self.arity {
+                                for idx in 0..self.format.arity {
                                     if !order_by_keys.iter().any(|co| co.column == idx) {
                                         packer.push(datums[idx]);
                                     }
@@ -439,13 +558,13 @@ impl ActiveSubscribe {
                                 packer.push(datums[column_order.column]);
                             }
                             if debezium {
-                                for idx in 0..self.arity {
+                                for idx in 0..self.format.arity {
                                     if !order_by_keys.iter().any(|co| co.column == idx) {
                                         packer.push(old_datums[idx]);
                                     }
                                 }
                             }
-                            for idx in 0..self.arity {
+                            for idx in 0..self.format.arity {
                                 if !order_by_keys.iter().any(|co| co.column == idx) {
                                     packer.push(datums[idx]);
                                 }
@@ -510,9 +629,11 @@ impl ActiveSubscribe {
             ActiveComputeSinkRetireReason::BufferExceeded {
                 buffered_bytes,
                 max_buffered_bytes,
+                budget,
             } => PeekResponseUnary::Error(AdapterError::SubscribeFellBehind {
                 buffered_bytes,
                 max_buffered_bytes,
+                budget,
             }),
         };
         self.send(message, 0);
@@ -521,18 +642,106 @@ impl ActiveSubscribe {
     /// Sends a message to the client if the subscribe has not already completed
     /// and if the client has not already gone away.
     ///
-    /// `bytes` is the message's payload size. Its footprint (payload plus a fixed
-    /// per-message overhead) is recorded in `backlog_accounting` here and
-    /// released by the receiver side when the message is drained. Overflow of
-    /// the budget is detected by the coordinator after `process_response`
-    /// returns, not here, because this method cannot retire the sink.
+    /// See [`send_to_client`] for the accounting of `bytes`. Overflow of the
+    /// budget is detected by the coordinator after `process_response` returns,
+    /// not here, because this method cannot retire the sink.
     fn send(&self, response: PeekResponseUnary, bytes: usize) {
-        let footprint = bytes.saturating_add(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES);
-        self.backlog_accounting
-            .lock()
-            .expect("subscribe backlog accounting poisoned")
-            .push(footprint);
-        let _ = self.channel.send(response);
+        send_to_client(&self.channel, &self.backlog_accounting, response, bytes);
+    }
+}
+
+/// A description of an active `SUBSCRIBE ... WITH (BATCHED)` from the coordinator's perspective.
+///
+/// Its `Forwarder` sends the subscribe's rows to the client. The coordinator hands it every
+/// accepted batch and retires the subscribe once the forwarder reports a `ForwarderEvent`.
+#[derive(Debug)]
+pub struct ActiveBatchedSubscribe {
+    /// The ID of the connection that created the subscribe.
+    pub conn_id: ConnectionId,
+    /// The UUID of the session that created the subscribe.
+    pub session_uuid: Uuid,
+    /// The ID of the cluster on which the subscribe is running.
+    pub cluster_id: ClusterId,
+    /// The IDs of the objects on which the subscribe depends.
+    pub depends_on: BTreeSet<GlobalId>,
+    /// The logical timestamp at which the subscribe began execution.
+    pub as_of: Timestamp,
+    /// The time when the subscribe started.
+    pub start_time: EpochMillis,
+    /// The channel to the client, shared with the forwarder.
+    pub channel: mpsc::UnboundedSender<PeekResponseUnary>,
+    /// The footprints of the messages queued in `channel`, shared with the forwarder and the
+    /// receiver side.
+    pub backlog_accounting: Arc<Mutex<SubscribeBacklogAccounting>>,
+    /// The bound on the client backlog plus the forwarder's unread inline shares. A snapshot of
+    /// `subscribe_max_buffered_bytes`.
+    pub max_buffered_bytes: usize,
+    /// The bound on the forwarder's unread stashed shares. A snapshot of
+    /// `batched_subscribe_max_unread_stash_bytes`.
+    pub max_unread_stash_bytes: usize,
+    /// The task that sends the subscribe's batches to the client.
+    pub(crate) forwarder: Forwarder,
+}
+
+impl ActiveBatchedSubscribe {
+    /// Hands an accepted batch to the forwarder.
+    ///
+    /// Returns the reason to retire the subscribe with, if the batch pushed it past one of its
+    /// bounds.
+    pub(crate) fn send(&self, batch: AcceptedBatch) -> Option<ActiveComputeSinkRetireReason> {
+        self.forwarder.send(batch);
+
+        let backlog = lock(&self.backlog_accounting).backlog_size();
+        let buffered_bytes = backlog.saturating_add(self.forwarder.unread_inline_bytes());
+        if buffered_bytes > self.max_buffered_bytes {
+            return Some(ActiveComputeSinkRetireReason::BufferExceeded {
+                buffered_bytes,
+                max_buffered_bytes: self.max_buffered_bytes,
+                budget: SubscribeBudget::BufferedBytes,
+            });
+        }
+        let unread_stash_bytes = self.forwarder.unread_stash_bytes();
+        if unread_stash_bytes > self.max_unread_stash_bytes {
+            return Some(ActiveComputeSinkRetireReason::BufferExceeded {
+                buffered_bytes: unread_stash_bytes,
+                max_buffered_bytes: self.max_unread_stash_bytes,
+                budget: SubscribeBudget::UnreadStashBytes,
+            });
+        }
+        None
+    }
+
+    /// Retires the subscribe with the specified reason.
+    ///
+    /// A `Finished` subscribe was ended by its forwarder, which already sent the last message.
+    /// For any other reason the client receives the matching terminal message. Dropping the
+    /// forwarder deletes the stashed shares it still holds.
+    pub fn retire(self, reason: ActiveComputeSinkRetireReason) {
+        let message = match reason {
+            ActiveComputeSinkRetireReason::Finished => None,
+            ActiveComputeSinkRetireReason::Canceled => Some(PeekResponseUnary::Canceled),
+            ActiveComputeSinkRetireReason::DependencyDropped(d) => {
+                Some(PeekResponseUnary::DependencyDropped(d))
+            }
+            ActiveComputeSinkRetireReason::BufferExceeded {
+                buffered_bytes,
+                max_buffered_bytes,
+                budget,
+            } => Some(PeekResponseUnary::Error(
+                AdapterError::SubscribeFellBehind {
+                    buffered_bytes,
+                    max_buffered_bytes,
+                    budget,
+                },
+            )),
+        };
+        // Dropping the forwarder aborts its task, but the task can still be in a send on
+        // another thread. `send_last_to_client` closes the channel to every later send, so the
+        // terminal message is the last one the client receives.
+        drop(self.forwarder);
+        if let Some(message) = message {
+            send_last_to_client(&self.channel, &self.backlog_accounting, message);
+        }
     }
 }
 
@@ -580,9 +789,11 @@ impl ActiveCopyTo {
             ActiveComputeSinkRetireReason::BufferExceeded {
                 buffered_bytes,
                 max_buffered_bytes,
+                budget,
             } => Err(AdapterError::SubscribeFellBehind {
                 buffered_bytes,
                 max_buffered_bytes,
+                budget,
             }),
         };
         let _ = self.tx.send(message);
@@ -603,47 +814,4 @@ pub(crate) struct ActiveCopyFrom {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::active_compute_sink::SubscribeBacklogAccounting;
-
-    /// The backlog excludes the message being drained, and zero-payload
-    /// messages (footprint = overhead only) still accumulate against it.
-    #[mz_ore::test]
-    fn test_subscribe_backlog_accounting() {
-        let mut acc = SubscribeBacklogAccounting::default();
-        assert_eq!(acc.backlog_size(), 0);
-
-        // A single large message is fully tolerated: nothing is queued behind it.
-        acc.push(10_000);
-        assert_eq!(acc.backlog_size(), 0);
-
-        // Near-empty messages (only per-message overhead) still build backlog, so
-        // a flood of frontier-only advances cannot grow without bound.
-        acc.push(1_024);
-        acc.push(1_024);
-        assert_eq!(acc.backlog_size(), 2_048);
-
-        // Draining the oldest message advances the tolerated front.
-        acc.pop();
-        assert_eq!(acc.backlog_size(), 1_024);
-
-        acc.pop();
-        acc.pop();
-        assert_eq!(acc.backlog_size(), 0);
-    }
-
-    /// A client that drains each message before the next is sent never
-    /// accumulates backlog, however many messages flow and however large they
-    /// are. This is the property that keeps a well-behaved subscribe from ever
-    /// being retired, so it is asserted after every step rather than at the end.
-    #[mz_ore::test]
-    fn test_subscribe_backlog_keeping_up_client() {
-        let mut acc = SubscribeBacklogAccounting::default();
-        for i in 0..1_000 {
-            acc.push(1_024 + i * 4_096);
-            assert_eq!(acc.backlog_size(), 0, "message {i} built backlog");
-            acc.pop();
-            assert_eq!(acc.backlog_size(), 0, "message {i} left backlog behind");
-        }
-    }
-}
+mod tests;

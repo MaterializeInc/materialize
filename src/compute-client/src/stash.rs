@@ -48,10 +48,12 @@ impl OwnedStash {
             .into_iter()
             .map(|batch| client.batch_from_transmittable_batch(&shard_id, batch))
             .collect();
-        OwnedStash {
-            batches,
-            runtime: Handle::current(),
-        }
+        OwnedStash::from_batches(batches, Handle::current())
+    }
+
+    /// Takes ownership of `batches`, which are deleted on `runtime` when the handle is dropped.
+    pub fn from_batches(batches: Vec<StashBatch>, runtime: Handle) -> OwnedStash {
+        OwnedStash { batches, runtime }
     }
 
     /// Releases the batches. The caller becomes responsible for deleting them.

@@ -26,7 +26,9 @@ use tokio::sync::mpsc;
 use tracing::Span;
 
 use crate::PeekResponseUnary;
-use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner};
+use crate::active_compute_sink::{
+    ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner, SubscribeRowFormat,
+};
 use crate::catalog::Catalog;
 use crate::command::WriteAttemptKind;
 use crate::coord::Coordinator;
@@ -115,13 +117,15 @@ impl Coordinator {
             // legitimately exceeds the budget, so bounding it here would
             // spuriously retire the statement with `SubscribeFellBehind`.
             max_buffered_bytes: usize::MAX,
-            emit_progress: true, // We need progress updates for OCC
+            format: SubscribeRowFormat {
+                emit_progress: true, // We need progress updates for OCC
+                arity,
+                output: SubscribeOutput::Diffs,
+            },
             as_of,
-            arity,
             cluster_id,
             depends_on,
             start_time,
-            output: SubscribeOutput::Diffs,
             internal: true, // no mz_subscriptions row and no active-subscribes metric
         };
         active_subscribe.initialize();

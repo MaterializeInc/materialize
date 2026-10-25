@@ -40,12 +40,14 @@ use tracing::{Instrument, Level, event, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
+use crate::batched_subscribe::ForwarderEvent;
 use crate::catalog::BuiltinTableUpdate;
 use crate::command::Command;
 use crate::coord::{
     AlterConnectionValidationReady, ArrangementSizeRecord, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
+use crate::error::SubscribeBudget;
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::{AdapterNotice, TimestampContext};
 
@@ -225,6 +227,11 @@ impl Coordinator {
             }
             Message::IntrospectionSubscribeStageReady { span, stage } => {
                 self.sequence_staged((), span, stage).boxed_local().await;
+            }
+            Message::BatchedSubscribeForwarder(event) => {
+                self.message_batched_subscribe_forwarder(event)
+                    .boxed_local()
+                    .await;
             }
             Message::MetricSinkStageReady { span, stage } => {
                 self.sequence_staged((), span, stage).boxed_local().await;
@@ -706,6 +713,27 @@ impl Coordinator {
         self.handle_command(cmd).await;
     }
 
+    /// Retires a batched subscribe whose forwarder ended the client's stream.
+    #[mz_ore::instrument(level = "debug")]
+    async fn message_batched_subscribe_forwarder(&mut self, event: ForwarderEvent) {
+        // An error ends the stream as well. The forwarder already sent it, so the
+        // retirement sends nothing more.
+        let (ForwarderEvent::Finished(sink_id) | ForwarderEvent::Errored(sink_id)) = event;
+        if !matches!(
+            self.active_compute_sinks.get(&sink_id),
+            Some(ActiveComputeSink::BatchedSubscribe(_))
+        ) {
+            // The subscribe was retired for another reason while the event was in flight.
+            return;
+        }
+        let retire_notify = self
+            .retire_compute_sinks(btreemap! {
+                sink_id => ActiveComputeSinkRetireReason::Finished,
+            })
+            .await;
+        drop(retire_notify);
+    }
+
     #[mz_ore::instrument(level = "debug")]
     async fn message_controller(&mut self, message: ControllerResponse) {
         event!(Level::TRACE, message = format!("{:?}", message));
@@ -741,6 +769,7 @@ impl Coordinator {
                         Some(ActiveComputeSinkRetireReason::BufferExceeded {
                             buffered_bytes,
                             max_buffered_bytes,
+                            budget: SubscribeBudget::BufferedBytes,
                         })
                     } else {
                         None
@@ -770,10 +799,20 @@ impl Coordinator {
                 }
             }
             ControllerResponse::BatchedSubscribeResponse(sink_id, batch) => {
-                // No sink consumes batched subscribe output, so the batch is dropped, which
-                // deletes its stashed shares.
-                tracing::debug!(%sink_id, "dropping a batched subscribe batch");
-                drop(batch);
+                let Some(ActiveComputeSink::BatchedSubscribe(active_subscribe)) =
+                    self.active_compute_sinks.get(&sink_id)
+                else {
+                    // Cancellation may cause us to receive batches for subscribes no longer
+                    // tracked. Dropping the batch deletes its stashed shares.
+                    return;
+                };
+                if let Some(reason) = active_subscribe.send(batch) {
+                    let retire_notify = self
+                        .retire_compute_sinks(btreemap! { sink_id => reason })
+                        .await;
+                    // There is no separate statement response to wait for.
+                    drop(retire_notify);
+                }
             }
             ControllerResponse::CopyToResponse(sink_id, response) => {
                 match self.drop_compute_sink(sink_id).await {
