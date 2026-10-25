@@ -22,7 +22,7 @@ use timely::communication::Allocator;
 use tokio::sync::mpsc;
 
 use crate::metrics::ComputeMetrics;
-use crate::server::ComputeRuntimeRole;
+use crate::server::{ComputeRuntimeRole, WorkerResponse};
 
 use super::index_peek_tests::{
     TARGET_ID, cancelling_errors, index_peek_with_uuid, rows_answer, trace_bundle, wide_ok_rows,
@@ -81,17 +81,17 @@ const PEEK_D: Uuid = Uuid::from_u128(4);
 /// An offloaded walk outlives the sweep that offloaded it, so the worker whose activator it wakes,
 /// the responses it eventually produces, and the state it stays pending in all have to survive
 /// the call that started it.
-struct Harness {
-    state: ComputeState,
+pub(super) struct Harness {
+    pub(super) state: ComputeState,
     timely_worker: TimelyWorker,
     response_tx: ResponseSender,
-    responses: mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
+    pub(super) responses: mpsc::UnboundedReceiver<(WorkerResponse, Uuid)>,
 }
 
 impl Harness {
     /// A harness as `CreateInstance` leaves one, with `configure` applied to the worker
     /// configuration as `UpdateConfiguration` applies a change.
-    fn new(configure: impl FnOnce(&mut ConfigUpdates)) -> Self {
+    pub(super) fn new(configure: impl FnOnce(&mut ConfigUpdates)) -> Self {
         let metrics_registry = MetricsRegistry::new();
         let metrics = ComputeMetrics::register_with(&metrics_registry, ComputeRuntimeRole::Solo)
             .for_worker(0);
@@ -139,7 +139,7 @@ impl Harness {
         }
     }
 
-    fn active(&mut self) -> ActiveComputeState<'_> {
+    pub(super) fn active(&mut self) -> ActiveComputeState<'_> {
         ActiveComputeState {
             timely_worker: &mut self.timely_worker,
             compute_state: &mut self.state,
@@ -203,7 +203,7 @@ impl Harness {
     fn peek_responses(&mut self) -> Vec<(Uuid, PeekResponse)> {
         let mut responses = Vec::new();
         while let Ok((response, _nonce)) = self.responses.try_recv() {
-            match response {
+            match response.into_compute() {
                 ComputeResponse::PeekResponse(uuid, response, _otel_ctx) => {
                     responses.push((uuid, response))
                 }

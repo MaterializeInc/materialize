@@ -3145,6 +3145,21 @@ class FlipFlagsAction(Action):
             "0.0001",
             "1000.0",
         ]
+        # The default, a bound that stashes every nonempty share, and one that
+        # keeps every share this workload produces inline.
+        self.flags_with_values["compute_batched_subscribe_inline_max_bytes"] = [
+            "1048576",
+            "0",
+            "1073741824",
+        ]
+        # The default, a bound that offloads every nonempty description, and
+        # one that scans every description this workload produces on the
+        # worker.
+        self.flags_with_values["compute_batched_subscribe_offload_min_updates"] = [
+            "1048576",
+            "0",
+            "1073741824",
+        ]
         self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
             "0",  # "force enabled"
             "1048576",  # 1 MiB, an in-between value

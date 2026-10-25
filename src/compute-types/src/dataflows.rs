@@ -418,12 +418,13 @@ impl<P, S, O> DataflowDescription<P, S, O> {
             })
     }
 
-    /// Identifiers of exported subscribe sinks.
+    /// Identifiers of exported subscribe sinks, batched or not.
     pub fn subscribe_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.sink_exports
             .iter()
             .filter_map(|(id, desc)| match desc.connection {
-                ComputeSinkConnection::Subscribe(_) => Some(*id),
+                ComputeSinkConnection::Subscribe(_)
+                | ComputeSinkConnection::BatchedSubscribe(_) => Some(*id),
                 _ => None,
             })
     }
