@@ -13,7 +13,9 @@ use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 
-use openssl::symm::{Cipher, Crypter};
+use aws_lc_rs::cipher::{AES_256, DecryptionContext, StreamingDecryptingKey, UnboundCipherKey};
+use aws_lc_rs::error::Unspecified;
+use aws_lc_rs::iv::FixedLength;
 use tokio::io::{AsyncRead, ReadBuf};
 
 const BUF_SIZE: usize = 4096;
@@ -21,7 +23,8 @@ const BLOCK_SIZE: usize = 16;
 
 pub struct AsyncAesDecrypter<R> {
     input: R,
-    crypter: Crypter,
+    /// `None` once `finish` has consumed the key.
+    decrypter: Option<StreamingDecryptingKey>,
     buf: [u8; BUF_SIZE + BLOCK_SIZE],
     pos: usize,
     end: usize,
@@ -29,19 +32,12 @@ pub struct AsyncAesDecrypter<R> {
 }
 
 impl<R> AsyncAesDecrypter<R> {
-    pub fn new(
-        input: R,
-        key: &[u8],
-        iv: &[u8],
-    ) -> Result<AsyncAesDecrypter<R>, openssl::error::ErrorStack> {
+    pub fn new(input: R, key: &[u8], iv: &[u8; 16]) -> Result<AsyncAesDecrypter<R>, Unspecified> {
+        let key = UnboundCipherKey::new(&AES_256, key)?;
+        let context = DecryptionContext::Iv128(FixedLength::from(iv));
         Ok(AsyncAesDecrypter {
             input,
-            crypter: Crypter::new(
-                Cipher::aes_256_cbc(),
-                openssl::symm::Mode::Decrypt,
-                key,
-                Some(iv),
-            )?,
+            decrypter: Some(StreamingDecryptingKey::cbc_pkcs7(key, context)?),
             buf: [0; BUF_SIZE + BLOCK_SIZE],
             pos: 0,
             end: 0,
@@ -77,14 +73,70 @@ where
 
             // Decrypt the chunk in full and stash it in `me.buf`.
             me.pos = 0;
+            let decrypt_err =
+                |_| io::Error::new(io::ErrorKind::InvalidData, "AES decryption failed");
+            let decrypter = me.decrypter.as_mut().expect("not done");
             if !read_buf.filled().is_empty() {
-                me.end = me.crypter.update(read_buf.filled(), &mut me.buf)?;
+                me.end = decrypter
+                    .update(read_buf.filled(), &mut me.buf)
+                    .map_err(decrypt_err)?
+                    .written()
+                    .len();
             } else {
-                me.end = me.crypter.finalize(&mut me.buf)?;
+                let decrypter = me.decrypter.take().expect("not done");
+                me.end = decrypter
+                    .finish(&mut me.buf)
+                    .map_err(decrypt_err)?
+                    .written()
+                    .len();
                 me.done = true;
             }
 
             // Go around the loop to return the decrypted data.
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aws_lc_rs::cipher::{EncryptionContext, PaddedBlockEncryptingKey};
+    use tokio::io::AsyncReadExt;
+
+    use super::*;
+
+    const KEY: [u8; 32] = [7; 32];
+    const IV: [u8; 16] = [9; 16];
+
+    fn encrypt(plaintext: &[u8]) -> Vec<u8> {
+        let key =
+            PaddedBlockEncryptingKey::cbc_pkcs7(UnboundCipherKey::new(&AES_256, &KEY).unwrap())
+                .unwrap();
+        let mut buf = plaintext.to_vec();
+        let context = EncryptionContext::Iv128(FixedLength::from(IV));
+        key.less_safe_encrypt(&mut buf, context).unwrap();
+        buf
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn decrypts_across_read_chunks() {
+        // Spans more than one BUF_SIZE read and ends mid-block.
+        let plaintext: Vec<u8> = (0..BUF_SIZE * 2 + 5)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let ciphertext = encrypt(&plaintext);
+        let mut decrypter = AsyncAesDecrypter::new(&ciphertext[..], &KEY, &IV).unwrap();
+        let mut out = Vec::new();
+        decrypter.read_to_end(&mut out).await.unwrap();
+        assert_eq!(out, plaintext);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn rejects_truncated_ciphertext() {
+        let ciphertext = encrypt(b"hello");
+        let truncated = &ciphertext[..ciphertext.len() - 1];
+        let mut decrypter = AsyncAesDecrypter::new(truncated, &KEY, &IV).unwrap();
+        let mut out = Vec::new();
+        let err = decrypter.read_to_end(&mut out).await.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }
