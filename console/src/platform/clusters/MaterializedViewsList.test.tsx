@@ -7,19 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen } from "@testing-library/react";
+import { hashKey } from "@tanstack/react-query";
+import { screen, waitFor, within } from "@testing-library/react";
 import React from "react";
 import { Route, Routes } from "react-router-dom";
 
 import { ErrorCode } from "~/api/materialize/types";
 import {
+  buildColumns,
   buildSqlQueryHandlerV2,
   buildUseSqlQueryHandler,
   mapKyselyToTabular,
 } from "~/api/mocks/buildSqlQueryHandler";
 import server from "~/api/mocks/server";
 import { getStore } from "~/jotai";
+import { getQueryClient } from "~/queryClient";
 import { allClusters } from "~/store/allClusters";
+import { buildValidMaterializationLagHandler } from "~/test/clusterQueryBuilders";
 import { mockSubscribeState } from "~/test/mockSubscribe";
 import {
   arrangmentMemoryColumns,
@@ -95,6 +99,19 @@ const validReplicaSizesHandler = buildSqlQueryHandlerV2({
     columns: clusterReplicasColumns,
   }),
 });
+const pendingReplicaSizesHandler = buildSqlQueryHandlerV2(
+  {
+    queryKey: clusterQueryKeys.replicas({
+      clusterId: detailPageCluster.id,
+      orderBy: "heapLimit",
+    }),
+    results: mapKyselyToTabular({
+      rows: [testReplicaSize],
+      columns: clusterReplicasColumns,
+    }),
+  },
+  { waitTimeMs: "infinite" },
+);
 const emptyArrangmentMemoryHandler = buildSqlQueryHandlerV2({
   queryKey: clusterQueryKeys.arrangementMemory({
     arrangmentIds: [testMaterializedViewId],
@@ -125,6 +142,80 @@ const validArrangmentMemoryHandler = buildSqlQueryHandlerV2({
     columns: arrangmentMemoryColumns,
   }),
 });
+
+const arrangementMemoryKey = clusterQueryKeys.arrangementMemory({
+  arrangmentIds: [testMaterializedViewId],
+  replicaHeapLimit: Number(testReplicaSize.heapLimit),
+  clusterName: detailPageCluster.name,
+  replicaName: detailPageCluster.replicas[0]?.name,
+});
+
+const pendingArrangmentMemoryHandler = buildSqlQueryHandlerV2(
+  {
+    queryKey: arrangementMemoryKey,
+    results: mapKyselyToTabular({
+      rows: [],
+      columns: arrangmentMemoryColumns,
+    }),
+  },
+  { waitTimeMs: "infinite" },
+);
+
+/**
+ * Resolves once the memory query is sent for the replica it reads from, so a
+ * test asserts while that query, not the replicas query, is pending.
+ */
+const arrangementMemoryRequested = () =>
+  new Promise<void>((resolve) => {
+    const onStart = ({ request }: { request: Request }) => {
+      const queryKey = new URL(request.url).searchParams.get("query_key");
+      if (queryKey === hashKey(arrangementMemoryKey)) {
+        server.events.removeListener("request:start", onStart);
+        resolve();
+      }
+    };
+    server.events.on("request:start", onStart);
+  });
+
+/**
+ * Resolves once the memory query has settled without a replica to read from,
+ * so a test asserts while only the replicas query is pending.
+ */
+const replicalessMemorySettled = () =>
+  waitFor(() =>
+    expect(
+      getQueryClient()
+        .getQueryCache()
+        .findAll({
+          predicate: ({ queryKey, state }) => {
+            const part = queryKey.at(-1) as
+              { scope?: string; replicaName?: string } | undefined;
+            return (
+              part?.scope === "arrangementMemory" &&
+              part.replicaName === undefined &&
+              state.status === "success"
+            );
+          },
+        }),
+    ).toHaveLength(1),
+  );
+
+const pendingMaterializationLagHandler = buildSqlQueryHandlerV2(
+  {
+    queryKey: clusterQueryKeys.materializationLag({
+      objectIds: [testMaterializedViewId],
+    }),
+    results: mapKyselyToTabular({
+      rows: [],
+      columns: buildColumns(["targetObjectId"]),
+    }),
+  },
+  { waitTimeMs: "infinite" },
+);
+const emptyMaterializationLagHandler = buildValidMaterializationLagHandler(
+  { objectIds: [testMaterializedViewId] },
+  [],
+);
 
 const errorArrangmentMemoryHandler = buildSqlQueryHandlerV2({
   queryKey: clusterQueryKeys.arrangementMemory({
@@ -204,13 +295,64 @@ describe("MaterializedViews", () => {
     expect(await screen.findByText("1.62 GB (10.1%)")).toBeVisible();
   });
 
-  it("shows '-' as memory usage if unavailable", async () => {
+  it("shows a loading indicator as memory usage while it loads", async () => {
+    server.use(pendingArrangmentMemoryHandler);
+    const requested = arrangementMemoryRequested();
+    renderMaterializedViewList();
+    await requested;
+
+    const memoryUsage = await screen.findByTestId("memory-usage");
+    expect(within(memoryUsage).getByTestId("metric-loading")).toBeVisible();
+    expect(memoryUsage).not.toHaveTextContent("-");
+  });
+
+  it("shows a loading indicator as memory usage while the replica it reads from loads", async () => {
+    server.use(pendingReplicaSizesHandler);
+    renderMaterializedViewList();
+    await replicalessMemorySettled();
+
+    const memoryUsage = await screen.findByTestId("memory-usage");
+    expect(within(memoryUsage).getByTestId("metric-loading")).toBeVisible();
+    expect(memoryUsage).not.toHaveTextContent("-");
+  });
+
+  it("shows '-' as memory usage once loaded without a value", async () => {
+    renderMaterializedViewList();
+
+    const memoryUsage = await screen.findByTestId("memory-usage");
+    await waitFor(() => expect(memoryUsage).toHaveTextContent(/^-$/));
+    expect(
+      within(memoryUsage).queryByTestId("metric-loading"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows '-' as memory usage if it fails to load", async () => {
     server.use(errorArrangmentMemoryHandler);
     renderMaterializedViewList();
 
     expect(await screen.findByText("test_materialized_view")).toBeVisible();
     const memoryUsage = await screen.findByTestId("memory-usage");
-    expect(memoryUsage).toHaveTextContent("-");
+    await waitFor(() => expect(memoryUsage).toHaveTextContent(/^-$/));
     expect(memoryUsage).toBeVisible();
+  });
+
+  it("shows a loading indicator as freshness while it loads", async () => {
+    server.use(pendingMaterializationLagHandler);
+    renderMaterializedViewList();
+
+    const freshness = await screen.findByTestId("freshness");
+    expect(within(freshness).getByTestId("metric-loading")).toBeVisible();
+    expect(freshness).not.toHaveTextContent("-");
+  });
+
+  it("shows '-' as freshness once loaded without a value", async () => {
+    server.use(emptyMaterializationLagHandler);
+    renderMaterializedViewList();
+
+    const freshness = await screen.findByTestId("freshness");
+    await waitFor(() => expect(freshness).toHaveTextContent(/^-$/));
+    expect(
+      within(freshness).queryByTestId("metric-loading"),
+    ).not.toBeInTheDocument();
   });
 });

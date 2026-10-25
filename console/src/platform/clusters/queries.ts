@@ -687,6 +687,9 @@ export function useClusterReplicasWithUtilization(
  * Returns a map of arrangment ID to memory usage as a percentage.
  *
  * Because this uses mz_compute_exports, it must run on the replica we want data from.
+ *
+ * Resolves to null without fetching while any param is unset, so a caller that
+ * derives params from another query is still loading while that query is.
  */
 export function useArrangmentsMemory(params: ArrangmentMemoryUsageParams) {
   return useQuery({
