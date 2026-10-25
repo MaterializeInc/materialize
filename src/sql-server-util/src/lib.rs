@@ -30,6 +30,7 @@ pub mod cdc;
 pub mod config;
 pub mod desc;
 pub mod inspect;
+pub mod schema_change;
 
 pub use config::Config;
 pub use desc::{ProtoSqlServerColumnDesc, ProtoSqlServerTableDesc};
