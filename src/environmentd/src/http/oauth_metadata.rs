@@ -65,7 +65,7 @@ use serde::Serialize;
 use tracing::warn;
 use url::Url;
 
-use crate::http::Delayed;
+use crate::http::{Delayed, StartingUp};
 
 /// Bounds how long the unauthenticated discovery handler waits for the
 /// adapter client. Without this, a wedged adapter could pin connections
@@ -301,8 +301,7 @@ pub(crate) async fn handle_protected_resource_metadata(
                     Ok(Ok(client)) => client,
                     Ok(Err(_)) | Err(_) => {
                         metrics.inc(MetricStatus::AdapterUnavailable);
-                        return (StatusCode::SERVICE_UNAVAILABLE, "adapter not ready")
-                            .into_response();
+                        return StartingUp.into_response();
                     }
                 };
             let system_vars = adapter_client.get_system_vars().await;
