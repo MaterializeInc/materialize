@@ -23,11 +23,11 @@ use mz_sql_parser::ast::{
     AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
     CreateSinkConnection, CreateSourceOptionName, CreateSubsourceOptionName, Format,
     FormatSpecifier, IcebergSinkConfigOptionName, IcebergSinkMode, IndexOptionName,
-    KafkaSinkConfigOptionName, KafkaSourceConfigOptionName, MaterializedViewOptionName,
-    PgConfigOptionName, ProtobufSchema, Raw, RawClusterName, RawItemName, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, SinkEnvelope, SourceEnvelope, SourceErrorPolicy,
-    Statement, TableFromSourceOptionName, TableOptionName, UnresolvedItemName, Value,
-    WithOptionValue,
+    KafkaSinkConfigOptionName, KafkaSourceConfigOptionName, MaterializedViewBody,
+    MaterializedViewOptionName, PgConfigOptionName, ProtobufSchema, Raw, RawClusterName,
+    RawItemName, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, SinkEnvelope,
+    SourceEnvelope, SourceErrorPolicy, Statement, TableFromSourceOptionName, TableOptionName,
+    UnresolvedItemName, Value, WithOptionValue,
 };
 use prost::Message as _;
 use serde_json::json;
@@ -228,7 +228,11 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
             };
             info.insert("cluster_id", json!(cluster_id));
 
-            let mut definition = stmt.query.to_ast_string_stable();
+            // A plan body has no query, so its definition is the `FROM PLAN` clause.
+            let mut definition = match &stmt.body {
+                MaterializedViewBody::Query(query) => query.to_ast_string_stable(),
+                body @ MaterializedViewBody::Plan(_) => body.to_ast_string_stable(),
+            };
             definition.push(';');
             info.insert("definition", json!(definition));
 

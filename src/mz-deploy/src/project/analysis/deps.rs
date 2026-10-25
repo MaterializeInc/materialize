@@ -416,7 +416,11 @@ pub(crate) fn extract_dependencies(
             visitor.visit_query(&s.definition.query);
         }
         Statement::CreateMaterializedView(s) => {
-            visitor.visit_query(&s.query);
+            // TODO: A plan body's imports are not visible here, so they are not tracked as
+            // dependencies.
+            if let MaterializedViewBody::Query(query) = &s.body {
+                visitor.visit_query(query);
+            }
 
             // Extract cluster dependency from IN CLUSTER clause
             if let Some(ref cluster_name) = s.in_cluster {

@@ -329,6 +329,9 @@ def get_variable_system_parameters(
         # On by default so CI exercises the jq function, which is off in
         # production while it earns trust.
         VariableSystemParameter("enable_jq", "true", ["true", "false"]),
+        # On by default so CI exercises user-provided LIR plans, which are off in
+        # production.
+        VariableSystemParameter("enable_lir_plans", "true", ["true", "false"]),
         # On by default so CI exercises the columnar merge batcher, which is
         # off in production while it earns trust.
         VariableSystemParameter(

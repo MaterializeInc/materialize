@@ -39,6 +39,7 @@ use crate::plan::transform::{Transform, TransformConfig};
 
 mod lowering;
 
+pub mod envelope;
 pub mod interpret;
 pub mod join;
 pub mod reduce;
@@ -47,6 +48,12 @@ pub mod scalar;
 pub mod threshold;
 pub mod top_k;
 pub mod transform;
+pub mod validate;
+
+/// Whether `finalize_dataflow` checks that every optimizer plan survives extraction to an
+/// envelope and back, which `MZ_LIR_ROUND_TRIP_CHECK=1` enables when soft assertions are on.
+static ROUND_TRIP_CHECK: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var("MZ_LIR_ROUND_TRIP_CHECK").is_ok_and(|v| v == "1"));
 
 /// Metrics collected during MIR to LIR lowering.
 #[derive(Debug, Clone)]
@@ -639,6 +646,31 @@ impl LirRelationExpr {
             ambiguous_ids: BTreeSet::default(),
         })
     }
+
+    /// Whether some operator in this plan filters by `mz_now()`.
+    ///
+    /// LIR scalar expressions cannot call `mz_now()`, so temporal filters appear only as the
+    /// bounds of an `MfpPlan`.
+    pub fn has_temporal_bounds(&self) -> bool {
+        let mut stack = vec![self];
+        while let Some(expr) = stack.pop() {
+            let mfp = match &expr.node {
+                LirRelationNode::Mfp { mfp, .. } => Some(mfp),
+                LirRelationNode::FlatMap { mfp_after, .. } => Some(mfp_after),
+                LirRelationNode::ArrangeBy { input_mfp, .. } => Some(input_mfp),
+                LirRelationNode::Get {
+                    plan: GetPlan::Arrangement(_, _, mfp) | GetPlan::Collection(mfp),
+                    ..
+                } => Some(mfp),
+                _ => None,
+            };
+            if mfp.is_some_and(MfpPlan::has_temporal_bounds) {
+                return true;
+            }
+            stack.extend(expr.node.children());
+        }
+        false
+    }
 }
 
 /// How a `Get` stage will be rendered.
@@ -826,6 +858,40 @@ impl LirRelationExpr {
         }
 
         soft_assert_eq_no_log!(dataflow.check_invariants(), Ok(()));
+
+        // Optimizer plans must pass the validator that user plans face, minus the rules for
+        // user plans only, so that its rules do not reject what the optimizer produces.
+        if mz_ore::assert::soft_assertions_enabled() {
+            let config = validate::ValidateConfig { user_plan: false };
+            if let Err(errors) = validate::validate_dataflow(&dataflow, &config) {
+                let errors = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>();
+                let explain_config = ExplainConfig {
+                    node_ids: true,
+                    ..Default::default()
+                };
+                let plans = dataflow
+                    .objects_to_build
+                    .iter()
+                    .map(|build| {
+                        let plan = build.plan.debug_explain(&explain_config, None);
+                        format!("{}:\n{plan}", build.id)
+                    })
+                    .collect::<Vec<_>>();
+                mz_ore::soft_panic_or_log!(
+                    "LIR validation failed for dataflow {}: {errors:#?}\n{}",
+                    dataflow.debug_name,
+                    plans.join("\n")
+                );
+            }
+            // Every optimizer plan must survive extraction to an envelope and back. Opt-in,
+            // because printing and parsing every dataflow costs more than validating it.
+            if *ROUND_TRIP_CHECK && let Err(error) = envelope::check_extract_round_trip(&dataflow) {
+                mz_ore::soft_panic_or_log!(
+                    "LIR envelope round trip failed for dataflow {}: {error}",
+                    dataflow.debug_name
+                );
+            }
+        }
 
         mz_repr::explain::trace_plan(&dataflow);
 

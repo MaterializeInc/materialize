@@ -37,7 +37,9 @@ use crate::project::ir::object_id::ObjectId;
 use crate::project::resolve::cte_scope::CteScope;
 use crate::types::ColumnType;
 use mz_sql_parser::ast::visit::{self, Visit};
-use mz_sql_parser::ast::{CommentObjectType, Raw, RawClusterName, TableFactor};
+use mz_sql_parser::ast::{
+    CommentObjectType, MaterializedViewBody, Raw, RawClusterName, TableFactor,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1293,7 +1295,9 @@ pub(crate) fn extract_alias_map(
             visitor.visit_query(&s.definition.query);
         }
         Statement::CreateMaterializedView(s) => {
-            visitor.visit_query(&s.query);
+            if let MaterializedViewBody::Query(query) = &s.body {
+                visitor.visit_query(query);
+            }
         }
         _ => {}
     }

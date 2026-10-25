@@ -1002,6 +1002,12 @@ impl AdapterError {
             AdapterError::PlanError(PlanError::Unsupported { .. }) => {
                 SqlState::FEATURE_NOT_SUPPORTED
             }
+            AdapterError::PlanError(PlanError::InvalidLirPlan(_)) => {
+                SqlState::INVALID_OBJECT_DEFINITION
+            }
+            AdapterError::PlanError(PlanError::NoSqlDefinition { .. }) => {
+                SqlState::FEATURE_NOT_SUPPORTED
+            }
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
@@ -1034,6 +1040,12 @@ impl AdapterError {
                     SqlState::UNDEFINED_PARAMETER
                 }
                 OptimizerError::PlanError(PlanError::Unsupported { .. }) => {
+                    SqlState::FEATURE_NOT_SUPPORTED
+                }
+                OptimizerError::PlanError(PlanError::InvalidLirPlan(_)) => {
+                    SqlState::INVALID_OBJECT_DEFINITION
+                }
+                OptimizerError::PlanError(PlanError::NoSqlDefinition { .. }) => {
                     SqlState::FEATURE_NOT_SUPPORTED
                 }
                 OptimizerError::PlanError(_) => SqlState::INTERNAL_ERROR,

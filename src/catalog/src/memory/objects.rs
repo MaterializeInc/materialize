@@ -1417,9 +1417,11 @@ pub struct MaterializedView {
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub collections: BTreeMap<RelationVersion, GlobalId>,
     /// Raw high-level expression from planning, derived from the `create_sql`.
-    pub raw_expr: Arc<HirRelationExpr>,
+    /// `None` for materialized views that have no SQL definition.
+    pub raw_expr: Option<Arc<HirRelationExpr>>,
     /// Optimized mid-level expression, derived from the `raw_expr`.
-    pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
+    /// `None` exactly when `raw_expr` is `None`.
+    pub locally_optimized_expr: Option<Arc<OptimizedMirRelationExpr>>,
     /// [`VersionedRelationDesc`] of this materialized view, derived from the `create_sql`.
     pub desc: VersionedRelationDesc,
     /// Other catalog items that this materialized view references, determined at name resolution.
@@ -1522,10 +1524,11 @@ impl MaterializedView {
             if_exists: old_stmt.if_exists,
             name: old_stmt.name,
             columns: rpl_stmt.columns,
+            column_defs: rpl_stmt.column_defs,
             replacement_for: None,
             in_cluster: rpl_stmt.in_cluster,
             in_cluster_replica: rpl_stmt.in_cluster_replica,
-            query: rpl_stmt.query,
+            body: rpl_stmt.body,
             as_of: rpl_stmt.as_of,
             with_options: rpl_stmt.with_options,
         };

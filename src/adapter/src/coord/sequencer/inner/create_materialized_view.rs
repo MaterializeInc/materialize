@@ -13,24 +13,28 @@ use maplit::btreemap;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
+use mz_compute_types::plan::envelope::{envelope_to_json, extract_envelope};
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
+use mz_ore::panic::catch_unwind_with_details;
 use mz_ore::soft_panic_or_log;
-use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::explain::{ExplainFormat, ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RelationVersion, Row, VersionedRelationDesc};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
+use mz_sql::plan::PlanError;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::CollectionDescription;
 use std::collections::BTreeMap;
+use std::panic::AssertUnwindSafe;
 use timely::progress::Antichain;
 use tracing::Span;
 
@@ -48,6 +52,7 @@ use crate::explain::explain_dataflow;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
+use crate::optimize::from_plan::build_dataflow_from_plan;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::util::ResultExt;
@@ -252,28 +257,76 @@ impl Coordinator {
             .override_from(&self.cluster_scoped_optimizer_overrides(view.cluster_id))
             .override_from(&config.features);
 
+        // Planning admits this format only for the physical plan.
+        if format == ExplainFormat::LirJson {
+            let Some(plan) = self.catalog().try_get_physical_plan(&gid) else {
+                tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                coord_bail!("cannot find {stage} for materialized view in catalog");
+            };
+            let mut sinks = plan.sink_exports.values();
+            let (Some(sink), None) = (sinks.next(), sinks.next()) else {
+                return Err(AdapterError::Internal(format!(
+                    "the dataflow of materialized view {id} exports {} sinks, expected one",
+                    plan.sink_exports.len()
+                )));
+            };
+            let catalog = self.catalog();
+            let name_of = |id: GlobalId| {
+                let entry = catalog.get_entry_by_global_id(&id);
+                // Quoted where SQL needs it, so that the name reads back as the same item.
+                let name = catalog.resolve_full_name(entry.name(), None);
+                ast::UnresolvedItemName::from(name).to_ast_string_simple()
+            };
+            let envelope =
+                extract_envelope(plan, sink.from, &name_of).map_err(AdapterError::Internal)?;
+            let json = envelope_to_json(&envelope);
+            let row = Row::pack_slice(&[Datum::from(json.as_str())]);
+            return Ok(Self::send_immediate_rows(row));
+        }
+
         let cardinality_stats = BTreeMap::new();
+        let no_sql_definition = || {
+            let name = self
+                .catalog()
+                .resolve_full_name(self.catalog().get_entry(&id).name(), None);
+            AdapterError::from(PlanError::NoSqlDefinition {
+                name: name.to_string(),
+            })
+        };
 
         let explain = match stage {
-            ExplainStage::RawPlan => explain_plan(
-                view.raw_expr.as_ref().clone(),
-                format,
-                &config,
-                &features,
-                &self.catalog().for_session(ctx.session()),
-                cardinality_stats,
-                Some(target_cluster.name.as_str()),
-            )?,
-            ExplainStage::LocalPlan => explain_plan(
-                view.locally_optimized_expr.as_inner().clone(),
-                format,
-                &config,
-                &features,
-                &self.catalog().for_session(ctx.session()),
-                cardinality_stats,
-                Some(target_cluster.name.as_str()),
-            )?,
+            ExplainStage::RawPlan => {
+                let Some(raw_expr) = &view.raw_expr else {
+                    return Err(no_sql_definition());
+                };
+                explain_plan(
+                    raw_expr.as_ref().clone(),
+                    format,
+                    &config,
+                    &features,
+                    &self.catalog().for_session(ctx.session()),
+                    cardinality_stats,
+                    Some(target_cluster.name.as_str()),
+                )?
+            }
+            ExplainStage::LocalPlan => {
+                let Some(locally_optimized_expr) = &view.locally_optimized_expr else {
+                    return Err(no_sql_definition());
+                };
+                explain_plan(
+                    locally_optimized_expr.as_inner().clone(),
+                    format,
+                    &config,
+                    &features,
+                    &self.catalog().for_session(ctx.session()),
+                    cardinality_stats,
+                    Some(target_cluster.name.as_str()),
+                )?
+            }
             ExplainStage::GlobalPlan => {
+                if view.raw_expr.is_none() {
+                    return Err(no_sql_definition());
+                }
                 let Some(plan) = self.catalog().try_get_optimized_plan(&gid).cloned() else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
                     coord_bail!("cannot find {stage} for materialized view in catalog");
@@ -328,7 +381,7 @@ impl Coordinator {
         let plan::CreateMaterializedViewPlan {
             materialized_view:
                 plan::MaterializedView {
-                    expr,
+                    definition,
                     cluster_id,
                     target_replica,
                     refresh_schedule,
@@ -337,12 +390,14 @@ impl Coordinator {
             ambiguous_columns,
             ..
         } = &plan;
-
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
         // We want to reject queries that depend on log sources, for example,
         // even if we can *technically* optimize that reference away.
-        let expr_depends_on = expr.depends_on();
+        let expr_depends_on = match definition {
+            plan::MaterializedViewDefinition::Query(expr) => expr.depends_on(),
+            plan::MaterializedViewDefinition::Plan { depends_on, .. } => depends_on.clone(),
+        };
         self.catalog()
             .validate_timeline_context(expr_depends_on.iter().copied())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
@@ -444,19 +499,46 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
+        let (item_id, mut global_id) = if let ExplainContext::None = explain_ctx {
             self.allocate_user_id().await?
         } else {
             self.allocate_transient_id()
         };
+        // A plan names its objects with transient ids of its own choosing, which a transient
+        // sink id could collide with.
+        if matches!(
+            plan.materialized_view.definition,
+            plan::MaterializedViewDefinition::Plan { .. }
+        ) && !matches!(explain_ctx, ExplainContext::None)
+        {
+            global_id = GlobalId::Explain;
+        }
 
         let (_, view_id) = self.allocate_transient_id();
+        let plan_object_ids: Vec<_> = match &plan.materialized_view.definition {
+            plan::MaterializedViewDefinition::Plan { envelope, .. } => {
+                std::iter::repeat_with(|| self.allocate_transient_id().1)
+                    .take(envelope.objects.len())
+                    .collect()
+            }
+            plan::MaterializedViewDefinition::Query(_) => Vec::new(),
+        };
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
+        // A plan is traced only as a physical plan, the other stages do not exist.
+        if let (plan::MaterializedViewDefinition::Plan { .. }, ExplainContext::Plan(explain_ctx)) =
+            (&plan.materialized_view.definition, &explain_ctx)
+        {
+            if explain_ctx.stage != ExplainStage::PhysicalPlan {
+                return Err(PlanError::NoSqlDefinition { name: debug_name }.into());
+            }
+        }
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&self.cluster_scoped_optimizer_overrides(*cluster_id))
             .override_from(&explain_ctx);
         let optimizer_features = optimizer_config.features.clone();
+        let catalog = self.owned_catalog();
+        let plan_debug_name = debug_name.clone();
 
         // Build an optimizer for this MATERIALIZED VIEW.
         let mut optimizer = optimize::materialized_view::Optimizer::new(
@@ -477,14 +559,58 @@ impl Coordinator {
             || "optimize create materialized view",
             move || {
                 span.in_scope(|| {
-                    let mut pipeline = || -> Result<(
-                        optimize::materialized_view::LocalMirPlan,
-                        optimize::materialized_view::GlobalMirPlan,
+                    // The MIR plans are `None` for a materialized view defined by an LIR plan.
+                    let pipeline = || -> Result<(
+                        Option<optimize::materialized_view::LocalMirPlan>,
+                        Option<optimize::materialized_view::GlobalMirPlan>,
                         optimize::materialized_view::GlobalLirPlan,
                     ), AdapterError> {
                         let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                        let raw_expr = plan.materialized_view.expr.clone();
+                        let raw_expr = match &plan.materialized_view.definition {
+                            plan::MaterializedViewDefinition::Query(raw_expr) => raw_expr.clone(),
+                            plan::MaterializedViewDefinition::Plan { envelope, desc, .. } => {
+                                // A panic while building or validating a user's plan is a bug,
+                                // reported as an internal error rather than crashing
+                                // `environmentd`.
+                                let build = || {
+                                    build_dataflow_from_plan(
+                                        catalog.state(),
+                                        plan.materialized_view.cluster_id,
+                                        envelope,
+                                        global_id,
+                                        desc,
+                                        plan.materialized_view.non_null_assertions.clone(),
+                                        plan.materialized_view.refresh_schedule.clone(),
+                                        plan_debug_name,
+                                        plan_object_ids,
+                                    )
+                                };
+                                let global_lir_plan =
+                                    match catch_unwind_with_details(AssertUnwindSafe(build)) {
+                                        Ok(result) => result?,
+                                        Err(panic) => {
+                                            tracing::error!(
+                                                location = panic
+                                                    .location
+                                                    .as_deref()
+                                                    .unwrap_or("<unknown location>"),
+                                                backtrace = panic
+                                                    .backtrace
+                                                    .as_deref()
+                                                    .unwrap_or("<backtrace unavailable>"),
+                                                message = %panic.message,
+                                                "caught a panic while building an LIR plan dataflow",
+                                            );
+                                            return Err(AdapterError::Internal(format!(
+                                                "unexpected panic while building an LIR plan \
+                                                 dataflow: {panic}"
+                                            )));
+                                        }
+                                    };
+                                return Ok((None, None, global_lir_plan));
+                            }
+                        };
 
                         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                         let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
@@ -494,7 +620,7 @@ impl Coordinator {
                         let global_lir_plan =
                             optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
-                        Ok((local_mir_plan, global_mir_plan, global_lir_plan))
+                        Ok((Some(local_mir_plan), Some(global_mir_plan), global_lir_plan))
                     };
 
                     let stage = match pipeline() {
@@ -574,7 +700,7 @@ impl Coordinator {
                     materialized_view:
                         plan::MaterializedView {
                             mut create_sql,
-                            expr: raw_expr,
+                            definition,
                             column_names,
                             dependencies,
                             replacement_target,
@@ -596,8 +722,13 @@ impl Coordinator {
             optimizer_features,
             ..
         } = stage;
+        let raw_expr = match definition {
+            plan::MaterializedViewDefinition::Query(raw_expr) => Some(raw_expr),
+            plan::MaterializedViewDefinition::Plan { .. } => None,
+        };
 
-        // Validate the replacement target, if one is given.
+        // Validate the replacement target, if one is given. The description of a view defined
+        // by an LIR plan is its declared schema, which has no keys.
         if let Some(target_id) = replacement_target {
             let target_entry = self.catalog().get_entry(&target_id);
             let Some(target) = target_entry.materialized_view() else {
@@ -674,8 +805,6 @@ impl Coordinator {
         let desc = VersionedRelationDesc::new(global_lir_plan.desc().clone());
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
-        let local_mir_for_cache = local_mir_plan.expr();
-
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -688,8 +817,8 @@ impl Coordinator {
                 name: name.clone(),
                 item: CatalogItem::MaterializedView(MaterializedView {
                     create_sql,
-                    raw_expr: raw_expr.into(),
-                    locally_optimized_expr: local_mir_plan.expr().into(),
+                    raw_expr: raw_expr.map(Into::into),
+                    locally_optimized_expr: local_mir_plan.as_ref().map(|p| p.expr().into()),
                     desc,
                     collections,
                     resolved_ids,
@@ -751,25 +880,31 @@ impl Coordinator {
         // Populate the durable expression cache before the catalog
         // transaction and await the write. This way any other envd (or a
         // subsequent bootstrap here) will observe the cached plans +
-        // rendered notices as soon as the item becomes visible.
-        self.catalog()
-            .cache_expressions(
-                global_id,
-                Some(local_mir_for_cache),
-                global_mir_plan.df_desc().clone(),
-                df_desc.clone(),
-                df_meta.clone(),
-                optimizer_features,
-            )
-            .await;
+        // rendered notices as soon as the item becomes visible. A view defined
+        // by an LIR plan has nothing to cache, its plan is validated again on
+        // every boot.
+        if let (Some(local_mir_plan), Some(global_mir_plan)) = (&local_mir_plan, &global_mir_plan) {
+            self.catalog()
+                .cache_expressions(
+                    global_id,
+                    Some(local_mir_plan.expr()),
+                    global_mir_plan.df_desc().clone(),
+                    df_desc.clone(),
+                    df_meta.clone(),
+                    optimizer_features,
+                )
+                .await;
+        }
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
                 Box::pin(async move {
                     // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
+                    if let Some(global_mir_plan) = global_mir_plan {
+                        coord
+                            .catalog_mut()
+                            .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
+                    }
                     coord
                         .catalog_mut()
                         .set_physical_plan(global_id, df_desc.clone());

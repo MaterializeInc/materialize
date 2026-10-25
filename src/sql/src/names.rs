@@ -16,6 +16,7 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 use anyhow::anyhow;
+use mz_compute_types::plan::envelope::ImportSource;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::str::StrExt;
@@ -36,8 +37,9 @@ use crate::ast::visit::{Visit, VisitNode};
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     self, AstInfo, Cte, CteBlock, CteMutRec, DocOnIdentifier, GrantTargetSpecification,
-    GrantTargetSpecificationInner, Ident, MutRecBlock, ObjectType, Query, Raw, RawClusterName,
-    RawDataType, RawItemName, Statement, UnresolvedItemName, UnresolvedObjectName,
+    GrantTargetSpecificationInner, Ident, MaterializedViewBody, MutRecBlock, ObjectType, Query,
+    Raw, RawClusterName, RawDataType, RawItemName, Statement, UnresolvedItemName,
+    UnresolvedObjectName,
 };
 use crate::catalog::{
     CatalogError, CatalogItem, CatalogItemType, CatalogTypeDetails, SessionCatalog,
@@ -1702,6 +1704,30 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         stmt
     }
 
+    fn fold_materialized_view_body(
+        &mut self,
+        body: MaterializedViewBody<Raw>,
+    ) -> MaterializedViewBody<Aug> {
+        match body {
+            MaterializedViewBody::Query(query) => {
+                MaterializedViewBody::Query(self.fold_query(query))
+            }
+            MaterializedViewBody::Plan(json) => {
+                // Record the plan's resolved imports, so that a stored statement, whose imports
+                // purification resolved, references the same items as when it was created.
+                // A plan that does not parse references nothing, and planning reports it.
+                if let Ok(envelope) = crate::plan::lir_plan::parse_user_envelope(&json) {
+                    let ids =
+                        crate::plan::lir_plan::resolved_import_collections(self.catalog, &envelope);
+                    for (item_id, global_id) in ids {
+                        self.ids.entry(item_id).or_default().insert(global_id);
+                    }
+                }
+                MaterializedViewBody::Plan(json)
+            }
+        }
+    }
+
     fn fold_query(&mut self, q: Query<Raw>) -> Query<Aug> {
         // Retain the old values of various CTE names so that we can restore them after we're done
         // planning this SELECT.
@@ -2621,6 +2647,28 @@ impl<'ast> Visit<'ast, Raw> for IdDependencVisitor {
             },
         }
     }
+
+    fn visit_materialized_view_body(&mut self, node: &'ast MaterializedViewBody<Raw>) {
+        match node {
+            MaterializedViewBody::Query(query) => self.visit_query(query),
+            // A purified plan names its imports by id, which the SQL AST does not see. A plan
+            // that does not parse has no dependencies, and planning reports it.
+            MaterializedViewBody::Plan(json) => {
+                let Ok(envelope) = mz_compute_types::plan::envelope::parse_envelope(json) else {
+                    return;
+                };
+                let sources = envelope
+                    .imports
+                    .iter()
+                    .flat_map(|import| std::iter::once(&import.source).chain(&import.indexes));
+                for source in sources {
+                    if let ImportSource::Item { item_id, .. } = source {
+                        self.ids.insert(*item_id);
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2653,6 +2701,21 @@ mod tests {
         proptest!(|(id in any::<DatabaseId>())| {
             testcase(id);
         })
+    }
+
+    #[mz_ore::test]
+    fn dependencies_include_plan_imports() {
+        let sql = r#"CREATE MATERIALIZED VIEW m (a int8) IN CLUSTER [u1] FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Item":{"item_id":{"User":7},"version":0}},"persist":false,"indexes":[{"Item":{"item_id":{"User":9},"version":0}}]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'"#;
+        let statement = crate::parse::parse(sql)
+            .expect("parses")
+            .into_iter()
+            .next()
+            .expect("one statement")
+            .ast;
+        assert_eq!(
+            dependencies(&statement).expect("dependencies"),
+            BTreeSet::from([CatalogItemId::User(7), CatalogItemId::User(9)])
+        );
     }
 
     #[mz_ore::test]

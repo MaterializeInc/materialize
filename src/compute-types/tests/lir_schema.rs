@@ -43,6 +43,7 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
+use mz_compute_types::plan::envelope::{ImportSource, LirPlanEnvelope};
 use mz_compute_types::plan::join::JoinPlan;
 use mz_compute_types::plan::reduce::{BasicPlan, HierarchicalPlan, ReducePlan};
 use mz_compute_types::plan::scalar::{LirScalarExpr, LiteralValue};
@@ -358,6 +359,9 @@ fn run_traces(
     tracer
         .trace_type::<LirRelationExpr>(samples)
         .map_err(|err| ("LirRelationExpr".to_string(), err))?;
+    tracer
+        .trace_type::<LirPlanEnvelope>(samples)
+        .map_err(|err| ("LirPlanEnvelope".to_string(), err))?;
 
     // Tracing a struct explores nested enums one variant per pass, so every
     // enum in the graph needs its own trace_type call to cover all variants.
@@ -404,6 +408,7 @@ fn run_traces(
         WindowFrameUnits,
         Timezone,
         CatalogItemId,
+        ImportSource,
     ];
 
     // Some enums in the graph are private (MatcherImpl in like_pattern, and

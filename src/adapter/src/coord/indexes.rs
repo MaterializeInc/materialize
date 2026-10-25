@@ -56,7 +56,11 @@ impl DataflowBuilder<'_> {
                         todo.extend(view.locally_optimized_expr.0.depends_on());
                     }
                     CatalogItem::MaterializedView(mview) if mview.replacement_target.is_some() => {
-                        todo.extend(mview.locally_optimized_expr.0.depends_on());
+                        // A replacement defined by an LIR plan has no expression to inline, and
+                        // `import_into_dataflow` rejects reading it, so it needs no collections.
+                        if let Some(expr) = &mview.locally_optimized_expr {
+                            todo.extend(expr.0.depends_on());
+                        }
                     }
                     CatalogItem::Source(_)
                     | CatalogItem::Table(_)

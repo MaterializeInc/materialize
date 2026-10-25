@@ -57,6 +57,9 @@ use crate::{Datum, RelationDesc, Timestamp};
 
 pub(crate) mod encode;
 pub mod iter;
+mod readable;
+
+pub use readable::{row_from_readable, row_to_readable, with_readable_rows};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
 
@@ -396,11 +399,17 @@ mod stable_row_proto {
     use mz_proto::RustType;
     use prost::Message;
     use serde::de::Error;
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+    use crate::row::readable::{readable_rows_enabled, row_to_readable};
     use crate::row::{ProtoRow, Row};
 
     pub fn serialize<S: Serializer>(row: &Row, serializer: S) -> Result<S::Ok, S::Error> {
+        if readable_rows_enabled() {
+            if let Some(readable) = row_to_readable(row) {
+                return readable.serialize(serializer);
+            }
+        }
         serializer.serialize_bytes(&row.into_proto().encode_to_vec())
     }
 
