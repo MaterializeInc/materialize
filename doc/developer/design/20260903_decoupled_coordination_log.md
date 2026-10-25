@@ -18,8 +18,8 @@ runtime evidence. Keep their proof scopes closed and their regular regressions
 enabled. Incremental protection publication, removal of the whole-map API,
 prepared-MV admission and the replacement-MV replay correction are implemented.
 
-M2 verification at the 1s default and history consolidation are complete within
-the approved scope. Verification of the approved 60s default remains open.
+M2 verification, including the approved 60s publication default, is complete
+within the approved scope and exclusions below. History consolidation is complete.
 The asynchronous catalog-owner refactor is not part of M2 and must not resume.
 
 ## Verification and closeout
@@ -39,11 +39,21 @@ workflows, four testdrive files, both SQL logic files, all 22 native library tes
 and full adapter-loss recovery pass on scratch. The SQL failures depended on
 input compaction, not a REFRESH correctness violation.
 
-Latest combined verification is CI140360 at `cf66aa0e`: 93 passed jobs and
-three failed. Cargo, Testdrive 6, Cluster 5, both restart and both parallel
-shards pass. All three failures match the explicit exclusions: upstream merge
+Latest combined verification is CI140484 at `01ef1f72`: 93 passed jobs and
+three failed exclusions. All cluster shards, native warm promotion, native
+hydration stability restart, catalog read-protection restart, both restart shards,
+Cargo and both parallel-check shards pass. The failures remain upstream merge
 conflicts, existing-environment source-to-view conversion and Kafka RTR's
-explicit-DDL revision conflict. They remain failures, not passing checks.
+explicit-DDL revision conflict. They are failures, not passing checks.
+
+CI140485 passes both original fixed-seed parallel shards on actual 8-CPU/16-GiB
+CI hosts, with unchanged concurrency, deadlines, backends and the 60s default.
+The previously failing shard's retained kernel journal has no OOM markers.
+SLT4 initially hit its 60s timeout before an expected optimizer recursion error.
+The unchanged upstream fixture passes on scratch, and the full shard passes on
+an unchanged CI retry. Its timing cause remains unexplained. No deadline or
+assertion was changed. Evidence is under `scratch/cadence60-default/ci140484/`
+and `ci140485/`.
 
 Webhook cleanup's cleanup-only 1s setting passes the full shard from clean
 scratch state and in CI. Startup-notice assertions use explicit replica readiness,
@@ -52,7 +62,8 @@ Clippy pass on scratch, and the Cargo job passes in CI. Assertions and deadlines
 are unchanged. The unchanged DROP/SUBSCRIBE workflow passes on scratch and in
 combined CI, but the earlier timeout's exact wait is not identified.
 Evidence and reproduction commands are under `scratch/cadence60-default/ci140353/`
-and `ci140360/`. The reproduced OOM below remains the product closeout blocker.
+and `ci140360/`. The Iceberg correction and original-workload verification below
+close the identified OOM investigation without a general memory-bound claim.
 
 The deferred explicit-DDL boundary has a reduced rename reproduction: six controller
 `ClusterRuntime` initialization commits, advancing its revision from 8 to 14.
@@ -163,9 +174,9 @@ all-target Clippy pass. The unchanged IcebergSinkUpsert check and the controlled
 installation-order case pass at an aggregate 8-CPU/16-GiB scratch budget. The real
 sink consumes intermediate frontier 2000 and commits epoch frontier
 1792956883001 without diagnostic guards or timestamp overrides. The original
-fixed-seed workload remains to verify. Its exact failing frontier sequence and
-the frequency effect of 60s retention remain unmeasured, so this is not yet a
-claim of OOM resolution.
+fixed-seed workload now passes in CI140485. The gap-proportional minting defect
+is corrected, with no OOM failure in that run. The original failure's exact
+frontier interleaving and the frequency effect of 60s retention remain unmeasured.
 Source-level review found no blocking defect. The pre-existing post-initialization
 empty-frontier completion gap remains outside this correction.
 Evidence is under `scratch/cadence60-default/ci140359/` and
@@ -252,13 +263,12 @@ building a larger synchronization harness for M2.
 ## Worker and evidence
 
 The traffic investigation retains `i-01023ce0e1db179f9`. Leave it untouched.
-Aljoscha authorized a second worker for bounded lifecycle verification:
-`i-069b0283acccc3174` (`table-lifecycle`), m8i.4xlarge, 16 vCPUs, 64 GiB RAM,
-500 GiB disk, expiry 2026-10-22 07:40:25 UTC. Verification covers adapter,
-storage-client, storage-controller and compute-client libraries and tests.
-Clippy and boundary tests pass on `45a37509`. Runtime results and the initial
-failures are preserved off-worker. The lifecycle fixture is stopped. This worker
-is now used for the publication slice above.
+The closeout worker is `i-0788036f0778687f1`, m8i.4xlarge, 16 vCPUs,
+64 GiB RAM and 500 GiB disk, with verified expiry 2026-10-28 19:01:27 UTC.
+The Iceberg fixture uses the temporary `mzrepro.slice` aggregate 8-CPU/16-GiB
+budget. Builds run outside it. Both the Iceberg and SLT fixtures are stopped,
+with data and evidence retained. Preserve evidence before replacing fixture state.
+The separate `m2-pause-test-postgres` container is not part of that fixture.
 Use `bin/ci-builder run stable <command>` for pinned tooling.
 Saved evidence: `~/.local/share/aj/m2-evidence/scratch/`.
 Lifecycle verification evidence: `scratch/table-lifecycle-verification/`.
