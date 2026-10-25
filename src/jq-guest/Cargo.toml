@@ -1,0 +1,24 @@
+[package]
+name = "mz-jq-guest"
+description = "jq programs on jaq, built as the WebAssembly module mz-jq runs."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jaq-core.workspace = true
+jaq-json.workspace = true
+jaq-std.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["test"], default-features = false }
+
+[features]
+default = []
