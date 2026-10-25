@@ -649,7 +649,7 @@ mz_internal.mz_cluster_replica_history:
       →Arrange (#0)
         →Union
           →Fused with Child Map/Filter/Project
-            Project: #0, #6, #7
+            Project: #0, #6, #8
             Map: true
               →Arranged mz_catalog.mz_cluster_replica_sizes
                 Key: (#0{size})

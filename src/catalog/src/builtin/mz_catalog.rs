@@ -2916,6 +2916,14 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
             "credits_per_hour",
             SqlScalarType::Numeric { max_scale: None }.nullable(false),
         )
+        .with_column(
+            "allowed_workloads",
+            SqlScalarType::List {
+                element_type: Box::new(SqlScalarType::String),
+                custom_id: None,
+            }
+            .nullable(false),
+        )
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("size", "The human-readable replica size."),
@@ -2933,6 +2941,10 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
         (
             "credits_per_hour",
             "The number of compute credits consumed per hour.",
+        ),
+        (
+            "allowed_workloads",
+            "The workload classes that clusters of this size may run: `ingest`, `sink`, `compute_maintained`, and `compute_interactive`.",
         ),
     ]),
     is_retained_metrics_object: true,

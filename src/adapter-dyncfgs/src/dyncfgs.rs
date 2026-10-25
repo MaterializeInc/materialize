@@ -190,6 +190,15 @@ pub const OIDC_AUDIENCE: Config<fn() -> serde_json::Value> = Config::new(
     ParameterScope::Environment,
 );
 
+/// The workload classes allowed per replica size family, in addition to what
+/// each size allows itself.
+pub const CLUSTER_FAMILY_ALLOWED_WORKLOADS: Config<fn() -> serde_json::Value> = Config::new(
+    "cluster_family_allowed_workloads",
+    || serde_json::json!({}),
+    "The workload classes that clusters using sizes of a family may run. A JSON object mapping family names to arrays of classes: ingest, sink, compute_maintained, compute_interactive. Families not listed allow every class.",
+    ParameterScope::Environment,
+);
+
 /// OIDC authentication claim to use as username
 pub const OIDC_AUTHENTICATION_CLAIM: Config<&'static str> = Config::new(
     "oidc_authentication_claim",
@@ -582,6 +591,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&READ_THEN_WRITE_MAX_DEPENDENCIES)
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
+        .add(&CLUSTER_FAMILY_ALLOWED_WORKLOADS)
         .add(&OIDC_AUTHENTICATION_CLAIM)
         .add(&OIDC_GROUP_ROLE_SYNC_ENABLED)
         .add(&OIDC_GROUP_CLAIM)

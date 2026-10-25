@@ -45,6 +45,7 @@ use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
+use mz_ore::str::StrExt;
 use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist_types::ShardId;
 use mz_repr::adt::interval::Interval;
@@ -1708,6 +1709,15 @@ impl Catalog {
                             ErrorKind::ReadOnlyCluster(cluster_name),
                         )));
                     }
+                }
+
+                if let Some((cluster_id, class)) = state.item_workload(&item) {
+                    state.ensure_cluster_allows_workload(
+                        &state.clusters_by_id[&cluster_id],
+                        class,
+                        session.map(|s| s.user()),
+                        || format!("host {} {}", item.typ(), name.item.quoted()),
+                    )?;
                 }
 
                 let owner_privileges = vec![rbac::owner_privilege(item.typ().into(), owner_id)];

@@ -112,6 +112,11 @@ pub struct ReplicaAllocation {
     /// Whether instances of this type can be created.
     #[serde(default)]
     pub disabled: bool,
+    /// The workload classes that clusters with replicas of this size may run.
+    /// `None` allows every class. The adapter enforces this for user clusters
+    /// and non-internal users.
+    #[serde(default)]
+    pub allowed_workloads: Option<BTreeSet<WorkloadClass>>,
     /// Additional node selectors.
     #[serde(default)]
     pub selectors: BTreeMap<String, String>,
@@ -137,6 +142,55 @@ impl ReplicaAllocation {
 
 fn default_true() -> bool {
     true
+}
+
+/// A class of work that a cluster can run, used to restrict what replica
+/// sizes may run.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkloadClass {
+    /// Sources, their subsources and tables, webhook sources, and `COPY FROM`.
+    Ingest,
+    /// Sinks.
+    Sink,
+    /// Indexes, materialized views, metric sinks, and `SUBSCRIBE`.
+    ComputeMaintained,
+    /// `SELECT`, `COPY TO`, and the reads of `INSERT`, `UPDATE`, and `DELETE`.
+    ComputeInteractive,
+}
+
+impl WorkloadClass {
+    pub const ALL: [WorkloadClass; 4] = [
+        WorkloadClass::Ingest,
+        WorkloadClass::Sink,
+        WorkloadClass::ComputeMaintained,
+        WorkloadClass::ComputeInteractive,
+    ];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WorkloadClass::Ingest => "ingest",
+            WorkloadClass::Sink => "sink",
+            WorkloadClass::ComputeMaintained => "compute_maintained",
+            WorkloadClass::ComputeInteractive => "compute_interactive",
+        }
+    }
+}
+
+impl fmt::Display for WorkloadClass {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[mz_ore::test]
@@ -170,6 +224,7 @@ fn test_replica_allocation_deserialization() {
             credits_per_hour: 16.into(),
             disk_limit: Some(DiskLimit(ByteSize::mib(100))),
             disabled: false,
+            allowed_workloads: None,
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
             cpu_request: None,
@@ -207,6 +262,7 @@ fn test_replica_allocation_deserialization() {
             credits_per_hour: 0.into(),
             disk_limit: Some(DiskLimit(ByteSize::mib(0))),
             disabled: true,
+            allowed_workloads: None,
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
             cpu_request: None,
@@ -227,6 +283,20 @@ fn test_replica_allocation_deserialization() {
     assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
     let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#;
     assert_ok!(serde_json::from_str::<ReplicaAllocation>(data));
+
+    let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "allowed_workloads": ["ingest", "compute_maintained"]}"#;
+    let replica_allocation: ReplicaAllocation = serde_json::from_str(data)
+        .expect("deserialization from JSON succeeds for ReplicaAllocation");
+    assert_eq!(
+        replica_allocation.allowed_workloads,
+        Some(BTreeSet::from([
+            WorkloadClass::Ingest,
+            WorkloadClass::ComputeMaintained
+        ]))
+    );
+    let data =
+        r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "allowed_workloads": ["select"]}"#;
+    assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
 }
 
 #[mz_ore::test]
