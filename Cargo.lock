@@ -7120,7 +7120,6 @@ dependencies = [
  "mz-postgres-util",
  "mz-server-core",
  "mz-tls-util",
- "postgres-openssl",
  "regex",
  "reqwest 0.13.5",
  "rustls",

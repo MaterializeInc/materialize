@@ -22,7 +22,7 @@ use anyhow::{Context as _, Result};
 use csv_async::AsyncSerializer;
 use futures::TryStreamExt;
 use mz_postgres_util::{Sql, execute, query, sql};
-use mz_tls_util::make_tls;
+use mz_tls_util::{MakeRustlsConnect, RustlsTlsStream, make_tls_rustls};
 use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -38,7 +38,6 @@ use tokio_util::io::StreamReader;
 use mz_ore::collections::HashMap;
 use mz_ore::retry::{self};
 use mz_ore::task::{self, JoinHandle};
-use postgres_openssl::{MakeTlsConnector, TlsStream};
 use tracing::{info, warn};
 
 async fn execute_sql(
@@ -601,7 +600,7 @@ impl fmt::Display for ClusterReplica {
 pub struct SystemCatalogDumper {
     base_path: PathBuf,
     pg_client: Arc<Mutex<PgClient>>,
-    pg_tls: MakeTlsConnector,
+    pg_tls: MakeRustlsConnect,
     cluster_replicas: Vec<ClusterReplica>,
     _pg_conn_handle: JoinHandle<Result<(), tokio_postgres::Error>>,
 }
@@ -611,14 +610,14 @@ pub async fn create_postgres_connection(
 ) -> Result<
     (
         PgClient,
-        Connection<Socket, TlsStream<Socket>>,
-        MakeTlsConnector,
+        Connection<Socket, RustlsTlsStream<Socket>>,
+        MakeRustlsConnect,
     ),
     anyhow::Error,
 > {
     let mut pg_config = PgConfig::from_str(connection_string)?;
     pg_config.connect_timeout(PG_CONNECTION_TIMEOUT);
-    let tls = make_tls(&pg_config)?;
+    let tls = make_tls_rustls(&pg_config)?;
 
     let host_addr = pg_config.get_hosts().first();
     let port = pg_config.get_ports().first();
