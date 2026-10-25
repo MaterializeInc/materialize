@@ -19,9 +19,11 @@ use mz_compute_types::plan::LirRelationExpr;
 use mz_compute_types::sinks::{
     BatchedSubscribeSinkConnection, ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
 };
-use mz_expr::{ColumnOrder, MirRelationExpr};
+use mz_expr::{
+    CollectionPlan, ColumnOrder, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, SafeMfpPlan,
+};
 use mz_ore::soft_assert_or_log;
-use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_repr::{GlobalId, RelationDesc, SqlRelationType, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{HirToMirConfig, SubscribeFrom, SubscribePlan};
 use mz_transform::TransformCtx;
@@ -206,6 +208,7 @@ impl Optimizer {
                     stash_id: *stash_id,
                     with_snapshot: self.with_snapshot,
                     output_desc: from_desc.clone(),
+                    mfp: None,
                 }),
                 true,
             ),
@@ -420,6 +423,9 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
             optimize_dataflow_snapshot(&mut df_desc)?;
         }
 
+        // Runs on the final MIR dataflow, so that its index imports are the ones lowering sees.
+        apply_batched_index_rewrite(&mut df_desc);
+
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
         // - LIR ⇒ LIR transforms
@@ -444,3 +450,106 @@ impl GlobalLirPlan {
         (self.df_desc, self.df_meta)
     }
 }
+
+/// Plans a batched subscribe that `sink_from` feeds onto an index of the collection it reads.
+///
+/// Returns the indexed collection, its description, and the MFP that maps the collection's rows
+/// to `sink_from`'s, when all of these hold:
+///
+/// * `sink_from` is built as a non-temporal MFP over a `Get` of a collection.
+/// * The collection has an index import.
+/// * The MFP passes every key column of that index to its output unchanged.
+///
+/// The index is the collection's first index import in id order, which is the arrangement
+/// lowering reads the collection from.
+pub fn batched_index_rewrite(
+    df_desc: &MirDataflowDescription,
+    sink_from: GlobalId,
+) -> Option<(GlobalId, RelationDesc, SafeMfpPlan)> {
+    let build = df_desc
+        .objects_to_build
+        .iter()
+        .find(|build| build.id == sink_from)?;
+    let (mfp, input) = MapFilterProject::extract_from_expression(build.plan.as_inner());
+    let MirRelationExpr::Get {
+        id: Id::Global(on_id),
+        ..
+    } = input
+    else {
+        return None;
+    };
+    // Checking any index but the first would plan onto an arrangement the sink does not read.
+    let index = df_desc
+        .index_imports
+        .values()
+        .find(|import| import.desc.on_id == *on_id)?;
+    if mfp.input_arity != index.typ.arity() {
+        return None;
+    }
+    // A temporal MFP has no `SafeMfpPlan`.
+    let mfp = mfp.into_plan().ok()?.into_nontemporal().ok()?;
+    // The arranged path consolidates each worker's share on its own. Rows of different keys can sit
+    // on different workers, so they must not map to the same output row. Passing every key column
+    // through unchanged rules that out. A projected column below the input arity is an input
+    // column, anything else is computed by the MFP.
+    let (_, _, projection) = mfp.as_map_filter_project();
+    let keeps_key = index.desc.key.iter().all(|key| match key {
+        MirScalarExpr::Column(column, _) => projection.contains(column),
+        _ => false,
+    });
+    if !keeps_key {
+        return None;
+    }
+    // The index import knows the collection's types but not its column names. A subscribe sink
+    // reads only the arity of its `from_desc`, because the names are read only by null assertions,
+    // which subscribes do not have.
+    let desc = RelationDesc::new(
+        SqlRelationType::from_repr(&index.typ),
+        (1..=index.typ.arity()).map(|c| format!("column{c}")),
+    );
+    Some((*on_id, desc, mfp))
+}
+
+/// Applies [`batched_index_rewrite`] to each batched subscribe sink of `df_desc`, and removes
+/// the objects the rewrite leaves unread.
+fn apply_batched_index_rewrite(df_desc: &mut MirDataflowDescription) {
+    let rewrites: Vec<_> = df_desc
+        .sink_exports
+        .iter()
+        .filter(|(_, sink)| matches!(sink.connection, ComputeSinkConnection::BatchedSubscribe(_)))
+        .filter_map(|(sink_id, sink)| {
+            batched_index_rewrite(df_desc, sink.from).map(|rewrite| (*sink_id, rewrite))
+        })
+        .collect();
+    for (sink_id, (on_id, from_desc, mfp)) in rewrites {
+        let sink = df_desc
+            .sink_exports
+            .get_mut(&sink_id)
+            .expect("collected from `sink_exports`");
+        let view_id = std::mem::replace(&mut sink.from, on_id);
+        sink.from_desc = from_desc;
+        let ComputeSinkConnection::BatchedSubscribe(connection) = &mut sink.connection else {
+            unreachable!("filtered to batched subscribes");
+        };
+        connection.mfp = (!mfp.is_identity()).then_some(mfp);
+
+        let read_elsewhere = df_desc
+            .sink_exports
+            .values()
+            .any(|sink| sink.from == view_id)
+            || df_desc
+                .index_exports
+                .values()
+                .any(|(index, _)| index.on_id == view_id)
+            || df_desc
+                .objects_to_build
+                .iter()
+                .any(|build| build.plan.as_inner().depends_on().contains(&view_id));
+        if !read_elsewhere {
+            df_desc.objects_to_build.retain(|build| build.id != view_id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

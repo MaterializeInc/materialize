@@ -9,7 +9,7 @@
 
 //! Types for describing dataflow sinks.
 
-use mz_expr::{ColumnOrder, MfpPlan};
+use mz_expr::{ColumnOrder, MfpPlan, SafeMfpPlan};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
 use mz_storage_types::connections::aws::AwsConnection;
@@ -103,6 +103,13 @@ pub struct BatchedSubscribeSinkConnection {
     pub with_snapshot: bool,
     /// The description of the subscribed relation.
     pub output_desc: RelationDesc,
+    /// Maps rows of the sink's `from_desc` to rows of `output_desc`. `None` means the two are
+    /// the same.
+    ///
+    /// On the arranged path each worker consolidates its share by itself, which is correct only
+    /// if the plan maps rows of different arrangement keys to different output rows, for example
+    /// by keeping the key columns.
+    pub mfp: Option<SafeMfpPlan>,
 }
 
 impl BatchedSubscribeSinkConnection {

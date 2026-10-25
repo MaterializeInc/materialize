@@ -45,7 +45,7 @@ use crate::compute_state::peek_offload::{OffloadConfig, offload_description_scan
 use crate::compute_state::peek_stash::{DeliveredBatch, StashUpload};
 use crate::metrics::WorkerMetrics;
 
-use super::{Description, ErrBatch, OkBatch, OwnedShare, inline_share};
+use super::{Description, HeldErr, HeldOk, OwnedShare, inline_share};
 
 /// Where a subscribe's stashed shares are written.
 #[derive(Clone)]
@@ -126,10 +126,10 @@ impl Tiers {
     /// `scan` is what remains of the description's scan, or `None` if it has ended. `updates` are
     /// the updates it handed out before, accounted at `bytes`. `activator` is activated once the
     /// outcome is ready.
-    pub(super) fn start(
+    pub(super) fn start<Ok: HeldOk, Err: HeldErr>(
         &self,
         description: &Description,
-        scan: Option<DescriptionScan<OkBatch, ErrBatch>>,
+        scan: Option<DescriptionScan<Ok, Err>>,
         updates: DescriptionUpdates,
         bytes: usize,
         activator: Option<SyncActivator>,
@@ -318,8 +318,8 @@ pub(super) struct PendingShare {
 }
 
 impl PendingShare {
-    fn start(
-        scan: Option<DescriptionScan<OkBatch, ErrBatch>>,
+    fn start<Ok: HeldOk, Err: HeldErr>(
+        scan: Option<DescriptionScan<Ok, Err>>,
         accumulator: Accumulator,
         permits: Arc<PeekPermits>,
         config: OffloadConfig,
@@ -346,8 +346,8 @@ impl PendingShare {
         }
     }
 
-    async fn assemble(
-        scan: Option<DescriptionScan<OkBatch, ErrBatch>>,
+    async fn assemble<Ok: HeldOk, Err: HeldErr>(
+        scan: Option<DescriptionScan<Ok, Err>>,
         accumulator: &Arc<tokio::sync::Mutex<Option<Accumulator>>>,
         permits: Arc<PeekPermits>,
         config: OffloadConfig,

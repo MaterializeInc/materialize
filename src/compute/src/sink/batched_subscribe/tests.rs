@@ -64,6 +64,8 @@ use super::{
     mint, write,
 };
 
+mod arranged;
+
 fn row(value: i64) -> Row {
     Row::pack_slice(&[Datum::Int64(value)])
 }
