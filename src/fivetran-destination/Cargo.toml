@@ -20,8 +20,8 @@ itertools.workspace = true
 mz-ore = { path = "../ore", features = ["cli", "id_gen"], default-features = false }
 mz-pgrepr = { path = "../pgrepr", default-features = false }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
+mz-tls-util = { path = "../tls-util" }
 openssl.workspace = true
-postgres-openssl.workspace = true
 postgres-protocol.workspace = true
 prost.workspace = true
 prost-types.workspace = true

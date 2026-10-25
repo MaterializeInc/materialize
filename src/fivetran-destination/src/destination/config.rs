@@ -7,11 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use openssl::ssl::{SslConnector, SslMethod};
-use openssl::x509::X509;
-use openssl::x509::store::X509StoreBuilder;
-use postgres_openssl::MakeTlsConnector;
 use std::collections::BTreeMap;
+
+use tokio_postgres::config::SslMode;
 
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::form_field::Type;
@@ -179,13 +177,13 @@ pub async fn connect(
     // TODO: depend on the system's certificate bundle instead, once Fivetran
     // supports running destinations in a containerized environment.
     let ca_bundle = include_bytes!(concat!(env!("OUT_DIR"), "/ca-certificate.crt"));
-    let ca_certs = X509::stack_from_pem(ca_bundle)?;
-    let mut cert_store = X509StoreBuilder::new()?;
-    for cert in ca_certs {
-        cert_store.add_cert(cert)?;
-    }
-    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
-    builder.set_verify_cert_store(cert_store.build())?;
+    // NOTE: The connection itself keeps the default `sslmode=prefer`, so the
+    // connector gets its own config. Verification must stay `verify-full`.
+    let mut tls_config = tokio_postgres::Config::new();
+    tls_config
+        .ssl_mode(SslMode::VerifyFull)
+        .ssl_root_cert(ca_bundle);
+    let tls_connector = mz_tls_util::make_tls_rustls(&tls_config)?;
 
     let options = if let Some(cluster) = cluster.as_ref() {
         format!("--cluster={}", utils::escape_options(cluster))
@@ -193,7 +191,6 @@ pub async fn connect(
         String::new()
     };
 
-    let tls_connector = MakeTlsConnector::new(builder.build());
     let (client, conn) = tokio_postgres::Config::new()
         .host(&host)
         .user(&user)
