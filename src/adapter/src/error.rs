@@ -749,8 +749,8 @@ impl AdapterError {
             }
             AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
                 "The materialized view's contents are final for all future times, so they can \
-                 no longer be changed. This happens once it can't receive any more updates, \
-                 for example after an unrecoverable source error."
+                 no longer be changed. See \
+                 https://materialize.com/docs/sql/alter-materialized-view/#troubleshooting"
                     .into(),
             ),
             AdapterError::ImpossibleTimestampConstraints { constraints } => {
