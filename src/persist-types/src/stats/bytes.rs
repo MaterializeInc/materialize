@@ -19,7 +19,7 @@ use crate::stats::primitive::{PrimitiveStats, any_primitive_vec_u8_stats};
 use crate::stats::{
     ColumnStatKinds, ColumnStats, ColumnarStats, DynStats, OptionStats, ProtoAtomicBytesStats,
     ProtoBytesStats, ProtoFixedSizeBytesStats, TrimStats, proto_bytes_stats,
-    proto_fixed_size_bytes_stats,
+    proto_fixed_size_bytes_stats, redact_json,
 };
 
 /// `PrimitiveStats<Vec<u8>>` that cannot safely be trimmed.
@@ -43,8 +43,8 @@ impl Debug for AtomicBytesStats {
 impl AtomicBytesStats {
     fn debug_json(&self) -> serde_json::Value {
         serde_json::json!({
-            "lower": hex::encode(&self.lower),
-            "upper": hex::encode(&self.upper),
+            "lower": redact_json(hex::encode(&self.lower).into()),
+            "upper": redact_json(hex::encode(&self.upper).into()),
         })
     }
 }
@@ -92,8 +92,8 @@ impl Debug for FixedSizeBytesStats {
 impl FixedSizeBytesStats {
     fn debug_json(&self) -> serde_json::Value {
         serde_json::json!({
-            "lower": hex::encode(&self.lower),
-            "upper": hex::encode(&self.upper),
+            "lower": redact_json(hex::encode(&self.lower).into()),
+            "upper": redact_json(hex::encode(&self.upper).into()),
             "kind": self.kind,
         })
     }
