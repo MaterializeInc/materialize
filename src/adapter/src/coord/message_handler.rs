@@ -769,6 +769,12 @@ impl Coordinator {
                     // tracked, so we quietly ignore them.
                 }
             }
+            ControllerResponse::BatchedSubscribeResponse(sink_id, batch) => {
+                // No sink consumes batched subscribe output, so the batch is dropped, which
+                // deletes its stashed shares.
+                tracing::debug!(%sink_id, "dropping a batched subscribe batch");
+                drop(batch);
+            }
             ControllerResponse::CopyToResponse(sink_id, response) => {
                 match self.drop_compute_sink(sink_id).await {
                     Some((ActiveComputeSink::CopyTo(active_copy_to), _write_notify)) => {
