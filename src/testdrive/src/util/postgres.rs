@@ -13,7 +13,7 @@ use std::time::Duration;
 use anyhow::{Context, anyhow, bail};
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_tls_util::make_tls;
+use mz_tls_util::make_tls_rustls;
 use tokio_postgres::config::Host;
 use tokio_postgres::{Client, Config};
 use url::Url;
@@ -58,7 +58,7 @@ pub async fn postgres_client(
         .retry_async_canceling(|_| async move {
             let pgconfig = &mut Config::from_str(url)?;
             pgconfig.connect_timeout(default_timeout);
-            let tls = make_tls(pgconfig)?;
+            let tls = make_tls_rustls(pgconfig)?;
             pgconfig.connect(tls).await.map_err(|e| anyhow!(e))
         })
         .await?;
