@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# THROWAWAY: valkey-cli inside the spike container. Usage: vk.sh ARGS...
+exec docker exec spike-valkey valkey-cli "$@"

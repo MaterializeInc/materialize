@@ -122,8 +122,10 @@ members = [
     "src/transform",
     "src/txn-wal",
     "src/walkabout",
+    "src/wasm-sink-spike",
     "test/metabase/smoketest",
     "test/test-util",
+    "misc/spike-wasm-sink/guest",
 ]
 
 # We make all members of the workspace default members, *except* for a few
@@ -253,6 +255,7 @@ default-members = [
     "src/transform",
     "src/txn-wal",
     "src/walkabout",
+    "src/wasm-sink-spike",
     "test/metabase/smoketest",
     "test/test-util",
 ]

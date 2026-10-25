@@ -254,7 +254,13 @@ pub(crate) trait SinkRender<'scope> {
 
 fn get_sink_render_for<'scope>(connection: &StorageSinkConnection) -> Box<dyn SinkRender<'scope>> {
     match connection {
-        StorageSinkConnection::Kafka(connection) => Box::new(connection.clone()),
+        StorageSinkConnection::Kafka(connection) => match crate::sink::wasm::spike_config() {
+            Some(cfg) => Box::new(crate::sink::wasm::WasmSinkRender {
+                kafka: connection.clone(),
+                cfg,
+            }),
+            None => Box::new(connection.clone()),
+        },
         StorageSinkConnection::Iceberg(connection) => Box::new(connection.clone()),
     }
 }
