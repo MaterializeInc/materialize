@@ -176,7 +176,35 @@ impl fmt::Display for Jq {
     }
 }
 
+/// The longest program, in bytes, that [`JqProgram::new`] accepts.
+pub const MAX_PROGRAM_LEN: usize = 8 << 10;
+
+/// The stack size [`compile`] runs on. jaq's loader and compiler recurse once
+/// per nesting level, and nesting can grow with every byte of source. Measured
+/// worst cases are about 1.6 KiB of stack per byte in release builds and 11 KiB
+/// in debug builds, so a program of [`MAX_PROGRAM_LEN`] bytes fits with room.
+const COMPILE_STACK_SIZE: usize = {
+    #[cfg(debug_assertions)]
+    {
+        128 << 20
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        32 << 20
+    }
+};
+
 fn compile(program: &str) -> Result<Filter, String> {
+    if program.len() > MAX_PROGRAM_LEN {
+        return Err(format!(
+            "program is {} bytes, more than the maximum of {MAX_PROGRAM_LEN}",
+            program.len()
+        ));
+    }
+    stacker::grow(COMPILE_STACK_SIZE, || compile_unchecked(program))
+}
+
+fn compile_unchecked(program: &str) -> Result<Filter, String> {
     let defs = jaq_core::defs()
         .chain(jaq_std::defs())
         .chain(jaq_json::defs());
