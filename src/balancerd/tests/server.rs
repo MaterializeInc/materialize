@@ -985,6 +985,53 @@ async fn test_stalled_tls_handshake_is_closed() {
     .await;
 }
 
+/// A failed TLS handshake is counted on its own, and is not an `error` connection, since balancerd
+/// cannot tell a certificate its clients reject from a client that cannot speak TLS.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_failed_tls_handshake_is_counted() {
+    const FAILURES: &str = "mz_balancer_tls_handshake_failures_total";
+    const HTTPS: Option<&str> = Some("source=\"https\"");
+    let ca = Ca::new_root("test ca").unwrap();
+    let (cert, key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let balancer = start_balancer_to(
+        "127.0.0.1:1".to_string(),
+        vec![],
+        Some(TlsCertConfig { cert, key }),
+    )
+    .await;
+    // Not a TLS record, so the server side of the handshake fails on the first read. balancerd
+    // may reset rather than close the socket, so the metrics are what the test waits on.
+    let not_a_client_hello = b"GET / HTTP/1.1\r\n\r\n";
+
+    let mut pgwire = TcpStream::connect(balancer.pgwire).await.unwrap();
+    let mut ssl_request = BytesMut::new();
+    FrontendStartupMessage::SslRequest
+        .encode(&mut ssl_request)
+        .unwrap();
+    pgwire.write_all(&ssl_request).await.unwrap();
+    let mut reply = [0u8; 1];
+    pgwire.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply, [ACCEPT_SSL_ENCRYPTION]);
+    pgwire.write_all(not_a_client_hello).await.unwrap();
+    assert_metric(balancer.internal_http, FAILURES, PGWIRE, 1.0).await;
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_SUCCESS, 1.0).await;
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_ERROR, 0.0).await;
+
+    let mut https = TcpStream::connect(balancer.https).await.unwrap();
+    https.write_all(not_a_client_hello).await.unwrap();
+    assert_metric(balancer.internal_http, FAILURES, HTTPS, 1.0).await;
+    assert_metric(
+        balancer.internal_http,
+        STATUS,
+        Some("source=\"https\",status=\"error\""),
+        0.0,
+    )
+    .await;
+}
+
 /// A client that is rejected during startup is told why, rather than having the connection
 /// closed under it. `FramedConn::send` only enqueues, so these paths are only correct if the
 /// rejection is flushed before the connection is dropped.

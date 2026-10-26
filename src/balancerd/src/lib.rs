@@ -36,7 +36,7 @@ use hickory_resolver::config::LookupIpStrategy;
 use hickory_resolver::lookup_ip::LookupIp;
 use hickory_resolver::net::NetError;
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
-use hickory_resolver::proto::rr::{RData, RecordType};
+use hickory_resolver::proto::rr::{Name, RData, RecordType};
 use hickory_resolver::system_conf::read_system_conf;
 use hickory_resolver::{Resolver, TokioResolver};
 use hyper::StatusCode;
@@ -552,6 +552,7 @@ struct ServerMetricsConfig {
     active_connections: IntGaugeVec,
     pre_resolved_connections: IntGaugeVec,
     pre_resolved_timeouts: IntCounterVec,
+    tls_handshake_failures: IntCounterVec,
     tenant_connections: IntGaugeVec,
     tenant_connection_rx: IntCounterVec,
     tenant_connection_tx: IntCounterVec,
@@ -602,6 +603,13 @@ impl ServerMetricsConfig {
             help: "Count of connections closed for not resolving a backend within the pre-resolved timeout.",
             var_labels: ["source"],
         ));
+        let tls_handshake_failures = registry.register(metric!(
+            name: "mz_balancer_tls_handshake_failures_total",
+            help: "Count of client TLS handshakes that failed. Rises when clients reject the \
+                certificate balancerd presents, as well as with scanners and misconfigured \
+                clients, none of which count as an `error` connection status.",
+            var_labels: ["source"],
+        ));
         let tenant_connections = registry.register(metric!(
             name: "mz_balancer_tenant_connection_active",
             help: "Count of opened network connections by tenant.",
@@ -630,6 +638,7 @@ impl ServerMetricsConfig {
             active_connections,
             pre_resolved_connections,
             pre_resolved_timeouts,
+            tls_handshake_failures,
             tenant_connections,
             tenant_connection_rx,
             tenant_connection_tx,
@@ -655,6 +664,7 @@ impl ServerMetrics {
         self_.connection_setup_duration();
         self_.upstream_connect_duration();
         self_.connection_duration();
+        self_.tls_handshake_failures();
         drop(self_.active_connections());
 
         self_
@@ -701,6 +711,12 @@ impl ServerMetrics {
     fn pre_resolved_timeout(&self) -> IntCounter {
         self.inner
             .pre_resolved_timeouts
+            .with_label_values(&[self.source])
+    }
+
+    fn tls_handshake_failures(&self) -> IntCounter {
+        self.inner
+            .tls_handshake_failures
             .with_label_values(&[self.source])
     }
 
@@ -1008,8 +1024,12 @@ where
 /// limit refused it, a server-side step failed (resolving the backend, authenticating against
 /// Frontegg, connecting upstream), or the pre-resolved deadline expired during balancerd's own
 /// work. Everything else is a `success`, including connections that reached proxying and
-/// connections the client ended or failed: hangups, protocol violations, failed TLS handshakes,
-/// rejected credentials, a hostname naming no tenant, or stalling until the deadline.
+/// connections the client ended or failed: hangups, protocol violations, rejected credentials, an
+/// SNI that is missing or names no tenant ([`UnknownHost`]), or stalling until the deadline.
+///
+/// A failed TLS handshake is a `success` too. balancerd cannot tell a client that rejects its
+/// certificate from one that cannot speak TLS, so those are counted on their own, in
+/// `mz_balancer_tls_handshake_failures_total`.
 ///
 /// Every server-side failure has to be reported through [`ConnectionFault::server`]: a connection
 /// that is never marked is a `success`, whatever its handler returned.
@@ -1214,6 +1234,7 @@ impl PgwireBalancer {
                             .and_then(|ssl| SslStream::new(ssl, conn))
                             .inspect_err(|_| fault.server())?;
                         if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                            metrics.tls_handshake_failures().inc();
                             let _ = ssl_stream.get_mut().shutdown().await;
                             return Err(e.into());
                         }
@@ -1770,6 +1791,7 @@ impl HttpsBalancer {
         resolver: &TenantDnsResolver,
         resolve_template: &str,
         port: u16,
+        metrics: &ServerMetrics,
         fault: &ConnectionFault,
     ) -> Result<(Box<dyn ClientStream>, ResolvedAddr, SocketAddr), anyhow::Error> {
         let peer_addr = conn
@@ -1783,6 +1805,7 @@ impl HttpsBalancer {
                     .and_then(|ssl| SslStream::new(ssl, conn))
                     .inspect_err(|_| fault.server())?;
                 if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                    metrics.tls_handshake_failures().inc();
                     let _ = ssl_stream.get_mut().shutdown().await;
                     return Err(e.into());
                 }
@@ -1823,9 +1846,10 @@ impl HttpsBalancer {
     ) -> Result<ResolvedAddr, anyhow::Error> {
         let (addr, tenant) = match servername {
             Some(sni) => resolver.resolve_sni(resolve_template, port, sni).await?,
+            // A template with a placeholder routes by SNI, so without one the client named no
+            // tenant. Scanners connecting by IP land here.
+            None if resolve_template.contains("{}") => return Err(UnknownHost::NoSni.into()),
             None => {
-                // Without SNI, resolve the template as is. Not expected for
-                // HTTPS in practice.
                 debug!("https hostname (no SNI): {}:{}", resolve_template, port);
                 resolver.resolve(resolve_template, port, false).await?
             }
@@ -1925,6 +1949,7 @@ impl mz_server_core::Server for HttpsBalancer {
                         &resolver,
                         &resolve_template,
                         port,
+                        &inner_metrics,
                         fault_ref,
                     ),
                 )
@@ -2160,7 +2185,7 @@ impl BalancerResolver {
                             Err(e) => {
                                 warn!("pgwire connection failed authentication: {}", e);
                                 // The client sees the same rejection either way.
-                                if e.is_unavailable() {
+                                if !e.is_credential_rejection() {
                                     fault.server();
                                 }
                                 return Err(ResolveError::InvalidPassword);
@@ -2308,7 +2333,12 @@ impl TenantDnsResolver {
         debug!("SNI hostname: {}", hostname);
         // Without a placeholder the template names the backend itself, whose records vanish when
         // it is down: its headless Service answers NXDOMAIN without ready endpoints.
-        self.resolve(&hostname, port, template.contains("{}")).await
+        let client_chosen = template.contains("{}");
+        // The lookups parse the name the same way, and would fail before sending a query.
+        if client_chosen && Name::from_utf8(&hostname).is_err() {
+            return Err(UnknownHost::Named(hostname).into());
+        }
+        self.resolve(&hostname, port, client_chosen).await
     }
 
     /// Resolves the address for a hostname, skipping CNAME resolution and
@@ -2352,7 +2382,7 @@ impl TenantDnsResolver {
                     .downcast_ref::<NetError>()
                     .is_some_and(NetError::is_no_records_found);
                 if client_chosen && no_records {
-                    e.context(UnknownHost(host.to_owned()))
+                    e.context(UnknownHost::Named(host.to_owned()))
                 } else {
                     e
                 }
@@ -2372,11 +2402,16 @@ impl TenantDnsResolver {
     }
 }
 
-/// A hostname chosen by the client's SNI that does not exist in DNS: the client named a tenant
-/// that does not exist, rather than one whose backend is unavailable.
+/// The client named no tenant, or one that does not exist, rather than one whose backend is
+/// unavailable. Only a hostname the client's SNI chooses can produce one.
 #[derive(Debug, thiserror::Error)]
-#[error("no tenant at {0}")]
-struct UnknownHost(String);
+enum UnknownHost {
+    #[error("no SNI to route by")]
+    NoSni,
+    /// The hostname is not a valid DNS name, or has no CNAME and no records.
+    #[error("no tenant at {0}")]
+    Named(String),
+}
 
 /// Whether `err` carries an [`UnknownHost`].
 fn names_unknown_host(err: &anyhow::Error) -> bool {
@@ -2617,6 +2652,25 @@ mod tests {
             .expect_err("a phase that never finishes must be cut short");
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
         assert_eq!(metrics.pre_resolved_timeout().get(), 1);
+    }
+
+    /// An SNI that cannot name a tenant is the client's fault, and is settled without a DNS query.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // reads the system DNS configuration
+    async fn test_sni_naming_no_tenant() {
+        let resolver = TenantDnsResolver::new().expect("system DNS configuration is readable");
+        for servername in ["bad!name".to_owned(), "a".repeat(64)] {
+            let err = resolver
+                .resolve_sni("blncr-{}.invalid", 6876, &servername)
+                .await
+                .expect_err("not a valid hostname");
+            assert!(names_unknown_host(&err), "{servername}: {err:#}");
+        }
+
+        let err = HttpsBalancer::resolve(&resolver, "blncr-{}.invalid", 6876, None)
+            .await
+            .expect_err("no SNI to route by");
+        assert!(names_unknown_host(&err), "{err:#}");
     }
 
     /// A deadline is the server's fault only when it interrupts balancerd's own work.

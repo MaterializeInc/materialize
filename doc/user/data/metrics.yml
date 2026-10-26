@@ -406,6 +406,15 @@ metrics:
   - tenant
   source: src/balancerd/src/lib.rs
   visibility: internal
+- name: mz_balancer_tls_handshake_failures_total
+  help: >-
+    Count of client TLS handshakes that failed. Rises when clients reject the
+    certificate balancerd presents, as well as with scanners and misconfigured clients,
+    none of which count as an `error` connection status.
+  labels:
+  - source
+  source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_upstream_connect_duration_seconds_bucket
   help: Time to open a TCP connection to environmentd, for connections that succeed.
   labels:
