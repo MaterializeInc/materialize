@@ -50,7 +50,7 @@ use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::GROUP_COMMIT_MAX_ATTEMPTS;
-use mz_catalog::builtin::{BuiltinTable, MZ_SESSIONS};
+use mz_catalog::builtin::{Builtin, BuiltinTable, MZ_SESSIONS, MZ_SESSIONS_RAW};
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::CollectionPlan;
 use mz_ore::halt;
@@ -78,7 +78,7 @@ use crate::util::{CompletedClientTransmitter, ResultExt};
 use crate::{AdapterError, ExecuteContext};
 
 /// Tables that we emit updates for when starting a new session.
-pub(crate) static REQUIRED_BUILTIN_TABLES: &[&LazyLock<BuiltinTable>] = &[&MZ_SESSIONS];
+pub(crate) static REQUIRED_BUILTIN_TABLES: &[&LazyLock<BuiltinTable>] = &[&MZ_SESSIONS_RAW];
 
 /// A plan awaiting session-startup builtin table appends.
 #[derive(Derivative)]
@@ -1360,6 +1360,9 @@ pub(crate) fn waiting_on_startup_appends(
     let depends_on_required_id = REQUIRED_BUILTIN_TABLES
         .iter()
         .map(|table| catalog.resolve_builtin_table(&**table))
+        .chain(std::iter::once(catalog.state().resolve_builtin_object(
+            &Builtin::<mz_sql::catalog::IdReference>::View(&MZ_SESSIONS),
+        )))
         .any(|id| {
             catalog
                 .get_global_ids(&id)

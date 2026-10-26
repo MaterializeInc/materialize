@@ -9,7 +9,7 @@
 
 use crate::active_compute_sink::ActiveSubscribe;
 use crate::coord::ConnMeta;
-use mz_catalog::builtin::{BuiltinTable, MZ_SESSIONS, MZ_SUBSCRIPTIONS};
+use mz_catalog::builtin::{BuiltinTable, MZ_SESSIONS_RAW, MZ_SUBSCRIPTIONS_RAW};
 use mz_catalog::catalog::BuiltinTableUpdate;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use uuid::Uuid;
@@ -17,6 +17,7 @@ pub(crate) fn pack_subscribe_update(
     id: GlobalId,
     subscribe: &ActiveSubscribe,
     session_uuid: Uuid,
+    client_incarnation: Option<u64>,
     diff: Diff,
 ) -> BuiltinTableUpdate<&'static BuiltinTable> {
     let mut row = Row::default();
@@ -34,23 +35,26 @@ pub(crate) fn pack_subscribe_update(
         .map(|id| id.to_string())
         .collect();
     packer.push_list(depends_on.iter().map(|s| Datum::String(s)));
+    packer.push(Datum::from(client_incarnation));
 
-    BuiltinTableUpdate::row(&*MZ_SUBSCRIPTIONS, row, diff)
+    BuiltinTableUpdate::row(&*MZ_SUBSCRIPTIONS_RAW, row, diff)
 }
 
 pub(crate) fn pack_session_update(
     conn: &ConnMeta,
+    client_incarnation: Option<u64>,
     diff: Diff,
 ) -> BuiltinTableUpdate<&'static BuiltinTable> {
     let connect_dt = mz_ore::now::to_datetime(conn.connected_at());
     BuiltinTableUpdate::row(
-        &*MZ_SESSIONS,
+        &*MZ_SESSIONS_RAW,
         Row::pack_slice(&[
             Datum::Uuid(conn.uuid()),
             Datum::UInt32(conn.conn_id().unhandled()),
             Datum::String(&conn.authenticated_role_id().to_string()),
             Datum::from(conn.client_ip().map(|ip| ip.to_string()).as_deref()),
             Datum::TimestampTz(connect_dt.try_into().expect("must fit")),
+            Datum::from(client_incarnation),
         ]),
         diff,
     )

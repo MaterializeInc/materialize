@@ -3321,10 +3321,28 @@ pub static MZ_MATERIALIZED_VIEW_REFRESHES: LazyLock<BuiltinSource> = LazyLock::n
     }
 });
 
-pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_SUBSCRIPTIONS_RAW: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_subscriptions_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_SUBSCRIPTIONS_RAW_OID,
+    desc: MZ_SUBSCRIPTIONS.desc.clone().concat(
+        RelationDesc::builder()
+            .with_column("client_incarnation", SqlScalarType::UInt64.nullable(true))
+            .finish(),
+    ),
+    column_comments: BTreeMap::from_iter([(
+        "client_incarnation",
+        "The publishing adapter execution, or NULL for legacy execution.",
+    )]),
+    is_retained_metrics_object: false,
+    access: vec![],
+    ontology: None,
+});
+
+pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_subscriptions",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_SUBSCRIPTIONS_OID,
+    oid: oid::VIEW_MZ_SUBSCRIPTIONS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("session_id", SqlScalarType::Uuid.nullable(false))
@@ -3361,7 +3379,21 @@ pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
             "The IDs of objects referenced by the subscription. Corresponds to `mz_objects.id`",
         ),
     ]),
-    is_retained_metrics_object: false,
+    sql: "
+SELECT id, session_id, cluster_id, created_at, referenced_object_ids
+FROM mz_internal.mz_subscriptions_raw AS runtime
+WHERE (client_incarnation IS NULL AND NOT EXISTS (
+           SELECT 1 FROM mz_internal.mz_catalog_shared
+           WHERE data->>'kind' = 'Config'
+             AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+             AND data->'value'->'value' <> '0'::jsonb
+       ))
+   OR EXISTS (
+           SELECT 1 FROM mz_internal.mz_catalog_shared
+           WHERE data->>'kind' = 'ClientIncarnation'
+             AND (data->'key'->>'id')::uint8 = runtime.client_incarnation
+             AND data->'value'->'realization'->'Adapter' IS NOT NULL
+       )",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "subscription",
@@ -3398,10 +3430,28 @@ pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     }),
 });
 
-pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+pub static MZ_SESSIONS_RAW: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_sessions_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_SESSIONS_RAW_OID,
+    desc: MZ_SESSIONS.desc.clone().concat(
+        RelationDesc::builder()
+            .with_column("client_incarnation", SqlScalarType::UInt64.nullable(true))
+            .finish(),
+    ),
+    column_comments: BTreeMap::from_iter([(
+        "client_incarnation",
+        "The publishing adapter execution, or NULL for legacy execution.",
+    )]),
+    is_retained_metrics_object: false,
+    access: vec![],
+    ontology: None,
+});
+
+pub static MZ_SESSIONS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_sessions",
     schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_SESSIONS_OID,
+    oid: oid::VIEW_MZ_SESSIONS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::Uuid.nullable(false))
         .with_column("connection_id", SqlScalarType::UInt32.nullable(false))
@@ -3431,7 +3481,21 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "The time at which the session connected to the system.",
         ),
     ]),
-    is_retained_metrics_object: false,
+    sql: "
+SELECT id, connection_id, role_id, client_ip, connected_at
+FROM mz_internal.mz_sessions_raw AS runtime
+WHERE (client_incarnation IS NULL AND NOT EXISTS (
+           SELECT 1 FROM mz_internal.mz_catalog_shared
+           WHERE data->>'kind' = 'Config'
+             AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+             AND data->'value'->'value' <> '0'::jsonb
+       ))
+   OR EXISTS (
+           SELECT 1 FROM mz_internal.mz_catalog_shared
+           WHERE data->>'kind' = 'ClientIncarnation'
+             AND (data->'key'->>'id')::uint8 = runtime.client_incarnation
+             AND data->'value'->'realization'->'Adapter' IS NOT NULL
+       )",
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "active_session",

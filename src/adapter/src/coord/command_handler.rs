@@ -951,7 +951,13 @@ impl Coordinator {
                     authenticated_role: role_id,
                     deferred_lock: None,
                 };
-                let update = crate::catalog::pack_session_update(&conn, Diff::ONE);
+                let update = crate::catalog::pack_session_update(
+                    &conn,
+                    self.query_client
+                        .as_ref()
+                        .map(|client| client.protection.incarnation()),
+                    Diff::ONE,
+                );
                 let update = self.catalog().state().resolve_builtin_table_update(update);
                 self.begin_session_for_statement_logging(&conn);
                 self.active_conns.insert(conn_id.clone(), conn);
@@ -2322,7 +2328,13 @@ impl Coordinator {
         // Queue the builtin table update, but do not wait for it to complete. We explicitly do
         // this to prevent blocking the Coordinator in the case that a lot of connections are
         // closed at once, which occurs regularly in some workflows.
-        let update = crate::catalog::pack_session_update(&conn, Diff::MINUS_ONE);
+        let update = crate::catalog::pack_session_update(
+            &conn,
+            self.query_client
+                .as_ref()
+                .map(|client| client.protection.incarnation()),
+            Diff::MINUS_ONE,
+        );
         let update = self.catalog().state().resolve_builtin_table_update(update);
 
         let _builtin_update_notify = self.builtin_table_update().defer(vec![update]);

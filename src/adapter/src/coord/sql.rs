@@ -314,6 +314,9 @@ impl Coordinator {
                             id,
                             active_subscribe,
                             session_uuid,
+                            self.query_client
+                                .as_ref()
+                                .map(|client| client.protection.incarnation()),
                             Diff::ONE,
                         );
                         let update = self.catalog().state().resolve_builtin_table_update(update);
@@ -396,6 +399,9 @@ impl Coordinator {
                                 id,
                                 active_subscribe,
                                 session_uuid,
+                                self.query_client
+                                    .as_ref()
+                                    .map(|client| client.protection.incarnation()),
                                 Diff::MINUS_ONE,
                             );
                             let update =

@@ -3691,7 +3691,7 @@ impl Coordinator {
         // that only starts after bootstrap finishes.
         let read_ts = write_ts;
 
-        let retained_across_restarts = BTreeSet::from([
+        let mut retained_across_restarts = BTreeSet::from([
             self.catalog()
                 .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD),
             self.catalog()
@@ -3701,6 +3701,16 @@ impl Coordinator {
             self.catalog()
                 .resolve_builtin_table(&MZ_REPLICA_HYDRATION_HISTORY),
         ]);
+        if self.catalog().state().catalog_read_protection_enabled() {
+            // Execution-qualified rows may belong to live peers. Their public
+            // views use committed incarnation membership to hide retired owners.
+            retained_across_restarts.extend([
+                self.catalog()
+                    .resolve_builtin_table(&mz_catalog::builtin::MZ_SESSIONS_RAW),
+                self.catalog()
+                    .resolve_builtin_table(&mz_catalog::builtin::MZ_SUBSCRIPTIONS_RAW),
+            ]);
+        }
 
         let mut retraction_tasks = Vec::new();
         let system_tables: Vec<_> = table_metas
