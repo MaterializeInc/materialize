@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -44,12 +44,8 @@ use super::Message;
 /// Statement logging state in the Coordinator.
 #[derive(Debug)]
 pub(crate) struct StatementLogging {
-    /// Information about statement executions that have been logged
-    /// but not finished.
-    ///
-    /// This map needs to have enough state left over to later retract
-    /// the system table entries (so that we can update them when the
-    /// execution finished.)
+    /// Current fields for sampled executions that have not finished.
+    /// Removing an entry at its first completion keeps duplicate ends idempotent.
     executions_begun: BTreeMap<Uuid, StatementBeganExecutionRecord>,
 
     /// Information about sessions that have been started, but which
@@ -63,8 +59,15 @@ pub(crate) struct StatementLogging {
     /// This same instance will be used by all frontend tasks.
     reproducible_rng: Arc<Mutex<rand::rngs::ChaCha8Rng>>,
 
+    /// Executions whose latest state must be emitted at the next drain.
+    dirty_executions: BTreeSet<Uuid>,
+    /// Final updates packed at completion so the periodic drain does not have
+    /// to serialize every execution that finished since its previous run.
+    pending_completed_execution_updates: Vec<(Row, Diff)>,
+    /// The row emitted by the last drain for each still-active execution.
+    /// Retraction must use that row rather than an intermediate, unflushed state.
+    last_drained_execution_rows: BTreeMap<Uuid, Row>,
     /// Events to be persisted periodically.
-    pending_statement_execution_events: Vec<(Row, Diff)>,
     pending_prepared_statement_events: Vec<PreparedStatementEvent>,
     pending_session_events: Vec<Row>,
     pending_statement_lifecycle_events: Vec<Row>,
@@ -86,13 +89,63 @@ impl StatementLogging {
             reproducible_rng: Arc::new(Mutex::new(rand::rngs::ChaCha8Rng::seed_from_u64(
                 Self::REPRODUCIBLE_RNG_SEED,
             ))),
-            pending_statement_execution_events: Vec::new(),
+            dirty_executions: BTreeSet::new(),
+            pending_completed_execution_updates: Vec::new(),
+            last_drained_execution_rows: BTreeMap::new(),
             pending_prepared_statement_events: Vec::new(),
             pending_session_events: Vec::new(),
             pending_statement_lifecycle_events: Vec::new(),
             throttling_state: Arc::new(ThrottlingState::new(&now)),
             now,
         }
+    }
+
+    fn drain_execution_updates(&mut self) -> Vec<(Row, Diff)> {
+        let mut updates = std::mem::take(&mut self.pending_completed_execution_updates);
+        for id in std::mem::take(&mut self.dirty_executions) {
+            if let Some(previous) = self.last_drained_execution_rows.remove(&id) {
+                updates.push((previous, Diff::MINUS_ONE));
+            }
+            let record = self
+                .executions_begun
+                .get(&id)
+                .expect("only active executions remain dirty at drain");
+            let row = pack_statement_began_execution_update(record);
+            self.last_drained_execution_rows.insert(id, row.clone());
+            updates.push((row, Diff::ONE));
+        }
+        updates
+    }
+
+    fn begin_execution(&mut self, record: StatementBeganExecutionRecord) {
+        self.dirty_executions.insert(record.id);
+        self.executions_begun.insert(record.id, record);
+    }
+
+    fn mutate_execution<F: FnOnce(&mut StatementBeganExecutionRecord)>(&mut self, id: Uuid, f: F) {
+        let record = self
+            .executions_begun
+            .get_mut(&id)
+            .expect("execution metadata cannot change after completion");
+        f(record);
+        self.dirty_executions.insert(id);
+    }
+
+    /// Returns false for a duplicate end. The first completion owns the final row.
+    fn finish_execution(&mut self, ended: &StatementEndedExecutionRecord) -> bool {
+        let Some(began) = self.executions_begun.remove(&ended.id) else {
+            return false;
+        };
+        self.dirty_executions.remove(&ended.id);
+        if let Some(previous) = self.last_drained_execution_rows.remove(&ended.id) {
+            self.pending_completed_execution_updates
+                .push((previous, Diff::MINUS_ONE));
+        }
+        self.pending_completed_execution_updates.push((
+            Coordinator::pack_full_statement_execution_update(&began, ended),
+            Diff::ONE,
+        ));
+        true
     }
 
     /// Create a `StatementLoggingFrontend` for use by frontend peek sequencing.
@@ -121,15 +174,10 @@ impl Coordinator {
         mseh_update: Row,
         prepared_statement: Option<PreparedStatementEvent>,
     ) {
-        // `mz_statement_execution_history`
-        self.statement_logging
-            .pending_statement_execution_events
-            .push((mseh_update, Diff::ONE));
-
-        // Track the execution for later updates
-        self.statement_logging
-            .executions_begun
-            .insert(record.id, record);
+        // Admission used the initial packed row. At drain time, serialize only
+        // the latest state, which may already include metadata or completion.
+        drop(mseh_update);
+        self.statement_logging.begin_execution(record);
 
         // If we have a prepared statement, log it and possibly its session
         if let Some(ps_event) = prepared_statement {
@@ -232,8 +280,7 @@ impl Coordinator {
                     },
                 )
                 .unzip::<_, _, Vec<_>, Vec<_>>();
-        let statement_execution_updates =
-            std::mem::take(&mut self.statement_logging.pending_statement_execution_events);
+        let statement_execution_updates = self.statement_logging.drain_execution_updates();
         let statement_lifecycle_updates =
             std::mem::take(&mut self.statement_logging.pending_statement_lifecycle_events)
                 .into_iter()
@@ -413,7 +460,7 @@ impl Coordinator {
             ended_at,
         };
 
-        let Some(began_record) = self.statement_logging.executions_begun.remove(&uuid) else {
+        if !self.statement_logging.finish_execution(&ended_record) {
             // The statement was already ended; the first end wins.
             //
             // A missing entry can only mean a duplicate end, never an end that
@@ -434,13 +481,6 @@ impl Coordinator {
                 "duplicate end_statement_execution, keeping the first end",
             );
             return;
-        };
-        for (row, diff) in
-            Self::pack_statement_ended_execution_updates(&began_record, &ended_record)
-        {
-            self.statement_logging
-                .pending_statement_execution_events
-                .push((row, diff));
         }
         self.record_statement_lifecycle_event(
             &id,
@@ -528,35 +568,13 @@ impl Coordinator {
         row
     }
 
-    fn pack_statement_ended_execution_updates(
-        began_record: &StatementBeganExecutionRecord,
-        ended_record: &StatementEndedExecutionRecord,
-    ) -> [(Row, Diff); 2] {
-        let retraction = pack_statement_began_execution_update(began_record);
-        let new = Self::pack_full_statement_execution_update(began_record, ended_record);
-        [(retraction, Diff::MINUS_ONE), (new, Diff::ONE)]
-    }
-
     /// Mutate a statement execution record via the given function `f`.
     fn mutate_record<F: FnOnce(&mut StatementBeganExecutionRecord)>(
         &mut self,
         StatementLoggingId(id): StatementLoggingId,
         f: F,
     ) {
-        let record = self
-            .statement_logging
-            .executions_begun
-            .get_mut(&id)
-            .expect("mutate_record must not be called after execution ends");
-        let retraction = pack_statement_began_execution_update(record);
-        self.statement_logging
-            .pending_statement_execution_events
-            .push((retraction, Diff::MINUS_ONE));
-        f(record);
-        let update = pack_statement_began_execution_update(record);
-        self.statement_logging
-            .pending_statement_execution_events
-            .push((update, Diff::ONE));
+        self.statement_logging.mutate_execution(id, f);
     }
 
     /// Set the `cluster_id` and `cluster_name` for a statement, once they're known.
@@ -760,12 +778,7 @@ impl Coordinator {
             began_at,
         );
 
-        self.statement_logging
-            .pending_statement_execution_events
-            .push((mseh_update, Diff::ONE));
-        self.statement_logging
-            .executions_begun
-            .insert(execution_uuid, record);
+        self.statement_logging.begin_execution(record);
 
         if let Some((sh_update, session_id)) = maybe_sh_event {
             self.statement_logging
@@ -926,5 +939,117 @@ impl Coordinator {
             ),
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod coalescing_tests {
+    use super::*;
+
+    fn record() -> StatementBeganExecutionRecord {
+        StatementBeganExecutionRecord {
+            id: Uuid::new_v4(),
+            prepared_statement_id: Uuid::new_v4(),
+            sample_rate: 1.0,
+            params: vec![Some("parameter".into())],
+            began_at: 1,
+            cluster_id: None,
+            cluster_name: None,
+            database_name: "materialize".into(),
+            search_path: vec!["public".into()],
+            application_name: "coalescing-test".into(),
+            transaction_isolation: "strict serializable".into(),
+            execution_timestamp: None,
+            transaction_id: 1,
+            transient_index_id: None,
+            mz_version: "test".into(),
+            kind: None,
+        }
+    }
+
+    fn normalized(mut rows: Vec<(Row, Diff)>) -> Vec<(Row, Diff)> {
+        differential_dataflow::consolidation::consolidate(&mut rows);
+        rows
+    }
+
+    #[mz_ore::test]
+    fn coalescing_preserves_each_flush_boundary() {
+        for reason in [
+            StatementEndedExecutionReason::Success {
+                result_size: Some(8),
+                rows_returned: Some(1),
+                execution_strategy: Some(
+                    crate::statement_logging::StatementExecutionStrategy::FastPath,
+                ),
+            },
+            StatementEndedExecutionReason::Canceled,
+            StatementEndedExecutionReason::Errored {
+                error: "query failed".into(),
+            },
+        ] {
+            // Try every combination of drains after begin, two metadata changes,
+            // and completion. Compare each emitted batch with eager row updates.
+            for drains in 0..16 {
+                let mut state = StatementLogging::new(mz_ore::now::SYSTEM_TIME.clone());
+                let mut current = record();
+                let id = current.id;
+                let mut eager = Vec::new();
+                for step in 0..4 {
+                    let previous = pack_statement_began_execution_update(&current);
+                    match step {
+                        0 => {
+                            state.begin_execution(current.clone());
+                            eager.push((previous, Diff::ONE));
+                        }
+                        1 | 2 => {
+                            if step == 1 {
+                                current.execution_timestamp = Some(7);
+                            } else {
+                                current.transient_index_id = Some(GlobalId::Transient(1));
+                            }
+                            state.mutate_execution(id, |r| *r = current.clone());
+                            eager.push((previous, Diff::MINUS_ONE));
+                            eager
+                                .push((pack_statement_began_execution_update(&current), Diff::ONE));
+                        }
+                        3 => {
+                            let ended = StatementEndedExecutionRecord {
+                                id,
+                                reason: reason.clone(),
+                                ended_at: 9,
+                            };
+                            eager.push((previous, Diff::MINUS_ONE));
+                            eager.push((
+                                Coordinator::pack_full_statement_execution_update(&current, &ended),
+                                Diff::ONE,
+                            ));
+                            assert!(state.finish_execution(&ended));
+                            let duplicate = StatementEndedExecutionRecord {
+                                id,
+                                reason: StatementEndedExecutionReason::Aborted,
+                                ended_at: 10,
+                            };
+                            assert!(!state.finish_execution(&duplicate));
+                        }
+                        _ => unreachable!(),
+                    }
+                    if drains & (1 << step) != 0 {
+                        assert_eq!(
+                            normalized(state.drain_execution_updates()),
+                            normalized(std::mem::take(&mut eager)),
+                            "drains={drains}, step={step}"
+                        );
+                    }
+                }
+                assert_eq!(
+                    normalized(state.drain_execution_updates()),
+                    normalized(eager)
+                );
+                assert!(state.executions_begun.is_empty());
+                assert!(state.pending_completed_execution_updates.is_empty());
+                assert!(state.last_drained_execution_rows.is_empty());
+                assert!(state.dirty_executions.is_empty());
+            }
+        }
     }
 }
