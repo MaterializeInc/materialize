@@ -908,6 +908,7 @@ mz_replica_hydration_history
 mz_replica_system_parameters
 mz_session_history
 mz_sessions
+mz_sessions_raw
 mz_show_all_my_privileges
 mz_show_all_objects
 mz_show_all_privileges
@@ -960,6 +961,7 @@ mz_statement_lifecycle_history
 mz_storage_shards
 mz_storage_usage_by_shard
 mz_subscriptions
+mz_subscriptions_raw
 mz_type_pg_metadata
 mz_wallclock_global_lag
 mz_wallclock_global_lag_histogram

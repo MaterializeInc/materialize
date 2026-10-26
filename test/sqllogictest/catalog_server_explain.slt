@@ -6267,7 +6267,7 @@ mz_catalog.mz_views:
             Project: #5, #0, #6, #1, #2, #8, #3, #4, #7
             Map: "s1"
         →Arrange (#1{schema_name}, #2{name})
-          →Constant (200 rows)
+          →Constant (202 rows)
         →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
           →Differential Join %1[#0] » %0:l0[(#0{data} ->> "kind")]
             after %0:
@@ -6818,7 +6818,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1095 rows)
+            →Constant (1103 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -9475,7 +9475,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_views";
 ----
 Explained Query (fast path):
-  →Constant (200 rows)
+  →Constant (202 rows)
 
 Target cluster: mz_catalog_server
 
@@ -11573,7 +11573,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1095 rows)
+            →Constant (1103 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -11926,6 +11926,89 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_recent_sql_text_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_sessions";
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arranged mz_internal.mz_catalog_shared
+    cte l1 =
+      →Distinct GroupAggregate
+        →Differential Join %1[#0] » %0:l0[(#0{data} ->> "kind")]
+          after %0:
+            Project: ()
+            Filter: ("catalog_read_protection_enabled" = ((#1{data} -> "key") ->> "key")) AND (0 != ((#1{data} -> "value") -> "value"))
+          →Arranged l0
+          →Arrange (#0)
+            →Constant (1 row)
+    cte l2 =
+      →Differential Cross Join %0:mz_sessions_raw[×] » %1[×]
+        →Arrange (empty key)
+          →Stream mz_internal.mz_sessions_raw
+        →Arrange (empty key)
+          →Union
+            →Fused with Child Map/Filter/Project
+              Project: #0
+              Map: true
+                →Arranged l1
+                  Key: ()
+            →Map/Filter/Project
+              Project: #0
+              Map: false
+                →Consolidating Union
+                  →Negate Diffs
+                    →Unarranged Raw Stream
+                      →Arranged l1
+                  →Constant (1 row)
+    cte l3 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #5
+            →Read l2
+  →Return
+    →Differential Join %1[#0] » %0:l2[#5]
+      after %0:
+        Project: #2..=#6
+        Filter: (#1 OR (NOT(#7) AND (#0{client_incarnation}) IS NULL))
+      →Arrange (#5)
+        →Stream l2
+      →Arrange (#0)
+        →Union
+          →Differential Join %0:l3[#0] » %1[#0]
+            after %1:
+              Filter: (#0{client_incarnation}) IS NOT NULL
+            Final closure:
+              Project: #0, #1
+              Map: true
+            →Arranged l3
+            →Distinct GroupAggregate
+              Key:
+                Project: #1
+                Map: text_to_uint8(((#0{data} -> "key") ->> "id"))
+              →Differential Join %1[#0] » %0:l0[(#0{data} ->> "kind")]
+                after %0:
+                  Project: #1
+                  Filter: (((#1{data} -> "key") ->> "id")) IS NOT NULL AND ((((#1{data} -> "value") -> "realization") -> "Adapter")) IS NOT NULL
+                →Arranged l0
+                →Arrange (#0)
+                  →Constant (1 row)
+          →Fused with Child Map/Filter/Project
+            Project: #0, #1
+            Filter: (#0) IS NULL
+            Map: false
+              →Arranged l3
+                Key: (#0)
+
+Source mz_internal.mz_sessions_raw
+
+Used Indexes:
+  - mz_internal.mz_catalog_shared_ind (lookup)
 
 Target cluster: mz_catalog_server
 
@@ -14784,6 +14867,89 @@ Explained Query:
 
 Source mz_internal.mz_statement_execution_history
   project=(#0..=#11, #13..=#16, #18..=#20)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_subscriptions";
+----
+Explained Query:
+  →With
+    cte l0 =
+      →Arranged mz_internal.mz_catalog_shared
+    cte l1 =
+      →Distinct GroupAggregate
+        →Differential Join %1[#0] » %0:l0[(#0{data} ->> "kind")]
+          after %0:
+            Project: ()
+            Filter: ("catalog_read_protection_enabled" = ((#1{data} -> "key") ->> "key")) AND (0 != ((#1{data} -> "value") -> "value"))
+          →Arranged l0
+          →Arrange (#0)
+            →Constant (1 row)
+    cte l2 =
+      →Differential Cross Join %0:mz_subscriptions_raw[×] » %1[×]
+        →Arrange (empty key)
+          →Stream mz_internal.mz_subscriptions_raw
+        →Arrange (empty key)
+          →Union
+            →Fused with Child Map/Filter/Project
+              Project: #0
+              Map: true
+                →Arranged l1
+                  Key: ()
+            →Map/Filter/Project
+              Project: #0
+              Map: false
+                →Consolidating Union
+                  →Negate Diffs
+                    →Unarranged Raw Stream
+                      →Arranged l1
+                  →Constant (1 row)
+    cte l3 =
+      →Distinct GroupAggregate
+        →Fused with Child Map/Filter/Project
+          Project: #5
+            →Read l2
+  →Return
+    →Differential Join %1[#0] » %0:l2[#5]
+      after %0:
+        Project: #2..=#6
+        Filter: (#1 OR (NOT(#7) AND (#0{client_incarnation}) IS NULL))
+      →Arrange (#5)
+        →Stream l2
+      →Arrange (#0)
+        →Union
+          →Differential Join %0:l3[#0] » %1[#0]
+            after %1:
+              Filter: (#0{client_incarnation}) IS NOT NULL
+            Final closure:
+              Project: #0, #1
+              Map: true
+            →Arranged l3
+            →Distinct GroupAggregate
+              Key:
+                Project: #1
+                Map: text_to_uint8(((#0{data} -> "key") ->> "id"))
+              →Differential Join %1[#0] » %0:l0[(#0{data} ->> "kind")]
+                after %0:
+                  Project: #1
+                  Filter: (((#1{data} -> "key") ->> "id")) IS NOT NULL AND ((((#1{data} -> "value") -> "realization") -> "Adapter")) IS NOT NULL
+                →Arranged l0
+                →Arrange (#0)
+                  →Constant (1 row)
+          →Fused with Child Map/Filter/Project
+            Project: #0, #1
+            Filter: (#0) IS NULL
+            Map: false
+              →Arranged l3
+                Key: (#0)
+
+Source mz_internal.mz_subscriptions_raw
+
+Used Indexes:
+  - mz_internal.mz_catalog_shared_ind (lookup)
 
 Target cluster: mz_catalog_server
 

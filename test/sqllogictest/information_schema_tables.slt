@@ -638,6 +638,10 @@ SOURCE
 materialize
 mz_internal
 mz_sessions
+VIEW
+materialize
+mz_internal
+mz_sessions_raw
 BASE TABLE
 materialize
 mz_internal
@@ -846,6 +850,10 @@ BASE TABLE
 materialize
 mz_internal
 mz_subscriptions
+VIEW
+materialize
+mz_internal
+mz_subscriptions_raw
 BASE TABLE
 materialize
 mz_internal
