@@ -477,7 +477,8 @@ authorizes incompatible catalog or Persist-format advancement.
 
 Initialization establishes a joinable deployment, including shared catalog and
 table infrastructure. A fresh environment gets a default adapter declaration so
-the first SQL endpoint needs no SQL bootstrap. An adapter joins its specified
+the first SQL endpoint needs no SQL bootstrap. That default is initialization-only
+and is not recreated after explicit removal. An adapter joins its specified
 deployment without repeating initialization, resetting shared tables or promoting
 itself. Build-owned planning remains with adapters under
 [written plans](#written-plans), without a permanent planner leader.
@@ -487,8 +488,10 @@ SQL supports `CREATE ADAPTER adapter_name (SIZE '<size>')`, `DROP ADAPTER` and
 not process readiness. Catalog relations list declarations, requested sizes and
 deployment-qualified endpoints, readiness and provisioning errors. Local sizes
 specify CPU and memory allocations using the backend's resource controls, with
-enforcement limitations explicit. M3 rejects dropping the serving adapter or the
-last declared adapter.
+enforcement limitations explicit. Dropping the serving adapter or the last
+declared adapter is allowed. Self-drop may disconnect the issuing session before
+acknowledgement. Zero adapters is a valid state, not a reason to reinitialize the
+environment.
 
 Adapter declarations have stable IDs independent of names. Rename does not change
 process identity or require a restart. Realizations are deployment-qualified.
@@ -515,6 +518,14 @@ and observed status. This is a view of desired state, not a second authority or 
 dump of credential-bearing launch arguments. Keep desired-state calculation
 separate from enactment. A passive exporter consumed by a Kubernetes controller
 is future work, not required for M3.
+
+Controllerd also exposes an administrative HTTP API to list, create and drop
+adapter declarations, including when no adapter is running. Creation accepts the
+same name and size as SQL. Listing includes deployment-qualified endpoints and
+observed status. Mutations use the same catalog operations, validation and
+authorization as SQL, respecting deployment authority. Success acknowledges the
+catalog commit, not process readiness or completed teardown. This is catalog
+administration, not a SQL proxy or a direct process-command path.
 
 ### Shared maintenance and introspection
 
@@ -794,8 +805,9 @@ Build through these slices, preserving working outcomes as the split progresses:
 2. **Correct independent adapters.** Isolate executions, protection and cleanup.
    Remove shared bootstrap resets and repair conflicting introspection writers.
    Make table writes and maintenance cooperate without a privileged adapter.
-3. **SQL-managed lifecycle.** Expose creation, listing, rename, drop, resource
-   sizes, endpoints and readiness through the same reconciliation path.
+3. **SQL/HTTP-managed lifecycle.** Expose SQL creation, listing, rename and drop,
+   plus controllerd HTTP listing, creation and drop, with resource sizes,
+   endpoints and readiness through the same catalog and reconciliation path.
 4. **Deployment coexistence and backends.** Exercise old/new deployment
    controllers with shared pubsub, externally authorized promotion and retired
    deployment cleanup. Complete local-process and Kubernetes integration through
@@ -806,7 +818,9 @@ and the HTTP inventory. Use two adapters concurrently, kill one, and show
 controllerd restoring it while the other continues serving against the same
 replicas. Creation and recovery must not repeat shared initialization or reset
 peer state. The local demo uses declared CPU/memory sizes, not manually launched
-extra adapters.
+extra adapters. Also drop all adapters, list the empty adapter inventory through
+controllerd HTTP, create an adapter through that API, and resume SQL against the
+existing environment without reinitialization.
 
 Also demonstrate controller restart without disrupting healthy children and
 pubsub outage/recovery with adapters using remote pubsub. Preserve native warm

@@ -20,7 +20,7 @@ Keep its demonstrated outcomes closed and regular regressions enabled. Preserve
 native maintained execution rather than restoring an adapter-side installer.
 
 Follow the M3 slices in the design, starting with one controller-managed default
-adapter and separate pubsub. Continue through independent adapters, SQL-managed
+adapter and separate pubsub. Continue through independent adapters, SQL/HTTP-managed
 lifecycle and deployment/backend integration, not just the binary extraction.
 The handoff identifies the current slice, concrete gaps and next useful check.
 

@@ -20,10 +20,12 @@ separate initialization from join without moving shared database duties into
 controllerd. The first working slice must preserve native maintained execution
 and leave healthy children running across controller restart.
 
-Then make shared state correct for independent adapters, expose SQL-managed
+Then make shared state correct for independent adapters, expose SQL/HTTP-managed
 lifecycle, and complete deployment/backend integration. The decisive demo creates
 B through A, uses both, kills A, and restores it through controllerd while B keeps
-serving. This is not complete with two manually launched SQL processes.
+serving. Also demonstrate dropping all adapters and recovering SQL through
+controllerd's HTTP list/create/drop API, without reinitializing the environment.
+This is not complete with two manually launched SQL processes.
 
 ## Concrete starting points
 
