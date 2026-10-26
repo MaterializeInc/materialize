@@ -103,10 +103,10 @@ use postgres_replication::protocol::{LogicalReplicationMessage, ReplicationMessa
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
+use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, watch};
@@ -129,14 +129,43 @@ type LogicalReplMsg = ReplicationMessage<LogicalReplicationMessage>;
 /// A decoded row from a transaction with source information.
 type DecodedRow = (u32, usize, Result<Row, DefiniteError>, Diff);
 
+/// An event of a transaction read from the replication stream.
+enum TransactionEvent {
+    /// A change to the export at the row's output index.
+    Update(DecodedRow),
+    /// The export receives no further events.
+    Seal(Seal),
+}
+
+/// A definite error that ends ingestion of the export at `output_index`.
+struct Seal {
+    output_index: usize,
+    resume_upper: Antichain<MzOffset>,
+    error: DefiniteError,
+}
+
+/// The data outputs of the replication reader, one per source export.
+type DataOutputs = SharedFuel<
+    MzOffset,
+    CapacityContainerBuilder<Vec<(Result<Row, DataflowError>, MzOffset, Diff)>>,
+>;
+
 /// Postgres epoch is 2000-01-01T00:00:00Z
 static PG_EPOCH: LazyLock<SystemTime> =
     LazyLock::new(|| UNIX_EPOCH + Duration::from_secs(946_684_800));
 
-// A request to rewind a snapshot taken at `snapshot_lsn` to the initial LSN of the replication
-// slot. This is accomplished by emitting `(data, 0, -diff)` for all updates `(data, lsn, diff)`
-// whose `lsn <= snapshot_lsn` and that the output does not ignore (see
-// `SourceOutputInfo::ignores`). By convention the snapshot is always emitted at LSN 0.
+/// A request to rewind a snapshot taken at `snapshot_lsn` to the initial LSN captured at
+/// purification. This is accomplished by emitting `(data, 0, -diff)` for all updates
+/// `(data, lsn, diff)` whose `lsn <= snapshot_lsn` and that the output does not ignore (see
+/// `SourceOutputInfo::ignores`). By convention the snapshot is always emitted at LSN 0.
+/// ```text
+/// LSN 0    confirmed_flush_lsn       initial_lsn                     snapshot_lsn
+///     │                      │                 │                                │
+///     │                      │ ignored by the  │◄──────── rewound ─────────────►│
+///     │                      │ export          │                                │
+///     │                      │                 │                                │
+///     └──────────────── snapshot reflects all of these ─────────────────────────┘
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RewindRequest {
     /// The output index that should be rewound.
@@ -145,13 +174,37 @@ pub(crate) struct RewindRequest {
     pub(crate) snapshot_lsn: MzOffset,
 }
 
+/// What the snapshot operator reports to the replication reader for each export it snapshots.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) enum SnapshotResult {
+    /// The export can begin processing rewinds for the given export. This gets emitted at
+    /// different points, depending on which mode the source is in: non-concurrent or concurrent
+    /// (`STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD` > 0).
+    ///
+    /// - In non-concurrent mode, the snapshot operator establishes a snapshot, verifies the table
+    /// schema for the export, and snapshots the upstream table before emitting the rewind requests.
+    ///
+    /// - In concurrent mode, the snapshot operator establishes a snapshot and verifies the table
+    /// schema for the export before emitting the rewind.
+    ///
+    /// The emission point is chosen in [`super::snapshot::render`].
+    Rewind(RewindRequest),
+    /// If the upstream table schema didn't match the export schema before the snapshot copy
+    /// started, the snapshot operator emits a `Seal` and skips the snapshot. The replication
+    /// operator emits the error at the minimum timestamp.
+    Seal {
+        output_index: usize,
+        error: DefiniteError,
+    },
+}
+
 /// Renders the replication dataflow. See the module documentation for more information.
 pub(crate) fn render<'scope>(
     scope: Scope<'scope, MzOffset>,
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
-    rewind_stream: StreamVec<'scope, MzOffset, RewindRequest>,
+    rewind_stream: StreamVec<'scope, MzOffset, SnapshotResult>,
     slot_ready_stream: StreamVec<'scope, MzOffset, Infallible>,
     committed_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
     metrics: PgSourceMetrics,
@@ -381,7 +434,34 @@ pub(crate) fn render<'scope>(
             let mut rewinds = BTreeMap::new();
             while let Some(event) = rewind_input.next().await {
                 if let AsyncEvent::Data(_, data) = event {
-                    for req in data {
+                    for result in data {
+                        let req = match result {
+                            SnapshotResult::Rewind(req) => req,
+                            SnapshotResult::Seal {
+                                output_index,
+                                error,
+                            } => {
+                                let info = table_info
+                                    .values_mut()
+                                    .find_map(|outputs| outputs.remove(&output_index))
+                                    .expect("snapshotted exports have table info");
+                                let seal = Seal {
+                                    output_index,
+                                    resume_upper: info.resume_upper,
+                                    error,
+                                };
+                                // Nothing was copied, so the error takes the place of the
+                                // snapshot at the minimum.
+                                seal_export(
+                                    &mut data_outputs,
+                                    &mut data_cap_sets[output_index],
+                                    seal,
+                                    MzOffset::from(0),
+                                )
+                                .await;
+                                continue;
+                            }
+                        };
                         if resume_lsn > req.snapshot_lsn + 1 {
                             let err = DefiniteError::SlotCompactedPastResumePoint(
                                 req.snapshot_lsn + 1,
@@ -508,9 +588,34 @@ pub(crate) fn render<'scope>(
                                 "new_upper={data_upper} tx_lsn={commit_lsn}",
                             );
                             data_upper = commit_lsn + 1;
-                            while let Some((_oid, output_index, event, diff)) =
-                                tx.try_next().await?
-                            {
+                            while let Some(event) = tx.try_next().await? {
+                                let (output_index, event, diff) = match event {
+                                    TransactionEvent::Update((_oid, output_index, event, diff)) => {
+                                        (output_index, event, diff)
+                                    }
+                                    TransactionEvent::Seal(seal) => {
+                                        // If the error occurred before the snapshot LSN, the rewind
+                                        // won't be able to reconstruct a correct view of the
+                                        // snapshot. For this case, the seal happens at the minimum
+                                        // FromTime rather than emitting a retraction for the error
+                                        // followed by emission at a later timestamp.
+                                        //
+                                        // NOTE: the snapshot continues to run. There is no channel
+                                        // back to that operator. This is inefficient, but doesn't
+                                        // affect correctness.
+                                        let rewound = rewinds
+                                            .get(&seal.output_index)
+                                            .is_some_and(|req| commit_lsn <= req.snapshot_lsn);
+                                        let time = if rewound {
+                                            MzOffset::from(0)
+                                        } else {
+                                            commit_lsn
+                                        };
+                                        let cap_set = &mut data_cap_sets[seal.output_index];
+                                        seal_export(&mut data_outputs, cap_set, seal, time).await;
+                                        continue;
+                                    }
+                                };
                                 let event: Result<_, DataflowError> = event.map_err(Into::into);
                                 if let Some(req) = rewinds.get(&output_index) {
                                     if commit_lsn <= req.snapshot_lsn {
@@ -604,18 +709,18 @@ pub(crate) fn render<'scope>(
                                     error,
                                 } => {
                                     let table = table_info.get_mut(&oid).unwrap();
-                                    if table.remove(&output_index).is_none() {
+                                    let Some(info) = table.remove(&output_index) else {
                                         continue;
-                                    }
+                                    };
+                                    let seal = Seal {
+                                        output_index,
+                                        resume_upper: info.resume_upper,
+                                        error,
+                                    };
 
-                                    let update = (
-                                        Err(error.into()),
-                                        data_cap_sets[output_index][0].time().clone(),
-                                        Diff::ONE,
-                                    );
-                                    data_outputs
-                                        .give(output_index, &data_cap_sets[output_index][0], update)
-                                        .await;
+                                    let cap_set = &mut data_cap_sets[output_index];
+                                    let time = *cap_set[0].time();
+                                    seal_export(&mut data_outputs, cap_set, seal, time).await;
                                 }
                             }
                         }
@@ -629,18 +734,22 @@ pub(crate) fn render<'scope>(
                 if will_yield {
                     trace!(%id, "timely-{worker_id} yielding at lsn={data_upper}");
                     rewinds.retain(|_, req| data_upper <= req.snapshot_lsn);
+                    let unsealed = data_cap_sets
+                        .iter_mut()
+                        .enumerate()
+                        .filter(|(_, cap_set)| !cap_set.is_empty());
                     // A port with a pending rewind must stay at the minimum capability since
                     // negated rewind data for its export is emitted at offset 0.
                     if concurrent_replication {
                         // Every other port advances with the stream, so exports that need no
                         // rewind make progress while a snapshot runs.
-                        for (output_index, cap_set) in data_cap_sets.iter_mut().enumerate() {
+                        for (output_index, cap_set) in unsealed {
                             if !rewinds.contains_key(&output_index) {
                                 cap_set.downgrade([&data_upper]);
                             }
                         }
                     } else if rewinds.is_empty() {
-                        for cap_set in data_cap_sets.iter_mut() {
+                        for (_, cap_set) in unsealed {
                             cap_set.downgrade([&data_upper]);
                         }
                     }
@@ -715,6 +824,38 @@ pub(crate) fn render<'scope>(
         errors,
         button.press_on_drop(),
     )
+}
+
+/// Emits the error of `seal` at `time` as the final update of its export and drops the export's
+/// capabilities.
+///
+/// The export's upper advances to the empty frontier once the error is reclocked, which persists
+/// that its ingestion has ended. A restarted dataflow excludes exports with an empty upper. One
+/// that resumed from its last upper instead would miss every upstream change since the error.
+///
+/// `time` must be bound by remap while other exports keep running, so it cannot be a placeholder
+/// like `u64::MAX`. Reclock defers an update until remap binds its time and only then drops the
+/// export's capability.
+async fn seal_export(
+    data_outputs: &mut DataOutputs,
+    cap_set: &mut CapabilitySet<MzOffset>,
+    seal: Seal,
+    time: MzOffset,
+) {
+    let Seal {
+        output_index,
+        resume_upper,
+        error,
+    } = seal;
+    // The stream resumes at the least upper of all exports, so it replays changes this export
+    // already committed. The persist sink drops updates below the export's resume upper as
+    // written, and an error dropped there would leave the export sealed without it.
+    let time = resume_upper
+        .as_option()
+        .map_or(time, |upper| std::cmp::max(time, *upper));
+    let update = (Err(error.into()), time, Diff::ONE);
+    data_outputs.give(output_index, &cap_set[0], update).await;
+    *cap_set = CapabilitySet::new();
 }
 
 /// Produces the logical replication stream while taking care of regularly sending standby
@@ -956,7 +1097,7 @@ fn extract_transaction<'a>(
     table_info: &'a mut BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: &'a PgSourceMetrics,
     publication: &'a str,
-) -> impl AsyncStream<Item = Result<DecodedRow, TransientError>> + 'a {
+) -> impl AsyncStream<Item = Result<TransactionEvent, TransientError>> + 'a {
     use LogicalReplicationMessage::*;
     let mut row = Row::default();
     async_stream::try_stream!({
@@ -990,7 +1131,7 @@ fn extract_transaction<'a>(
                         };
                         let datums = projection.iter().map(|idx| &tuple_data[*idx]);
                         let row = unpack_tuple(datums, &mut row);
-                        yield (rel, *output, row, Diff::ONE);
+                        yield TransactionEvent::Update((rel, *output, row, Diff::ONE));
                     }
                 }
                 Update(body) => match body.old_tuple() {
@@ -1016,19 +1157,24 @@ fn extract_transaction<'a>(
                             let old_row = unpack_tuple(old_tuple, &mut row);
                             let new_row = unpack_tuple(new_tuple, &mut row);
 
-                            yield (rel, *output, old_row, Diff::MINUS_ONE);
-                            yield (rel, *output, new_row, Diff::ONE);
+                            yield TransactionEvent::Update((
+                                rel,
+                                *output,
+                                old_row,
+                                Diff::MINUS_ONE,
+                            ));
+                            yield TransactionEvent::Update((rel, *output, new_row, Diff::ONE));
                         }
                     }
                     None => {
                         let rel = body.rel_id();
                         for (output, _) in outputs_at(table_info, rel, commit_lsn) {
-                            yield (
+                            yield TransactionEvent::Update((
                                 rel,
                                 *output,
                                 Err(DefiniteError::DefaultReplicaIdentity),
                                 Diff::ONE,
-                            );
+                            ));
                         }
                     }
                 },
@@ -1042,18 +1188,18 @@ fn extract_transaction<'a>(
                             };
                             let datums = projection.iter().map(|idx| &old_tuple.tuple_data()[*idx]);
                             let row = unpack_tuple(datums, &mut row);
-                            yield (rel, *output, row, Diff::MINUS_ONE);
+                            yield TransactionEvent::Update((rel, *output, row, Diff::MINUS_ONE));
                         }
                     }
                     None => {
                         let rel = body.rel_id();
                         for (output, _) in outputs_at(table_info, rel, commit_lsn) {
-                            yield (
+                            yield TransactionEvent::Update((
                                 rel,
                                 *output,
                                 Err(DefiniteError::DefaultReplicaIdentity),
                                 Diff::ONE,
-                            );
+                            ));
                         }
                     }
                 },
@@ -1076,13 +1222,12 @@ fn extract_transaction<'a>(
                         outputs.retain(|output_index, info| {
                             match verify_schema(rel_id, info, &upstream_info) {
                                 Ok(()) => true,
-                                Err(err) => {
-                                    schema_errors.push((
-                                        rel_id,
-                                        *output_index,
-                                        Err(err),
-                                        Diff::ONE,
-                                    ));
+                                Err(error) => {
+                                    schema_errors.push(TransactionEvent::Seal(Seal {
+                                        output_index: *output_index,
+                                        resume_upper: info.resume_upper.clone(),
+                                        error,
+                                    }));
                                     false
                                 }
                             }
@@ -1135,12 +1280,11 @@ fn extract_transaction<'a>(
                                     ignored.insert(output, info);
                                     continue;
                                 }
-                                yield (
-                                    rel_id,
-                                    output,
-                                    Err(DefiniteError::TableTruncated),
-                                    Diff::ONE,
-                                );
+                                yield TransactionEvent::Seal(Seal {
+                                    output_index: output,
+                                    resume_upper: info.resume_upper,
+                                    error: DefiniteError::TableTruncated,
+                                });
                             }
                             *outputs = ignored;
                         }
