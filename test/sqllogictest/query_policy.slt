@@ -220,6 +220,26 @@ SELECT * FROM indexed;
 query error query rejected: this query would build a temporary dataflow
 SUBSCRIBE indexed;
 
+# Replacing RULES removes the old restriction and preserves enforcement mode.
+statement ok
+ALTER QUERY POLICY no_dataflows SET (RULES (
+    memory_only (action = 'reject', metric = 'query_plan_includes', value = 'persist_read')
+));
+
+query II rowsort
+SELECT a, sum(b) FROM indexed GROUP BY a;
+----
+1 40
+2 20
+
+query error query rejected: this query would read from object storage
+SELECT * FROM unindexed LIMIT 10;
+
+statement ok
+ALTER QUERY POLICY no_dataflows SET (RULES (
+    fast_only (action = 'reject', metric = 'query_plan_includes', value = 'slow_path_query')
+));
+
 statement ok
 ALTER CLUSTER quickstart SET (QUERY POLICY = no_persist);
 
