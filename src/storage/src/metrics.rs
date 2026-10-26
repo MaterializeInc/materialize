@@ -58,18 +58,37 @@ impl StatisticsMergeMetricDefs {
             )),
         }
     }
+}
 
-    pub(crate) fn regressed_offset_known(
-        &self,
+/// Per-source instance of [`StatisticsMergeMetricDefs`], with one series per worker.
+#[derive(Debug)]
+pub(crate) struct StatisticsMergeMetrics {
+    regressed_offset_known: Vec<DeleteOnDropCounter<AtomicU64, Vec<String>>>,
+}
+
+impl StatisticsMergeMetrics {
+    pub(crate) fn new(
+        defs: &StatisticsMergeMetricDefs,
         id: GlobalId,
-        worker_id: usize,
         shard_id: &ShardId,
-    ) -> DeleteOnDropCounter<AtomicU64, Vec<String>> {
-        self.regressed_offset_known.get_delete_on_drop_metric(vec![
-            id.to_string(),
-            worker_id.to_string(),
-            shard_id.to_string(),
-        ])
+        worker_count: usize,
+    ) -> Self {
+        let regressed_offset_known = (0..worker_count)
+            .map(|worker_id| {
+                defs.regressed_offset_known.get_delete_on_drop_metric(vec![
+                    id.to_string(),
+                    worker_id.to_string(),
+                    shard_id.to_string(),
+                ])
+            })
+            .collect();
+        Self {
+            regressed_offset_known,
+        }
+    }
+
+    pub(crate) fn inc_regressed_offset_known(&self, worker_id: usize) {
+        self.regressed_offset_known[worker_id].inc();
     }
 }
 

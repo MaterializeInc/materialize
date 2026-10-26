@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::progress::frontier::Antichain;
 
-use crate::metrics::StatisticsMergeMetricDefs;
+use crate::metrics::{StatisticsMergeMetricDefs, StatisticsMergeMetrics};
 
 // Note(guswynn): ordinarily these metric structs would be in the `metrics` modules, but we
 // put them here so they can be near the user-facing definitions as well.
@@ -925,9 +925,8 @@ pub struct AggregatedStatistics {
     global_source_statistics:
         BTreeMap<GlobalId, (usize, GlobalId, Vec<Option<SourceStatisticsUpdate>>)>,
     global_sink_statistics: BTreeMap<GlobalId, (usize, Vec<Option<SinkStatisticsUpdate>>)>,
-    /// One counter per worker slot of `global_source_statistics`, bumped when that worker
-    /// reports a lower `offset_known` than the slot holds.
-    regressed_offset_known: BTreeMap<GlobalId, Vec<DeleteOnDropCounter<AtomicU64, Vec<String>>>>,
+    /// Kept in step with `global_source_statistics`.
+    merge_metrics: BTreeMap<GlobalId, StatisticsMergeMetrics>,
 }
 
 impl AggregatedStatistics {
@@ -945,7 +944,7 @@ impl AggregatedStatistics {
             local_sink_statistics: Default::default(),
             global_source_statistics: Default::default(),
             global_sink_statistics: Default::default(),
-            regressed_offset_known: Default::default(),
+            merge_metrics: Default::default(),
         }
     }
 
@@ -980,7 +979,7 @@ impl AggregatedStatistics {
         self.local_sink_statistics.remove(&id);
         self.global_source_statistics.remove(&id);
         self.global_sink_statistics.remove(&id);
-        self.regressed_offset_known.remove(&id);
+        self.merge_metrics.remove(&id);
     }
 
     /// Advance the _global epoch_ for statistics.
@@ -1029,10 +1028,8 @@ impl AggregatedStatistics {
             self.global_source_statistics
                 .entry(id)
                 .or_insert_with(|| (0, ingestion_id, vec![None; self.worker_count]));
-            self.regressed_offset_known.entry(id).or_insert_with(|| {
-                (0..self.worker_count)
-                    .map(|worker_id| self.metrics.regressed_offset_known(id, worker_id, shard_id))
-                    .collect()
+            self.merge_metrics.entry(id).or_insert_with(|| {
+                StatisticsMergeMetrics::new(&self.metrics, id, shard_id, self.worker_count)
             });
         }
     }
@@ -1080,7 +1077,7 @@ impl AggregatedStatistics {
                     (Some(occupied), true) => {
                         let regressed = occupied.incorporate(update);
                         if regressed.offset_known {
-                            self.regressed_offset_known[&stat.id][stat.worker_id].inc();
+                            self.merge_metrics[&stat.id].inc_regressed_offset_known(stat.worker_id);
                         }
                     }
                     (Some(occupied), false) => occupied.incorporate_counters(update),
