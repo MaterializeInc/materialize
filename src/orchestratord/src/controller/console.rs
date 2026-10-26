@@ -55,6 +55,11 @@ use mz_server_core::listeners::AuthenticatorKind;
 /// the reporter of the events it publishes.
 pub const CONTROLLER_NAME: &str = "console";
 
+/// Pod template annotation recording the external certificate's cert-manager
+/// revision.
+const EXTERNAL_CERTIFICATE_REVISION_ANNOTATION: &str =
+    "materialize.cloud/external-certificate-revision";
+
 #[derive(Clone)]
 pub struct Config {
     pub enable_security_context: bool,
@@ -255,7 +260,15 @@ impl Context {
         }
     }
 
-    fn create_console_deployment_object(&self, console: &Console) -> Deployment {
+    /// Builds the console Deployment. `external_certificate_revision` is the
+    /// cert-manager revision of the external certificate, stamped on the pod
+    /// template so each issuance rolls the pods: nginx reads the certificate
+    /// only at startup.
+    fn create_console_deployment_object(
+        &self,
+        console: &Console,
+        external_certificate_revision: Option<i64>,
+    ) -> Deployment {
         let mut pod_template_labels = console.default_labels();
         pod_template_labels.insert(
             "materialize.cloud/name".to_owned(),
@@ -421,6 +434,11 @@ ssl_certificate_key /nginx/tls/tls.key;",
                 // owned by the deployment, not the materialize instance
                 metadata: Some(ObjectMeta {
                     labels: Some(pod_template_labels),
+                    annotations: external_certificate_revision.map(|revision| {
+                        btreemap! {
+                            EXTERNAL_CERTIFICATE_REVISION_ANNOTATION.to_owned() => revision.to_string(),
+                        }
+                    }),
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {
@@ -637,9 +655,27 @@ impl k8s_controller::Context for Context {
         apply_resource(&configmap_api, &console_configmap).await?;
         step.finish(Outcome::Completed);
 
+        // The certificate is applied before the deployment so the pod
+        // template can carry the revision it was issued at.
+        let step = metadata.step("certificate");
+        let console_external_certificate = self.create_console_external_certificate(console)?;
+        let external_certificate_revision = match &console_external_certificate {
+            Some(certificate) => {
+                trace!("creating new console external certificate");
+                let certificate = apply_resource(&certificate_api, certificate).await?;
+                step.finish(Outcome::Completed);
+                certificate.status.and_then(|status| status.revision)
+            }
+            None => {
+                step.finish(Outcome::Skipped);
+                None
+            }
+        };
+
         let step = metadata.step("deployment");
         trace!("creating new console deployment");
-        let console_deployment = self.create_console_deployment_object(console);
+        let console_deployment =
+            self.create_console_deployment_object(console, external_certificate_revision);
         self.fix_deployment(&deployment_api, &console_deployment)
             .await?;
         apply_resource(&deployment_api, &console_deployment).await?;
@@ -650,16 +686,6 @@ impl k8s_controller::Context for Context {
         let console_service = self.create_console_service_object(console);
         apply_resource(&service_api, &console_service).await?;
         step.finish(Outcome::Completed);
-
-        let step = metadata.step("certificate");
-        let console_external_certificate = self.create_console_external_certificate(console)?;
-        if let Some(certificate) = &console_external_certificate {
-            trace!("creating new console external certificate");
-            apply_resource(&certificate_api, certificate).await?;
-            step.finish(Outcome::Completed);
-        } else {
-            step.finish(Outcome::Skipped);
-        }
 
         let step = metadata.step("sync_status");
         self.sync_deployment_status(&client, console).await?;
