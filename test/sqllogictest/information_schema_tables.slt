@@ -589,6 +589,10 @@ mz_query_policies
 MATERIALIZED VIEW
 materialize
 mz_internal
+mz_query_policy_attachments
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_query_policy_rules
 MATERIALIZED VIEW
 materialize

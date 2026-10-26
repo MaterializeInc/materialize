@@ -1268,3 +1268,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17139  mz_query_policies
 17140  mz_query_policy_rules
 17141  mz_show_query_policies
+17142  mz_query_policy_attachments

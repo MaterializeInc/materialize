@@ -629,7 +629,7 @@ statement error
 CREATE QUERY POLICY disabled (RULES (r (action='reject', metric='query_plan_includes', value='persist_read')));
 
 statement error query policies and their attachments.* is not available
-ALTER DEFAULT PRIVILEGES GRANT USAGE ON QUERY POLICIES TO PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON QUERY POLICIES TO PUBLIC;
 
 statement error query policies and their attachments.* is not available
-ALTER DEFAULT PRIVILEGES REVOKE USAGE ON QUERY POLICIES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON QUERY POLICIES FROM PUBLIC;
