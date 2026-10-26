@@ -861,6 +861,7 @@ pub struct CreateTypePlan {
 
 #[derive(Debug)]
 pub struct DropObjectsPlan {
+    pub cascade: bool,
     /// The IDs of only the objects directly referenced in the `DROP` statement.
     pub referenced_ids: Vec<ObjectId>,
     /// All object IDs to drop. Includes `referenced_ids` and all descendants.
@@ -872,6 +873,7 @@ pub struct DropObjectsPlan {
 
 #[derive(Debug)]
 pub struct DropOwnedPlan {
+    pub cascade: bool,
     /// The role IDs that own the objects.
     pub role_ids: Vec<RoleId>,
     /// All object IDs to drop.

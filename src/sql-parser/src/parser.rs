@@ -5115,7 +5115,7 @@ impl<'a> Parser<'a> {
                     cascade: false,
                 }))
             }
-            ObjectType::NetworkPolicy | ObjectType::QueryPolicy => {
+            ObjectType::NetworkPolicy => {
                 let names =
                     self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
                 Ok(Statement::DropObjects(DropObjectsStatement {
@@ -5123,6 +5123,20 @@ impl<'a> Parser<'a> {
                     if_exists,
                     names,
                     cascade: false,
+                }))
+            }
+            ObjectType::QueryPolicy => {
+                let names =
+                    self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
+                let cascade = matches!(
+                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+                    Some(CASCADE),
+                );
+                Ok(Statement::DropObjects(DropObjectsStatement {
+                    object_type,
+                    if_exists,
+                    names,
+                    cascade,
                 }))
             }
             ObjectType::Cluster => self.parse_drop_clusters(if_exists),

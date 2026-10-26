@@ -6152,6 +6152,7 @@ pub fn plan_drop_objects(
     let drop_ids = scx.catalog.object_dependents(&referenced_ids);
 
     Ok(Plan::DropObjects(DropObjectsPlan {
+        cascade,
         referenced_ids,
         drop_ids,
         object_type,
@@ -6662,6 +6663,7 @@ pub fn plan_drop_owned(
     }
 
     Ok(Plan::DropOwned(DropOwnedPlan {
+        cascade,
         role_ids: role_ids.into_iter().collect(),
         drop_ids,
         privilege_revokes,

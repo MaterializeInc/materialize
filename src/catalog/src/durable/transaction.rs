@@ -718,24 +718,69 @@ impl<'a> Transaction<'a> {
     pub fn remove_query_policies(
         &mut self,
         ids: &BTreeSet<QueryPolicyId>,
+        cascade: bool,
     ) -> Result<(), CatalogError> {
-        // Check references in the same durable working copy as the deletion.
-        // A sequencer's catalog snapshot can predate a staged attachment.
-        for policy in self
-            .clusters
-            .items()
-            .values()
-            .filter_map(|c| c.config.query_policy)
-            .chain(
-                self.roles
-                    .items()
-                    .values()
-                    .filter_map(|r| r.vars.query_policy),
-            )
-        {
-            if ids.contains(&policy) {
-                return Err(SqlCatalogError::QueryPolicyInUse(policy.to_string()).into());
+        if ids.is_empty() {
+            return Ok(());
+        }
+        if !cascade {
+            // Check references in the same durable working copy as the deletion.
+            // A sequencer's catalog snapshot can predate a staged attachment.
+            for policy in self
+                .clusters
+                .items()
+                .values()
+                .filter_map(|c| c.config.query_policy)
+                .chain(
+                    self.roles
+                        .items()
+                        .values()
+                        .filter_map(|r| r.vars.query_policy),
+                )
+            {
+                if ids.contains(&policy) {
+                    let policy = self
+                        .query_policies
+                        .get(&QueryPolicyKey { id: policy })
+                        .expect("referenced query policy exists");
+                    return Err(SqlCatalogError::QueryPolicyInUse(policy.name.clone()).into());
+                }
             }
+        } else {
+            let clusters: Vec<_> = self
+                .clusters
+                .items()
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    value
+                        .config
+                        .query_policy
+                        .filter(|id| ids.contains(id))
+                        .map(|_| {
+                            let mut value = value.clone();
+                            value.config.query_policy = None;
+                            (key.clone(), value)
+                        })
+                })
+                .collect();
+            self.clusters.update_by_keys(clusters, self.op_id)?;
+            let roles: Vec<_> = self
+                .roles
+                .items()
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    value
+                        .vars
+                        .query_policy
+                        .filter(|id| ids.contains(id))
+                        .map(|_| {
+                            let mut value = value.clone();
+                            value.vars.query_policy = None;
+                            (key.clone(), value)
+                        })
+                })
+                .collect();
+            self.roles.update_by_keys(roles, self.op_id)?;
         }
         let to_remove = ids
             .iter()

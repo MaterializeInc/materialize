@@ -429,6 +429,134 @@ SELECT count(*) FROM mz_internal.mz_query_policies;
 ----
 0
 
+# CASCADE detaches surviving targets without dropping them or unrelated policies.
+statement ok
+CREATE QUERY POLICY discarded (RULES ());
+
+statement ok
+CREATE QUERY POLICY retained (RULES ());
+
+statement ok
+CREATE ROLE retained_role;
+
+statement ok
+ALTER ROLE guarded SET query_policy = discarded;
+
+statement ok
+ALTER CLUSTER quickstart SET (QUERY POLICY = discarded);
+
+statement ok
+ALTER ROLE retained_role SET query_policy = retained;
+
+statement error query policy 'discarded' is attached to a cluster or role
+DROP QUERY POLICY discarded RESTRICT;
+
+statement ok
+DROP QUERY POLICY discarded CASCADE;
+
+query TTT rowsort
+SELECT p.name, a.object_type, r.name
+FROM mz_internal.mz_query_policy_attachments a
+JOIN mz_internal.mz_query_policies p ON p.id = a.policy_id
+LEFT JOIN mz_roles r ON a.object_type = 'role' AND r.id = a.object_id;
+----
+retained role retained_role
+
+query T rowsort
+SELECT name FROM mz_roles WHERE name IN ('guarded', 'retained_role')
+UNION ALL SELECT name FROM mz_clusters WHERE name = 'quickstart';
+----
+guarded
+quickstart
+retained_role
+
+query II rowsort
+SELECT * FROM indexed;
+----
+1 10
+1 30
+2 20
+
+statement ok
+DROP QUERY POLICY retained CASCADE;
+
+statement ok
+DROP ROLE retained_role;
+
+# DROP OWNED also detaches policies from targets owned by another role.
+statement ok
+CREATE ROLE cleanup_owner;
+
+statement ok
+GRANT cleanup_owner TO materialize;
+
+statement ok
+CREATE QUERY POLICY owned_policy (RULES ());
+
+statement ok
+ALTER QUERY POLICY owned_policy OWNER TO cleanup_owner;
+
+statement ok
+ALTER ROLE guarded SET query_policy = owned_policy;
+
+statement ok
+CREATE CLUSTER owned_cluster REPLICAS ();
+
+statement ok
+ALTER CLUSTER owned_cluster OWNER TO cleanup_owner;
+
+statement error query policy 'owned_policy' is attached to a cluster or role
+DROP OWNED BY cleanup_owner RESTRICT;
+
+query T rowsort
+SELECT name FROM mz_clusters WHERE name = 'owned_cluster'
+UNION ALL SELECT name FROM mz_internal.mz_query_policies;
+----
+owned_cluster
+owned_policy
+
+query T
+SELECT r.name FROM mz_roles r
+JOIN mz_internal.mz_query_policy_attachments a
+ON a.object_type = 'role' AND a.object_id = r.id;
+----
+guarded
+
+statement ok
+DROP OWNED BY cleanup_owner CASCADE;
+
+query I
+SELECT count(*) FROM mz_internal.mz_query_policy_attachments;
+----
+0
+
+# An attachment to an object in the same drop set does not block RESTRICT.
+statement ok
+CREATE QUERY POLICY owned_policy (RULES ());
+
+statement ok
+ALTER QUERY POLICY owned_policy OWNER TO cleanup_owner;
+
+statement ok
+CREATE CLUSTER owned_cluster REPLICAS ();
+
+statement ok
+ALTER CLUSTER owned_cluster OWNER TO cleanup_owner;
+
+statement ok
+ALTER CLUSTER owned_cluster SET (QUERY POLICY = owned_policy);
+
+statement ok
+DROP OWNED BY cleanup_owner RESTRICT;
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'owned_cluster'
+UNION ALL SELECT name FROM mz_internal.mz_query_policies;
+----
+
+statement ok
+DROP ROLE cleanup_owner;
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_query_policies = false;
 ----

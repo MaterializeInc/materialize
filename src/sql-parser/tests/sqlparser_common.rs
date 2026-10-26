@@ -69,6 +69,8 @@ fn query_policy_syntax() {
         "ALTER QUERY POLICY guarded SET (RULES ())",
         "ALTER QUERY POLICY guarded OWNER TO policy_admin",
         "DROP QUERY POLICY IF EXISTS guarded, other",
+        "DROP QUERY POLICY guarded RESTRICT",
+        "DROP QUERY POLICY guarded CASCADE",
         "GRANT USAGE ON QUERY POLICY guarded TO analyst",
         "REVOKE USAGE ON QUERY POLICY guarded FROM analyst",
         "GRANT USAGE ON ALL QUERY POLICIES TO analyst",
@@ -88,10 +90,20 @@ fn query_policy_syntax() {
         }
     }
 
+    for (suffix, cascade) in [("", false), (" RESTRICT", false), (" CASCADE", true)] {
+        let sql = format!("DROP QUERY POLICY guarded{suffix}");
+        let ast = parse_statements(&sql).unwrap().remove(0).ast;
+        let Statement::DropObjects(drop) = ast else {
+            panic!("expected DROP QUERY POLICY");
+        };
+        assert_eq!(drop.cascade, cascade, "{sql}");
+    }
+
     for sql in [
         "CREATE QUERY POLICY schema.guarded (RULES ())",
         "ALTER QUERY POLICY schema.guarded SET (MODE = 'warn')",
         "DROP QUERY POLICY schema.guarded",
+        "DROP QUERY POLICY guarded CASCADE RESTRICT",
         "CREATE QUERY POLICY guarded (RULES (r (duration = 10)))",
         "CREATE QUERY POLICY guarded (RULES (r (heap = 10)))",
     ] {

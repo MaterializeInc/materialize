@@ -192,7 +192,10 @@ pub enum Op {
         sub_component: Option<usize>,
         comment: Option<String>,
     },
-    DropObjects(Vec<DropObjectInfo>),
+    DropObjects {
+        objects: Vec<DropObjectInfo>,
+        cascade: bool,
+    },
     GrantRole {
         role_id: RoleId,
         member_id: RoleId,
@@ -723,7 +726,10 @@ impl Catalog {
         let drop_ids: BTreeSet<CatalogItemId> = ops
             .iter()
             .filter_map(|op| match op {
-                Op::DropObjects(drop_object_infos) => {
+                Op::DropObjects {
+                    objects: drop_object_infos,
+                    ..
+                } => {
                     let ids = drop_object_infos.iter().map(|info| info.to_object_id());
                     let item_ids = ids.filter_map(|id| match id {
                         ObjectId::Item(id) => Some(id),
@@ -2091,7 +2097,10 @@ impl Catalog {
                     references.updated_at,
                 )?;
             }
-            Op::DropObjects(drop_object_infos) => {
+            Op::DropObjects {
+                objects: drop_object_infos,
+                cascade,
+            } => {
                 // Generate all of the objects that need to get dropped.
                 let delta = ObjectsToDrop::generate(drop_object_infos, state, session)?;
 
@@ -2252,24 +2261,6 @@ impl Catalog {
                     info!("drop network policy {}", policy.name.clone());
                 }
 
-                tx.remove_query_policies(&delta.query_policies)?;
-                for id in delta.query_policies {
-                    let policy = state.get_query_policy(&id);
-                    CatalogState::add_to_audit_log(
-                        &state.system_configuration,
-                        oracle_write_ts,
-                        session,
-                        tx,
-                        audit_events,
-                        EventType::Drop,
-                        ObjectType::QueryPolicy,
-                        EventDetails::IdNameV1(IdNameV1 {
-                            id: id.to_string(),
-                            name: policy.name.clone(),
-                        }),
-                    )?;
-                }
-
                 // Drop any replicas.
                 let replicas = delta.replicas.keys().copied().collect();
                 tx.remove_cluster_replicas(&replicas)?;
@@ -2317,6 +2308,26 @@ impl Catalog {
                         EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
                             id: cluster.id.to_string(),
                             name: cluster.name.clone(),
+                        }),
+                    )?;
+                }
+
+                // Remove attachment targets first so RESTRICT ignores targets
+                // that are themselves part of this drop.
+                tx.remove_query_policies(&delta.query_policies, cascade)?;
+                for id in delta.query_policies {
+                    let policy = state.get_query_policy(&id);
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Drop,
+                        ObjectType::QueryPolicy,
+                        EventDetails::IdNameV1(IdNameV1 {
+                            id: id.to_string(),
+                            name: policy.name.clone(),
                         }),
                     )?;
                 }
@@ -3672,9 +3683,6 @@ impl ObjectsToDrop {
                         ErrorKind::ReadOnlyQueryPolicy(policy.name.clone()),
                     )));
                 }
-                if state.query_policy_is_attached(id) {
-                    return Err(SqlCatalogError::QueryPolicyInUse(policy.name.clone()).into());
-                }
                 self.query_policies.insert(id);
             }
         }
@@ -4593,7 +4601,10 @@ mod tests {
                     None,
                     oracle_write_ts,
                     None,
-                    vec![Op::DropObjects(vec![DropObjectInfo::Cluster(cluster_a)])],
+                    vec![Op::DropObjects {
+                        objects: vec![DropObjectInfo::Cluster(cluster_a)],
+                        cascade: false,
+                    }],
                 )
                 .await
                 .expect("drop cluster A");

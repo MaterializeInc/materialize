@@ -435,7 +435,10 @@ impl Coordinator {
 
         for op in &ops {
             match op {
-                catalog::Op::DropObjects(drop_object_infos) => {
+                catalog::Op::DropObjects {
+                    objects: drop_object_infos,
+                    ..
+                } => {
                     for drop_object_info in drop_object_infos {
                         match &drop_object_info {
                             catalog::DropObjectInfo::Item(_) => {
@@ -1004,12 +1007,13 @@ impl Coordinator {
         if all_items.is_empty() {
             return;
         }
-        let op = Op::DropObjects(
-            all_items
+        let op = Op::DropObjects {
+            objects: all_items
                 .into_iter()
                 .map(DropObjectInfo::manual_drop_from_object_id)
                 .collect(),
-        );
+            cascade: false,
+        };
 
         self.catalog_transact_with_context(Some(conn_id), None, vec![op])
             .await
@@ -1280,7 +1284,10 @@ impl Coordinator {
                         | CatalogItem::MetricSink(_) => {}
                     }
                 }
-                Op::DropObjects(drop_object_infos) => {
+                Op::DropObjects {
+                    objects: drop_object_infos,
+                    ..
+                } => {
                     for drop_object_info in drop_object_infos {
                         match drop_object_info {
                             DropObjectInfo::Cluster(_) => {

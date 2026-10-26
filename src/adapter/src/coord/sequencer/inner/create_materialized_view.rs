@@ -668,12 +668,13 @@ impl Coordinator {
         let local_mir_for_cache = local_mir_plan.expr();
 
         let ops = vec![
-            catalog::Op::DropObjects(
-                drop_ids
+            catalog::Op::DropObjects {
+                objects: drop_ids
                     .into_iter()
                     .map(catalog::DropObjectInfo::Item)
                     .collect(),
-            ),
+                cascade: false,
+            },
             catalog::Op::CreateItem {
                 id: item_id,
                 name: name.clone(),

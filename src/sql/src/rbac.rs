@@ -855,6 +855,7 @@ fn generate_rbac_requirements(
             }
         }
         Plan::DropObjects(plan::DropObjectsPlan {
+            cascade: _,
             referenced_ids,
             drop_ids: _,
             object_type,
@@ -902,6 +903,7 @@ fn generate_rbac_requirements(
             }
         }
         Plan::DropOwned(plan::DropOwnedPlan {
+            cascade: _,
             role_ids,
             drop_ids: _,
             privilege_revokes: _,

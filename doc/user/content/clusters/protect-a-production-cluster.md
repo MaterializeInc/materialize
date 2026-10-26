@@ -135,13 +135,17 @@ Policy edits affect subsequent queries, not in-flight work. Changing `RULES`
 replaces the entire rule set; changing only `MODE` preserves the rules. See
 [`ALTER QUERY POLICY`](/sql/alter-query-policy/).
 
-To remove a policy, first detach every cluster and role that uses it:
+To remove a policy without `CASCADE`, first detach every cluster and role that
+uses it:
 
 ```mzsql
 ALTER CLUSTER serving RESET (QUERY POLICY);
 ALTER ROLE app RESET query_policy;
 DROP QUERY POLICY serving_fast_peeks;
 ```
+
+Alternatively, `DROP QUERY POLICY serving_fast_peeks CASCADE` detaches all
+attachments and drops the policy atomically, preserving the clusters and roles.
 
 Altering or dropping a policy requires ownership. See
 [`DROP QUERY POLICY`](/sql/drop-query-policy/),

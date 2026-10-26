@@ -1218,17 +1218,6 @@ impl CatalogState {
             .collect()
     }
 
-    /// Attachments must be removed explicitly, including for DROP ... CASCADE.
-    pub(super) fn query_policy_is_attached(&self, id: QueryPolicyId) -> bool {
-        self.clusters_by_id
-            .values()
-            .any(|cluster| cluster.config.query_policy == Some(id))
-            || self
-                .roles_by_id
-                .values()
-                .any(|role| role.vars.query_policy == Some(id))
-    }
-
     /// Returns the URL for POST-ing data to a webhook source, if `id` corresponds to a webhook
     /// source.
     ///

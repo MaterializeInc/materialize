@@ -1333,6 +1333,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         plan::DropObjectsPlan {
+            cascade,
             drop_ids,
             object_type,
             referenced_ids,
@@ -1371,7 +1372,7 @@ impl Coordinator {
             dropped_active_db,
             dropped_active_cluster,
             dropped_in_use_indexes,
-        } = self.sequence_drop_common(ctx.session(), drop_ids)?;
+        } = self.sequence_drop_common(ctx.session(), drop_ids, cascade)?;
 
         self.catalog_transact_with_context(None, Some(ctx), ops)
             .await?;
@@ -1653,7 +1654,7 @@ impl Coordinator {
             dropped_active_db,
             dropped_active_cluster,
             dropped_in_use_indexes,
-        } = self.sequence_drop_common(session, plan.drop_ids)?;
+        } = self.sequence_drop_common(session, plan.drop_ids, plan.cascade)?;
 
         let ops = privilege_revoke_ops
             .chain(default_privilege_revoke_ops)
@@ -1682,6 +1683,7 @@ impl Coordinator {
         &self,
         session: &Session,
         ids: Vec<ObjectId>,
+        cascade: bool,
     ) -> Result<DropOps, AdapterError> {
         let mut dropped_active_db = false;
         let mut dropped_active_cluster = false;
@@ -1865,11 +1867,13 @@ impl Coordinator {
                     variant: UpdatePrivilegeVariant::Revoke,
                 },
             ))
-            .chain(iter::once(catalog::Op::DropObjects(
-                ids.into_iter()
+            .chain(iter::once(catalog::Op::DropObjects {
+                objects: ids
+                    .into_iter()
                     .map(DropObjectInfo::manual_drop_from_object_id)
                     .collect(),
-            )))
+                cascade,
+            }))
             .collect();
 
         Ok(DropOps {

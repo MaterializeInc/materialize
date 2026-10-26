@@ -6,8 +6,8 @@ menu:
     parent: commands
 ---
 
-`DROP QUERY POLICY` removes an existing query policy from Materialize. Detach the
-policy from all clusters and roles before dropping it.
+`DROP QUERY POLICY` removes an existing query policy from Materialize. Use
+`CASCADE` to detach it from clusters and roles as part of the drop.
 
 {{< warning >}}
 Query policies are experimental. The default-off `enable_query_policies` flag
@@ -18,13 +18,18 @@ flag enables warnings and rejections.
 ## Syntax
 
 ```mzsql
-DROP QUERY POLICY [IF EXISTS] <name>;
+DROP QUERY POLICY [IF EXISTS] <name> [CASCADE | RESTRICT];
 ```
 
 Syntax element | Description
 ---------------|------------
-**IF EXISTS** | Optional. Do not return an error if the named policy does not exist. This does not bypass the requirement to detach an existing policy.
+**IF EXISTS** | Optional. Do not return an error if the named policy does not exist.
 `<name>` | The name of the query policy to drop. List policies in `mz_internal.mz_query_policies`.
+**CASCADE** | Detach the policy from all clusters and roles, without dropping those objects.
+**RESTRICT** | Default. Reject the drop if a surviving cluster or role has the policy attached.
+
+`DROP OWNED ... CASCADE` also detaches policies being dropped. An attachment to
+a cluster that is itself being dropped does not block `DROP OWNED ... RESTRICT`.
 
 ## Privileges
 
@@ -39,6 +44,12 @@ and then drop the policy:
 ALTER CLUSTER serving RESET (QUERY POLICY);
 ALTER ROLE app RESET query_policy;
 DROP QUERY POLICY IF EXISTS serving_policy;
+```
+
+Alternatively, detach all attachments and drop the policy atomically:
+
+```mzsql
+DROP QUERY POLICY IF EXISTS serving_policy CASCADE;
 ```
 
 ## Related pages
