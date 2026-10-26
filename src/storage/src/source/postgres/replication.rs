@@ -154,10 +154,18 @@ type DataOutputs = SharedFuel<
 static PG_EPOCH: LazyLock<SystemTime> =
     LazyLock::new(|| UNIX_EPOCH + Duration::from_secs(946_684_800));
 
-// A request to rewind a snapshot taken at `snapshot_lsn` to the initial LSN of the replication
-// slot. This is accomplished by emitting `(data, 0, -diff)` for all updates `(data, lsn, diff)`
-// whose `lsn <= snapshot_lsn` and that the output does not ignore (see
-// `SourceOutputInfo::ignores`). By convention the snapshot is always emitted at LSN 0.
+/// A request to rewind a snapshot taken at `snapshot_lsn` to the initial LSN captured at
+/// purification. This is accomplished by emitting `(data, 0, -diff)` for all updates
+/// `(data, lsn, diff)` whose `lsn <= snapshot_lsn` and that the output does not ignore (see
+/// `SourceOutputInfo::ignores`). By convention the snapshot is always emitted at LSN 0.
+/// ```text
+/// LSN 0    confirmed_flush_lsn       initial_lsn                     snapshot_lsn
+///     │                      │                 │                                │
+///     │                      │ ignored by the  │◄──────── rewound ─────────────►│
+///     │                      │ export          │                                │
+///     │                      │                 │                                │
+///     └──────────────── snapshot reflects all of these ─────────────────────────┘
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RewindRequest {
     /// The output index that should be rewound.
@@ -169,10 +177,21 @@ pub(crate) struct RewindRequest {
 /// What the snapshot operator reports to the replication reader for each export it snapshots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum SnapshotResult {
-    /// The export was copied and its snapshot must be rewound.
+    /// The export can begin processing rewinds for the given export. This gets emitted at
+    /// different points, depending on which mode the source is in: non-concurrent or concurrent
+    /// (`STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD` > 0).
+    ///
+    /// - In non-concurrent mode, the snapshot operator establishes a snapshot, verifies the table
+    /// schema for the export, and snapshots the upstream table before emitting the rewind requests.
+    ///
+    /// - In concurrent mode, the snapshot operator establishes a snapshot and verifies the table
+    /// schema for the export before emitting the rewind.
+    ///
+    /// The emission point is chosen in [`super::snapshot::render`].
     Rewind(RewindRequest),
-    /// The export's schema no longer matched the upstream at the snapshot, so nothing was copied
-    /// and its ingestion ends with `error`.
+    /// If the upstream table schema didn't match the export schema before the snapshot copy
+    /// started, the snapshot operator emits a `Seal` and skips the snapshot. The replication
+    /// operator emits the error at the minimum timestamp.
     Seal {
         output_index: usize,
         error: DefiniteError,
