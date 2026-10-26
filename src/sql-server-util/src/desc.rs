@@ -63,13 +63,10 @@ pub struct SqlServerTableDesc {
     pub columns: Box<[SqlServerColumnDesc]>,
     /// Constraints for the table.
     ///
-    /// Holds at most the constraint backing the capture instance's index. SQL
-    /// Server rejects dropping that index while the capture instance is the
-    /// table's newest one, so it is the only key the upstream table keeps for
-    /// as long as the source replicates from it. Any other PRIMARY KEY or
-    /// UNIQUE constraint can be dropped at any time, and the drop is not
-    /// recorded in `cdc.ddl_history`, so duplicate rows would reach a
-    /// Materialize relation that still declares the key.
+    /// For new instances, it only holds the constraint backing the capture
+    /// instance's index. SQL Server rejects dropping that index while
+    /// the capture instance is the table's newest one, so we have some
+    /// protection against a dropped constraint.
     pub constraints: Vec<SqlServerTableConstraint>,
 }
 

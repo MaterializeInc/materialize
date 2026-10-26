@@ -260,6 +260,20 @@ true false
 1 10 100
 2 20 200
 
+# While superseded_one is the only capture instance, SQL Server rejects dropping its index ...
+$ sql-server-set-from-sql name=sql-server var=drop-sole-pk-outcome
+BEGIN TRY
+  ALTER TABLE superseded DROP CONSTRAINT superseded_pk;
+  SELECT 'dropped';
+END TRY
+BEGIN CATCH
+  SELECT CAST(ERROR_NUMBER() AS VARCHAR(10));
+END CATCH
+
+> SELECT '${drop-sole-pk-outcome}';
+22979
+
+# ... but a newer capture instance with a different index lifts that protection.
 $ sql-server-execute name=sql-server
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'superseded', @role_name = 'SA', @supports_net_changes = 0, @capture_instance = 'superseded_two', @index_name = 'superseded_code';
 ALTER TABLE superseded DROP CONSTRAINT superseded_pk;
