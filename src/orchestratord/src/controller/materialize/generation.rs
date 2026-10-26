@@ -87,9 +87,9 @@ static V26_42_0: LazyLock<Version> = LazyLock::new(|| Version {
 
 /// Version at which `environmentd` learned `--license-key-intermediate-cert`.
 /// Older images reject the unknown argument and fail to start.
-static V26_48_0: LazyLock<Version> = LazyLock::new(|| Version {
+static V26_49_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
-    minor: 48,
+    minor: 49,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -1036,7 +1036,7 @@ fn create_environmentd_statefulset_object(
             value: Some("/license_key/license_key".to_string()),
             ..Default::default()
         });
-        if mz.meets_minimum_version(&V26_48_0) {
+        if mz.meets_minimum_version(&V26_49_0) {
             for cert in &config.license_key_intermediate_certs {
                 args.push(format!("--license-key-intermediate-cert={cert}"));
             }
