@@ -63,11 +63,12 @@ def explain_ddl_rejection(c: Composition) -> None:
                 else:
                     execute(txn, "BEGIN")
                     execute(txn, rename)
-                    if mode == "prepared":
-                        execute(txn, f"PREPARE ddl_explain AS {statement}")
-                        statement = "EXECUTE ddl_explain"
                 try:
-                    result = execute(txn, statement)
+                    if mode == "prepared":
+                        # SQL PREPARE rejects EXPLAIN, so use protocol preparation.
+                        result = txn.execute(statement.encode(), prepare=True)
+                    else:
+                        result = execute(txn, statement)
                     while result.nextset():
                         pass
                 except Error as error:
