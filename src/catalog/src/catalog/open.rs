@@ -64,7 +64,7 @@ use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_storage_client::controller::{StorageMetadata, StorageTxn};
-use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_client::storage_collections::{StorageCollections, prepare_collection_state};
 use semver::Version;
 use tracing::{Instrument, info, warn};
 use uuid::Uuid;
@@ -1024,6 +1024,25 @@ impl Catalog {
         &mut self,
         storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
     ) -> Result<(), crate::durable::CatalogError> {
+        self.initialize_storage_metadata_inner(Some(storage_collections))
+            .await
+    }
+
+    /// Establishes committed shard identities and initial compaction permissions
+    /// without starting storage maintenance or registering tables with txn-WAL.
+    ///
+    /// Deployment initialization must complete table infrastructure separately
+    /// before launching joiners. Joined handles only validate existing mappings.
+    pub async fn initialize_storage_metadata(
+        &mut self,
+    ) -> Result<(), crate::durable::CatalogError> {
+        self.initialize_storage_metadata_inner(None).await
+    }
+
+    async fn initialize_storage_metadata_inner(
+        &mut self,
+        storage_collections: Option<&Arc<dyn StorageCollections + Send + Sync>>,
+    ) -> Result<(), crate::durable::CatalogError> {
         let mut collections: BTreeSet<_> = self
             .entries()
             .filter(|entry| entry.item().is_storage_collection())
@@ -1037,6 +1056,7 @@ impl Catalog {
         let mut storage = self.storage().await;
         let shard_id = storage.shard_id();
         let is_savepoint = storage.is_savepoint();
+        let is_join = storage.is_join();
         let mut txn = storage.transaction().await?;
         let existing_collections = txn.get_collection_metadata();
 
@@ -1052,12 +1072,12 @@ impl Catalog {
         // `MZ_CATALOG_RAW` builtin source.
         let item_id = self.resolve_builtin_storage_collection(&MZ_CATALOG_RAW);
         let global_id = self.get_entry(&item_id).latest_global_id();
-        if self.diagnostic_config.read_only
+        if (self.diagnostic_config.read_only || is_join)
             && !is_savepoint
             && state.catalog_read_protection_enabled()
         {
-            // Pending native execution consumes shared mappings. It cannot mint
-            // shards or initialize a finalization queue for another deployment.
+            // Joining consumes shared mappings. It cannot mint shards or
+            // initialize a finalization queue as a side effect of attaching.
             let missing: Vec<_> = collections
                 .iter()
                 .filter(|id| !existing_collections.contains_key(id))
@@ -1065,7 +1085,7 @@ impl Catalog {
                 .collect();
             if !missing.is_empty() || existing_collections.get(&global_id) != Some(&shard_id) {
                 return Err(crate::durable::DurableCatalogError::NotWritable(format!(
-                    "native prewarming requires committed storage mappings: missing {missing:?}"
+                    "catalog joining requires committed storage mappings: missing {missing:?}"
                 ))
                 .into());
             }
@@ -1079,10 +1099,26 @@ impl Catalog {
             Some(id) => assert_eq!(*id, shard_id),
         }
 
-        storage_collections
-            .initialize_state(&mut txn, collections)
-            .await
+        if let Some(storage_collections) = storage_collections {
+            storage_collections
+                .initialize_state(&mut txn, collections)
+                .await
+                .map_err(crate::durable::DurableCatalogError::from)?;
+        } else {
+            let missing = collections
+                .iter()
+                .filter(|id| !existing_collections.contains_key(id) && **id != global_id)
+                .copied()
+                .collect();
+            prepare_collection_state(
+                &mut txn,
+                missing,
+                BTreeSet::new(),
+                BTreeMap::new(),
+                &collections,
+            )
             .map_err(crate::durable::DurableCatalogError::from)?;
+        }
 
         if state.catalog_read_protection_enabled() {
             // The catalog's controller critical reader is established by durable

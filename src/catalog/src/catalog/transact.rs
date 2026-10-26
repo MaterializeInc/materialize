@@ -5320,7 +5320,8 @@ mod tests {
         use std::collections::BTreeMap;
 
         use mz_persist_client::PersistClient;
-        use mz_repr::SqlScalarType;
+        use mz_repr::{SqlScalarType, Timestamp};
+        use timely::progress::Antichain;
         use uuid::Uuid;
 
         use crate::catalog::state::LocalExpressionCache;
@@ -5353,6 +5354,43 @@ mod tests {
         )
         .await
         .expect("open protected catalog");
+        let infrastructure_birth = catalog.current_upper().await;
+        catalog
+            .initialize_storage_metadata()
+            .await
+            .expect("initialize storage metadata without a runtime controller");
+        let initialized = catalog.state().storage_metadata().clone();
+        let columns = catalog.resolve_builtin_table(&crate::builtin::MZ_COLUMNS);
+        let columns = catalog.get_entry(&columns).latest_global_id();
+        assert_eq!(
+            initialized.compaction_bounds[&columns],
+            Antichain::from_elem(infrastructure_birth)
+        );
+        let statistics =
+            catalog.resolve_builtin_storage_collection(&crate::builtin::MZ_SOURCE_STATISTICS_RAW);
+        let statistics = catalog.get_entry(&statistics).latest_global_id();
+        assert_eq!(
+            initialized.compaction_bounds[&statistics],
+            Antichain::from_elem(Timestamp::MIN)
+        );
+        for id in catalog
+            .entries()
+            .filter(|entry| entry.item().is_storage_collection())
+            .flat_map(|entry| entry.global_ids())
+        {
+            assert!(initialized.collection_metadata.contains_key(&id), "{id}");
+            assert!(initialized.compaction_bounds.contains_key(&id), "{id}");
+        }
+        catalog
+            .initialize_storage_metadata()
+            .await
+            .expect("repeat finite initialization");
+        let repeated = catalog.state().storage_metadata();
+        assert_eq!(
+            initialized.collection_metadata,
+            repeated.collection_metadata
+        );
+        assert_eq!(initialized.compaction_bounds, repeated.compaction_bounds);
         let database = catalog
             .resolve_database(DEFAULT_DATABASE_NAME)
             .expect("default database");

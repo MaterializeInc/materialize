@@ -2180,6 +2180,37 @@ async fn test_multi_subscriber_catalog() {
             .current_snapshot(),
         before_open
     );
+    assert!(matches!(
+        writer_catalog_peer.initialize_storage_metadata().await,
+        Err(crate::durable::CatalogError::Durable(
+            crate::durable::DurableCatalogError::NotWritable(_)
+        ))
+    ));
+    assert_eq!(writer_catalog.current_upper().await, upper_before_open);
+    writer_catalog
+        .initialize_storage_metadata()
+        .await
+        .expect("initializer establishes storage infrastructure");
+    writer_catalog_peer
+        .sync_to_current_updates()
+        .await
+        .expect("joiner follows infrastructure");
+    let infrastructure_upper = writer_catalog.current_upper().await;
+    writer_catalog_peer
+        .initialize_storage_metadata()
+        .await
+        .expect("joiner adopts committed storage metadata");
+    assert_eq!(writer_catalog.current_upper().await, infrastructure_upper);
+    assert_eq!(
+        writer_catalog_peer
+            .state()
+            .storage_metadata()
+            .collection_metadata,
+        writer_catalog
+            .state()
+            .storage_metadata()
+            .collection_metadata,
+    );
     let peer_db = writer_catalog_peer
         .resolve_database(db_name)
         .expect("resolve_database for peer");
