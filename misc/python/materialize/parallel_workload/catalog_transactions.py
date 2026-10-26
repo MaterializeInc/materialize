@@ -78,7 +78,6 @@ def explain_ddl_rejection(c: Composition) -> None:
                     raise AssertionError(f"EXPLAIN was allowed in DDL mode: {mode}")
                 finally:
                     execute(txn, "ROLLBACK")
-                execute(txn, "DEALLOCATE ALL")
                 assert execute(
                     txn, "SELECT * FROM ddl_explain_rejection.original"
                 ).fetchall() == [(42,)]
