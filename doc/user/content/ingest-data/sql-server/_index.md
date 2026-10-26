@@ -61,7 +61,9 @@ table it is ingesting. See the details below the table for recovery commands.
 | [Dropping an ingested column](#dropping-a-column) | Table enters an error state. Re-create the table. |
 | [Renaming an ingested column](#renaming-a-column) | Table enters an error state. Re-create the table. |
 | Any [`ALTER COLUMN`](#changing-a-columns-data-type) (type, collation, sparseness, masking, nullability) | Table enters an error state. Re-create the table. |
-| Dropping a `UNIQUE` constraint | Table enters an error state. Re-create the table. |
+| Adding a `PRIMARY KEY` or `UNIQUE` constraint | No impact. |
+| [Dropping a `PRIMARY KEY` or `UNIQUE` constraint](#changing-constraints) that the capture instance does not use | No impact. Materialize does not record it as a key. |
+| [Dropping the `PRIMARY KEY` or `UNIQUE` constraint](#changing-constraints) that the capture instance uses | Rejected by SQL Server while that capture instance is the newest one for the table. |
 | [Disabling CDC on a table](#disabling-cdc-on-a-table) (`sys.sp_cdc_disable_table`) | Table enters an error state. Drop and re-create just that table; the rest of the source keeps replicating. |
 | [Removing the in-use capture instance](#removing-a-capture-instance) | Table enters an error state. Re-create the table. |
 | [Dropping or renaming a table, or moving it to another schema](#table-level-operations) | Table enters an error state. Re-create the table. |
