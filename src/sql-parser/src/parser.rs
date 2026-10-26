@@ -10433,6 +10433,9 @@ impl<'a> Parser<'a> {
     /// Bail out if the current token is not a privilege object type, or consume and
     /// return it if it is.
     fn expect_plural_object_type_for_privileges(&mut self) -> Result<ObjectType, ParserError> {
+        if self.parse_keywords(&[QUERY, POLICIES]) {
+            return Ok(ObjectType::QueryPolicy);
+        }
         if let Some(object_type) = self.parse_one_of_keywords(&[VIEWS, SOURCES]) {
             return parser_err!(
                 self,

@@ -3862,8 +3862,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         if let ShowObjectType::DefaultPrivileges { object_type, role } = &self.object_type {
             if let Some(object_type) = object_type {
                 f.write_str(" ON ");
-                f.write_node(object_type);
-                f.write_str("S");
+                write_grant_object_type_plural(f, object_type);
             }
             if let Some(role) = role {
                 f.write_str(" FOR ");

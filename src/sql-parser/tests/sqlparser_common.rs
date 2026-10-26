@@ -72,6 +72,7 @@ fn query_policy_syntax() {
         "GRANT USAGE ON QUERY POLICY guarded TO analyst",
         "REVOKE USAGE ON QUERY POLICY guarded FROM analyst",
         "GRANT USAGE ON ALL QUERY POLICIES TO analyst",
+        "SHOW DEFAULT PRIVILEGES ON QUERY POLICIES FOR analyst",
         "ALTER CLUSTER c SET (QUERY POLICY = guarded)",
         "ALTER CLUSTER c RESET (QUERY POLICY)",
         "ALTER ROLE analyst SET query_policy = guarded",
