@@ -73,6 +73,10 @@ pub struct ResumeUppers<T> {
     // these frontiers and the probes, so sources only supply their seeds and we can maintain
     // SourceStatistics outside source operators.
     pub exports: BTreeMap<GlobalId, Antichain<T>>,
+    /// For each export in [`ResumeUppers::exports`], the system time upper `u` such that the
+    /// export's persist shard at `u - 1` holds exactly the updates not beyond the export's entry
+    /// in [`ResumeUppers::exports`].
+    pub exports_into: BTreeMap<GlobalId, Antichain<mz_repr::Timestamp>>,
 }
 
 /// Formats as `source={..} exports={id: {..}, ..}`, with `source=pending` while
@@ -98,6 +102,9 @@ impl<T: Display + 'static> Display for ResumeUppers<T> {
 pub trait SourceRender {
     type Time: SourceTimestamp;
     const STATUS_NAMESPACE: StatusNamespace;
+    /// Whether the source reads [`ResumeUppers::exports_into`]. Other sources observe resume
+    /// uppers without it, and only when another field changes.
+    const USES_EXPORTS_INTO: bool = false;
 
     /// Renders the source in the provided timely scope.
     ///
@@ -385,6 +392,7 @@ mod tests {
                 (GlobalId::User(3), offset(30)),
                 (GlobalId::User(4), offset(10)),
             ]),
+            exports_into: BTreeMap::new(),
         };
         assert_eq!(
             uppers.to_string(),
@@ -394,6 +402,7 @@ mod tests {
         let pending = ResumeUppers {
             source: None,
             exports: BTreeMap::from([(GlobalId::User(3), Antichain::<MzOffset>::new())]),
+            exports_into: BTreeMap::new(),
         };
         assert_eq!(pending.to_string(), "source=pending exports={u3: {}}");
     }

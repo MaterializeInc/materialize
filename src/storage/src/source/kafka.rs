@@ -473,6 +473,7 @@ fn render_reader<'scope>(
                         .iter()
                         .map(|output| (output.id, output.resume_upper.clone()))
                         .collect(),
+                    exports_into: BTreeMap::new(),
                 };
                 if let Err(e) = offset_committer.process_frontier(&seed).await {
                     offset_commit_metrics.offset_commit_failures.inc();
