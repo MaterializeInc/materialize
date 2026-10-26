@@ -1269,14 +1269,15 @@ fn test_statement_logging_indexed_peek_overlaps_readiness_observation() {
              JOIN mz_internal.mz_sql_text s ON p.sql_hash = s.sql_hash
              WHERE s.sql = 'SELECT x AS pipeline_probe FROM logging_pipeline WHERE x = 5'
              AND e.finished_status = 'success' AND e.execution_strategy = 'fast-path'
-             AND (SELECT count(DISTINCT event_type) FROM mz_internal.mz_statement_lifecycle_history l
+             AND (SELECT count(*) = 4 AND count(DISTINCT event_type) = 4
+                  FROM mz_internal.mz_statement_lifecycle_history l
                   WHERE l.statement_id = e.id AND event_type IN
-                  ('execution-began', 'execution-finished', 'storage-dependencies-finished', 'compute-dependencies-finished')) = 4",
+                  ('execution-began', 'execution-finished', 'storage-dependencies-finished', 'compute-dependencies-finished'))",
             &[],
         ).unwrap();
         let count: i64 = row.get(0);
         if count == 3 { Ok(()) } else { Err(count) }
-    }).expect("all three executions retain their completion and dependency milestones");
+    }).expect("all three executions retain exactly one completion and each dependency milestone");
 }
 
 #[mz_ore::test]
