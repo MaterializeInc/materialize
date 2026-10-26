@@ -3797,6 +3797,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "frontegg"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaf2f43495d93b1e748491b08346216295a8aceb7dcfc5f1c581a9c11484146b"
+dependencies = [
+ "async-stream",
+ "futures-core",
+ "once_cell",
+ "reqwest 0.13.5",
+ "reqwest-middleware",
+ "reqwest-retry",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "fs-err"
 version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7524,6 +7543,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "clap",
+ "frontegg",
  "hyper",
  "jsonwebtoken",
  "mz-frontegg-auth",
