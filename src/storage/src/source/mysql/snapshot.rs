@@ -702,8 +702,10 @@ pub(crate) fn render<'scope>(
 
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
-    // One data output port per source export, in output index order. All ports advance in
-    // lockstep. Every export observes the same frontier.
+    // One data output port per source export, in output index order. With concurrent
+    // replication each port is held at the minimum only while this worker still has snapshot
+    // data to emit for that export. Without it all ports are held until the entire snapshot
+    // completes. Every export then observes the same frontier.
     let export_count = config.source_exports.len();
     let mut raw_handles = Vec::with_capacity(export_count);
     let mut raw_streams = Vec::with_capacity(export_count);
@@ -778,6 +780,14 @@ pub(crate) fn render<'scope>(
 
                 let id = config.id;
                 let worker_id = config.worker_id;
+
+                // This operator only emits snapshot data for the exports it snapshots. With
+                // concurrent replication the ports of all other exports close up front. Their
+                // frontiers then follow the replication operator alone. They make progress while
+                // the snapshot runs.
+                if concurrent_replication {
+                    release_data_ports(data_cap_sets, &all_outputs.iter().copied().collect());
+                }
 
                 if !all_outputs.is_empty() {
                     // A worker *must* emit a count even if not responsible for snapshotting a table
@@ -980,6 +990,18 @@ pub(crate) fn render<'scope>(
                 );
                 let has_work = !table_ranges.is_empty();
 
+                // Ports of snapshotted exports close as soon as this worker has nothing left to
+                // emit for them. At this point that covers outputs that failed schema
+                // verification. It also covers tables this worker reads no part of.
+                if concurrent_replication {
+                    let reading = reader_snapshot_table_info
+                        .iter()
+                        .filter(|(table, _)| table_ranges.contains_key(*table))
+                        .flat_map(|(_, outputs)| outputs.iter().map(|output| output.output_index))
+                        .collect();
+                    release_data_ports(data_cap_sets, &reading);
+                }
+
                 // Returning will release the snapshot capabilities unblocking the leader from dropping the lock connection.
                 if !has_work && !is_snapshot_leader {
                     trace!(%id, "timely-{worker_id} has no tables to snapshot.");
@@ -1139,6 +1161,13 @@ pub(crate) fn render<'scope>(
                     }
                     trace!(%id, "timely-{worker_id} snapshotted {} records from \
                                  table '{table}'", snapshot_staged * u64::cast_from(outputs.len()));
+                    // A transient error above returns with the capabilities still held. That
+                    // keeps a partially copied export from advancing.
+                    if concurrent_replication {
+                        for output in outputs {
+                            data_cap_sets[output.output_index] = CapabilitySet::new();
+                        }
+                    }
                 }
 
                 if !concurrent_replication {
@@ -1162,6 +1191,15 @@ pub(crate) fn render<'scope>(
         errors,
         button.press_on_drop(),
     )
+}
+
+/// Drops the capabilities of every data port whose output index is not in `keep`.
+fn release_data_ports(data_cap_sets: &mut [CapabilitySet<GtidPartition>], keep: &BTreeSet<usize>) {
+    for (output_index, cap_set) in data_cap_sets.iter_mut().enumerate() {
+        if !keep.contains(&output_index) {
+            *cap_set = CapabilitySet::new();
+        }
+    }
 }
 
 /// Publish the snapshot size to each table's statistics gauges, using the counts
