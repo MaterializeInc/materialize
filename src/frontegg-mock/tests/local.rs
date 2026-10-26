@@ -2571,10 +2571,21 @@ async fn test_latency() {
 
 // Tenant Tests
 
+/// Creates a tenant through the raw API, returning the response.
+async fn create_tenant(ctx: &TestContext, body: serde_json::Value) -> reqwest::Response {
+    ctx.client
+        .post(format!("{}/tenants/resources/tenants/v1", ctx.base_url))
+        .json(&body)
+        .send()
+        .await
+        .unwrap()
+}
+
 #[mz_ore::test(tokio::test)]
-async fn test_list_tenants_derived_from_users() {
+async fn test_tenants_are_not_derived_from_users() {
     let ctx = setup_test_context().await;
 
+    // Configured users don't imply tenants; they must be created.
     let response = ctx
         .client
         .get(format!("{}/tenants/resources/tenants/v1", ctx.base_url))
@@ -2582,42 +2593,15 @@ async fn test_list_tenants_derived_from_users() {
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
-
     let body: serde_json::Value = response.json().await.unwrap();
-    let tenants = body.as_array().unwrap();
-    assert_eq!(tenants.len(), 1);
-    assert_eq!(tenants[0]["tenantId"], ctx.tenant_id.to_string());
-    // Frontegg returns metadata as a JSON-encoded string.
-    assert_eq!(tenants[0]["metadata"], "{}");
-}
-
-#[mz_ore::test(tokio::test)]
-async fn test_get_tenant() {
-    let ctx = setup_test_context().await;
-
-    // A tenant derived from a configured user is found.
-    let response = ctx
-        .client
-        .get(format!(
-            "{}/tenants/resources/tenants/v1/{}",
-            ctx.base_url, ctx.tenant_id
-        ))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    let body: serde_json::Value = response.json().await.unwrap();
-    let tenants = body.as_array().unwrap();
-    assert_eq!(tenants.len(), 1);
-    assert_eq!(tenants[0]["tenantId"], ctx.tenant_id.to_string());
+    assert!(body.as_array().unwrap().is_empty());
 
     // An unknown tenant yields an empty list, as Frontegg does.
     let response = ctx
         .client
         .get(format!(
             "{}/tenants/resources/tenants/v1/{}",
-            ctx.base_url,
-            Uuid::new_v4()
+            ctx.base_url, ctx.tenant_id
         ))
         .send()
         .await
@@ -2631,27 +2615,42 @@ async fn test_get_tenant() {
 async fn test_create_tenant_and_set_metadata() {
     let ctx = setup_test_context().await;
     let tenant_id = Uuid::new_v4();
+    let request = json!({
+        "tenantId": tenant_id,
+        "name": "Test Tenant",
+        "metadata": {"a": 1},
+        "creatorEmail": "creator@example.com",
+    });
 
-    let response = ctx
-        .client
-        .post(format!("{}/tenants/resources/tenants/v1", ctx.base_url))
-        .json(&json!({
-            "tenantId": tenant_id,
-            "name": "Test Tenant",
-            "metadata": {"a": 1},
-            "creatorEmail": "creator@example.com",
-        }))
-        .send()
-        .await
-        .unwrap();
+    let response = create_tenant(&ctx, request.clone()).await;
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["tenantId"], tenant_id.to_string());
     assert_eq!(body["name"], "Test Tenant");
     assert_eq!(body["creatorEmail"], "creator@example.com");
+    // Frontegg returns metadata as a JSON-encoded string.
     let metadata: serde_json::Value =
         serde_json::from_str(body["metadata"].as_str().unwrap()).unwrap();
     assert_eq!(metadata, json!({"a": 1}));
+
+    // The tenant can be fetched by ID.
+    let response = ctx
+        .client
+        .get(format!(
+            "{}/tenants/resources/tenants/v1/{}",
+            ctx.base_url, tenant_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = response.json().await.unwrap();
+    let tenants = body.as_array().unwrap();
+    assert_eq!(tenants.len(), 1);
+    assert_eq!(tenants[0]["tenantId"], tenant_id.to_string());
+
+    // Creating a tenant with an existing ID conflicts and leaves it unchanged.
+    let response = create_tenant(&ctx, json!({"tenantId": tenant_id, "name": "Other"})).await;
+    assert_eq!(response.status(), 409);
 
     // Metadata updates are merged into the existing metadata.
     let response = ctx
@@ -2666,28 +2665,10 @@ async fn test_create_tenant_and_set_metadata() {
         .unwrap();
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["name"], "Test Tenant");
     let metadata: serde_json::Value =
         serde_json::from_str(body["metadata"].as_str().unwrap()).unwrap();
     assert_eq!(metadata, json!({"a": 1, "b": 2}));
-
-    // Created tenants are listed alongside the user-derived tenant.
-    let response = ctx
-        .client
-        .get(format!("{}/tenants/resources/tenants/v1", ctx.base_url))
-        .send()
-        .await
-        .unwrap();
-    let body: serde_json::Value = response.json().await.unwrap();
-    let mut ids: Vec<_> = body
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| t["tenantId"].as_str().unwrap().to_string())
-        .collect();
-    ids.sort();
-    let mut expected = vec![tenant_id.to_string(), ctx.tenant_id.to_string()];
-    expected.sort();
-    assert_eq!(ids, expected);
 
     // Setting metadata on an unknown tenant is a 404.
     let response = ctx
@@ -2702,28 +2683,6 @@ async fn test_create_tenant_and_set_metadata() {
         .await
         .unwrap();
     assert_eq!(response.status(), 404);
-}
-
-#[mz_ore::test(tokio::test)]
-async fn test_set_metadata_on_user_derived_tenant() {
-    let ctx = setup_test_context().await;
-
-    let response = ctx
-        .client
-        .post(format!(
-            "{}/tenants/resources/tenants/v1/{}/metadata",
-            ctx.base_url, ctx.tenant_id
-        ))
-        .json(&json!({"metadata": {"k": "v"}}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    let body: serde_json::Value = response.json().await.unwrap();
-    assert_eq!(body["tenantId"], ctx.tenant_id.to_string());
-    let metadata: serde_json::Value =
-        serde_json::from_str(body["metadata"].as_str().unwrap()).unwrap();
-    assert_eq!(metadata, json!({"k": "v"}));
 }
 
 #[mz_ore::test(tokio::test)]
@@ -2755,16 +2714,7 @@ async fn test_frontegg_client_tenants() {
             secret_key: "vendor-secret".into(),
         });
 
-    // The user-derived tenant is visible.
-    let tenants = client.list_tenants().await.unwrap();
-    assert_eq!(
-        tenants.iter().map(|t| t.id).collect::<Vec<_>>(),
-        vec![ctx.tenant_id]
-    );
-    let tenant = client.get_tenant(ctx.tenant_id).await.unwrap();
-    assert_eq!(tenant.id, ctx.tenant_id);
-    assert_eq!(tenant.metadata, json!({}));
-    assert_eq!(tenant.deleted_at, None);
+    assert!(client.list_tenants().await.unwrap().is_empty());
 
     // Create a tenant.
     let id = Uuid::new_v4();
@@ -2786,7 +2736,10 @@ async fn test_frontegg_client_tenants() {
         created.creator_email.as_deref(),
         Some("creator@example.com")
     );
-    assert_eq!(client.list_tenants().await.unwrap().len(), 2);
+    let tenants = client.list_tenants().await.unwrap();
+    assert_eq!(tenants.iter().map(|t| t.id).collect::<Vec<_>>(), vec![id]);
+    let fetched = client.get_tenant(id).await.unwrap();
+    assert_eq!(fetched.deleted_at, None);
 
     // Setting metadata merges keys rather than replacing the object.
     let updated = client
@@ -2801,24 +2754,13 @@ async fn test_frontegg_client_tenants() {
     let updated = client.delete_tenant_metadata(id, "a").await.unwrap();
     assert_eq!(updated.metadata, json!({"b": "two"}));
 
-    // Metadata changes to a user-derived tenant persist.
-    client
-        .set_tenant_metadata(ctx.tenant_id, &json!({"k": "v"}))
-        .await
-        .unwrap();
-    let fetched = client.get_tenant(ctx.tenant_id).await.unwrap();
-    assert_eq!(fetched.metadata, json!({"k": "v"}));
-
-    // Deleting tenants hides them from get and list.
+    // Deleting a tenant removes it from get and list.
     client.delete_tenant(id).await.unwrap();
-    client.delete_tenant(ctx.tenant_id).await.unwrap();
-    for id in [id, ctx.tenant_id] {
-        match client.get_tenant(id).await {
-            Err(frontegg::Error::Api(e)) => {
-                assert_eq!(e.status_code, reqwest::StatusCode::NOT_FOUND)
-            }
-            res => panic!("expected not found, got {res:?}"),
+    match client.get_tenant(id).await {
+        Err(frontegg::Error::Api(e)) => {
+            assert_eq!(e.status_code, reqwest::StatusCode::NOT_FOUND)
         }
+        res => panic!("expected not found, got {res:?}"),
     }
     assert!(client.list_tenants().await.unwrap().is_empty());
 

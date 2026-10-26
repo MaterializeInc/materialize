@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use uuid::Uuid;
 
 /// Configuration for a tenant in the mock.
@@ -41,7 +41,10 @@ impl TenantConfig {
 }
 
 /// Tenant response matching the Frontegg API format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Only serializable: `metadata` is encoded as a nested JSON string, which is
+/// not decoded on the way back in.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TenantResponse {
     #[serde(rename = "tenantId")]
