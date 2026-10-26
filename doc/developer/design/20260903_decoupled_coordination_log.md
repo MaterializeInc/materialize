@@ -9,112 +9,68 @@ appending a work log. Detailed evidence stays outside these documents.
 ## Current work: M3
 
 Implementer session: `2026-09-14-13-05-31-256`. Bookmark:
-`decoupled-coordination`, based on `d9a2c5dc40`. Keep that upstream base pinned.
-M2 is closed within its approved scope, including the 60s publication default.
-M3 slice 1 is in progress. A standalone `pubsubd` reuses the existing relay,
-with unified-image packaging and pinned envelope compatibility tests. Candidate
-`50a0d4dd` is not yet pushed to the working bookmark. Compilation, all-target
-Clippy, 11 RPC boundary tests and workspace manifest lint pass. The packaged
-daemon starts without a catalog or backend connection and serves liveness and
-metrics. Evidence is preserved in `~/.local/share/aj/m3-evidence/`.
-No adapter has been moved to remote pubsub yet, and the one-default-adapter slice
-is not complete.
+`decoupled-coordination`, based on pinned `d9a2c5dc40`. M2 remains closed,
+including the 60s default. M3 slice 1 is incomplete. No adapter uses remote
+pubsub yet, and controllerd/adapterd have not been implemented.
 
-Follow the [M3 slices](20260903_decoupled_coordination.md#3-independent-adapters-and-process-management).
-Begin with one default adapter: deployment-scoped controllerd, join-only adapterd,
-and externally managed, environment-scoped pubsubd. Establish adapter identity and
-separate initialization from join without moving shared database duties into
-controllerd. The first working slice must preserve native maintained execution
-and leave healthy children running across controller restart.
+Local commits, not yet pushed:
 
-Then make shared state correct for independent adapters, expose SQL/HTTP-managed
-lifecycle, and complete deployment/backend integration. The decisive demo creates
-B through A, uses both, kills A, and restores it through controllerd while B keeps
-serving. Also demonstrate dropping all adapters and recovering SQL through
-controllerd's HTTP list/create/drop API, without reinitializing the environment.
-This is not complete with two manually launched SQL processes.
+- `50a0d4dd`: standalone pubsubd and unified-image packaging. Clippy, 11 RPC
+  boundary tests, manifest lint and packaged daemon smoke pass.
+- `bbe00aba`: opt-in retained local supervision, distinct from explicit deletion.
+  Four lifecycle tests, existing restart regressions and caller Clippy pass.
+- `4a2a374c`: replica launch-spec extraction, with Clippy and restart regressions.
+- `440e7126`: named adapter declarations and deployment-qualified execution
+  identity, default declaration only at fresh initialization, schema v96.
+  Aljoscha approved no M2-to-M3 conversion. Frozen v95 is unchanged.
+- `ab9122e0`: joined catalog reconstruction without shared initialization,
+  including writable joins. Unsupported conversion is rejected before fencing
+  or admission. Active/prewarm/build/cache cases and legacy nonmutation pass.
 
-The adapter declaration and explicit realization identity slice is committed
-locally as `440e7126`, not yet pushed.
-Aljoscha confirmed M3 is the final artifact and needs no M2-to-M3 migration.
-The slice adds `AdapterId` and schema v96 with adapter declarations and tagged
-adapter/replica realization ownership. Frozen v95 is unchanged. Durable/shared
-catalog transport and exact-realization replacement compile in `mz-catalog`
-(`f71f6fcefd`). The unsupported transition is rejected, not converted.
-Fresh initialization now declares the default adapter and initializes its ID
-allocator. Runtime registration uses explicit adapter/replica identities.
-The combined runtime check passes for environmentd, clusterd, catalog-debug,
-testdrive and sqllogictest. All five focused lifecycle/reopen tests and the
-serialization stability check pass. The v96 fixture was generated with the
-repository helper and copied back with matching SHA-256.
-Environmentd still supplies the default identity, pending the join-only binary.
-Catalog protection fixtures now use explicit realizations. New regressions cover
-two-adapter replacement/drop isolation and reopening an empty adapter inventory.
-Static ownership review found no concrete defects, with its scope recorded in
-`~/.local/share/aj/m3-evidence/adapter-identity-review.md`. Boundary/schema results
-are in `adapter-identity-boundary-and-schema.log`. All-target Clippy passes for
-catalog, adapter, clusterd, environmentd, catalog-debug, testdrive and sqllogictest.
-The join/admission slice replaces obsolete v94 migration-success tests with rejection coverage
-and moves unsupported-version rejection before fencing or admission. Failed
-writable/savepoint opens leave the catalog and fence unchanged. All-target catalog
-Clippy, all 393 catalog unit tests (2 skipped) and static ownership review pass.
-Workspace/integration verification remains open.
-Use `bin/cargo-test` for its standard stack setting, configure both the Postgres
-comparison companion and metadata backend, and forward `--lib` after `--`.
-It exposes joined-handle admission to catalog reconstruction and routes
-active joins through the same nonmutating replay used for prewarming. The existing
-join regression now includes an active-deployment case with conflicting initializer
-configuration. Independent named tests cover active joins, prewarming and compatible
-build/cache variants. Splitting the sequential matrix avoids its cumulative 180s
-timeout without changing cases, assertions or the per-test timeout. All five pass
-in the full suite. The active-join test fails on shared-definition mutation when
-the correction is removed and passes when restored. Scratch is restored to the
-candidate, with canonical edits unchanged.
-Evidence: `catalog-join-split-full-unit.log`, `catalog-join-review.md`,
-`catalog-join-negative-revision.txt`, `catalog-join-negative.log` and
-`catalog-join-restored.log` under `~/.local/share/aj/m3-evidence/`.
-The worker-generated Cargo.lock delta is preserved and applied locally, with no
-dependency version changes. Initialization/join boundary research is saved in
-`~/.local/share/aj/m3-evidence/initialization-join-boundary.md`.
-Catalog/table initialization must be finite and separate from own-build planning
-and shared maintenance. The controller's local restart must not repeat a global
-system-table reset or treat a handle-local bootstrap flag as durable readiness.
-`table-initialization-recovery.md` records the finite WAL recovery seam. Existing
-registration/application can recover without a new marker, but global builtin
-reset/republication must be replaced by the M3 producer-ownership behavior.
-`builtin-publication-ownership.md` identifies the remaining derived facts.
-Writer completion and follower refresh both publish these builtin diffs, so
-skipping bootstrap reset alone would still duplicate rows. Focused architectural
-review is assessing idempotent publication and stale-follower exclusion before
-implementation. Session ownership and finite table adoption are separate boundaries.
+All 393 catalog unit tests pass (2 skipped). The join matrix runs as independent
+cases, preserving assertions and the standard per-test timeout. The active-join
+regression fails on shared-definition mutation without the fix and passes when
+restored. Production checks and all-target Clippy pass for catalog, adapter,
+clusterd, environmentd, catalog-debug, testdrive and sqllogictest. Broad combined
+workspace/integration verification is still open.
 
-The local backend now supports retained supervision separately from explicit
-service deletion (`bbe00aba`). Four boundary tests, two existing in-runtime
-restart regressions, and all-target Clippy for the backend and both caller crates
-pass on scratch. Focused ownership review found a cancellable PID-file write,
-which is corrected. Existing callers retain coupled shutdown. Use
-`bin/cargo-test` for environmentd tests: direct nextest omitted the repository
-runner's standard stack setting and overflowed during catalog startup.
+Latest verified slices:
 
-Process provisioning research is saved alongside it in
-`process-provisioning-boundary.md`. PID-only adoption and controller-owned TCP
-proxies still need correction before claiming controller restart continuity.
-Extract the existing service-spec/backend boundary, not the whole storage/compute
-controller. Adapter SQL endpoints must remain usable independently of controllerd.
-The declaration/identity map is in `adapter-declaration-boundary.md`.
-Reuse existing execution replacement and retirement, with exact adapter identity,
-and create the default declaration only in fresh initialization. Do not infer
-initialization from an empty adapter inventory or silently convert v95 state.
+- `kwuvpvnl`: catalog integration fixture corrections: generated snapshots include the
+  default declaration/allocator, and unsupported-version rejection has its
+  precise error assertion. Nonmutation assertions remain unchanged. All 68 tests
+  across the five integration targets pass.
+- `7585df45`: `TxnsHandle::adopt`: local schema-bearing handle adoption, extracted from shared
+  registration. It neither registers nor advances the WAL. Caller retains
+  readiness and write-authority responsibilities. Static review, Clippy and all
+  33 txn-WAL unit tests pass through `bin/cargo-test`, including the new two-writer
+  regression. Direct nextest omits the standard stack setting and overflows in
+  two existing tests.
+  Adapter startup is not wired to adoption yet.
 
-Replica launch specification construction is extracted from controller enactment
-in `4a2a374c`. All-target Clippy and both restart regressions pass. One run hit the
-old scratch database's 100-connection ceiling, then passed unchanged. Subsequent
-checks use the isolated `m3-native-checks` cargo-test metadata service with the
-repository's standard 5000 connections, where both tests also pass. Its URL is in
-`~/m3-evidence/native-metadata-url.txt` on scratch. Leave `m2-pause-test-postgres`
-untouched.
-The same fixture's ordinary `postgres` service supplies `POSTGRES_URL` for catalog
-comparison tests, recorded in `~/m3-evidence/native-postgres-url.txt`.
+Next ownership boundary: `bootstrap_tables` resets shared builtin tables and
+writer completion/follower refresh both publish derived builtin diffs. Skipping
+reset alone still duplicates facts. Architectural review confirms the shared publication gap. Aljoscha has been
+asked to workshop transactional publication progress versus storing derived
+metadata with catalog definitions before either is implemented. The tradeoff
+is recorded in `builtin-publication-decision.md`.
+Session ownership and finite table adoption are separate boundaries. Initialization
+must remain finite, without embedding a coordinator or shared maintenance in
+controllerd. Existing WAL registration/application can recover without a new
+initialization marker.
+
+Evidence lives in `~/.local/share/aj/m3-evidence/`: `catalog-join-split-full-unit.log`,
+`catalog-join-{review,negative-revision,negative,restored}.*`,
+`txn-local-adoption-review.md`, `builtin-publication-ownership.md`,
+`table-initialization-recovery.md`, `initialization-join-boundary.md`,
+`process-provisioning-boundary.md` and `adapter-declaration-boundary.md`.
+`foundation-handoff-detail.md` preserves the detailed verification pointers.
+Scratch test logs live in `~/m3-evidence/` and must be copied off-worker.
+
+Use `bin/cargo-test` for the standard stack setting, forwarding `--lib` after
+`--`. Metadata and comparison Postgres URLs are respectively
+`~/m3-evidence/native-metadata-url.txt` and `native-postgres-url.txt` on scratch.
+The latter supplies `POSTGRES_URL`. Leave `m2-pause-test-postgres` untouched.
 
 ## Concrete starting points
 

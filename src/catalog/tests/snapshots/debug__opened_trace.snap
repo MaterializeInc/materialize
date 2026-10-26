@@ -513,6 +513,25 @@ Trace {
             ),
         ],
     },
+    adapter_declarations: CollectionTrace {
+        values: [
+            (
+                (
+                    AdapterDeclarationKey {
+                        id: 1,
+                    },
+                    AdapterDeclarationValue {
+                        name: "default",
+                        size: "1",
+                    },
+                ),
+                2,
+                Overflowing(
+                    1,
+                ),
+            ),
+        ],
+    },
     cluster_replica_declarations: CollectionTrace {
         values: [],
     },
@@ -689,6 +708,20 @@ Trace {
     },
     id_allocator: CollectionTrace {
         values: [
+            (
+                (
+                    IdAllocKey {
+                        name: "adapter",
+                    },
+                    IdAllocValue {
+                        next_id: 2,
+                    },
+                ),
+                2,
+                Overflowing(
+                    1,
+                ),
+            ),
             (
                 (
                     IdAllocKey {

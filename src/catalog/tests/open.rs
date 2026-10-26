@@ -1514,7 +1514,11 @@ async fn test_join_requires_initialized_current_version() {
             .join()
             .await
             .unwrap_err(),
-        CatalogError::Durable(DurableCatalogError::NotWritable(_))
+        CatalogError::Durable(DurableCatalogError::IncompatibleDataVersion {
+            found_version,
+            min_catalog_version: 96,
+            catalog_version: CATALOG_VERSION,
+        }) if found_version == CATALOG_VERSION - 1
     ));
     assert_eq!(state.current_upper().await, upper);
     assert_eq!(

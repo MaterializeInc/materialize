@@ -703,10 +703,23 @@ Snapshot {
             ),
         },
     },
+    adapter_declarations: {
+        AdapterDeclarationKey {
+            id: 1,
+        }: AdapterDeclarationValue {
+            name: "default",
+            size: "1",
+        },
+    },
     cluster_replica_declarations: {},
     cluster_runtimes: {},
     introspection_sources: {},
     id_allocator: {
+        IdAllocKey {
+            name: "adapter",
+        }: IdAllocValue {
+            next_id: 2,
+        },
         IdAllocKey {
             name: "auditlog",
         }: IdAllocValue {
