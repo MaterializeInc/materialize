@@ -15,7 +15,9 @@ use mz_controller_types::clusters::ReplicaLogging;
 use mz_persist_client::PersistClient;
 
 use crate::durable::objects::ClusterVariant;
-use crate::durable::{ReplicaLocation, TestCatalogStateBuilder, test_bootstrap_args};
+use crate::durable::{
+    DEFAULT_ADAPTER_ID, ReplicaLocation, TestCatalogStateBuilder, test_bootstrap_args,
+};
 
 const COLLECTION: GlobalId = GlobalId::User(1000);
 const CLUSTER: ClusterId = ClusterId::User(1000);
@@ -44,8 +46,8 @@ fn insert_replica(tx: &mut Transaction<'_>, cluster: ClusterId, replica: Replica
     .unwrap();
 }
 
-fn protect(tx: &mut Transaction<'_>, replica: Option<ReplicaId>) -> u64 {
-    let client = tx.replace_client_incarnation(replica, None).unwrap();
+fn protect(tx: &mut Transaction<'_>, realization: ClientRealization) -> u64 {
+    let client = tx.replace_client_incarnation(realization, None).unwrap();
     tx.grant_client_read_requirements(client, BTreeMap::from([(COLLECTION, 20.into())]))
         .unwrap();
     client
@@ -56,6 +58,150 @@ async fn commit(mut tx: Transaction<'_>) {
     let _ = tx.get_and_commit_op_updates();
     let ts = tx.upper();
     tx.commit(ts).await.unwrap();
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn adapter_replacement_and_drop_preserve_other_adapter() {
+    let mut state = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    state.sync_to_current_updates().await.unwrap();
+    let mut tx = state.transaction().await.unwrap();
+    tx.set_config("catalog_read_protection_enabled".into(), Some(1))
+        .unwrap();
+    let a = DEFAULT_ADAPTER_ID;
+    let b = tx.allocate_adapter_id().unwrap();
+    assert_ne!(a, b);
+    tx.set_adapter_declaration(AdapterDeclaration {
+        id: b,
+        name: "other_adapter".into(),
+        size: tx.get_adapter_declaration(a).unwrap().size,
+    })
+    .unwrap();
+    tx.insert_collection_metadata(BTreeMap::from([(COLLECTION, ShardId::new())]))
+        .unwrap();
+    tx.set_collection_compaction_bound(COLLECTION, Some(0.into()))
+        .unwrap();
+    let first = protect(&mut tx, ClientRealization::Adapter(a));
+    let other = protect(&mut tx, ClientRealization::Adapter(b));
+    commit(tx).await;
+    let before = state.snapshot().await.unwrap();
+
+    let mut tx = state.transaction().await.unwrap();
+    let successor = tx
+        .replace_client_incarnation(ClientRealization::Adapter(a), Some(first))
+        .unwrap();
+    assert_ne!(successor, first);
+    commit(tx).await;
+    let replaced = state.snapshot().await.unwrap();
+    let mut expected_clients = before.client_incarnations;
+    let execution = expected_clients
+        .remove(&ClientIncarnationKey { id: first })
+        .unwrap();
+    expected_clients.insert(ClientIncarnationKey { id: successor }, execution);
+    let mut expected_grants = before.client_read_requirements;
+    let grant = expected_grants
+        .remove(&ClientReadRequirementKey {
+            incarnation: first,
+            id: COLLECTION,
+        })
+        .unwrap();
+    expected_grants.insert(
+        ClientReadRequirementKey {
+            incarnation: successor,
+            id: COLLECTION,
+        },
+        grant,
+    );
+    assert_eq!(replaced.client_incarnations, expected_clients);
+    assert_eq!(replaced.client_read_requirements, expected_grants);
+    assert_eq!(replaced.adapter_declarations, before.adapter_declarations);
+
+    let mut tx = state.transaction().await.unwrap();
+    assert_eq!(tx.remove_adapter_declaration(a).unwrap().id, a);
+    commit(tx).await;
+    let dropped = state.snapshot().await.unwrap();
+    expected_clients.remove(&ClientIncarnationKey { id: successor });
+    expected_grants.remove(&ClientReadRequirementKey {
+        incarnation: successor,
+        id: COLLECTION,
+    });
+    assert_eq!(dropped.client_incarnations, expected_clients);
+    assert_eq!(dropped.client_read_requirements, expected_grants);
+    let mut expected_declarations = replaced.adapter_declarations;
+    expected_declarations.remove(&AdapterDeclarationKey { id: a });
+    assert_eq!(dropped.adapter_declarations, expected_declarations);
+
+    let mut tx = state.transaction().await.unwrap();
+    for expected in [None, Some(first), Some(successor)] {
+        assert!(matches!(
+            tx.replace_client_incarnation(ClientRealization::Adapter(a), expected),
+            Err(CatalogError::Durable(
+                DurableCatalogError::InvalidReadProtection(_)
+            ))
+        ));
+    }
+    for retired in [first, successor] {
+        assert!(
+            tx.grant_client_read_requirements(retired, BTreeMap::from([(COLLECTION, 20.into())]))
+                .is_err()
+        );
+        assert!(
+            tx.update_client_read_requirements(retired, BTreeMap::from([(COLLECTION, None)]))
+                .is_err()
+        );
+    }
+    // B can still publish using its original execution after A is removed.
+    assert_eq!(
+        tx.grant_client_read_requirements(other, BTreeMap::from([(COLLECTION, 20.into())]))
+            .unwrap(),
+        BTreeMap::from([(COLLECTION, 20.into())]),
+    );
+    commit(tx).await;
+    assert_eq!(state.snapshot().await.unwrap(), dropped);
+    state.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn reopening_empty_adapter_inventory_does_not_initialize_again() {
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    let mut options = test_bootstrap_args();
+    options.default_adapter_size = "test-size".into();
+    let mut state = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &options)
+        .await
+        .unwrap();
+    state.sync_to_current_updates().await.unwrap();
+    let mut tx = state.transaction().await.unwrap();
+    let default = tx.remove_adapter_declaration(DEFAULT_ADAPTER_ID).unwrap();
+    assert_eq!(default.name, "default");
+    assert_eq!(default.size, "test-size");
+    assert_eq!(tx.get_adapter_declarations().count(), 0);
+    commit(tx).await;
+    state.expire().await;
+
+    let mut reopened = builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &options)
+        .await
+        .unwrap();
+    reopened.sync_to_current_updates().await.unwrap();
+    let mut tx = reopened.transaction().await.unwrap();
+    assert_eq!(tx.get_adapter_declarations().count(), 0);
+    assert!(tx.allocate_adapter_id().unwrap() > DEFAULT_ADAPTER_ID);
+    drop(tx);
+    reopened.expire().await;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -127,14 +273,14 @@ async fn realization_replacement_and_removal_preserve_other_owners() {
             .unwrap();
         insert_replica(&mut tx, CLUSTER, REPLICA);
         insert_replica(&mut tx, OTHER_CLUSTER, OTHER_REPLICA);
-        let predecessor = protect(&mut tx, Some(REPLICA));
-        let unrelated = protect(&mut tx, Some(OTHER_REPLICA));
-        let adapter = protect(&mut tx, None);
+        let predecessor = protect(&mut tx, ClientRealization::Replica(REPLICA));
+        let unrelated = protect(&mut tx, ClientRealization::Replica(OTHER_REPLICA));
+        let adapter = protect(&mut tx, ClientRealization::Adapter(DEFAULT_ADAPTER_ID));
         commit(tx).await;
 
         let mut tx = state.transaction().await.unwrap();
         let affected = tx
-            .replace_client_incarnation(Some(REPLICA), Some(predecessor))
+            .replace_client_incarnation(ClientRealization::Replica(REPLICA), Some(predecessor))
             .unwrap();
         assert_ne!(affected, predecessor);
         commit(tx).await;
@@ -156,7 +302,7 @@ async fn realization_replacement_and_removal_preserve_other_owners() {
         // take authority from the execution that won while it was retrying.
         let mut tx = state.transaction().await.unwrap();
         assert!(
-            tx.replace_client_incarnation(Some(REPLICA), Some(predecessor))
+            tx.replace_client_incarnation(ClientRealization::Replica(REPLICA), Some(predecessor))
                 .is_err()
         );
         assert!(
@@ -178,7 +324,7 @@ async fn realization_replacement_and_removal_preserve_other_owners() {
         prewarmer.sync_to_current_updates().await.unwrap();
         let mut tx = prewarmer.transaction().await.unwrap();
         insert_replica(&mut tx, CLUSTER, REPLICA);
-        let peer = protect(&mut tx, Some(REPLICA));
+        let peer = protect(&mut tx, ClientRealization::Replica(REPLICA));
         commit(tx).await;
         prewarmer.expire().await;
         state.sync_to_current_updates().await.unwrap();
@@ -317,7 +463,7 @@ async fn replacement_retains_index_history_without_granting_earlier_reads() {
         .expect("insert durable index definition");
     }
     let predecessor = tx
-        .replace_client_incarnation(None, None)
+        .replace_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID), None)
         .expect("create initial execution");
     tx.grant_client_read_requirements(predecessor, BTreeMap::from([(COLLECTION, 20.into())]))
         .expect("publish initial index grant");
@@ -341,10 +487,16 @@ async fn replacement_retains_index_history_without_granting_earlier_reads() {
             .await
             .expect("begin invalid acquisition");
         let intermediate = tx
-            .replace_client_incarnation(None, Some(predecessor))
+            .replace_client_incarnation(
+                ClientRealization::Adapter(DEFAULT_ADAPTER_ID),
+                Some(predecessor),
+            )
             .expect("replace initial execution");
         let successor = tx
-            .replace_client_incarnation(None, Some(intermediate))
+            .replace_client_incarnation(
+                ClientRealization::Adapter(DEFAULT_ADAPTER_ID),
+                Some(intermediate),
+            )
             .expect("replace intermediate execution");
         let mut requirements = BTreeMap::from([(COLLECTION, 20.into())]);
         requirements.insert(target, 14.into());
@@ -392,7 +544,10 @@ async fn replacement_retains_index_history_without_granting_earlier_reads() {
         .await
         .expect("begin retired acquisition");
     let successor = tx
-        .replace_client_incarnation(None, Some(predecessor))
+        .replace_client_incarnation(
+            ClientRealization::Adapter(DEFAULT_ADAPTER_ID),
+            Some(predecessor),
+        )
         .expect("replace retired index reader");
     tx.grant_client_read_requirements(successor, BTreeMap::from([(COLLECTION, 19.into())]))
         .expect("stage earlier retired index grant");
@@ -427,7 +582,10 @@ async fn replacement_retains_index_history_without_granting_earlier_reads() {
         let mut tx = state.transaction().await.expect("begin history transfer");
         for _ in 0..replacements {
             current = tx
-                .replace_client_incarnation(None, Some(current))
+                .replace_client_incarnation(
+                    ClientRealization::Adapter(DEFAULT_ADAPTER_ID),
+                    Some(current),
+                )
                 .expect("rekey retained index history");
         }
         commit(tx).await;

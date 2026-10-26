@@ -176,6 +176,19 @@ pub struct ClusterReplicaDeclarationValue {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct AdapterDeclarationKey {
+    pub id: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct AdapterDeclarationValue {
+    pub name: String,
+    pub size: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ClusterRuntimeKey {
     pub cluster_id: ClusterId,
     pub deployment_generation: u64,
@@ -2055,6 +2068,7 @@ pub mod audit_log_event_v1 {
 // persist pushdown statistics for success.
 #[serde(tag = "kind")]
 pub enum StateUpdateKind {
+    AdapterDeclaration(AdapterDeclaration),
     AuditLog(AuditLog),
     Cluster(Cluster),
     ClusterIntrospectionSourceIndex(ClusterIntrospectionSourceIndex),
@@ -2088,6 +2102,13 @@ pub enum StateUpdateKind {
     SystemPrivileges(SystemPrivileges),
     TxnWalShard(TxnWalShard),
     UnfinalizedShard(UnfinalizedShard),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct AdapterDeclaration {
+    pub key: AdapterDeclarationKey,
+    pub value: AdapterDeclarationValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2464,8 +2485,14 @@ pub struct ClientIncarnationKey {
 pub struct ClientIncarnationValue {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub deployment_generation: u64,
-    #[serde(default)]
-    pub replica_id: Option<ReplicaId>,
+    pub realization: ClientRealization,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub enum ClientRealization {
+    Adapter(u64),
+    Replica(ReplicaId),
 }
 
 fn is_zero(value: &u64) -> bool {

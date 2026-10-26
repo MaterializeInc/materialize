@@ -325,7 +325,10 @@ pub(crate) async fn run(
                     .iter()
                     .find_map(|(id, client)| {
                         (client.deployment_generation == config.deploy_generation
-                            && client.replica_id == Some(config.replica_id))
+                            && client.realization
+                                == mz_catalog::durable::objects::ClientRealization::Replica(
+                                    config.replica_id,
+                                ))
                         .then_some(*id)
                     })
             });
@@ -337,7 +340,9 @@ pub(crate) async fn run(
                     ts,
                     None,
                     vec![Op::CreateClientIncarnation {
-                        replica_id: Some(config.replica_id),
+                        realization: mz_catalog::durable::objects::ClientRealization::Replica(
+                            config.replica_id,
+                        ),
                         expected: predecessor,
                     }],
                 )

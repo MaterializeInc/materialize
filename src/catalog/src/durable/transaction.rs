@@ -28,7 +28,7 @@ use mz_proto::TryFromProtoError;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion};
+use mz_repr::{AdapterId, CatalogItemId, Diff, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogError as SqlCatalogError, CatalogItemType, ObjectType, RoleMembership, RoleVars,
 };
@@ -47,25 +47,26 @@ use crate::durable::initialize::{
 };
 use crate::durable::objects::serialization::{RustType, proto};
 use crate::durable::objects::{
-    AuditLogKey, ClientIncarnationKey, ClientIncarnationValue, ClientReadRequirementKey,
-    ClientReadRequirementValue, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
-    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaDeclaration,
-    ClusterReplicaDeclarationKey, ClusterReplicaDeclarationValue, ClusterReplicaKey,
-    ClusterReplicaValue, ClusterRuntime, ClusterRuntimeKey, ClusterRuntimeValue,
-    ClusterSystemConfiguration, ClusterSystemConfigurationKey, ClusterSystemConfigurationValue,
-    ClusterValue, CollectionCompactionBound, CollectionCompactionBoundKey,
-    CollectionCompactionBoundValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
-    Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, MaintainedReadRequirement,
-    MaintainedReadRequirementKey, MaintainedReadRequirementValue, NetworkPolicyKey,
-    NetworkPolicyValue, ReadProtectionIndex, ReplicaConfig, ReplicaSystemConfiguration,
-    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue,
-    Schema, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey,
-    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
-    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemObjectDescription,
-    SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
-    UnfinalizedShardKey, WrittenPlan, WrittenPlanKey, WrittenPlanValue,
+    AdapterDeclaration, AdapterDeclarationKey, AdapterDeclarationValue, AuditLogKey,
+    ClientIncarnationKey, ClientIncarnationValue, ClientReadRequirementKey,
+    ClientReadRequirementValue, ClientRealization, Cluster, ClusterConfig,
+    ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue, ClusterKey,
+    ClusterReplica, ClusterReplicaDeclaration, ClusterReplicaDeclarationKey,
+    ClusterReplicaDeclarationValue, ClusterReplicaKey, ClusterReplicaValue, ClusterRuntime,
+    ClusterRuntimeKey, ClusterRuntimeValue, ClusterSystemConfiguration,
+    ClusterSystemConfigurationKey, ClusterSystemConfigurationValue, ClusterValue,
+    CollectionCompactionBound, CollectionCompactionBoundKey, CollectionCompactionBoundValue,
+    CommentKey, CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
+    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue,
+    MaintainedReadRequirement, MaintainedReadRequirementKey, MaintainedReadRequirementValue,
+    NetworkPolicyKey, NetworkPolicyValue, ReadProtectionIndex, ReplicaConfig,
+    ReplicaSystemConfiguration, ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue,
+    Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, ServerConfigurationKey,
+    ServerConfigurationValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
+    SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
+    SystemObjectDescription, SystemObjectMapping, SystemPrivilegesKey, SystemPrivilegesValue,
+    TxnWalShardValue, UnfinalizedShardKey, WrittenPlan, WrittenPlanKey, WrittenPlanValue,
 };
 use crate::durable::objects::{NameIndex, NameIndexes, NameScope, NamedCatalogValue, OidIndex};
 use crate::durable::{
@@ -107,6 +108,7 @@ pub struct Transaction<'a> {
     roles: TableTransaction<RoleKey, RoleValue>,
     role_auth: TableTransaction<RoleAuthKey, RoleAuthValue>,
     clusters: TableTransaction<ClusterKey, ClusterValue>,
+    adapter_declarations: TableTransaction<AdapterDeclarationKey, AdapterDeclarationValue>,
     cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
     cluster_replica_declarations:
         TableTransaction<ClusterReplicaDeclarationKey, ClusterReplicaDeclarationValue>,
@@ -237,6 +239,7 @@ impl<'a> Transaction<'a> {
             clusters,
             network_policies,
             cluster_replicas,
+            adapter_declarations,
             cluster_replica_declarations,
             cluster_runtimes,
             introspection_sources,
@@ -276,6 +279,8 @@ impl<'a> Transaction<'a> {
             |a, b| a.name == b.name;
         let cluster_replica_unique_fn: fn(&ClusterReplicaValue, &ClusterReplicaValue) -> bool =
             |a, b| a.cluster_id == b.cluster_id && a.name == b.name;
+        let adapter_unique_fn: fn(&AdapterDeclarationValue, &AdapterDeclarationValue) -> bool =
+            |a, b| a.name == b.name;
         let declaration_unique_fn: fn(
             &ClusterReplicaDeclarationValue,
             &ClusterReplicaDeclarationValue,
@@ -352,6 +357,12 @@ impl<'a> Transaction<'a> {
             )?
             .with_name_index(name_indexes.cluster_replicas)
             .with_uniqueness_partition(|a, b| a.deployment_generation == b.deployment_generation),
+            adapter_declarations: TableTransaction::new_with_uniqueness_fn(
+                adapter_declarations,
+                adapter_unique_fn,
+                adapter_unique_fn,
+            )?
+            .with_name_index(name_indexes.adapter_declarations),
             cluster_replica_declarations: TableTransaction::new_with_uniqueness_fn(
                 cluster_replica_declarations,
                 declaration_unique_fn,
@@ -1374,6 +1385,7 @@ impl<'a> Transaction<'a> {
     pub fn current_snapshot(&self) -> Snapshot {
         Snapshot {
             name_indexes: NameIndexes {
+                adapter_declarations: self.adapter_declarations.current_name_index(),
                 databases: self.databases.current_name_index(),
                 schemas: self.schemas.current_name_index(),
                 items: self.items.current_name_index(),
@@ -1396,6 +1408,7 @@ impl<'a> Transaction<'a> {
             clusters: self.clusters.current_items(),
             network_policies: self.network_policies.current_items(),
             cluster_replicas: self.cluster_replicas.current_items(),
+            adapter_declarations: self.adapter_declarations.current_items(),
             cluster_replica_declarations: self.cluster_replica_declarations.current_items(),
             cluster_runtimes: self.cluster_runtimes.current_items(),
             introspection_sources: self.introspection_sources.current_items(),
@@ -1715,7 +1728,7 @@ impl<'a> Transaction<'a> {
         }
         let retired = self.client_incarnations.delete(
             |_, client| {
-                client.replica_id.is_some_and(|id| {
+                client.realization.replica_id().is_some_and(|id| {
                     replicas.contains(&ClusterReplicaKey {
                         id,
                         deployment_generation: client.deployment_generation,
@@ -2626,6 +2639,60 @@ impl<'a> Transaction<'a> {
             .expect("cannot have uniqueness violation");
     }
 
+    /// Allocates a stable adapter identity in this transaction.
+    pub fn allocate_adapter_id(&mut self) -> Result<AdapterId, CatalogError> {
+        self.get_and_increment_id(super::ADAPTER_ID_ALLOC_KEY.to_string())
+            .map(AdapterId)
+    }
+
+    /// Looks up shared adapter intent by stable identity.
+    pub fn get_adapter_declaration(&self, id: AdapterId) -> Option<AdapterDeclaration> {
+        let key = AdapterDeclarationKey { id };
+        self.adapter_declarations
+            .get(&key)
+            .cloned()
+            .map(|value| AdapterDeclaration::from_key_value(key, value))
+    }
+
+    /// Returns shared adapter intent, including adapters without a current execution.
+    pub fn get_adapter_declarations(&self) -> impl Iterator<Item = AdapterDeclaration> + use<'_> {
+        self.adapter_declarations
+            .items()
+            .into_iter()
+            .map(|(key, value)| AdapterDeclaration::from_key_value(key.clone(), value.clone()))
+    }
+
+    /// Stages a declaration without changing its stable identity.
+    pub fn set_adapter_declaration(
+        &mut self,
+        declaration: AdapterDeclaration,
+    ) -> Result<(), CatalogError> {
+        let (key, value) = declaration.into_key_value();
+        self.adapter_declarations
+            .set(key, Some(value), self.op_id)?;
+        Ok(())
+    }
+
+    /// Removes shared intent and revokes only this adapter's executions and grants
+    /// across deployments. The removal takes effect together at durable commit.
+    pub fn remove_adapter_declaration(&mut self, id: AdapterId) -> Option<AdapterDeclaration> {
+        let key = AdapterDeclarationKey { id };
+        let previous = self
+            .adapter_declarations
+            .delete_by_key(key.clone(), self.op_id);
+        let retired = self.client_incarnations.delete(
+            |_, client| client.realization == ClientRealization::Adapter(id),
+            self.op_id,
+        );
+        let requirements = retired
+            .into_iter()
+            .flat_map(|(key, _)| self.client_requirement_keys(key.id))
+            .collect::<BTreeSet<_>>();
+        self.client_read_requirements
+            .delete_by_keys(requirements, self.op_id);
+        previous.map(|value| AdapterDeclaration::from_key_value(key, value))
+    }
+
     /// Removes settings belonging to the explicitly qualified realizations.
     pub fn remove_replica_system_configs(&mut self, replicas: &BTreeSet<ClusterReplicaKey>) {
         self.replica_system_configurations.delete(
@@ -2922,6 +2989,7 @@ impl<'a> Transaction<'a> {
             clusters,
             network_policies,
             cluster_replicas,
+            adapter_declarations,
             cluster_replica_declarations,
             cluster_runtimes,
             introspection_sources,
@@ -3015,6 +3083,11 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 cluster_replicas,
                 StateUpdateKind::ClusterReplica,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                adapter_declarations,
+                StateUpdateKind::AdapterDeclaration,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
@@ -3117,16 +3190,16 @@ impl<'a> Transaction<'a> {
     /// protection become usable only after durable commit.
     pub fn create_client_incarnation(
         &mut self,
-        replica_id: Option<ReplicaId>,
+        realization: ClientRealization,
     ) -> Result<u64, CatalogError> {
-        self.replace_client_incarnation(replica_id, None)
+        self.replace_client_incarnation(realization, None)
     }
 
     fn allocate_client_incarnation(
         &mut self,
-        replica_id: Option<ReplicaId>,
+        realization: ClientRealization,
     ) -> Result<u64, CatalogError> {
-        if let Some(id) = replica_id {
+        if let ClientRealization::Replica(id) = realization {
             if self
                 .cluster_replicas
                 .get(&ClusterReplicaKey {
@@ -3141,6 +3214,17 @@ impl<'a> Transaction<'a> {
                 .into());
             }
         }
+        if let ClientRealization::Adapter(id) = realization
+            && self
+                .adapter_declarations
+                .get(&AdapterDeclarationKey { id })
+                .is_none()
+        {
+            return Err(DurableCatalogError::InvalidReadProtection(format!(
+                "adapter {id} does not exist"
+            ))
+            .into());
+        }
         let name = "client_incarnation".to_string();
         if self
             .id_allocator
@@ -3154,7 +3238,7 @@ impl<'a> Transaction<'a> {
             ClientIncarnationKey { id },
             ClientIncarnationValue {
                 deployment_generation: self.deployment_generation,
-                replica_id,
+                realization,
             },
             self.op_id,
         )?;
@@ -3169,13 +3253,13 @@ impl<'a> Transaction<'a> {
     /// The returned identity becomes usable only after this transaction commits.
     pub fn replace_client_incarnation(
         &mut self,
-        replica_id: Option<ReplicaId>,
+        realization: ClientRealization,
         expected: Option<u64>,
     ) -> Result<u64, CatalogError> {
         let mut current = BTreeSet::new();
         self.client_incarnations.for_values(|key, value| {
             if value.deployment_generation == self.deployment_generation
-                && value.replica_id == replica_id
+                && value.realization == realization
             {
                 current.insert(key.id);
             }
@@ -3186,7 +3270,7 @@ impl<'a> Transaction<'a> {
             ))
             .into());
         }
-        let successor = self.allocate_client_incarnation(replica_id)?;
+        let successor = self.allocate_client_incarnation(realization)?;
         if let Some(predecessor) = expected {
             let requirements = self.client_requirement_keys(predecessor);
             let mut updates = BTreeMap::new();
@@ -3309,7 +3393,7 @@ impl<'a> Transaction<'a> {
             ))
             .into());
         }
-        if let Some(id) = previous.replica_id
+        if let Some(id) = previous.realization.replica_id()
             && self
                 .cluster_replicas
                 .get(&ClusterReplicaKey {
@@ -3320,6 +3404,17 @@ impl<'a> Transaction<'a> {
         {
             return Err(DurableCatalogError::InvalidReadProtection(format!(
                 "client incarnation {incarnation} belongs to removed replica {id}"
+            ))
+            .into());
+        }
+        if let ClientRealization::Adapter(id) = previous.realization
+            && self
+                .adapter_declarations
+                .get(&AdapterDeclarationKey { id })
+                .is_none()
+        {
+            return Err(DurableCatalogError::InvalidReadProtection(format!(
+                "client incarnation {incarnation} belongs to removed adapter {id}"
             ))
             .into());
         }
@@ -3819,6 +3914,7 @@ impl<'a> Transaction<'a> {
             role_auth,
             clusters,
             cluster_replicas,
+            adapter_declarations,
             cluster_replica_declarations,
             cluster_runtimes,
             introspection_sources,
@@ -3866,6 +3962,7 @@ impl<'a> Transaction<'a> {
             roles,
             role_auth,
             clusters,
+            adapter_declarations,
             cluster_replica_declarations,
             introspection_sources,
             configs,
@@ -3977,7 +4074,7 @@ impl<'a> Transaction<'a> {
                 && (client.deployment_generation != *deployment_generation
                     || client_incarnations.initial.get(key).is_some_and(|old| {
                         old.deployment_generation != client.deployment_generation
-                            || old.replica_id != client.replica_id
+                            || old.realization != client.realization
                     }))
             {
                 return Err(denied("another deployment's client incarnation"));
@@ -4070,6 +4167,7 @@ impl<'a> Transaction<'a> {
             role_auth: self.role_auth.pending(),
             clusters: self.clusters.pending(),
             cluster_replicas: self.cluster_replicas.pending(),
+            adapter_declarations: self.adapter_declarations.pending(),
             cluster_replica_declarations: self.cluster_replica_declarations.pending(),
             cluster_runtimes: self.cluster_runtimes.pending(),
             network_policies: self.network_policies.pending(),
@@ -4139,6 +4237,7 @@ impl<'a> Transaction<'a> {
             role_auth,
             clusters,
             cluster_replicas,
+            adapter_declarations,
             cluster_replica_declarations,
             cluster_runtimes,
             network_policies,
@@ -4175,6 +4274,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(role_auth);
         differential_dataflow::consolidation::consolidate_updates(clusters);
         differential_dataflow::consolidation::consolidate_updates(cluster_replicas);
+        differential_dataflow::consolidation::consolidate_updates(adapter_declarations);
         differential_dataflow::consolidation::consolidate_updates(cluster_replica_declarations);
         differential_dataflow::consolidation::consolidate_updates(cluster_runtimes);
         differential_dataflow::consolidation::consolidate_updates(network_policies);
@@ -4425,6 +4525,11 @@ pub struct TransactionBatch {
     pub(crate) role_auth: Vec<(proto::RoleAuthKey, proto::RoleAuthValue, Diff)>,
     pub(crate) clusters: Vec<(proto::ClusterKey, proto::ClusterValue, Diff)>,
     pub(crate) cluster_replicas: Vec<(proto::ClusterReplicaKey, proto::ClusterReplicaValue, Diff)>,
+    pub(crate) adapter_declarations: Vec<(
+        proto::AdapterDeclarationKey,
+        proto::AdapterDeclarationValue,
+        Diff,
+    )>,
     pub(crate) cluster_replica_declarations: Vec<(
         proto::ClusterReplicaDeclarationKey,
         proto::ClusterReplicaDeclarationValue,
@@ -4518,6 +4623,7 @@ impl TransactionBatch {
             role_auth,
             clusters,
             cluster_replicas,
+            adapter_declarations,
             cluster_replica_declarations,
             cluster_runtimes,
             network_policies,
@@ -4552,6 +4658,7 @@ impl TransactionBatch {
             && role_auth.is_empty()
             && clusters.is_empty()
             && cluster_replicas.is_empty()
+            && adapter_declarations.is_empty()
             && cluster_replica_declarations.is_empty()
             && cluster_runtimes.is_empty()
             && network_policies.is_empty()

@@ -435,7 +435,9 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
                 .expect("can set initial collection compaction bound");
         }
         let incarnation = tx
-            .create_client_incarnation(None)
+            .create_client_incarnation(crate::durable::ClientRealization::Adapter(
+                crate::durable::DEFAULT_ADAPTER_ID,
+            ))
             .expect("can create client incarnation");
         tx.grant_client_read_requirements(
             incarnation,
@@ -2071,7 +2073,9 @@ async fn test_multi_subscriber_catalog() {
             commit_ts,
             None,
             vec![Op::CreateClientIncarnation {
-                replica_id: None,
+                realization: crate::durable::ClientRealization::Adapter(
+                    crate::durable::DEFAULT_ADAPTER_ID,
+                ),
                 expected: None,
             }],
         )

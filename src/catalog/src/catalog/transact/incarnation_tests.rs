@@ -14,6 +14,7 @@ use mz_persist_client::PersistClient;
 use uuid::Uuid;
 
 use crate::catalog::{Catalog, Op};
+use crate::durable::{ClientRealization, DEFAULT_ADAPTER_ID};
 
 #[mz_ore::test(tokio::test)]
 async fn replica_replacement_survives_catalog_reopen() {
@@ -60,11 +61,11 @@ async fn replica_replacement_survives_catalog_reopen() {
             None,
             vec![
                 Op::CreateClientIncarnation {
-                    replica_id: None,
+                    realization: ClientRealization::Adapter(DEFAULT_ADAPTER_ID),
                     expected: None,
                 },
                 Op::CreateClientIncarnation {
-                    replica_id: Some(replica_id),
+                    realization: ClientRealization::Replica(replica_id),
                     expected: None,
                 },
             ],
@@ -83,7 +84,7 @@ async fn replica_replacement_survives_catalog_reopen() {
             ts,
             None,
             vec![Op::CreateClientIncarnation {
-                replica_id: Some(replica_id),
+                realization: ClientRealization::Replica(replica_id),
                 expected: Some(first),
             }],
         )
@@ -112,9 +113,15 @@ async fn replica_replacement_survives_catalog_reopen() {
         .await
         .expect("valid incarnation fixture operation");
     let incarnations = follower.state().client_incarnations();
-    assert_eq!(incarnations[&query].replica_id, None);
+    assert_eq!(
+        incarnations[&query].realization,
+        ClientRealization::Adapter(DEFAULT_ADAPTER_ID)
+    );
     assert!(!incarnations.contains_key(&first));
-    assert_eq!(incarnations[&restarted].replica_id, Some(replica_id));
+    assert_eq!(
+        incarnations[&restarted].realization,
+        ClientRealization::Replica(replica_id)
+    );
     assert_eq!(incarnations, catalog.state().client_incarnations());
 
     let ts = catalog.current_upper().await;
@@ -126,7 +133,7 @@ async fn replica_replacement_survives_catalog_reopen() {
                 ts,
                 None,
                 vec![Op::CreateClientIncarnation {
-                    replica_id: Some(ReplicaId::User(u64::MAX)),
+                    realization: ClientRealization::Replica(ReplicaId::User(u64::MAX)),
                     expected: None
                 }]
             )

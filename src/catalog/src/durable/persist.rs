@@ -2254,6 +2254,15 @@ impl CatalogStateInner {
                     diff,
                 );
             }
+            StateUpdateKind::AdapterDeclaration(key, value) => {
+                apply_named(
+                    &mut snapshot.adapter_declarations,
+                    &mut snapshot.name_indexes.adapter_declarations,
+                    key,
+                    value,
+                    diff,
+                );
+            }
             StateUpdateKind::ClusterRuntime(key, value) => {
                 apply(&mut snapshot.cluster_runtimes, key, value, diff);
             }
@@ -3203,6 +3212,9 @@ impl Trace {
                     .cluster_replica_declarations
                     .values
                     .push(((k, v), ts, diff)),
+                StateUpdateKind::AdapterDeclaration(k, v) => {
+                    trace.adapter_declarations.values.push(((k, v), ts, diff))
+                }
                 StateUpdateKind::ClusterRuntime(k, v) => {
                     trace.cluster_runtimes.values.push(((k, v), ts, diff))
                 }

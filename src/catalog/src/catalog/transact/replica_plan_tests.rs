@@ -770,8 +770,11 @@ async fn protected_bootstrap_absorbs_publication() {
                         let mut peer = peer.lock().await;
                         peer.sync_to_current_updates().await.expect("refresh peer");
                         let mut tx = peer.transaction().await.expect("start peer publication");
-                        let incarnation =
-                            tx.create_client_incarnation(None).expect("register peer");
+                        let incarnation = tx
+                            .create_client_incarnation(crate::durable::ClientRealization::Adapter(
+                                crate::durable::DEFAULT_ADAPTER_ID,
+                            ))
+                            .expect("register peer");
                         let _ = tx.get_and_commit_op_updates();
                         let ts = tx.upper();
                         tx.commit(ts).await.expect("publish during bootstrap");
@@ -869,7 +872,11 @@ async fn wal_identity_read_preserves_pending_replica_updates() {
         .expect("consume peer snapshot");
     let incarnation = {
         let mut tx = peer.transaction().await.expect("start peer publication");
-        let incarnation = tx.create_client_incarnation(None).expect("register peer");
+        let incarnation = tx
+            .create_client_incarnation(crate::durable::ClientRealization::Adapter(
+                crate::durable::DEFAULT_ADAPTER_ID,
+            ))
+            .expect("register peer");
         let _ = tx.get_and_commit_op_updates();
         let ts = tx.upper();
         tx.commit(ts).await.expect("commit peer publication");
@@ -983,7 +990,7 @@ async fn exercise_dry_run_contention() {
         peer.current_upper().await,
         None,
         vec![Op::CreateClientIncarnation {
-            replica_id: Some(replica),
+            realization: crate::durable::ClientRealization::Replica(replica),
             expected: None,
         }],
     )

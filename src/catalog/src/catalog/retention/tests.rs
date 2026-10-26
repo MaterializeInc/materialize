@@ -60,11 +60,13 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
             None,
             vec![
                 Op::CreateClientIncarnation {
-                    replica_id: None,
+                    realization: crate::durable::ClientRealization::Adapter(
+                        crate::durable::DEFAULT_ADAPTER_ID,
+                    ),
                     expected: None,
                 },
                 Op::CreateClientIncarnation {
-                    replica_id: Some(replica_id),
+                    realization: crate::durable::ClientRealization::Replica(replica_id),
                     expected: None,
                 },
             ],
@@ -108,7 +110,9 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
             // The adapter execution already exists. Failure must not undo the
             // committed peer prefix or its incremental compaction bookkeeping.
             Op::CreateClientIncarnation {
-                replica_id: None,
+                realization: crate::durable::ClientRealization::Adapter(
+                    crate::durable::DEFAULT_ADAPTER_ID,
+                ),
                 expected: None,
             }
         } else {
@@ -511,7 +515,9 @@ async fn caught_up_bound_survives_failure_and_is_superseded_by_drop() {
             ts,
             None,
             vec![Op::CreateClientIncarnation {
-                replica_id: None,
+                realization: crate::durable::ClientRealization::Adapter(
+                    crate::durable::DEFAULT_ADAPTER_ID,
+                ),
                 expected: None,
             }],
         )
@@ -803,7 +809,9 @@ impl Fixture {
                 ts,
                 None,
                 vec![Op::CreateClientIncarnation {
-                    replica_id: None,
+                    realization: crate::durable::ClientRealization::Adapter(
+                        crate::durable::DEFAULT_ADAPTER_ID,
+                    ),
                     expected: None,
                 }],
             )
@@ -1123,7 +1131,9 @@ async fn replacing_client_preserves_index_object_retention() {
             ts,
             None,
             vec![Op::CreateClientIncarnation {
-                replica_id: None,
+                realization: crate::durable::ClientRealization::Adapter(
+                    crate::durable::DEFAULT_ADAPTER_ID,
+                ),
                 expected: None,
             }],
         )
@@ -1146,7 +1156,9 @@ async fn replacing_client_preserves_index_object_retention() {
             ts,
             None,
             vec![Op::CreateClientIncarnation {
-                replica_id: None,
+                realization: crate::durable::ClientRealization::Adapter(
+                    crate::durable::DEFAULT_ADAPTER_ID,
+                ),
                 expected: Some(incarnation),
             }],
         )

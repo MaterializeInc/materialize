@@ -147,7 +147,9 @@ async fn written_index_survives_writer_and_query_disconnect() {
             ts,
             None,
             vec![Op::CreateClientIncarnation {
-                replica_id: None,
+                realization: mz_catalog::durable::ClientRealization::Adapter(
+                    mz_catalog::durable::DEFAULT_ADAPTER_ID,
+                ),
                 expected: None,
             }],
         )

@@ -14,12 +14,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog::durable::objects::{
-    self, ClusterConfig, ClusterVariant, CollectionCompactionBound, DurableType,
+    self, ClientRealization, ClusterConfig, ClusterVariant, CollectionCompactionBound, DurableType,
     SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
 use mz_catalog::durable::{
-    CatalogError, DurableCatalogError, Snapshot, TestCatalogStateBuilder, Transaction,
-    test_bootstrap_args,
+    CatalogError, DEFAULT_ADAPTER_ID, DurableCatalogError, Snapshot, TestCatalogStateBuilder,
+    Transaction, test_bootstrap_args,
 };
 use mz_controller_types::ClusterId;
 use mz_ore::now::SYSTEM_TIME;
@@ -245,7 +245,9 @@ async fn cancelled_prewarming_cannot_restore_its_protection() {
         .unwrap();
     tx.set_collection_compaction_bound(input, Some(10.into()))
         .unwrap();
-    let serving_client = tx.create_client_incarnation(None).unwrap();
+    let serving_client = tx
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
     tx.grant_client_read_requirements(serving_client, BTreeMap::from([(input, 30.into())]))
         .unwrap();
     commit(tx).await;
@@ -261,7 +263,9 @@ async fn cancelled_prewarming_cannot_restore_its_protection() {
         .unwrap();
     pending.sync_to_current_updates().await.unwrap();
     let mut tx = pending.transaction().await.unwrap();
-    let pending_client = tx.create_client_incarnation(None).unwrap();
+    let pending_client = tx
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
     tx.grant_client_read_requirements(pending_client, BTreeMap::from([(input, 10.into())]))
         .unwrap();
     commit(tx).await;
@@ -346,7 +350,9 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     Owner::Ordinary.insert(&mut tx, 1001);
     tx.set_collection_compaction_bound(index, Some(20.into()))
         .unwrap();
-    let active_client = tx.create_client_incarnation(None).unwrap();
+    let active_client = tx
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
     tx.grant_client_read_requirements(active_client, BTreeMap::from([(input, 30.into())]))
         .unwrap();
     let active_replica = tx
@@ -423,7 +429,9 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     assert_eq!(pending.get_deployment_generation().await.unwrap(), 8);
     assert_eq!(active.get_deployment_generation().await.unwrap(), 7);
     let mut tx = pending.transaction().await.unwrap();
-    let warm_client = tx.create_client_incarnation(None).unwrap();
+    let warm_client = tx
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
     tx.grant_client_read_requirements(warm_client, BTreeMap::from([(input, 10.into())]))
         .unwrap();
     tx.set_written_plan_with_owner(
@@ -807,7 +815,9 @@ async fn deployment_cannot_publish_another_deployments_protection() {
         .unwrap();
     txn.set_collection_compaction_bound(id, Some(10.into()))
         .unwrap();
-    let old = txn.create_client_incarnation(None).unwrap();
+    let old = txn
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
     txn.grant_client_read_requirements(old, BTreeMap::from([(id, 20.into())]))
         .unwrap();
     commit(txn).await;
@@ -840,7 +850,9 @@ async fn deployment_cannot_publish_another_deployments_protection() {
             DurableCatalogError::InvalidReadProtection(_)
         ))
     ));
-    let own = txn.create_client_incarnation(None).unwrap();
+    let own = txn
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
     txn.grant_client_read_requirements(own, BTreeMap::from([(id, 30.into())]))
         .unwrap();
     commit(txn).await;
@@ -882,8 +894,12 @@ async fn client_publication_reopen_and_replica_retirement() {
         .next()
         .expect("bootstrap replica")
         .replica_id;
-    let a = txn.create_client_incarnation(Some(replica)).unwrap();
-    let b = txn.create_client_incarnation(None).unwrap();
+    let a = txn
+        .create_client_incarnation(ClientRealization::Replica(replica))
+        .unwrap();
+    let b = txn
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
     assert_ne!(a, b);
     txn.grant_client_read_requirements(a, BTreeMap::from([(id, 20.into())]))
         .unwrap();
@@ -951,7 +967,9 @@ async fn client_publication_reopen_and_replica_retirement() {
         txn.grant_client_read_requirements(a, BTreeMap::from([(id, 30.into())]))
             .is_err()
     );
-    let c = txn.replace_client_incarnation(None, Some(b)).unwrap();
+    let c = txn
+        .replace_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID), Some(b))
+        .unwrap();
     assert!(c > a && c > b);
     commit(txn).await;
     Box::new(state).expire().await;
@@ -982,13 +1000,17 @@ async fn client_grants_and_updates_leave_unmentioned_protection_unchanged() {
         txn.set_collection_compaction_bound(id, Some(10.into()))
             .unwrap();
     }
-    let client = txn.create_client_incarnation(None).unwrap();
+    let client = txn
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
     let replica = txn
         .get_cluster_replicas()
         .next()
         .expect("bootstrap replica")
         .replica_id;
-    let peer = txn.create_client_incarnation(Some(replica)).unwrap();
+    let peer = txn
+        .create_client_incarnation(ClientRealization::Replica(replica))
+        .unwrap();
     txn.grant_client_read_requirements(
         client,
         BTreeMap::from([(target, 30.into()), (unrelated, 20.into())]),
@@ -1106,7 +1128,9 @@ async fn client_admission_and_protected_metadata_retirement() {
         .unwrap();
     txn.set_maintained_read_requirement(id, BTreeSet::from([input]), Some(10.into()))
         .unwrap();
-    let client = txn.create_client_incarnation(None).unwrap();
+    let client = txn
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
     commit(txn).await;
 
     for target in [id, GlobalId::User(9999)] {
@@ -1131,7 +1155,9 @@ async fn client_admission_and_protected_metadata_retirement() {
         .next()
         .expect("bootstrap replica")
         .replica_id;
-    let other = txn.create_client_incarnation(Some(replica)).unwrap();
+    let other = txn
+        .create_client_incarnation(ClientRealization::Replica(replica))
+        .unwrap();
     txn.grant_client_read_requirements(other, BTreeMap::from([(id, 20.into())]))
         .unwrap();
     commit(txn).await;
@@ -1183,7 +1209,9 @@ async fn client_index_permission_and_retirement() {
         .unwrap();
     Owner::Ordinary.insert(&mut txn, 1000);
     let id = Owner::Ordinary.id(1000);
-    let client = txn.create_client_incarnation(None).unwrap();
+    let client = txn
+        .create_client_incarnation(ClientRealization::Adapter(DEFAULT_ADAPTER_ID))
+        .unwrap();
     txn.grant_client_read_requirements(client, BTreeMap::from([(id, 20.into())]))
         .unwrap();
     commit(txn).await;
@@ -1213,7 +1241,9 @@ async fn client_index_permission_and_retirement() {
         .next()
         .expect("bootstrap replica")
         .replica_id;
-    let other = txn.create_client_incarnation(Some(replica)).unwrap();
+    let other = txn
+        .create_client_incarnation(ClientRealization::Replica(replica))
+        .unwrap();
     txn.grant_client_read_requirements(other, BTreeMap::from([(id, 21.into())]))
         .unwrap();
     reject(txn, "no live storage or index identity").await;

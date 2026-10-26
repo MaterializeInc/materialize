@@ -488,14 +488,18 @@ impl Coordinator {
     }
 
     /// Capture once before entering the registration transaction's retry loop.
-    pub(super) fn adapter_execution_predecessor(catalog: &Catalog) -> Option<u64> {
+    pub(super) fn adapter_execution_predecessor(
+        catalog: &Catalog,
+        adapter_id: mz_repr::AdapterId,
+    ) -> Option<u64> {
         let state = catalog.state();
         state
             .client_incarnations()
             .iter()
             .find_map(|(&id, execution)| {
                 (execution.deployment_generation == state.deployment_generation()
-                    && execution.replica_id.is_none())
+                    && execution.realization
+                        == mz_catalog::durable::objects::ClientRealization::Adapter(adapter_id))
                 .then_some(id)
             })
     }
@@ -628,10 +632,15 @@ impl Coordinator {
                 client
             }
             None => {
-                let expected = Self::adapter_execution_predecessor(self.client_read_catalog());
+                let expected = Self::adapter_execution_predecessor(
+                    self.client_read_catalog(),
+                    self.adapter_id,
+                );
                 let incarnation = self
                     .transact_client_protection(Op::CreateClientIncarnation {
-                        replica_id: None,
+                        realization: mz_catalog::durable::objects::ClientRealization::Adapter(
+                            self.adapter_id,
+                        ),
                         expected,
                     })
                     .await?

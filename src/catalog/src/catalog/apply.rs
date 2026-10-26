@@ -418,6 +418,14 @@ impl CatalogState {
                     retractions,
                 );
             }
+            StateUpdateKind::AdapterDeclaration(declaration) => {
+                apply_inverted_lookup(
+                    &mut self.adapter_declarations,
+                    &declaration.id,
+                    declaration.clone(),
+                    diff,
+                );
+            }
             StateUpdateKind::ClusterReplicaDeclaration(declaration) => {
                 apply_inverted_lookup(
                     &mut self.cluster_replica_declarations,
@@ -545,7 +553,7 @@ impl CatalogState {
                     &incarnation.id,
                     crate::durable::objects::ClientIncarnationValue {
                         deployment_generation: incarnation.deployment_generation,
-                        replica_id: incarnation.replica_id,
+                        realization: incarnation.realization,
                     },
                     diff,
                 );
@@ -1718,6 +1726,7 @@ impl CatalogState {
             // mz_cluster_replicas is a MaterializedView backed by
             // mz_internal.mz_catalog_raw.
             StateUpdateKind::ClusterReplica(_)
+            | StateUpdateKind::AdapterDeclaration(_)
             | StateUpdateKind::ClusterReplicaDeclaration(_)
             | StateUpdateKind::ClusterRuntime(_) => Vec::new(),
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
@@ -2505,6 +2514,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             StateUpdateKind::Cluster(_)
             | StateUpdateKind::ClusterSystemConfiguration(_)
             | StateUpdateKind::IntrospectionSourceIndex(_)
+            | StateUpdateKind::AdapterDeclaration(_)
             | StateUpdateKind::ClusterReplicaDeclaration(_)
             | StateUpdateKind::ClusterRuntime(_)
             | StateUpdateKind::ClusterReplica(_)
@@ -2766,6 +2776,7 @@ impl ApplyState {
             | ReplicaSystemConfiguration(_)
             | Cluster(_)
             | NetworkPolicy(_)
+            | AdapterDeclaration(_)
             | ClusterReplicaDeclaration(_)
             | ClusterRuntime(_)
             | ClusterReplica(_)

@@ -141,7 +141,7 @@ async fn exercise_liveness() {
             ts,
             None,
             vec![Op::CreateClientIncarnation {
-                replica_id: Some(replica),
+                realization: mz_catalog::durable::ClientRealization::Replica(replica),
                 expected: None,
             }],
         )
@@ -170,7 +170,7 @@ async fn exercise_liveness() {
             ts,
             None,
             vec![Op::CreateClientIncarnation {
-                replica_id: Some(replica),
+                realization: mz_catalog::durable::ClientRealization::Replica(replica),
                 expected: Some(predecessor),
             }],
         )
@@ -463,7 +463,9 @@ async fn exercise_liveness() {
             None,
             vec![
                 Op::CreateClientIncarnation {
-                    replica_id: None,
+                    realization: mz_catalog::durable::ClientRealization::Adapter(
+                        mz_catalog::durable::DEFAULT_ADAPTER_ID,
+                    ),
                     expected: None,
                 },
                 Op::UpdateSystemConfiguration {
@@ -756,7 +758,7 @@ async fn exercise_liveness() {
             cluster,
             &build,
             vec![Op::CreateClientIncarnation {
-                replica_id: Some(replica),
+                realization: mz_catalog::durable::ClientRealization::Replica(replica),
                 expected: Some(incarnation),
             }],
         )

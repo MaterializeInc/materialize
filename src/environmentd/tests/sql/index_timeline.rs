@@ -88,7 +88,11 @@ async fn creation_protects_timelines_before_installation() {
                         .map(|(key, value)| {
                             ClientIncarnation::from_key_value(key.clone(), value.clone())
                         })
-                        .any(|client| client.id == grant.incarnation && client.replica_id.is_none())
+                        .any(|client| {
+                            client.id == grant.incarnation
+                                && client.realization.adapter_id()
+                                    == Some(mz_catalog::durable::DEFAULT_ADAPTER_ID)
+                        })
             })
             .expect("SQL creation must durably protect the index before installation");
         let creator_id = grant.incarnation;

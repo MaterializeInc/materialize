@@ -881,7 +881,8 @@ impl ReplicaEnactment {
             .get(&self.protection.incarnation())
             .context("replica execution was superseded or retired")?;
         ensure!(
-            participant.replica_id == Some(self.replica)
+            participant.realization
+                == mz_catalog::durable::ClientRealization::Replica(self.replica)
                 && participant.deployment_generation == catalog.state().deployment_generation(),
             "replica incarnation identity mismatch"
         );

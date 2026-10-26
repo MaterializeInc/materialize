@@ -222,6 +222,10 @@ pub(crate) async fn initialize(
     let mut audit_events = vec![];
 
     for (name, next_id) in [
+        (
+            super::ADAPTER_ID_ALLOC_KEY.to_string(),
+            super::DEFAULT_ADAPTER_ID.0 + 1,
+        ),
         (USER_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
         (SYSTEM_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),
         (
@@ -271,6 +275,12 @@ pub(crate) async fn initialize(
     ] {
         tx.insert_id_allocator(name, next_id)?;
     }
+
+    tx.set_adapter_declaration(super::objects::AdapterDeclaration {
+        id: super::DEFAULT_ADAPTER_ID,
+        name: "default".to_string(),
+        size: options.default_adapter_size.clone(),
+    })?;
 
     for role in BUILTIN_ROLES {
         tx.insert_builtin_role(

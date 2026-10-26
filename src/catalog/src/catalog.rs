@@ -1455,6 +1455,7 @@ impl Catalog {
     ) -> Result<crate::durable::CatalogSnapshotReader, CatalogError> {
         let config = &self.diagnostic_config;
         let bootstrap = BootstrapArgs {
+            default_adapter_size: crate::durable::DEFAULT_ADAPTER_SIZE.into(),
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
             default_cluster_replica_size: config.builtin_system_cluster_config.size.clone(),
             default_cluster_replication_factor: config
@@ -2037,6 +2038,7 @@ impl Catalog {
                 StateUpdateKind::ClientReadRequirement(_) => "ClientReadRequirement",
                 StateUpdateKind::StorageCollectionMetadata(_) => "StorageCollectionMetadata",
                 StateUpdateKind::UnfinalizedShard(_) => "UnfinalizedShard",
+                StateUpdateKind::AdapterDeclaration(_) => "AdapterDeclaration",
             };
             *kinds.entry((kind, update.diff)).or_default() += 1;
         }

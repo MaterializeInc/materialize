@@ -86,7 +86,11 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
         .expect("consume peer snapshot");
     let incarnation = {
         let mut tx = peer.transaction().await.expect("start peer publication");
-        let incarnation = tx.create_client_incarnation(None).expect("register peer");
+        let incarnation = tx
+            .create_client_incarnation(mz_catalog::durable::ClientRealization::Adapter(
+                mz_catalog::durable::DEFAULT_ADAPTER_ID,
+            ))
+            .expect("register peer");
         let _ = tx.get_and_commit_op_updates();
         let ts = tx.upper();
         tx.commit(ts).await.expect("publish peer metadata");

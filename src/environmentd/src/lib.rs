@@ -704,6 +704,7 @@ impl Listeners {
                 .await?;
 
         let bootstrap_args = BootstrapArgs {
+            default_adapter_size: mz_catalog::durable::DEFAULT_ADAPTER_SIZE.into(),
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
             bootstrap_role: config.bootstrap_role,
@@ -844,6 +845,7 @@ impl Listeners {
         };
         let envd_epoch = adapter_storage.epoch();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
+            adapter_id: mz_catalog::durable::DEFAULT_ADAPTER_ID,
             connection_context: config.controller.connection_context.clone(),
             connection_limit_callback,
             controller_config: config.controller,

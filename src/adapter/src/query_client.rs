@@ -1538,7 +1538,9 @@ mod tests {
                     .expect("can enable joined protection writers");
             }
             let incarnation = tx
-                .create_client_incarnation(None)
+                .create_client_incarnation(mz_catalog::durable::ClientRealization::Adapter(
+                    mz_catalog::durable::DEFAULT_ADAPTER_ID,
+                ))
                 .expect("can create client incarnation");
             let _ = tx.get_and_commit_op_updates();
             let ts = tx.upper();
@@ -1584,7 +1586,9 @@ mod tests {
                     ts,
                     None,
                     vec![Op::CreateClientIncarnation {
-                        replica_id: None,
+                        realization: mz_catalog::durable::ClientRealization::Adapter(
+                            mz_catalog::durable::DEFAULT_ADAPTER_ID,
+                        ),
                         expected: Some(incarnation),
                     }],
                 )
@@ -1788,7 +1792,9 @@ mod tests {
                     ts,
                     None,
                     vec![Op::CreateClientIncarnation {
-                        replica_id: None,
+                        realization: mz_catalog::durable::ClientRealization::Adapter(
+                            mz_catalog::durable::DEFAULT_ADAPTER_ID,
+                        ),
                         expected: Some(incarnation),
                     }],
                 )

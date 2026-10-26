@@ -40,7 +40,7 @@ use mz_proto::TryFromProtoError;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
+use mz_repr::{AdapterId, CatalogItemId, GlobalId, RelationVersion, Timestamp};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -497,6 +497,76 @@ impl DurableType for IntrospectionSourceIndex {
         ClusterIntrospectionSourceIndexKey {
             cluster_id: self.cluster_id,
             name: self.name.clone(),
+        }
+    }
+}
+
+/// Shared SQL adapter intent. Executions and endpoints belong to deployments.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct AdapterDeclaration {
+    pub id: AdapterId,
+    pub name: String,
+    pub size: String,
+}
+
+impl DurableType for AdapterDeclaration {
+    type Key = AdapterDeclarationKey;
+    type Value = AdapterDeclarationValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            AdapterDeclarationKey { id: self.id },
+            AdapterDeclarationValue {
+                name: self.name,
+                size: self.size,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            name: value.name,
+            size: value.size,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        AdapterDeclarationKey { id: self.id }
+    }
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct AdapterDeclarationKey {
+    pub(crate) id: AdapterId,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct AdapterDeclarationValue {
+    pub(crate) name: String,
+    pub(crate) size: String,
+}
+
+/// The stable participant realized within a deployment. Incarnation IDs identify
+/// executions of this participant, not its declaration.
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, PartialEq, Eq, serde::Serialize)]
+pub enum ClientRealization {
+    Adapter(AdapterId),
+    Replica(ReplicaId),
+}
+
+impl ClientRealization {
+    pub fn replica_id(self) -> Option<ReplicaId> {
+        match self {
+            Self::Replica(id) => Some(id),
+            Self::Adapter(_) => None,
+        }
+    }
+
+    pub fn adapter_id(self) -> Option<AdapterId> {
+        match self {
+            Self::Adapter(id) => Some(id),
+            Self::Replica(_) => None,
         }
     }
 }
@@ -1476,8 +1546,7 @@ pub struct ClientIncarnation {
     pub id: u64,
     /// Immutable deployment that owns this client's protection publications.
     pub deployment_generation: u64,
-    /// The replica realization, or this deployment's adapter singleton.
-    pub replica_id: Option<ReplicaId>,
+    pub realization: ClientRealization,
 }
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
@@ -1488,7 +1557,7 @@ pub struct ClientIncarnationKey {
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, serde::Serialize)]
 pub struct ClientIncarnationValue {
     pub deployment_generation: u64,
-    pub replica_id: Option<ReplicaId>,
+    pub realization: ClientRealization,
 }
 
 impl DurableType for ClientIncarnation {
@@ -1499,7 +1568,7 @@ impl DurableType for ClientIncarnation {
             ClientIncarnationKey { id: self.id },
             ClientIncarnationValue {
                 deployment_generation: self.deployment_generation,
-                replica_id: self.replica_id,
+                realization: self.realization,
             },
         )
     }
@@ -1507,7 +1576,7 @@ impl DurableType for ClientIncarnation {
         Self {
             id: key.id,
             deployment_generation: value.deployment_generation,
-            replica_id: value.replica_id,
+            realization: value.realization,
         }
     }
     fn key(&self) -> Self::Key {
@@ -1737,6 +1806,11 @@ macro_rules! named_catalog_value {
 }
 
 named_catalog_value!(
+    AdapterDeclarationKey,
+    AdapterDeclarationValue,
+    |_: &AdapterDeclarationKey, v: &AdapterDeclarationValue| NameScope::Global(v.name.clone())
+);
+named_catalog_value!(
     DatabaseKey,
     DatabaseValue,
     |_: &DatabaseKey, v: &DatabaseValue| NameScope::Global(v.name.clone())
@@ -1812,6 +1886,7 @@ impl<K: Ord + Clone> NameIndex<K> {
 /// Derived name lookups. These are not persisted and must track the snapshot tables.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NameIndexes {
+    pub(crate) adapter_declarations: NameIndex<AdapterDeclarationKey>,
     pub(crate) databases: NameIndex<DatabaseKey>,
     pub(crate) schemas: NameIndex<SchemaKey>,
     pub(crate) items: NameIndex<ItemKey>,
@@ -1870,6 +1945,7 @@ impl OidIndex {
 /// [`Self::rebuild_oid_index`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Snapshot {
+    pub adapter_declarations: imbl::OrdMap<AdapterDeclarationKey, AdapterDeclarationValue>,
     pub name_indexes: NameIndexes,
     pub oid_index: OidIndex,
     pub read_protection_index: ReadProtectionIndex,
@@ -1954,6 +2030,7 @@ impl Snapshot {
             index
         }
         self.name_indexes = NameIndexes {
+            adapter_declarations: rebuild(&self.adapter_declarations),
             databases: rebuild(&self.databases),
             schemas: rebuild(&self.schemas),
             items: rebuild(&self.items),

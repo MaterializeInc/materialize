@@ -129,6 +129,9 @@ pub struct CatalogState {
     /// Cluster replica routing maps contain only this deployment's realizations.
     #[serde(serialize_with = "serialize_replica_membership")]
     pub(super) replica_membership: imbl::OrdMap<(u64, ReplicaId), ClusterId>,
+    #[serde(serialize_with = "serialize_adapter_declarations")]
+    pub(super) adapter_declarations:
+        imbl::OrdMap<mz_repr::AdapterId, crate::durable::objects::AdapterDeclaration>,
     #[serde(serialize_with = "serialize_replica_declarations")]
     pub(super) cluster_replica_declarations:
         imbl::OrdMap<ReplicaId, crate::durable::ClusterReplicaDeclaration>,
@@ -511,6 +514,13 @@ where
 }
 
 impl CatalogState {
+    /// Committed shared adapter intent, including declarations without a running process.
+    pub fn adapter_declarations(
+        &self,
+    ) -> &imbl::OrdMap<mz_repr::AdapterId, crate::durable::objects::AdapterDeclaration> {
+        &self.adapter_declarations
+    }
+
     /// Returns an empty [`CatalogState`] that can be used in tests.
     // TODO: Ideally we'd mark this as `#[cfg(test)]`, but that doesn't work with the way
     // tests are structured in this repository.
@@ -528,6 +538,7 @@ impl CatalogState {
             temporary_namespaces: Default::default(),
             clusters_by_id: Default::default(),
             replica_membership: Default::default(),
+            adapter_declarations: Default::default(),
             cluster_replica_declarations: Default::default(),
             cluster_runtimes: Default::default(),
             clusters_by_name: Default::default(),
@@ -3401,6 +3412,21 @@ fn serialize_maintained_read_requirements<S: serde::Serializer>(
     serializer.collect_map(entries)
 }
 
+fn serialize_adapter_declarations<S: serde::Serializer>(
+    declarations: &imbl::OrdMap<mz_repr::AdapterId, crate::durable::objects::AdapterDeclaration>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use crate::durable::objects::DurableType;
+    use crate::durable::objects::serialization::RustType;
+    serializer.collect_seq(declarations.values().map(|record| {
+        let (key, value) = record.clone().into_key_value();
+        mz_catalog_protos::objects::AdapterDeclaration {
+            key: key.into_proto(),
+            value: value.into_proto(),
+        }
+    }))
+}
+
 fn serialize_replica_declarations<S: serde::Serializer>(
     declarations: &imbl::OrdMap<ReplicaId, crate::durable::ClusterReplicaDeclaration>,
     serializer: S,
@@ -3903,7 +3929,9 @@ mod tests {
             StateUpdateKind::ClientIncarnation(ClientIncarnation {
                 id,
                 deployment_generation,
-                replica_id: None,
+                realization: crate::durable::ClientRealization::Adapter(
+                    crate::durable::DEFAULT_ADAPTER_ID,
+                ),
             })
         };
         let requirement = |incarnation, id, frontier| {
@@ -4031,7 +4059,9 @@ mod tests {
                 id,
                 crate::durable::objects::ClientIncarnationValue {
                     deployment_generation: id - 1,
-                    replica_id: None
+                    realization: crate::durable::ClientRealization::Adapter(
+                        crate::durable::DEFAULT_ADAPTER_ID
+                    )
                 }
             )))
         );
@@ -4039,8 +4069,8 @@ mod tests {
         assert_eq!(
             dump["client_incarnations"],
             serde_json::json!({
-                "1": {"deployment_generation": 0, "replica_id": null},
-                "2": {"deployment_generation": 1, "replica_id": null}
+                "1": {"deployment_generation": 0, "realization": {"Adapter": 1}},
+                "2": {"deployment_generation": 1, "realization": {"Adapter": 1}}
             })
         );
         assert_eq!(
@@ -4657,7 +4687,7 @@ mod tests {
                 1,
                 crate::durable::objects::ClientIncarnationValue {
                     deployment_generation: 0,
-                    replica_id: None,
+                    realization: crate::durable::ClientRealization::Adapter(crate::durable::DEFAULT_ADAPTER_ID),
                 },
             );
             for direct in [5, 50] {

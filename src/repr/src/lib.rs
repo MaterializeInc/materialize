@@ -31,6 +31,7 @@ mod relation_and_scalar;
 mod row;
 mod scalar;
 
+pub mod adapter_id;
 pub mod adt;
 pub mod bytes;
 pub mod catalog_item_id;
@@ -48,6 +49,7 @@ pub mod timestamp;
 mod update;
 pub mod user;
 
+pub use crate::adapter_id::AdapterId;
 pub use crate::catalog_item_id::CatalogItemId;
 pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;

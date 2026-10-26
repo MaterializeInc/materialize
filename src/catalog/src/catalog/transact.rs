@@ -354,7 +354,7 @@ pub enum Op {
     /// Replaces a realization's expected execution, transferring its protection.
     /// The startup attempt must retain its expectation across catalog retries.
     CreateClientIncarnation {
-        replica_id: Option<ReplicaId>,
+        realization: crate::durable::objects::ClientRealization,
         expected: Option<u64>,
     },
     /// Advances or releases changed grants, leaving unmentioned grants intact.
@@ -1873,7 +1873,7 @@ impl Catalog {
                 )?;
             }
             Op::CreateClientIncarnation {
-                replica_id,
+                realization,
                 expected,
             } => {
                 if !state.catalog_read_protection_enabled() {
@@ -1883,7 +1883,7 @@ impl Catalog {
                     ));
                 }
                 created_client_incarnations
-                    .push(tx.replace_client_incarnation(replica_id, expected)?);
+                    .push(tx.replace_client_incarnation(realization, expected)?);
             }
             Op::UpdateClientReadRequirements {
                 incarnation,
@@ -5158,6 +5158,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::SYSTEM_CONN_ID;
+    use crate::durable;
     use crate::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
     use crate::memory::error::{Error, ErrorKind};
     use crate::memory::objects::{CatalogItem, Table, TableDataSource};
@@ -5447,7 +5448,7 @@ mod tests {
                 ts,
                 None,
                 vec![Op::CreateClientIncarnation {
-                    replica_id: None,
+                    realization: durable::ClientRealization::Adapter(durable::DEFAULT_ADAPTER_ID),
                     expected: None,
                 }],
             )
@@ -5816,11 +5817,13 @@ mod tests {
                 None,
                 vec![
                     Op::CreateClientIncarnation {
-                        replica_id: None,
+                        realization: durable::ClientRealization::Adapter(
+                            durable::DEFAULT_ADAPTER_ID,
+                        ),
                         expected: None,
                     },
                     Op::CreateClientIncarnation {
-                        replica_id: Some(replica),
+                        realization: durable::ClientRealization::Replica(replica),
                         expected: None,
                     },
                 ],
@@ -6111,7 +6114,7 @@ mod tests {
                 ts,
                 None,
                 vec![Op::CreateClientIncarnation {
-                    replica_id: None,
+                    realization: durable::ClientRealization::Adapter(durable::DEFAULT_ADAPTER_ID),
                     expected: Some(incarnation),
                 }],
             )

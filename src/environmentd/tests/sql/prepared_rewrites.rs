@@ -169,8 +169,10 @@ async fn run_inner(conflict: Conflict) {
             .unwrap();
             Some((
                 replica.replica_id,
-                txn.create_client_incarnation(Some(replica.replica_id))
-                    .unwrap(),
+                txn.create_client_incarnation(mz_catalog::durable::ClientRealization::Replica(
+                    replica.replica_id,
+                ))
+                .unwrap(),
             ))
         };
         let ts = txn.upper();
@@ -315,7 +317,10 @@ async fn run_inner(conflict: Conflict) {
                 // as a compatible peer-grant prefix at transaction open.
                 let (replica, incarnation) = peer_execution.unwrap();
                 let successor = txn
-                    .replace_client_incarnation(Some(replica), Some(incarnation))
+                    .replace_client_incarnation(
+                        mz_catalog::durable::ClientRealization::Replica(replica),
+                        Some(incarnation),
+                    )
                     .unwrap();
                 txn.grant_client_read_requirements(successor, BTreeMap::from([(input, required)]))
                     .unwrap();
@@ -398,7 +403,10 @@ async fn run_inner(conflict: Conflict) {
                 // requiring the DROP to refresh and retry its prepared commit.
                 let (replica, incarnation) = peer_execution.unwrap();
                 let successor = txn
-                    .replace_client_incarnation(Some(replica), Some(incarnation))
+                    .replace_client_incarnation(
+                        mz_catalog::durable::ClientRealization::Replica(replica),
+                        Some(incarnation),
+                    )
                     .unwrap();
                 let ts = txn.upper();
                 let _ = txn.get_and_commit_op_updates();

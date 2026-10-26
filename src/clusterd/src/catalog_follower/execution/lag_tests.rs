@@ -370,7 +370,9 @@ async fn create_reader(catalog: &mut Catalog) -> u64 {
                     ts,
                     None,
                     vec![Op::CreateClientIncarnation {
-                        replica_id: None,
+                        realization: mz_catalog::durable::ClientRealization::Adapter(
+                            mz_catalog::durable::DEFAULT_ADAPTER_ID,
+                        ),
                         expected: None,
                     }],
                 )

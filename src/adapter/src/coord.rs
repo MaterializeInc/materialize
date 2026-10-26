@@ -1453,6 +1453,7 @@ impl StagedContext for () {
 
 /// Configures a coordinator.
 pub struct Config {
+    pub adapter_id: mz_repr::AdapterId,
     pub controller_config: ControllerConfig,
     pub controller_envd_epoch: std::num::NonZeroI64,
     pub storage: Box<dyn mz_catalog::durable::DurableCatalogState>,
@@ -2215,6 +2216,8 @@ impl ClusterReplicaStatuses {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Coordinator {
+    /// Stable shared declaration identity, qualified by this deployment at execution admission.
+    adapter_id: mz_repr::AdapterId,
     /// The controller for the storage and compute layers.
     #[derivative(Debug = "ignore")]
     controller: mz_controller::Controller,
@@ -2932,11 +2935,13 @@ impl Coordinator {
         // Keep construction separate from activation. Bootstrap read policies
         // still use their initialization holds until the late client handoff.
         let bootstrap_client = if write_plans {
-            let expected = Self::adapter_execution_predecessor(self.catalog());
+            let expected = Self::adapter_execution_predecessor(self.catalog(), self.adapter_id);
             let incarnations = self
                 .bootstrap_catalog_transact(
                     vec![crate::catalog::Op::CreateClientIncarnation {
-                        replica_id: None,
+                        realization: mz_catalog::durable::objects::ClientRealization::Adapter(
+                            self.adapter_id,
+                        ),
                         expected,
                     }],
                     &mut builtin_table_updates,
@@ -6189,6 +6194,7 @@ impl Drop for LastMessage {
 /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
 pub fn serve(
     Config {
+        adapter_id,
         controller_config,
         controller_envd_epoch,
         mut storage,
@@ -6611,6 +6617,7 @@ pub fn serve(
                     query_persist_location,
                     query_orchestrator,
                     query_deploy_generation,
+                    adapter_id,
                     internal_cmd_tx,
                     group_commit_tx,
                     reconcile_now: Arc::new(Notify::new()),

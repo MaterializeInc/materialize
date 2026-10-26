@@ -115,7 +115,7 @@ completion adopts the exact committed grants and issues the new timeline tokens
 before another publication can release them. Explicit reconstruction windows
 remain fixed rather than becoming another automatic birth.
 
-Adapter protection belongs to one execution per deployment and does not expire
+Adapter protection belongs to one execution per adapter and deployment and does not expire
 through silence. Startup captures the expected predecessor once, retaining that
 expectation across registration retries. Bootstrap and serving share that execution.
 A confirmed supersession or deployment fence terminates the adapter, rather than

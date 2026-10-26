@@ -58,6 +58,7 @@ pub enum CollectionType {
     ComputeIntrospectionSourceIndex,
     ComputeReplicas,
     ClusterReplicaDeclaration,
+    AdapterDeclaration,
     ClusterRuntime,
 
     Comments,
@@ -169,6 +170,14 @@ collection_impl!({
     collection_type: CollectionType::ClusterReplicaDeclaration,
     trace_field: cluster_replica_declarations,
     update: StateUpdateKind::ClusterReplicaDeclaration,
+});
+collection_impl!({
+    name: AdapterDeclarationCollection,
+    key: proto::AdapterDeclarationKey,
+    value: proto::AdapterDeclarationValue,
+    collection_type: CollectionType::AdapterDeclaration,
+    trace_field: adapter_declarations,
+    update: StateUpdateKind::AdapterDeclaration,
 });
 collection_impl!({
     name: ClusterRuntimeCollection,
@@ -415,6 +424,7 @@ pub struct Trace {
     pub introspection_sources: CollectionTrace<ClusterIntrospectionSourceIndexCollection>,
     pub cluster_replicas: CollectionTrace<ClusterReplicaCollection>,
     pub cluster_replica_declarations: CollectionTrace<ClusterReplicaDeclarationCollection>,
+    pub adapter_declarations: CollectionTrace<AdapterDeclarationCollection>,
     pub cluster_runtimes: CollectionTrace<ClusterRuntimeCollection>,
 
     pub comments: CollectionTrace<CommentCollection>,
@@ -478,6 +488,7 @@ impl Trace {
             introspection_sources: CollectionTrace::new(),
             cluster_replicas: CollectionTrace::new(),
             cluster_replica_declarations: CollectionTrace::new(),
+            adapter_declarations: CollectionTrace::new(),
             cluster_runtimes: CollectionTrace::new(),
 
             comments: CollectionTrace::new(),
@@ -515,6 +526,7 @@ impl Trace {
             introspection_sources,
             cluster_replicas,
             cluster_replica_declarations,
+            adapter_declarations,
             cluster_runtimes,
 
             comments,
@@ -548,6 +560,7 @@ impl Trace {
         introspection_sources.sort();
         cluster_replicas.sort();
         cluster_replica_declarations.sort();
+        adapter_declarations.sort();
         cluster_runtimes.sort();
 
         comments.sort();
@@ -648,7 +661,7 @@ mod tests {
                 proto::ClientIncarnationKey { id: 1 },
                 proto::ClientIncarnationValue {
                     deployment_generation: 0,
-                    replica_id: None,
+                    realization: proto::ClientRealization::Adapter(1),
                 },
             ),
             Timestamp::new(699_999),

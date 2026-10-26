@@ -31,9 +31,9 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
-    AuditLogCollection, ClientIncarnationCollection, ClientReadRequirementCollection,
-    ClusterCollection, ClusterIntrospectionSourceIndexCollection, ClusterReplicaCollection,
-    ClusterReplicaDeclarationCollection, ClusterRuntimeCollection,
+    AdapterDeclarationCollection, AuditLogCollection, ClientIncarnationCollection,
+    ClientReadRequirementCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
+    ClusterReplicaCollection, ClusterReplicaDeclarationCollection, ClusterRuntimeCollection,
     ClusterSystemConfigurationCollection, Collection, CollectionCompactionBoundCollection,
     CollectionTrace, CollectionType, CommentCollection, ConfigCollection, DatabaseCollection,
     DebugCatalogState, DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection,
@@ -339,6 +339,9 @@ macro_rules! for_collection {
             CollectionType::ClusterReplicaDeclaration => {
                 $fn::<ClusterReplicaDeclarationCollection>($($arg),*).await?
             }
+            CollectionType::AdapterDeclaration => {
+                $fn::<AdapterDeclarationCollection>($($arg),*).await?
+            }
             CollectionType::ClusterRuntime => $fn::<ClusterRuntimeCollection>($($arg),*).await?,
             CollectionType::Comments => $fn::<CommentCollection>($($arg),*).await?,
             CollectionType::Config => $fn::<ConfigCollection>($($arg),*).await?,
@@ -526,6 +529,7 @@ async fn dump(
         introspection_sources,
         cluster_replicas,
         cluster_replica_declarations,
+        adapter_declarations,
         cluster_runtimes,
         comments,
         configs,
@@ -580,6 +584,13 @@ async fn dump(
     dump_col(
         &mut data,
         cluster_replica_declarations,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        adapter_declarations,
         &ignore,
         stats_only,
         consolidate,
@@ -730,6 +741,7 @@ async fn upgrade_check(
         .open_savepoint(
             now().into(),
             &BootstrapArgs {
+                default_adapter_size: mz_catalog::durable::DEFAULT_ADAPTER_SIZE.into(),
                 default_cluster_replica_size:
                     "DEFAULT CLUSTER REPLICA SIZE IS ONLY USED FOR NEW ENVIRONMENTS".into(),
                 default_cluster_replication_factor: 1,

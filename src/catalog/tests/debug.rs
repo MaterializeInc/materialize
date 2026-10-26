@@ -92,6 +92,7 @@ impl Debug for StableTrace<'_> {
             clusters,
             introspection_sources,
             cluster_replicas,
+            adapter_declarations,
             cluster_replica_declarations,
             cluster_runtimes,
             comments,
@@ -145,6 +146,7 @@ impl Debug for StableTrace<'_> {
             .field("clusters", clusters)
             .field("introspection_sources", introspection_sources)
             .field("cluster_replicas", cluster_replicas)
+            .field("adapter_declarations", adapter_declarations)
             .field("cluster_replica_declarations", cluster_replica_declarations)
             .field("cluster_runtimes", cluster_runtimes)
             .field("comments", comments)
@@ -409,7 +411,10 @@ async fn test_debug_live_mutations(registered: bool, protected: bool) {
             .unwrap();
     }
     if registered {
-        txn.create_client_incarnation(None).unwrap();
+        txn.create_client_incarnation(mz_catalog::durable::ClientRealization::Adapter(
+            mz_catalog::durable::DEFAULT_ADAPTER_ID,
+        ))
+        .unwrap();
     }
     // The open timestamp is not the publication timestamp. Publish at wall-clock
     // time so the advisory check observes genuinely recent durable activity.
@@ -583,7 +588,10 @@ async fn test_persist_debug_registered_execution_requires_force() {
         .unwrap();
     state.sync_to_current_updates().await.unwrap();
     let mut txn = state.transaction().await.unwrap();
-    txn.create_client_incarnation(None).unwrap();
+    txn.create_client_incarnation(mz_catalog::durable::ClientRealization::Adapter(
+        mz_catalog::durable::DEFAULT_ADAPTER_ID,
+    ))
+    .unwrap();
     let ts = txn.upper();
     let _ = txn.get_and_commit_op_updates();
     txn.commit(ts).await.unwrap();

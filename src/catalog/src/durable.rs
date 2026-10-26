@@ -33,14 +33,14 @@ pub use crate::durable::metrics::Metrics;
 pub use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::state_update::StateUpdate;
 pub use crate::durable::objects::{
-    BurstState, ClientIncarnation, ClientReadRequirement, Cluster, ClusterConfig, ClusterReplica,
-    ClusterReplicaDeclaration, ClusterRuntime, ClusterSystemConfiguration, ClusterVariant,
-    ClusterVariantManaged, Comment, Database, DefaultPrivilege, IntrospectionSourceIndex, Item,
-    NetworkPolicy, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
-    ReplicaConfig, ReplicaLocation, ReplicaSystemConfiguration, Role, RoleAuth, Schema,
-    SourceReference, SourceReferences, StorageCollectionMetadata, SystemConfiguration,
-    SystemObjectDescription, SystemObjectMapping, UnfinalizedShard, WrittenPlan,
-    managed_cluster_replica_name,
+    AdapterDeclaration, BurstState, ClientIncarnation, ClientReadRequirement, ClientRealization,
+    Cluster, ClusterConfig, ClusterReplica, ClusterReplicaDeclaration, ClusterRuntime,
+    ClusterSystemConfiguration, ClusterVariant, ClusterVariantManaged, Comment, Database,
+    DefaultPrivilege, IntrospectionSourceIndex, Item, NetworkPolicy, ReconfigurationState,
+    ReconfigurationStatus, ReconfigurationTarget, ReplicaConfig, ReplicaLocation,
+    ReplicaSystemConfiguration, Role, RoleAuth, Schema, SourceReference, SourceReferences,
+    StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
+    UnfinalizedShard, WrittenPlan, managed_cluster_replica_name,
 };
 pub use crate::durable::persist::{CatalogSnapshotReader, catalog_shard_id, shard_id};
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
@@ -68,6 +68,9 @@ pub const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
 pub const USER_CLUSTER_ID_ALLOC_KEY: &str = "user_compute";
 pub const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
 pub const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
+pub const ADAPTER_ID_ALLOC_KEY: &str = "adapter";
+pub const DEFAULT_ADAPTER_ID: mz_repr::AdapterId = mz_repr::AdapterId(1);
+pub const DEFAULT_ADAPTER_SIZE: &str = "1";
 pub const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
@@ -80,6 +83,7 @@ pub const MOCK_AUTHENTICATION_NONCE_KEY: &str = "mock_authentication_nonce";
 
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
+    pub default_adapter_size: String,
     pub cluster_replica_size_map: ClusterReplicaSizeMap,
     pub default_cluster_replica_size: String,
     pub default_cluster_replication_factor: u32,
@@ -733,6 +737,7 @@ pub async fn persist_backed_catalog_join_active(
 
 pub fn test_bootstrap_args() -> BootstrapArgs {
     BootstrapArgs {
+        default_adapter_size: DEFAULT_ADAPTER_SIZE.into(),
         default_cluster_replica_size: "scale=1,workers=1".into(),
         default_cluster_replication_factor: 1,
         bootstrap_role: None,

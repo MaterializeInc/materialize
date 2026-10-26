@@ -4345,6 +4345,7 @@ pub enum StateUpdateKind {
     ClusterSystemConfiguration(durable::objects::ClusterSystemConfiguration),
     NetworkPolicy(durable::objects::NetworkPolicy),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
+    AdapterDeclaration(durable::objects::AdapterDeclaration),
     ClusterReplicaDeclaration(durable::objects::ClusterReplicaDeclaration),
     ClusterRuntime(durable::objects::ClusterRuntime),
     ClusterReplica(durable::objects::ClusterReplica),

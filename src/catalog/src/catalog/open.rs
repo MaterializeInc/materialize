@@ -499,6 +499,7 @@ impl Catalog {
             clusters_by_name: imbl::OrdMap::new(),
             clusters_by_id: imbl::OrdMap::new(),
             replica_membership: Default::default(),
+            adapter_declarations: Default::default(),
             cluster_replica_declarations: Default::default(),
             cluster_runtimes: Default::default(),
             roles_by_name: imbl::OrdMap::new(),
@@ -617,6 +618,7 @@ impl Catalog {
                 | StateUpdateKind::ReplicaSystemConfiguration(_)
                 | StateUpdateKind::Cluster(_)
                 | StateUpdateKind::NetworkPolicy(_)
+                | StateUpdateKind::AdapterDeclaration(_)
                 | StateUpdateKind::ClusterReplicaDeclaration(_)
                 | StateUpdateKind::ClusterRuntime(_)
                 | StateUpdateKind::ClusterReplica(_) => pre_item_updates.push(StateUpdate {

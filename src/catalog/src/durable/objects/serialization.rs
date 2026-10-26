@@ -14,22 +14,22 @@ use mz_proto::TryFromProtoError;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
-    AuditLogKey, ClientIncarnationKey, ClientIncarnationValue, ClientReadRequirementKey,
-    ClientReadRequirementValue, ClusterIntrospectionSourceIndexKey,
-    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplicaDeclarationKey,
-    ClusterReplicaDeclarationValue, ClusterReplicaKey, ClusterReplicaValue, ClusterRuntimeKey,
-    ClusterRuntimeValue, ClusterSystemConfigurationKey, ClusterSystemConfigurationValue,
-    ClusterValue, CollectionCompactionBoundKey, CollectionCompactionBoundValue, CommentKey,
-    CommentValue, ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    MaintainedReadRequirementKey, MaintainedReadRequirementValue, NetworkPolicyKey,
-    NetworkPolicyValue, ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey,
-    RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue,
-    SettingKey, SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
-    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemCatalogItemId,
-    SystemGlobalId, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
-    UnfinalizedShardKey,
+    AdapterDeclarationKey, AdapterDeclarationValue, AuditLogKey, ClientIncarnationKey,
+    ClientIncarnationValue, ClientReadRequirementKey, ClientReadRequirementValue,
+    ClientRealization, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
+    ClusterKey, ClusterReplicaDeclarationKey, ClusterReplicaDeclarationValue, ClusterReplicaKey,
+    ClusterReplicaValue, ClusterRuntimeKey, ClusterRuntimeValue, ClusterSystemConfigurationKey,
+    ClusterSystemConfigurationValue, ClusterValue, CollectionCompactionBoundKey,
+    CollectionCompactionBoundValue, CommentKey, CommentValue, ConfigKey, ConfigValue, DatabaseKey,
+    DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue,
+    IdAllocKey, IdAllocValue, IntrospectionSourceIndexCatalogItemId,
+    IntrospectionSourceIndexGlobalId, ItemKey, ItemValue, MaintainedReadRequirementKey,
+    MaintainedReadRequirementValue, NetworkPolicyKey, NetworkPolicyValue,
+    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey,
+    SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
+    SourceReference, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
+    SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
@@ -430,6 +430,50 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
             catalog_id: proto.catalog_id.into_rust()?,
             global_id: proto.global_id.into_rust()?,
             oid: proto.oid,
+        })
+    }
+}
+
+impl RustType<proto::AdapterDeclarationKey> for AdapterDeclarationKey {
+    fn into_proto(&self) -> proto::AdapterDeclarationKey {
+        proto::AdapterDeclarationKey { id: self.id.0 }
+    }
+
+    fn from_proto(proto: proto::AdapterDeclarationKey) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            id: mz_repr::AdapterId(proto.id),
+        })
+    }
+}
+
+impl RustType<proto::AdapterDeclarationValue> for AdapterDeclarationValue {
+    fn into_proto(&self) -> proto::AdapterDeclarationValue {
+        proto::AdapterDeclarationValue {
+            name: self.name.clone(),
+            size: self.size.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::AdapterDeclarationValue) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            name: proto.name,
+            size: proto.size,
+        })
+    }
+}
+
+impl RustType<proto::ClientRealization> for ClientRealization {
+    fn into_proto(&self) -> proto::ClientRealization {
+        match self {
+            Self::Adapter(id) => proto::ClientRealization::Adapter(id.0),
+            Self::Replica(id) => proto::ClientRealization::Replica(id.into_proto()),
+        }
+    }
+
+    fn from_proto(proto: proto::ClientRealization) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            proto::ClientRealization::Adapter(id) => Self::Adapter(mz_repr::AdapterId(id)),
+            proto::ClientRealization::Replica(id) => Self::Replica(id.into_rust()?),
         })
     }
 }
@@ -925,13 +969,13 @@ impl RustType<proto::ClientIncarnationValue> for ClientIncarnationValue {
     fn into_proto(&self) -> proto::ClientIncarnationValue {
         proto::ClientIncarnationValue {
             deployment_generation: self.deployment_generation,
-            replica_id: self.replica_id.into_proto(),
+            realization: self.realization.into_proto(),
         }
     }
     fn from_proto(proto: proto::ClientIncarnationValue) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             deployment_generation: proto.deployment_generation,
-            replica_id: proto.replica_id.into_rust()?,
+            realization: proto.realization.into_rust()?,
         })
     }
 }

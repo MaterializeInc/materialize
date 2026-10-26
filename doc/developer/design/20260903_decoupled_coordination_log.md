@@ -34,8 +34,28 @@ serving. Also demonstrate dropping all adapters and recovering SQL through
 controllerd's HTTP list/create/drop API, without reinitializing the environment.
 This is not complete with two manually launched SQL processes.
 
-Next, establish the default adapter declaration and explicit realization identity,
-then integrate remote clients with the controller-managed adapter.
+The default adapter declaration and explicit realization identity are in progress.
+Aljoscha confirmed M3 is the final artifact and needs no M2-to-M3 migration.
+Current WIP adds `AdapterId` and schema v96 with adapter declarations and tagged
+adapter/replica realization ownership. Frozen v95 is unchanged. Durable/shared
+catalog transport and exact-realization replacement compile in `mz-catalog`
+(`f71f6fcefd`). The unsupported transition is rejected, not converted.
+Fresh initialization now declares the default adapter and initializes its ID
+allocator. Runtime registration uses explicit adapter/replica identities.
+The combined runtime check passes for environmentd, clusterd, catalog-debug,
+testdrive and sqllogictest. All five focused lifecycle/reopen tests and the
+serialization stability check pass. The v96 fixture was generated with the
+repository helper and copied back with matching SHA-256.
+Environmentd still supplies the default identity, pending the join-only binary.
+Catalog protection fixtures now use explicit realizations. New regressions cover
+two-adapter replacement/drop isolation and reopening an empty adapter inventory.
+Static ownership review found no concrete defects, with its scope recorded in
+`~/.local/share/aj/m3-evidence/adapter-identity-review.md`. Boundary/schema results
+are in `adapter-identity-boundary-and-schema.log`. All-target Clippy passes for
+catalog, adapter, clusterd, environmentd, catalog-debug, testdrive and sqllogictest.
+The full catalog unit suite is running through `bin/cargo-test`. Direct nextest
+again omitted the repository runner's standard stack setting and overflowed in
+two existing retention tests. Full workspace/integration verification remains open.
 The worker-generated Cargo.lock delta is preserved and applied locally, with no
 dependency version changes. Initialization/join boundary research is saved in
 `~/.local/share/aj/m3-evidence/initialization-join-boundary.md`.
@@ -61,15 +81,23 @@ Reuse existing execution replacement and retirement, with exact adapter identity
 and create the default declaration only in fresh initialization. Do not infer
 initialization from an empty adapter inventory or silently convert v95 state.
 
+Replica launch specification construction is extracted from controller enactment
+in `4a2a374c`. All-target Clippy and both restart regressions pass. One run hit the
+old scratch database's 100-connection ceiling, then passed unchanged. Subsequent
+checks use the isolated `m3-native-checks` cargo-test metadata service with the
+repository's standard 5000 connections, where both tests also pass. Its URL is in
+`~/m3-evidence/native-metadata-url.txt` on scratch. Leave `m2-pause-test-postgres`
+untouched.
+
 ## Concrete starting points
 
 - `src/catalog/src/durable.rs` separates join from initialization/promotion.
   `Catalog::open_committed` in `src/catalog/src/catalog.rs` reconstructs initialized
   same-version state. Neither is a complete deployment initializer. Own-build
   plans remain adapter work, not a reason to embed a coordinator in controllerd.
-- `src/adapter/src/coord/read_protection.rs::adapter_execution_predecessor` and
-  durable `ClientIncarnation` still treat the adapter as a deployment singleton.
-  `src/adapter/src/coord.rs::bootstrap_tables` resets shared system-table contents.
+- `src/adapter/src/coord/read_protection.rs::adapter_execution_predecessor` uses
+  the configured adapter identity. Joining must supply the selected declaration.
+  `src/adapter/src/coord.rs::bootstrap_tables` still resets shared system-table contents.
   Ordinary adapter join/restart must not supersede or reset a peer.
 - Reuse `src/cluster-controller/` policy with a standalone catalog/observation
   context. Explicit replica reconciliation and transactional resource admission
