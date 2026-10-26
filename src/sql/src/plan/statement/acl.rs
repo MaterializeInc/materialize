@@ -696,7 +696,10 @@ pub fn plan_alter_default_privileges(
         | ObjectType::Func => {
             sql_bail!("{object_type}S do not have privileges")
         }
-        ObjectType::Cluster | ObjectType::Database
+        ObjectType::Cluster
+        | ObjectType::Database
+        | ObjectType::NetworkPolicy
+        | ObjectType::QueryPolicy
             if matches!(
                 target_objects,
                 GrantTargetAllSpecification::AllDatabases { .. }
@@ -705,7 +708,11 @@ pub fn plan_alter_default_privileges(
             sql_bail!("cannot specify {object_type}S and IN DATABASE")
         }
 
-        ObjectType::Cluster | ObjectType::Database | ObjectType::Schema
+        ObjectType::Cluster
+        | ObjectType::Database
+        | ObjectType::Schema
+        | ObjectType::NetworkPolicy
+        | ObjectType::QueryPolicy
             if matches!(
                 target_objects,
                 GrantTargetAllSpecification::AllSchemas { .. }

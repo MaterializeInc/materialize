@@ -3846,9 +3846,11 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
         if let ShowObjectType::Privileges { object_type, role } = &self.object_type {
             if let Some(object_type) = object_type {
                 f.write_str(" ON ");
-                f.write_node(object_type);
-                if let SystemObjectType::Object(_) = object_type {
-                    f.write_str("S");
+                match object_type {
+                    SystemObjectType::System => f.write_str("SYSTEM"),
+                    SystemObjectType::Object(object_type) => {
+                        write_grant_object_type_plural(f, object_type);
+                    }
                 }
             }
             if let Some(role) = role {

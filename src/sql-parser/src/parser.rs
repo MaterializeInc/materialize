@@ -10502,6 +10502,7 @@ impl<'a> Parser<'a> {
                 CONNECTIONS,
                 DATABASES,
                 SCHEMAS,
+                QUERY,
             ])? {
                 SYSTEM => SystemObjectType::System,
                 TABLES => SystemObjectType::Object(ObjectType::Table),
@@ -10511,6 +10512,10 @@ impl<'a> Parser<'a> {
                 CONNECTIONS => SystemObjectType::Object(ObjectType::Connection),
                 DATABASES => SystemObjectType::Object(ObjectType::Database),
                 SCHEMAS => SystemObjectType::Object(ObjectType::Schema),
+                QUERY => {
+                    self.expect_keyword(POLICIES)?;
+                    SystemObjectType::Object(ObjectType::QueryPolicy)
+                }
                 _ => unreachable!(),
             },
         )

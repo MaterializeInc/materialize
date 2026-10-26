@@ -63,6 +63,70 @@ statement ok
 DROP ROLE policy_creator;
 
 statement ok
+CREATE ROLE policy_grantee;
+
+statement error cannot specify QUERY POLICYS and IN DATABASE
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN DATABASE materialize GRANT USAGE ON QUERY POLICIES TO policy_grantee;
+
+statement error cannot specify QUERY POLICYS and IN SCHEMA
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA public GRANT USAGE ON QUERY POLICIES TO policy_grantee;
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize GRANT USAGE ON QUERY POLICIES TO policy_grantee;
+
+statement ok
+CREATE QUERY POLICY inherited (RULES (r (action='reject', metric='query_plan_includes', value='persist_read')));
+
+mode standard
+
+query TTTTTTT
+SHOW PRIVILEGES FOR policy_grantee WHERE name = 'inherited';
+----
+materialize
+policy_grantee
+NULL
+NULL
+inherited
+query policy
+USAGE
+
+query TTTTTTT
+SHOW PRIVILEGES ON QUERY POLICIES FOR policy_grantee;
+----
+materialize
+policy_grantee
+NULL
+NULL
+inherited
+query policy
+USAGE
+
+statement ok
+GRANT USAGE ON QUERY POLICY inherited TO PUBLIC;
+
+query TTTTTTT
+SHOW PRIVILEGES ON QUERY POLICIES WHERE grantee = 'PUBLIC';
+----
+materialize
+PUBLIC
+NULL
+NULL
+inherited
+query policy
+USAGE
+
+mode cockroach
+
+statement ok
+DROP QUERY POLICY inherited;
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE materialize REVOKE USAGE ON QUERY POLICIES FROM policy_grantee;
+
+statement ok
+DROP ROLE policy_grantee;
+
+statement ok
 CREATE TABLE indexed (a int, b int);
 
 statement ok
@@ -107,6 +171,13 @@ SELECT a, sum(b) FROM indexed GROUP BY a;
 db error: ERROR: query rejected: this query would build a temporary dataflow
 DETAIL: Query policy "no_dataflows" rule "fast_only" applies to this query on cluster "quickstart".
 HINT: Run EXPLAIN to inspect the query plan. Create an index that serves the query on this cluster, or use a cluster and role whose query policies permit this plan.
+
+# Diagnostics remain available even when their introspection queries need dataflows.
+statement ok
+EXPLAIN ANALYZE CLUSTER MEMORY;
+
+statement ok
+EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW unindexed;
 
 # A persist fast-path read does not build a temporary dataflow.
 query II rowsort

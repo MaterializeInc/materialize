@@ -7537,7 +7537,23 @@ SELECT grantor, grantee, database, NULL AS schema, name, 'schema' AS object_type
 FROM mz_internal.mz_show_schema_privileges
 UNION ALL
 SELECT grantor, grantee, database, schema, name, object_type, privilege_type
-FROM mz_internal.mz_show_object_privileges"#,
+FROM mz_internal.mz_show_object_privileges
+UNION ALL
+SELECT
+    grantor.name,
+    CASE privileges.grantee WHEN 'p' THEN 'PUBLIC' ELSE grantee.name END,
+    NULL AS database,
+    NULL AS schema,
+    privileges.name,
+    'query policy' AS object_type,
+    privileges.privilege_type
+FROM
+    (SELECT mz_internal.mz_aclexplode(privileges).*, name
+    FROM mz_internal.mz_query_policies
+    WHERE id NOT LIKE 's%') AS privileges
+LEFT JOIN mz_catalog.mz_roles grantor ON privileges.grantor = grantor.id
+LEFT JOIN mz_catalog.mz_roles grantee ON privileges.grantee = grantee.id
+WHERE privileges.grantee NOT LIKE 's%'"#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
 });

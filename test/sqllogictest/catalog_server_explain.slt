@@ -10993,63 +10993,72 @@ Explained Query:
                 →Arranged mz_catalog.mz_objects
                   Key: (#2{schema_id})
     cte l5 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2..=#4
+          →Table Function mz_aclexplode(#1{privileges})
+            →Read mz_internal.mz_query_policies
+    cte l6 =
       →Negate Diffs
         →Fused with Child Map/Filter/Project
           Project: #0
             →Arranged mz_catalog.mz_roles
               Key: (#0{id})
-    cte l6 =
+    cte l7 =
       →Negate Diffs
         →Fused with Child Map/Filter/Project
           Project: #0
           Filter: NOT(like["s%"](#0))
             →Arranged mz_catalog.mz_roles
               Key: (#0{id})
-    cte l7 =
+    cte l8 =
       →Negate Diffs
         →Fused with Child Map/Filter/Project
           Project: #1
             →Arranged mz_catalog.mz_databases
               Key: (#2{name})
-    cte l8 =
+    cte l9 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#1{grantee}))
           →Read l0
-    cte l9 =
+    cte l10 =
       →Fused with Child Map/Filter/Project
         Project: #0, #2, #6
         Map: true
           →Arranged mz_catalog.mz_roles
             Key: (#0{id})
-    cte l10 =
-      →Fused with Child Map/Filter/Project
-        Filter: NOT(like["s%"](#0))
-          →Read l9
     cte l11 =
       →Fused with Child Map/Filter/Project
-        Filter: NOT(like["s%"](#2{grantee}))
-          →Read l1
+        Filter: NOT(like["s%"](#0))
+          →Read l10
     cte l12 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#2{grantee}))
-          →Read l2
+          →Read l1
     cte l13 =
+      →Fused with Child Map/Filter/Project
+        Filter: NOT(like["s%"](#2{grantee}))
+          →Read l2
+    cte l14 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#3{grantee}))
           →Read l3
-    cte l14 =
+    cte l15 =
       →Fused with Child Map/Filter/Project
         Project: #1, #0, #5
         Map: true
           →Arranged mz_catalog.mz_databases
             Key: (#2{name})
-    cte l15 =
+    cte l16 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#4{grantee}))
           →Read l4
-    cte l16 =
+    cte l17 =
+      →Fused with Child Map/Filter/Project
+        Filter: NOT(like["s%"](#2{grantee}))
+          →Read l5
+    cte l18 =
       →Union
-        →One-Shot Delta Join [%0:l8 » %1[#0] » %2[#0]]
+        →One-Shot Delta Join [%0:l9 » %1[#0] » %2[#0]]
           path %0:
             after %1:
               Project: #1, #2, #5
@@ -11061,22 +11070,7 @@ Explained Query:
               Project: #1..=#6, #0
               Map: null, null, null, "system"
           →Unarranged Raw Stream
-            →Stream l8
-          →Arrange (#0)
-            →Union
-              →Stream l9
-              →Map/Filter/Project
-                Project: #0..=#2
-                Map: null, null
-                  →Threshold Diffs #0
-                    →Arrange (#0)
-                      →Union
-                        →Stream l5
-                        →Unarranged Raw Stream
-                          →Distinct GroupAggregate
-                            →Fused with Child Map/Filter/Project
-                              Project: #0
-                                →Read l0
+            →Stream l9
           →Arrange (#0)
             →Union
               →Stream l10
@@ -11090,9 +11084,24 @@ Explained Query:
                         →Unarranged Raw Stream
                           →Distinct GroupAggregate
                             →Fused with Child Map/Filter/Project
+                              Project: #0
+                                →Read l0
+          →Arrange (#0)
+            →Union
+              →Stream l11
+              →Map/Filter/Project
+                Project: #0..=#2
+                Map: null, null
+                  →Threshold Diffs #0
+                    →Arrange (#0)
+                      →Union
+                        →Stream l7
+                        →Unarranged Raw Stream
+                          →Distinct GroupAggregate
+                            →Fused with Child Map/Filter/Project
                               Project: #1
-                                →Read l8
-        →One-Shot Delta Join [%0:l11 » %1[#0] » %2[#0]]
+                                →Read l9
+        →One-Shot Delta Join [%0:l12 » %1[#0] » %2[#0]]
           path %0:
             after %1:
               Project: #1..=#3, #6
@@ -11104,22 +11113,7 @@ Explained Query:
               Project: #2..=#5, #0, #6, #1
               Map: null, null, "cluster"
           →Unarranged Raw Stream
-            →Stream l11
-          →Arrange (#0)
-            →Union
-              →Stream l9
-              →Map/Filter/Project
-                Project: #0..=#2
-                Map: null, null
-                  →Threshold Diffs #0
-                    →Arrange (#0)
-                      →Union
-                        →Stream l5
-                        →Unarranged Raw Stream
-                          →Distinct GroupAggregate
-                            →Fused with Child Map/Filter/Project
-                              Project: #1
-                                →Read l1
+            →Stream l12
           →Arrange (#0)
             →Union
               →Stream l10
@@ -11133,9 +11127,24 @@ Explained Query:
                         →Unarranged Raw Stream
                           →Distinct GroupAggregate
                             →Fused with Child Map/Filter/Project
+                              Project: #1
+                                →Read l1
+          →Arrange (#0)
+            →Union
+              →Stream l11
+              →Map/Filter/Project
+                Project: #0..=#2
+                Map: null, null
+                  →Threshold Diffs #0
+                    →Arrange (#0)
+                      →Union
+                        →Stream l7
+                        →Unarranged Raw Stream
+                          →Distinct GroupAggregate
+                            →Fused with Child Map/Filter/Project
                               Project: #2
-                                →Read l11
-        →One-Shot Delta Join [%0:l12 » %1[#0] » %2[#0]]
+                                →Read l12
+        →One-Shot Delta Join [%0:l13 » %1[#0] » %2[#0]]
           path %0:
             after %1:
               Project: #1..=#3, #6
@@ -11147,22 +11156,7 @@ Explained Query:
               Project: #2..=#5, #0, #6, #1
               Map: null, null, "database"
           →Unarranged Raw Stream
-            →Stream l12
-          →Arrange (#0)
-            →Union
-              →Stream l9
-              →Map/Filter/Project
-                Project: #0..=#2
-                Map: null, null
-                  →Threshold Diffs #0
-                    →Arrange (#0)
-                      →Union
-                        →Stream l5
-                        →Unarranged Raw Stream
-                          →Distinct GroupAggregate
-                            →Fused with Child Map/Filter/Project
-                              Project: #1
-                                →Read l2
+            →Stream l13
           →Arrange (#0)
             →Union
               →Stream l10
@@ -11176,9 +11170,24 @@ Explained Query:
                         →Unarranged Raw Stream
                           →Distinct GroupAggregate
                             →Fused with Child Map/Filter/Project
+                              Project: #1
+                                →Read l2
+          →Arrange (#0)
+            →Union
+              →Stream l11
+              →Map/Filter/Project
+                Project: #0..=#2
+                Map: null, null
+                  →Threshold Diffs #0
+                    →Arrange (#0)
+                      →Union
+                        →Stream l7
+                        →Unarranged Raw Stream
+                          →Distinct GroupAggregate
+                            →Fused with Child Map/Filter/Project
                               Project: #2
-                                →Read l12
-        →One-Shot Delta Join [%0:l13 » %1[#0] » %2[#0] » %3[#0]]
+                                →Read l13
+        →One-Shot Delta Join [%0:l14 » %1[#0] » %2[#0] » %3[#0]]
           path %0:
             after %1:
               Project: #1..=#4, #7
@@ -11193,22 +11202,7 @@ Explained Query:
               Project: #2..=#5, #0, #6, #1
               Map: null, "schema"
           →Unarranged Raw Stream
-            →Stream l13
-          →Arrange (#0)
-            →Union
-              →Stream l9
-              →Map/Filter/Project
-                Project: #0..=#2
-                Map: null, null
-                  →Threshold Diffs #0
-                    →Arrange (#0)
-                      →Union
-                        →Stream l5
-                        →Unarranged Raw Stream
-                          →Distinct GroupAggregate
-                            →Fused with Child Map/Filter/Project
-                              Project: #2
-                                →Read l3
+            →Stream l14
           →Arrange (#0)
             →Union
               →Stream l10
@@ -11222,11 +11216,11 @@ Explained Query:
                         →Unarranged Raw Stream
                           →Distinct GroupAggregate
                             →Fused with Child Map/Filter/Project
-                              Project: #3
-                                →Read l13
+                              Project: #2
+                                →Read l3
           →Arrange (#0)
             →Union
-              →Stream l14
+              →Stream l11
               →Map/Filter/Project
                 Project: #0..=#2
                 Map: null, null
@@ -11236,12 +11230,27 @@ Explained Query:
                         →Stream l7
                         →Unarranged Raw Stream
                           →Distinct GroupAggregate
+                            →Fused with Child Map/Filter/Project
+                              Project: #3
+                                →Read l14
+          →Arrange (#0)
+            →Union
+              →Stream l15
+              →Map/Filter/Project
+                Project: #0..=#2
+                Map: null, null
+                  →Threshold Diffs #0
+                    →Arrange (#0)
+                      →Union
+                        →Stream l8
+                        →Unarranged Raw Stream
+                          →Distinct GroupAggregate
                             →Union
                               →Fused with Child Map/Filter/Project
                                 Project: #0
                                   →Read l3
                               →Constant (1 row)
-        →One-Shot Delta Join [%0:l15 » %1[#0] » %2[#0] » %3[#0] » %4[#0]]
+        →One-Shot Delta Join [%0:l16 » %1[#0] » %2[#0] » %3[#0] » %4[#0]]
           path %0:
             after %1:
               Project: #1..=#5, #8
@@ -11256,22 +11265,7 @@ Explained Query:
               Project: #6, #7, #11, #8, #1..=#3
               Map: case when (#10) IS NULL then null else #9 end
           →Unarranged Raw Stream
-            →Stream l15
-          →Arrange (#0)
-            →Union
-              →Stream l9
-              →Map/Filter/Project
-                Project: #0..=#2
-                Map: null, null
-                  →Threshold Diffs #0
-                    →Arrange (#0)
-                      →Union
-                        →Stream l5
-                        →Unarranged Raw Stream
-                          →Distinct GroupAggregate
-                            →Fused with Child Map/Filter/Project
-                              Project: #3
-                                →Read l4
+            →Stream l16
           →Arrange (#0)
             →Union
               →Stream l10
@@ -11285,8 +11279,23 @@ Explained Query:
                         →Unarranged Raw Stream
                           →Distinct GroupAggregate
                             →Fused with Child Map/Filter/Project
+                              Project: #3
+                                →Read l4
+          →Arrange (#0)
+            →Union
+              →Stream l11
+              →Map/Filter/Project
+                Project: #0..=#2
+                Map: null, null
+                  →Threshold Diffs #0
+                    →Arrange (#0)
+                      →Union
+                        →Stream l7
+                        →Unarranged Raw Stream
+                          →Distinct GroupAggregate
+                            →Fused with Child Map/Filter/Project
                               Project: #4
-                                →Read l15
+                                →Read l16
           →Arrange (#0) (case when (#3) IS NULL then null else #1 end)
             →Union
               →Fused with Child Map/Filter/Project
@@ -11312,7 +11321,53 @@ Explained Query:
                                 →Read l4
           →Arrange (#0)
             →Union
-              →Stream l14
+              →Stream l15
+              →Map/Filter/Project
+                Project: #0..=#2
+                Map: null, null
+                  →Threshold Diffs #0
+                    →Arrange (#0)
+                      →Union
+                        →Stream l8
+                        →Unarranged Raw Stream
+                          →Distinct GroupAggregate
+                            →Union
+                              →Fused with Child Map/Filter/Project
+                                Project: #0
+                                  →Arranged mz_catalog.mz_schemas
+                                    Key: (#2{database_id})
+                              →Constant (1 row)
+        →One-Shot Delta Join [%0:l17 » %1[#0] » %2[#0]]
+          path %0:
+            after %1:
+              Project: #1..=#3, #6
+              Map: case when (#5) IS NULL then null else #4 end
+            after %2:
+              Project: #1..=#3, #6
+              Map: case when (#0{grantee} = "p") then "PUBLIC" else case when (#5) IS NULL then null else #4 end end
+            Final closure:
+              Project: #2..=#5, #0, #6, #1
+              Map: null, null, "query policy"
+          →Unarranged Raw Stream
+            →Stream l17
+          →Arrange (#0)
+            →Union
+              →Stream l10
+              →Map/Filter/Project
+                Project: #0..=#2
+                Map: null, null
+                  →Threshold Diffs #0
+                    →Arrange (#0)
+                      →Union
+                        →Stream l6
+                        →Unarranged Raw Stream
+                          →Distinct GroupAggregate
+                            →Fused with Child Map/Filter/Project
+                              Project: #1
+                                →Read l5
+          →Arrange (#0)
+            →Union
+              →Stream l11
               →Map/Filter/Project
                 Project: #0..=#2
                 Map: null, null
@@ -11322,22 +11377,22 @@ Explained Query:
                         →Stream l7
                         →Unarranged Raw Stream
                           →Distinct GroupAggregate
-                            →Union
-                              →Fused with Child Map/Filter/Project
-                                Project: #0
-                                  →Arranged mz_catalog.mz_schemas
-                                    Key: (#2{database_id})
-                              →Constant (1 row)
+                            →Fused with Child Map/Filter/Project
+                              Project: #2
+                                →Read l17
   →Return
     →Union
       →Fused with Child Map/Filter/Project
         Filter: (#1{grantee} = "PUBLIC")
-          →Read l16
+          →Read l18
       →Fused with Child Map/Filter/Project
         Filter: (#1 = "materialize") AND (false = (#1{grantee} = "PUBLIC"))
-          →Read l16
+          →Read l18
 
 Source mz_catalog.mz_system_privileges
+Source mz_internal.mz_query_policies
+  project=(#1, #4)
+  filter=(NOT(like["s%"](#0{id})))
 
 Used Indexes:
   - mz_catalog.mz_clusters_ind (*** full scan ***)
@@ -11411,63 +11466,72 @@ Explained Query:
                 →Arranged mz_catalog.mz_objects
                   Key: (#2{schema_id})
     cte l5 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2..=#4
+          →Table Function mz_aclexplode(#1{privileges})
+            →Read mz_internal.mz_query_policies
+    cte l6 =
       →Negate Diffs
         →Fused with Child Map/Filter/Project
           Project: #0
             →Arranged mz_catalog.mz_roles
               Key: (#0{id})
-    cte l6 =
+    cte l7 =
       →Negate Diffs
         →Fused with Child Map/Filter/Project
           Project: #0
           Filter: NOT(like["s%"](#0))
             →Arranged mz_catalog.mz_roles
               Key: (#0{id})
-    cte l7 =
+    cte l8 =
       →Negate Diffs
         →Fused with Child Map/Filter/Project
           Project: #1
             →Arranged mz_catalog.mz_databases
               Key: (#2{name})
-    cte l8 =
+    cte l9 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#1{grantee}))
           →Read l0
-    cte l9 =
+    cte l10 =
       →Fused with Child Map/Filter/Project
         Project: #0, #2, #6
         Map: true
           →Arranged mz_catalog.mz_roles
             Key: (#0{id})
-    cte l10 =
-      →Fused with Child Map/Filter/Project
-        Filter: NOT(like["s%"](#0))
-          →Read l9
     cte l11 =
       →Fused with Child Map/Filter/Project
-        Filter: NOT(like["s%"](#2{grantee}))
-          →Read l1
+        Filter: NOT(like["s%"](#0))
+          →Read l10
     cte l12 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#2{grantee}))
-          →Read l2
+          →Read l1
     cte l13 =
+      →Fused with Child Map/Filter/Project
+        Filter: NOT(like["s%"](#2{grantee}))
+          →Read l2
+    cte l14 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#3{grantee}))
           →Read l3
-    cte l14 =
+    cte l15 =
       →Fused with Child Map/Filter/Project
         Project: #1, #0, #5
         Map: true
           →Arranged mz_catalog.mz_databases
             Key: (#2{name})
-    cte l15 =
+    cte l16 =
       →Fused with Child Map/Filter/Project
         Filter: NOT(like["s%"](#4{grantee}))
           →Read l4
+    cte l17 =
+      →Fused with Child Map/Filter/Project
+        Filter: NOT(like["s%"](#2{grantee}))
+          →Read l5
   →Return
     →Union
-      →One-Shot Delta Join [%0:l8 » %1[#0] » %2[#0]]
+      →One-Shot Delta Join [%0:l9 » %1[#0] » %2[#0]]
         path %0:
           after %1:
             Project: #1, #2, #5
@@ -11479,22 +11543,7 @@ Explained Query:
             Project: #1..=#6, #0
             Map: null, null, null, "system"
         →Unarranged Raw Stream
-          →Stream l8
-        →Arrange (#0)
-          →Union
-            →Stream l9
-            →Map/Filter/Project
-              Project: #0..=#2
-              Map: null, null
-                →Threshold Diffs #0
-                  →Arrange (#0)
-                    →Union
-                      →Stream l5
-                      →Unarranged Raw Stream
-                        →Distinct GroupAggregate
-                          →Fused with Child Map/Filter/Project
-                            Project: #0
-                              →Read l0
+          →Stream l9
         →Arrange (#0)
           →Union
             →Stream l10
@@ -11508,9 +11557,24 @@ Explained Query:
                       →Unarranged Raw Stream
                         →Distinct GroupAggregate
                           →Fused with Child Map/Filter/Project
+                            Project: #0
+                              →Read l0
+        →Arrange (#0)
+          →Union
+            →Stream l11
+            →Map/Filter/Project
+              Project: #0..=#2
+              Map: null, null
+                →Threshold Diffs #0
+                  →Arrange (#0)
+                    →Union
+                      →Stream l7
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
                             Project: #1
-                              →Read l8
-      →One-Shot Delta Join [%0:l11 » %1[#0] » %2[#0]]
+                              →Read l9
+      →One-Shot Delta Join [%0:l12 » %1[#0] » %2[#0]]
         path %0:
           after %1:
             Project: #1..=#3, #6
@@ -11522,22 +11586,7 @@ Explained Query:
             Project: #2..=#5, #0, #6, #1
             Map: null, null, "cluster"
         →Unarranged Raw Stream
-          →Stream l11
-        →Arrange (#0)
-          →Union
-            →Stream l9
-            →Map/Filter/Project
-              Project: #0..=#2
-              Map: null, null
-                →Threshold Diffs #0
-                  →Arrange (#0)
-                    →Union
-                      →Stream l5
-                      →Unarranged Raw Stream
-                        →Distinct GroupAggregate
-                          →Fused with Child Map/Filter/Project
-                            Project: #1
-                              →Read l1
+          →Stream l12
         →Arrange (#0)
           →Union
             →Stream l10
@@ -11551,9 +11600,24 @@ Explained Query:
                       →Unarranged Raw Stream
                         →Distinct GroupAggregate
                           →Fused with Child Map/Filter/Project
+                            Project: #1
+                              →Read l1
+        →Arrange (#0)
+          →Union
+            →Stream l11
+            →Map/Filter/Project
+              Project: #0..=#2
+              Map: null, null
+                →Threshold Diffs #0
+                  →Arrange (#0)
+                    →Union
+                      →Stream l7
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
                             Project: #2
-                              →Read l11
-      →One-Shot Delta Join [%0:l12 » %1[#0] » %2[#0]]
+                              →Read l12
+      →One-Shot Delta Join [%0:l13 » %1[#0] » %2[#0]]
         path %0:
           after %1:
             Project: #1..=#3, #6
@@ -11565,22 +11629,7 @@ Explained Query:
             Project: #2..=#5, #0, #6, #1
             Map: null, null, "database"
         →Unarranged Raw Stream
-          →Stream l12
-        →Arrange (#0)
-          →Union
-            →Stream l9
-            →Map/Filter/Project
-              Project: #0..=#2
-              Map: null, null
-                →Threshold Diffs #0
-                  →Arrange (#0)
-                    →Union
-                      →Stream l5
-                      →Unarranged Raw Stream
-                        →Distinct GroupAggregate
-                          →Fused with Child Map/Filter/Project
-                            Project: #1
-                              →Read l2
+          →Stream l13
         →Arrange (#0)
           →Union
             →Stream l10
@@ -11594,9 +11643,24 @@ Explained Query:
                       →Unarranged Raw Stream
                         →Distinct GroupAggregate
                           →Fused with Child Map/Filter/Project
+                            Project: #1
+                              →Read l2
+        →Arrange (#0)
+          →Union
+            →Stream l11
+            →Map/Filter/Project
+              Project: #0..=#2
+              Map: null, null
+                →Threshold Diffs #0
+                  →Arrange (#0)
+                    →Union
+                      →Stream l7
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
                             Project: #2
-                              →Read l12
-      →One-Shot Delta Join [%0:l13 » %1[#0] » %2[#0] » %3[#0]]
+                              →Read l13
+      →One-Shot Delta Join [%0:l14 » %1[#0] » %2[#0] » %3[#0]]
         path %0:
           after %1:
             Project: #1..=#4, #7
@@ -11611,22 +11675,7 @@ Explained Query:
             Project: #2..=#5, #0, #6, #1
             Map: null, "schema"
         →Unarranged Raw Stream
-          →Stream l13
-        →Arrange (#0)
-          →Union
-            →Stream l9
-            →Map/Filter/Project
-              Project: #0..=#2
-              Map: null, null
-                →Threshold Diffs #0
-                  →Arrange (#0)
-                    →Union
-                      →Stream l5
-                      →Unarranged Raw Stream
-                        →Distinct GroupAggregate
-                          →Fused with Child Map/Filter/Project
-                            Project: #2
-                              →Read l3
+          →Stream l14
         →Arrange (#0)
           →Union
             →Stream l10
@@ -11640,11 +11689,11 @@ Explained Query:
                       →Unarranged Raw Stream
                         →Distinct GroupAggregate
                           →Fused with Child Map/Filter/Project
-                            Project: #3
-                              →Read l13
+                            Project: #2
+                              →Read l3
         →Arrange (#0)
           →Union
-            →Stream l14
+            →Stream l11
             →Map/Filter/Project
               Project: #0..=#2
               Map: null, null
@@ -11654,12 +11703,27 @@ Explained Query:
                       →Stream l7
                       →Unarranged Raw Stream
                         →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
+                            Project: #3
+                              →Read l14
+        →Arrange (#0)
+          →Union
+            →Stream l15
+            →Map/Filter/Project
+              Project: #0..=#2
+              Map: null, null
+                →Threshold Diffs #0
+                  →Arrange (#0)
+                    →Union
+                      →Stream l8
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
                           →Union
                             →Fused with Child Map/Filter/Project
                               Project: #0
                                 →Read l3
                             →Constant (1 row)
-      →One-Shot Delta Join [%0:l15 » %1[#0] » %2[#0] » %3[#0] » %4[#0]]
+      →One-Shot Delta Join [%0:l16 » %1[#0] » %2[#0] » %3[#0] » %4[#0]]
         path %0:
           after %1:
             Project: #1..=#5, #8
@@ -11674,22 +11738,7 @@ Explained Query:
             Project: #6, #7, #11, #8, #1..=#3
             Map: case when (#10) IS NULL then null else #9 end
         →Unarranged Raw Stream
-          →Stream l15
-        →Arrange (#0)
-          →Union
-            →Stream l9
-            →Map/Filter/Project
-              Project: #0..=#2
-              Map: null, null
-                →Threshold Diffs #0
-                  →Arrange (#0)
-                    →Union
-                      →Stream l5
-                      →Unarranged Raw Stream
-                        →Distinct GroupAggregate
-                          →Fused with Child Map/Filter/Project
-                            Project: #3
-                              →Read l4
+          →Stream l16
         →Arrange (#0)
           →Union
             →Stream l10
@@ -11703,8 +11752,23 @@ Explained Query:
                       →Unarranged Raw Stream
                         →Distinct GroupAggregate
                           →Fused with Child Map/Filter/Project
+                            Project: #3
+                              →Read l4
+        →Arrange (#0)
+          →Union
+            →Stream l11
+            →Map/Filter/Project
+              Project: #0..=#2
+              Map: null, null
+                →Threshold Diffs #0
+                  →Arrange (#0)
+                    →Union
+                      →Stream l7
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
                             Project: #4
-                              →Read l15
+                              →Read l16
         →Arrange (#0) (case when (#3) IS NULL then null else #1 end)
           →Union
             →Fused with Child Map/Filter/Project
@@ -11730,7 +11794,53 @@ Explained Query:
                               →Read l4
         →Arrange (#0)
           →Union
-            →Stream l14
+            →Stream l15
+            →Map/Filter/Project
+              Project: #0..=#2
+              Map: null, null
+                →Threshold Diffs #0
+                  →Arrange (#0)
+                    →Union
+                      →Stream l8
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Union
+                            →Fused with Child Map/Filter/Project
+                              Project: #0
+                                →Arranged mz_catalog.mz_schemas
+                                  Key: (#2{database_id})
+                            →Constant (1 row)
+      →One-Shot Delta Join [%0:l17 » %1[#0] » %2[#0]]
+        path %0:
+          after %1:
+            Project: #1..=#3, #6
+            Map: case when (#5) IS NULL then null else #4 end
+          after %2:
+            Project: #1..=#3, #6
+            Map: case when (#0{grantee} = "p") then "PUBLIC" else case when (#5) IS NULL then null else #4 end end
+          Final closure:
+            Project: #2..=#5, #0, #6, #1
+            Map: null, null, "query policy"
+        →Unarranged Raw Stream
+          →Stream l17
+        →Arrange (#0)
+          →Union
+            →Stream l10
+            →Map/Filter/Project
+              Project: #0..=#2
+              Map: null, null
+                →Threshold Diffs #0
+                  →Arrange (#0)
+                    →Union
+                      →Stream l6
+                      →Unarranged Raw Stream
+                        →Distinct GroupAggregate
+                          →Fused with Child Map/Filter/Project
+                            Project: #1
+                              →Read l5
+        →Arrange (#0)
+          →Union
+            →Stream l11
             →Map/Filter/Project
               Project: #0..=#2
               Map: null, null
@@ -11740,14 +11850,14 @@ Explained Query:
                       →Stream l7
                       →Unarranged Raw Stream
                         →Distinct GroupAggregate
-                          →Union
-                            →Fused with Child Map/Filter/Project
-                              Project: #0
-                                →Arranged mz_catalog.mz_schemas
-                                  Key: (#2{database_id})
-                            →Constant (1 row)
+                          →Fused with Child Map/Filter/Project
+                            Project: #2
+                              →Read l17
 
 Source mz_catalog.mz_system_privileges
+Source mz_internal.mz_query_policies
+  project=(#1, #4)
+  filter=(NOT(like["s%"](#0{id})))
 
 Used Indexes:
   - mz_catalog.mz_clusters_ind (*** full scan ***)
