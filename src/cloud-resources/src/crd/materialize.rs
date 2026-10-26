@@ -283,10 +283,10 @@ pub mod v1alpha1 {
         ///
         /// A document without a `version` key is a flat map whose every key sets
         /// a parameter for the whole environment. A document with `"version": 2`
-        /// holds the environment-wide values under `global_parameters` and may
-        /// scope parameters to clusters or replicas: a segment names a context
-        /// kind, `cluster` or `replica`, and the clauses selecting the objects it
-        /// matches, and a rule attaches parameters to a segment. For each
+        /// holds the environment-wide values under `globalParameters` and may
+        /// scope parameters to clusters or replicas through `rules`: each rule
+        /// names a context kind, `cluster` or `replica`, the clauses selecting
+        /// the objects it matches, and the parameters to apply to them. For each
         /// parameter the first matching rule wins. A document with a structural
         /// defect anywhere is ignored as a whole, leaving every current value and
         /// override in place.
@@ -299,18 +299,13 @@ pub mod v1alpha1 {
         ///   system-params.json: |
         ///     {
         ///       "version": 2,
-        ///       "global_parameters": {"max_connections": 1000},
-        ///       "segments": {
-        ///         "analytics": {
+        ///       "globalParameters": {"max_connections": 1000},
+        ///       "rules": [
+        ///         {
         ///           "contextKind": "cluster",
         ///           "clauses": [
         ///             {"attribute": "cluster_name", "op": "in", "values": ["analytics"]}
-        ///           ]
-        ///         }
-        ///       },
-        ///       "rules": [
-        ///         {
-        ///           "segment": "analytics",
+        ///           ],
         ///           "parameters": {"enable_eager_delta_joins": true}
         ///         }
         ///       ]
@@ -1596,10 +1591,10 @@ pub mod v1 {
         ///
         /// A document without a `version` key is a flat map whose every key sets
         /// a parameter for the whole environment. A document with `"version": 2`
-        /// holds the environment-wide values under `global_parameters` and may
-        /// scope parameters to clusters or replicas: a segment names a context
-        /// kind, `cluster` or `replica`, and the clauses selecting the objects it
-        /// matches, and a rule attaches parameters to a segment. For each
+        /// holds the environment-wide values under `globalParameters` and may
+        /// scope parameters to clusters or replicas through `rules`: each rule
+        /// names a context kind, `cluster` or `replica`, the clauses selecting
+        /// the objects it matches, and the parameters to apply to them. For each
         /// parameter the first matching rule wins. A document with a structural
         /// defect anywhere is ignored as a whole, leaving every current value and
         /// override in place.
@@ -1612,18 +1607,13 @@ pub mod v1 {
         ///   system-params.json: |
         ///     {
         ///       "version": 2,
-        ///       "global_parameters": {"max_connections": 1000},
-        ///       "segments": {
-        ///         "analytics": {
+        ///       "globalParameters": {"max_connections": 1000},
+        ///       "rules": [
+        ///         {
         ///           "contextKind": "cluster",
         ///           "clauses": [
         ///             {"attribute": "cluster_name", "op": "in", "values": ["analytics"]}
-        ///           ]
-        ///         }
-        ///       },
-        ///       "rules": [
-        ///         {
-        ///           "segment": "analytics",
+        ///           ],
         ///           "parameters": {"enable_eager_delta_joins": true}
         ///         }
         ///       ]

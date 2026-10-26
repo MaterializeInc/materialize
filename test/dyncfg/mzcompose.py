@@ -153,66 +153,31 @@ def workflow_default(c: Composition) -> None:
             )
 
             # The same environment-wide values in the versioned format, which
-            # adds segments and rules alongside them.
+            # adds rules alongside them. A rule declares the context kind its
+            # clauses match, so a cluster and its replicas need one rule each even
+            # when the clauses are the same.
+            scoped_clauses = [
+                {
+                    "attribute": "cluster_name",
+                    "op": "in",
+                    "values": ["dyncfg_scoped"],
+                }
+            ]
             system_params_3: dict[str, Any] = {
                 "version": 2,
-                "global_parameters": {
+                "globalParameters": {
                     **ENV_WIDE_PARAMS,
                     "max_connections": 67,
                     "allowed_cluster_replica_sizes": "'25cc','50cc'",
                 },
-                "segments": {
-                    # A segment declares the context kind its clauses match, so a
-                    # cluster and its replicas need one segment each even when the
-                    # clauses are the same.
-                    "scoped-cluster": {
-                        "contextKind": "cluster",
-                        "clauses": [
-                            {
-                                "attribute": "cluster_name",
-                                "op": "in",
-                                "values": ["dyncfg_scoped"],
-                            }
-                        ],
-                    },
-                    "scoped-r1": {
+                "rules": [
+                    # The `r1` rule.
+                    {
                         "contextKind": "replica",
                         "clauses": [
-                            {
-                                "attribute": "cluster_name",
-                                "op": "in",
-                                "values": ["dyncfg_scoped"],
-                            },
+                            *scoped_clauses,
                             {"attribute": "replica_name", "op": "in", "values": ["r1"]},
                         ],
-                    },
-                    # Clauses over cluster attributes alone, which in a `replica`
-                    # segment reaches every replica of that cluster.
-                    "scoped-replicas": {
-                        "contextKind": "replica",
-                        "clauses": [
-                            {
-                                "attribute": "cluster_name",
-                                "op": "in",
-                                "values": ["dyncfg_scoped"],
-                            }
-                        ],
-                    },
-                    # No live cluster matches this, so its rule applies to nothing.
-                    "absent-cluster": {
-                        "contextKind": "cluster",
-                        "clauses": [
-                            {
-                                "attribute": "cluster_name",
-                                "op": "in",
-                                "values": ["dyncfg_absent"],
-                            }
-                        ],
-                    },
-                },
-                "rules": [
-                    {
-                        "segment": "scoped-r1",
                         "parameters": {
                             # First match wins: this repeats the environment-wide
                             # value, so the whole-cluster replica rule below cannot
@@ -220,17 +185,22 @@ def workflow_default(c: Composition) -> None:
                             # `r2` reaches that rule and does take its value.
                             REPLICA_PARAM: True,
                             # A cluster-coherent parameter may not be supplied
-                            # through a `replica` segment, so this is dropped by the
-                            # coherence guard.
+                            # through a `replica` rule, so this is ignored.
                             CLUSTER_PARAM_2: True,
                         },
                     },
+                    # The whole-cluster replica rule: clauses over cluster
+                    # attributes alone, which in a `replica` rule reach every
+                    # replica of that cluster.
                     {
-                        "segment": "scoped-replicas",
+                        "contextKind": "replica",
+                        "clauses": scoped_clauses,
                         "parameters": {REPLICA_PARAM: False},
                     },
+                    # The cluster rule.
                     {
-                        "segment": "scoped-cluster",
+                        "contextKind": "cluster",
+                        "clauses": scoped_clauses,
                         "parameters": {
                             # Differs from the environment-wide value, so it is
                             # recorded as the cluster's override.
@@ -239,7 +209,18 @@ def workflow_default(c: Composition) -> None:
                             UNPARSEABLE_PARAM: "maybe",
                         },
                     },
-                    {"segment": "absent-cluster", "parameters": {CLUSTER_PARAM: True}},
+                    # No live cluster matches this, so it applies to nothing.
+                    {
+                        "contextKind": "cluster",
+                        "clauses": [
+                            {
+                                "attribute": "cluster_name",
+                                "op": "in",
+                                "values": ["dyncfg_absent"],
+                            }
+                        ],
+                        "parameters": {CLUSTER_PARAM: True},
+                    },
                 ],
             }
 
@@ -257,11 +238,11 @@ def workflow_default(c: Composition) -> None:
                     dyncfg_scoped r2 {REPLICA_PARAM} false
 
                     # First match wins, stated per replica rather than by the
-                    # absence of a row above: `r1` is decided by `scoped-r1` at
+                    # absence of a row above: `r1` is decided by the `r1` rule at
                     # the environment-wide value and so records no override, `r2`
-                    # falls through to `scoped-replicas`. Reversing the two rules
-                    # makes `scoped-replicas` decide both, turning `r1` into
-                    # `false` and failing this.
+                    # falls through to the whole-cluster replica rule. Reversing
+                    # the two rules makes the latter decide both, turning `r1`
+                    # into `false` and failing this.
                     > SELECT r.name, coalesce(p.value, 'env-wide') FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id LEFT JOIN mz_internal.mz_replica_system_parameters p ON p.replica_id = r.id AND p.name = '{REPLICA_PARAM}' WHERE c.name = 'dyncfg_scoped' ORDER BY r.name
                     r1 env-wide
                     r2 false
@@ -270,29 +251,28 @@ def workflow_default(c: Composition) -> None:
 
             # A structural defect anywhere rejects the whole document, so neither
             # its environment-wide values nor its rules apply. The misspelled
-            # attribute would otherwise widen or narrow the segment, and reading
+            # attribute would otherwise widen or narrow the rule, and reading
             # the document as a flat map would prune every override. testdrive
             # retries until a result matches, so these assertions hold only
             # because the sleep gave the sync loop time to apply the document.
+            broken_rules = list(system_params_3["rules"])
+            broken_rules[2] = {
+                **broken_rules[2],
+                "clauses": [
+                    {
+                        "attribute": "cluster_nmae",
+                        "op": "in",
+                        "values": ["dyncfg_scoped"],
+                    }
+                ],
+            }
             system_params_broken: dict[str, Any] = {
                 **system_params_3,
-                "global_parameters": {
-                    **system_params_3["global_parameters"],
+                "globalParameters": {
+                    **system_params_3["globalParameters"],
                     "max_connections": 68,
                 },
-                "segments": {
-                    **system_params_3["segments"],
-                    "scoped-cluster": {
-                        "contextKind": "cluster",
-                        "clauses": [
-                            {
-                                "attribute": "cluster_nmae",
-                                "op": "in",
-                                "values": ["dyncfg_scoped"],
-                            }
-                        ],
-                    },
-                },
+                "rules": broken_rules,
             }
             write_config(config_file, system_params_broken)
             c.sleep(2)
@@ -309,7 +289,7 @@ def workflow_default(c: Composition) -> None:
                 """),
             )
 
-            # Create-time resolution: a cluster created while a segment already
+            # Create-time resolution: a cluster created while a rule already
             # matches it folds the overrides into its create transaction. So that
             # this is the only path that can produce the rows asserted for
             # `dyncfg_scoped_2`, materialized restarts with the sync loop parked at
@@ -318,9 +298,10 @@ def workflow_default(c: Composition) -> None:
             # parameters to `--system-parameter-default` values equal to the rule
             # values, leaving the fold nothing to record.
             #
-            # The segments are widened with `startsWith`, which selects
-            # `dyncfg_scoped_2` before it exists. `r1` of `dyncfg_scoped` must stay
-            # decided by the narrower `scoped-r1` rule ahead of the widened one.
+            # The cluster rule and the whole-cluster replica rule are widened with
+            # `startsWith`, which selects `dyncfg_scoped_2` before it exists. `r1`
+            # of `dyncfg_scoped` must stay decided by the narrower `r1` rule ahead
+            # of the widened one.
             widened = [
                 {
                     "attribute": "cluster_name",
@@ -328,13 +309,12 @@ def workflow_default(c: Composition) -> None:
                     "values": ["dyncfg_scoped"],
                 }
             ]
+            widened_rules = list(system_params_3["rules"])
+            widened_rules[1] = {**widened_rules[1], "clauses": widened}
+            widened_rules[2] = {**widened_rules[2], "clauses": widened}
             system_params_4: dict[str, Any] = {
                 **system_params_3,
-                "segments": {
-                    **system_params_3["segments"],
-                    "scoped-cluster": {"contextKind": "cluster", "clauses": widened},
-                    "scoped-replicas": {"contextKind": "replica", "clauses": widened},
-                },
+                "rules": widened_rules,
             }
 
             write_config(config_file, system_params_4)
@@ -375,9 +355,9 @@ def workflow_default(c: Composition) -> None:
                         > SELECT r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'dyncfg_scoped_2'
                         r1 {REPLICA_PARAM} false
 
-                        # `scoped-replicas` now matches every replica of both
-                        # clusters, but `scoped-r1` still precedes it, so `r1` of
-                        # `dyncfg_scoped` is still decided at the environment-wide
+                        # The whole-cluster replica rule now matches every replica
+                        # of both clusters, but the `r1` rule still precedes it, so
+                        # `r1` of `dyncfg_scoped` is still decided at the environment-wide
                         # value. Widening a later rule must not take a parameter away
                         # from the narrower rule ahead of it.
                         > SELECT c.name, r.name, coalesce(p.value, 'env-wide') FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id LEFT JOIN mz_internal.mz_replica_system_parameters p ON p.replica_id = r.id AND p.name = '{REPLICA_PARAM}' WHERE c.name LIKE 'dyncfg_scoped%' ORDER BY c.name, r.name
