@@ -575,6 +575,13 @@ pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_QUERY_POLICIES: VarDefinition = VarDefinition::new(
+    "max_query_policies",
+    value!(u32; 25),
+    "The maximum number of query policies in the region.",
+    true,
+);
+
 pub static MAX_RULES_PER_NETWORK_POLICY: VarDefinition = VarDefinition::new(
     "max_rules_per_network_policy",
     value!(u32; 25),

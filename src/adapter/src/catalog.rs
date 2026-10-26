@@ -1434,6 +1434,14 @@ impl Catalog {
             .map(|(_, policy)| policy)
     }
 
+    pub fn user_query_policies(&self) -> impl Iterator<Item = &QueryPolicy> {
+        self.state
+            .query_policies_by_id
+            .iter()
+            .filter(|(id, _)| id.is_user())
+            .map(|(_, policy)| policy)
+    }
+
     pub fn system_privileges(&self) -> &PrivilegeMap {
         &self.state.system_privileges
     }

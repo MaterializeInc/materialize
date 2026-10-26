@@ -577,6 +577,49 @@ UNION ALL SELECT name FROM mz_internal.mz_query_policies;
 statement ok
 DROP ROLE cleanup_owner;
 
+# Query policies have an independent object limit. Dropping one frees capacity.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_query_policies = 1;
+----
+COMPLETE 0
+
+statement ok
+CREATE QUERY POLICY at_limit (RULES ());
+
+statement error creating query policy would violate max_query_policies limit \(desired: 2, limit: 1, current: 1\)
+CREATE QUERY POLICY over_limit (RULES ());
+
+query T
+SELECT name FROM mz_internal.mz_query_policies;
+----
+at_limit
+
+statement ok
+DROP QUERY POLICY at_limit;
+
+statement ok
+CREATE QUERY POLICY replacement (RULES ());
+
+# Lowering the limit must not prevent altering or dropping existing policies.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_query_policies = 0;
+----
+COMPLETE 0
+
+statement ok
+ALTER QUERY POLICY replacement SET (MODE = 'enforce');
+
+statement ok
+DROP QUERY POLICY replacement;
+
+statement error creating query policy would violate max_query_policies limit \(desired: 1, limit: 0, current: 0\)
+CREATE QUERY POLICY over_limit (RULES ());
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET max_query_policies;
+----
+COMPLETE 0
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_query_policies = false;
 ----
@@ -584,3 +627,9 @@ COMPLETE 0
 
 statement error
 CREATE QUERY POLICY disabled (RULES (r (action='reject', metric='query_plan_includes', value='persist_read')));
+
+statement error query policies and their attachments.* is not available
+ALTER DEFAULT PRIVILEGES GRANT USAGE ON QUERY POLICIES TO PUBLIC;
+
+statement error query policies and their attachments.* is not available
+ALTER DEFAULT PRIVILEGES REVOKE USAGE ON QUERY POLICIES FROM PUBLIC;

@@ -1228,6 +1228,7 @@ impl SystemVars {
             &MAX_SECRETS,
             &MAX_ROLES,
             &MAX_NETWORK_POLICIES,
+            &MAX_QUERY_POLICIES,
             &MAX_RULES_PER_NETWORK_POLICY,
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_ROW_SIZE,
@@ -1779,6 +1780,11 @@ impl SystemVars {
     /// Returns the value of the `max_network_policies` configuration parameter.
     pub fn max_network_policies(&self) -> u32 {
         *self.expect_value(&MAX_NETWORK_POLICIES)
+    }
+
+    /// Returns the value of the `max_query_policies` configuration parameter.
+    pub fn max_query_policies(&self) -> u32 {
+        *self.expect_value(&MAX_QUERY_POLICIES)
     }
 
     /// Returns the value of the `max_network_policies` configuration parameter.

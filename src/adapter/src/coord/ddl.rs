@@ -40,8 +40,8 @@ use mz_sql::session::vars::{
     self, DEFAULT_TIMESTAMP_INTERVAL, MAX_AWS_PRIVATELINK_CONNECTIONS, MAX_CLUSTERS,
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
     MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
-    MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, Var,
+    MAX_QUERY_POLICIES, MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS,
+    MAX_SINKS, MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, Var,
 };
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -1208,6 +1208,7 @@ impl Coordinator {
         let mut new_secrets = 0;
         let mut new_roles = 0;
         let mut new_network_policies = 0;
+        let mut new_query_policies = 0;
         for op in ops {
             match op {
                 Op::CreateDatabase { .. } => {
@@ -1223,6 +1224,9 @@ impl Coordinator {
                 }
                 Op::CreateNetworkPolicy { .. } => {
                     new_network_policies += 1;
+                }
+                Op::CreateQueryPolicy { .. } => {
+                    new_query_policies += 1;
                 }
                 Op::CreateCluster { .. } => {
                     // TODO(benesch): having deprecated linked clusters, remove
@@ -1321,7 +1325,9 @@ impl Coordinator {
                             DropObjectInfo::NetworkPolicy(_) => {
                                 new_network_policies -= 1;
                             }
-                            DropObjectInfo::QueryPolicy(_) => {}
+                            DropObjectInfo::QueryPolicy(_) => {
+                                new_query_policies -= 1;
+                            }
                             DropObjectInfo::Item(id) => {
                                 let entry = self.catalog().get_entry(id);
                                 *new_objects_per_schema
@@ -1394,7 +1400,6 @@ impl Coordinator {
                 | Op::AlterRetainHistory { .. }
                 | Op::AlterSourceTimestampInterval { .. }
                 | Op::AlterNetworkPolicy { .. }
-                | Op::CreateQueryPolicy { .. }
                 | Op::AlterQueryPolicy { .. }
                 | Op::AlterAddColumn { .. }
                 | Op::AlterMaterializedViewApplyReplacement { .. }
@@ -1606,6 +1611,13 @@ impl Coordinator {
             SystemVars::max_network_policies,
             "network_policy",
             MAX_NETWORK_POLICIES.name(),
+        )?;
+        self.validate_resource_limit(
+            self.catalog().user_query_policies().count(),
+            new_query_policies,
+            SystemVars::max_query_policies,
+            "query policy",
+            MAX_QUERY_POLICIES.name(),
         )?;
         Ok(())
     }

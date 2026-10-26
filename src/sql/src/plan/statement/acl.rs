@@ -685,6 +685,9 @@ pub fn plan_alter_default_privileges(
     }: AlterDefaultPrivilegesStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let object_type: ObjectType = (*grant_or_revoke.object_type()).into();
+    if object_type == ObjectType::QueryPolicy {
+        scx.require_feature_flag(&crate::session::vars::ENABLE_QUERY_POLICIES)?;
+    }
     match object_type {
         ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => sql_bail!(
             "{object_type}S is not valid for ALTER DEFAULT PRIVILEGES, use TABLES instead"
