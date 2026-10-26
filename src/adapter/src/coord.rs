@@ -2463,6 +2463,30 @@ pub struct Coordinator {
     user_id_pool: IdPool,
 }
 
+/// Bootstrap reconstructs snapshots independently of changes it commits. Keep
+/// their provenance until the table initialization boundary decides what to seed.
+#[derive(Default)]
+struct BootstrapBuiltinTableUpdates {
+    snapshot: Vec<BuiltinTableUpdate>,
+    committed: Vec<BuiltinTableUpdate>,
+    committed_plans: BTreeSet<GlobalId>,
+}
+
+impl BootstrapBuiltinTableUpdates {
+    fn notices(&mut self, id: GlobalId) -> &mut Vec<BuiltinTableUpdate> {
+        if self.committed_plans.contains(&id) {
+            &mut self.committed
+        } else {
+            &mut self.snapshot
+        }
+    }
+
+    fn into_updates(mut self) -> Vec<BuiltinTableUpdate> {
+        self.snapshot.append(&mut self.committed);
+        self.snapshot
+    }
+}
+
 impl Coordinator {
     /// Persists the scoped system-parameter working copy and reconciles it into
     /// the per-scope resolution boundaries.
@@ -2700,13 +2724,15 @@ impl Coordinator {
             .cluster_scoped_optimizer_overrides(cluster_id)
     }
 
-    /// Commits bootstrap catalog changes, retaining refreshed rows for the
-    /// initial system-table reset instead of sending them to the live writer.
+    /// Retains the originating commit's rows until bootstrap table publication.
     async fn bootstrap_catalog_transact(
         &mut self,
         ops: Vec<crate::catalog::Op>,
-        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        builtin_table_updates: &mut BootstrapBuiltinTableUpdates,
     ) -> Result<crate::catalog::TransactionResult, AdapterError> {
+        use mz_catalog::memory::implications::ParsedStateUpdateKind;
+        use mz_catalog::memory::objects::StateDiff;
+
         let revision = self.catalog().transient_revision();
         loop {
             let write_ts = self.get_catalog_write_ts().await;
@@ -2716,7 +2742,21 @@ impl Coordinator {
                 .await
             {
                 Ok(mut result) => {
-                    builtin_table_updates.append(&mut result.builtin_table_updates);
+                    let build = crate::catalog::Catalog::expression_build_version(
+                        self.catalog().config().build_info,
+                    )
+                    .to_string();
+                    for update in &result.catalog_updates {
+                        if let ParsedStateUpdateKind::WrittenPlan(plan) = &update.kind
+                            && update.diff == StateDiff::Addition
+                            && plan.build_version == build
+                        {
+                            builtin_table_updates.committed_plans.insert(plan.id);
+                        }
+                    }
+                    builtin_table_updates
+                        .committed
+                        .append(&mut result.builtin_table_updates);
                     return Ok(result);
                 }
                 Err(error) => {
@@ -2759,10 +2799,14 @@ impl Coordinator {
         boot_ts: Timestamp,
         migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
         hydrate_migrated_mvs: bool,
-        mut builtin_table_updates: Vec<BuiltinTableUpdate>,
+        initial_builtin_table_updates: Vec<BuiltinTableUpdate>,
         cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
     ) -> Result<Option<Arc<crate::query_client::QueryClient>>, AdapterError> {
+        let mut builtin_table_updates = BootstrapBuiltinTableUpdates {
+            snapshot: initial_builtin_table_updates,
+            ..Default::default()
+        };
         let bootstrap_start = Instant::now();
         info!("startup: coordinator init: bootstrap beginning");
         info!("startup: coordinator init: bootstrap: preamble beginning");
@@ -3190,7 +3234,7 @@ impl Coordinator {
                         if self.catalog().state().system_config().enable_mz_notices() {
                             // Collect optimization hint updates.
                             self.catalog().state().pack_optimizer_notices(
-                                &mut builtin_table_updates,
+                                builtin_table_updates.notices(idx.global_id()),
                                 df_meta.optimizer_notices.iter(),
                                 Diff::ONE,
                             );
@@ -3241,7 +3285,7 @@ impl Coordinator {
                     if self.catalog().state().system_config().enable_mz_notices() {
                         // Collect optimization hint updates.
                         self.catalog().state().pack_optimizer_notices(
-                            &mut builtin_table_updates,
+                            builtin_table_updates.notices(mview.global_id_writes()),
                             df_meta.optimizer_notices.iter(),
                             Diff::ONE,
                         );
@@ -3300,7 +3344,7 @@ impl Coordinator {
                     if self.catalog().state().system_config().enable_mz_notices() {
                         // Collect optimization hint updates.
                         self.catalog().state().pack_optimizer_notices(
-                            &mut builtin_table_updates,
+                            builtin_table_updates.notices(metric_sink.global_id),
                             df_meta.optimizer_notices.iter(),
                             Diff::ONE,
                         );
@@ -3374,7 +3418,7 @@ impl Coordinator {
         self.adopt_admission_timeline_holds(index_timeline_holds);
 
         // Expose mapping from T-shirt sizes to actual sizes
-        builtin_table_updates.extend(
+        builtin_table_updates.snapshot.extend(
             self.catalog().state().resolve_builtin_table_updates(
                 self.catalog().state().pack_all_replica_size_updates(),
             ),
@@ -3388,8 +3432,12 @@ impl Coordinator {
         // be registered while in read-only, so they are written to directly.
         let migrated_updates_fut = if self.controller.read_only() {
             let min_timestamp = Timestamp::minimum();
-            let migrated_builtin_table_updates: Vec<_> = builtin_table_updates
-                .extract_if(.., |update| {
+            let mut migrated_builtin_table_updates = Vec::new();
+            for updates in [
+                &mut builtin_table_updates.snapshot,
+                &mut builtin_table_updates.committed,
+            ] {
+                migrated_builtin_table_updates.extend(updates.extract_if(.., |update| {
                     let gid = self.catalog().get_entry(&update.id).latest_global_id();
                     migrated_storage_collections_0dt.contains(&update.id)
                         && self
@@ -3400,8 +3448,8 @@ impl Coordinator {
                             .write_frontier
                             .elements()
                             == &[min_timestamp]
-                })
-                .collect();
+                }));
+            }
             if migrated_builtin_table_updates.is_empty() {
                 futures::future::ready(()).boxed()
             } else {
@@ -3474,9 +3522,10 @@ impl Coordinator {
             self.buffered_builtin_table_updates
                 .as_mut()
                 .expect("in read-only mode")
-                .append(&mut builtin_table_updates);
+                .extend(builtin_table_updates.into_updates());
         } else {
-            self.bootstrap_tables(&entries, builtin_table_updates).await;
+            self.bootstrap_tables(&entries, builtin_table_updates.into_updates())
+                .await;
         };
         info!(
             "startup: coordinator init: bootstrap: generate builtin updates complete in {:?}",
@@ -4339,7 +4388,7 @@ impl Coordinator {
         client: &Arc<crate::query_client::QueryClient>,
         planning_revision: u64,
         minimums: Option<&BTreeMap<GlobalId, Timestamp>>,
-        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        builtin_table_updates: &mut BootstrapBuiltinTableUpdates,
     ) -> Result<ReadHolds, AdapterError> {
         let prepared_ids = prepared.keys().copied().collect();
         let mut selections = self.catalog().write_plans(prepared).await?;
@@ -4461,7 +4510,7 @@ impl Coordinator {
         mut cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         written_ids: &BTreeSet<GlobalId>,
         bootstrap_client: Option<&Arc<crate::query_client::QueryClient>>,
-        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        builtin_table_updates: &mut BootstrapBuiltinTableUpdates,
         plan_holds: &mut Vec<ReadHolds>,
     ) -> Result<
         (
@@ -4834,7 +4883,7 @@ impl Coordinator {
     async fn publish_bootstrap_read_protection(
         &mut self,
         client: Option<&Arc<crate::query_client::QueryClient>>,
-        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        builtin_table_updates: &mut BootstrapBuiltinTableUpdates,
     ) -> Result<(), AdapterError> {
         let Some(client) = client else { return Ok(()) };
         let Some(requirements) = client.protection.prepare_updates_if_needed() else {

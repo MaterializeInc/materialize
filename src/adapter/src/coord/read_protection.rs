@@ -23,9 +23,9 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::storage_collections::CollectionFrontiers;
 use timely::progress::Antichain;
 
-use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Op, TransactionResult};
+use crate::catalog::{Catalog, CatalogState, Op, TransactionResult};
 use crate::coord::ddl::ClientProtectionResult;
-use crate::coord::{Coordinator, Message};
+use crate::coord::{BootstrapBuiltinTableUpdates, Coordinator, Message};
 use crate::query_client::{PreparedRead, QueryClient};
 use crate::{AdapterError, CollectionIdBundle, ReadHolds, TimelineContext};
 
@@ -170,7 +170,7 @@ impl AdmissionTimelinePublication {
 
 enum ReadProtectionPublication<'a> {
     Runtime,
-    Bootstrap(&'a mut Vec<BuiltinTableUpdate>),
+    Bootstrap(&'a mut BootstrapBuiltinTableUpdates),
 }
 
 impl ReadProtectionPublication<'_> {
@@ -864,7 +864,7 @@ impl Coordinator {
         client: Arc<QueryClient>,
         bundle: crate::CollectionIdBundle,
         read_ts: Option<Timestamp>,
-        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        builtin_table_updates: &mut BootstrapBuiltinTableUpdates,
     ) -> Result<(crate::ReadHolds, Antichain<Timestamp>), AdapterError> {
         self.acquire_read_protection(
             client,
