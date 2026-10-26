@@ -2833,7 +2833,11 @@ pub fn describe_alter_network_policy(
     Ok(StatementDesc::new(None))
 }
 
-/// Rejects times that are too large.
+/// Rejects times past the `timestamptz` range, which is also chrono's.
+///
+/// NOTE: A later refresh time can crash-loop the replicas of the materialized view's cluster.
+/// With replica expiration on, compute rounds a dataflow's expiration up to the next refresh and
+/// logs it through `mz_ore::now::to_datetime`, which panics past chrono's range.
 fn check_refresh_time(option: &str, ts: Timestamp) -> Result<(), PlanError> {
     let renderable = i64::try_from(ts)
         .ok()

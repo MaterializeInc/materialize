@@ -762,7 +762,7 @@ CREATE MATERIALIZED VIEW mv_bad
   WITH (REFRESH EVERY '999 microseconds')
   AS SELECT 1;
 
-# Beyond `timestamptz` range, which is how these get packed.
+# Beyond the `timestamptz` range, see `check_refresh_time`.
 query error REFRESH AT time too large: 18446744073709551615
 CREATE MATERIALIZED VIEW mv_bad WITH (REFRESH AT 18446744073709551615) AS SELECT * FROM t2;
 
