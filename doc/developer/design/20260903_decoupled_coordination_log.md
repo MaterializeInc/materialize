@@ -13,7 +13,7 @@ Implementer session: `2026-09-14-13-05-31-256`. Bookmark:
 including the 60s default. M3 slice 1 is incomplete. No adapter uses remote
 pubsub yet, and controllerd/adapterd have not been implemented.
 
-Foundation commits are published on `decoupled-coordination` at `75a9b8e1`:
+Foundation commits on `decoupled-coordination` include:
 
 - `50a0d4dd`: standalone pubsubd and unified-image packaging. Clippy, 11 RPC
   boundary tests, manifest lint and packaged daemon smoke pass.
@@ -40,10 +40,19 @@ before tests. Five executed failures use the removed client `replica_id` field:
 `55352b03` adapts their probes to `realization`, preserving assertions
 and deadlines. Syntax and pinned formatting pass, workload reruns remain open.
 The upgrade smoke rejects catalog v92 against minimum v96, outside the approved
-conversion scope. Merge skew remains excluded. The rustfmt fixture correction
-is corrected in `e82ff650`. A separate cluster-thread error-message mismatch
-still needs classification. See `ci140586/current-failure-classification.md`.
+conversion scope. Merge skew remains excluded. The rustfmt fixture is corrected
+in `e82ff650`. The cluster-thread error mismatch is a stale expectation after
+upstream's intentional `42704` subscribe cancellation change, not explicit-DDL
+invalidation. `62311f28` asserts the exact message and SQLSTATE. Those
+workflows still do not propagate thread assertions to their callers, a separate
+harness gap not repaired here. See `ci140586/cluster-thread-classification.md`
+and `ci140586/current-failure-classification.md`.
 Do not count checkout failures or corrected-but-unrerun fixtures as passing.
+
+CI140661 at `ec80584b` is being classified. The saved GitHub statuses report
+93 successes, eight failures and one pending check. SLT 1–4 and Testdrive 4/6
+are unresolved, separate from upgrade conversion and merge skew. This build
+does not include the configuration reconciliation below.
 
 Latest verified slices:
 
@@ -87,17 +96,26 @@ provisioning retain their own deployment's configuration. This is separate from
 projection inconsistency and execution-owned session cleanup. See
 `startup-projection-boundary-review.md` and `bootstrap-provenance-verification.log`.
 
-The working copy captures those four configuration relations from the existing
-packers and removes their protected reset/reinsert path. One background task uses
-the existing OCC machinery to publish desired-minus-current, with active-generation
-authority in the read expression. Shared planning was extracted from the hydration
-collector without changing its mutations. Scratch lint, formatting and existing
-bootstrap/replacement-shard tests pass on `ba72f6a0`. Review found a readiness gap:
-publication afterward can expose empty/old/mixed configuration. Do not land that
-behavior silently. A bounded review is checking config-only reconciliation at
-bootstrap's existing WAL barrier and conditional append boundary instead, without
-adding a compute-query dependency to readiness. The current candidate is uncommitted
-and preserved in `active-config-background-candidate.patch`.
+`a1f90e7e` captures those four configuration relations from the existing
+packers and removes their protected reset/reinsert path. Bootstrap computes
+desired-minus-current at its existing WAL barrier, then conditionally appends all
+four tables at the next timestamp after validating catalog authority. A conflict
+discards the differences and takes fresh snapshots. This avoids a compute-query
+dependency and completes before readiness. Existing bounded retries are retained,
+as approved for the expected small adapter population. Two focused ownership
+reviews found no blocking defect. All-target adapter/environmentd Clippy,
+formatting, readiness with changed/unchanged restart, independent-oracle restart,
+private replacement-shard prewarming, and existing upper-authority tests pass.
+Final bootstrap-local ownership wiring was rechecked on `1bb89e84`.
+See `config-bootstrap-local-verification.log` and `config-bootstrap-cas-verification.log`.
+These checks do not establish the complete multi-adapter promotion/concurrency
+acceptance, which remains open.
+
+The background-publication experiment is preserved in
+`active-config-background-candidate.patch`. Its existing bootstrap tests passed,
+but the new readiness regression twice returned no replica sizes after startup.
+That experiment is not a passing implementation. Its task/timer and shared planner
+extraction are not part of the committed correction.
 
 `f7fe2b97` adds execution-qualified session/subscription backing tables and
 public views that filter by live adapter incarnation. Protected bootstrap no longer
