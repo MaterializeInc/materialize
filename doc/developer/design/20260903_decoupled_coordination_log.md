@@ -12,10 +12,13 @@ Implementer session: `2026-09-14-13-05-31-256`. Bookmark:
 `decoupled-coordination`, based on `d9a2c5dc40`. Keep that upstream base pinned.
 M2 is closed within its approved scope, including the 60s publication default.
 M3 slice 1 is in progress. A standalone `pubsubd` reuses the existing relay,
-with unified-image packaging and pinned envelope compatibility tests. The pubsub
-slice is not yet pushed to the working bookmark. Compilation of pubsubd and the unified binary passes, as do all 11 existing/new
-RPC boundary tests on the scratch worker. No adapter has been moved
-to remote pubsub yet, and the one-default-adapter slice is not complete.
+with unified-image packaging and pinned envelope compatibility tests. Candidate
+`50a0d4dd` is not yet pushed to the working bookmark. Compilation, all-target
+Clippy, 11 RPC boundary tests and workspace manifest lint pass. The packaged
+daemon starts without a catalog or backend connection and serves liveness and
+metrics. Evidence is preserved in `~/.local/share/aj/m3-evidence/`.
+No adapter has been moved to remote pubsub yet, and the one-default-adapter slice
+is not complete.
 
 Follow the [M3 slices](20260903_decoupled_coordination.md#3-independent-adapters-and-process-management).
 Begin with one default adapter: deployment-scoped controllerd, join-only adapterd,
@@ -31,13 +34,21 @@ serving. Also demonstrate dropping all adapters and recovering SQL through
 controllerd's HTTP list/create/drop API, without reinitializing the environment.
 This is not complete with two manually launched SQL processes.
 
-The next useful check is a standalone relay smoke check and remote-client
-integration. The worker-generated Cargo.lock delta is preserved and applied
-locally, with no dependency version changes. Initialization/join boundary
-research is saved in `~/.local/share/aj/m3-evidence/initialization-join-boundary.md`.
+Next, integrate remote clients with the controller-managed default adapter.
+The worker-generated Cargo.lock delta is preserved and applied locally, with no
+dependency version changes. Initialization/join boundary research is saved in
+`~/.local/share/aj/m3-evidence/initialization-join-boundary.md`.
 Catalog/table initialization must be finite and separate from own-build planning
 and shared maintenance. The controller's local restart must not repeat a global
 system-table reset or treat a handle-local bootstrap flag as durable readiness.
+
+Process provisioning research is saved alongside it in
+`process-provisioning-boundary.md`. Extract the existing service-spec/backend
+boundary, not the whole storage/compute controller. Local child drop guards,
+PID-only adoption and controller-owned TCP proxies do not yet satisfy restart
+continuity. Adapter SQL endpoints must remain usable independently of controllerd.
+Keep these corrections at the existing backend boundary, without another
+supervisor.
 
 ## Concrete starting points
 

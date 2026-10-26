@@ -1226,6 +1226,7 @@ impl<'a> RunnerInner<'a> {
                     .as_ref()
                     .map_or(Ok(vec![]), |s| shell_words::split(s))?,
                 propagate_crashes: true,
+                retain_on_shutdown: false,
                 tcp_proxy: None,
                 scratch_directory: scratch_dir.path().to_path_buf(),
             })

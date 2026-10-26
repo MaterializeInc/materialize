@@ -921,6 +921,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .orchestrator_process_wrapper
                             .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
                         propagate_crashes: args.orchestrator_process_propagate_crashes,
+                        retain_on_shutdown: false,
                         tcp_proxy: args.orchestrator_process_tcp_proxy_listen_addr.map(
                             |listen_addr| ProcessOrchestratorTcpProxyConfig {
                                 listen_addr,

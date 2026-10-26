@@ -876,6 +876,7 @@ impl Listeners {
                 vec![]
             },
             propagate_crashes: config.propagate_crashes,
+            retain_on_shutdown: false,
             tcp_proxy: None,
             scratch_directory: scratch_dir.path().to_path_buf(),
         })

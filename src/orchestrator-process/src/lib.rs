@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use anyhow::{Context, anyhow, bail};
 use async_stream::stream;
@@ -57,6 +57,9 @@ use tracing::{debug, error, info, warn};
 
 pub mod secrets;
 
+#[cfg(test)]
+mod lifetime_tests;
+
 /// Configures a [`ProcessOrchestrator`].
 #[derive(Debug, Clone)]
 pub struct ProcessOrchestratorConfig {
@@ -73,6 +76,9 @@ pub struct ProcessOrchestratorConfig {
     pub command_wrapper: Vec<String>,
     /// Whether to crash this process if a child process crashes.
     pub propagate_crashes: bool,
+    /// Leave children running when this orchestrator stops supervising them.
+    /// Explicit service deletion still terminates both spawned and adopted children.
+    pub retain_on_shutdown: bool,
     /// TCP proxy configuration.
     ///
     /// When enabled, for each named port of each created service, the process
@@ -121,6 +127,7 @@ pub struct ProcessOrchestrator {
     secrets_dir: PathBuf,
     command_wrapper: Vec<String>,
     propagate_crashes: bool,
+    retain_on_shutdown: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
     scratch_directory: PathBuf,
     launch_spec: LaunchSpec,
@@ -197,6 +204,7 @@ impl ProcessOrchestrator {
             secrets_dir,
             command_wrapper,
             propagate_crashes,
+            retain_on_shutdown,
             tcp_proxy,
             scratch_directory,
         }: ProcessOrchestratorConfig,
@@ -231,6 +239,7 @@ impl ProcessOrchestrator {
             secrets_dir: fs::canonicalize(secrets_dir).await?,
             command_wrapper,
             propagate_crashes,
+            retain_on_shutdown,
             tcp_proxy,
             scratch_directory,
             launch_spec,
@@ -249,6 +258,7 @@ impl Orchestrator for ProcessOrchestrator {
                 metadata_dir: self.metadata_dir.clone(),
                 command_wrapper: self.command_wrapper.clone(),
                 propagate_crashes: self.propagate_crashes,
+                retain_on_shutdown: self.retain_on_shutdown,
                 tcp_proxy: self.tcp_proxy.clone(),
                 scratch_directory: self.scratch_directory.clone(),
                 launch_spec: self.launch_spec,
@@ -288,6 +298,7 @@ struct NamespacedProcessOrchestratorConfig {
     metadata_dir: PathBuf,
     command_wrapper: Vec<String>,
     propagate_crashes: bool,
+    retain_on_shutdown: bool,
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
     scratch_directory: PathBuf,
     launch_spec: LaunchSpec,
@@ -707,6 +718,8 @@ impl OrchestratorWorker {
                     }
                 }
 
+                let terminate_on_drop = Arc::new(AtomicBool::new(!self.config.retain_on_shutdown));
+
                 // Launch supervisor process.
                 let handle = mz_ore::task::spawn(
                     || format!("process-orchestrator:{full_id}-{i}"),
@@ -721,11 +734,13 @@ impl OrchestratorWorker {
                         memory_limit,
                         cpu_limit,
                         launch_spec: self.config.launch_spec,
+                        terminate_on_drop: Arc::clone(&terminate_on_drop),
                     }),
                 );
 
                 process_states.push(ProcessState {
                     _handle: handle.abort_on_drop(),
+                    terminate_on_drop,
                     status: ProcessStatus::NotReady,
                     status_time: Utc::now(),
                     restart_count: 0,
@@ -752,10 +767,22 @@ impl OrchestratorWorker {
         // Drop the supervisor for the service, if it exists. If this service
         // was under supervision, this will kill all processes associated with
         // it.
-        let supervised = {
-            let mut supervisors = self.services.lock().expect("lock poisoned");
-            supervisors.remove(id).is_some()
-        };
+        let supervisors = self.services.lock().expect("lock poisoned").remove(id);
+        let supervised = supervisors.is_some();
+        if let Some(supervisors) = supervisors {
+            // Request termination before cancellation, including for a spawn that
+            // has not yet published its PID. Wait before removing its directory,
+            // so a cancelled supervisor cannot recreate metadata after deletion.
+            for supervisor in &supervisors {
+                supervisor.terminate_on_drop.store(true, Ordering::SeqCst);
+            }
+            futures::future::join_all(
+                supervisors
+                    .into_iter()
+                    .map(|supervisor| supervisor._handle.abort_and_wait()),
+            )
+            .await;
+        }
 
         // If the service was orphaned by a prior incarnation of the
         // orchestrator, it won't have been under supervision and therefore will
@@ -840,6 +867,7 @@ impl OrchestratorWorker {
             memory_limit,
             cpu_limit,
             launch_spec,
+            terminate_on_drop,
         }: ServiceProcessConfig,
     ) -> impl Future<Output = ()> + use<> {
         let suppress_output = self.config.suppress_output;
@@ -852,7 +880,7 @@ impl OrchestratorWorker {
             namespace: self.config.namespace.clone(),
             id,
             i,
-            services: Arc::clone(&self.services),
+            services: Arc::downgrade(&self.services),
             service_event_tx: self.service_event_tx.clone(),
         };
 
@@ -879,7 +907,7 @@ impl OrchestratorWorker {
                 }
             }
 
-            supervise_existing_process(&state_updater, &pid_file).await;
+            supervise_existing_process(&state_updater, &pid_file, &terminate_on_drop).await;
 
             loop {
                 let mut cmd = launch_spec.refine_command(
@@ -901,8 +929,14 @@ impl OrchestratorWorker {
                     cmd.stdout(Stdio::null());
                     cmd.stderr(Stdio::null());
                 }
-                match spawn_process(&state_updater, cmd, &pid_file, !command_wrapper.is_empty())
-                    .await
+                match spawn_process(
+                    &state_updater,
+                    cmd,
+                    &pid_file,
+                    !command_wrapper.is_empty(),
+                    Arc::clone(&terminate_on_drop),
+                )
+                .await
                 {
                     Ok(status) => {
                         assert!(
@@ -983,6 +1017,7 @@ struct ServiceProcessConfig {
     memory_limit: Option<MemoryLimit>,
     cpu_limit: Option<CpuLimit>,
     launch_spec: LaunchSpec,
+    terminate_on_drop: Arc<AtomicBool>,
 }
 
 struct ServiceProcessPort {
@@ -992,7 +1027,11 @@ struct ServiceProcessPort {
 }
 
 /// Supervises an existing process, if it exists.
-async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_file: &Path) {
+async fn supervise_existing_process(
+    state_updater: &ProcessStateUpdater,
+    pid_file: &Path,
+    terminate_on_drop: &AtomicBool,
+) {
     let name = format!(
         "{}-{}-{}",
         state_updater.namespace, state_updater.id, state_updater.i
@@ -1008,11 +1047,11 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
     info!(%pid, "discovered existing process for {name}");
     state_updater.update_state(ProcessStatus::Ready { pid });
 
-    // Kill the process if the future is dropped.
+    // Stopping observation is distinct from an explicit service deletion.
     let need_kill = AtomicBool::new(true);
     defer! {
         state_updater.update_state(ProcessStatus::NotReady);
-        if need_kill.load(Ordering::SeqCst) {
+        if need_kill.load(Ordering::SeqCst) && terminate_on_drop.load(Ordering::SeqCst) {
             info!(%pid, "terminating existing process for {name}");
             process.kill();
         }
@@ -1060,12 +1099,26 @@ async fn spawn_process(
     mut cmd: Command,
     pid_file: &Path,
     send_sigterm: bool,
+    terminate_on_drop: Arc<AtomicBool>,
 ) -> Result<ExitStatus, anyhow::Error> {
-    struct KillOnDropChild(Child, bool);
+    struct KillOnDropChild {
+        child: Child,
+        send_sigterm: bool,
+        terminate_on_drop: Arc<AtomicBool>,
+        pid_published: bool,
+    }
 
     impl Drop for KillOnDropChild {
         fn drop(&mut self) {
-            if let (Some(pid), true) = (self.0.id().and_then(|id| i32::try_from(id).ok()), self.1) {
+            // A child without recoverable metadata must not survive an error or
+            // cancellation while publishing its PID, even in retained mode.
+            if self.pid_published && !self.terminate_on_drop.load(Ordering::SeqCst) {
+                return;
+            }
+            if let (Some(pid), true) = (
+                self.child.id().and_then(|id| i32::try_from(id).ok()),
+                self.send_sigterm,
+            ) {
                 let _ = nix::sys::signal::kill(
                     nix::unistd::Pid::from_raw(pid),
                     nix::sys::signal::Signal::SIGTERM,
@@ -1073,11 +1126,16 @@ async fn spawn_process(
                 // Give the process a bit of time to react to the signal
                 tokio::task::block_in_place(|| std::thread::sleep(Duration::from_millis(500)));
             }
-            let _ = self.0.start_kill();
+            let _ = self.child.start_kill();
         }
     }
 
-    let mut child = KillOnDropChild(cmd.spawn()?, send_sigterm);
+    let mut child = KillOnDropChild {
+        child: cmd.spawn()?,
+        send_sigterm,
+        terminate_on_drop,
+        pid_published: false,
+    };
 
     // Immediately write out a file containing the PID of the child process and
     // its start time. We'll use this state to rediscover our children if we
@@ -1087,10 +1145,11 @@ async fn spawn_process(
     // anything more robust given the Unix APIs available to us, and the
     // solution here is good enough given that the process orchestrator is only
     // used in development/testing.
-    let pid = Pid::from_u32(child.0.id().unwrap());
-    write_pid_file(pid_file, pid).await?;
+    let pid = Pid::from_u32(child.child.id().unwrap());
+    write_pid_file(pid_file, pid)?;
+    child.pid_published = true;
     state_updater.update_state(ProcessStatus::Ready { pid });
-    Ok(child.0.wait().await?)
+    Ok(child.child.wait().await?)
 }
 
 fn did_process_crash(status: ExitStatus) -> bool {
@@ -1109,7 +1168,7 @@ fn did_process_crash(status: ExitStatus) -> bool {
     })
 }
 
-async fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
+fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
     let mut system = System::new();
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[pid]),
@@ -1117,7 +1176,10 @@ async fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> 
         ProcessRefreshKind::nothing(),
     );
     let start_time = system.process(pid).map_or(0, |p| p.start_time());
-    fs::write(pid_file, format!("{pid}\n{start_time}\n")).await?;
+    // Publish this small local record synchronously. A cancelled Tokio file
+    // write can continue on its blocking worker after supervisor termination,
+    // overwriting a replacement service's PID file after deletion/recreation.
+    std::fs::write(pid_file, format!("{pid}\n{start_time}\n"))?;
     Ok(())
 }
 
@@ -1192,13 +1254,17 @@ struct ProcessStateUpdater {
     namespace: String,
     id: String,
     i: usize,
-    services: Arc<Mutex<BTreeMap<String, Vec<ProcessState>>>>,
+    // A supervisor observes the service map without owning its own task handle.
+    services: Weak<Mutex<BTreeMap<String, Vec<ProcessState>>>>,
     service_event_tx: broadcast::Sender<ServiceEvent>,
 }
 
 impl ProcessStateUpdater {
     fn update_state(&self, status: ProcessStatus) {
-        let mut services = self.services.lock().expect("lock poisoned");
+        let Some(services) = self.services.upgrade() else {
+            return;
+        };
+        let mut services = services.lock().expect("lock poisoned");
         let Some(process_states) = services.get_mut(&self.id) else {
             return;
         };
@@ -1229,6 +1295,7 @@ impl ProcessStateUpdater {
 #[derive(Debug)]
 struct ProcessState {
     _handle: AbortOnDropHandle<()>,
+    terminate_on_drop: Arc<AtomicBool>,
     status: ProcessStatus,
     status_time: DateTime<Utc>,
     /// Number of times this process has died and been relaunched. Monotonic for
@@ -1318,6 +1385,7 @@ mod tests {
                     metadata_dir,
                     command_wrapper: Vec::new(),
                     propagate_crashes: false,
+                    retain_on_shutdown: false,
                     tcp_proxy: None,
                     scratch_directory: PathBuf::new(),
                     launch_spec: LaunchSpec::Direct,
