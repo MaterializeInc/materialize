@@ -13,202 +13,72 @@ Implementer session: `2026-09-14-13-05-31-256`. Bookmark:
 including the 60s default. M3 slice 1 is incomplete. No adapter uses remote
 pubsub yet, and controllerd/adapterd have not been implemented.
 
-Foundation commits on `decoupled-coordination` include:
+The foundation includes standalone pubsubd, retained local supervision, replica
+launch specifications, named adapter declarations and catalog join without shared
+initialization. Runtime catalog projection publication is originator-only, and
+bootstrap snapshots are distinguishable from originating transaction rows.
+These components have focused verification, not combined M3 acceptance.
 
-- `50a0d4dd`: standalone pubsubd and unified-image packaging. Clippy, 11 RPC
-  boundary tests, manifest lint and packaged daemon smoke pass.
-- `bbe00aba`: opt-in retained local supervision, distinct from explicit deletion.
-  Four lifecycle tests, existing restart regressions and caller Clippy pass.
-- `4a2a374c`: replica launch-spec extraction, with Clippy and restart regressions.
-- `440e7126`: named adapter declarations and deployment-qualified execution
-  identity, default declaration only at fresh initialization, schema v96.
-  Aljoscha approved no M2-to-M3 conversion. Frozen v95 is unchanged.
-- `ab9122e0`: joined catalog reconstruction without shared initialization,
-  including writable joins. Unsupported conversion is rejected before fencing
-  or admission. Active/prewarm/build/cache cases and legacy nonmutation pass.
+## Resume here
 
-All 393 catalog unit tests pass (2 skipped). The join matrix runs as independent
-cases, preserving assertions and the standard per-test timeout. The active-join
-regression fails on shared-definition mutation without the fix and passes when
-restored. Production checks and all-target Clippy pass for catalog, adapter,
-clusterd, environmentd, catalog-debug, testdrive and sqllogictest. Broad combined
-workspace/integration verification is still open.
+- Classify CI140661 at `ec80584b`: SLT 1–4 and Testdrive 4/6 remain unresolved,
+  separate from excluded upgrade conversion and merge skew. It does not cover
+  the configuration reconciliation in `a1f90e7e`. Corrected CI140586 fixtures still
+  need workload reruns. Cluster-thread assertions do not propagate to callers,
+  an unresolved harness gap. Do not count checkout failures or unrerun corrections
+  as passing.
+- Configuration reconciliation before readiness is committed in `a1f90e7e`.
+  Focused startup, restart and prewarming checks, formatting and Clippy pass.
+  Complete multi-adapter promotion/concurrency verification remains open.
+- Finish removing shared join/restart resets and positive snapshot replay in
+  `src/adapter/src/coord.rs::bootstrap_tables`, preserving legitimate originating
+  bootstrap diffs. `TxnsHandle::adopt` exists and is tested but is not wired into
+  adapter startup. Local adoption does not register or advance the WAL, or establish
+  readiness/write authority.
+- Session/subscription rows are execution-qualified and public views filter live
+  incarnations. Existing SQL and bootstrap-progress tests pass, but retired-row
+  cleanup and runtime concurrency coverage remain missing.
 
-CI140586 at `75a9b8e1` finished failed with 78 passed and 18 failed jobs.
-Console staging passed. Ten failures occurred during Git checkout
-before tests. Five executed failures use the removed client `replica_id` field:
-`55352b03` adapts their probes to `realization`, preserving assertions
-and deadlines. Syntax and pinned formatting pass, workload reruns remain open.
-The upgrade smoke rejects catalog v92 against minimum v96, outside the approved
-conversion scope. Merge skew remains excluded. The rustfmt fixture is corrected
-in `e82ff650`. The cluster-thread error mismatch is a stale expectation after
-upstream's intentional `42704` subscribe cancellation change, not explicit-DDL
-invalidation. `62311f28` asserts the exact message and SQLSTATE. Those
-workflows still do not propagate thread assertions to their callers, a separate
-harness gap not repaired here. See `ci140586/cluster-thread-classification.md`
-and `ci140586/current-failure-classification.md`.
-Do not count checkout failures or corrected-but-unrerun fixtures as passing.
+Evidence is under `~/.local/share/aj/m3-evidence/`. Start with `ci140661/` and
+`ci140586/current-failure-classification.md` for CI, `config-bootstrap-local-verification.log`
+and `config-bootstrap-cas-verification.log` for readiness, and
+`session-publication-boundary.md` for session cleanup. `foundation-handoff-detail.md`
+holds completed foundation verification pointers. Broad combined verification is
+still open.
 
-CI140661 at `ec80584b` is being classified. The saved GitHub statuses report
-93 successes, eight failures and one pending check. SLT 1–4 and Testdrive 4/6
-are unresolved, separate from upgrade conversion and merge skew. This build
-does not include the configuration reconciliation below.
+## Boundaries to preserve
 
-Latest verified slices:
+The [M3 projection limitation](20260903_decoupled_coordination.md#shared-maintenance-and-introspection)
+permits unordered originator-only publication and persistent inconsistency after
+publication failure only for those derived projections. Followers still enact
+catalog effects. A colleague owns conversion of these projections to catalog-backed
+views. Do not take over that work or add a publication watermark or recovery protocol.
 
-- `kwuvpvnl`: catalog integration fixture corrections: generated snapshots include the
-  default declaration/allocator, and unsupported-version rejection has its
-  precise error assertion. Nonmutation assertions remain unchanged. All 68 tests
-  across the five integration targets pass.
-- `7585df45`: `TxnsHandle::adopt`: local schema-bearing handle adoption, extracted from shared
-  registration. It neither registers nor advances the WAL. Caller retains
-  readiness and write-authority responsibilities. Static review, Clippy and all
-  33 txn-WAL unit tests pass through `bin/cargo-test`, including the new two-writer
-  regression. Direct nextest omits the standard stack setting and overflows in
-  two existing tests.
-  Adapter startup is not wired to adoption yet.
+Configuration relations must describe the active deployment before readiness.
+Any active adapter may transactionally reconcile them, but prewarming and retired
+deployments cannot overwrite them. Internal planning/provisioning retain their
+deployment's configuration. Existing bounded bootstrap retries are approved for
+the expected small adapter population. This is separate from projection
+inconsistency and session cleanup.
 
-Proceed with originator-only publication for remaining derived catalog rows,
-under the [M3 limitation](20260903_decoupled_coordination.md#shared-maintenance-and-introspection).
-Only the successful committer publishes its own derived diffs. Followers still
-apply catalog state and required effects. Remove join/restart resets and positive
-snapshot replay, keeping fresh initialization separate. Aljoscha accepts
-out-of-order publication and persistent inconsistency after publication failure
-for these projections. A colleague owns their catalog-backed-view conversion.
-Do not add a publication watermark/recovery protocol or take over that conversion.
+Initialization and table adoption must remain finite, without a coordinator or
+shared maintenance in controllerd. Existing WAL registration/application can
+recover without a new initialization marker. See `table-initialization-recovery.md`
+and `initialization-join-boundary.md` in the evidence directory. Continue process
+extraction under the [M3 slices](20260903_decoupled_coordination.md#3-independent-adapters-and-process-management),
+preserving existing replica burst/reconfiguration policy rather than redesigning
+it or expanding its acceptance campaign.
 
-`9c68c525` implements runtime originator-only publication, including
-written-plan and legacy installation notices. Follower APIs return catalog effects
-without publication rows. `9723efed` identifies the successful fresh initializer
-on its durable handle. Scratch all-target Clippy, full formatting and four focused
-initialization/follower tests pass. Evidence: `originator-publication-verification.log`
-and `originator-publication-review.md`. Startup snapshot/reset handling remains
-unchanged. Review its mixed reconstruction/migration output before filtering:
-legitimate originating bootstrap diffs must survive.
+M2 closeout and its evidence pointers are at `676346d6`. Keep those proof scopes
+closed and regular regressions enabled, not a new M3 backlog. The explicit-DDL
+admission correction belongs to Aljoscha's separate work. Do not suppress
+structural revision checks or replay acknowledged DDL. Raise an actual M3
+dependency before pulling that work in or changing the pinned base.
 
-`cb02d511` separates bootstrap snapshots from originating transaction
-rows, including notices classified by committed plan IDs. All-target adapter
-Clippy and full formatting pass on scratch. Reset/publication policy is unchanged.
-Configuration-backed shared relations must describe the active deployment.
-Any active adapter may transactionally reconcile the common desired contents.
-Prewarming and retired deployments cannot overwrite them. Internal planning and
-provisioning retain their own deployment's configuration. This is separate from
-projection inconsistency and execution-owned session cleanup. See
-`startup-projection-boundary-review.md` and `bootstrap-provenance-verification.log`.
-
-`a1f90e7e` captures those four configuration relations from the existing
-packers and removes their protected reset/reinsert path. Bootstrap computes
-desired-minus-current at its existing WAL barrier, then conditionally appends all
-four tables at the next timestamp after validating catalog authority. A conflict
-discards the differences and takes fresh snapshots. This avoids a compute-query
-dependency and completes before readiness. Existing bounded retries are retained,
-as approved for the expected small adapter population. Two focused ownership
-reviews found no blocking defect. All-target adapter/environmentd Clippy,
-formatting, readiness with changed/unchanged restart, independent-oracle restart,
-private replacement-shard prewarming, and existing upper-authority tests pass.
-Final bootstrap-local ownership wiring was rechecked on `1bb89e84`.
-See `config-bootstrap-local-verification.log` and `config-bootstrap-cas-verification.log`.
-These checks do not establish the complete multi-adapter promotion/concurrency
-acceptance, which remains open.
-
-The background-publication experiment is preserved in
-`active-config-background-candidate.patch`. Its existing bootstrap tests passed,
-but the new readiness regression twice returned no replica sizes after startup.
-That experiment is not a passing implementation. Its task/timer and shared planner
-extraction are not part of the committed correction.
-
-`f7fe2b97` adds execution-qualified session/subscription backing tables and
-public views that filter by live adapter incarnation. Protected bootstrap no longer
-resets those two backing tables. The session startup write barrier includes the
-public view as well as the backing table. All-target Clippy, full formatting,
-catalog reconstruction and inferred builtin descriptor checks pass on `47733765`.
-Independent static review found no defects. The three existing session/subscription
-SQL and bootstrap-progress tests pass. Retired-row cleanup
-and runtime concurrency coverage are still missing. Do not claim this slice complete.
-`session-publication-boundary.md` records the existing OCC cleanup path and risks.
-
-Session ownership and finite table adoption are separate boundaries. Initialization
-must remain finite, without embedding a coordinator or shared maintenance in
-controllerd. Existing WAL registration/application can recover without a new
-initialization marker.
-
-Evidence lives in `~/.local/share/aj/m3-evidence/`: `catalog-join-split-full-unit.log`,
-`catalog-join-{review,negative-revision,negative,restored}.*`,
-`txn-local-adoption-review.md`, `builtin-publication-ownership.md`,
-`table-initialization-recovery.md`, `initialization-join-boundary.md`,
-`process-provisioning-boundary.md` and `adapter-declaration-boundary.md`.
-`foundation-handoff-detail.md` preserves the detailed verification pointers.
-Scratch test logs live in `~/m3-evidence/` and must be copied off-worker.
-
-Use `bin/cargo-test` for the standard stack setting, forwarding `--lib` after
-`--`. Metadata and comparison Postgres URLs are respectively
-`~/m3-evidence/native-metadata-url.txt` and `native-postgres-url.txt` on scratch.
-The latter supplies `POSTGRES_URL`. Leave `m2-pause-test-postgres` untouched.
-
-## Concrete starting points
-
-- `src/catalog/src/durable.rs` separates join from initialization/promotion.
-  `Catalog::open_committed` in `src/catalog/src/catalog.rs` reconstructs initialized
-  same-version state. Neither is a complete deployment initializer. Own-build
-  plans remain adapter work, not a reason to embed a coordinator in controllerd.
-- `src/adapter/src/coord/read_protection.rs::adapter_execution_predecessor` uses
-  the configured adapter identity. Joining must supply the selected declaration.
-  `src/adapter/src/coord.rs::bootstrap_tables` still resets shared system-table contents.
-  Ordinary adapter join/restart must not supersede or reset a peer.
-- Reuse `src/cluster-controller/` policy with a standalone catalog/observation
-  context. Explicit replica reconciliation and transactional resource admission
-  must follow the move. Extract provisioning from `src/controller/src/clusters.rs`,
-  not the whole compute/storage controller. Adapters need discovery, not backend
-  lifecycle workers or permissions.
-- Pubsub is embedded in `src/environmentd/src/environmentd/main.rs`.
-  `src/persist-client/src/rpc.rs` provides the relay and remote clients. The
-  generation-owned service in `src/orchestratord/` must become environment-scoped.
-  `src/persist-client/src/internal/service.proto` currently disclaims cross-version
-  compatibility. Extraction must establish the supported wire contract, not assume
-  that Persist payload compatibility also covers the envelope.
-- The process backend has deterministic Unix sockets, while adapter listeners use
-  TCP. Reuse its endpoint/proxy boundary and publish a usable pgwire address.
-  Backend Online is not SQL readiness. Check child adoption/teardown, resource
-  enforcement and unchanged launch specs rather than adding another supervisor.
-- For the multi-adapter slice, inspect `src/adapter/src/coord/appends.rs` conflict
-  handling and `src/storage-controller/src/collection_mgmt.rs` empty advancement.
-  Introspection `RowScope` distinguishes deployments, not executions, and webhook
-  writers in `adapter_storage.rs` claim all NULL-replica rows. Repair ownership
-  without duplicating shared collectors. Hydration history already has
-  concurrency-safe OCC publication and does not need a wholesale rewrite.
-
-Replica burst and graceful-reconfiguration state are already deployment-local.
-Preserve that policy during extraction. Separate runtime proofs do not establish
-all burst/reconfiguration overlaps with promotion, but this is not a new policy
-redesign or an instruction to start a broader acceptance campaign.
-
-## M2 baseline and exclusions
-
-Closeout is recorded at `676346d6`. CI140484 at `01ef1f72` has 93 passed jobs
-and three failed exclusions: upstream merge skew, existing-environment
-source-to-view conversion, and Kafka RTR's explicit-DDL revision conflict.
-CI140485 passes both original fixed-seed parallel shards at the normal
-8-CPU/16-GiB CI budget with the 60s default. The identified Iceberg descriptor
-expansion is corrected, with no OOM in that run. This is not a general memory
-bound or scheduling guarantee, and the combined build is not wholly green.
-
-Keep those proof scopes closed and regular regressions enabled. Passing unchanged
-retries do not explain every earlier timeout or the missing-Persist-metric flake.
-Evidence under `~/.local/share/aj/m2-evidence/scratch/` includes
-`cadence60-default/ci140484/`, `cadence60-default/ci140485/`,
-`cadence60-default/iceberg-causal-check/causal-conclusion.md`,
-`cadence60-default/publication-pause/`, `combined-publication/` and
-`table-lifecycle-verification/`. The closeout revision retains the detailed
-handoff and further evidence pointers. Do not turn them into an M3 backlog.
-
-The explicit-DDL admission correction belongs to Aljoscha's separate work. Do not
-suppress structural revision checks or replay acknowledged DDL here. Raise an
-actual M3 dependency before pulling that work in or changing the pinned base.
-Existing-environment conversion, unsupported-version interoperation, managed
-replica-targeted MV handover and query-relative public replica visibility remain
-outside the milestone scope. The deferred orchestratord draft is preserved at
-`m2-deferred-orchestratord-retirement` (`5bb35005`), not an approved M3 solution.
-The archived log is historical context, not required reading or a task list.
+There is no approved M2-to-M3 conversion. Existing-environment conversion,
+unsupported-version interoperation, managed replica-targeted MV handover and
+query-relative public replica visibility remain excluded. The deferred draft at
+`m2-deferred-orchestratord-retirement` is not an approved M3 solution.
 
 ## Worker
 
@@ -217,9 +87,13 @@ Last verified expiry: 2026-10-28 19:01:27 UTC. Check status and extend expiry as
 needed under the prompt's existing authorization. The traffic investigation's
 `i-01023ce0e1db179f9` belongs to another session. Leave it untouched.
 
-The Iceberg and SLT fixtures are stopped, with data and evidence retained.
-Preserve useful evidence before replacing fixture state. The separate
-`m2-pause-test-postgres` container is not part of that fixture. `mzrepro.slice`
-applies a temporary aggregate 8-CPU/16-GiB workload budget, not the build budget or
-a faithful CI-host reproduction. Use `bin/ci-builder run stable <command>` for
-pinned tooling, repository entry points and the worker's existing caches.
+Use `bin/ci-builder run stable <command>` and `bin/cargo-test` for pinned tooling
+and standard stack settings, forwarding `--lib` after `--`. Scratch logs live in
+`~/m3-evidence/` and must be copied off-worker. Metadata and comparison Postgres
+URLs are `native-metadata-url.txt` and `native-postgres-url.txt` in that directory.
+The latter supplies `POSTGRES_URL`.
+
+Iceberg and SLT fixtures are stopped, with data and evidence retained. Preserve
+useful evidence before replacing fixture state. Leave `m2-pause-test-postgres`
+untouched. `mzrepro.slice` is an aggregate 8-CPU/16-GiB workload budget, not the
+build budget or a faithful CI-host reproduction.
