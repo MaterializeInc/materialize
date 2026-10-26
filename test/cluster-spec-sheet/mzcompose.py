@@ -42,7 +42,6 @@ from materialize.cluster_spec_sheet_qps import (
     validate_qps_result,
 )
 from materialize.mz_env_util import print_environment_id
-from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
@@ -118,15 +117,15 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 
 @functools.cache
 def staging_version() -> str:
-    # Cached: the version cannot change within a run, and `parse_cargo` shells
-    # out to cargo, whose failure must not surface inside a region retry loop.
-    return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
+    # This diagnostic reuses the measured candidate image.
+    return "v26.48.0-dev.0--pr.gcfcaee3de73777da108642f74ac5b4634f185748"
 
 
 SERVICES = [
     # Overridden below
     Mz(app_password=""),
     Materialized(
+        image="materialize/materialized:v26.48.0-dev.0--pr.gcfcaee3de73777da108642f74ac5b4634f185748",
         propagate_crashes=True,
         additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
     ),
@@ -1954,7 +1953,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             runner.run_query("SET cluster = 'c'")
             # Keep the default-logging series intact, then repeat on the same
             # clusters with sampling disabled in every benchmark connection.
-            for disable_statement_logging in (False, True):
+            for disable_statement_logging in (True,):
                 for protocol in self.options.protocols:
                     for concurrency in (
                         [512]

@@ -10,6 +10,7 @@ This minimal wrapper is tailored to the spec-sheet sweep. Transaction logs provi
 pooled percentiles and maximum latency after warmup.
 """
 
+import heapq
 import math
 import re
 import shlex
@@ -103,15 +104,11 @@ def merge_logs(paths: list[Path], clients: int, warmup: float, duration: float) 
                 bucket["max_latency_us"] = max(bucket["max_latency_us"], latency)
                 if latency >= 50_000:
                     slow_count += 1
+                    event = (latency, completed, path.name, client)
                     if len(slow_transactions) < 2000:
-                        slow_transactions.append(
-                            {
-                                "log": path.name,
-                                "client": client,
-                                "completed_us": completed,
-                                "latency_us": latency,
-                            }
-                        )
+                        heapq.heappush(slow_transactions, event)
+                    elif event > slow_transactions[0]:
+                        heapq.heapreplace(slow_transactions, event)
     count = sum(histogram.values())
     if not count:
         raise ValueError("empty measurement window")
@@ -140,7 +137,17 @@ def merge_logs(paths: list[Path], clients: int, warmup: float, duration: float) 
             "seconds": seconds,
             "slow_threshold_us": 50_000,
             "slow_count": slow_count,
-            "slow_transactions": slow_transactions,
+            "slow_transactions": [
+                {
+                    "latency_us": latency,
+                    "completed_us": completed,
+                    "log": name,
+                    "client": client,
+                }
+                for latency, completed, name, client in sorted(
+                    slow_transactions, reverse=True
+                )
+            ],
             "truncated": slow_count > len(slow_transactions),
         },
     }
@@ -175,15 +182,62 @@ def cpu_stat(container: str) -> dict[str, int]:
     return {k: int(v) for k, v in (line.split() for line in text.splitlines())}
 
 
-def thread_ticks(container: str) -> dict[str, int]:
+def thread_ticks(container: str, network_samples: list | None = None) -> dict[str, int]:
     text = container_output(
         container,
         "sh",
         "-c",
         'for file in /work/pid-*; do [ -f "$file" ] || continue; '
         'read -r pid < "$file"; for stat in /proc/$pid/task/*/stat; do '
-        'cat "$stat" 2>/dev/null || true; done; done',
+        'cat "$stat" 2>/dev/null || true; done; done; '
+        "echo __NETWORK__; cat /proc/net/snmp /proc/net/netstat; "
+        "echo __TCP__; cat /proc/net/tcp /proc/net/tcp6",
     )
+    text, _, network = text.partition("__NETWORK__")
+    if network_samples is not None and network:
+        counters, _, flows = network.partition("__TCP__")
+        selected = {}
+        lines = counters.strip().splitlines()
+        for header, values in zip(lines[::2], lines[1::2]):
+            names, numbers = header.split(), values.split()
+            if names[0] == numbers[0]:
+                selected.update(
+                    {
+                        names[0].rstrip(":") + "." + key: int(value)
+                        for key, value in zip(names[1:], numbers[1:])
+                        if any(
+                            part in key
+                            for part in (
+                                "Retrans",
+                                "Timeout",
+                                "Loss",
+                                "Reorder",
+                                "DSACK",
+                                "Drop",
+                            )
+                        )
+                    }
+                )
+        retransmitting = []
+        for line in flows.splitlines():
+            fields = line.split()
+            if fields and fields[0].rstrip(":").isdigit() and int(fields[6], 16):
+                retransmitting.append(
+                    {
+                        "local": fields[1],
+                        "remote": fields[2],
+                        "queue": fields[4],
+                        "timer": fields[5],
+                        "retransmits": int(fields[6], 16),
+                    }
+                )
+        network_samples.append(
+            {
+                "observed_at": time.time(),
+                "counters": selected,
+                "retransmitting": retransmitting,
+            }
+        )
     ticks = {}
     for line in text.splitlines():
         fields = line.rsplit(")", 1)[1].split()
@@ -306,6 +360,7 @@ def measure(config: dict, root: Path, container: str) -> dict:
     before = cpu_stat(container)
     wall_start = time.monotonic()
     peak_thread_percent = 0.0
+    network_samples = []
     try:
         for i, n in enumerate(assignments):
             output = (root / f"summary-{i}").open("w+")
@@ -338,7 +393,7 @@ def measure(config: dict, root: Path, container: str) -> dict:
                 )
             )
         deadline = wall_start + seconds + config["query_timeout_seconds"] + 30
-        previous = thread_ticks(container)
+        previous = thread_ticks(container, network_samples)
         sample_time = time.monotonic()
         first: dict[tuple[int, int], float] = {}
         stop_at = None
@@ -363,7 +418,7 @@ def measure(config: dict, root: Path, container: str) -> dict:
                 signal_clients(container, "ALRM")
                 stopped = True
             now = time.monotonic()
-            current = thread_ticks(container)
+            current = thread_ticks(container, network_samples)
             if current:
                 peak_thread_percent = max(
                     peak_thread_percent,
@@ -429,6 +484,7 @@ def measure(config: dict, root: Path, container: str) -> dict:
         "threads_per_cluster": 1,
         "pgbench_version": container_output(container, "pgbench", "--version").strip(),
         "native_summaries": results,
+        "network_diagnostics": network_samples,
         "driver": {
             "cpu_percent": 100 * cpu / capacity,
             "cpu_cores": cpu,
