@@ -97,6 +97,17 @@ SERVICES = [
         external_metadata_store=True,
         default_replication_factor=2,
     ),
+    # A second process of mz_new's generation, as the container entrypoint
+    # starts it after `restart_in_place!`.
+    Materialized(
+        name="mz_restarted_in_place",
+        sanity_restart=False,
+        deploy_generation=1,
+        system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+        external_metadata_store=True,
+        default_replication_factor=2,
+        environment_extra=["MZ_RESTARTED_IN_PLACE=true"],
+    ),
     Testdrive(
         materialize_url="postgres://materialize@mz_old:6875",
         materialize_url_internal="postgres://materialize@mz_old:6877",
@@ -3770,3 +3781,43 @@ def workflow_ddl_detection_ephemeral_items(c: Composition) -> None:
         conn.close()
     except Exception:
         pass
+
+
+def workflow_restarted_in_place_after_promotion(c: Composition) -> None:
+    """A process restarted in place halts once its generation has been promoted.
+
+    Booting writable instead would fence the promoted leader of its generation.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql("CREATE TABLE t (a int); INSERT INTO t VALUES (1);", service="mz_old")
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    c.promote_mz("mz_new", retire_mz_service="mz_old")
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+    c.up("mz_restarted_in_place", wait=False)
+    deadline = time.time() + 300
+    while c.is_running("mz_restarted_in_place"):
+        assert time.time() < deadline, "mz_restarted_in_place did not halt"
+        time.sleep(1)
+    exit_code = c.invoke(
+        "ps",
+        "--all",
+        "--format",
+        "{{.ExitCode}}",
+        "mz_restarted_in_place",
+        capture=True,
+        silent=True,
+    ).stdout.strip()
+    assert exit_code == "166", f"mz_restarted_in_place exited with {exit_code}"
+    logs = c.invoke("logs", "mz_restarted_in_place", capture=True).stdout
+    assert (
+        "restarted in place, but deployment generation 1 has been promoted; halting"
+        in logs
+    ), "mz_restarted_in_place did not halt on the marker"
+
+    c.sql("INSERT INTO t VALUES (2)", service="mz_new")
+    assert c.sql_query("SELECT count(*) FROM t", service="mz_new")[0][0] == 2
+    assert _leader_status(c, "mz_new") == DeploymentStatus.IS_LEADER.value
