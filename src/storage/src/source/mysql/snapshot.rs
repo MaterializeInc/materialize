@@ -124,6 +124,7 @@ use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_repr::{Diff, Row, SqlScalarType};
+use mz_storage_types::dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
@@ -758,6 +759,14 @@ pub(crate) fn render<'scope>(
             .push(output);
     }
 
+    // Read at render time, matching the value the persist sink reads in the same dataflow build.
+    // A read in the async body can observe an `UpdateConfiguration` sequenced after this dataflow's
+    // creation and disagree with the sink because the `ConfigSet` is updated in place.
+    // A nonzero lookahead is the switch, see `STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD`.
+    let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
+        .get(config.config.config_set())
+        .is_zero();
+
     let (button, transient_errors): (_, StreamVec<'scope, GtidPartition, Rc<TransientError>>) =
         builder.build_fallible(move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
@@ -934,6 +943,36 @@ pub(crate) fn render<'scope>(
                 trace!(%id, "timely-{worker_id} received snapshot info at: {}",
                        snapshot_gtid_frontier.pretty());
 
+                // Several workers can read parts of a partitioned table. To avoid duplicate rewind
+                // requests, only the worker responsible for the table emits them.
+                let emit_rewinds = |rewind_cap_set: &mut CapabilitySet<GtidPartition>| {
+                    for (table, outputs) in &reader_snapshot_table_info {
+                        if !config.responsible_for(table) {
+                            continue;
+                        }
+                        for output in outputs {
+                            trace!(%id, "timely-{worker_id} producing rewind request for {table}\
+                                         output {}", output.output_index);
+                            let req = RewindRequest {
+                                output_index: output.output_index,
+                                snapshot_upper: snapshot_gtid_frontier.clone(),
+                            };
+                            rewinds_handle.give(&rewind_cap_set[0], req);
+                        }
+                    }
+                    *rewind_cap_set = CapabilitySet::new();
+                };
+
+                // The rewind requests unblock the replication operator. With concurrent
+                // replication they go out now, before any data is copied. The snapshot frontier is
+                // already known at this point. The replication operator then reads the stream
+                // while the snapshot runs and stages its data in the dataflow until the snapshot
+                // completes. Without concurrent replication they go out after the snapshot. That
+                // keeps the two phases serial and avoids the staging cost.
+                if concurrent_replication {
+                    emit_rewinds(rewind_cap_set);
+                }
+
                 let table_ranges = plan_worker_reads(
                     &config,
                     &reader_snapshot_table_info,
@@ -1102,27 +1141,9 @@ pub(crate) fn render<'scope>(
                                  table '{table}'", snapshot_staged * u64::cast_from(outputs.len()));
                 }
 
-                // We are done with the snapshot so now we will emit rewind requests. It is
-                // important that this happens after the snapshot has finished because this is what
-                // unblocks the replication operator and we want this to happen serially. It might
-                // seem like a good idea to read the replication stream concurrently with the
-                // snapshot but it actually leads to a lot of data being staged for the future,
-                // which needlesly consumed memory in the cluster.
-                for (table, outputs) in &reader_snapshot_table_info {
-                    if !config.responsible_for(table) {
-                        continue;
-                    }
-                    for output in outputs {
-                        trace!(%id, "timely-{worker_id} producing rewind request for {table}\
-                                     output {}", output.output_index);
-                        let req = RewindRequest {
-                            output_index: output.output_index,
-                            snapshot_upper: snapshot_gtid_frontier.clone(),
-                        };
-                        rewinds_handle.give(&rewind_cap_set[0], req);
-                    }
+                if !concurrent_replication {
+                    emit_rewinds(rewind_cap_set);
                 }
-                *rewind_cap_set = CapabilitySet::new();
 
                 Ok(())
             }))
