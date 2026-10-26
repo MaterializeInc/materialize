@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -29,6 +28,8 @@ use mz_ore::metrics::UIntGauge;
 use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
 use regex::Regex;
+use serde::Deserialize;
+use serde::de::{DeserializeOwned, IgnoredAny};
 use serde_json::Value as JsonValue;
 use tokio::time;
 use tracing::warn;
@@ -99,111 +100,155 @@ impl Drop for SystemParameterFrontendClient {
     }
 }
 
-/// Reserved top-level key of the config-sync file holding the segment
-/// definitions, keyed by segment name.
-const SEGMENTS_SECTION: &str = "segments";
-/// Reserved top-level key of the config-sync file holding the ordered rules.
-const RULES_SECTION: &str = "rules";
-/// Key of a `rules` element naming the segment whose objects it applies to.
-const RULE_SEGMENT: &str = "segment";
-/// Key of a `rules` element holding the parameters it supplies.
-const RULE_PARAMETERS: &str = "parameters";
-/// Key of a `segments` entry naming the [`ContextKind`] its clauses match.
-const SEGMENT_CONTEXT_KIND: &str = "contextKind";
-/// Key of a `segments` entry holding its [`Clause`] array.
-const SEGMENT_CLAUSES: &str = "clauses";
-/// Key of a [`Clause`] naming the attribute it constrains.
-const CLAUSE_ATTRIBUTE: &str = "attribute";
-/// Key of a [`Clause`] naming its [`Operator`].
-const CLAUSE_OP: &str = "op";
-/// Key of a [`Clause`] holding the values its operator is applied against.
-const CLAUSE_VALUES: &str = "values";
-/// Key of a [`Clause`] inverting it.
-const CLAUSE_NEGATE: &str = "negate";
-/// Key LaunchDarkly's REST API stamps on a clause. Accepted and ignored.
-const CLAUSE_ID: &str = "_id";
+/// The top-level key whose presence selects [`ConfigFileV2`] over
+/// [`LegacyConfigFile`].
+const VERSION_KEY: &str = "version";
 
-/// The parsed contents of the config-sync file, a JSON object whose keys are
-/// parameter names except for the reserved [`SEGMENTS_SECTION`] and
-/// [`RULES_SECTION`].
+/// The config-sync file in the format every consumer reads, which a document
+/// opts into with `"version": 2`.
 ///
-/// NOTE: A reserved section shadows a synced parameter of the same name.
-/// `test_no_synced_parameter_shadows_a_reserved_section` checks there is none.
-#[derive(Debug, Default, PartialEq)]
-struct ConfigFile {
+/// Deserialization is all-or-nothing: a structural defect anywhere fails the
+/// whole document. What depends on this binary's parameter set rather than on
+/// the document's structure stays a per-parameter diagnostic, see
+/// [`SystemParameterFrontend::scoped_rule_diagnostics`].
+#[derive(Debug, Default, PartialEq, Deserialize)]
+#[serde(try_from = "RawConfigFileV2")]
+struct ConfigFileV2 {
     /// Environment-wide values, keyed by the parameter's external name.
-    environment: BTreeMap<String, JsonValue>,
+    global_parameters: BTreeMap<String, JsonValue>,
     /// The predicates rules select objects with, keyed by segment name.
     segments: BTreeMap<String, Segment>,
     /// The rules in file order. The first rule whose segment matches an object
-    /// decides each parameter it supplies.
+    /// decides each parameter it supplies. Every rule names a key of
+    /// [`Self::segments`].
     rules: Vec<Rule>,
 }
 
-impl ConfigFile {
-    /// Parses the config-sync file's contents, or `None` if the document is not a
-    /// JSON object.
-    ///
-    /// `None` is "no information about any parameter", which callers must keep
-    /// distinct from a valid but empty document. A section, segment or rule of the
-    /// wrong shape is dropped with a warning and does not fail the parse.
-    fn parse(contents: &str) -> Option<Self> {
-        let values: BTreeMap<String, JsonValue> = match serde_json::from_str(contents) {
-            Ok(values) => values,
-            Err(e) => {
-                warn!("could not parse system parameter sync file: {e}");
-                return None;
-            }
-        };
+/// A [`ConfigFileV2`] as written, before its rules are checked against its
+/// segments.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawConfigFileV2 {
+    #[serde(rename = "version")]
+    _version: FormatVersion,
+    #[serde(default)]
+    global_parameters: BTreeMap<String, JsonValue>,
+    #[serde(default)]
+    segments: BTreeMap<String, Segment>,
+    #[serde(default)]
+    rules: Vec<Rule>,
+}
 
-        let mut file = Self::default();
-        for (key, value) in values {
-            match key.as_str() {
-                SEGMENTS_SECTION => {
-                    file.segments = as_object(FilePosition::Section(SEGMENTS_SECTION), value)
-                        .into_iter()
-                        .filter_map(|(name, predicate)| {
-                            let segment = Segment::parse(FilePosition::Segment(&name), predicate)?;
-                            Some((name, segment))
-                        })
-                        .collect();
-                }
-                RULES_SECTION => {
-                    file.rules = as_array(FilePosition::Section(RULES_SECTION), value)
-                        .into_iter()
-                        .enumerate()
-                        .filter_map(|(index, rule)| Rule::parse(index + 1, rule))
-                        .collect();
-                }
-                _ => {
-                    file.environment.insert(key, value);
-                }
+impl TryFrom<RawConfigFileV2> for ConfigFileV2 {
+    type Error = String;
+
+    fn try_from(raw: RawConfigFileV2) -> Result<Self, String> {
+        for (index, rule) in raw.rules.iter().enumerate() {
+            if !raw.segments.contains_key(&rule.segment) {
+                return Err(format!(
+                    "rules[{index}] names the segment {:?}, which segments does not define",
+                    rule.segment
+                ));
             }
         }
-
-        Some(file)
+        Ok(Self {
+            global_parameters: raw.global_parameters,
+            segments: raw.segments,
+            rules: raw.rules,
+        })
     }
+}
+
+/// The `version` of a [`ConfigFileV2`], which must be 2.
+#[derive(Deserialize)]
+#[serde(try_from = "u64")]
+struct FormatVersion;
+
+impl TryFrom<u64> for FormatVersion {
+    type Error = String;
+
+    fn try_from(version: u64) -> Result<Self, String> {
+        match version {
+            2 => Ok(Self),
+            other => Err(format!("unsupported version {other}, expected 2")),
+        }
+    }
+}
+
+/// The config-sync file in the format without a `version` key: a flat map of
+/// environment-wide values, keyed by the parameter's external name.
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct LegacyConfigFile(BTreeMap<String, JsonValue>);
+
+impl From<LegacyConfigFile> for ConfigFileV2 {
+    fn from(legacy: LegacyConfigFile) -> Self {
+        Self {
+            global_parameters: legacy.0,
+            segments: BTreeMap::new(),
+            rules: Vec::new(),
+        }
+    }
+}
+
+impl ConfigFileV2 {
+    /// Parses the config-sync file's contents in either format, or describes
+    /// the first defect.
+    ///
+    /// An error is "no information about any parameter", which callers must keep
+    /// distinct from a valid but empty document.
+    fn parse(contents: &str) -> Result<Self, String> {
+        let document: serde_json::Map<String, JsonValue> =
+            serde_json::from_str(contents).map_err(|e| e.to_string())?;
+        // The format is chosen by the key's presence. Trying version 2 and
+        // falling back to the flat format would read a defective version 2
+        // document as a valid flat one, which prunes every scoped override.
+        if let Some(version) = document.get(VERSION_KEY) {
+            // Checked ahead of the rest, so a document of another version is
+            // reported as that rather than as its first unknown key.
+            let _: FormatVersion =
+                FormatVersion::deserialize(version).map_err(|e| format!("{VERSION_KEY}: {e}"))?;
+            deserialize_tracked(JsonValue::Object(document))
+        } else {
+            deserialize_tracked::<LegacyConfigFile>(JsonValue::Object(document)).map(Self::from)
+        }
+    }
+
+    /// Each rule with its index in [`Self::rules`] and the segment it names.
+    fn resolved_rules(&self) -> impl Iterator<Item = (usize, &Rule, &Segment)> {
+        self.rules.iter().enumerate().map(move |(index, rule)| {
+            let segment = self
+                .segments
+                .get(&rule.segment)
+                .expect("deserialization rejects a rule naming an undefined segment");
+            (index, rule, segment)
+        })
+    }
+}
+
+/// Deserializes `value`, prefixing an error with the path to the element it is
+/// about, such as `segments.prod.clauses[1].op`.
+fn deserialize_tracked<T: DeserializeOwned>(value: JsonValue) -> Result<T, String> {
+    serde_path_to_error::deserialize(value).map_err(|e| {
+        // An error about the document as a whole names its own position.
+        if e.path().iter().next().is_none() {
+            e.inner().to_string()
+        } else {
+            format!("{}: {}", e.path(), e.inner())
+        }
+    })
 }
 
 /// The kind of object a [`Segment`]'s clauses match, named after the
 /// LaunchDarkly context kind (see [`cluster_context`] and [`replica_context`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum ContextKind {
     Cluster,
     Replica,
 }
 
 impl ContextKind {
-    /// The context kind of this name, or `None` if the name is outside the
-    /// vocabulary.
-    fn parse(name: &str) -> Option<Self> {
-        match name {
-            "cluster" => Some(Self::Cluster),
-            "replica" => Some(Self::Replica),
-            _ => None,
-        }
-    }
-
     fn as_str(&self) -> &'static str {
         match self {
             Self::Cluster => "cluster",
@@ -215,7 +260,8 @@ impl ContextKind {
 /// An attribute of a cluster or replica that a [`Clause`] matches on, the same
 /// set the LaunchDarkly `cluster` and `replica` contexts carry (see
 /// [`cluster_context`] and [`replica_context`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum ScopeAttribute {
     ClusterId,
     ClusterName,
@@ -228,21 +274,6 @@ enum ScopeAttribute {
 }
 
 impl ScopeAttribute {
-    /// The attribute of this name, or `None` if the name is outside the
-    /// vocabulary.
-    fn parse(name: &str) -> Option<Self> {
-        match name {
-            "cluster_id" => Some(Self::ClusterId),
-            "cluster_name" => Some(Self::ClusterName),
-            "is_builtin" => Some(Self::IsBuiltin),
-            "replica_id" => Some(Self::ReplicaId),
-            "replica_name" => Some(Self::ReplicaName),
-            "replica_size" => Some(Self::ReplicaSize),
-            "replica_size_family" => Some(Self::ReplicaSizeFamily),
-            _ => None,
-        }
-    }
-
     fn as_str(&self) -> &'static str {
         match self {
             Self::ClusterId => "cluster_id",
@@ -303,29 +334,58 @@ fn replica_attributes(replica: &ReplicaScopeContext) -> BTreeMap<ScopeAttribute,
 
 /// A named predicate selecting the clusters or replicas a rule applies to: a
 /// context kind and LaunchDarkly-shaped clauses, ANDed.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "RawSegment")]
 struct Segment {
-    /// The kind of object the clauses match, or `None` when the entry's
-    /// `contextKind` is missing or unknown.
-    context_kind: Option<ContextKind>,
+    context_kind: ContextKind,
     /// The clauses, ANDed. An empty list constrains nothing, so it matches every
-    /// object of [`Self::context_kind`].
+    /// object of [`Self::context_kind`]. Every clause names an attribute that
+    /// objects of that kind carry.
     clauses: Vec<Clause>,
-    /// The defects that keep this segment from being evaluated. A segment with
-    /// any defect matches nothing, because dropping only the bad clause would
-    /// widen what the remaining clauses select.
-    rejected: Vec<SegmentDefect>,
+}
+
+/// A [`Segment`] as written, before its clauses are checked against its
+/// context kind.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawSegment {
+    context_kind: ContextKind,
+    clauses: Vec<Clause>,
+}
+
+impl TryFrom<RawSegment> for Segment {
+    type Error = String;
+
+    fn try_from(raw: RawSegment) -> Result<Self, String> {
+        // A clause on an attribute the context kind lacks could only ever be
+        // false. Refusing it is what makes the cluster-coherence guard
+        // structural rather than a property of `cluster_attributes` staying
+        // replica-free.
+        for (index, clause) in raw.clauses.iter().enumerate() {
+            if !clause.attribute.in_context(raw.context_kind) {
+                return Err(format!(
+                    "clauses[{index}] names the attribute {:?}, which a {:?} does not carry",
+                    clause.attribute.as_str(),
+                    raw.context_kind.as_str()
+                ));
+            }
+        }
+        Ok(Self {
+            context_kind: raw.context_kind,
+            clauses: raw.clauses,
+        })
+    }
 }
 
 /// One clause of a [`Segment`]: an operator applied to one attribute's value
 /// against a list of values.
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
+#[serde(try_from = "RawClause")]
 struct Clause {
     /// The attribute whose value the operator is applied to.
     attribute: ScopeAttribute,
     op: Operator,
-    /// The values the operator is applied against, ORed, rendered to strings as
-    /// scope attributes are, so `true` and `"true"` are the same value.
+    /// The values the operator is applied against, ORed.
     values: Vec<String>,
     /// The compiled [`Operator::Matches`] patterns, one per entry of
     /// [`Self::values`], and empty for every other operator.
@@ -335,12 +395,85 @@ struct Clause {
     negate: bool,
 }
 
+/// A [`Clause`] as written, in LaunchDarkly's clause shape.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawClause {
+    attribute: ScopeAttribute,
+    op: Operator,
+    values: Vec<ClauseValue>,
+    /// Absent means false. More lenient than the SDK, which requires the key,
+    /// because this file is hand-authored.
+    #[serde(default)]
+    negate: bool,
+    /// The key LaunchDarkly's REST API stamps on a clause, accepted so that a
+    /// clause copied from the API parses as written.
+    #[serde(default)]
+    _id: IgnoredAny,
+}
+
+impl TryFrom<RawClause> for Clause {
+    type Error = String;
+
+    fn try_from(raw: RawClause) -> Result<Self, String> {
+        let values: Vec<String> = raw.values.into_iter().map(|value| value.0).collect();
+        let mut patterns = Vec::new();
+        if raw.op == Operator::Matches {
+            for (index, pattern) in values.iter().enumerate() {
+                let compiled = Regex::new(pattern).map_err(|e| {
+                    // Collapse the multi-line error so the warning is one line.
+                    let error = e
+                        .to_string()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    format!(
+                        "values[{index}] is the invalid {:?} pattern {pattern:?}: {error}",
+                        Operator::Matches.as_str()
+                    )
+                })?;
+                patterns.push(compiled);
+            }
+        }
+        Ok(Self {
+            attribute: raw.attribute,
+            op: raw.op,
+            values,
+            patterns,
+            negate: raw.negate,
+        })
+    }
+}
+
+/// One entry of a clause's `values`, a JSON string, number or boolean rendered
+/// to a string as scope attributes are, so `true` and `"true"` are the same
+/// value.
+#[derive(Deserialize)]
+#[serde(try_from = "JsonValue")]
+struct ClauseValue(String);
+
+impl TryFrom<JsonValue> for ClauseValue {
+    type Error = String;
+
+    fn try_from(value: JsonValue) -> Result<Self, String> {
+        match value {
+            JsonValue::String(v) => Ok(Self(v)),
+            JsonValue::Number(v) => Ok(Self(v.to_string())),
+            JsonValue::Bool(v) => Ok(Self(v.to_string())),
+            other @ (JsonValue::Object(_) | JsonValue::Array(_) | JsonValue::Null) => Err(format!(
+                "expected a string, number or boolean, found {other}"
+            )),
+        }
+    }
+}
+
 /// A [`Clause`] operator, the string operators of LaunchDarkly's vocabulary.
 ///
 /// NOTE: The SDK's own `Op` is `pub(crate)`, so this mirrors it and
 /// `test_operator_vocabulary_matches_launchdarkly` keeps the two aligned. The
 /// compiler does not.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
 enum Operator {
     In,
     StartsWith,
@@ -375,6 +508,25 @@ impl Operator {
             Self::Contains => "contains",
             Self::Matches => "matches",
         }
+    }
+}
+
+impl TryFrom<String> for Operator {
+    type Error = String;
+
+    fn try_from(op: String) -> Result<Self, String> {
+        if let Some(supported) = Self::parse(&op) {
+            return Ok(supported);
+        }
+        Err(match unsupported_operator(&op) {
+            Some(reason) => {
+                format!("the LaunchDarkly operator {op:?} is not supported: it {reason}")
+            }
+            None => format!(
+                "{op:?} is not an operator, expected one of {}",
+                Self::ALL.map(|supported| supported.as_str()).join(", ")
+            ),
+        })
     }
 }
 
@@ -421,9 +573,8 @@ impl Clause {
     /// Whether the clause holds for an object carrying `attributes`.
     fn matches(&self, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
         let Some(value) = attributes.get(&self.attribute) else {
-            // Unreachable, as the parse refuses an attribute outside the
-            // segment's context kind. `false` regardless of `negate`, as in the
-            // SDK.
+            // Unreachable, as `Segment` refuses an attribute outside its
+            // context kind. `false` regardless of `negate`, as in the SDK.
             return false;
         };
         self.holds(value) != self.negate
@@ -442,251 +593,23 @@ impl Clause {
     }
 }
 
-/// Why a [`Segment`] cannot be evaluated: a defect in the entry itself, or in one
-/// of its clauses.
-#[derive(Debug, PartialEq, Eq)]
-enum SegmentDefect {
-    /// `contextKind` is a string outside the [`ContextKind`] vocabulary.
-    UnknownContextKind(String),
-    /// `contextKind` is absent, or is not a string at all.
-    MissingContextKind,
-    /// `clauses` is missing or is not a JSON array.
-    Clauses,
-    /// The clause at this 1-based position in `clauses` cannot be evaluated.
-    Clause(usize, ClauseDefect),
-    /// The entry carries a key other than `contextKind` and `clauses`.
-    UnknownKey(String),
-}
-
-impl fmt::Display for SegmentDefect {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SegmentDefect::MissingContextKind => write!(
-                f,
-                "it declares no {SEGMENT_CONTEXT_KIND:?}, which must be {:?} or {:?}",
-                ContextKind::Cluster.as_str(),
-                ContextKind::Replica.as_str()
-            ),
-            SegmentDefect::UnknownContextKind(kind) => write!(
-                f,
-                "its {SEGMENT_CONTEXT_KIND} {kind:?} is neither {:?} nor {:?}",
-                ContextKind::Cluster.as_str(),
-                ContextKind::Replica.as_str()
-            ),
-            SegmentDefect::Clauses => {
-                write!(f, "its {SEGMENT_CLAUSES:?} is not an array of clauses")
-            }
-            SegmentDefect::Clause(ordinal, defect) => {
-                write!(f, "clause {ordinal} {defect}")
-            }
-            SegmentDefect::UnknownKey(key) => {
-                write!(f, "carries the unknown key {key:?}")
-            }
-        }
-    }
-}
-
-/// Why one [`Clause`] cannot be evaluated.
-#[derive(Debug, PartialEq, Eq)]
-enum ClauseDefect {
-    /// The clause is not a JSON object.
-    NotAnObject,
-    /// `attribute` is missing or is not a string.
-    MissingAttribute,
-    /// `attribute` is outside the [`ScopeAttribute`] vocabulary.
-    UnknownAttribute(String),
-    /// `attribute` names an attribute that objects of the segment's context kind
-    /// do not carry, so the clause could only ever evaluate false.
-    AttributeOutsideContext(ScopeAttribute, ContextKind),
-    /// `op` is missing or is not a string.
-    MissingOperator,
-    /// `op` names a LaunchDarkly operator this format refuses, with the reason
-    /// from [`unsupported_operator`].
-    UnsupportedOperator(String, &'static str),
-    /// `op` is not a LaunchDarkly operator.
-    UnknownOperator(String),
-    /// `values` is missing, is not an array, or holds something other than a
-    /// string, number or boolean.
-    UnsupportedValues,
-    /// A `matches` value is not a valid regular expression.
-    InvalidPattern { pattern: String, error: String },
-    /// `negate` is present but is not a boolean.
-    UnsupportedNegate,
-    /// The clause carries an unknown key, including a per-clause `contextKind`.
-    UnknownKey(String),
-}
-
-impl fmt::Display for ClauseDefect {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ClauseDefect::NotAnObject => write!(f, "is not a JSON object"),
-            ClauseDefect::MissingAttribute => {
-                write!(f, "names no {CLAUSE_ATTRIBUTE:?}")
-            }
-            ClauseDefect::UnknownAttribute(attribute) => write!(
-                f,
-                "names the {CLAUSE_ATTRIBUTE} {attribute:?}, which is not a cluster or replica \
-                 attribute"
-            ),
-            ClauseDefect::AttributeOutsideContext(attribute, kind) => write!(
-                f,
-                "names the {CLAUSE_ATTRIBUTE} {:?}, which a {:?} does not carry",
-                attribute.as_str(),
-                kind.as_str()
-            ),
-            ClauseDefect::MissingOperator => write!(f, "names no {CLAUSE_OP:?}"),
-            ClauseDefect::UnsupportedOperator(op, reason) => {
-                write!(f, "uses the {CLAUSE_OP} {op:?}, which {reason}")
-            }
-            ClauseDefect::UnknownOperator(op) => {
-                write!(f, "uses the {CLAUSE_OP} {op:?}, which is not an operator")
-            }
-            ClauseDefect::UnsupportedValues => write!(
-                f,
-                "expects {CLAUSE_VALUES:?} to be an array of strings, numbers or booleans"
-            ),
-            ClauseDefect::InvalidPattern { pattern, error } => write!(
-                f,
-                "has the invalid {:?} pattern {pattern:?}: {error}",
-                Operator::Matches.as_str()
-            ),
-            ClauseDefect::UnsupportedNegate => {
-                write!(f, "expects {CLAUSE_NEGATE:?} to be a boolean")
-            }
-            ClauseDefect::UnknownKey(key) => {
-                write!(f, "carries the unknown key {key:?}")
-            }
-        }
-    }
-}
-
 impl Segment {
-    /// Parses one entry of the `segments` section, or `None` if its value is not
-    /// a JSON object. Defects are recorded in [`Self::rejected`].
-    fn parse(position: FilePosition<'_>, value: JsonValue) -> Option<Self> {
-        let mut entry = match value {
-            JsonValue::Object(entry) => entry,
-            other => {
-                warn!(
-                    "ignoring {position} in system parameter sync file: expected a JSON object, found {}",
-                    json_type_name(&other)
-                );
-                return None;
-            }
-        };
-
-        let mut segment = Self::default();
-        match entry.remove(SEGMENT_CONTEXT_KIND) {
-            Some(JsonValue::String(name)) => match ContextKind::parse(&name) {
-                Some(kind) => segment.context_kind = Some(kind),
-                None => segment
-                    .rejected
-                    .push(SegmentDefect::UnknownContextKind(name)),
-            },
-            _ => segment.rejected.push(SegmentDefect::MissingContextKind),
-        }
-
-        // Parse the clauses even without a usable context kind, so every defect
-        // is reported at once.
-        match entry.remove(SEGMENT_CLAUSES) {
-            Some(JsonValue::Array(clauses)) => {
-                for (index, clause) in clauses.into_iter().enumerate() {
-                    match Clause::parse(clause, segment.context_kind) {
-                        Ok(clause) => segment.clauses.push(clause),
-                        Err(defect) => segment
-                            .rejected
-                            .push(SegmentDefect::Clause(index + 1, defect)),
-                    }
-                }
-            }
-            _ => segment.rejected.push(SegmentDefect::Clauses),
-        }
-
-        for (key, _) in entry {
-            segment.rejected.push(SegmentDefect::UnknownKey(key));
-        }
-
-        Some(segment)
-    }
-
     /// Whether the segment selects an object of `kind` carrying `attributes`. A
     /// segment of another context kind selects nothing.
     fn matches(&self, kind: ContextKind, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
-        self.rejected.is_empty()
-            && self.context_kind == Some(kind)
-            && self.clauses.iter().all(|clause| clause.matches(attributes))
+        self.context_kind == kind && self.clauses.iter().all(|clause| clause.matches(attributes))
     }
 }
 
 /// One element of the `rules` array: the parameters to apply to the objects a
 /// segment matches.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Rule {
-    /// The rule's 1-based position in the `rules` array, counting dropped
-    /// elements, named in diagnostics.
-    ordinal: usize,
     /// The name of the [`Segment`] selecting the objects this rule applies to.
     segment: String,
     /// The values this rule supplies, keyed by the parameter's external name.
     parameters: BTreeMap<String, JsonValue>,
-}
-
-impl Rule {
-    /// Parses the `ordinal`th element of the `rules` array, or `None` if it is
-    /// not an object carrying a segment name and a parameter object.
-    fn parse(ordinal: usize, value: JsonValue) -> Option<Self> {
-        let position = FilePosition::Rule {
-            ordinal,
-            segment: None,
-        };
-        let mut rule = match value {
-            JsonValue::Object(rule) => rule,
-            other => {
-                warn!(
-                    "ignoring {position} in system parameter sync file: expected a JSON object, found {}",
-                    json_type_name(&other)
-                );
-                return None;
-            }
-        };
-
-        let segment = match rule.remove(RULE_SEGMENT) {
-            Some(JsonValue::String(segment)) => segment,
-            other => {
-                warn!(
-                    "ignoring {position} in system parameter sync file: expected a {RULE_SEGMENT:?} \
-                     name, found {}",
-                    other.as_ref().map_or("nothing", json_type_name)
-                );
-                return None;
-            }
-        };
-        let parameters = match rule.remove(RULE_PARAMETERS) {
-            Some(JsonValue::Object(parameters)) => parameters.into_iter().collect(),
-            other => {
-                warn!(
-                    "ignoring {position} in system parameter sync file: expected a \
-                     {RULE_PARAMETERS:?} object, found {}",
-                    other.as_ref().map_or("nothing", json_type_name)
-                );
-                return None;
-            }
-        };
-
-        Some(Self {
-            ordinal,
-            segment,
-            parameters,
-        })
-    }
-
-    /// The rule's position, for a diagnostic about it.
-    fn position(&self) -> FilePosition<'_> {
-        FilePosition::Rule {
-            ordinal: self.ordinal,
-            segment: Some(&self.segment),
-        }
-    }
 }
 
 /// The frontend's cached view of the config-sync file.
@@ -697,178 +620,11 @@ struct CachedConfigFile {
     /// diagnosed, only when it changes.
     contents: Option<String>,
     /// The parse of [`Self::contents`], or `None` if the read failed or the
-    /// document was not a JSON object. The environment-wide pass reads this.
-    current: Option<Arc<ConfigFile>>,
+    /// document did not parse. The environment-wide pass reads this.
+    current: Option<Arc<ConfigFileV2>>,
     /// The newest valid parse whose environment-wide section is committed to
     /// the catalog. The scoped passes read this. It survives a failed read.
-    published: Option<Arc<ConfigFile>>,
-}
-
-/// A position in the config-sync file, naming it in a diagnostic about what is
-/// written there.
-enum FilePosition<'a> {
-    /// A reserved top-level section.
-    Section(&'a str),
-    /// One entry of the `segments` section.
-    Segment(&'a str),
-    /// One element of the `rules` array, by its 1-based position and, once
-    /// parsed, the segment it names.
-    Rule {
-        ordinal: usize,
-        segment: Option<&'a str>,
-    },
-}
-
-impl fmt::Display for FilePosition<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FilePosition::Section(name) => write!(f, "the {name} section"),
-            FilePosition::Segment(name) => write!(f, "segment {name:?}"),
-            FilePosition::Rule {
-                ordinal,
-                segment: None,
-            } => write!(f, "rule {ordinal}"),
-            FilePosition::Rule {
-                ordinal,
-                segment: Some(segment),
-            } => write!(f, "rule {ordinal} (segment {segment:?})"),
-        }
-    }
-}
-
-/// Interprets `value` as a JSON object, or warns and yields an empty map.
-fn as_object(position: FilePosition<'_>, value: JsonValue) -> BTreeMap<String, JsonValue> {
-    match value {
-        JsonValue::Object(map) => map.into_iter().collect(),
-        other => {
-            warn!(
-                "ignoring {position} in system parameter sync file: expected a JSON object, found {}",
-                json_type_name(&other)
-            );
-            BTreeMap::new()
-        }
-    }
-}
-
-/// Interprets `value` as a JSON array, or warns and yields an empty vector.
-fn as_array(position: FilePosition<'_>, value: JsonValue) -> Vec<JsonValue> {
-    match value {
-        JsonValue::Array(values) => values,
-        other => {
-            warn!(
-                "ignoring {position} in system parameter sync file: expected a JSON array, found {}",
-                json_type_name(&other)
-            );
-            Vec::new()
-        }
-    }
-}
-
-impl Clause {
-    /// Parses one element of a segment's `clauses` array, or its first defect.
-    ///
-    /// `context_kind` is the segment's, used to refuse an attribute objects of
-    /// that kind do not carry. `None`, for an unusable context kind, skips that
-    /// check.
-    fn parse(value: JsonValue, context_kind: Option<ContextKind>) -> Result<Self, ClauseDefect> {
-        let JsonValue::Object(mut clause) = value else {
-            return Err(ClauseDefect::NotAnObject);
-        };
-
-        let attribute = match clause.remove(CLAUSE_ATTRIBUTE) {
-            Some(JsonValue::String(name)) => match ScopeAttribute::parse(&name) {
-                None => return Err(ClauseDefect::UnknownAttribute(name)),
-                Some(attribute) => match context_kind {
-                    Some(kind) if !attribute.in_context(kind) => {
-                        return Err(ClauseDefect::AttributeOutsideContext(attribute, kind));
-                    }
-                    _ => attribute,
-                },
-            },
-            _ => return Err(ClauseDefect::MissingAttribute),
-        };
-
-        let op = match clause.remove(CLAUSE_OP) {
-            Some(JsonValue::String(op)) => match Operator::parse(&op) {
-                Some(op) => op,
-                None => {
-                    return Err(match unsupported_operator(&op) {
-                        Some(reason) => ClauseDefect::UnsupportedOperator(op, reason),
-                        None => ClauseDefect::UnknownOperator(op),
-                    });
-                }
-            },
-            _ => return Err(ClauseDefect::MissingOperator),
-        };
-
-        let values = match clause.remove(CLAUSE_VALUES) {
-            Some(JsonValue::Array(values)) => values
-                .iter()
-                .map(scalar_string)
-                .collect::<Option<Vec<_>>>()
-                .ok_or(ClauseDefect::UnsupportedValues)?,
-            _ => return Err(ClauseDefect::UnsupportedValues),
-        };
-
-        let negate = match clause.remove(CLAUSE_NEGATE) {
-            // Absent means false. More lenient than the SDK, which requires the
-            // key, because this file is hand-authored.
-            None | Some(JsonValue::Null) => false,
-            Some(JsonValue::Bool(negate)) => negate,
-            Some(_) => return Err(ClauseDefect::UnsupportedNegate),
-        };
-
-        let mut patterns = Vec::new();
-        if op == Operator::Matches {
-            for pattern in &values {
-                let compiled = Regex::new(pattern).map_err(|e| ClauseDefect::InvalidPattern {
-                    pattern: pattern.clone(),
-                    // Collapse the multi-line error so the warning is one line.
-                    error: e
-                        .to_string()
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                })?;
-                patterns.push(compiled);
-            }
-        }
-
-        clause.remove(CLAUSE_ID);
-        if let Some((key, _)) = clause.into_iter().next() {
-            return Err(ClauseDefect::UnknownKey(key));
-        }
-
-        Ok(Self {
-            attribute,
-            op,
-            values,
-            patterns,
-            negate,
-        })
-    }
-}
-
-/// Renders a JSON scalar as the string a scope attribute is compared against, or
-/// `None` for a composite value or `null`.
-fn scalar_string(value: &JsonValue) -> Option<String> {
-    match value {
-        JsonValue::String(v) => Some(v.clone()),
-        JsonValue::Number(v) => Some(v.to_string()),
-        JsonValue::Bool(v) => Some(v.to_string()),
-        JsonValue::Object(_) | JsonValue::Array(_) | JsonValue::Null => None,
-    }
-}
-
-fn json_type_name(value: &JsonValue) -> &'static str {
-    match value {
-        JsonValue::Null => "null",
-        JsonValue::Bool(_) => "boolean",
-        JsonValue::Number(_) => "number",
-        JsonValue::String(_) => "string",
-        JsonValue::Array(_) => "array",
-        JsonValue::Object(_) => "object",
-    }
+    published: Option<Arc<ConfigFileV2>>,
 }
 
 /// Renders a JSON value as the raw parameter string the backend parses.
@@ -991,7 +747,7 @@ impl SystemParameterFrontend {
                 // the file could not be read or parsed, keeps its current value.
                 SystemParameterFrontendClient::File { .. } => file
                     .as_ref()
-                    .and_then(|file| file.environment.get(flag_name))
+                    .and_then(|file| file.global_parameters.get(flag_name))
                     .and_then(json_param_value)
                     .unwrap_or_else(|| params.get(param_name)),
             };
@@ -1031,7 +787,7 @@ impl SystemParameterFrontend {
         path: &Path,
         read: io::Result<String>,
         params: &SynchronizedParameters,
-    ) -> Option<Arc<ConfigFile>> {
+    ) -> Option<Arc<ConfigFileV2>> {
         let mut cache = self
             .config_file
             .lock()
@@ -1055,8 +811,13 @@ impl SystemParameterFrontend {
         };
         let file = contents
             .as_deref()
-            .and_then(ConfigFile::parse)
-            .map(Arc::new);
+            .and_then(|contents| match ConfigFileV2::parse(contents) {
+                Ok(file) => Some(Arc::new(file)),
+                Err(e) => {
+                    warn!("could not parse system parameter sync file: {e}");
+                    None
+                }
+            });
         if let Some(file) = &file {
             for diagnostic in self.scoped_rule_diagnostics(file, params) {
                 warn!("{diagnostic}");
@@ -1075,7 +836,7 @@ impl SystemParameterFrontend {
 
     /// The newest valid config-sync file whose environment-wide section is
     /// committed to the catalog, or `None` if no read has parsed yet.
-    fn published_config_file(&self) -> Option<Arc<ConfigFile>> {
+    fn published_config_file(&self) -> Option<Arc<ConfigFileV2>> {
         self.config_file
             .lock()
             .expect("config file cache lock poisoned")
@@ -1120,34 +881,19 @@ impl SystemParameterFrontend {
         }
     }
 
-    /// The problems with `file`'s segments and rules that an operator can act on,
-    /// which resolution drops silently.
+    /// The rule parameters that resolution drops silently and that an operator
+    /// can act on. They depend on this binary's parameter set, which is why they
+    /// are diagnosed per parameter rather than failing the document.
     fn scoped_rule_diagnostics(
         &self,
-        file: &ConfigFile,
+        file: &ConfigFileV2,
         params: &SynchronizedParameters,
     ) -> Vec<String> {
         let mut diagnostics = Vec::new();
 
-        for (name, segment) in &file.segments {
-            for defect in &segment.rejected {
-                diagnostics.push(format!(
-                    "{} in the system parameter sync file matches no cluster or replica: {defect}",
-                    FilePosition::Segment(name)
-                ));
-            }
-        }
-
         let scopable = self.scopable_params(params);
-        for rule in &file.rules {
-            let Some(segment) = file.segments.get(&rule.segment) else {
-                diagnostics.push(format!(
-                    "ignoring rule {} in the system parameter sync file: no segment named {:?}",
-                    rule.ordinal, rule.segment
-                ));
-                continue;
-            };
-            let position = rule.position();
+        for (index, rule, segment) in file.resolved_rules() {
+            let position = format!("rules[{index}] (segment {:?})", rule.segment);
 
             for (name, value) in &rule.parameters {
                 let Some(&(param_name, scope)) = scopable.get(name.as_str()) else {
@@ -1158,8 +904,7 @@ impl SystemParameterFrontend {
                     continue;
                 };
                 // The coherence guard, see [`Self::file_rule_overrides`].
-                if scope == ParameterScope::Cluster
-                    && segment.context_kind == Some(ContextKind::Replica)
+                if scope == ParameterScope::Cluster && segment.context_kind == ContextKind::Replica
                 {
                     diagnostics.push(format!(
                         "ignoring {param_name} for {position} in the system parameter sync file: \
@@ -1353,7 +1098,7 @@ impl SystemParameterFrontend {
     /// `clusters`.
     fn file_cluster_overrides(
         &self,
-        file: &ConfigFile,
+        file: &ConfigFileV2,
         params: &SynchronizedParameters,
         param_names: &[&'static str],
         clusters: &[ClusterEvalContext],
@@ -1379,7 +1124,7 @@ impl SystemParameterFrontend {
     /// `replicas`.
     fn file_replica_overrides(
         &self,
-        file: &ConfigFile,
+        file: &ConfigFileV2,
         params: &SynchronizedParameters,
         param_names: &[&'static str],
         replicas: &[ReplicaEvalContext],
@@ -1410,7 +1155,7 @@ impl SystemParameterFrontend {
     /// yields no override. Silent, see [`Self::scoped_rule_diagnostics`].
     fn file_rule_overrides(
         &self,
-        file: &ConfigFile,
+        file: &ConfigFileV2,
         params: &SynchronizedParameters,
         param_names: &[&'static str],
         scope: ParameterScope,
@@ -1423,19 +1168,14 @@ impl SystemParameterFrontend {
             .collect();
 
         let mut decided: BTreeMap<&'static str, String> = BTreeMap::new();
-        for rule in &file.rules {
-            let Some(segment) = file.segments.get(&rule.segment) else {
-                continue;
-            };
+        for (_, rule, segment) in file.resolved_rules() {
             if !segment.matches(kind, attributes) {
                 continue;
             }
             // The coherence guard: a cluster-scoped parameter comes only from a
             // `cluster` segment. The match above already ensures this when `kind`
             // is `Cluster`, and this keeps it from resting on the callers.
-            if scope == ParameterScope::Cluster
-                && segment.context_kind != Some(ContextKind::Cluster)
-            {
+            if scope == ParameterScope::Cluster && segment.context_kind != ContextKind::Cluster {
                 continue;
             }
 
@@ -1835,9 +1575,14 @@ mod tests {
     /// The path a [`file_frontend`] reports in its warnings. Never opened.
     const CONFIG_PATH: &str = "/nonexistent/system-params.json";
 
-    /// Parses a document the test knows to be a JSON object.
-    fn parse(contents: &str) -> ConfigFile {
-        ConfigFile::parse(contents).expect("document is a JSON object")
+    /// Parses a document the test knows to be valid.
+    fn parse(contents: &str) -> ConfigFileV2 {
+        ConfigFileV2::parse(contents).unwrap_or_else(|e| panic!("document does not parse: {e}"))
+    }
+
+    /// The error a document the test knows to be invalid is rejected with.
+    fn parse_error(contents: &str) -> String {
+        ConfigFileV2::parse(contents).expect_err("document parses")
     }
 
     /// One tick of the sync loop's handling of the file: read it, then publish
@@ -1930,6 +1675,7 @@ mod tests {
     fn scoped_file(value: bool) -> String {
         format!(
             r#"{{
+                "version": 2,
                 "segments": {{"analytics": {{
                     "contextKind": "cluster",
                     "clauses": [
@@ -1943,8 +1689,20 @@ mod tests {
         )
     }
 
+    /// A document whose `cluster` segment `s` holds `clause` as its only clause,
+    /// with one rule naming it.
+    fn single_clause_file(clause: &str) -> String {
+        format!(
+            r#"{{
+                "version": 2,
+                "segments": {{"s": {{"contextKind": "cluster", "clauses": [{clause}]}}}},
+                "rules": [{{"segment": "s", "parameters": {{"{CLUSTER_PARAM}": true}}}}]
+            }}"#
+        )
+    }
+
     #[mz_ore::test]
-    fn test_parse_flat_file_is_environment_wide() {
+    fn test_parse_legacy_document() {
         let file = parse(
             r#"{
                 "max_connections": 1000,
@@ -1954,39 +1712,56 @@ mod tests {
         );
 
         assert_eq!(
-            file.environment.keys().collect::<Vec<_>>(),
-            vec![
-                "allowed_cluster_replica_sizes",
-                "enable_lgalloc",
-                "max_connections"
-            ]
+            file,
+            ConfigFileV2::from(LegacyConfigFile(BTreeMap::from([
+                ("max_connections".to_string(), JsonValue::from(1000)),
+                (
+                    "allowed_cluster_replica_sizes".to_string(),
+                    JsonValue::from("'25cc', '50cc'")
+                ),
+                ("enable_lgalloc".to_string(), JsonValue::Bool(false)),
+            ])))
         );
         assert!(file.segments.is_empty());
         assert!(file.rules.is_empty());
 
         // Every JSON scalar renders to the raw string the backend parses.
         assert_eq!(
-            json_param_value(&file.environment["max_connections"]).as_deref(),
+            json_param_value(&file.global_parameters["max_connections"]).as_deref(),
             Some("1000")
         );
         assert_eq!(
-            json_param_value(&file.environment["enable_lgalloc"]).as_deref(),
+            json_param_value(&file.global_parameters["enable_lgalloc"]).as_deref(),
             Some("false")
         );
         assert_eq!(
-            json_param_value(&file.environment["allowed_cluster_replica_sizes"]).as_deref(),
+            json_param_value(&file.global_parameters["allowed_cluster_replica_sizes"]).as_deref(),
             Some("'25cc', '50cc'")
         );
         // An explicit `null` expresses no opinion, leaving the value alone.
         let null = parse(r#"{"max_connections": null}"#);
-        assert_eq!(json_param_value(&null.environment["max_connections"]), None);
+        assert_eq!(
+            json_param_value(&null.global_parameters["max_connections"]),
+            None
+        );
+
+        // Without `version` no key is reserved, so these are parameter names like
+        // any other, and the document scopes nothing.
+        let flat = parse(r#"{"segments": {}, "rules": []}"#);
+        assert_eq!(
+            flat.global_parameters.keys().collect::<Vec<_>>(),
+            vec!["rules", "segments"]
+        );
+        assert!(flat.segments.is_empty());
+        assert!(flat.rules.is_empty());
     }
 
     #[mz_ore::test]
-    fn test_parse_segments_and_rules() {
+    fn test_parse_v2_document() {
         let file = parse(
             r#"{
-                "enable_lgalloc": false,
+                "version": 2,
+                "global_parameters": {"enable_lgalloc": false},
                 "segments": {
                     "analytics": {
                         "contextKind": "cluster",
@@ -2022,60 +1797,56 @@ mod tests {
             }"#,
         );
 
-        // The reserved keys are sections, every other key is environment-wide.
         assert_eq!(
-            file.environment.keys().collect::<Vec<_>>(),
-            vec!["enable_lgalloc"]
+            file.global_parameters,
+            BTreeMap::from([("enable_lgalloc".to_string(), JsonValue::Bool(false))])
         );
 
         assert_eq!(
-            file.segments["analytics"].context_kind,
-            Some(ContextKind::Cluster)
-        );
-        assert_eq!(
-            file.segments["analytics"].clauses,
-            vec![clause(
-                ScopeAttribute::ClusterName,
-                Operator::In,
-                &["analytics", "analytics_2"],
-                false
-            )]
+            file.segments["analytics"],
+            Segment {
+                context_kind: ContextKind::Cluster,
+                clauses: vec![clause(
+                    ScopeAttribute::ClusterName,
+                    Operator::In,
+                    &["analytics", "analytics_2"],
+                    false
+                )],
+            }
         );
 
         // Clauses keep their array order, `negate` defaults to false, a boolean
         // value may be written as a JSON boolean or as its string, and the
         // LaunchDarkly REST API's `_id` is ignored rather than rejected.
         assert_eq!(
-            file.segments["legacy-replicas"].context_kind,
-            Some(ContextKind::Replica)
+            file.segments["legacy-replicas"],
+            Segment {
+                context_kind: ContextKind::Replica,
+                clauses: vec![
+                    clause(
+                        ScopeAttribute::ReplicaSizeFamily,
+                        Operator::In,
+                        &["legacy"],
+                        false
+                    ),
+                    clause(ScopeAttribute::IsBuiltin, Operator::In, &["false"], false),
+                    clause(
+                        ScopeAttribute::ReplicaName,
+                        Operator::Matches,
+                        &["^scratch-"],
+                        true
+                    ),
+                ],
+            }
         );
-        assert_eq!(
-            file.segments["legacy-replicas"].clauses,
-            vec![
-                clause(
-                    ScopeAttribute::ReplicaSizeFamily,
-                    Operator::In,
-                    &["legacy"],
-                    false
-                ),
-                clause(ScopeAttribute::IsBuiltin, Operator::In, &["false"], false),
-                clause(
-                    ScopeAttribute::ReplicaName,
-                    Operator::Matches,
-                    &["^scratch-"],
-                    true
-                ),
-            ]
-        );
-        assert!(file.segments.values().all(|s| s.rejected.is_empty()));
 
         // Rules keep the document order that decides which of them wins.
         assert_eq!(
             file.rules
                 .iter()
-                .map(|rule| (rule.ordinal, rule.segment.as_str()))
+                .map(|rule| rule.segment.as_str())
                 .collect::<Vec<_>>(),
-            vec![(1, "analytics"), (2, "legacy-replicas")]
+            vec!["analytics", "legacy-replicas"]
         );
         assert_eq!(
             file.rules[0].parameters[CLUSTER_PARAM],
@@ -2083,52 +1854,35 @@ mod tests {
         );
     }
 
-    /// One malformed segment or rule must not strand the rest of the file, and
-    /// dropping a rule must not renumber the rules after it.
+    /// The `version` key alone selects the format, so a defective version 2
+    /// document is rejected rather than read as a flat parameter map.
     #[mz_ore::test]
-    fn test_parse_ignores_malformed_segments_and_rules() {
-        let file = parse(
-            r#"{
-                "max_connections": 1000,
-                "segments": {
-                    "broken": 7,
-                    "prod": {
-                        "contextKind": "cluster",
-                        "clauses": [
-                            {"attribute": "cluster_name", "op": "in", "values": ["prod"]}
-                        ]
-                    }
-                },
-                "rules": [
-                    "not-a-rule",
-                    {"parameters": {"enable_lgalloc": true}},
-                    {"segment": "prod", "parameters": {"enable_lgalloc": true}}
-                ]
-            }"#,
+    fn test_parse_selects_format_by_version_key() {
+        assert_eq!(parse(r#"{"version": 2}"#), ConfigFileV2::default());
+
+        // A flat key is not an environment-wide value in version 2.
+        let flat_key = parse_error(r#"{"version": 2, "max_connections": 1000}"#);
+        assert!(
+            flat_key.contains("unknown field `max_connections`"),
+            "{flat_key}"
         );
 
-        assert_eq!(
-            file.environment.keys().collect::<Vec<_>>(),
-            vec!["max_connections"]
+        // Read as a flat map, this would apply `max_connections` and scope
+        // nothing, pruning every existing override.
+        let broken = parse_error(
+            r#"{"version": 2, "global_parameters": {"max_connections": 1000}, "segments": 7}"#,
         );
-        assert_eq!(
-            file.segments.keys().collect::<Vec<_>>(),
-            vec!["prod"],
-            "non-object segment dropped"
-        );
-        assert_eq!(file.rules.len(), 1);
-        assert_eq!(
-            file.rules[0].ordinal, 3,
-            "surviving rule keeps its position in the file"
-        );
+        assert!(broken.starts_with("segments: invalid type"), "{broken}");
 
-        // A section of the wrong shape drops that section only.
-        let sections = parse(r#"{"max_connections": 1000, "segments": 7, "rules": {}}"#);
-        assert!(sections.segments.is_empty());
-        assert!(sections.rules.is_empty());
+        // Another version is reported as such, ahead of its unknown keys.
         assert_eq!(
-            sections.environment.keys().collect::<Vec<_>>(),
-            vec!["max_connections"]
+            parse_error(r#"{"version": 3, "anything": true}"#),
+            "version: unsupported version 3, expected 2"
+        );
+        let string_version = parse_error(r#"{"version": "2"}"#);
+        assert!(
+            string_version.starts_with("version: invalid type"),
+            "{string_version}"
         );
     }
 
@@ -2136,9 +1890,298 @@ mod tests {
     /// distinct from an empty document.
     #[mz_ore::test]
     fn test_parse_rejects_non_object_document() {
-        assert_eq!(ConfigFile::parse("[]"), None);
-        assert_eq!(ConfigFile::parse("not json"), None);
-        assert_eq!(ConfigFile::parse("{}"), Some(ConfigFile::default()));
+        assert!(ConfigFileV2::parse("[]").is_err());
+        assert!(ConfigFileV2::parse("not json").is_err());
+        assert_eq!(parse("{}"), ConfigFileV2::default());
+    }
+
+    /// Every structural defect fails the whole document, and the error names the
+    /// path to it. Each case is a document with one defect, the path the error
+    /// starts with, and a fragment of the message.
+    #[mz_ore::test]
+    fn test_parse_rejects_structural_defects() {
+        let segment = r#""s": {"contextKind": "cluster", "clauses": []}"#;
+        let rule = |extra: &str| {
+            format!(
+                r#"{{"version": 2, "segments": {{{segment}}}, "rules": [{{
+                    "segment": "s", "parameters": {{}}{extra}
+                }}]}}"#
+            )
+        };
+        let segment_with = |body: &str| format!(r#"{{"version": 2, "segments": {{"s": {body}}}}}"#);
+        let cluster_name = r#""attribute": "cluster_name", "op": "in", "values": ["prod"]"#;
+
+        let cases = [
+            // Sections of the wrong type.
+            (
+                r#"{"version": 2, "segments": 7}"#.to_string(),
+                "segments",
+                "invalid type",
+            ),
+            (
+                r#"{"version": 2, "rules": {}}"#.to_string(),
+                "rules",
+                "invalid type",
+            ),
+            (
+                r#"{"version": 2, "global_parameters": []}"#.to_string(),
+                "global_parameters",
+                "invalid type",
+            ),
+            // Rules.
+            (
+                r#"{"version": 2, "rules": ["not-a-rule"]}"#.to_string(),
+                "rules[0]",
+                "invalid type",
+            ),
+            (
+                rule(r#", "priority": 1"#),
+                "rules[0]",
+                "unknown field `priority`",
+            ),
+            (
+                format!(
+                    r#"{{"version": 2, "segments": {{{segment}}}, "rules": [{{"segment": "s"}}]}}"#
+                ),
+                "rules[0]",
+                "missing field `parameters`",
+            ),
+            (
+                format!(
+                    r#"{{"version": 2, "segments": {{{segment}}}, "rules": [
+                        {{"segment": "s", "parameters": {{}}}},
+                        {{"segment": "nope", "parameters": {{}}}}
+                    ]}}"#
+                ),
+                "rules[1] names the segment \"nope\"",
+                "which segments does not define",
+            ),
+            // Segments.
+            (
+                segment_with(r#"{"clauses": []}"#),
+                "segments.s",
+                "missing field `contextKind`",
+            ),
+            (
+                segment_with(r#"{"contextKind": "environment", "clauses": []}"#),
+                "segments.s.contextKind",
+                "unknown variant `environment`",
+            ),
+            (
+                segment_with(r#"{"contextKind": "cluster"}"#),
+                "segments.s",
+                "missing field `clauses`",
+            ),
+            (
+                segment_with(r#"{"contextKind": "cluster", "clauses": {}}"#),
+                "segments.s.clauses",
+                "invalid type",
+            ),
+            (
+                segment_with(r#"{"contextKind": "cluster", "clauses": [], "description": "x"}"#),
+                "segments.s",
+                "unknown field `description`",
+            ),
+            (
+                single_clause_file(&format!(
+                    r#"{{{cluster_name}}}, {{
+                        "attribute": "replica_size_family", "op": "in", "values": ["legacy"]
+                    }}"#
+                )),
+                "segments.s: clauses[1] names the attribute \"replica_size_family\"",
+                "which a \"cluster\" does not carry",
+            ),
+            // Clauses.
+            (
+                single_clause_file("7"),
+                "segments.s.clauses[0]",
+                "invalid type",
+            ),
+            (
+                single_clause_file(r#"{"op": "in", "values": []}"#),
+                "segments.s.clauses[0]",
+                "missing field `attribute`",
+            ),
+            (
+                single_clause_file(r#"{"attribute": "cluster_nmae", "op": "in", "values": []}"#),
+                "segments.s.clauses[0].attribute",
+                "unknown variant `cluster_nmae`",
+            ),
+            (
+                single_clause_file(r#"{"attribute": 7, "op": "in", "values": []}"#),
+                "segments.s.clauses[0].attribute",
+                "invalid type",
+            ),
+            (
+                single_clause_file(r#"{"attribute": "cluster_name", "values": []}"#),
+                "segments.s.clauses[0]",
+                "missing field `op`",
+            ),
+            (
+                single_clause_file(r#"{"attribute": "cluster_name", "op": "in"}"#),
+                "segments.s.clauses[0]",
+                "missing field `values`",
+            ),
+            (
+                single_clause_file(
+                    r#"{"attribute": "cluster_name", "op": "in", "values": "prod"}"#,
+                ),
+                "segments.s.clauses[0].values",
+                "invalid type",
+            ),
+            (
+                single_clause_file(
+                    r#"{"attribute": "cluster_name", "op": "in", "values": ["prod", ["prod"]]}"#,
+                ),
+                "segments.s.clauses[0].values[1]",
+                "expected a string, number or boolean",
+            ),
+            (
+                single_clause_file(&format!(r#"{{{cluster_name}, "negate": "yes"}}"#)),
+                "segments.s.clauses[0].negate",
+                "invalid type",
+            ),
+            (
+                single_clause_file(&format!(r#"{{{cluster_name}, "nope": 1}}"#)),
+                "segments.s.clauses[0]",
+                "unknown field `nope`",
+            ),
+            // The segment declares the context kind for all of its clauses.
+            (
+                single_clause_file(&format!(r#"{{{cluster_name}, "contextKind": "cluster"}}"#)),
+                "segments.s.clauses[0]",
+                "unknown field `contextKind`",
+            ),
+            (
+                single_clause_file(
+                    r#"{"attribute": "cluster_name", "op": "matches", "values": ["^prod-", "^prod-["]}"#,
+                ),
+                "segments.s.clauses[0]: values[1] is the invalid \"matches\" pattern \"^prod-[\": ",
+                "",
+            ),
+        ];
+
+        for (document, path, fragment) in cases {
+            let error = parse_error(&document);
+            assert!(
+                error.starts_with(path) && error.contains(fragment),
+                "expected an error at {path:?} containing {fragment:?}, got {error:?} for {document}"
+            );
+        }
+    }
+
+    /// The ten LaunchDarkly operators this format refuses are recognised and
+    /// refused with their own reason, rather than lumped in with a typo. An
+    /// operator that is not LaunchDarkly's at all is refused as unknown.
+    #[mz_ore::test]
+    fn test_unsupported_operators_rejected() {
+        let rejected = |op: &str| {
+            parse_error(&single_clause_file(&format!(
+                r#"{{"attribute": "cluster_name", "op": "{op}", "values": ["1"]}}"#
+            )))
+        };
+        let unsupported = |op: &str, reason: &str| {
+            format!(
+                "segments.s.clauses[0].op: the LaunchDarkly operator {op:?} is not supported: it \
+                 {reason}"
+            )
+        };
+
+        for op in [
+            "lessThan",
+            "lessThanOrEqual",
+            "greaterThan",
+            "greaterThanOrEqual",
+        ] {
+            assert_eq!(
+                rejected(op),
+                unsupported(
+                    op,
+                    "compares numbers, and every cluster and replica attribute is a string"
+                )
+            );
+        }
+        for op in ["before", "after"] {
+            assert_eq!(
+                rejected(op),
+                unsupported(
+                    op,
+                    "compares dates, and every cluster and replica attribute is a string"
+                )
+            );
+        }
+        for op in ["semVerEqual", "semVerGreaterThan", "semVerLessThan"] {
+            assert_eq!(
+                rejected(op),
+                unsupported(
+                    op,
+                    "compares semantic versions, and every cluster and replica attribute is a \
+                     string"
+                )
+            );
+        }
+        assert_eq!(
+            rejected("segmentMatch"),
+            unsupported(
+                "segmentMatch",
+                "references another segment, which this file expresses through the segment a \
+                 rule names"
+            )
+        );
+
+        // Not a LaunchDarkly operator at all, including the casing a hand-author
+        // is most likely to reach for.
+        for op in ["starts_with", "IN"] {
+            assert_eq!(
+                rejected(op),
+                format!(
+                    "segments.s.clauses[0].op: {op:?} is not an operator, expected one of in, \
+                     startsWith, endsWith, contains, matches"
+                )
+            );
+        }
+    }
+
+    /// Every LaunchDarkly operator is either supported or refused with a reason.
+    /// An operator added to the SDK does not fail this.
+    #[mz_ore::test]
+    fn test_operator_vocabulary_matches_launchdarkly() {
+        let launchdarkly = [
+            "in",
+            "startsWith",
+            "endsWith",
+            "contains",
+            "matches",
+            "lessThan",
+            "lessThanOrEqual",
+            "greaterThan",
+            "greaterThanOrEqual",
+            "before",
+            "after",
+            "segmentMatch",
+            "semVerEqual",
+            "semVerGreaterThan",
+            "semVerLessThan",
+        ];
+        let supported = Operator::ALL.map(|op| op.as_str());
+
+        for op in launchdarkly {
+            assert_eq!(
+                Operator::parse(op).is_some(),
+                unsupported_operator(op).is_none(),
+                "{op:?} must be either supported or refused with a reason, not both or neither"
+            );
+        }
+        for op in supported {
+            assert!(launchdarkly.contains(&op), "{op:?} is not a LD operator");
+            // The name a diagnostic prints round-trips through the parse.
+            assert_eq!(Operator::parse(op).map(|op| op.as_str()), Some(op));
+        }
+        assert_eq!(supported.len(), 5);
+        assert_eq!(launchdarkly.len(), 15);
+        // Nothing outside the vocabulary is silently accepted as refusable.
+        assert_eq!(unsupported_operator("starts_with"), None);
+        assert_eq!(Operator::parse("starts_with"), None);
     }
 
     #[mz_ore::test]
@@ -2169,6 +2212,7 @@ mod tests {
         let params = SynchronizedParameters::default();
         let file = parse(&format!(
             r#"{{
+                "version": 2,
                 "segments": {{"legacy-in-prod": {{
                     "contextKind": "replica",
                     "clauses": [
@@ -2214,6 +2258,7 @@ mod tests {
         let params = SynchronizedParameters::default();
         let file = parse(&format!(
             r#"{{
+                "version": 2,
                 "segments": {{"prod": {{
                     "contextKind": "replica",
                     "clauses": [
@@ -2261,6 +2306,7 @@ mod tests {
 
         let file = parse(&format!(
             r#"{{
+                "version": 2,
                 "segments": {{
                     "analytics": {{
                         "contextKind": "cluster",
@@ -2316,17 +2362,9 @@ mod tests {
         // Every rule supplies the same parameter, and each segment is tested on
         // its own file, so a hit is unambiguous.
         let hits = |op: &str, values: &str, name: &str| {
-            let file = parse(&format!(
-                r#"{{
-                    "segments": {{"s": {{
-                        "contextKind": "cluster",
-                        "clauses": [
-                            {{"attribute": "cluster_name", "op": "{op}", "values": {values}}}
-                        ]
-                    }}}},
-                    "rules": [{{"segment": "s", "parameters": {{"{CLUSTER_PARAM}": true}}}}]
-                }}"#
-            ));
+            let file = parse(&single_clause_file(&format!(
+                r#"{{"attribute": "cluster_name", "op": "{op}", "values": {values}}}"#
+            )));
             !frontend
                 .file_cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, name)])
                 .is_empty()
@@ -2367,21 +2405,13 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_clause_negate() {
         let params = SynchronizedParameters::default();
-        let file = parse(&format!(
-            r#"{{
-                "segments": {{"not-scratch": {{
-                    "contextKind": "cluster",
-                    "clauses": [{{
-                        "attribute": "cluster_name",
-                        "op": "in",
-                        "values": ["scratch", "sandbox"],
-                        "negate": true
-                    }}]
-                }}}},
-                "rules": [
-                    {{"segment": "not-scratch", "parameters": {{"{CLUSTER_PARAM}": true}}}}
-                ]
-            }}"#
+        let file = parse(&single_clause_file(
+            r#"{
+                "attribute": "cluster_name",
+                "op": "in",
+                "values": ["scratch", "sandbox"],
+                "negate": true
+            }"#,
         ));
 
         let out = file_frontend().file_cluster_overrides(
@@ -2415,6 +2445,7 @@ mod tests {
         let frontend = file_frontend();
         let file = parse(&format!(
             r#"{{
+                "version": 2,
                 "segments": {{
                     "legacy-replicas": {{
                         "contextKind": "replica",
@@ -2462,345 +2493,11 @@ mod tests {
         assert_eq!(
             frontend.scoped_rule_diagnostics(&file, &params),
             vec![format!(
-                "ignoring {CLUSTER_PARAM} for rule 1 (segment \"legacy-replicas\") in the system \
+                "ignoring {CLUSTER_PARAM} for rules[0] (segment \"legacy-replicas\") in the system \
                  parameter sync file: {CLUSTER_PARAM} is cluster-scoped, so it cannot be supplied \
                  through a segment of context kind \"replica\""
             )]
         );
-    }
-
-    /// A `cluster` segment cannot name a replica attribute: a cluster carries
-    /// none, so the clause could only ever be false. Refused at parse time, which
-    /// is what makes the cluster-coherence rule structural rather than a property
-    /// of `cluster_attributes` staying replica-free.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_replica_attribute_in_cluster_segment_rejected() {
-        let params = SynchronizedParameters::default();
-        let frontend = file_frontend();
-        let file = parse(&format!(
-            r#"{{
-                "segments": {{"legacy": {{
-                    "contextKind": "cluster",
-                    "clauses": [
-                        {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}},
-                        {{
-                            "attribute": "replica_size_family",
-                            "op": "in",
-                            "values": ["legacy"]
-                        }}
-                    ]
-                }}}},
-                "rules": [{{"segment": "legacy", "parameters": {{"{CLUSTER_PARAM}": true}}}}]
-            }}"#
-        ));
-
-        assert_eq!(
-            file.segments["legacy"].rejected,
-            vec![SegmentDefect::Clause(
-                2,
-                ClauseDefect::AttributeOutsideContext(
-                    ScopeAttribute::ReplicaSizeFamily,
-                    ContextKind::Cluster
-                )
-            )]
-        );
-        // Not widened to what the surviving clause allows.
-        assert!(
-            frontend
-                .file_cluster_overrides(
-                    &file,
-                    &params,
-                    &[CLUSTER_PARAM],
-                    &[cluster_ctx(1, "analytics")]
-                )
-                .is_empty()
-        );
-        assert_eq!(
-            frontend.scoped_rule_diagnostics(&file, &params),
-            vec![
-                "segment \"legacy\" in the system parameter sync file matches no cluster or \
-                 replica: clause 2 names the attribute \"replica_size_family\", which a \
-                 \"cluster\" does not carry"
-                    .to_string()
-            ]
-        );
-    }
-
-    /// A segment this binary cannot fully evaluate matches nothing. Dropping the
-    /// offending clause instead would widen the segment, in the limit to every
-    /// cluster and replica.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_uninterpretable_segment_matches_nothing() {
-        let params = SynchronizedParameters::default();
-        let frontend = file_frontend();
-        let file = parse(&format!(
-            r#"{{
-                "segments": {{
-                    "attribute-typo": {{
-                        "contextKind": "cluster",
-                        "clauses": [
-                            {{"attribute": "cluster_nmae", "op": "in", "values": ["analytics"]}}
-                        ]
-                    }},
-                    "no-context-kind": {{
-                        "clauses": [
-                            {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
-                        ]
-                    }},
-                    "wrong-context-kind": {{
-                        "contextKind": "environment",
-                        "clauses": []
-                    }},
-                    "clause-typo": {{
-                        "contextKind": "cluster",
-                        "clauses": [{{
-                            "attribute": "cluster_name",
-                            "op": "in",
-                            "values": ["analytics"],
-                            "contextKind": "cluster"
-                        }}]
-                    }},
-                    "no-clauses": {{"contextKind": "cluster"}}
-                }},
-                "rules": [
-                    {{"segment": "attribute-typo", "parameters": {{"{CLUSTER_PARAM}": true}}}},
-                    {{"segment": "no-context-kind", "parameters": {{"{CLUSTER_PARAM}": true}}}},
-                    {{"segment": "wrong-context-kind", "parameters": {{"{CLUSTER_PARAM}": true}}}},
-                    {{"segment": "clause-typo", "parameters": {{"{CLUSTER_PARAM}": true}}}},
-                    {{"segment": "no-clauses", "parameters": {{"{CLUSTER_PARAM}": true}}}}
-                ]
-            }}"#
-        ));
-
-        assert_eq!(
-            file.segments["attribute-typo"].rejected,
-            vec![SegmentDefect::Clause(
-                1,
-                ClauseDefect::UnknownAttribute("cluster_nmae".to_string())
-            )]
-        );
-        assert_eq!(
-            file.segments["no-context-kind"].rejected,
-            vec![SegmentDefect::MissingContextKind]
-        );
-        assert_eq!(
-            file.segments["wrong-context-kind"].rejected,
-            vec![SegmentDefect::UnknownContextKind("environment".to_string())]
-        );
-        // A per-clause `contextKind` is an unknown clause key: the segment
-        // declares the context kind for all of its clauses.
-        assert_eq!(
-            file.segments["clause-typo"].rejected,
-            vec![SegmentDefect::Clause(
-                1,
-                ClauseDefect::UnknownKey("contextKind".to_string())
-            )]
-        );
-        assert_eq!(
-            file.segments["no-clauses"].rejected,
-            vec![SegmentDefect::Clauses]
-        );
-
-        // Every one of them resolves to nothing, rather than to everything.
-        assert!(
-            frontend
-                .file_cluster_overrides(
-                    &file,
-                    &params,
-                    &[CLUSTER_PARAM],
-                    &[cluster_ctx(1, "analytics")]
-                )
-                .is_empty()
-        );
-        assert_eq!(
-            frontend.scoped_rule_diagnostics(&file, &params),
-            // Ordered by segment name.
-            vec![
-                "segment \"attribute-typo\" in the system parameter sync file matches no cluster \
-                 or replica: clause 1 names the attribute \"cluster_nmae\", which is not a \
-                 cluster or replica attribute"
-                    .to_string(),
-                "segment \"clause-typo\" in the system parameter sync file matches no cluster or \
-                 replica: clause 1 carries the unknown key \"contextKind\""
-                    .to_string(),
-                "segment \"no-clauses\" in the system parameter sync file matches no cluster or \
-                 replica: its \"clauses\" is not an array of clauses"
-                    .to_string(),
-                "segment \"no-context-kind\" in the system parameter sync file matches no cluster \
-                 or replica: it declares no \"contextKind\", which must be \"cluster\" or \
-                 \"replica\""
-                    .to_string(),
-                "segment \"wrong-context-kind\" in the system parameter sync file matches no \
-                 cluster or replica: its contextKind \"environment\" is neither \"cluster\" nor \
-                 \"replica\""
-                    .to_string(),
-            ]
-        );
-    }
-
-    /// A malformed clause fails closed, each with its own reason so that an author
-    /// is told what to fix rather than that something is wrong.
-    #[mz_ore::test]
-    fn test_malformed_clauses_rejected() {
-        let malformed = [
-            ("7", ClauseDefect::NotAnObject),
-            (
-                r#"{"op": "in", "values": []}"#,
-                ClauseDefect::MissingAttribute,
-            ),
-            (
-                r#"{"attribute": 7, "op": "in", "values": []}"#,
-                ClauseDefect::MissingAttribute,
-            ),
-            (
-                r#"{"attribute": "cluster_name", "values": []}"#,
-                ClauseDefect::MissingOperator,
-            ),
-            (
-                r#"{"attribute": "cluster_name", "op": "in"}"#,
-                ClauseDefect::UnsupportedValues,
-            ),
-            (
-                r#"{"attribute": "cluster_name", "op": "in", "values": "prod"}"#,
-                ClauseDefect::UnsupportedValues,
-            ),
-            (
-                r#"{"attribute": "cluster_name", "op": "in", "values": [["prod"]]}"#,
-                ClauseDefect::UnsupportedValues,
-            ),
-            (
-                r#"{"attribute": "cluster_name", "op": "in", "values": [], "negate": "yes"}"#,
-                ClauseDefect::UnsupportedNegate,
-            ),
-            (
-                r#"{"attribute": "cluster_name", "op": "in", "values": [], "nope": 1}"#,
-                ClauseDefect::UnknownKey("nope".to_string()),
-            ),
-        ];
-
-        for (clause, expected) in malformed {
-            let file = parse(&format!(
-                r#"{{"segments": {{"s": {{"contextKind": "cluster", "clauses": [{clause}]}}}}}}"#
-            ));
-            assert_eq!(
-                file.segments["s"].rejected,
-                vec![SegmentDefect::Clause(1, expected)],
-                "{clause}"
-            );
-        }
-    }
-
-    /// The ten LaunchDarkly operators this format refuses are recognised and
-    /// refused with their own reason, rather than lumped in with a typo. An
-    /// operator that is not LaunchDarkly's at all is refused as unknown.
-    #[mz_ore::test]
-    fn test_unsupported_operators_rejected() {
-        let rejected = |op: &str| {
-            let file = parse(&format!(
-                r#"{{"segments": {{"s": {{"contextKind": "cluster", "clauses": [
-                    {{"attribute": "cluster_name", "op": "{op}", "values": ["1"]}}
-                ]}}}}}}"#
-            ));
-            let defects = &file.segments["s"].rejected;
-            assert_eq!(defects.len(), 1, "{op}");
-            match &defects[0] {
-                SegmentDefect::Clause(1, defect) => defect.to_string(),
-                other => panic!("{op}: unexpected {other:?}"),
-            }
-        };
-
-        for op in [
-            "lessThan",
-            "lessThanOrEqual",
-            "greaterThan",
-            "greaterThanOrEqual",
-        ] {
-            assert_eq!(
-                rejected(op),
-                format!(
-                    "uses the op {op:?}, which compares numbers, and every cluster and replica \
-                     attribute is a string"
-                )
-            );
-        }
-        for op in ["before", "after"] {
-            assert_eq!(
-                rejected(op),
-                format!(
-                    "uses the op {op:?}, which compares dates, and every cluster and replica \
-                     attribute is a string"
-                )
-            );
-        }
-        for op in ["semVerEqual", "semVerGreaterThan", "semVerLessThan"] {
-            assert_eq!(
-                rejected(op),
-                format!(
-                    "uses the op {op:?}, which compares semantic versions, and every cluster and \
-                     replica attribute is a string"
-                )
-            );
-        }
-        assert_eq!(
-            rejected("segmentMatch"),
-            "uses the op \"segmentMatch\", which references another segment, which this file \
-             expresses through the segment a rule names"
-        );
-
-        // Not a LaunchDarkly operator at all, including the casing a hand-author
-        // is most likely to reach for.
-        assert_eq!(
-            rejected("starts_with"),
-            "uses the op \"starts_with\", which is not an operator"
-        );
-        assert_eq!(
-            rejected("IN"),
-            "uses the op \"IN\", which is not an operator"
-        );
-    }
-
-    /// Every LaunchDarkly operator is either supported or refused with a reason.
-    /// An operator added to the SDK does not fail this.
-    #[mz_ore::test]
-    fn test_operator_vocabulary_matches_launchdarkly() {
-        let launchdarkly = [
-            "in",
-            "startsWith",
-            "endsWith",
-            "contains",
-            "matches",
-            "lessThan",
-            "lessThanOrEqual",
-            "greaterThan",
-            "greaterThanOrEqual",
-            "before",
-            "after",
-            "segmentMatch",
-            "semVerEqual",
-            "semVerGreaterThan",
-            "semVerLessThan",
-        ];
-        let supported = Operator::ALL.map(|op| op.as_str());
-
-        for op in launchdarkly {
-            assert_eq!(
-                Operator::parse(op).is_some(),
-                unsupported_operator(op).is_none(),
-                "{op:?} must be either supported or refused with a reason, not both or neither"
-            );
-        }
-        for op in supported {
-            assert!(launchdarkly.contains(&op), "{op:?} is not a LD operator");
-            // The name a diagnostic prints round-trips through the parse.
-            assert_eq!(Operator::parse(op).map(|op| op.as_str()), Some(op));
-        }
-        assert_eq!(supported.len(), 5);
-        assert_eq!(launchdarkly.len(), 15);
-        // Nothing outside the vocabulary is silently accepted as refusable.
-        assert_eq!(unsupported_operator("starts_with"), None);
-        assert_eq!(Operator::parse("starts_with"), None);
     }
 
     /// A pattern does not change which rule decides a parameter: the first rule
@@ -2812,6 +2509,7 @@ mod tests {
         let params = SynchronizedParameters::default();
         let file = parse(&format!(
             r#"{{
+                "version": 2,
                 "segments": {{
                     "prod-canary": {{
                         "contextKind": "cluster",
@@ -2860,55 +2558,6 @@ mod tests {
         );
     }
 
-    /// An invalid pattern makes its segment match nothing, exactly as an unknown
-    /// attribute does. Dropping the clause instead would widen the segment to
-    /// every object the surviving clauses allow.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_invalid_pattern_matches_nothing() {
-        let params = SynchronizedParameters::default();
-        let frontend = file_frontend();
-        let file = parse(&format!(
-            r#"{{
-                "segments": {{"prod": {{
-                    "contextKind": "cluster",
-                    "clauses": [
-                        {{"attribute": "is_builtin", "op": "in", "values": [false]}},
-                        {{
-                            "attribute": "cluster_name",
-                            "op": "matches",
-                            "values": ["^prod-["]
-                        }}
-                    ]
-                }}}},
-                "rules": [{{"segment": "prod", "parameters": {{"{CLUSTER_PARAM}": true}}}}]
-            }}"#
-        ));
-
-        assert!(
-            frontend
-                .file_cluster_overrides(
-                    &file,
-                    &params,
-                    &[CLUSTER_PARAM],
-                    &[cluster_ctx(1, "prod-ingest"), cluster_ctx(2, "analytics")]
-                )
-                .is_empty()
-        );
-
-        // The regex crate's error text is its own, so only the framing is pinned.
-        let diagnostics = frontend.scoped_rule_diagnostics(&file, &params);
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(
-            diagnostics[0].starts_with(
-                "segment \"prod\" in the system parameter sync file matches no cluster or \
-                 replica: clause 2 has the invalid \"matches\" pattern \"^prod-[\": "
-            ),
-            "{}",
-            diagnostics[0]
-        );
-    }
-
     /// A segment that matches nothing live is ignored, not an error: the live
     /// objects drive the resolution, so the file is never a second source of truth
     /// for what exists.
@@ -2919,6 +2568,7 @@ mod tests {
         let frontend = file_frontend();
         let file = parse(&format!(
             r#"{{
+                "version": 2,
                 "segments": {{
                     "gone-cluster": {{
                         "contextKind": "cluster",
@@ -2966,6 +2616,7 @@ mod tests {
         let params = SynchronizedParameters::default();
         let file = parse(&format!(
             r#"{{
+                "version": 2,
                 "segments": {{"analytics": {{
                     "contextKind": "cluster",
                     "clauses": [
@@ -3013,8 +2664,9 @@ mod tests {
         );
     }
 
-    /// An unreadable or unparseable file skips the reconcile, while create-time
-    /// evaluation keeps resolving against the last valid parse.
+    /// An unreadable or unparseable file, including a structurally defective
+    /// version 2 document, skips the reconcile, while create-time evaluation keeps
+    /// resolving against the last valid parse.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_read_failure_keeps_scoped_overrides() {
@@ -3034,6 +2686,7 @@ mod tests {
         for failure in [
             Err(io::Error::from(io::ErrorKind::NotFound)),
             Ok("}not json{".to_string()),
+            Ok(scoped_file(true).replace("cluster_name", "cluster_nmae")),
         ] {
             sync_tick(&frontend, &params, failure);
             // The reconcile is skipped wholesale on this signal, which is what
@@ -3072,7 +2725,7 @@ mod tests {
         let frontend = file_frontend();
         let clusters = [cluster_ctx(1, "analytics")];
 
-        // The baseline before and after the new file's top-level section is
+        // The baseline before and after the new file's environment-wide section is
         // pushed. The parameter is `off` environment-wide by default.
         let before = SynchronizedParameters::default();
         let mut after = SynchronizedParameters::default();
@@ -3093,7 +2746,8 @@ mod tests {
         // hold `analytics` back at `false`. Read, but not yet pushed.
         let flipped = format!(
             r#"{{
-                "{CLUSTER_PARAM}": true,
+                "version": 2,
+                "global_parameters": {{"{CLUSTER_PARAM}": true}},
                 "segments": {{"analytics": {{
                     "contextKind": "cluster",
                     "clauses": [
@@ -3134,7 +2788,7 @@ mod tests {
         let read = |contents: &str| {
             frontend
                 .refresh_config_file(Path::new(CONFIG_PATH), Ok(contents.to_string()), &params)
-                .expect("document is a JSON object")
+                .expect("document parses")
         };
 
         let first = read(&scoped_file(true));
@@ -3164,6 +2818,7 @@ mod tests {
             Err(io::Error::from(io::ErrorKind::NotFound)),
             Ok("}not json{".to_string()),
             Ok("[]".to_string()),
+            Ok(r#"{"version": 2, "segments": 7}"#.to_string()),
         ] {
             refresh(failure);
             assert!(!frontend.has_scoped_desired_state());
@@ -3203,27 +2858,43 @@ mod tests {
             "null changed the value"
         );
 
-        // Unparseable or missing, the file leaves every current value alone.
-        fs::write(&path, "}not json{").expect("can write the test file");
-        assert!(!frontend.pull(&mut params));
-        assert!(!frontend.has_scoped_desired_state());
+        // A version 2 document supplies the same values from `global_parameters`.
+        fs::write(
+            &path,
+            r#"{"version": 2, "global_parameters": {"max_connections": 2000}}"#,
+        )
+        .expect("can write the test file");
+        assert!(frontend.pull(&mut params));
+        assert_eq!(params.get("max_connections"), "2000");
+
+        // Unparseable, structurally defective or missing, the file leaves every
+        // current value alone.
+        for contents in [
+            "}not json{",
+            r#"{"version": 2, "global_parameters": {"max_connections": 5}, "segments": 7}"#,
+        ] {
+            fs::write(&path, contents).expect("can write the test file");
+            assert!(!frontend.pull(&mut params));
+            assert!(!frontend.has_scoped_desired_state());
+        }
         fs::remove_file(&path).expect("can remove the test file");
         assert!(!frontend.pull(&mut params));
         assert!(!frontend.has_scoped_desired_state());
-        assert_eq!(params.get("max_connections"), "1000");
+        assert_eq!(params.get("max_connections"), "2000");
         assert_eq!(params.get("enable_lgalloc"), "off");
     }
 
-    /// The mistakes an operator can realistically make in a rule are diagnosed
-    /// rather than hard-failed. Resolution drops each of them, and nothing
-    /// surfaces a parameter's scope from SQL, which leaves an operator nothing
-    /// else to debug against.
+    /// The mistakes in a rule that depend on this binary's parameter set are
+    /// diagnosed rather than failing the document. Resolution drops each of them,
+    /// and nothing surfaces a parameter's scope from SQL, which leaves an operator
+    /// nothing else to debug against.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_diagnoses_rule_mistakes() {
         let params = SynchronizedParameters::default();
         let file = parse(&format!(
             r#"{{
+                "version": 2,
                 "segments": {{"analytics": {{
                     "contextKind": "cluster",
                     "clauses": [
@@ -3231,12 +2902,12 @@ mod tests {
                     ]
                 }}}},
                 "rules": [
+                    {{"segment": "analytics", "parameters": {{}}}},
                     {{"segment": "analytics", "parameters": {{
                         "max_connections": 100,
                         "enabel_eager_delta_joins": true,
                         "{CLUSTER_PARAM}": "maybe"
-                    }}}},
-                    {{"segment": "analytics_2", "parameters": {{"{CLUSTER_PARAM}": true}}}}
+                    }}}}
                 ]
             }}"#
         ));
@@ -3246,41 +2917,22 @@ mod tests {
             // Ordered by rule, then by parameter name within a rule.
             vec![
                 // A misspelled parameter name.
-                "ignoring enabel_eager_delta_joins for rule 1 (segment \"analytics\") in the \
+                "ignoring enabel_eager_delta_joins for rules[1] (segment \"analytics\") in the \
                  system parameter sync file: not a cluster-scoped or replica-scoped system \
                  parameter"
                     .to_string(),
                 // A value that does not parse for the parameter's type.
                 format!(
                     "ignoring unparseable value \"maybe\" for system parameter {CLUSTER_PARAM} \
-                     on rule 1 (segment \"analytics\") in the system parameter sync file"
+                     on rules[1] (segment \"analytics\") in the system parameter sync file"
                 ),
                 // A parameter that carries no scope at all, so it can only be set
                 // environment-wide.
-                "ignoring max_connections for rule 1 (segment \"analytics\") in the system \
+                "ignoring max_connections for rules[1] (segment \"analytics\") in the system \
                  parameter sync file: not a cluster-scoped or replica-scoped system parameter"
-                    .to_string(),
-                // A rule naming a segment the file does not define.
-                "ignoring rule 2 in the system parameter sync file: no segment named \
-                 \"analytics_2\""
                     .to_string(),
             ]
         );
-    }
-
-    /// The reserved section names shadow any synced parameter of the same name,
-    /// so no such parameter may exist. Renaming the parameter is the fix.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_no_synced_parameter_shadows_a_reserved_section() {
-        let params = SynchronizedParameters::default();
-        for section in [SEGMENTS_SECTION, RULES_SECTION] {
-            assert!(
-                !params.is_synchronized(section),
-                "synced system parameter {section:?} is shadowed by the config-sync \
-                 file section of the same name; rename the parameter"
-            );
-        }
     }
 
     #[mz_ore::test]
