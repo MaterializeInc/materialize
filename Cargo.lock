@@ -775,9 +775,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-glue"
-version = "1.172.0"
+version = "1.177.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "534eebf09c10c330fa4d9ebb1bab211c20d1df4668bb2532111c792978ecea4f"
+checksum = "041ff4c35c997627ab642165feb351d4985ba2fd14a72be687d2a3ed028deaa5"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -13358,7 +13358,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.59.0",
