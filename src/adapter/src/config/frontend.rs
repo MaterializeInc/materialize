@@ -112,80 +112,31 @@ const VERSION_KEY: &str = "version";
 /// the document's structure stays a per-parameter diagnostic, see
 /// [`SystemParameterFrontend::scoped_rule_diagnostics`].
 #[derive(Debug, Default, PartialEq, Deserialize)]
-#[serde(try_from = "RawConfigFileV2")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ConfigFileV2 {
-    /// Environment-wide values, keyed by the parameter's external name.
-    global_parameters: BTreeMap<String, JsonValue>,
-    /// The predicates rules select objects with, keyed by segment name.
-    segments: BTreeMap<String, Segment>,
-    /// The rules in file order. The first rule whose segment matches an object
-    /// decides each parameter it supplies. Every rule names a key of
-    /// [`Self::segments`].
-    rules: Vec<Rule>,
-}
-
-/// A [`ConfigFileV2`] as written, before its rules are checked against its
-/// segments.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawConfigFileV2 {
+    /// Checked by [`Self::parse`] ahead of the rest of the document.
     #[serde(rename = "version")]
-    _version: FormatVersion,
+    _version: IgnoredAny,
+    /// Environment-wide values, keyed by the parameter's external name.
     #[serde(default)]
-    global_parameters: BTreeMap<String, JsonValue>,
-    #[serde(default)]
-    segments: BTreeMap<String, Segment>,
+    global_parameters: BTreeMap<String, ParamValue>,
+    /// The rules in file order. The first rule that matches an object decides
+    /// each parameter it supplies.
     #[serde(default)]
     rules: Vec<Rule>,
-}
-
-impl TryFrom<RawConfigFileV2> for ConfigFileV2 {
-    type Error = String;
-
-    fn try_from(raw: RawConfigFileV2) -> Result<Self, String> {
-        for (index, rule) in raw.rules.iter().enumerate() {
-            if !raw.segments.contains_key(&rule.segment) {
-                return Err(format!(
-                    "rules[{index}] names the segment {:?}, which segments does not define",
-                    rule.segment
-                ));
-            }
-        }
-        Ok(Self {
-            global_parameters: raw.global_parameters,
-            segments: raw.segments,
-            rules: raw.rules,
-        })
-    }
-}
-
-/// The `version` of a [`ConfigFileV2`], which must be 2.
-#[derive(Deserialize)]
-#[serde(try_from = "u64")]
-struct FormatVersion;
-
-impl TryFrom<u64> for FormatVersion {
-    type Error = String;
-
-    fn try_from(version: u64) -> Result<Self, String> {
-        match version {
-            2 => Ok(Self),
-            other => Err(format!("unsupported version {other}, expected 2")),
-        }
-    }
 }
 
 /// The config-sync file in the format without a `version` key: a flat map of
 /// environment-wide values, keyed by the parameter's external name.
 #[derive(Deserialize)]
 #[serde(transparent)]
-struct LegacyConfigFile(BTreeMap<String, JsonValue>);
+struct LegacyConfigFile(BTreeMap<String, ParamValue>);
 
 impl From<LegacyConfigFile> for ConfigFileV2 {
     fn from(legacy: LegacyConfigFile) -> Self {
         Self {
+            _version: IgnoredAny,
             global_parameters: legacy.0,
-            segments: BTreeMap::new(),
             rules: Vec::new(),
         }
     }
@@ -201,31 +152,22 @@ impl ConfigFileV2 {
         // The format is chosen by the key's presence. Trying version 2 and
         // falling back to the flat format would read a defective version 2
         // document as a valid flat one, which prunes every scoped override.
-        if let Some(version) = document.get(VERSION_KEY) {
+        match document.get(VERSION_KEY) {
             // Checked ahead of the rest, so a document of another version is
             // reported as that rather than as its first unknown key.
-            let _: FormatVersion =
-                FormatVersion::deserialize(version).map_err(|e| format!("{VERSION_KEY}: {e}"))?;
-            deserialize_tracked(JsonValue::Object(document))
-        } else {
-            deserialize_tracked::<LegacyConfigFile>(JsonValue::Object(document)).map(Self::from)
+            Some(version) if version.as_u64() != Some(2) => Err(format!(
+                "{VERSION_KEY}: unsupported version {version}, expected 2"
+            )),
+            Some(_) => deserialize_tracked(JsonValue::Object(document)),
+            None => {
+                deserialize_tracked::<LegacyConfigFile>(JsonValue::Object(document)).map(Self::from)
+            }
         }
-    }
-
-    /// Each rule with its index in [`Self::rules`] and the segment it names.
-    fn resolved_rules(&self) -> impl Iterator<Item = (usize, &Rule, &Segment)> {
-        self.rules.iter().enumerate().map(move |(index, rule)| {
-            let segment = self
-                .segments
-                .get(&rule.segment)
-                .expect("deserialization rejects a rule naming an undefined segment");
-            (index, rule, segment)
-        })
     }
 }
 
 /// Deserializes `value`, prefixing an error with the path to the element it is
-/// about, such as `segments.prod.clauses[1].op`.
+/// about, such as `rules[0].clauses[1].op`.
 fn deserialize_tracked<T: DeserializeOwned>(value: JsonValue) -> Result<T, String> {
     serde_path_to_error::deserialize(value).map_err(|e| {
         // An error about the document as a whole names its own position.
@@ -237,22 +179,31 @@ fn deserialize_tracked<T: DeserializeOwned>(value: JsonValue) -> Result<T, Strin
     })
 }
 
-/// The kind of object a [`Segment`]'s clauses match, named after the
-/// LaunchDarkly context kind (see [`cluster_context`] and [`replica_context`]).
+/// A parameter value as the raw string the backend parses, or `None` for a JSON
+/// `null`, which expresses no opinion, so the parameter's current value stands.
+#[derive(Debug, PartialEq, Deserialize)]
+#[serde(from = "JsonValue")]
+struct ParamValue(Option<String>);
+
+impl From<JsonValue> for ParamValue {
+    fn from(value: JsonValue) -> Self {
+        Self(match value {
+            JsonValue::String(v) => Some(v),
+            JsonValue::Number(v) => Some(v.to_string()),
+            JsonValue::Bool(v) => Some(v.to_string()),
+            JsonValue::Object(_) | JsonValue::Array(_) => Some(value.to_string()),
+            JsonValue::Null => None,
+        })
+    }
+}
+
+/// The kind of object a [`Rule`] matches, named after the LaunchDarkly context
+/// kind (see [`cluster_context`] and [`replica_context`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum ContextKind {
     Cluster,
     Replica,
-}
-
-impl ContextKind {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Cluster => "cluster",
-            Self::Replica => "replica",
-        }
-    }
 }
 
 /// An attribute of a cluster or replica that a [`Clause`] matches on, the same
@@ -272,33 +223,13 @@ enum ScopeAttribute {
 }
 
 impl ScopeAttribute {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::ClusterId => "cluster_id",
-            Self::ClusterName => "cluster_name",
-            Self::IsBuiltin => "is_builtin",
-            Self::ReplicaId => "replica_id",
-            Self::ReplicaName => "replica_name",
-            Self::ReplicaSize => "replica_size",
-            Self::ReplicaSizeFamily => "replica_size_family",
-        }
-    }
-
-    /// Whether the attribute can distinguish two replicas of one cluster.
-    fn is_replica_attribute(&self) -> bool {
-        match self {
-            Self::ClusterId | Self::ClusterName | Self::IsBuiltin => false,
-            Self::ReplicaId | Self::ReplicaName | Self::ReplicaSize | Self::ReplicaSizeFamily => {
-                true
-            }
-        }
-    }
-
     /// Whether an object of `kind` carries this attribute.
     fn in_context(&self, kind: ContextKind) -> bool {
-        match kind {
-            ContextKind::Cluster => !self.is_replica_attribute(),
-            ContextKind::Replica => true,
+        match self {
+            Self::ClusterId | Self::ClusterName | Self::IsBuiltin => true,
+            Self::ReplicaId | Self::ReplicaName | Self::ReplicaSize | Self::ReplicaSizeFamily => {
+                kind == ContextKind::Replica
+            }
         }
     }
 }
@@ -330,72 +261,86 @@ fn replica_attributes(replica: &ReplicaScopeContext) -> BTreeMap<ScopeAttribute,
     ])
 }
 
-/// A named predicate selecting the clusters or replicas a rule applies to: a
-/// context kind and LaunchDarkly-shaped clauses, ANDed.
-#[derive(Debug, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "RawSegment")]
-struct Segment {
+/// One element of the `rules` array: the parameters to apply to the objects of
+/// one context kind that its clauses match.
+#[derive(Debug, PartialEq, Deserialize)]
+#[serde(try_from = "RawRule")]
+struct Rule {
     context_kind: ContextKind,
     /// The clauses, ANDed. An empty list constrains nothing, so it matches every
     /// object of [`Self::context_kind`]. Every clause names an attribute that
     /// objects of that kind carry.
     clauses: Vec<Clause>,
+    /// The values this rule supplies, keyed by the parameter's external name.
+    parameters: BTreeMap<String, ParamValue>,
 }
 
-/// A [`Segment`] as written, before its clauses are checked against its
-/// context kind.
+/// A [`Rule`] as written, before its clauses are checked against its context
+/// kind.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RawSegment {
+struct RawRule {
     context_kind: ContextKind,
     clauses: Vec<Clause>,
+    parameters: BTreeMap<String, ParamValue>,
 }
 
-impl TryFrom<RawSegment> for Segment {
+impl TryFrom<RawRule> for Rule {
     type Error = String;
 
-    fn try_from(raw: RawSegment) -> Result<Self, String> {
-        // A clause on an attribute the context kind lacks could only ever be
-        // false. Refusing it is what makes the cluster-coherence guard
-        // structural rather than a property of `cluster_attributes` staying
-        // replica-free.
+    fn try_from(raw: RawRule) -> Result<Self, String> {
         for (index, clause) in raw.clauses.iter().enumerate() {
+            if clause
+                .context_kind
+                .is_some_and(|kind| kind != raw.context_kind)
+            {
+                return Err(format!(
+                    "clauses[{index}].contextKind differs from the rule's contextKind"
+                ));
+            }
+            // A clause on an attribute the context kind lacks could only ever be
+            // false. Refusing it keeps a cluster rule replica-free by
+            // construction rather than by `cluster_attributes` staying so.
             if !clause.attribute.in_context(raw.context_kind) {
                 return Err(format!(
-                    "clauses[{index}] names the attribute {:?}, which a {:?} does not carry",
-                    clause.attribute.as_str(),
-                    raw.context_kind.as_str()
+                    "clauses[{index}].attribute is not carried by objects of the rule's \
+                     contextKind"
                 ));
             }
         }
         Ok(Self {
             context_kind: raw.context_kind,
             clauses: raw.clauses,
+            parameters: raw.parameters,
         })
     }
 }
 
-/// One clause of a [`Segment`]: an operator applied to one attribute's value
-/// against a list of values.
-#[derive(Debug, Deserialize)]
+impl Rule {
+    /// Whether the rule selects an object of `kind` carrying `attributes`. A rule
+    /// of another context kind selects nothing.
+    fn matches(&self, kind: ContextKind, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
+        self.context_kind == kind && self.clauses.iter().all(|clause| clause.matches(attributes))
+    }
+}
+
+/// One clause of a [`Rule`]: an operator applied to one attribute's value.
+#[derive(Debug, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawClause")]
 struct Clause {
     /// The attribute whose value the operator is applied to.
     attribute: ScopeAttribute,
-    op: Operator,
-    /// The values the operator is applied against, ORed.
-    values: Vec<String>,
-    /// The compiled [`Operator::Matches`] patterns, one per entry of
-    /// [`Self::values`], and empty for every other operator.
-    patterns: Vec<Regex>,
-    /// Whether to invert the clause, after the OR across [`Self::values`] as in
-    /// LaunchDarkly.
+    op: ClauseOp,
+    /// Whether to invert the clause, after the OR across the operator's operands
+    /// as in LaunchDarkly.
     negate: bool,
+    /// The context kind the clause names, checked against its rule's.
+    context_kind: Option<ContextKind>,
 }
 
 /// A [`Clause`] as written, in LaunchDarkly's clause shape.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawClause {
     attribute: ScopeAttribute,
     op: Operator,
@@ -404,9 +349,13 @@ struct RawClause {
     /// because this file is hand-authored.
     #[serde(default)]
     negate: bool,
+    /// Optional, unlike in LaunchDarkly, as the rule already names the context
+    /// kind.
+    #[serde(default)]
+    context_kind: Option<ContextKind>,
     /// The key LaunchDarkly's REST API stamps on a clause, accepted so that a
     /// clause copied from the API parses as written.
-    #[serde(default)]
+    #[serde(default, rename = "_id")]
     _id: IgnoredAny,
 }
 
@@ -414,31 +363,35 @@ impl TryFrom<RawClause> for Clause {
     type Error = String;
 
     fn try_from(raw: RawClause) -> Result<Self, String> {
-        let values: Vec<String> = raw.values.into_iter().map(|value| value.0).collect();
-        let mut patterns = Vec::new();
-        if raw.op == Operator::Matches {
-            for (index, pattern) in values.iter().enumerate() {
-                let compiled = Regex::new(pattern).map_err(|e| {
-                    // Collapse the multi-line error so the warning is one line.
-                    let error = e
-                        .to_string()
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    format!(
-                        "values[{index}] is the invalid {:?} pattern {pattern:?}: {error}",
-                        Operator::Matches.as_str()
-                    )
-                })?;
-                patterns.push(compiled);
-            }
-        }
+        let values = raw.values.into_iter().map(|value| value.0);
+        let op = match raw.op {
+            Operator::In => ClauseOp::In(values.collect()),
+            Operator::StartsWith => ClauseOp::StartsWith(values.collect()),
+            Operator::EndsWith => ClauseOp::EndsWith(values.collect()),
+            Operator::Contains => ClauseOp::Contains(values.collect()),
+            Operator::Matches => ClauseOp::Matches(
+                values
+                    .enumerate()
+                    .map(|(index, pattern)| {
+                        Regex::new(&pattern).map(Pattern).map_err(|e| {
+                            // Collapse the multi-line error so the warning is one
+                            // line.
+                            let error = e
+                                .to_string()
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            format!("values[{index}] is the invalid pattern {pattern:?}: {error}")
+                        })
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+        };
         Ok(Self {
             attribute: raw.attribute,
-            op: raw.op,
-            values,
-            patterns,
+            op,
             negate: raw.negate,
+            context_kind: raw.context_kind,
         })
     }
 }
@@ -465,13 +418,9 @@ impl TryFrom<JsonValue> for ClauseValue {
     }
 }
 
-/// A [`Clause`] operator, the string operators of LaunchDarkly's vocabulary.
-///
-/// NOTE: The SDK's own `Op` is `pub(crate)`, so this mirrors it and
-/// `test_operator_vocabulary_matches_launchdarkly` keeps the two aligned. The
-/// compiler does not.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "String")]
+/// A clause's `op`, the string operators of LaunchDarkly's vocabulary.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 enum Operator {
     In,
     StartsWith,
@@ -480,134 +429,52 @@ enum Operator {
     Matches,
 }
 
-impl Operator {
-    /// Every supported operator. The vocabulary
-    /// `test_operator_vocabulary_matches_launchdarkly` checks against.
-    const ALL: [Self; 5] = [
-        Self::In,
-        Self::StartsWith,
-        Self::EndsWith,
-        Self::Contains,
-        Self::Matches,
-    ];
-
-    /// The operator of this name, or `None` if it is not supported.
-    fn parse(op: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|candidate| candidate.as_str() == op)
-    }
-
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::In => "in",
-            Self::StartsWith => "startsWith",
-            Self::EndsWith => "endsWith",
-            Self::Contains => "contains",
-            Self::Matches => "matches",
-        }
-    }
+/// A [`Clause`]'s operator with the operands it is applied against, ORed.
+#[derive(Debug, PartialEq, Eq)]
+enum ClauseOp {
+    In(Vec<String>),
+    StartsWith(Vec<String>),
+    EndsWith(Vec<String>),
+    Contains(Vec<String>),
+    Matches(Vec<Pattern>),
 }
 
-impl TryFrom<String> for Operator {
-    type Error = String;
+/// A compiled `matches` pattern, equal to another compiled from the same source.
+#[derive(Debug)]
+struct Pattern(Regex);
 
-    fn try_from(op: String) -> Result<Self, String> {
-        if let Some(supported) = Self::parse(&op) {
-            return Ok(supported);
-        }
-        Err(match unsupported_operator(&op) {
-            Some(reason) => {
-                format!("the LaunchDarkly operator {op:?} is not supported: it {reason}")
-            }
-            None => format!(
-                "{op:?} is not an operator, expected one of {}",
-                Self::ALL.map(|supported| supported.as_str()).join(", ")
-            ),
-        })
-    }
-}
-
-/// Why the LaunchDarkly operator `op` is refused, or `None` if it is not a
-/// LaunchDarkly operator at all.
-fn unsupported_operator(op: &str) -> Option<&'static str> {
-    match op {
-        "lessThan" | "lessThanOrEqual" | "greaterThan" | "greaterThanOrEqual" => {
-            Some("compares numbers, and every cluster and replica attribute is a string")
-        }
-        "before" | "after" => {
-            Some("compares dates, and every cluster and replica attribute is a string")
-        }
-        "semVerEqual" | "semVerGreaterThan" | "semVerLessThan" => {
-            Some("compares semantic versions, and every cluster and replica attribute is a string")
-        }
-        // A clause-level segment reference would be a second way to name a
-        // segment, the `rules` array already being the first.
-        "segmentMatch" => Some(
-            "references another segment, which this file expresses through the segment a rule \
-             names",
-        ),
-        _ => None,
-    }
-}
-
-/// Compares the patterns by the source they were compiled from, a [`Regex`] being
-/// uncomparable itself. Two clauses equal under this decide the same objects.
-impl PartialEq for Clause {
+impl PartialEq for Pattern {
     fn eq(&self, other: &Self) -> bool {
-        self.attribute == other.attribute
-            && self.op == other.op
-            && self.values == other.values
-            && self.negate == other.negate
-            && self.patterns.len() == other.patterns.len()
-            && std::iter::zip(&self.patterns, &other.patterns)
-                .all(|(a, b)| a.as_str() == b.as_str())
+        self.0.as_str() == other.0.as_str()
     }
 }
 
-impl Eq for Clause {}
+impl Eq for Pattern {}
 
 impl Clause {
     /// Whether the clause holds for an object carrying `attributes`.
     fn matches(&self, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
         let Some(value) = attributes.get(&self.attribute) else {
-            // Unreachable, as `Segment` refuses an attribute outside its
-            // context kind. `false` regardless of `negate`, as in the SDK.
+            // Unreachable, as `Rule` refuses an attribute outside its context
+            // kind. `false` regardless of `negate`, as in the SDK.
             return false;
         };
-        self.holds(value) != self.negate
+        self.op.holds(value) != self.negate
     }
+}
 
-    /// Whether the operator holds for `value`, before [`Self::negate`].
+impl ClauseOp {
+    /// Whether the operator holds for `value`, before [`Clause::negate`].
     fn holds(&self, value: &str) -> bool {
-        match self.op {
-            Operator::In => self.values.iter().any(|allowed| allowed == value),
-            Operator::StartsWith => self.values.iter().any(|prefix| value.starts_with(prefix)),
-            Operator::EndsWith => self.values.iter().any(|suffix| value.ends_with(suffix)),
-            Operator::Contains => self.values.iter().any(|needle| value.contains(needle)),
+        match self {
+            Self::In(allowed) => allowed.iter().any(|allowed| allowed == value),
+            Self::StartsWith(prefixes) => prefixes.iter().any(|prefix| value.starts_with(prefix)),
+            Self::EndsWith(suffixes) => suffixes.iter().any(|suffix| value.ends_with(suffix)),
+            Self::Contains(needles) => needles.iter().any(|needle| value.contains(needle)),
             // Unanchored, as LaunchDarkly's `matches`, which uses the same crate.
-            Operator::Matches => self.patterns.iter().any(|pattern| pattern.is_match(value)),
+            Self::Matches(patterns) => patterns.iter().any(|pattern| pattern.0.is_match(value)),
         }
     }
-}
-
-impl Segment {
-    /// Whether the segment selects an object of `kind` carrying `attributes`. A
-    /// segment of another context kind selects nothing.
-    fn matches(&self, kind: ContextKind, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
-        self.context_kind == kind && self.clauses.iter().all(|clause| clause.matches(attributes))
-    }
-}
-
-/// One element of the `rules` array: the parameters to apply to the objects a
-/// segment matches.
-#[derive(Debug, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Rule {
-    /// The name of the [`Segment`] selecting the objects this rule applies to.
-    segment: String,
-    /// The values this rule supplies, keyed by the parameter's external name.
-    parameters: BTreeMap<String, JsonValue>,
 }
 
 /// The frontend's cached view of the config-sync file.
@@ -625,50 +492,18 @@ struct CachedConfigFile {
     published: Option<Arc<ConfigFileV2>>,
 }
 
-/// Renders a JSON value as the raw parameter string the backend parses.
+/// Whether `value`, a scoped source's raw value for `param_name`, is an
+/// override: it parses for the parameter's type and differs from the
+/// environment-wide value held in `params`.
 ///
-/// `null` yields `None`, meaning the file expresses no opinion for this
-/// parameter, so its current value stands.
-fn json_param_value(value: &JsonValue) -> Option<String> {
-    match value {
-        JsonValue::String(v) => Some(v.clone()),
-        JsonValue::Number(v) => Some(v.to_string()),
-        JsonValue::Bool(v) => Some(v.to_string()),
-        JsonValue::Object(_) | JsonValue::Array(_) => Some(value.to_string()),
-        JsonValue::Null => None,
-    }
-}
-
-/// The verdict on a value a scoped source served for a parameter.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ScopedValue {
-    /// Parses, and differs from the environment-wide value, so it is recorded as
-    /// an override.
-    Override,
-    /// Parses, but matches the environment-wide value, so there is no override
-    /// to record.
-    MatchesEnvironment,
-    /// Does not parse for the parameter's type, so it is dropped. Recording it
-    /// would panic the optimizer's `bool` decode for a cluster-coherent override.
-    Unparseable,
-}
-
-/// Classifies `value` as the scoped value of `param_name` against the
-/// environment-wide `base`, the var-formatted value held in `params`.
-///
-/// The comparison is in the parameter's canonical encoding, since a raw boolean
-/// is `"true"` where `base` is `"on"`. Callers store the raw value.
-fn classify_scoped_value(
-    params: &SynchronizedParameters,
-    param_name: &str,
-    base: &str,
-    value: &str,
-) -> ScopedValue {
-    match params.canonicalize(param_name, value) {
-        Some(canonical) if canonical != base => ScopedValue::Override,
-        Some(_) => ScopedValue::MatchesEnvironment,
-        None => ScopedValue::Unparseable,
-    }
+/// An unparseable value is no override, as recording it would panic the
+/// optimizer's `bool` decode for a cluster-coherent override. The comparison is
+/// in the parameter's canonical encoding, since a raw boolean is `"true"` where
+/// the environment-wide value is `"on"`. Callers store the raw value.
+fn is_override(params: &SynchronizedParameters, param_name: &str, value: &str) -> bool {
+    params
+        .canonicalize(param_name, value)
+        .is_some_and(|canonical| canonical != params.get(param_name))
 }
 
 impl SystemParameterFrontend {
@@ -746,7 +581,7 @@ impl SystemParameterFrontend {
                 SystemParameterFrontendClient::File { .. } => file
                     .as_ref()
                     .and_then(|file| file.global_parameters.get(flag_name))
-                    .and_then(json_param_value)
+                    .and_then(|value| value.0.clone())
                     .unwrap_or_else(|| params.get(param_name)),
             };
 
@@ -893,8 +728,8 @@ impl SystemParameterFrontend {
         let mut diagnostics = Vec::new();
 
         let scopable = self.scopable_params(params);
-        for (index, rule, segment) in file.resolved_rules() {
-            let position = format!("rules[{index}] (segment {:?})", rule.segment);
+        for (index, rule) in file.rules.iter().enumerate() {
+            let position = format!("rules[{index}]");
 
             for (name, value) in &rule.parameters {
                 let Some(&(param_name, scope)) = scopable.get(name.as_str()) else {
@@ -904,26 +739,22 @@ impl SystemParameterFrontend {
                     ));
                     continue;
                 };
-                // The coherence guard, see [`Self::file_rule_overrides`].
-                if scope == ParameterScope::Cluster && segment.context_kind == ContextKind::Replica
-                {
+                // A cluster-scoped parameter resolves only through the cluster
+                // pass, which never consults a replica rule.
+                if scope == ParameterScope::Cluster && rule.context_kind == ContextKind::Replica {
                     diagnostics.push(format!(
                         "ignoring {param_name} for {position} in the system parameter sync file: \
                          {param_name} is cluster-scoped, so it cannot be supplied through a \
-                         segment of context kind {:?}",
-                        ContextKind::Replica.as_str()
+                         rule of contextKind \"replica\""
                     ));
                     continue;
                 }
                 // `null` expresses no opinion rather than a value, so there is
                 // nothing to parse.
-                let Some(value) = json_param_value(value) else {
+                let Some(value) = &value.0 else {
                     continue;
                 };
-                let base = params.get(param_name);
-                if classify_scoped_value(params, param_name, &base, &value)
-                    == ScopedValue::Unparseable
-                {
+                if params.canonicalize(param_name, value).is_none() {
                     diagnostics.push(format!(
                         "ignoring unparseable value {value:?} for system parameter {param_name} \
                          on {position} in the system parameter sync file"
@@ -956,7 +787,7 @@ impl SystemParameterFrontend {
     ///
     /// The returned map is sparse: replicas with no overriding value are
     /// omitted. Replicas absent from `replicas` are never evaluated, so a
-    /// config-sync file segment that matches nothing live has no effect.
+    /// config-sync file rule that matches nothing live has no effect.
     pub fn pull_replica_overrides(
         &self,
         params: &SynchronizedParameters,
@@ -977,7 +808,16 @@ impl SystemParameterFrontend {
                 let Some(file) = self.published_config_file() else {
                     return out;
                 };
-                return self.file_replica_overrides(&file, params, param_names, replicas);
+                let replicas = replicas
+                    .iter()
+                    .map(|replica| (replica.replica_id, replica_attributes(&replica.replica)));
+                return self.file_overrides(
+                    &file,
+                    params,
+                    param_names,
+                    ContextKind::Replica,
+                    replicas,
+                );
             }
         };
 
@@ -1014,7 +854,7 @@ impl SystemParameterFrontend {
     ///
     /// The returned map is sparse: clusters with no overriding value are
     /// omitted. Clusters absent from `clusters` are never evaluated, so a
-    /// config-sync file segment that matches nothing live has no effect.
+    /// config-sync file rule that matches nothing live has no effect.
     pub fn pull_cluster_overrides(
         &self,
         params: &SynchronizedParameters,
@@ -1034,7 +874,16 @@ impl SystemParameterFrontend {
                 let Some(file) = self.published_config_file() else {
                     return out;
                 };
-                return self.file_cluster_overrides(&file, params, param_names, clusters);
+                let clusters = clusters
+                    .iter()
+                    .map(|cluster| (cluster.cluster_id, cluster_attributes(&cluster.cluster)));
+                return self.file_overrides(
+                    &file,
+                    params,
+                    param_names,
+                    ContextKind::Cluster,
+                    clusters,
+                );
             }
         };
 
@@ -1088,124 +937,69 @@ impl SystemParameterFrontend {
             // matched, and `Fallthrough` serves every object the same value. An
             // unparseable value is dropped silently, as nothing in the
             // environment can fix it.
-            if classify_scoped_value(params, param_name, &base, &value) == ScopedValue::Override {
+            if is_override(params, param_name, &value) {
                 overrides.insert(param_name.to_string(), value);
             }
         }
         overrides
     }
 
-    /// Resolves the cluster-coherent overrides `file`'s rules declare for each of
-    /// `clusters`.
-    fn file_cluster_overrides(
-        &self,
-        file: &ConfigFileV2,
-        params: &SynchronizedParameters,
-        param_names: &[&'static str],
-        clusters: &[ClusterEvalContext],
-    ) -> BTreeMap<ClusterId, BTreeMap<String, String>> {
-        let mut out = BTreeMap::new();
-        for cluster in clusters {
-            let overrides = self.file_rule_overrides(
-                file,
-                params,
-                param_names,
-                ParameterScope::Cluster,
-                ContextKind::Cluster,
-                &cluster_attributes(&cluster.cluster),
-            );
-            if !overrides.is_empty() {
-                out.insert(cluster.cluster_id, overrides);
-            }
-        }
-        out
-    }
-
-    /// Resolves the replica-local overrides `file`'s rules declare for each of
-    /// `replicas`.
-    fn file_replica_overrides(
-        &self,
-        file: &ConfigFileV2,
-        params: &SynchronizedParameters,
-        param_names: &[&'static str],
-        replicas: &[ReplicaEvalContext],
-    ) -> BTreeMap<ReplicaId, BTreeMap<String, String>> {
-        let mut out = BTreeMap::new();
-        for replica in replicas {
-            let overrides = self.file_rule_overrides(
-                file,
-                params,
-                param_names,
-                ParameterScope::Replica,
-                ContextKind::Replica,
-                &replica_attributes(&replica.replica),
-            );
-            if !overrides.is_empty() {
-                out.insert(replica.replica_id, overrides);
-            }
-        }
-        out
-    }
-
-    /// Resolves one object's scoped overrides from `file`'s rules, given the
-    /// object's context `kind` and scope `attributes`, and the `scope` that every
-    /// parameter in `param_names` declares.
+    /// Resolves the scoped overrides `file`'s rules declare for each of
+    /// `objects`, the id and scope attributes of each object of context `kind`.
+    /// Every parameter in `param_names` must declare the scope of `kind`.
     ///
     /// The first matching rule with a non-null value for a parameter decides it.
     /// A decided value that matches the environment-wide value or does not parse
     /// yields no override. Silent, see [`Self::scoped_rule_diagnostics`].
-    fn file_rule_overrides(
+    fn file_overrides<Id: Ord>(
         &self,
         file: &ConfigFileV2,
         params: &SynchronizedParameters,
         param_names: &[&'static str],
-        scope: ParameterScope,
         kind: ContextKind,
-        attributes: &BTreeMap<ScopeAttribute, String>,
-    ) -> BTreeMap<String, String> {
+        objects: impl Iterator<Item = (Id, BTreeMap<ScopeAttribute, String>)>,
+    ) -> BTreeMap<Id, BTreeMap<String, String>> {
         let requested: BTreeMap<&str, &'static str> = param_names
             .iter()
             .map(|&param_name| (self.external_name(param_name), param_name))
             .collect();
 
-        let mut decided: BTreeMap<&'static str, String> = BTreeMap::new();
-        for (_, rule, segment) in file.resolved_rules() {
-            if !segment.matches(kind, attributes) {
-                continue;
-            }
-            // The coherence guard: a cluster-scoped parameter comes only from a
-            // `cluster` segment. The match above already ensures this when `kind`
-            // is `Cluster`, and this keeps it from resting on the callers.
-            if scope == ParameterScope::Cluster && segment.context_kind != ContextKind::Cluster {
-                continue;
-            }
-
-            for (name, value) in &rule.parameters {
-                let Some(&param_name) = requested.get(name.as_str()) else {
-                    continue;
-                };
-                // First match wins before the value is judged, so a malformed
-                // value does not fall through to a later rule.
-                if decided.contains_key(param_name) {
-                    continue;
+        let mut out = BTreeMap::new();
+        for (id, attributes) in objects {
+            let mut decided: BTreeMap<&'static str, &str> = BTreeMap::new();
+            for rule in file
+                .rules
+                .iter()
+                .filter(|rule| rule.matches(kind, &attributes))
+            {
+                for (name, value) in &rule.parameters {
+                    let Some(&param_name) = requested.get(name.as_str()) else {
+                        continue;
+                    };
+                    // First match wins before the value is judged, so a malformed
+                    // value does not fall through to a later rule.
+                    if decided.contains_key(param_name) {
+                        continue;
+                    }
+                    // `null` expresses no opinion, leaving the parameter to a later
+                    // rule.
+                    let Some(value) = &value.0 else {
+                        continue;
+                    };
+                    decided.insert(param_name, value);
                 }
-                // `null` expresses no opinion, leaving the parameter to a later
-                // rule.
-                let Some(value) = json_param_value(value) else {
-                    continue;
-                };
-                decided.insert(param_name, value);
             }
-        }
 
-        let mut overrides = BTreeMap::new();
-        for (param_name, value) in decided {
-            let base = params.get(param_name);
-            if classify_scoped_value(params, param_name, &base, &value) == ScopedValue::Override {
-                overrides.insert(param_name.to_string(), value);
+            let overrides: BTreeMap<String, String> = decided
+                .into_iter()
+                .filter(|(param_name, value)| is_override(params, param_name, value))
+                .map(|(param_name, value)| (param_name.to_string(), value.to_string()))
+                .collect();
+            if !overrides.is_empty() {
+                out.insert(id, overrides);
             }
         }
-        overrides
+        out
     }
 }
 

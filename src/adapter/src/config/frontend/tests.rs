@@ -115,7 +115,7 @@ fn replica_ctx(
     }
 }
 
-/// A replica of a legacy size family, the coarse targeting axis a segment
+/// A replica of a legacy size family, the coarse targeting axis a rule
 /// matching on `replica_size_family` selects.
 fn legacy_replica_ctx(
     cluster_id: u64,
@@ -133,21 +133,40 @@ fn overrides(param_name: &str, value: &str) -> BTreeMap<String, String> {
     BTreeMap::from([(param_name.to_string(), value.to_string())])
 }
 
-/// The clause a parse assertion expects.
-fn clause(attribute: ScopeAttribute, op: Operator, values: &[&str], negate: bool) -> Clause {
-    Clause {
-        attribute,
-        op,
-        values: values.iter().map(|value| value.to_string()).collect(),
-        patterns: match op {
-            Operator::Matches => values
-                .iter()
-                .map(|value| Regex::new(value).expect("test pattern compiles"))
-                .collect(),
-            _ => Vec::new(),
-        },
-        negate,
-    }
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| value.to_string()).collect()
+}
+
+fn param_value(value: &str) -> ParamValue {
+    ParamValue(Some(value.to_string()))
+}
+
+/// Resolves `file`'s rules for `clusters`, as the file arm of
+/// [`SystemParameterFrontend::pull_cluster_overrides`] does.
+fn cluster_overrides(
+    file: &ConfigFileV2,
+    params: &SynchronizedParameters,
+    param_names: &[&'static str],
+    clusters: &[ClusterEvalContext],
+) -> BTreeMap<ClusterId, BTreeMap<String, String>> {
+    let clusters = clusters
+        .iter()
+        .map(|cluster| (cluster.cluster_id, cluster_attributes(&cluster.cluster)));
+    file_frontend().file_overrides(file, params, param_names, ContextKind::Cluster, clusters)
+}
+
+/// Resolves `file`'s rules for `replicas`, as the file arm of
+/// [`SystemParameterFrontend::pull_replica_overrides`] does.
+fn replica_overrides(
+    file: &ConfigFileV2,
+    params: &SynchronizedParameters,
+    param_names: &[&'static str],
+    replicas: &[ReplicaEvalContext],
+) -> BTreeMap<ReplicaId, BTreeMap<String, String>> {
+    let replicas = replicas
+        .iter()
+        .map(|replica| (replica.replica_id, replica_attributes(&replica.replica)));
+    file_frontend().file_overrides(file, params, param_names, ContextKind::Replica, replicas)
 }
 
 /// A document whose single rule gives the `analytics` cluster `value` for
@@ -156,27 +175,27 @@ fn scoped_file(value: bool) -> String {
     format!(
         r#"{{
             "version": 2,
-            "segments": {{"analytics": {{
+            "rules": [{{
                 "contextKind": "cluster",
                 "clauses": [
                     {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
-                ]
-            }}}},
-            "rules": [
-                {{"segment": "analytics", "parameters": {{"{CLUSTER_PARAM}": {value}}}}}
-            ]
+                ],
+                "parameters": {{"{CLUSTER_PARAM}": {value}}}
+            }}]
         }}"#
     )
 }
 
-/// A document whose `cluster` segment `s` holds `clause` as its only clause,
-/// with one rule naming it.
+/// A document whose single `cluster` rule holds `clause` as its only clause.
 fn single_clause_file(clause: &str) -> String {
     format!(
         r#"{{
             "version": 2,
-            "segments": {{"s": {{"contextKind": "cluster", "clauses": [{clause}]}}}},
-            "rules": [{{"segment": "s", "parameters": {{"{CLUSTER_PARAM}": true}}}}]
+            "rules": [{{
+                "contextKind": "cluster",
+                "clauses": [{clause}],
+                "parameters": {{"{CLUSTER_PARAM}": true}}
+            }}]
         }}"#
     )
 }
@@ -191,48 +210,32 @@ fn test_parse_legacy_document() {
         }"#,
     );
 
-    assert_eq!(
-        file,
-        ConfigFileV2::from(LegacyConfigFile(BTreeMap::from([
-            ("max_connections".to_string(), JsonValue::from(1000)),
-            (
-                "allowed_cluster_replica_sizes".to_string(),
-                JsonValue::from("'25cc', '50cc'")
-            ),
-            ("enable_lgalloc".to_string(), JsonValue::Bool(false)),
-        ])))
-    );
-    assert!(file.segments.is_empty());
-    assert!(file.rules.is_empty());
-
     // Every JSON scalar renders to the raw string the backend parses.
     assert_eq!(
-        json_param_value(&file.global_parameters["max_connections"]).as_deref(),
-        Some("1000")
-    );
-    assert_eq!(
-        json_param_value(&file.global_parameters["enable_lgalloc"]).as_deref(),
-        Some("false")
-    );
-    assert_eq!(
-        json_param_value(&file.global_parameters["allowed_cluster_replica_sizes"]).as_deref(),
-        Some("'25cc', '50cc'")
+        file,
+        ConfigFileV2 {
+            global_parameters: BTreeMap::from([
+                ("max_connections".to_string(), param_value("1000")),
+                (
+                    "allowed_cluster_replica_sizes".to_string(),
+                    param_value("'25cc', '50cc'")
+                ),
+                ("enable_lgalloc".to_string(), param_value("false")),
+            ]),
+            ..Default::default()
+        }
     );
     // An explicit `null` expresses no opinion, leaving the value alone.
     let null = parse(r#"{"max_connections": null}"#);
-    assert_eq!(
-        json_param_value(&null.global_parameters["max_connections"]),
-        None
-    );
+    assert_eq!(null.global_parameters["max_connections"], ParamValue(None));
 
     // Without `version` no key is reserved, so these are parameter names like
     // any other, and the document scopes nothing.
-    let flat = parse(r#"{"segments": {}, "rules": []}"#);
+    let flat = parse(r#"{"globalParameters": {}, "rules": []}"#);
     assert_eq!(
         flat.global_parameters.keys().collect::<Vec<_>>(),
-        vec!["rules", "segments"]
+        vec!["globalParameters", "rules"]
     );
-    assert!(flat.segments.is_empty());
     assert!(flat.rules.is_empty());
 }
 
@@ -241,20 +244,22 @@ fn test_parse_v2_document() {
     let file = parse(
         r#"{
             "version": 2,
-            "global_parameters": {"enable_lgalloc": false},
-            "segments": {
-                "analytics": {
+            "globalParameters": {"enable_lgalloc": false},
+            "rules": [
+                {
                     "contextKind": "cluster",
                     "clauses": [{
                         "attribute": "cluster_name",
                         "op": "in",
                         "values": ["analytics", "analytics_2"]
-                    }]
+                    }],
+                    "parameters": {"enable_eager_delta_joins": true}
                 },
-                "legacy-replicas": {
+                {
                     "contextKind": "replica",
                     "clauses": [
                         {
+                            "contextKind": "replica",
                             "attribute": "replica_size_family",
                             "op": "in",
                             "values": ["legacy"]
@@ -267,70 +272,63 @@ fn test_parse_v2_document() {
                             "negate": true,
                             "_id": "carried over from the LaunchDarkly API"
                         }
-                    ]
+                    ],
+                    "parameters": {"enable_lgalloc": true}
                 }
-            },
-            "rules": [
-                {"segment": "analytics", "parameters": {"enable_eager_delta_joins": true}},
-                {"segment": "legacy-replicas", "parameters": {"enable_lgalloc": true}}
             ]
         }"#,
     );
 
     assert_eq!(
         file.global_parameters,
-        BTreeMap::from([("enable_lgalloc".to_string(), JsonValue::Bool(false))])
+        BTreeMap::from([("enable_lgalloc".to_string(), param_value("false"))])
     );
 
+    // Rules keep the document order that decides which of them wins, and so do
+    // their clauses. `negate` defaults to false, a clause may repeat its rule's
+    // context kind, a boolean value may be written as a JSON boolean or as its
+    // string, and the LaunchDarkly REST API's `_id` is ignored rather than
+    // rejected.
     assert_eq!(
-        file.segments["analytics"],
-        Segment {
-            context_kind: ContextKind::Cluster,
-            clauses: vec![clause(
-                ScopeAttribute::ClusterName,
-                Operator::In,
-                &["analytics", "analytics_2"],
-                false
-            )],
-        }
-    );
-
-    // Clauses keep their array order, `negate` defaults to false, a boolean
-    // value may be written as a JSON boolean or as its string, and the
-    // LaunchDarkly REST API's `_id` is ignored rather than rejected.
-    assert_eq!(
-        file.segments["legacy-replicas"],
-        Segment {
-            context_kind: ContextKind::Replica,
-            clauses: vec![
-                clause(
-                    ScopeAttribute::ReplicaSizeFamily,
-                    Operator::In,
-                    &["legacy"],
-                    false
-                ),
-                clause(ScopeAttribute::IsBuiltin, Operator::In, &["false"], false),
-                clause(
-                    ScopeAttribute::ReplicaName,
-                    Operator::Matches,
-                    &["^scratch-"],
-                    true
-                ),
-            ],
-        }
-    );
-
-    // Rules keep the document order that decides which of them wins.
-    assert_eq!(
-        file.rules
-            .iter()
-            .map(|rule| rule.segment.as_str())
-            .collect::<Vec<_>>(),
-        vec!["analytics", "legacy-replicas"]
-    );
-    assert_eq!(
-        file.rules[0].parameters[CLUSTER_PARAM],
-        JsonValue::Bool(true)
+        file.rules,
+        vec![
+            Rule {
+                context_kind: ContextKind::Cluster,
+                clauses: vec![Clause {
+                    attribute: ScopeAttribute::ClusterName,
+                    op: ClauseOp::In(strings(&["analytics", "analytics_2"])),
+                    negate: false,
+                    context_kind: None,
+                }],
+                parameters: BTreeMap::from([(CLUSTER_PARAM.to_string(), param_value("true"))]),
+            },
+            Rule {
+                context_kind: ContextKind::Replica,
+                clauses: vec![
+                    Clause {
+                        attribute: ScopeAttribute::ReplicaSizeFamily,
+                        op: ClauseOp::In(strings(&["legacy"])),
+                        negate: false,
+                        context_kind: Some(ContextKind::Replica),
+                    },
+                    Clause {
+                        attribute: ScopeAttribute::IsBuiltin,
+                        op: ClauseOp::In(strings(&["false"])),
+                        negate: false,
+                        context_kind: None,
+                    },
+                    Clause {
+                        attribute: ScopeAttribute::ReplicaName,
+                        op: ClauseOp::Matches(vec![Pattern(
+                            Regex::new("^scratch-").expect("test pattern compiles")
+                        )]),
+                        negate: true,
+                        context_kind: None,
+                    },
+                ],
+                parameters: BTreeMap::from([(REPLICA_PARAM.to_string(), param_value("true"))]),
+            },
+        ]
     );
 }
 
@@ -349,20 +347,18 @@ fn test_parse_selects_format_by_version_key() {
 
     // Read as a flat map, this would apply `max_connections` and scope
     // nothing, pruning every existing override.
-    let broken = parse_error(
-        r#"{"version": 2, "global_parameters": {"max_connections": 1000}, "segments": 7}"#,
-    );
-    assert!(broken.starts_with("segments: invalid type"), "{broken}");
+    let broken =
+        parse_error(r#"{"version": 2, "globalParameters": {"max_connections": 1000}, "rules": 7}"#);
+    assert!(broken.starts_with("rules: invalid type"), "{broken}");
 
     // Another version is reported as such, ahead of its unknown keys.
     assert_eq!(
         parse_error(r#"{"version": 3, "anything": true}"#),
         "version: unsupported version 3, expected 2"
     );
-    let string_version = parse_error(r#"{"version": "2"}"#);
-    assert!(
-        string_version.starts_with("version: invalid type"),
-        "{string_version}"
+    assert_eq!(
+        parse_error(r#"{"version": "2"}"#),
+        r#"version: unsupported version "2", expected 2"#
     );
 }
 
@@ -387,33 +383,31 @@ fn test_refresh_rejects_non_object_document() {
 /// starts with, and a fragment of the message.
 #[mz_ore::test]
 fn test_parse_rejects_structural_defects() {
-    let segment = r#""s": {"contextKind": "cluster", "clauses": []}"#;
-    let rule = |extra: &str| {
-        format!(
-            r#"{{"version": 2, "segments": {{{segment}}}, "rules": [{{
-                "segment": "s", "parameters": {{}}{extra}
-            }}]}}"#
-        )
-    };
-    let segment_with = |body: &str| format!(r#"{{"version": 2, "segments": {{"s": {body}}}}}"#);
+    let rule_with = |body: &str| format!(r#"{{"version": 2, "rules": [{body}]}}"#);
     let cluster_name = r#""attribute": "cluster_name", "op": "in", "values": ["prod"]"#;
 
     let cases = [
         // Sections of the wrong type.
-        (
-            r#"{"version": 2, "segments": 7}"#.to_string(),
-            "segments",
-            "invalid type",
-        ),
         (
             r#"{"version": 2, "rules": {}}"#.to_string(),
             "rules",
             "invalid type",
         ),
         (
-            r#"{"version": 2, "global_parameters": []}"#.to_string(),
-            "global_parameters",
+            r#"{"version": 2, "globalParameters": []}"#.to_string(),
+            "globalParameters",
             "invalid type",
+        ),
+        // Keys are camelCase, and segments are written inline in their rule.
+        (
+            r#"{"version": 2, "global_parameters": {}}"#.to_string(),
+            "",
+            "unknown field `global_parameters`",
+        ),
+        (
+            r#"{"version": 2, "segments": {}}"#.to_string(),
+            "",
+            "unknown field `segments`",
         ),
         // Rules.
         (
@@ -422,52 +416,43 @@ fn test_parse_rejects_structural_defects() {
             "invalid type",
         ),
         (
-            rule(r#", "priority": 1"#),
+            rule_with(
+                r#"{"contextKind": "cluster", "clauses": [], "parameters": {}, "priority": 1}"#,
+            ),
             "rules[0]",
             "unknown field `priority`",
         ),
         (
-            format!(
-                r#"{{"version": 2, "segments": {{{segment}}}, "rules": [{{"segment": "s"}}]}}"#
+            rule_with(
+                r#"{"contextKind": "cluster", "clauses": [], "segment": "s", "parameters": {}}"#,
             ),
+            "rules[0]",
+            "unknown field `segment`",
+        ),
+        (
+            rule_with(r#"{"contextKind": "cluster", "clauses": []}"#),
             "rules[0]",
             "missing field `parameters`",
         ),
         (
-            format!(
-                r#"{{"version": 2, "segments": {{{segment}}}, "rules": [
-                    {{"segment": "s", "parameters": {{}}}},
-                    {{"segment": "nope", "parameters": {{}}}}
-                ]}}"#
-            ),
-            "rules[1] names the segment \"nope\"",
-            "which segments does not define",
-        ),
-        // Segments.
-        (
-            segment_with(r#"{"clauses": []}"#),
-            "segments.s",
+            rule_with(r#"{"clauses": [], "parameters": {}}"#),
+            "rules[0]",
             "missing field `contextKind`",
         ),
         (
-            segment_with(r#"{"contextKind": "environment", "clauses": []}"#),
-            "segments.s.contextKind",
+            rule_with(r#"{"contextKind": "environment", "clauses": [], "parameters": {}}"#),
+            "rules[0].contextKind",
             "unknown variant `environment`",
         ),
         (
-            segment_with(r#"{"contextKind": "cluster"}"#),
-            "segments.s",
+            rule_with(r#"{"contextKind": "cluster", "parameters": {}}"#),
+            "rules[0]",
             "missing field `clauses`",
         ),
         (
-            segment_with(r#"{"contextKind": "cluster", "clauses": {}}"#),
-            "segments.s.clauses",
+            rule_with(r#"{"contextKind": "cluster", "clauses": {}, "parameters": {}}"#),
+            "rules[0].clauses",
             "invalid type",
-        ),
-        (
-            segment_with(r#"{"contextKind": "cluster", "clauses": [], "description": "x"}"#),
-            "segments.s",
-            "unknown field `description`",
         ),
         (
             single_clause_file(&format!(
@@ -475,73 +460,101 @@ fn test_parse_rejects_structural_defects() {
                     "attribute": "replica_size_family", "op": "in", "values": ["legacy"]
                 }}"#
             )),
-            "segments.s: clauses[1] names the attribute \"replica_size_family\"",
-            "which a \"cluster\" does not carry",
+            "rules[0]: clauses[1].attribute is not carried by objects of the rule's contextKind",
+            "",
+        ),
+        // A clause may repeat its rule's context kind, but not contradict it.
+        (
+            single_clause_file(&format!(r#"{{{cluster_name}, "contextKind": "replica"}}"#)),
+            "rules[0]: clauses[0].contextKind differs from the rule's contextKind",
+            "",
+        ),
+        (
+            single_clause_file(&format!(r#"{{{cluster_name}, "contextKind": "user"}}"#)),
+            "rules[0].clauses[0].contextKind",
+            "unknown variant `user`",
         ),
         // Clauses.
         (
             single_clause_file("7"),
-            "segments.s.clauses[0]",
+            "rules[0].clauses[0]",
             "invalid type",
         ),
         (
             single_clause_file(r#"{"op": "in", "values": []}"#),
-            "segments.s.clauses[0]",
+            "rules[0].clauses[0]",
             "missing field `attribute`",
         ),
         (
             single_clause_file(r#"{"attribute": "cluster_nmae", "op": "in", "values": []}"#),
-            "segments.s.clauses[0].attribute",
+            "rules[0].clauses[0].attribute",
             "unknown variant `cluster_nmae`",
         ),
         (
             single_clause_file(r#"{"attribute": 7, "op": "in", "values": []}"#),
-            "segments.s.clauses[0].attribute",
+            "rules[0].clauses[0].attribute",
             "invalid type",
         ),
         (
             single_clause_file(r#"{"attribute": "cluster_name", "values": []}"#),
-            "segments.s.clauses[0]",
+            "rules[0].clauses[0]",
             "missing field `op`",
         ),
         (
             single_clause_file(r#"{"attribute": "cluster_name", "op": "in"}"#),
-            "segments.s.clauses[0]",
+            "rules[0].clauses[0]",
             "missing field `values`",
         ),
         (
             single_clause_file(r#"{"attribute": "cluster_name", "op": "in", "values": "prod"}"#),
-            "segments.s.clauses[0].values",
+            "rules[0].clauses[0].values",
             "invalid type",
         ),
         (
             single_clause_file(
                 r#"{"attribute": "cluster_name", "op": "in", "values": ["prod", ["prod"]]}"#,
             ),
-            "segments.s.clauses[0].values[1]",
+            "rules[0].clauses[0].values[1]",
             "expected a string, number or boolean",
         ),
         (
             single_clause_file(&format!(r#"{{{cluster_name}, "negate": "yes"}}"#)),
-            "segments.s.clauses[0].negate",
+            "rules[0].clauses[0].negate",
             "invalid type",
         ),
         (
             single_clause_file(&format!(r#"{{{cluster_name}, "nope": 1}}"#)),
-            "segments.s.clauses[0]",
+            "rules[0].clauses[0]",
             "unknown field `nope`",
         ),
-        // The segment declares the context kind for all of its clauses.
+        // Operators: LaunchDarkly's non-string ones, and a casing a hand-author
+        // is likely to reach for.
         (
-            single_clause_file(&format!(r#"{{{cluster_name}, "contextKind": "cluster"}}"#)),
-            "segments.s.clauses[0]",
-            "unknown field `contextKind`",
+            single_clause_file(
+                r#"{"attribute": "cluster_name", "op": "lessThan", "values": ["1"]}"#,
+            ),
+            "rules[0].clauses[0].op",
+            "unknown variant `lessThan`",
+        ),
+        (
+            single_clause_file(
+                r#"{"attribute": "cluster_name", "op": "segmentMatch", "values": ["s"]}"#,
+            ),
+            "rules[0].clauses[0].op",
+            "unknown variant `segmentMatch`",
+        ),
+        (
+            single_clause_file(
+                r#"{"attribute": "cluster_name", "op": "starts_with", "values": []}"#,
+            ),
+            "rules[0].clauses[0].op",
+            "unknown variant `starts_with`",
         ),
         (
             single_clause_file(
                 r#"{"attribute": "cluster_name", "op": "matches", "values": ["^prod-", "^prod-["]}"#,
             ),
-            "segments.s.clauses[0]: values[1] is the invalid \"matches\" pattern \"^prod-[\": ",
+            "rules[0].clauses[0]: values[1] is the invalid pattern \"^prod-[\": ",
             "",
         ),
     ];
@@ -555,142 +568,28 @@ fn test_parse_rejects_structural_defects() {
     }
 }
 
-/// The ten LaunchDarkly operators this format refuses are recognised and
-/// refused with their own reason, rather than lumped in with a typo. An
-/// operator that is not LaunchDarkly's at all is refused as unknown.
-#[mz_ore::test]
-fn test_unsupported_operators_rejected() {
-    let rejected = |op: &str| {
-        parse_error(&single_clause_file(&format!(
-            r#"{{"attribute": "cluster_name", "op": "{op}", "values": ["1"]}}"#
-        )))
-    };
-    let unsupported = |op: &str, reason: &str| {
-        format!(
-            "segments.s.clauses[0].op: the LaunchDarkly operator {op:?} is not supported: it \
-             {reason}"
-        )
-    };
-
-    for op in [
-        "lessThan",
-        "lessThanOrEqual",
-        "greaterThan",
-        "greaterThanOrEqual",
-    ] {
-        assert_eq!(
-            rejected(op),
-            unsupported(
-                op,
-                "compares numbers, and every cluster and replica attribute is a string"
-            )
-        );
-    }
-    for op in ["before", "after"] {
-        assert_eq!(
-            rejected(op),
-            unsupported(
-                op,
-                "compares dates, and every cluster and replica attribute is a string"
-            )
-        );
-    }
-    for op in ["semVerEqual", "semVerGreaterThan", "semVerLessThan"] {
-        assert_eq!(
-            rejected(op),
-            unsupported(
-                op,
-                "compares semantic versions, and every cluster and replica attribute is a \
-                 string"
-            )
-        );
-    }
-    assert_eq!(
-        rejected("segmentMatch"),
-        unsupported(
-            "segmentMatch",
-            "references another segment, which this file expresses through the segment a \
-             rule names"
-        )
-    );
-
-    // Not a LaunchDarkly operator at all, including the casing a hand-author
-    // is most likely to reach for.
-    for op in ["starts_with", "IN"] {
-        assert_eq!(
-            rejected(op),
-            format!(
-                "segments.s.clauses[0].op: {op:?} is not an operator, expected one of in, \
-                 startsWith, endsWith, contains, matches"
-            )
-        );
-    }
-}
-
-/// Every LaunchDarkly operator is either supported or refused with a reason.
-/// An operator added to the SDK does not fail this.
-#[mz_ore::test]
-fn test_operator_vocabulary_matches_launchdarkly() {
-    let launchdarkly = [
-        "in",
-        "startsWith",
-        "endsWith",
-        "contains",
-        "matches",
-        "lessThan",
-        "lessThanOrEqual",
-        "greaterThan",
-        "greaterThanOrEqual",
-        "before",
-        "after",
-        "segmentMatch",
-        "semVerEqual",
-        "semVerGreaterThan",
-        "semVerLessThan",
-    ];
-    let supported = Operator::ALL.map(|op| op.as_str());
-
-    for op in launchdarkly {
-        assert_eq!(
-            Operator::parse(op).is_some(),
-            unsupported_operator(op).is_none(),
-            "{op:?} must be either supported or refused with a reason, not both or neither"
-        );
-    }
-    for op in supported {
-        assert!(launchdarkly.contains(&op), "{op:?} is not a LD operator");
-        // The name a diagnostic prints round-trips through the parse.
-        assert_eq!(Operator::parse(op).map(|op| op.as_str()), Some(op));
-    }
-    assert_eq!(supported.len(), 5);
-    assert_eq!(launchdarkly.len(), 15);
-    // Nothing outside the vocabulary is silently accepted as refusable.
-    assert_eq!(unsupported_operator("starts_with"), None);
-    assert_eq!(Operator::parse("starts_with"), None);
-}
-
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_file_cluster_rule_applied() {
     let params = SynchronizedParameters::default();
     let file = parse(&scoped_file(true));
 
-    let out = file_frontend().file_cluster_overrides(
+    let out = cluster_overrides(
         &file,
         &params,
         &[CLUSTER_PARAM],
         &[cluster_ctx(1, "analytics"), cluster_ctx(2, "staging")],
     );
 
-    // Sparse: only the cluster the segment matches gets a row.
+    // Sparse: only the cluster the rule matches gets a row.
     assert_eq!(
         out,
         BTreeMap::from([(ClusterId::User(1), overrides(CLUSTER_PARAM, "true"))])
     );
 }
 
-/// The clauses of one segment are ANDed, and a replica may be matched on its
-/// own attributes as well as its owning cluster's.
+/// The clauses of one rule are ANDed, and a replica may be matched on its own
+/// attributes as well as its owning cluster's.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_file_replica_rule_applied() {
@@ -698,7 +597,7 @@ fn test_file_replica_rule_applied() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
-            "segments": {{"legacy-in-prod": {{
+            "rules": [{{
                 "contextKind": "replica",
                 "clauses": [
                     {{
@@ -707,15 +606,13 @@ fn test_file_replica_rule_applied() {
                         "values": ["legacy"]
                     }},
                     {{"attribute": "cluster_name", "op": "in", "values": ["prod"]}}
-                ]
-            }}}},
-            "rules": [
-                {{"segment": "legacy-in-prod", "parameters": {{"{REPLICA_PARAM}": false}}}}
-            ]
+                ],
+                "parameters": {{"{REPLICA_PARAM}": false}}
+            }}]
         }}"#
     ));
 
-    let out = file_frontend().file_replica_overrides(
+    let out = replica_overrides(
         &file,
         &params,
         &[REPLICA_PARAM],
@@ -734,7 +631,7 @@ fn test_file_replica_rule_applied() {
     );
 }
 
-/// A replica-local parameter may be supplied through a `replica` segment whose
+/// A replica-local parameter may be supplied through a `replica` rule whose
 /// clauses name cluster attributes alone, which targets every replica of that
 /// cluster.
 #[mz_ore::test]
@@ -744,17 +641,17 @@ fn test_file_replica_rule_targeted_by_cluster() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
-            "segments": {{"prod": {{
+            "rules": [{{
                 "contextKind": "replica",
                 "clauses": [
                     {{"attribute": "cluster_name", "op": "in", "values": ["prod"]}}
-                ]
-            }}}},
-            "rules": [{{"segment": "prod", "parameters": {{"{REPLICA_PARAM}": false}}}}]
+                ],
+                "parameters": {{"{REPLICA_PARAM}": false}}
+            }}]
         }}"#
     ));
 
-    let out = file_frontend().file_replica_overrides(
+    let out = replica_overrides(
         &file,
         &params,
         &[REPLICA_PARAM],
@@ -774,11 +671,11 @@ fn test_file_replica_rule_targeted_by_cluster() {
     );
 }
 
-/// The first rule whose segment matches decides a parameter, and it decides it
-/// before the value is judged, so a value agreeing with the environment-wide
-/// one still shadows a later rule. A rule that does not mention a parameter
-/// leaves it to a later one, and a segment with no clauses matches every
-/// object of its context kind.
+/// The first matching rule decides a parameter, and it decides it before the
+/// value is judged, so a value agreeing with the environment-wide one still
+/// shadows a later rule. A rule that does not mention a parameter leaves it to
+/// a later one, and a rule with no clauses matches every object of its context
+/// kind.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_first_matching_rule_wins() {
@@ -792,26 +689,24 @@ fn test_first_matching_rule_wins() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
-            "segments": {{
-                "analytics": {{
+            "rules": [
+                {{
                     "contextKind": "cluster",
                     "clauses": [
                         {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
-                    ]
+                    ],
+                    "parameters": {{"{CLUSTER_PARAM}": false}}
                 }},
-                "every-cluster": {{"contextKind": "cluster", "clauses": []}}
-            }},
-            "rules": [
-                {{"segment": "analytics", "parameters": {{"{CLUSTER_PARAM}": false}}}},
-                {{"segment": "every-cluster", "parameters": {{
-                    "{CLUSTER_PARAM}": true,
-                    "{CLUSTER_PARAM_2}": true
-                }}}}
+                {{
+                    "contextKind": "cluster",
+                    "clauses": [],
+                    "parameters": {{"{CLUSTER_PARAM}": true, "{CLUSTER_PARAM_2}": true}}
+                }}
             ]
         }}"#
     ));
 
-    let out = file_frontend().file_cluster_overrides(
+    let out = cluster_overrides(
         &file,
         &params,
         &[CLUSTER_PARAM, CLUSTER_PARAM_2],
@@ -842,17 +737,14 @@ fn test_first_matching_rule_wins() {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_clause_operators() {
     let params = SynchronizedParameters::default();
-    let frontend = file_frontend();
 
-    // Every rule supplies the same parameter, and each segment is tested on
-    // its own file, so a hit is unambiguous.
+    // Every rule supplies the same parameter, and each clause is tested on its
+    // own file, so a hit is unambiguous.
     let hits = |op: &str, values: &str, name: &str| {
         let file = parse(&single_clause_file(&format!(
             r#"{{"attribute": "cluster_name", "op": "{op}", "values": {values}}}"#
         )));
-        !frontend
-            .file_cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, name)])
-            .is_empty()
+        !cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, name)]).is_empty()
     };
 
     assert!(hits("in", r#"["prod"]"#, "prod"));
@@ -899,7 +791,7 @@ fn test_clause_negate() {
         }"#,
     ));
 
-    let out = file_frontend().file_cluster_overrides(
+    let out = cluster_overrides(
         &file,
         &params,
         &[CLUSTER_PARAM],
@@ -918,47 +810,41 @@ fn test_clause_negate() {
     );
 }
 
-/// A cluster-coherent parameter may not be supplied through a `replica`
-/// segment: honouring that would let the parameter resolve differently across
-/// one cluster's replicas. The parameter is dropped from that rule, leaving it
-/// to a later one, while a replica-local parameter in the same rule is
-/// unaffected.
+/// A cluster-coherent parameter may not be supplied through a `replica` rule:
+/// honouring that would let the parameter resolve differently across one
+/// cluster's replicas. The cluster pass never consults a `replica` rule, so the
+/// parameter is left to a later rule, while a replica-local parameter in the
+/// same rule is unaffected.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_cluster_coherence_guard() {
     let params = SynchronizedParameters::default();
-    let frontend = file_frontend();
     let file = parse(&format!(
         r#"{{
             "version": 2,
-            "segments": {{
-                "legacy-replicas": {{
+            "rules": [
+                {{
                     "contextKind": "replica",
                     "clauses": [{{
                         "attribute": "replica_size_family",
                         "op": "in",
                         "values": ["legacy"]
-                    }}]
+                    }}],
+                    "parameters": {{"{CLUSTER_PARAM}": true, "{REPLICA_PARAM}": false}}
                 }},
-                "analytics": {{
+                {{
                     "contextKind": "cluster",
                     "clauses": [
                         {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
-                    ]
+                    ],
+                    "parameters": {{"{CLUSTER_PARAM}": true}}
                 }}
-            }},
-            "rules": [
-                {{"segment": "legacy-replicas", "parameters": {{
-                    "{CLUSTER_PARAM}": true,
-                    "{REPLICA_PARAM}": false
-                }}}},
-                {{"segment": "analytics", "parameters": {{"{CLUSTER_PARAM}": true}}}}
             ]
         }}"#
     ));
 
     assert_eq!(
-        frontend.file_cluster_overrides(
+        cluster_overrides(
             &file,
             &params,
             &[CLUSTER_PARAM],
@@ -967,7 +853,7 @@ fn test_cluster_coherence_guard() {
         BTreeMap::from([(ClusterId::User(1), overrides(CLUSTER_PARAM, "true"))])
     );
     assert_eq!(
-        frontend.file_replica_overrides(
+        replica_overrides(
             &file,
             &params,
             &[REPLICA_PARAM],
@@ -976,18 +862,18 @@ fn test_cluster_coherence_guard() {
         BTreeMap::from([(ReplicaId::User(1), overrides(REPLICA_PARAM, "false"))])
     );
     assert_eq!(
-        frontend.scoped_rule_diagnostics(&file, &params),
+        file_frontend().scoped_rule_diagnostics(&file, &params),
         vec![format!(
-            "ignoring {CLUSTER_PARAM} for rules[0] (segment \"legacy-replicas\") in the system \
-             parameter sync file: {CLUSTER_PARAM} is cluster-scoped, so it cannot be supplied \
-             through a segment of context kind \"replica\""
+            "ignoring {CLUSTER_PARAM} for rules[0] in the system parameter sync file: \
+             {CLUSTER_PARAM} is cluster-scoped, so it cannot be supplied through a rule of \
+             contextKind \"replica\""
         )]
     );
 }
 
 /// A pattern does not change which rule decides a parameter: the first rule
-/// whose segment matches still wins. Two patterns of which one is the narrower
-/// is the shape that makes this the natural way to write an exception.
+/// that matches still wins. Two patterns of which one is the narrower is the
+/// shape that makes this the natural way to write an exception.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_pattern_obeys_first_matching_rule() {
@@ -995,35 +881,30 @@ fn test_pattern_obeys_first_matching_rule() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
-            "segments": {{
-                "prod-canary": {{
+            "rules": [
+                {{
                     "contextKind": "cluster",
                     "clauses": [{{
                         "attribute": "cluster_name",
                         "op": "matches",
                         "values": ["^prod-canary"]
-                    }}]
+                    }}],
+                    "parameters": {{"{CLUSTER_PARAM}": false, "{CLUSTER_PARAM_2}": true}}
                 }},
-                "prod": {{
+                {{
                     "contextKind": "cluster",
                     "clauses": [{{
                         "attribute": "cluster_name",
                         "op": "matches",
                         "values": ["^prod-"]
-                    }}]
+                    }}],
+                    "parameters": {{"{CLUSTER_PARAM}": true}}
                 }}
-            }},
-            "rules": [
-                {{"segment": "prod-canary", "parameters": {{
-                    "{CLUSTER_PARAM}": false,
-                    "{CLUSTER_PARAM_2}": true
-                }}}},
-                {{"segment": "prod", "parameters": {{"{CLUSTER_PARAM}": true}}}}
             ]
         }}"#
     ));
 
-    let out = file_frontend().file_cluster_overrides(
+    let out = cluster_overrides(
         &file,
         &params,
         &[CLUSTER_PARAM, CLUSTER_PARAM_2],
@@ -1043,52 +924,46 @@ fn test_pattern_obeys_first_matching_rule() {
     );
 }
 
-/// A segment that matches nothing live is ignored, not an error: the live
-/// objects drive the resolution, so the file is never a second source of truth
-/// for what exists.
+/// A rule that matches nothing live is ignored, not an error: the live objects
+/// drive the resolution, so the file is never a second source of truth for what
+/// exists.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-fn test_file_segment_matching_nothing_live_ignored() {
+fn test_file_rule_matching_nothing_live_ignored() {
     let params = SynchronizedParameters::default();
-    let frontend = file_frontend();
     let file = parse(&format!(
         r#"{{
             "version": 2,
-            "segments": {{
-                "gone-cluster": {{
+            "rules": [
+                {{
                     "contextKind": "cluster",
                     "clauses": [
                         {{"attribute": "cluster_name", "op": "in", "values": ["gone"]}}
-                    ]
+                    ],
+                    "parameters": {{"{CLUSTER_PARAM}": true}}
                 }},
-                "gone-replicas": {{
+                {{
                     "contextKind": "replica",
                     "clauses": [
                         {{"attribute": "cluster_name", "op": "in", "values": ["gone"]}}
-                    ]
+                    ],
+                    "parameters": {{"{REPLICA_PARAM}": false}}
                 }}
-            }},
-            "rules": [
-                {{"segment": "gone-cluster", "parameters": {{"{CLUSTER_PARAM}": true}}}},
-                {{"segment": "gone-replicas", "parameters": {{"{REPLICA_PARAM}": false}}}}
             ]
         }}"#
     ));
 
     assert!(
-        frontend
-            .file_cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, "prod")])
-            .is_empty()
+        cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, "prod")]).is_empty()
     );
     assert!(
-        frontend
-            .file_replica_overrides(
-                &file,
-                &params,
-                &[REPLICA_PARAM],
-                &[replica_ctx(1, "prod", 1, "r1")]
-            )
-            .is_empty()
+        replica_overrides(
+            &file,
+            &params,
+            &[REPLICA_PARAM],
+            &[replica_ctx(1, "prod", 1, "r1")]
+        )
+        .is_empty()
     );
 }
 
@@ -1102,27 +977,24 @@ fn test_file_unparseable_value_dropped() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
-            "segments": {{"analytics": {{
+            "rules": [{{
                 "contextKind": "cluster",
                 "clauses": [
                     {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
-                ]
-            }}}},
-            "rules": [{{"segment": "analytics", "parameters": {{
-                "{CLUSTER_PARAM}": "maybe"
-            }}}}]
+                ],
+                "parameters": {{"{CLUSTER_PARAM}": "maybe"}}
+            }}]
         }}"#
     ));
 
     assert!(
-        file_frontend()
-            .file_cluster_overrides(
-                &file,
-                &params,
-                &[CLUSTER_PARAM],
-                &[cluster_ctx(1, "analytics")]
-            )
-            .is_empty()
+        cluster_overrides(
+            &file,
+            &params,
+            &[CLUSTER_PARAM],
+            &[cluster_ctx(1, "analytics")]
+        )
+        .is_empty()
     );
 }
 
@@ -1138,14 +1010,13 @@ fn test_file_value_matching_environment_dropped() {
     let file = parse(&scoped_file(false));
 
     assert!(
-        file_frontend()
-            .file_cluster_overrides(
-                &file,
-                &params,
-                &[CLUSTER_PARAM],
-                &[cluster_ctx(1, "analytics")]
-            )
-            .is_empty()
+        cluster_overrides(
+            &file,
+            &params,
+            &[CLUSTER_PARAM],
+            &[cluster_ctx(1, "analytics")]
+        )
+        .is_empty()
     );
 }
 
@@ -1232,16 +1103,14 @@ fn test_rules_are_published_with_their_baseline() {
     let flipped = format!(
         r#"{{
             "version": 2,
-            "global_parameters": {{"{CLUSTER_PARAM}": true}},
-            "segments": {{"analytics": {{
+            "globalParameters": {{"{CLUSTER_PARAM}": true}},
+            "rules": [{{
                 "contextKind": "cluster",
                 "clauses": [
                     {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
-                ]
-            }}}},
-            "rules": [
-                {{"segment": "analytics", "parameters": {{"{CLUSTER_PARAM}": false}}}}
-            ]
+                ],
+                "parameters": {{"{CLUSTER_PARAM}": false}}
+            }}]
         }}"#
     );
     frontend.refresh_config_file(Path::new(CONFIG_PATH), Ok(flipped), &before);
@@ -1303,7 +1172,7 @@ fn test_unreadable_file_has_no_scoped_desired_state() {
         Err(io::Error::from(io::ErrorKind::NotFound)),
         Ok("}not json{".to_string()),
         Ok("[]".to_string()),
-        Ok(r#"{"version": 2, "segments": 7}"#.to_string()),
+        Ok(r#"{"version": 2, "rules": 7}"#.to_string()),
     ] {
         refresh(failure);
         assert!(!frontend.has_scoped_desired_state());
@@ -1343,10 +1212,10 @@ fn test_pull_from_file() {
         "null changed the value"
     );
 
-    // A version 2 document supplies the same values from `global_parameters`.
+    // A version 2 document supplies the same values from `globalParameters`.
     fs::write(
         &path,
-        r#"{"version": 2, "global_parameters": {"max_connections": 2000}}"#,
+        r#"{"version": 2, "globalParameters": {"max_connections": 2000}}"#,
     )
     .expect("can write the test file");
     assert!(frontend.pull(&mut params));
@@ -1356,7 +1225,7 @@ fn test_pull_from_file() {
     // current value alone.
     for contents in [
         "}not json{",
-        r#"{"version": 2, "global_parameters": {"max_connections": 5}, "segments": 7}"#,
+        r#"{"version": 2, "globalParameters": {"max_connections": 5}, "rules": 7}"#,
     ] {
         fs::write(&path, contents).expect("can write the test file");
         assert!(!frontend.pull(&mut params));
@@ -1380,19 +1249,17 @@ fn test_diagnoses_rule_mistakes() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
-            "segments": {{"analytics": {{
-                "contextKind": "cluster",
-                "clauses": [
-                    {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
-                ]
-            }}}},
             "rules": [
-                {{"segment": "analytics", "parameters": {{}}}},
-                {{"segment": "analytics", "parameters": {{
-                    "max_connections": 100,
-                    "enabel_eager_delta_joins": true,
-                    "{CLUSTER_PARAM}": "maybe"
-                }}}}
+                {{"contextKind": "cluster", "clauses": [], "parameters": {{}}}},
+                {{
+                    "contextKind": "cluster",
+                    "clauses": [],
+                    "parameters": {{
+                        "max_connections": 100,
+                        "enabel_eager_delta_joins": true,
+                        "{CLUSTER_PARAM}": "maybe"
+                    }}
+                }}
             ]
         }}"#
     ));
@@ -1402,19 +1269,18 @@ fn test_diagnoses_rule_mistakes() {
         // Ordered by rule, then by parameter name within a rule.
         vec![
             // A misspelled parameter name.
-            "ignoring enabel_eager_delta_joins for rules[1] (segment \"analytics\") in the \
-             system parameter sync file: not a cluster-scoped or replica-scoped system \
-             parameter"
+            "ignoring enabel_eager_delta_joins for rules[1] in the system parameter sync \
+             file: not a cluster-scoped or replica-scoped system parameter"
                 .to_string(),
             // A value that does not parse for the parameter's type.
             format!(
                 "ignoring unparseable value \"maybe\" for system parameter {CLUSTER_PARAM} \
-                 on rules[1] (segment \"analytics\") in the system parameter sync file"
+                 on rules[1] in the system parameter sync file"
             ),
             // A parameter that carries no scope at all, so it can only be set
             // environment-wide.
-            "ignoring max_connections for rules[1] (segment \"analytics\") in the system \
-             parameter sync file: not a cluster-scoped or replica-scoped system parameter"
+            "ignoring max_connections for rules[1] in the system parameter sync file: not a \
+             cluster-scoped or replica-scoped system parameter"
                 .to_string(),
         ]
     );
