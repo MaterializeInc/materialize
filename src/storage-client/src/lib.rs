@@ -11,6 +11,7 @@
 
 pub mod client;
 pub mod collection_reader;
+pub mod collection_writer;
 pub mod controller;
 pub mod healthcheck;
 pub mod metrics;

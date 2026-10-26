@@ -86,6 +86,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{ColumnName, Datum, DatumVec, Diff, GlobalId, Row, Timestamp};
 use mz_storage_client::client::{AppendOnlyUpdate, Status, TimestamplessUpdate};
+use mz_storage_client::collection_writer::monotonic_append;
 use mz_storage_client::controller::{IntrospectionType, MonotonicAppender, StorageWriteOp};
 use mz_storage_client::healthcheck::{
     MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC, REPLICA_METRICS_HISTORY_DESC,
@@ -1937,50 +1938,6 @@ where
         .into_iter()
         .map(|(key, (_, row))| (key, row))
         .collect()
-}
-
-async fn monotonic_append(
-    write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
-    updates: Vec<TimestamplessUpdate>,
-    at_least: Timestamp,
-) {
-    let mut expected_upper = write_handle.shared_upper();
-    loop {
-        if updates.is_empty() && expected_upper.is_empty() {
-            // Ignore timestamp advancement for
-            // closed collections. TODO? Make this a
-            // correctable error
-            return;
-        }
-
-        let upper = expected_upper
-            .into_option()
-            .expect("cannot append data to closed collection");
-
-        let lower = std::cmp::max(upper, at_least);
-        let new_upper = lower.step_forward();
-        let updates = updates
-            .iter()
-            .map(|TimestamplessUpdate { row, diff }| {
-                ((SourceData(Ok(row.clone())), ()), lower, diff.into_inner())
-            })
-            .collect::<Vec<_>>();
-        let res = write_handle
-            .compare_and_append(
-                updates,
-                Antichain::from_elem(upper),
-                Antichain::from_elem(new_upper),
-            )
-            .await
-            .expect("valid usage");
-        match res {
-            Ok(()) => return,
-            Err(err) => {
-                expected_upper = err.current;
-                continue;
-            }
-        }
-    }
 }
 
 // Helper method for notifying listeners.
