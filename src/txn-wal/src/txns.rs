@@ -188,6 +188,74 @@ where
         Txn::new()
     }
 
+    /// Adopts local write handles without changing shared txn-WAL membership or
+    /// advancing any frontier.
+    ///
+    /// Each handle must use an already registered schema. The caller remains
+    /// responsible for establishing shared table registration and readability.
+    /// Adoption does not grant write authority or apply pending transactions.
+    /// Transaction commit still checks membership against the WAL's current prefix.
+    ///
+    /// This permits independent writers to attach to the same registered tables
+    /// without submitting another registration transaction. It retains the newest
+    /// schema when multiple handles refer to the same shard, as [`Self::register`]
+    /// does.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a supplied handle has no registered schema.
+    pub fn adopt(&mut self, data_writes: impl IntoIterator<Item = WriteHandle<K, V, T, D>>) {
+        for data_write in data_writes {
+            assert!(
+                data_write.schema_id().is_some(),
+                "adopted schema must be registered"
+            );
+            // If we already have a write handle for a newer version of a table, don't replace
+            // it! Currently we only support adding columns to tables with a default value, so
+            // the latest/newest schema will always be the most complete.
+            //
+            // TODO(alter_table): Revisit when we support dropping columns.
+            match self.datas.data_write_for_commit.get(&data_write.shard_id()) {
+                None => {
+                    self.datas
+                        .data_write_for_commit
+                        .insert(data_write.shard_id(), DataWriteCommit(data_write));
+                }
+                Some(previous) => {
+                    let new_schema_id = data_write.schema_id().expect("ensured above");
+
+                    if let Some(prev_schema_id) = previous.schema_id()
+                        && prev_schema_id > new_schema_id
+                    {
+                        mz_ore::soft_panic_or_log!(
+                            "tried registering a WriteHandle with an older SchemaId; \
+                         prev_schema_id: {} new_schema_id: {} shard_id: {}",
+                            prev_schema_id,
+                            new_schema_id,
+                            previous.shard_id(),
+                        );
+                        continue;
+                    } else if previous.schema_id().is_none() {
+                        mz_ore::soft_panic_or_log!(
+                            "encountered data shard without a schema; shard_id: {}",
+                            previous.shard_id(),
+                        );
+                    }
+
+                    tracing::info!(
+                        prev_schema_id = ?previous.schema_id(),
+                        ?new_schema_id,
+                        shard_id = %previous.shard_id(),
+                        "replacing WriteHandle"
+                    );
+                    self.datas
+                        .data_write_for_commit
+                        .insert(data_write.shard_id(), DataWriteCommit(data_write));
+                }
+            }
+        }
+    }
+
     /// Registers data shards for use with this txn set.
     ///
     /// A registration entry is written to the txn shard. If it is not possible
@@ -298,51 +366,7 @@ where
                     }
                 }
             }
-            for data_write in data_writes {
-                // If we already have a write handle for a newer version of a table, don't replace
-                // it! Currently we only support adding columns to tables with a default value, so
-                // the latest/newest schema will always be the most complete.
-                //
-                // TODO(alter_table): Revisit when we support dropping columns.
-                match self.datas.data_write_for_commit.get(&data_write.shard_id()) {
-                    None => {
-                        self.datas
-                            .data_write_for_commit
-                            .insert(data_write.shard_id(), DataWriteCommit(data_write));
-                    }
-                    Some(previous) => {
-                        let new_schema_id = data_write.schema_id().expect("ensured above");
-
-                        if let Some(prev_schema_id) = previous.schema_id()
-                            && prev_schema_id > new_schema_id
-                        {
-                            mz_ore::soft_panic_or_log!(
-                                "tried registering a WriteHandle with an older SchemaId; \
-                                 prev_schema_id: {} new_schema_id: {} shard_id: {}",
-                                prev_schema_id,
-                                new_schema_id,
-                                previous.shard_id(),
-                            );
-                            continue;
-                        } else if previous.schema_id().is_none() {
-                            mz_ore::soft_panic_or_log!(
-                                "encountered data shard without a schema; shard_id: {}",
-                                previous.shard_id(),
-                            );
-                        }
-
-                        tracing::info!(
-                            prev_schema_id = ?previous.schema_id(),
-                            ?new_schema_id,
-                            shard_id = %previous.shard_id(),
-                            "replacing WriteHandle"
-                        );
-                        self.datas
-                            .data_write_for_commit
-                            .insert(data_write.shard_id(), DataWriteCommit(data_write));
-                    }
-                }
-            }
+            self.adopt(data_writes);
             let tidy = self.apply_le(&register_ts).await;
 
             Ok(tidy)
@@ -1083,6 +1107,36 @@ mod tests {
 
         let () = log.assert_snapshot(d0, 6).await;
         let () = log.assert_snapshot(d1, 6).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn local_adoption_preserves_shared_registration() {
+        let client = PersistClient::new_for_tests().await;
+        let mut first = TxnsHandle::expect_open(client.clone()).await;
+        let log = first.new_log();
+        let data_id = first.expect_register(2).await;
+        first
+            .expect_commit_at(3, data_id, &["before join"], &log)
+            .await;
+
+        let mut second = TxnsHandle::expect_open_id(client.clone(), first.txns_id()).await;
+        let upper = first.txns_write.fetch_recent_upper().await.clone();
+        second.adopt([writer(&client, data_id).await]);
+        assert_eq!(first.txns_write.fetch_recent_upper().await, &upper);
+        second
+            .expect_commit_at(4, data_id, &["second writer"], &log)
+            .await;
+        first
+            .expect_commit_at(5, data_id, &["first writer"], &log)
+            .await;
+        log.assert_snapshot(data_id, 5).await;
+
+        drop(second);
+        first
+            .expect_commit_at(6, data_id, &["after detach"], &log)
+            .await;
+        log.assert_snapshot(data_id, 6).await;
     }
 
     /// A sanity check that CommitLog catches an incorrect usage (proxy for a
