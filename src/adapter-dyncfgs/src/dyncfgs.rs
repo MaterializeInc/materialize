@@ -228,7 +228,7 @@ pub const OIDC_GROUP_ROLE_SYNC_STRICT: Config<bool> = Config::new(
 
 pub const PERSIST_FAST_PATH_ORDER: Config<bool> = Config::new(
     "persist_fast_path_order",
-    false,
+    true,
     "If set, send queries with a compatible literal constraint or ordering clause down the Persist fast path.",
     ParameterScope::Environment,
 );
