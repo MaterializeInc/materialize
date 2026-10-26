@@ -69,7 +69,7 @@
 //! [1]: https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION
 //! [2]: https://www.postgresql.org/message-id/CAFPTHDZS9O9WG02EfayBd6oONzK%2BqfUxS6AbVLJ7W%2BKECza2gg%40mail.gmail.com
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::pin::pin;
@@ -84,6 +84,7 @@ use mz_postgres_util::PostgresError;
 use mz_postgres_util::{execute, sql};
 use mz_repr::{DatumVec, Diff, GlobalId, Row};
 use mz_storage_types::dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD;
+use mz_storage_types::dyncfgs::{PG_SOURCE_TRUNCATE_BUFFER_MAX_BYTES, PG_SOURCE_TRUNCATE_RETRACT};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceTimestamp;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -99,27 +100,50 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
+use tokio::sync::watch;
 use tracing::trace;
 
 use crate::metrics::source::postgres::PgSourceMetrics;
 use crate::source::RawSourceCreationConfig;
 use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::types::{
-    Probe, ResumeUppers, SharedFuel, SignaledFuture, SourceMessage, StackedCollection,
+    FuelSize, Probe, ResumeUppers, SharedFuel, SignaledFuture, SourceMessage, StackedCollection,
 };
 
 mod decode;
 mod schema;
 mod stream;
+mod truncate;
 
 pub(super) use stream::ensure_replication_prerequisites;
 
-use decode::extract_transaction;
+use decode::{ExtractMode, TxEvent, extract_transaction};
 use schema::{SchemaValidationError, spawn_schema_validator};
-use stream::raw_stream;
+use stream::StreamStarter;
+use truncate::{Replay, Retractions};
 
 /// A logical replication message from the server.
 type LogicalReplMsg = ReplicationMessage<LogicalReplicationMessage>;
+
+/// The data output ports of the replication operator, one per export.
+type DataOutputs = SharedFuel<MzOffset, CapacityContainerBuilder<Vec<(ReplData, MzOffset, Diff)>>>;
+
+/// The payload of a data port.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum ReplData {
+    /// A row in upstream form, which the decode operator casts.
+    Raw(Result<Row, DataflowError>),
+    /// A row in the export's persisted form, read back from its shard.
+    Cast(Result<Row, DataflowError>),
+}
+
+impl FuelSize for ReplData {
+    fn fuel_size(&self) -> usize {
+        match self {
+            ReplData::Raw(r) | ReplData::Cast(r) => r.fuel_size(),
+        }
+    }
+}
 
 // A request to rewind a snapshot taken at `snapshot_lsn` to the initial LSN of the replication
 // slot. This is accomplished by emitting `(data, 0, -diff)` for all updates `(data, lsn, diff)`
@@ -159,6 +183,10 @@ pub(crate) fn render<'scope>(
     let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
         .get(config.config.config_set())
         .is_zero();
+    // Read at render time as well, so a truncate in this dataflow is either always retracted or
+    // always an error, however often the operator replays it.
+    let truncate_retract = PG_SOURCE_TRUNCATE_RETRACT.get(config.config.config_set());
+    let tail_max = PG_SOURCE_TRUNCATE_BUFFER_MAX_BYTES.get(config.config.config_set());
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     // One data output port per source export, in output index order. With concurrent
@@ -227,10 +255,6 @@ pub(crate) fn render<'scope>(
                 .await?;
 
             let slot = &connection.publication_details.slot;
-            let replication_client = connection_config
-                .connect_replication(&config.config.connection_context.ssh_tunnel_manager)
-                .await?;
-
             let metadata_client = connection_config
                 .connect(
                     "replication metadata",
@@ -382,7 +406,7 @@ pub(crate) fn render<'scope>(
                                     // We pick `u64::MAX` as the LSN which will (in practice) never conflict
                                     // any previously revealed portions of the TVC.
                                     let update = (
-                                        Err(DataflowError::from(err.clone())),
+                                        ReplData::Raw(Err(DataflowError::from(err.clone()))),
                                         MzOffset::from(u64::MAX),
                                         Diff::ONE,
                                     );
@@ -407,19 +431,20 @@ pub(crate) fn render<'scope>(
             }
             trace!(%id, "timely-{worker_id} pending rewinds {rewinds:?}");
 
-            let mut committed_uppers = pin!(committed_uppers);
-
-            let stream_result = raw_stream(
-                &config,
-                &connection,
-                replication_client,
-                Arc::clone(&metadata_client),
+            // Shared, so a replay can start a new stream from the same uppers.
+            let (latest_uppers_tx, latest_uppers) = watch::channel(None);
+            let starter = StreamStarter {
+                config: &config,
+                connection: &connection,
+                connection_config: &connection_config,
+                metadata_client: &metadata_client,
                 resume_lsn,
-                committed_uppers.as_mut(),
-                &probe_output,
-                &probe_cap[0],
-            )
-            .await?;
+                uppers: Rc::new(RefCell::new(Box::pin(committed_uppers))),
+                probe_output: &probe_output,
+                probe_cap: &probe_cap[0],
+                latest_uppers: &latest_uppers_tx,
+            };
+            let stream_result = starter.start(resume_lsn).await?;
 
             let stream = match stream_result {
                 Ok(stream) => stream,
@@ -431,7 +456,7 @@ pub(crate) fn render<'scope>(
                             // We pick `u64::MAX` as the LSN which will (in practice) never conflict
                             // any previously revealed portions of the TVC.
                             let update = (
-                                Err(DataflowError::from(err.clone())),
+                                ReplData::Raw(Err(DataflowError::from(err.clone()))),
                                 MzOffset::from(u64::MAX),
                                 Diff::ONE,
                             );
@@ -448,7 +473,7 @@ pub(crate) fn render<'scope>(
                     return Ok(());
                 }
             };
-            let mut stream = pin!(stream.peekable());
+            let mut stream_slot = Some(Box::pin(stream.peekable()));
 
             // Run the periodic schema validation on a separate task using a separate client,
             // to prevent it from blocking the replication reading progress.
@@ -469,22 +494,63 @@ pub(crate) fn render<'scope>(
             // creating excessive progress tracking traffic when there are multiple small
             // transactions ready to go.
             let mut data_upper = resume_lsn;
-            while let Some(event) = stream.as_mut().next().await {
+            let mut retractions = Retractions::new(
+                &config,
+                &table_info,
+                truncate_retract,
+                tail_max,
+                latest_uppers,
+            );
+            // A retraction that waits for the replication stream to be replayed.
+            let mut pending_replay: Option<Replay> = None;
+            loop {
+                if let Some(replay) = pending_replay.take() {
+                    let from = replay.from();
+                    // The replay's stream needs the slot, which the current stream's walsender
+                    // holds while the stream is live.
+                    let own_pid = starter.active_pid().await?;
+                    stream_slot = None;
+                    starter.wait_for_slot_release(own_pid).await?;
+                    let new_stream = match starter.start(from).await? {
+                        Ok(stream) => stream,
+                        Err(err) => {
+                            return Err(TransientError::from(anyhow::anyhow!(
+                                "replaying from {from}: {err}"
+                            )));
+                        }
+                    };
+                    let stream = stream_slot.insert(Box::pin(new_stream.peekable()));
+                    retractions
+                        .replay(
+                            replay,
+                            stream.as_mut(),
+                            data_upper,
+                            &metadata_client,
+                            &metrics,
+                            &connection.publication,
+                            &mut data_outputs,
+                        )
+                        .await?;
+                }
+                let stream = stream_slot.as_mut().expect("live replication stream");
+                let event = tokio::select! {
+                    msg = retractions.next_job_msg() => Err(msg),
+                    event = stream.next() => Ok(event),
+                };
+                let event = match event {
+                    Ok(Some(event)) => event,
+                    Ok(None) => break,
+                    Err(msg) => {
+                        pending_replay = retractions.on_job_msg(msg, &mut data_outputs).await?;
+                        continue;
+                    }
+                };
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
                 match event {
                     Ok(XLogData(data)) => match data.data() {
                         Begin(begin) => {
                             let commit_lsn = MzOffset::from(begin.final_lsn());
-
-                            let mut tx = pin!(extract_transaction(
-                                stream.by_ref(),
-                                &*metadata_client,
-                                commit_lsn,
-                                &mut table_info,
-                                &metrics,
-                                &connection.publication,
-                            ));
 
                             trace!(
                                 %id,
@@ -496,26 +562,84 @@ pub(crate) fn render<'scope>(
                                 "new_upper={data_upper} tx_lsn={commit_lsn}",
                             );
                             data_upper = commit_lsn + 1;
-                            while let Some((_oid, output_index, event, diff)) =
-                                tx.try_next().await?
                             {
-                                let event: Result<_, DataflowError> = event.map_err(Into::into);
-                                if let Some(req) = rewinds.get(&output_index) {
-                                    if commit_lsn <= req.snapshot_lsn {
-                                        let update = (event.clone(), MzOffset::from(0), -diff);
-                                        data_outputs
-                                            .give(
+                                let mode = if truncate_retract {
+                                    ExtractMode::Retract
+                                } else {
+                                    ExtractMode::Error
+                                };
+                                let mut tx = pin!(extract_transaction(
+                                    stream.by_ref(),
+                                    &*metadata_client,
+                                    commit_lsn,
+                                    &mut table_info,
+                                    &metrics,
+                                    &connection.publication,
+                                    mode,
+                                ));
+                                while let Some(tx_event) = tx.try_next().await? {
+                                    match tx_event {
+                                        TxEvent::Row((_oid, output_index, event, diff)) => {
+                                            let event: Result<_, DataflowError> =
+                                                event.map_err(Into::into);
+                                            if let Some(req) = rewinds.get(&output_index) {
+                                                if commit_lsn <= req.snapshot_lsn {
+                                                    let update = (
+                                                        ReplData::Raw(event.clone()),
+                                                        MzOffset::from(0),
+                                                        -diff,
+                                                    );
+                                                    data_outputs
+                                                        .give(
+                                                            output_index,
+                                                            &data_cap_sets[output_index][0],
+                                                            update,
+                                                        )
+                                                        .await;
+                                                }
+                                            }
+                                            retractions.on_emit(
                                                 output_index,
-                                                &data_cap_sets[output_index][0],
-                                                update,
-                                            )
-                                            .await;
+                                                &event,
+                                                commit_lsn,
+                                                diff,
+                                            );
+                                            let update = (ReplData::Raw(event), commit_lsn, diff);
+                                            data_outputs
+                                                .give(
+                                                    output_index,
+                                                    &data_cap_sets[output_index][0],
+                                                    update,
+                                                )
+                                                .await;
+                                        }
+                                        TxEvent::Truncate(targets) => {
+                                            for (output_index, info) in targets {
+                                                // A snapshot taken at `snapshot_lsn` already
+                                                // reflects a TRUNCATE at or below it, and the
+                                                // rewind cancels every update up to it. An entry
+                                                // whose snapshot is below this transaction is
+                                                // resolved but not yet pruned, which happens
+                                                // only when the operator yields. The retraction
+                                                // then waits for the snapshot to be durable.
+                                                if rewinds.get(&output_index).is_some_and(|req| {
+                                                    commit_lsn <= req.snapshot_lsn
+                                                }) {
+                                                    continue;
+                                                }
+                                                retractions
+                                                    .on_truncate(
+                                                        output_index,
+                                                        info,
+                                                        commit_lsn,
+                                                        &data_cap_sets[output_index],
+                                                        &mut data_outputs,
+                                                    )
+                                                    .await;
+                                            }
+                                        }
                                     }
                                 }
-                                let update = (event, commit_lsn, diff);
-                                data_outputs
-                                    .give(output_index, &data_cap_sets[output_index][0], update)
-                                    .await;
                             }
                         }
                         _ => return Err(TransientError::BareTransactionEvent),
@@ -535,7 +659,9 @@ pub(crate) fn render<'scope>(
                                     for outputs in table_info.values() {
                                         for output_index in outputs.keys() {
                                             let update = (
-                                                Err(DataflowError::from(err.clone())),
+                                                ReplData::Raw(Err(DataflowError::from(
+                                                    err.clone(),
+                                                ))),
                                                 data_cap_sets[*output_index][0].time().clone(),
                                                 Diff::ONE,
                                             );
@@ -566,7 +692,9 @@ pub(crate) fn render<'scope>(
                                     for outputs in table_info.values() {
                                         for output_index in outputs.keys() {
                                             let update = (
-                                                Err(DataflowError::from(err.clone())),
+                                                ReplData::Raw(Err(DataflowError::from(
+                                                    err.clone(),
+                                                ))),
                                                 // We don't have a clean way to align on when the replica changed so jump straight to u64::MAX to avoid conflicts.
                                                 MzOffset::from(u64::MAX),
                                                 Diff::ONE,
@@ -597,7 +725,7 @@ pub(crate) fn render<'scope>(
                                     }
 
                                     let update = (
-                                        Err(error.into()),
+                                        ReplData::Raw(Err(error.into())),
                                         data_cap_sets[output_index][0].time().clone(),
                                         Diff::ONE,
                                     );
@@ -616,6 +744,7 @@ pub(crate) fn render<'scope>(
                 let will_yield = stream.as_mut().peek().now_or_never().is_none();
                 if will_yield {
                     trace!(%id, "timely-{worker_id} yielding at lsn={data_upper}");
+                    retractions.on_resume_uppers();
                     rewinds.retain(|_, req| data_upper <= req.snapshot_lsn);
                     // A port with a pending rewind must stay at the minimum capability since
                     // negated rewind data for its export is emitted at offset 0.
@@ -676,15 +805,22 @@ pub(crate) fn render<'scope>(
                                 let info = info
                                     .as_ref()
                                     .expect("only exports with output info receive data");
-                                let event = event.and_then(|row| {
-                                    let datums = datum_vec.borrow_with(&row);
-                                    super::cast_row(&info.casts, &datums, &mut final_row)?;
-                                    Ok(SourceMessage {
+                                let event = match event {
+                                    ReplData::Raw(event) => event.and_then(|row| {
+                                        let datums = datum_vec.borrow_with(&row);
+                                        super::cast_row(&info.casts, &datums, &mut final_row)?;
+                                        Ok(SourceMessage {
+                                            key: Row::default(),
+                                            value: final_row.clone(),
+                                            metadata: Row::default(),
+                                        })
+                                    }),
+                                    ReplData::Cast(event) => event.map(|row| SourceMessage {
                                         key: Row::default(),
-                                        value: final_row.clone(),
+                                        value: row,
                                         metadata: Row::default(),
-                                    })
-                                });
+                                    }),
+                                };
                                 session.give((event, time, diff));
                             }
                         });

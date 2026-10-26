@@ -124,6 +124,7 @@ impl SourceRender for PostgresSourceConnection {
     type Time = MzOffset;
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Postgres;
+    const USES_EXPORTS_INTO: bool = true;
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.

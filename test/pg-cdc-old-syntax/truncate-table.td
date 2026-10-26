@@ -42,6 +42,10 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 TRUNCATE TABLE t1;
 
+# Versions before 26.49 error a truncated table, and later versions retract its contents.
+$ skip-if
+SELECT mz_version_num() >= 2604900;
+
 # Note: truncating the upstream table will not corrupt the source in Materialize
 # for Postgres version 10. For all versions > 10, users will see the following error
 # "source table got truncated."
@@ -50,3 +54,12 @@ TRUNCATE TABLE t1;
 # https://www.postgresql.org/docs/10/logical-replication-restrictions.html
 ! SELECT * FROM t1;
 contains:table was truncated
+
+$ skip-end
+
+$ skip-if
+SELECT mz_version_num() < 2604900;
+
+> SELECT * FROM t1;
+
+$ skip-end
