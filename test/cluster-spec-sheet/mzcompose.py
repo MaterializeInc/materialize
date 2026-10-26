@@ -120,7 +120,10 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 def staging_version() -> str:
     # Cached: the version cannot change within a run, and `parse_cargo` shells
     # out to cargo, whose failure must not surface inside a region retry loop.
-    return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
+    sha = os.environ.get(
+        "QPS_LATENCY_IMAGE_SHA", "02ffe6e1bdfbe2477e9317235049ae682ab9fa75"
+    )
+    return f"{MzVersion.parse_cargo()}--pr.g{sha}"
 
 
 SERVICES = [
@@ -1952,22 +1955,34 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 runner.run_query(f"SET cluster = '{cluster}'")
                 runner.run_query("SELECT * FROM qps_gen_view")
             runner.run_query("SET cluster = 'c'")
-            # Keep the default-logging series intact, then repeat on the same
-            # clusters with sampling disabled in every benchmark connection.
-            for disable_statement_logging in (False, True):
-                for protocol in self.options.protocols:
-                    for concurrency in (
-                        [512]
-                        if disable_statement_logging
-                        else self.options.concurrencies
-                    ):
-                        self.measure(
-                            runner,
-                            size,
-                            concurrency,
-                            protocol,
-                            disable_statement_logging,
-                        )
+            assert isinstance(runner.target, CloudTarget)
+            for label, sha in (
+                ("A1", "02ffe6e1bdfbe2477e9317235049ae682ab9fa75"),
+                ("B", "dd0d704272eadad2abcbc8e956e1be6e9d8b0ab2"),
+                ("A2", "02ffe6e1bdfbe2477e9317235049ae682ab9fa75"),
+            ):
+                runner.connection.connection.close()
+                if label != "A1":
+                    os.environ["QPS_LATENCY_IMAGE_SHA"] = sha
+                    staging_version.cache_clear()
+                    enable_region(runner.target, envd_cpus=32)
+                deadline = time.monotonic() + 900
+                while True:
+                    try:
+                        with runner.target.new_connection() as conn:
+                            version = conn.execute("SELECT mz_version()").fetchone()[0]
+                        if sha[:9] in version:
+                            print(f"--- {label}: verified serving version {version}")
+                            break
+                    except psycopg.Error as e:
+                        print(f"Waiting for {label}: {type(e).__name__}")
+                    if time.monotonic() > deadline:
+                        raise UIError(f"{label}: expected image did not promote")
+                    time.sleep(5)
+                self.latency_control_label = label
+                self.latency_control_sha = sha
+                for disable_statement_logging in (False, True):
+                    self.measure(runner, size, 1, "prepared", disable_statement_logging)
         finally:
             runner.run_query("SET cluster = 'c'")
             runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
@@ -1983,7 +1998,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         disable_statement_logging: bool = False,
     ) -> None:
         suffix = "_logging_disabled" if disable_statement_logging else ""
-        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters{suffix}"
+        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters{suffix}_{self.latency_control_label}"
         print(
             f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
         )
@@ -2038,6 +2053,8 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 "Docker query replicas share environmentd's container quota; this is not an isolated adapter benchmark"
             )
         result.update(
+            latency_control_label=self.latency_control_label,
+            latency_control_image_sha=self.latency_control_sha,
             replica_cpu_peak_percent=replica_cpu,
             replica_cpu_samples=replica_samples,
             warnings=warnings,

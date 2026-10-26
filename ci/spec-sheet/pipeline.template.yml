@@ -121,7 +121,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster-spec-sheet
           run: default
-          args: [--cleanup, --target=cloud-staging, "--qps-concurrencies=1,128,512", --qps-duration=60, --qps-warmup=10, qps_envd_strong_scaling]
+          args: [--cleanup, --target=cloud-staging, --qps-concurrencies=1, --qps-duration=30, --qps-warmup=10, qps_envd_strong_scaling]
     agents:
       queue: linux-aarch64-medium
 
