@@ -1968,17 +1968,34 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                     staging_version.cache_clear()
                     enable_region(runner.target, envd_cpus=32)
                 if sha not in binary_versions:
-                    reported = subprocess.check_output(
-                        [
-                            "docker",
-                            "run",
-                            "--rm",
-                            f"materialize/environmentd:{staging_version()}",
-                            "--version",
-                        ],
-                        text=True,
-                        timeout=180,
+                    probe_name = (
+                        f"qps-version-{os.environ['BUILDKITE_JOB_ID']}-{sha[:9]}"
                     )
+                    try:
+                        reported = subprocess.check_output(
+                            [
+                                "docker",
+                                "run",
+                                "--rm",
+                                "--name",
+                                probe_name,
+                                "--label",
+                                "com.docker.compose.project=cluster-spec-sheet",
+                                "--entrypoint",
+                                "/usr/local/bin/environmentd",
+                                f"materialize/environmentd:{staging_version()}",
+                                "--version",
+                            ],
+                            text=True,
+                            timeout=180,
+                        )
+                    finally:
+                        subprocess.run(
+                            ["docker", "rm", "--force", probe_name],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=15,
+                        )
                     match = re.search(r"\b[0-9a-f]{9}\b", reported)
                     if match is None:
                         raise UIError(
