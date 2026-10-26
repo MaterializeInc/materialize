@@ -89,7 +89,7 @@ describe("formatExecutionTime", () => {
   it.each([
     ["empty_result", "3.0ms in Materialize"],
     ["completed", "3.0ms in Materialize"],
-    ["staged", "3.0ms in Materialize, before commit"],
+    ["staged", "3.0ms in Materialize, staged"],
   ] as const)("labels %s", (kind, expected) => {
     expect(formatExecutionTime({ kind, durationMs: 3 })).toBe(expected);
   });
