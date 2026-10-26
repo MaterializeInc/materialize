@@ -75,6 +75,76 @@ use uuid::Uuid;
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
+async fn test_builtin_configuration_ready_on_startup() {
+    let data_dir = tempfile::tempdir().expect("temporary data directory");
+    let harness = test_util::TestHarness::default().data_directory(data_dir.path());
+    let sizes = mz_catalog::config::ClusterReplicaSizeMap::for_tests();
+    let mut changed_sizes = sizes.clone();
+    changed_sizes
+        .0
+        .remove("scale=32,workers=32")
+        .expect("test size exists");
+    // Exercise initial contents, a changed configuration, then an unchanged restart.
+    for sizes in [sizes, changed_sizes.clone(), changed_sizes] {
+        let mut expected: Vec<_> = sizes
+            .0
+            .iter()
+            .filter(|(_, allocation)| !allocation.disabled)
+            .map(|(name, allocation)| {
+                (
+                    name.clone(),
+                    allocation.scale.to_string(),
+                    allocation.workers.to_string(),
+                )
+            })
+            .collect();
+        expected.sort();
+        let mut expected_internal: Vec<_> = sizes.0.keys().cloned().collect();
+        expected_internal.sort();
+        let server = harness
+            .clone()
+            .with_cluster_replica_sizes(sizes)
+            .start()
+            .await;
+        let client = server.connect().await.expect("connect after readiness");
+        // Readiness must include configuration publication, not just a promise
+        // that a later maintenance tick will eventually populate these tables.
+        let rows = client
+            .query(
+                "SELECT size, processes::text, workers::text \
+                 FROM mz_catalog.mz_cluster_replica_sizes ORDER BY size",
+                &[],
+            )
+            .await
+            .expect("read public replica configuration");
+        let actual: Vec<(String, String, String)> = rows
+            .iter()
+            .map(|row| (row.get(0), row.get(1), row.get(2)))
+            .collect();
+        assert_eq!(actual, expected);
+        let internal_client = server
+            .connect()
+            .internal()
+            .await
+            .expect("internal connection");
+        let rows = internal_client
+            .query(
+                "SELECT size FROM mz_internal.mz_cluster_replica_size_internal ORDER BY size",
+                &[],
+            )
+            .await
+            .expect("read internal replica configuration");
+        let actual: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
+        assert_eq!(actual, expected_internal);
+        drop(internal_client);
+        drop(client);
+        drop(server);
+    }
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_bootstrap_snapshots_with_independent_oracle_progress() {
     let data_dir = tempfile::tempdir().unwrap();
     let harness = test_util::TestHarness::default().data_directory(data_dir.path());

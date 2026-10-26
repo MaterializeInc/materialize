@@ -235,6 +235,7 @@ pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
+mod builtin_configuration;
 pub mod catalog_implications;
 mod catalog_reads;
 mod caught_up;
@@ -3425,6 +3426,17 @@ impl Coordinator {
         );
 
         debug!("startup: coordinator init: bootstrap: initializing migrated builtin tables");
+        let builtin_configuration = self
+            .catalog()
+            .state()
+            .catalog_read_protection_enabled()
+            .then(|| {
+                builtin_configuration::Reconciliation::new(
+                    self.catalog(),
+                    &builtin_table_updates.snapshot,
+                )
+            });
+
         // When 0dt is enabled, we create new shards for any migrated builtin storage collections.
         // In read-only mode, the migrated builtin tables (which are a subset of migrated builtin
         // storage collections) need to be back-filled so that any dependent dataflow can be
@@ -3514,6 +3526,12 @@ impl Coordinator {
             &mut builtin_table_updates,
         )
         .await?;
+        if builtin_configuration.is_some() {
+            let configuration_ids = builtin_configuration::table_ids(self.catalog());
+            builtin_table_updates
+                .snapshot
+                .retain(|update| !configuration_ids.contains(&update.id));
+        }
         if self.controller.read_only() {
             info!(
                 "coordinator init: bootstrap: stashing builtin table updates while in read-only mode"
@@ -3524,8 +3542,12 @@ impl Coordinator {
                 .expect("in read-only mode")
                 .extend(builtin_table_updates.into_updates());
         } else {
-            self.bootstrap_tables(&entries, builtin_table_updates.into_updates())
-                .await;
+            self.bootstrap_tables(
+                &entries,
+                builtin_table_updates.into_updates(),
+                builtin_configuration,
+            )
+            .await;
         };
         info!(
             "startup: coordinator init: bootstrap: generate builtin updates complete in {:?}",
@@ -3646,6 +3668,7 @@ impl Coordinator {
         &mut self,
         entries: &[CatalogEntry],
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
+        builtin_configuration: Option<builtin_configuration::Reconciliation>,
     ) {
         /// Smaller helper struct of metadata for bootstrapping tables.
         struct TableMetadata<'a> {
@@ -3702,6 +3725,7 @@ impl Coordinator {
                 .resolve_builtin_table(&MZ_REPLICA_HYDRATION_HISTORY),
         ]);
         if self.catalog().state().catalog_read_protection_enabled() {
+            retained_across_restarts.extend(builtin_configuration::table_ids(self.catalog()));
             // Execution-qualified rows may belong to live peers. Their public
             // views use committed incarnation membership to hide retired owners.
             retained_across_restarts.extend([
@@ -3800,6 +3824,9 @@ impl Coordinator {
             .await
             .expect("One-shot shouldn't be dropped during bootstrap")
             .unwrap_or_terminate("cannot fail to append");
+
+        self.reconcile_builtin_configuration(builtin_configuration, &reader, txns_shard, read_ts)
+            .await;
 
         info!("coordinator init: sending builtin table updates");
         let builtin_updates_fut = self.builtin_table_update().execute(builtin_table_updates);

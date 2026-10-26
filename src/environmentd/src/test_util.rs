@@ -191,6 +191,7 @@ pub struct TestHarness {
     orchestrator_tracing_cli_args: TracingCliArgs,
     bootstrap_role: Option<String>,
     deploy_generation: u64,
+    cluster_replica_sizes: ClusterReplicaSizeMap,
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
@@ -289,6 +290,7 @@ impl Default for TestHarness {
             enable_tracing: false,
             bootstrap_role: Some("materialize".into()),
             deploy_generation: 0,
+            cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             // This and startup_log_filter below are both (?) needed to suppress clusterd messages.
             // If we need those in the future, we might need to change both.
             system_parameter_defaults: BTreeMap::from([
@@ -391,6 +393,11 @@ impl TestHarness {
     /// AWS context functions fold to NULL.
     pub fn without_aws_connection_context(mut self) -> Self {
         self.aws_connection_context = false;
+        self
+    }
+
+    pub fn with_cluster_replica_sizes(mut self, sizes: ClusterReplicaSizeMap) -> Self {
+        self.cluster_replica_sizes = sizes;
         self
     }
 
@@ -1026,7 +1033,7 @@ impl Listeners {
                 environment_id: config.environment_id,
                 cors_allowed_origin: AllowOrigin::list([]),
                 cors_allowed_origin_list: Vec::new(),
-                cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
+                cluster_replica_sizes: config.cluster_replica_sizes,
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                 bootstrap_default_cluster_replication_factor: config
                     .default_cluster_replication_factor,

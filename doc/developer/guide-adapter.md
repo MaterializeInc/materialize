@@ -522,6 +522,15 @@ land only at `T >= B+1`. Its cached catalog upper is `<= C_f`, hence
 no-op and must observe the fence durably before the txns compare-and-append.
 This proof is independent of W and does not require T to become the new R.
 
+Shared configuration rows describe the active deployment. Writable bootstrap
+reconciles desired-minus-current at the WAL fence timestamp B and conditionally
+appends the differences at B+1, after advancing the catalog upper to B+2. Success
+excludes intervening WAL writes. A definitive conflict requires fresh snapshots,
+not replayed differences. Reconciliation completes before readiness and does not
+depend on compute queries. Prewarming skips shared reconciliation even though its
+catalog handle can write protection. Private replacement-shard backfill remains
+separate, and planning continues to use deployment-local configuration.
+
 ### Durable sink progress can precede controller observations
 
 A sink commits external output before advancing its Persist progress shard, then
