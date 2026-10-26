@@ -115,11 +115,10 @@ The notice's detail is a JSON object:
 
 Clients must ignore kinds and fields they do not recognize, so new ones can be
 added. The notice's message text is meant for people and may change. It names
-the end point only for `staged`: `execution time: 0.412 ms (before commit)`,
-because a reader would otherwise assume that the number covers the commit. A
-read's "first row"
-would read as covering less than it does, because Materialize computes the whole
-result before the first row.
+the end point only for `staged`: `execution time: 0.412 ms (staged)`, because a
+reader would otherwise assume that the number covers the commit. A read's "first
+row" would read as covering less than it does, because Materialize computes the
+whole result before the first row.
 
 ### Transactions and association
 
@@ -213,7 +212,7 @@ choose the label and the tooltip by kind. It explains where the server-side
 value ends: in the label where that changes what the value covers, which is for
 `staged`, and otherwise in the tooltip. A read's label does not say "first row",
 for the reason given under [What the duration means](#what-the-duration-means).
-The prototype Console labels a `staged` value "in Materialize, before commit",
+The prototype Console labels a `staged` value "in Materialize, staged",
 and every other value "in Materialize". It shows values below 0.1 ms as
 `<0.1ms`, so a very small value is not displayed as zero.
 
