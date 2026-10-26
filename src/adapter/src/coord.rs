@@ -2720,12 +2720,8 @@ impl Coordinator {
                     return Ok(result);
                 }
                 Err(error) => {
-                    self.refresh_bootstrap_catalog_after_conflict(
-                        error,
-                        revision,
-                        builtin_table_updates,
-                    )
-                    .await?;
+                    self.refresh_bootstrap_catalog_after_conflict(error, revision)
+                        .await?;
                 }
             }
         }
@@ -2737,7 +2733,6 @@ impl Coordinator {
         &mut self,
         error: AdapterError,
         revision: u64,
-        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         if !matches!(&error,
         AdapterError::Catalog(error) if matches!(&error.kind,
@@ -2748,16 +2743,11 @@ impl Coordinator {
             return Err(error);
         }
         info!(%error, "refreshing bootstrap selections after catalog contention");
-        let (builtin, updates) = self.catalog_mut().sync_to_current_updates().await?;
-        builtin_table_updates.extend(
-            self.catalog()
-                .state()
-                .resolve_builtin_table_updates(builtin),
-        );
+        let updates = self.catalog_mut().sync_to_current_updates().await?;
         if self.catalog().transient_revision() != revision {
             return Err(error);
         }
-        Box::pin(self.apply_catalog_implications(None, updates)).await
+        Box::pin(self.apply_catalog_implications(None, updates, false)).await
     }
 
     /// Initializes coordinator state based on the contained catalog. Must be
@@ -4404,12 +4394,8 @@ impl Coordinator {
                 match result {
                     Ok(candidate) => break candidate,
                     Err(error) => {
-                        self.refresh_bootstrap_catalog_after_conflict(
-                            error,
-                            planning_revision,
-                            builtin_table_updates,
-                        )
-                        .await?;
+                        self.refresh_bootstrap_catalog_after_conflict(error, planning_revision)
+                            .await?;
                     }
                 }
             };
@@ -5708,6 +5694,8 @@ impl Coordinator {
     ///
     /// Protected writers publish notices from committed plan selections instead.
     /// Installation must not overwrite that metadata or append those notices again.
+    /// Legacy installation retains local metadata on followers too, but only the
+    /// originating committer may set `publish_derived_rows`.
     ///
     /// This:
     /// - packs builtin-table updates for `mz_optimizer_notices` (if enabled),
@@ -5719,13 +5707,15 @@ impl Coordinator {
         &mut self,
         df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
         export_id: GlobalId,
+        publish_derived_rows: bool,
     ) -> Option<BuiltinTableAppendNotify> {
         if self.catalog().state().catalog_read_protection_enabled() {
             return None;
         }
         // Attend to optimization notice builtin tables and save the metainfo in the catalog's
         // in-memory state.
-        if self.catalog().state().system_config().enable_mz_notices()
+        if publish_derived_rows
+            && self.catalog().state().system_config().enable_mz_notices()
             && !df_meta.optimizer_notices.is_empty()
         {
             let mut builtin_table_updates = Vec::with_capacity(df_meta.optimizer_notices.len());
@@ -6364,7 +6354,7 @@ pub fn serve(
             last_seen_version,
             migrated_storage_collections_0dt,
             new_builtin_collections,
-            mut builtin_table_updates,
+            builtin_table_updates,
             cached_global_exprs,
             uncached_local_exprs,
         } = Catalog::open(mz_catalog::config::Config {
@@ -6573,7 +6563,7 @@ pub fn serve(
                         read_only_controllers,
                     ),
                 ).unwrap_or_terminate("failed to initialize adapter table writer");
-                let (controller, storage_builtin_updates) = handle
+                let controller = handle
                     .block_on({
                         catalog.initialize_controller(
                             controller_config,
@@ -6583,7 +6573,6 @@ pub fn serve(
                         )
                     })
                     .unwrap_or_terminate("failed to initialize storage_controller");
-                builtin_table_updates.extend(storage_builtin_updates);
                 // Initializing the controller uses one or more timestamps, so push the boot timestamp up to the
                 // current catalog upper.
                 let catalog_upper = handle.block_on(catalog.current_upper());

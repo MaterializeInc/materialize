@@ -218,7 +218,7 @@ impl Coordinator {
         // We can't run this concurrently with the explicit side effects,
         // because both want to borrow self mutably.
         let apply_implications_res = self
-            .apply_catalog_implications(ctx.as_deref_mut(), catalog_updates)
+            .apply_catalog_implications(ctx.as_deref_mut(), catalog_updates, true)
             .await;
 
         // We would get into an inconsistent state if we updated the catalog but
@@ -469,7 +469,8 @@ impl Coordinator {
             .metrics
             .catalog_transact_phase_seconds
             .with_label_values(&["table_updates_wait"]);
-        let apply_catalog_implications_fut = self.apply_catalog_implications(ctx, catalog_updates);
+        let apply_catalog_implications_fut =
+            self.apply_catalog_implications(ctx, catalog_updates, true);
 
         // Apply catalog implications concurrently with the table updates.
         let (combined_apply_res, ()) = trace_catalog_await!(
@@ -722,7 +723,7 @@ impl Coordinator {
                 None => self.catalog_mut().sync_to_current_updates().await,
             }
         );
-        let (builtin, updates) = match result {
+        let updates = match result {
             Err(mz_catalog::durable::CatalogError::Durable(
                 mz_catalog::durable::DurableCatalogError::Fence(error),
             )) => mz_ore::halt!("this deployment has been fenced out: {error}"),
@@ -731,18 +732,7 @@ impl Coordinator {
         if self.client_protection_catalog.is_none() {
             self.validate_query_client_execution();
         }
-        let builtin = self
-            .catalog()
-            .state()
-            .resolve_builtin_table_updates(builtin);
-        // Metadata-only catch-up has no table writes to order. Waiting for an
-        // empty group commit can let peer publications win every catalog retry,
-        // delaying protection acquisition when table writes are delayed.
-        let notify = (!builtin.is_empty()).then(|| self.builtin_table_update().execute(builtin));
         self.apply_caught_up_catalog_updates(updates).await;
-        if let Some(notify) = notify {
-            trace_catalog_await!("catalog_refresh_builtin_wait", notify.await);
-        }
         Ok(())
     }
 
@@ -751,7 +741,7 @@ impl Coordinator {
         match trace_catalog_await!(
             "catalog_refresh_implications",
             mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(Box::pin(
-                self.apply_catalog_implications(None, updates)
+                self.apply_catalog_implications(None, updates, false)
             )))
             .await
         ) {

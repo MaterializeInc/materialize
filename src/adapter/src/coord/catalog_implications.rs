@@ -87,12 +87,14 @@ impl Coordinator {
     ///
     /// This _requires_ that the given updates are consolidated. There must be
     /// at most one addition and/or one retraction for a given item, as
-    /// identified by that items ID type.
+    /// identified by that items ID type. Only the successful originating committer
+    /// may publish derived builtin rows. Followers still reconstruct local metadata.
     #[instrument(level = "debug")]
     pub async fn apply_catalog_implications(
         &mut self,
         ctx: Option<&mut ExecuteContext>,
         catalog_updates: Vec<ParsedStateUpdate>,
+        publish_derived_rows: bool,
     ) -> Result<(), AdapterError> {
         let start = Instant::now();
 
@@ -134,7 +136,7 @@ impl Coordinator {
                 .refresh_written_plan_metadata(written_plans)
                 .await?
         };
-        let notice_updates = (!notice_updates.is_empty())
+        let notice_updates = (publish_derived_rows && !notice_updates.is_empty())
             .then(|| self.builtin_table_update().execute(notice_updates));
         self.apply_catalog_implications_inner(
             ctx,
@@ -145,6 +147,7 @@ impl Coordinator {
             replica_scoped_config_changed,
             system_config_changed,
             compaction_bounds,
+            publish_derived_rows,
         )
         .await?;
         if reconcile_metric_sinks {
@@ -318,6 +321,7 @@ impl Coordinator {
         replica_scoped_config_changed: bool,
         system_config_changed: bool,
         compaction_bounds: BTreeMap<GlobalId, Antichain<Timestamp>>,
+        publish_derived_rows: bool,
     ) -> Result<(), AdapterError> {
         // Install configuration before other implications so newly created
         // objects use the committed settings, regardless of which node wrote them.
@@ -1012,16 +1016,31 @@ impl Coordinator {
                 }
                 match entry.item() {
                     CatalogItem::Index(index) => {
-                        self.create_index_from_catalog(entry.id(), index, None)
-                            .await?;
+                        self.create_index_from_catalog(
+                            entry.id(),
+                            index,
+                            None,
+                            publish_derived_rows,
+                        )
+                        .await?;
                     }
                     CatalogItem::MaterializedView(mv) => {
-                        self.create_materialized_view_from_catalog(entry.id(), mv, None)
-                            .await?;
+                        self.create_materialized_view_from_catalog(
+                            entry.id(),
+                            mv,
+                            None,
+                            publish_derived_rows,
+                        )
+                        .await?;
                     }
                     CatalogItem::MetricSink(sink) => {
-                        self.create_metric_sink_from_catalog(entry.id(), sink, None)
-                            .await?;
+                        self.create_metric_sink_from_catalog(
+                            entry.id(),
+                            sink,
+                            None,
+                            publish_derived_rows,
+                        )
+                        .await?;
                     }
                     _ => unreachable!("only maintained compute additions are queued"),
                 }
@@ -1502,16 +1521,26 @@ impl Coordinator {
                 }
                 let result = match entry.item() {
                     CatalogItem::Index(index) if index.global_id() == id => {
-                        self.create_index_from_catalog(entry.id(), index, plans.get(&id))
+                        self.create_index_from_catalog(entry.id(), index, plans.get(&id), false)
                             .await
                     }
                     CatalogItem::MaterializedView(mv) if mv.global_id_writes() == id => {
-                        self.create_materialized_view_from_catalog(entry.id(), mv, plans.get(&id))
-                            .await
+                        self.create_materialized_view_from_catalog(
+                            entry.id(),
+                            mv,
+                            plans.get(&id),
+                            false,
+                        )
+                        .await
                     }
                     CatalogItem::MetricSink(sink) if sink.global_id == id => {
-                        self.create_metric_sink_from_catalog(entry.id(), sink, plans.get(&id))
-                            .await
+                        self.create_metric_sink_from_catalog(
+                            entry.id(),
+                            sink,
+                            plans.get(&id),
+                            false,
+                        )
+                        .await
                     }
                     // Retired MV writers can remain as readable aliases. Their
                     // physical drop likewise owns removing the pending marker.
@@ -1602,6 +1631,7 @@ impl Coordinator {
         catalog_id: CatalogItemId,
         index: &Index,
         written: Option<&GlobalExpressions>,
+        publish_derived_rows: bool,
     ) -> Result<bool, AdapterError> {
         let global_id = index.global_id();
         let expressions = if self.catalog().state().catalog_read_protection_enabled() {
@@ -1656,7 +1686,8 @@ impl Coordinator {
         self.catalog_mut().set_optimized_plan(global_id, global_mir);
         self.catalog_mut()
             .set_physical_plan(global_id, physical_plan.clone());
-        let notice_updates = self.persist_dataflow_metainfo(dataflow_metainfos, global_id);
+        let notice_updates =
+            self.persist_dataflow_metainfo(dataflow_metainfos, global_id, publish_derived_rows);
         self.ship_new_dataflow(&id_bundle, physical_plan, index.cluster_id, notice_updates)
             .await;
         self.update_compute_read_policy(
@@ -1675,6 +1706,7 @@ impl Coordinator {
         catalog_id: CatalogItemId,
         sink: &MetricSink,
         written: Option<&GlobalExpressions>,
+        publish_derived_rows: bool,
     ) -> Result<bool, AdapterError> {
         let expressions = if self.catalog().state().catalog_read_protection_enabled() {
             let Some(plan) =
@@ -1726,7 +1758,11 @@ impl Coordinator {
             .set_optimized_plan(sink.global_id, global_mir);
         self.catalog_mut()
             .set_physical_plan(sink.global_id, physical_plan.clone());
-        let notices = self.persist_dataflow_metainfo(dataflow_metainfos, sink.global_id);
+        let notices = self.persist_dataflow_metainfo(
+            dataflow_metainfos,
+            sink.global_id,
+            publish_derived_rows,
+        );
         // Metric exports are process-local and need neither historical recovery nor allow_writes.
         self.ship_new_dataflow(&imports, physical_plan, sink.cluster_id, notices)
             .await;
@@ -1738,6 +1774,7 @@ impl Coordinator {
         catalog_id: CatalogItemId,
         mv: &MaterializedView,
         written: Option<&GlobalExpressions>,
+        publish_derived_rows: bool,
     ) -> Result<bool, AdapterError> {
         let global_id = mv.global_id_writes();
         let output = self
@@ -1836,7 +1873,8 @@ impl Coordinator {
         self.catalog_mut().set_optimized_plan(global_id, global_mir);
         self.catalog_mut()
             .set_physical_plan(global_id, physical_plan.clone());
-        let notices = self.persist_dataflow_metainfo(dataflow_metainfos, global_id);
+        let notices =
+            self.persist_dataflow_metainfo(dataflow_metainfos, global_id, publish_derived_rows);
         physical_plan.set_as_of(as_of);
         mv.apply_execution_bounds(&mut physical_plan);
         let target = self

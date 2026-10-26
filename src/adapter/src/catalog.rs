@@ -475,10 +475,7 @@ impl Catalog {
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
         txns_metrics: Arc<mz_txn_wal::metrics::Metrics>,
-    ) -> Result<
-        (mz_controller::Controller, Vec<BuiltinTableUpdate>),
-        mz_catalog::durable::CatalogError,
-    > {
+    ) -> Result<mz_controller::Controller, mz_catalog::durable::CatalogError> {
         let controller_start = Instant::now();
         info!("startup: controller init: beginning");
 
@@ -503,7 +500,6 @@ impl Catalog {
             serde_json::to_string(&self.replica_config())
                 .expect("catalog reconstruction configuration is serializable"),
         );
-        let mut builtin_updates = Vec::new();
         let revision = self.transient_revision();
         loop {
             match self
@@ -517,8 +513,7 @@ impl Catalog {
                     ),
                 ) => {
                     info!(%error, "refreshing storage initialization after catalog contention");
-                    let (updates, _) = self.sync_to_current_updates().await?;
-                    builtin_updates.extend(self.state().resolve_builtin_table_updates(updates));
+                    self.sync_to_current_updates().await?;
                     if self.transient_revision() != revision {
                         return Err(error);
                     }
@@ -533,8 +528,8 @@ impl Catalog {
         );
 
         // Nothing is registered yet. Bootstrap derives controller inventory from
-        // the refreshed state and includes these rows in the system-table reset.
-        Ok((controller, builtin_updates))
+        // the refreshed state.
+        Ok(controller)
     }
 }
 impl OptimizerCatalog for CatalogState {

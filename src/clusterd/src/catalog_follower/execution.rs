@@ -461,7 +461,7 @@ impl ReplicaEnactment {
                     // on every follower tick. Absorb the committed prefix before
                     // recomputing admission. Structural changes require the caller
                     // to reconstruct its inputs and executable definition instead.
-                    let (_, updates) = self.io.wait(catalog.sync_to_current_updates()).await?;
+                    let updates = self.io.wait(catalog.sync_to_current_updates()).await?;
                     absorb_updates(effects, catalog, cluster, build, updates);
                     self.ensure_live(catalog)?;
                     if catalog.transient_revision() != revision {
@@ -1159,7 +1159,7 @@ impl ReplicaEnactment {
         self.publication_retry_after = None;
         let refreshed = self.publication_needs_refresh;
         if refreshed {
-            let (_, updates) = self.io.wait(catalog.sync_to_current_updates()).await?;
+            let updates = self.io.wait(catalog.sync_to_current_updates()).await?;
             absorb_updates(effects, catalog, cluster, build, updates);
             self.ensure_live(catalog)?;
             self.publication_needs_refresh = false;

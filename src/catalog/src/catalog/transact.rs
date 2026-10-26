@@ -1022,12 +1022,7 @@ impl Catalog {
                         let upper = storage.synced_upper();
                         // Apply to the committed base, not the success-only candidate. This
                         // also retains dirty compaction bookkeeping if the candidate fails.
-                        let (builtin_updates, implications) =
-                            self.apply_committed_updates(updates, upper).await;
-                        assert!(
-                            builtin_updates.is_empty(),
-                            "frontier catch-up has no builtin rows"
-                        );
+                        let implications = self.apply_committed_updates(updates, upper).await;
                         let context = catch_up.as_deref_mut().expect("catch-up context");
                         for update in implications {
                             let ParsedStateUpdateKind::CollectionCompactionBound(bound) =
@@ -5393,7 +5388,7 @@ mod tests {
             })
             .expect("valid table definition");
         let birth = catalog.current_upper().await;
-        catalog
+        let created = catalog
             .transact(
                 None,
                 None,
@@ -5408,6 +5403,18 @@ mod tests {
             )
             .await
             .expect("creation allocates metadata without a controller");
+        let columns = catalog.resolve_builtin_table(&crate::builtin::MZ_COLUMNS);
+        let column_updates = created
+            .builtin_table_updates
+            .iter()
+            .filter(|update| update.id == columns)
+            .collect::<Vec<_>>();
+        assert_eq!(column_updates.len(), 1);
+        let mz_storage_client::client::TableData::Rows(rows) = &column_updates[0].data else {
+            panic!("column projection must contain rows");
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, mz_repr::Diff::ONE);
         let shard = catalog.state().storage_metadata().collection_metadata[&global_id];
         assert_eq!(
             catalog.state().collection_compaction_bounds()[&global_id],

@@ -2051,13 +2051,7 @@ impl Catalog {
     /// with a stale or partially updated projection.
     pub async fn sync_to_current_updates(
         &mut self,
-    ) -> Result<
-        (
-            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
-            Vec<ParsedStateUpdate>,
-        ),
-        DurableError,
-    > {
+    ) -> Result<Vec<ParsedStateUpdate>, DurableError> {
         self.sync_updates_inner(None).await
     }
 
@@ -2068,13 +2062,7 @@ impl Catalog {
     pub async fn sync_updates_through(
         &mut self,
         upper: mz_repr::Timestamp,
-    ) -> Result<
-        (
-            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
-            Vec<ParsedStateUpdate>,
-        ),
-        DurableError,
-    > {
+    ) -> Result<Vec<ParsedStateUpdate>, DurableError> {
         let upper = self.observed_position.map_or(upper, |p| upper.max(p.upper));
         self.sync_updates_inner(Some(upper)).await
     }
@@ -2082,13 +2070,7 @@ impl Catalog {
     async fn sync_updates_inner(
         &mut self,
         target_upper: Option<mz_repr::Timestamp>,
-    ) -> Result<
-        (
-            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
-            Vec<ParsedStateUpdate>,
-        ),
-        DurableError,
-    > {
+    ) -> Result<Vec<ParsedStateUpdate>, DurableError> {
         let (updates, upper) = match mz_ore::future::OreFutureExt::ore_catch_unwind(
             std::panic::AssertUnwindSafe(async {
                 let mut storage = self.storage().await;
@@ -2123,14 +2105,13 @@ impl Catalog {
 
     /// Applies a drained durable prefix independently of any candidate transaction.
     /// Its protection bookkeeping must survive candidate rejection or CAS loss.
+    /// Derived builtin rows belong to the originating commit, not its followers.
+    /// Applying the prefix still updates local plans, notices and all catalog effects.
     async fn apply_committed_updates(
         &mut self,
         updates: Vec<crate::memory::objects::StateUpdate>,
         upper: mz_repr::Timestamp,
-    ) -> (
-        Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
-        Vec<ParsedStateUpdate>,
-    ) {
+    ) -> Vec<ParsedStateUpdate> {
         // Diagnose complete committed prefixes, not just their planning changes.
         // Bound identity output and omit catalog values and SQL.
         let prefix_diagnostic = (!updates.is_empty()
@@ -2171,9 +2152,8 @@ impl Catalog {
                     .collect::<BTreeMap<_, _>>(),
             )
         });
-        let (builtin_table_updates, catalog_updates, planning_upper) =
+        let (catalog_updates, planning_upper) =
             mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(async {
-                let mut builtin_table_updates = Vec::with_capacity(updates.len());
                 let mut catalog_updates = Vec::with_capacity(updates.len());
                 let mut planning_upper = None;
                 let mut transactions = BTreeMap::<_, Vec<_>>::new();
@@ -2191,7 +2171,7 @@ impl Catalog {
                         planning_upper = Some(ts.step_forward());
                     }
                     let planning_update_kinds = Self::planning_update_kinds(&self.state, &updates);
-                    let (builtin_updates, parsed_updates) = self
+                    let (_builtin_updates, parsed_updates) = self
                         .state
                         .apply_updates(updates, &mut state::LocalExpressionCache::Closed)
                         .await;
@@ -2204,10 +2184,9 @@ impl Catalog {
                         ?planning_update_kinds,
                         "applied committed catalog transaction during refresh",
                     );
-                    builtin_table_updates.extend(builtin_updates);
                     catalog_updates.extend(parsed_updates);
                 }
-                (builtin_table_updates, catalog_updates, planning_upper)
+                (catalog_updates, planning_upper)
             }))
             .await
             .unwrap_or_else(|payload| {
@@ -2259,7 +2238,7 @@ impl Catalog {
             self.shared_transient_revision
                 .store(self.transient_revision, std::sync::atomic::Ordering::SeqCst);
         }
-        (builtin_table_updates, catalog_updates)
+        catalog_updates
     }
 }
 

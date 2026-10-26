@@ -45,7 +45,7 @@ impl ReplicaEnactment {
             return Ok(());
         }
         let refreshed: anyhow::Result<()> = async {
-            let (_, updates) = self.io.wait(catalog.sync_to_current_updates()).await?;
+            let updates = self.io.wait(catalog.sync_to_current_updates()).await?;
             super::super::super::absorb_updates(effects, catalog, cluster, build, updates);
             self.ensure_live(catalog)
         }

@@ -326,7 +326,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
         }],
     )
     .await;
-    let (_, updates) = follower
+    let updates = follower
         .sync_to_current_updates()
         .await
         .expect("replacement sync");
@@ -362,7 +362,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
         }],
     )
     .await;
-    let (_, updates) = follower
+    let updates = follower
         .sync_to_current_updates()
         .await
         .expect("unselection sync");
@@ -389,7 +389,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
         )
         .await;
     }
-    let (_, updates) = follower
+    let updates = follower
         .sync_to_current_updates()
         .await
         .expect("multi-timestamp sync");
@@ -406,7 +406,7 @@ async fn native_bootstrap_updates_and_selection_retry() {
         vec![Op::DropObjects(vec![DropObjectInfo::Item(id)])],
     )
     .await;
-    let (_, updates) = follower
+    let updates = follower
         .sync_to_current_updates()
         .await
         .expect("native drop sync");

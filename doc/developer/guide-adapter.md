@@ -35,6 +35,14 @@ updates and derives implications. The adapter enacts coordinator effects, while
 native replicas reconcile their own execution. This is the same distributed
 stance as "No local-only assumptions" below.
 
+Derived builtin catalog rows have a separate publication owner: only the
+successful committer publishes its commit's diffs. Followers still apply the
+catalog changes and reconstruct local plan metadata, but do not republish those
+rows. Fresh initialization may seed projections. Joining or restarting must not
+reset shared projections or replay full positive snapshots. For these projections
+only, M3 accepts out-of-order publication and persistent inconsistency after
+publication failure. This does not relax user-data or runtime ownership.
+
 Two contracts on the implications phase:
 
 - It is treated as infallible. `catalog_transact_with_context` does

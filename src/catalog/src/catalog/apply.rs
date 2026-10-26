@@ -99,7 +99,8 @@ struct InProgressRetractions {
 impl CatalogState {
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
     ///
-    /// Returns builtin table updates corresponding to the changes to catalog state.
+    /// Returns builtin table updates for initialization or an originating commit.
+    /// A transaction candidate must not publish them unless its commit succeeds.
     #[must_use]
     #[instrument]
     pub(crate) async fn apply_updates(

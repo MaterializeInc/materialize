@@ -314,7 +314,7 @@ pub(crate) async fn run(
     if owner.compute.is_some() {
         let mut expected = None;
         let incarnation = loop {
-            let (_, updates) = catalog.sync_to_current_updates().await?;
+            let updates = catalog.sync_to_current_updates().await?;
             absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
             // Capture absence as well as identity. A conflicting startup cannot
             // refresh its expectation and supersede the execution that won.
@@ -417,7 +417,7 @@ pub(crate) async fn run(
     loop {
         // Native application owns parsing, ordering and in-memory catalog state.
         // It halts on unapplicable committed changes and returns fencing errors.
-        let (_, updates) = wait(&mut *execution, catalog.sync_to_current_updates()).await?;
+        let updates = wait(&mut *execution, catalog.sync_to_current_updates()).await?;
         let changed = !updates.is_empty();
         absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
         if let Some(execution) = &mut *execution {
