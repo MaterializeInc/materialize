@@ -121,6 +121,20 @@ impl PeekClient {
         // This must happen BEFORE statement logging setup to avoid orphaned execution records.
         if let Some(ref stmt) = stmt {
             match &**stmt {
+                Statement::ExplainPlan(_)
+                | Statement::ExplainPushdown(_)
+                | Statement::ExplainAnalyzeObject(_)
+                | Statement::ExplainAnalyzeCluster(_)
+                | Statement::ExplainSinkSchema(_)
+                | Statement::ExplainTimestamp(_)
+                    if session.transaction().is_ddl() =>
+                {
+                    // DDL commands bind against the current catalog in one atomic commit.
+                    // EXPLAIN would expose provisional state that concurrent DDL can
+                    // invalidate before that commit. Its results are not retained and
+                    // revalidated, so we cannot promise to preserve that observation.
+                    return Err(AdapterError::DDLOnlyTransaction);
+                }
                 Statement::Select(_)
                 | Statement::ExplainAnalyzeObject(_)
                 | Statement::ExplainAnalyzeCluster(_)

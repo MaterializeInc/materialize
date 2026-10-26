@@ -1384,12 +1384,6 @@ impl Coordinator {
                     | Statement::Declare(_)
                     | Statement::Discard(_)
                     | Statement::Execute(_)
-                    | Statement::ExplainPlan(_)
-                    | Statement::ExplainPushdown(_)
-                    | Statement::ExplainAnalyzeObject(_)
-                    | Statement::ExplainAnalyzeCluster(_)
-                    | Statement::ExplainTimestamp(_)
-                    | Statement::ExplainSinkSchema(_)
                     | Statement::Fetch(_)
                     | Statement::Prepare(_)
                     | Statement::Rollback(_)
@@ -1402,6 +1396,21 @@ impl Coordinator {
                     | Statement::Subscribe(_)
                     | Statement::Raise(_) => {
                         // Always safe.
+                    }
+
+                    Statement::ExplainPlan(_)
+                    | Statement::ExplainPushdown(_)
+                    | Statement::ExplainAnalyzeObject(_)
+                    | Statement::ExplainAnalyzeCluster(_)
+                    | Statement::ExplainSinkSchema(_)
+                    | Statement::ExplainTimestamp(_) => {
+                        // DDL transactions publish through one late-binding commit, which
+                        // can resolve commands against catalog state changed by concurrent
+                        // DDL. EXPLAIN would expose provisional state while accumulating
+                        // commands, without retaining its result to check during replay.
+                        if ctx.session().transaction().is_ddl() {
+                            return ctx.retire(Err(AdapterError::DDLOnlyTransaction));
+                        }
                     }
 
                     Statement::Insert(InsertStatement {

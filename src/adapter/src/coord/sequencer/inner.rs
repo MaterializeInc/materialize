@@ -1835,9 +1835,13 @@ impl Coordinator {
 
     pub(super) fn sequence_explain_schema(
         &self,
-        plan: ExplainSinkSchemaPlan,
+        ExplainSinkSchemaPlan { json_schema, .. }: ExplainSinkSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let row = catalog::command::CatalogResultCommand::result(&Plan::ExplainSinkSchema(plan))?;
+        let value: serde_json::Value = serde_json::from_str(&json_schema).map_err(|error| {
+            AdapterError::Explain(mz_repr::explain::ExplainError::SerdeJsonError(error))
+        })?;
+        let json = mz_repr::explain::json::json_string(&value);
+        let row = Row::pack_slice(&[Datum::String(&json)]);
         Ok(Self::send_immediate_rows(row))
     }
 
