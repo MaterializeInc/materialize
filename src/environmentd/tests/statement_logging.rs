@@ -1185,6 +1185,99 @@ fn test_statement_logging_finished_at_excludes_coordinator_queue() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)] // Coordinate query completion with a parked logging observer.
+fn test_statement_logging_indexed_peek_overlaps_readiness_observation() {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+
+    struct ResumeObserver(mpsc::SyncSender<()>);
+    impl Drop for ResumeObserver {
+        fn drop(&mut self) {
+            fail::remove("frontend_peek_watch_set_install");
+            let _ = self.0.try_send(());
+        }
+    }
+
+    let harness = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_frontend_peek_sequencing".into(), "true".into())
+        .with_system_parameter_default(
+            "enable_frontend_transaction_completion".into(),
+            "true".into(),
+        )
+        .with_system_parameter_default("enable_statement_lifecycle_logging".into(), "true".into());
+    let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
+    client.batch_execute(
+        "CREATE VIEW logging_pipeline AS SELECT generate_series AS x FROM generate_series(1, 10);
+         CREATE DEFAULT INDEX ON logging_pipeline;",
+    ).unwrap();
+    let stmt = client
+        .prepare("SELECT x AS pipeline_probe FROM logging_pipeline WHERE x = 5")
+        .unwrap();
+    assert_eq!(client.query_one(&stmt, &[]).unwrap().get::<_, i32>(0), 5);
+    let mut internal = server.connect_internal(postgres::NoTls).unwrap();
+    // DDL must pass through the coordinator after the warmup's queued observer.
+    internal
+        .batch_execute("CREATE TABLE logging_pipeline_barrier (x int)")
+        .unwrap();
+
+    let (reached_tx, reached_rx) = mpsc::sync_channel(1);
+    let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+    let resume_rx = Mutex::new(resume_rx);
+    let armed = AtomicBool::new(true);
+    fail::cfg_callback("frontend_peek_watch_set_install", move || {
+        if armed.swap(false, Ordering::SeqCst) {
+            let _ = reached_tx.send(());
+            let _ = resume_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(30));
+        }
+    })
+    .unwrap();
+    let resume = ResumeObserver(resume_tx);
+    let (done_tx, done_rx) = mpsc::sync_channel(2);
+    let worker = thread::spawn(move || {
+        for _ in 0..2 {
+            let value = client.query_one(&stmt, &[]).unwrap().get::<_, i32>(0);
+            done_tx.send(value).unwrap();
+        }
+    });
+    reached_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("observer was queued");
+    assert_eq!(
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("query must finish while observation is parked"),
+        5
+    );
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        "the next observation must not outrun the coordinator"
+    );
+    drop(resume);
+    assert_eq!(done_rx.recv_timeout(Duration::from_secs(30)).unwrap(), 5);
+    worker.join().unwrap();
+
+    Retry::default().max_duration(Duration::from_secs(30)).retry(|_| {
+        let row = internal.query_one(
+            "SELECT count(*) FROM mz_internal.mz_statement_execution_history e
+             JOIN mz_internal.mz_prepared_statement_history p ON e.prepared_statement_id = p.id
+             JOIN mz_internal.mz_sql_text s ON p.sql_hash = s.sql_hash
+             WHERE s.sql = 'SELECT x AS pipeline_probe FROM logging_pipeline WHERE x = 5'
+             AND e.finished_status = 'success' AND e.execution_strategy = 'fast-path'
+             AND (SELECT count(DISTINCT event_type) FROM mz_internal.mz_statement_lifecycle_history l
+                  WHERE l.statement_id = e.id AND event_type IN
+                  ('execution-began', 'execution-finished', 'storage-dependencies-finished', 'compute-dependencies-finished')) = 4",
+            &[],
+        ).unwrap();
+        let count: i64 = row.get(0);
+        if count == 3 { Ok(()) } else { Err(count) }
+    }).expect("all three executions retain their completion and dependency milestones");
+}
+
+#[mz_ore::test]
 fn test_statement_logging_frontend_constant_insert_sets_cluster() {
     let harness = test_util::TestHarness::default();
     let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
