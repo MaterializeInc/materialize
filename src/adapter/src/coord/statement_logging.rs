@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::controller::error::CollectionLookupError;
-use mz_controller_types::ClusterId;
+use mz_controller_types::{ClusterId, WatchSetId};
 use mz_ore::now::{EpochMillis, NowFn, epoch_to_uuid_v7, to_datetime};
 use mz_ore::task::spawn;
 use mz_ore::{cast::CastFrom, cast::CastInto};
@@ -816,12 +816,6 @@ impl Coordinator {
         }
     }
 
-    /// Install watch sets for statement lifecycle logging.
-    ///
-    /// This installs both storage and compute watch sets that will fire
-    /// `StatementLifecycleEvent::StorageDependenciesFinished` and
-    /// `StatementLifecycleEvent::ComputeDependenciesFinished` respectively
-    /// when the dependencies are ready at the given timestamp.
     /// Observe logging milestones without participating in query execution.
     pub(crate) fn observe_frontend_peek_dependencies(
         &mut self,
@@ -834,7 +828,7 @@ impl Coordinator {
             return;
         }
         let logging_id = watch_set.logging_id;
-        if let Err(error) = self.install_peek_watch_sets(conn_id, watch_set) {
+        if let Err(error) = self.observe_frontend_peek_watch_sets(conn_id, watch_set) {
             // A concurrent drop can remove dependencies before this observation
             // is processed. Do not invent a readiness milestone for them. The
             // registered peek independently resolves the query's outcome.
@@ -842,6 +836,65 @@ impl Coordinator {
         }
     }
 
+    fn observe_frontend_peek_watch_sets(
+        &mut self,
+        conn_id: ConnectionId,
+        watch_set: WatchSetCreation,
+    ) -> Result<(), CollectionLookupError> {
+        let WatchSetCreation {
+            logging_id,
+            timestamp,
+            storage_ids,
+            compute_ids,
+        } = watch_set;
+        let storage_watch = self
+            .controller
+            .install_storage_watch_set_if_pending(storage_ids, timestamp)?;
+        self.record_or_track_statement_watch(
+            conn_id.clone(),
+            storage_watch,
+            logging_id,
+            StatementLifecycleEvent::StorageDependenciesFinished,
+        );
+        let compute_watch = self
+            .controller
+            .install_compute_watch_set_if_pending(compute_ids, timestamp)?;
+        self.record_or_track_statement_watch(
+            conn_id,
+            compute_watch,
+            logging_id,
+            StatementLifecycleEvent::ComputeDependenciesFinished,
+        );
+        Ok(())
+    }
+
+    fn record_or_track_statement_watch(
+        &mut self,
+        conn_id: ConnectionId,
+        watch: Option<WatchSetId>,
+        logging_id: StatementLoggingId,
+        event: StatementLifecycleEvent,
+    ) {
+        match watch {
+            None => self.record_statement_lifecycle_event(&logging_id, &event, self.now()),
+            Some(id) => {
+                self.connection_watch_sets
+                    .entry(conn_id.clone())
+                    .or_default()
+                    .insert(id);
+                self.installed_watch_sets.insert(
+                    id,
+                    (
+                        conn_id,
+                        WatchSetResponse::StatementDependenciesReady(logging_id, event),
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Install storage and compute watches for statement lifecycle logging.
+    /// Completion events are delivered through the controller even when ready.
     pub(crate) fn install_peek_watch_sets(
         &mut self,
         conn_id: ConnectionId,
