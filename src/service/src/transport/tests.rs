@@ -9,7 +9,79 @@
 
 //! Unit tests for CTP internals. Protocol-level tests live in `tests/transport.rs`.
 
+use super::metrics::{Metrics, NoopMetrics, Progress, ProgressMetrics};
 use super::{CONNECTION_CLOSED, Connection, error_channel};
+use std::sync::Arc;
+use std::time::Duration;
+
+async fn watchdog_with_one_way_progress(receiving: bool) {
+    let progress = Arc::new(Progress::default());
+    let mut metrics = ProgressMetrics::new(NoopMetrics, Some(Arc::clone(&progress)));
+    let (tx, mut rx) = error_channel();
+    let task = mz_ore::task::spawn(
+        || "watchdog-test",
+        Connection::<(), ()>::run_watchdog(Duration::from_secs(3), Some(progress), tx),
+    );
+    tokio::task::yield_now().await;
+    for _ in 0..3 {
+        if receiving {
+            <ProgressMetrics<_> as Metrics<(), ()>>::bytes_received(&mut metrics, 8);
+        } else {
+            <ProgressMetrics<_> as Metrics<(), ()>>::bytes_sent(&mut metrics, 8);
+        }
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+    }
+    assert!(task.is_finished());
+    assert_eq!(
+        rx.collect().await,
+        if receiving {
+            "send error: timed out"
+        } else {
+            "recv error: timed out"
+        },
+    );
+    task.await;
+}
+
+#[mz_ore::test(tokio::test(start_paused = true))]
+async fn watchdog_does_not_treat_writes_as_proof_of_a_live_peer() {
+    watchdog_with_one_way_progress(false).await;
+}
+
+#[mz_ore::test(tokio::test(start_paused = true))]
+async fn watchdog_detects_stuck_writes_while_reads_continue() {
+    watchdog_with_one_way_progress(true).await;
+}
+
+#[mz_ore::test(tokio::test(start_paused = true))]
+async fn watchdog_tracks_partial_byte_progress_without_complete_messages() {
+    let progress = Arc::new(Progress::default());
+    let mut metrics = ProgressMetrics::new(NoopMetrics, Some(Arc::clone(&progress)));
+    let (tx, mut rx) = error_channel();
+    let task = mz_ore::task::spawn(
+        || "watchdog-test",
+        Connection::<(), ()>::run_watchdog(Duration::from_millis(2500), Some(progress), tx),
+    );
+    tokio::task::yield_now().await;
+    for _ in 0..6 {
+        <ProgressMetrics<_> as Metrics<(), ()>>::bytes_received(&mut metrics, 1);
+        <ProgressMetrics<_> as Metrics<(), ()>>::bytes_sent(&mut metrics, 1);
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished());
+    }
+    for _ in 0..3 {
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        task.is_finished(),
+        "sampling must not postpone failure indefinitely"
+    );
+    assert_eq!(rx.collect().await, "recv error: timed out");
+    task.await;
+}
 
 #[mz_ore::test(tokio::test(start_paused = true))]
 async fn heartbeat_waits_for_first_tick_skips_missed_ticks_and_stops_with_receiver() {
