@@ -63,7 +63,7 @@ use crate::durable::objects::state_update::{
 };
 use crate::durable::objects::{AuditLogKey, DeploymentAdmission, FenceToken, Snapshot};
 use crate::durable::transaction::TransactionBatch;
-use crate::durable::upgrade::upgrade;
+use crate::durable::upgrade::{self, upgrade};
 use crate::durable::{
     BootstrapArgs, CATALOG_CONTENT_VERSION_KEY, CatalogError, DryRunTransaction,
     DurableCatalogError, DurableCatalogState, Epoch, OpenableDurableCatalogState,
@@ -1489,6 +1489,19 @@ impl UnopenedPersistCatalogState {
         loop {
             self.sync_to_current_upper().await?;
             commit_ts = max(commit_ts, self.upper);
+            // Refuse unsupported conversion before fencing an existing deployment
+            // or publishing any admission changes.
+            if !read_only
+                && let Some(&version) = self.update_applier.configs.get(USER_VERSION_KEY)
+                && version < upgrade::MIN_INITIALIZATION_VERSION
+            {
+                return Err(DurableCatalogError::IncompatibleDataVersion {
+                    found_version: version,
+                    min_catalog_version: upgrade::MIN_INITIALIZATION_VERSION,
+                    catalog_version: upgrade::CATALOG_VERSION,
+                }
+                .into());
+            }
             let protection_enabled = self
                 .update_applier
                 .configs
@@ -2845,6 +2858,10 @@ impl DurableCatalogState for PersistCatalogState {
 
     fn is_savepoint(&self) -> bool {
         matches!(self.mode, Mode::Savepoint)
+    }
+
+    fn is_join(&self) -> bool {
+        self.is_join
     }
 
     async fn mark_bootstrap_complete(&mut self) {

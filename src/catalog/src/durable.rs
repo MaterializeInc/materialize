@@ -441,6 +441,10 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Returns true if the catalog is opened is savepoint mode, false otherwise.
     fn is_savepoint(&self) -> bool;
 
+    /// Whether this handle joined an initialized deployment rather than opening
+    /// it for initialization or migration. Joining does not authorize bootstrap.
+    fn is_join(&self) -> bool;
+
     /// Marks the bootstrap process as complete.
     ///
     /// Captures the consumed read-protection mode and transaction WAL identity used

@@ -122,6 +122,11 @@ A confirmed supersession or deployment fence terminates the adapter, rather than
 registering again or continuing to serve with a closed client. An object DROP or
 ordinary acquisition rejection is not evidence of supersession.
 
+Joining a deployment reconstructs its committed catalog without rerunning shared
+initialization or migrations. This restriction follows the durable handle's
+admission, not whether the adapter serves read-only SQL. A writable joiner must
+not apply initializer-supplied configuration or reconcile shared builtin identities.
+
 Replacement transfers committed grants into a separate recovery guard, not ordinary
 read holds. Retain that guard through reconstruction and acquisition of successor
 timeline windows, then release obsolete transient grants through changed-aggregate

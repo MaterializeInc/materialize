@@ -34,9 +34,10 @@ serving. Also demonstrate dropping all adapters and recovering SQL through
 controllerd's HTTP list/create/drop API, without reinitializing the environment.
 This is not complete with two manually launched SQL processes.
 
-The default adapter declaration and explicit realization identity are in progress.
+The adapter declaration and explicit realization identity slice is committed
+locally as `440e7126`, not yet pushed.
 Aljoscha confirmed M3 is the final artifact and needs no M2-to-M3 migration.
-Current WIP adds `AdapterId` and schema v96 with adapter declarations and tagged
+The slice adds `AdapterId` and schema v96 with adapter declarations and tagged
 adapter/replica realization ownership. Frozen v95 is unchanged. Durable/shared
 catalog transport and exact-realization replacement compile in `mz-catalog`
 (`f71f6fcefd`). The unsupported transition is rejected, not converted.
@@ -53,15 +54,39 @@ Static ownership review found no concrete defects, with its scope recorded in
 `~/.local/share/aj/m3-evidence/adapter-identity-review.md`. Boundary/schema results
 are in `adapter-identity-boundary-and-schema.log`. All-target Clippy passes for
 catalog, adapter, clusterd, environmentd, catalog-debug, testdrive and sqllogictest.
-The full catalog unit suite is running through `bin/cargo-test`. Direct nextest
-again omitted the repository runner's standard stack setting and overflowed in
-two existing retention tests. Full workspace/integration verification remains open.
+The join/admission slice replaces obsolete v94 migration-success tests with rejection coverage
+and moves unsupported-version rejection before fencing or admission. Failed
+writable/savepoint opens leave the catalog and fence unchanged. All-target catalog
+Clippy, all 393 catalog unit tests (2 skipped) and static ownership review pass.
+Workspace/integration verification remains open.
+Use `bin/cargo-test` for its standard stack setting, configure both the Postgres
+comparison companion and metadata backend, and forward `--lib` after `--`.
+It exposes joined-handle admission to catalog reconstruction and routes
+active joins through the same nonmutating replay used for prewarming. The existing
+join regression now includes an active-deployment case with conflicting initializer
+configuration. Independent named tests cover active joins, prewarming and compatible
+build/cache variants. Splitting the sequential matrix avoids its cumulative 180s
+timeout without changing cases, assertions or the per-test timeout. All five pass
+in the full suite. The active-join test fails on shared-definition mutation when
+the correction is removed and passes when restored. Scratch is restored to the
+candidate, with canonical edits unchanged.
+Evidence: `catalog-join-split-full-unit.log`, `catalog-join-review.md`,
+`catalog-join-negative-revision.txt`, `catalog-join-negative.log` and
+`catalog-join-restored.log` under `~/.local/share/aj/m3-evidence/`.
 The worker-generated Cargo.lock delta is preserved and applied locally, with no
 dependency version changes. Initialization/join boundary research is saved in
 `~/.local/share/aj/m3-evidence/initialization-join-boundary.md`.
 Catalog/table initialization must be finite and separate from own-build planning
 and shared maintenance. The controller's local restart must not repeat a global
 system-table reset or treat a handle-local bootstrap flag as durable readiness.
+`table-initialization-recovery.md` records the finite WAL recovery seam. Existing
+registration/application can recover without a new marker, but global builtin
+reset/republication must be replaced by the M3 producer-ownership behavior.
+`builtin-publication-ownership.md` identifies the remaining derived facts.
+Writer completion and follower refresh both publish these builtin diffs, so
+skipping bootstrap reset alone would still duplicate rows. Focused architectural
+review is assessing idempotent publication and stale-follower exclusion before
+implementation. Session ownership and finite table adoption are separate boundaries.
 
 The local backend now supports retained supervision separately from explicit
 service deletion (`bbe00aba`). Four boundary tests, two existing in-runtime
@@ -88,6 +113,8 @@ checks use the isolated `m3-native-checks` cargo-test metadata service with the
 repository's standard 5000 connections, where both tests also pass. Its URL is in
 `~/m3-evidence/native-metadata-url.txt` on scratch. Leave `m2-pause-test-postgres`
 untouched.
+The same fixture's ordinary `postgres` service supplies `POSTGRES_URL` for catalog
+comparison tests, recorded in `~/m3-evidence/native-postgres-url.txt`.
 
 ## Concrete starting points
 

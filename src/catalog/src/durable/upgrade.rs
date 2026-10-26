@@ -337,10 +337,10 @@ pub(crate) async fn upgrade(
     // Named adapters require explicit declaration and execution ownership.
     // There is no conversion from singleton adapter catalogs. Reject before
     // running any migration rather than inventing a declaration or dropping holds.
-    if version < 96 {
+    if version < MIN_INITIALIZATION_VERSION {
         return Err(DurableCatalogError::IncompatibleDataVersion {
             found_version: version,
-            min_catalog_version: 96,
+            min_catalog_version: MIN_INITIALIZATION_VERSION,
             catalog_version: CATALOG_VERSION,
         }
         .into());
@@ -352,6 +352,9 @@ pub(crate) async fn upgrade(
 
     Ok(commit_ts)
 }
+
+/// Named adapter ownership has no conversion from singleton adapter catalogs.
+pub(super) const MIN_INITIALIZATION_VERSION: u64 = 96;
 
 /// Determines which upgrade to run for the `version` and executes it.
 ///

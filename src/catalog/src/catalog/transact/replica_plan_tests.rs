@@ -380,17 +380,65 @@ async fn catalog_positions_use_actual_commit_upper() {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
-async fn joined_prewarming_serving_open_replays_without_shared_writes() {
+async fn joined_serving_open_active() {
+    check_joined_serving_open(
+        Catalog::latest_builtin_schema_migration_version(),
+        None,
+        false,
+    )
+    .await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn joined_serving_open_prewarming() {
+    check_joined_serving_open(
+        Catalog::latest_builtin_schema_migration_version(),
+        None,
+        true,
+    )
+    .await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn joined_serving_open_prewarming_without_cache() {
+    check_joined_serving_open(
+        Catalog::latest_builtin_schema_migration_version(),
+        Some(false),
+        true,
+    )
+    .await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn joined_serving_open_patch() {
+    let mut version = Catalog::latest_builtin_schema_migration_version();
+    version.patch += 1;
+    version.pre = semver::Prerelease::EMPTY;
+    check_joined_serving_open(version, None, true).await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn joined_serving_open_prerelease_without_cache() {
+    let mut version = Catalog::latest_builtin_schema_migration_version();
+    version.patch += 1;
+    version.pre = semver::Prerelease::new("dev.1").expect("valid prerelease");
+    check_joined_serving_open(version, Some(false), true).await;
+}
+
+async fn check_joined_serving_open(
+    version: semver::Version,
+    cache_override: Option<bool>,
+    prewarming: bool,
+) {
     // These configured versions share this binary's schema and builtins. Semantic
     // compatibility of real images is the provisioner's contract, not this test's.
     let source_version = Catalog::latest_builtin_schema_migration_version();
-    let mut patch_version = source_version.clone();
-    patch_version.patch += 1;
-    patch_version.pre = semver::Prerelease::EMPTY;
-    let mut prerelease_version = patch_version.clone();
-    prerelease_version.pre = semver::Prerelease::new("dev.1").expect("valid prerelease");
-    // Catalog configuration requires static build info. Only these three test
-    // fixtures are retained for the process lifetime.
+    // Catalog configuration requires static build info. These two test fixtures
+    // are retained for the process lifetime.
     let build_info = |version: semver::Version| -> &'static mz_build_info::BuildInfo {
         Box::leak(Box::new(mz_build_info::BuildInfo {
             version: Box::leak(version.to_string().into_boxed_str()),
@@ -398,192 +446,194 @@ async fn joined_prewarming_serving_open_replays_without_shared_writes() {
         }))
     };
     let source_build = build_info(source_version.clone());
-    let patch_build = build_info(patch_version);
-    let prerelease_build = build_info(prerelease_version);
-    for (build_info, cache_override) in [
-        (source_build, None),
-        (source_build, Some(false)),
-        (patch_build, None),
-        (prerelease_build, Some(false)),
-    ] {
-        let mut cache = mz_persist_client::cache::PersistClientCache::new_no_metrics();
-        cache.cfg.build_version = source_version.clone();
-        let persist = cache
-            .open(mz_persist_client::PersistLocation::new_in_mem())
-            .await
-            .expect("open source-version Persist client");
-        let organization = Uuid::new_v4();
-        let active =
-            open_protected_catalog_with_version(persist.clone(), organization, source_build).await;
-        let bootstrap = crate::catalog::test_bootstrap_args();
-        let active_generation = active.state().deployment_generation();
-        let pending_generation = active_generation + 1;
-        let build = Catalog::expression_build_version(build_info).to_string();
-        let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
-            .with_version(build_info.semver_version())
-            .with_organization_id(organization)
-            .with_deploy_generation(pending_generation)
-            .unwrap_build()
-            .await
-            .join_prewarming(&build)
-            .await
-            .expect("join same-schema prewarming deployment");
-        assert!(!storage.is_read_only());
-        assert!(!storage.is_savepoint());
-        let shard_id = storage.shard_id();
-        // Leave the joined handle's initial updates for the serving entrypoint.
-        let before = active.storage().await.snapshot().await.expect("snapshot");
-        let upper = active.current_upper().await;
-        {
-            let mut storage = active.storage().await;
-            storage
-                .sync_to_current_updates()
-                .await
-                .expect("refresh active");
-            let tx = storage.transaction().await.expect("read migration marker");
-            assert_eq!(
-                crate::catalog::migrate::get_migration_version(&tx),
-                Some(source_version.clone())
-            );
-        }
-        let replica_storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
-            .with_version(build_info.semver_version())
-            .with_organization_id(organization)
-            .unwrap_build()
-            .await
-            .open_read_only(&bootstrap)
-            .await
-            .expect("open committed replica reader");
-        let mut replica_state = Catalog::diagnostic_state_config(&active.diagnostic_config);
-        replica_state.build_info = build_info;
-        let replica = Catalog::open_committed(replica_state, replica_storage)
-            .await
-            .expect("reconstruct committed replica with compatible builtins")
-            .catalog;
-        assert_eq!(
-            replica.observed_position().expect("replica position").upper,
-            upper
-        );
-        assert_eq!(
-            active.storage().await.snapshot().await.expect("snapshot"),
-            before
-        );
-        assert_eq!(active.current_upper().await, upper);
-        replica.expire().await;
-        let mut state = Catalog::diagnostic_state_config(&active.diagnostic_config);
-        state.build_info = build_info;
-        state.read_only = true;
-        // The serving entrypoint must choose safe replay, not the caller.
-        state.skip_migrations = false;
-        state.builtin_item_migration_config.read_only = true;
-        state.enable_expression_cache_override = cache_override;
-        let opened = Catalog::open(crate::config::Config {
-            storage,
-            metrics_registry: &mz_ore::metrics::MetricsRegistry::new(),
-            state,
-        })
+    let build_info = build_info(version);
+    let mut cache = mz_persist_client::cache::PersistClientCache::new_no_metrics();
+    cache.cfg.build_version = source_version.clone();
+    let persist = cache
+        .open(mz_persist_client::PersistLocation::new_in_mem())
         .await
-        .expect("open output-readonly joined serving catalog");
-        let pending = opened.catalog;
-        assert_eq!(
-            active.storage().await.snapshot().await.expect("snapshot"),
-            before,
-            "serving replay must not change shared durable definitions"
-        );
-        assert_eq!(active.current_upper().await, upper);
-        assert_eq!(pending.state().deployment_generation(), pending_generation);
-        assert_eq!(
-            pending
-                .storage()
-                .await
-                .get_deployment_generation()
-                .await
-                .expect("joined identity"),
-            pending_generation
-        );
-        assert_eq!(
-            pending.state().active_deployment_generation(),
-            Some(active_generation)
-        );
-        let position = pending
-            .observed_position()
-            .expect("joined catalog position");
-        assert_eq!(position.shard_id, shard_id);
-        assert_eq!(position.deployment_generation, pending_generation);
-        assert_eq!(position.upper, upper);
-        assert_eq!(pending.planning_position(), Some(position));
-        assert!(pending.state().catalog_read_protection_enabled());
-        assert_eq!(
-            pending
-                .entries()
-                .map(|entry| (entry.id(), entry.name().clone()))
-                .collect::<BTreeMap<_, _>>(),
-            active
-                .entries()
-                .map(|entry| (entry.id(), entry.name().clone()))
-                .collect::<BTreeMap<_, _>>(),
-            "replay retains committed catalog definitions"
-        );
-        assert!(
-            !opened.builtin_table_updates.is_empty(),
-            "serving open retains bootstrap rows for its output collections"
-        );
-        assert!(
-            pending
-                .read_written_plans(vec![(GlobalId::Transient(1_000_000), Uuid::new_v4())])
-                .await
-                .expect("serving plan store is open even with the cache disabled")
-                .is_empty()
-        );
-        pending.expire().await;
-        {
-            let mut storage = active.storage().await;
-            let tx = storage
-                .transaction()
-                .await
-                .expect("read migration marker after replay");
-            assert_eq!(
-                crate::catalog::migrate::get_migration_version(&tx),
-                Some(source_version.clone())
-            );
-        }
-        let mut state = Catalog::diagnostic_state_config(&active.diagnostic_config);
-        state.build_info = build_info;
-        state.read_only = false;
-        state.skip_migrations = false;
-        state.builtin_item_migration_config.read_only = false;
-        active.expire().await;
-        let storage = crate::durable::TestCatalogStateBuilder::new(persist)
-            .with_version(build_info.semver_version())
-            .with_organization_id(organization)
-            .with_deploy_generation(pending_generation)
-            .unwrap_build()
-            .await
-            .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
-            .await
-            .expect("authorize writable bootstrap");
-        let bootstrapped = Catalog::open(crate::config::Config {
-            storage,
-            metrics_registry: &mz_ore::metrics::MetricsRegistry::new(),
-            state,
-        })
-        .await
-        .expect("bootstrap with target version")
-        .catalog;
-        {
-            let mut storage = bootstrapped.storage().await;
-            let tx = storage
-                .transaction()
-                .await
-                .expect("read bootstrap migration marker");
-            assert_eq!(
-                crate::catalog::migrate::get_migration_version(&tx),
-                Some(build_info.semver_version())
-            );
-        }
-        assert!(bootstrapped.current_upper().await > upper);
-        bootstrapped.expire().await;
+        .expect("open source-version Persist client");
+    let organization = Uuid::new_v4();
+    let active =
+        open_protected_catalog_with_version(persist.clone(), organization, source_build).await;
+    let bootstrap = crate::catalog::test_bootstrap_args();
+    let active_generation = active.state().deployment_generation();
+    let pending_generation = active_generation + u64::from(prewarming);
+    let build = Catalog::expression_build_version(build_info).to_string();
+    let storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+        .with_version(build_info.semver_version())
+        .with_organization_id(organization)
+        .with_deploy_generation(pending_generation)
+        .unwrap_build()
+        .await;
+    let storage = if prewarming {
+        storage.join_prewarming(&build).await
+    } else {
+        storage.join().await
     }
+    .expect("join initialized deployment");
+    assert!(storage.is_join());
+    assert!(!storage.is_read_only());
+    assert!(!storage.is_savepoint());
+    let shard_id = storage.shard_id();
+    // Leave the joined handle's initial updates for the serving entrypoint.
+    let before = active.storage().await.snapshot().await.expect("snapshot");
+    let upper = active.current_upper().await;
+    {
+        let mut storage = active.storage().await;
+        storage
+            .sync_to_current_updates()
+            .await
+            .expect("refresh active");
+        let tx = storage.transaction().await.expect("read migration marker");
+        assert_eq!(
+            crate::catalog::migrate::get_migration_version(&tx),
+            Some(source_version.clone())
+        );
+    }
+    let replica_storage = crate::durable::TestCatalogStateBuilder::new(persist.clone())
+        .with_version(build_info.semver_version())
+        .with_organization_id(organization)
+        .unwrap_build()
+        .await
+        .open_read_only(&bootstrap)
+        .await
+        .expect("open committed replica reader");
+    let mut replica_state = Catalog::diagnostic_state_config(&active.diagnostic_config);
+    replica_state.build_info = build_info;
+    let replica = Catalog::open_committed(replica_state, replica_storage)
+        .await
+        .expect("reconstruct committed replica with compatible builtins")
+        .catalog;
+    assert_eq!(
+        replica.observed_position().expect("replica position").upper,
+        upper
+    );
+    assert_eq!(
+        active.storage().await.snapshot().await.expect("snapshot"),
+        before
+    );
+    assert_eq!(active.current_upper().await, upper);
+    replica.expire().await;
+    let mut state = Catalog::diagnostic_state_config(&active.diagnostic_config);
+    state.build_info = build_info;
+    state.read_only = prewarming;
+    // The serving entrypoint must choose safe replay, not the caller.
+    state.skip_migrations = false;
+    state.builtin_item_migration_config.read_only = prewarming;
+    state.enable_expression_cache_override = cache_override;
+    if !prewarming {
+        // Joining must not apply initializer-supplied shared configuration,
+        // even when a writable adapter supplies different bootstrap inputs.
+        state.remote_system_parameters =
+            Some(BTreeMap::from([("max_connections".into(), "1234".into())]));
+    }
+    let opened = Catalog::open(crate::config::Config {
+        storage,
+        metrics_registry: &mz_ore::metrics::MetricsRegistry::new(),
+        state,
+    })
+    .await
+    .expect("open joined serving catalog");
+    let pending = opened.catalog;
+    assert_eq!(
+        active.storage().await.snapshot().await.expect("snapshot"),
+        before,
+        "serving replay must not change shared durable definitions"
+    );
+    assert_eq!(active.current_upper().await, upper);
+    assert_eq!(pending.state().deployment_generation(), pending_generation);
+    assert_eq!(
+        pending
+            .storage()
+            .await
+            .get_deployment_generation()
+            .await
+            .expect("joined identity"),
+        pending_generation
+    );
+    assert_eq!(
+        pending.state().active_deployment_generation(),
+        Some(active_generation)
+    );
+    let position = pending
+        .observed_position()
+        .expect("joined catalog position");
+    assert_eq!(position.shard_id, shard_id);
+    assert_eq!(position.deployment_generation, pending_generation);
+    assert_eq!(position.upper, upper);
+    assert_eq!(pending.planning_position(), Some(position));
+    assert!(pending.state().catalog_read_protection_enabled());
+    assert_eq!(
+        pending
+            .entries()
+            .map(|entry| (entry.id(), entry.name().clone()))
+            .collect::<BTreeMap<_, _>>(),
+        active
+            .entries()
+            .map(|entry| (entry.id(), entry.name().clone()))
+            .collect::<BTreeMap<_, _>>(),
+        "replay retains committed catalog definitions"
+    );
+    assert!(
+        !opened.builtin_table_updates.is_empty(),
+        "serving open retains bootstrap rows for its output collections"
+    );
+    assert!(
+        pending
+            .read_written_plans(vec![(GlobalId::Transient(1_000_000), Uuid::new_v4())])
+            .await
+            .expect("serving plan store is open even with the cache disabled")
+            .is_empty()
+    );
+    pending.expire().await;
+    {
+        let mut storage = active.storage().await;
+        let tx = storage
+            .transaction()
+            .await
+            .expect("read migration marker after replay");
+        assert_eq!(
+            crate::catalog::migrate::get_migration_version(&tx),
+            Some(source_version.clone())
+        );
+    }
+    let mut state = Catalog::diagnostic_state_config(&active.diagnostic_config);
+    state.build_info = build_info;
+    state.read_only = false;
+    state.skip_migrations = false;
+    state.builtin_item_migration_config.read_only = false;
+    active.expire().await;
+    let storage = crate::durable::TestCatalogStateBuilder::new(persist)
+        .with_version(build_info.semver_version())
+        .with_organization_id(organization)
+        .with_deploy_generation(pending_generation)
+        .unwrap_build()
+        .await
+        .open(mz_ore::now::SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .expect("authorize writable bootstrap");
+    let bootstrapped = Catalog::open(crate::config::Config {
+        storage,
+        metrics_registry: &mz_ore::metrics::MetricsRegistry::new(),
+        state,
+    })
+    .await
+    .expect("bootstrap with target version")
+    .catalog;
+    {
+        let mut storage = bootstrapped.storage().await;
+        let tx = storage
+            .transaction()
+            .await
+            .expect("read bootstrap migration marker");
+        assert_eq!(
+            crate::catalog::migrate::get_migration_version(&tx),
+            Some(build_info.semver_version())
+        );
+    }
+    assert!(bootstrapped.current_upper().await > upper);
+    bootstrapped.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]

@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
@@ -17,8 +15,6 @@ use mz_repr::Diff;
 use uuid::Uuid;
 
 use super::UnopenedPersistCatalogState;
-use crate::durable::objects::Snapshot;
-use crate::durable::objects::serialization::RustType;
 use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
 use crate::durable::persist::{CATALOG_SEED, fetch_catalog_shard_version, shard_id};
 use crate::durable::{
@@ -245,145 +241,41 @@ async fn seed_legacy_v94() -> TestCatalogStateBuilder {
     builder
 }
 
-fn assert_legacy_snapshot(snapshot: &Snapshot, generation: u64) {
-    fn assert_collection<K, V, PK, PV>(kind: &str, actual: &imbl::OrdMap<K, V>, generation: u64)
-    where
-        K: Ord + Clone + RustType<PK>,
-        V: Clone + RustType<PV>,
-        PK: serde::Serialize,
-        PV: serde::Serialize,
-    {
-        let expected: BTreeSet<_> = legacy_v94_rows()
-            .into_iter()
-            .filter(|row| row.kind() == kind)
-            .map(|row| {
-                let mut json: serde_json::Value = row.to_serde();
-                match kind {
-                    "ClusterReplica" | "ReplicaSystemConfiguration" => {
-                        json["key"]["deployment_generation"] = generation.into();
-                    }
-                    "Config" => {
-                        json["value"]["value"] = crate::durable::upgrade::CATALOG_VERSION.into();
-                    }
-                    _ => {}
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn unsupported_legacy_open_preserves_catalog_and_admission() {
+    for savepoint in [false, true] {
+        let builder = seed_legacy_v94().await;
+        let before = raw_catalog(&builder).await;
+        let openable = builder.clone().unwrap_build().await;
+        let result = if savepoint {
+            openable
+                .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
+                .await
+        } else {
+            openable
+                .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+                .await
+        };
+        assert!(matches!(
+            result,
+            Err(CatalogError::Durable(
+                DurableCatalogError::IncompatibleDataVersion {
+                    found_version: 94,
+                    min_catalog_version: 96,
+                    ..
                 }
-                StateUpdateKindJson::from_serde(json)
-            })
-            .collect();
-        let actual: BTreeSet<_> = actual
-            .iter()
-            .map(|(key, value)| {
-                StateUpdateKindJson::from_serde(serde_json::json!({
-                    "kind": kind, "key": key.into_proto(), "value": value.into_proto()
-                }))
-            })
-            .collect();
-        assert_eq!(actual, expected, "{kind} must preserve its v94 contents");
+            ))
+        ));
+        let after = raw_catalog(&builder).await;
+        assert_eq!(before.upper, after.upper);
+        assert_eq!(before.snapshot, after.snapshot);
+        assert_eq!(
+            before.fenceable_token.token(),
+            after.fenceable_token.token()
+        );
+        assert!(after.update_applier.deployment_admission.is_none());
     }
-    assert_collection("Cluster", &snapshot.clusters, generation);
-    assert_collection("ClusterReplica", &snapshot.cluster_replicas, generation);
-    assert_collection("Role", &snapshot.roles, generation);
-    assert_collection("IdAlloc", &snapshot.id_allocator, generation);
-    assert_collection("Config", &snapshot.configs, generation);
-    assert_collection("Setting", &snapshot.settings, generation);
-    assert_collection(
-        "ClusterSystemConfiguration",
-        &snapshot.cluster_system_configurations,
-        generation,
-    );
-    assert_collection(
-        "ReplicaSystemConfiguration",
-        &snapshot.replica_system_configurations,
-        generation,
-    );
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)]
-async fn test_legacy_v94_savepoint_is_nondurable() {
-    let builder = seed_legacy_v94().await;
-    let before = raw_catalog(&builder).await;
-    let mut savepoint = builder
-        .clone()
-        .unwrap_build()
-        .await
-        .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
-        .await
-        .expect("savepoint can migrate a v94 catalog in memory");
-    // Savepoint migration uses the stored generation, not the requested 43.
-    assert_legacy_snapshot(
-        &savepoint
-            .snapshot()
-            .await
-            .expect("inspect savepoint snapshot"),
-        42,
-    );
-    let after = raw_catalog(&builder).await;
-    assert_eq!(before.upper, after.upper);
-    assert_eq!(before.snapshot, after.snapshot);
-    assert!(after.update_applier.deployment_admission.is_none());
-    let durable_rows: BTreeSet<_> = after
-        .snapshot
-        .into_iter()
-        .map(|(row, _, diff)| {
-            assert_eq!(diff, Diff::ONE);
-            row
-        })
-        .collect();
-    assert_eq!(durable_rows, legacy_v94_rows().into_iter().collect());
-}
-
-#[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)]
-async fn test_legacy_v94_writable_open_defers_admission() {
-    let builder = seed_legacy_v94().await;
-    let mut writable = builder
-        .clone()
-        .unwrap_build()
-        .await
-        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
-        .await
-        .expect("exclusive open must migrate v94 before publishing admission");
-    assert_legacy_snapshot(
-        &writable
-            .snapshot()
-            .await
-            .expect("inspect upgraded snapshot"),
-        43,
-    );
-    let raw = raw_catalog(&builder).await;
-    let fence = raw.fenceable_token.token().expect("opened catalog fence");
-    assert_eq!(fence.deploy_generation, 43);
-    assert_eq!(fence.epoch.get(), 18);
-    let admission = raw
-        .update_applier
-        .deployment_admission
-        .as_ref()
-        .expect("committed deployment admission");
-    assert_eq!(
-        admission.members,
-        BTreeMap::from([(43, builder.version.clone())])
-    );
-    assert_eq!(admission.persist_target, builder.version);
-    assert!(
-        !raw.update_applier
-            .configs
-            .contains_key(super::READ_PROTECTION_CONFIG)
-    );
-    drop(writable);
-    let mut reopened = builder
-        .unwrap_build()
-        .await
-        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
-        .await
-        .expect("migrated catalog can reopen with admission already present");
-    assert_legacy_snapshot(
-        &reopened
-            .snapshot()
-            .await
-            .expect("inspect reopened snapshot"),
-        43,
-    );
 }
 
 /// Each participant has process-local authorization and cached shard state, but

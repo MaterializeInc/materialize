@@ -245,6 +245,7 @@ impl Catalog {
         let shard_id = storage.shard_id();
         let is_savepoint = storage.is_savepoint();
         let writable = !storage.is_read_only() && !storage.is_savepoint();
+        let joined = storage.is_join();
         let boot_ts = config.boot_ts;
         let mut updates = Vec::new();
         let mut reconciled = None;
@@ -269,11 +270,12 @@ impl Catalog {
                 }
                 Err(error) => return Err(error.into()),
             };
-            if config.read_only
-                && writable
-                && txn.get_config("catalog_read_protection_enabled".into()) == Some(1)
+            if joined
+                || (config.read_only
+                    && writable
+                    && txn.get_config("catalog_read_protection_enabled".into()) == Some(1))
             {
-                // A joined prewarmer consumes committed definitions. It may
+                // A joining execution consumes committed definitions. It may
                 // publish its plans and protection, but cannot run shared restart
                 // migrations or reconcile another deployment's builtin identities.
                 let before = txn.current_snapshot();
@@ -290,7 +292,7 @@ impl Catalog {
                 cleanup.await;
                 if txn.current_snapshot() != before {
                     return Err(CatalogError::Internal(
-                        "native prewarming reconstruction requires shared catalog changes".into(),
+                        "joined reconstruction requires shared catalog changes".into(),
                     ));
                 }
                 if result.expr_cache_handle.is_none() {
