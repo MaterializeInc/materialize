@@ -32,21 +32,6 @@ pub trait BucketTimestamp: Timestamp {
     fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self>;
 }
 
-/// A product timestamp buckets by its outer coordinate: advancing moves the
-/// outer timestamp and resets the inner one to its minimum.
-///
-/// A [`BucketChain`] derives every bucket boundary by advancing from the
-/// minimum, so all boundaries have a minimal inner coordinate and a bucket
-/// holds every refinement of the outer timestamps it spans. A frontier inside
-/// an outer timestamp therefore lands in a bucket [`BucketChain::peel`] keeps.
-impl<TOuter: BucketTimestamp, TInner: Timestamp> BucketTimestamp for (TOuter, TInner) {
-    const DOMAIN: usize = TOuter::DOMAIN;
-
-    fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self> {
-        Some((self.0.advance_by_power_of_two(exponent)?, TInner::minimum()))
-    }
-}
-
 /// A type that can be split into two parts based on a timestamp.
 pub trait Bucket: Sized {
     /// The timestamp type associated with this storage.
@@ -148,10 +133,6 @@ impl<S: Bucket> BucketChain<S> {
 
     /// Peel off all data up to `frontier`, where the returned buckets contain all
     /// data strictly less than the frontier.
-    ///
-    /// A frontier inside a bucket of a single step (zero bits), possible for a
-    /// timestamp whose step spans several times, leaves that bucket in the
-    /// chain, holding its data below the frontier.
     #[inline]
     pub fn peel(&mut self, frontier: AntichainRef<S::Timestamp>) -> Vec<S> {
         let mut peeled = vec![];
@@ -166,10 +147,6 @@ impl<S: Bucket> BucketChain<S> {
             if upper.is_none() && !frontier.is_empty()
                 || upper.is_some() && frontier.less_than(&upper.unwrap())
             {
-                if bits == 0 {
-                    self.content.insert(offset, (bits, storage));
-                    break;
-                }
                 // We need to split the bucket, no matter how much fuel we have.
                 self.split_and_insert(&mut 0, bits, offset, storage);
             } else {
@@ -382,49 +359,6 @@ mod tests {
             let mut fuel = 1000;
             chain.restore(&mut fuel);
         }
-    }
-
-    /// A chain over product timestamps never puts two refinements of one
-    /// outer timestamp in different buckets.
-    #[mz_ore::test]
-    fn test_bucket_chain_product_keeps_refinements_together() {
-        let times: Vec<(u8, u8)> = (0..=255)
-            .flat_map(|outer| [(outer, 0), (outer, 7), (outer, 255)])
-            .collect();
-        let mut chain = BucketChain::new(TestStorage {
-            inner: times.clone(),
-        });
-        let mut fuel = -1;
-        while fuel <= 0 {
-            fuel = 100;
-            chain.restore(&mut fuel);
-        }
-        for (outer, inner) in &times {
-            let range = chain.range_of(&(*outer, *inner)).expect("must exist");
-            assert_eq!(range.start.1, 0, "bucket starts inside an outer timestamp");
-            assert!(range.contains(&(*outer, 0)) && range.contains(&(*outer, 255)));
-        }
-        let peeled = chain.peel(AntichainRef::new(&[(64, 0)]));
-        assert!(
-            collect_and_sort(peeled)
-                .into_iter()
-                .eq(times.iter().copied().filter(|(outer, _)| *outer < 64))
-        );
-        // A frontier inside outer timestamp 100 peels everything before it
-        // and keeps 100's bucket whole.
-        let peeled = chain.peel(AntichainRef::new(&[(100, 7)]));
-        assert!(
-            collect_and_sort(peeled).into_iter().eq(times
-                .iter()
-                .copied()
-                .filter(|(outer, _)| (64..100).contains(outer)))
-        );
-        let kept = chain.find(&(100, 7)).expect("must exist");
-        assert_eq!(kept.inner.len(), 3, "outer timestamp 100 stays whole");
-        assert_eq!(
-            chain.range_of(&(100, 0)).expect("must exist").start,
-            (100, 0)
-        );
     }
 
     #[mz_ore::test]

@@ -188,7 +188,8 @@ impl UpsertMetricDefs {
             restashed: registry.register(metric!(
                 name: "mz_storage_upsert_restashed_total",
                 help: "The number of updates the upsert v2 operator extracted from its \
-                    stash before the output caught up to their time, and pushed back.",
+                    stash before the persist feedback frontier reached their time, and \
+                    pushed back.",
                 var_labels: ["source_id", "worker_id"],
             )),
             shared,

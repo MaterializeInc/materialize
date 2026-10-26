@@ -681,7 +681,7 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
     PressOnDropButton,
 )
 where
-    T: mz_timely_util::temporal::BucketTimestamp + TotalOrder + Sync,
+    T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
     T: columnation::Columnation,
     T: columnar::Columnar + Default,

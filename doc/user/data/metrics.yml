@@ -4480,7 +4480,7 @@ metrics:
 - name: mz_storage_upsert_restashed_total
   help: >-
     The number of updates the upsert v2 operator extracted from its stash before
-    the output caught up to their time, and pushed back.
+    the persist feedback frontier reached their time, and pushed back.
   labels:
   - source_id
   - worker_id

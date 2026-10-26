@@ -31,10 +31,9 @@
 //! 1. **Ingest source data.** Read upsert commands from the source input,
 //!    wrap each in an `UpsertDiff` (carrying a columnar order key projected
 //!    from `FromTime` via [`UpsertSourceTime`] for dedup), and push into the
-//!    source stash, a set of batchers bucketed by time (see `Stash`). Each
-//!    batcher consolidates entries for the same `(key, time)` via the
-//!    `UpsertDiff` Semigroup, keeping the update with the highest order key
-//!    (latest source offset), through amortized
+//!    source-stash batcher. The batcher consolidates entries for the same
+//!    `(key, time)` via the `UpsertDiff` Semigroup, keeping the update with
+//!    the highest order key (latest source offset), through amortized
 //!    geometric merging as data is pushed in, and cold stash state leaves RSS
 //!    through the flavor's spill path (see below). This bounds resident
 //!    memory even during large source snapshots.
@@ -43,26 +42,25 @@
 //!    to learn which times have been committed. When the persist frontier
 //!    reaches the resume upper, rehydration is complete.
 //!
-//! 3. **Seal & drain.** Seal the stash just past the persist frontier
-//!    (capped at the input frontier) to extract the source-finalized entries
-//!    that can be processed this round as sorted, consolidated chunks. Each
-//!    entry is classified:
+//! 3. **Seal & drain.** Seal the batcher just past the persist frontier
+//!    (capped at the input frontier, see `seal_upper`) to extract
+//!    source-finalized entries as sorted, consolidated chunks. Each entry is
+//!    classified:
 //!    - **Eligible** (at the persist frontier): the persist trace has the
 //!      correct "before" state for this time. Look up the old value in the
 //!      feedback arrangement, emit a retraction if present, and emit the new
 //!      value.
 //!    - **Ineligible** (above the persist frontier, below the seal upper):
-//!      persist hasn't caught up yet. Push back into the stash for the next
-//!      iteration. These share the persist frontier's `mz_repr::Timestamp`
-//!      and differ only in the refining component.
+//!      persist hasn't caught up yet. Push back into the batcher for the next
+//!      iteration.
 //!    - **Already persisted** (below the persist frontier): some writer has
 //!      already advanced the shard past this time, so it is dropped. See the
 //!      drain functions for why re-stashing it would strand the data and pin
 //!      the output frontier below the shard upper.
 //!
 //! 4. **Capability management.** Downgrade the output capability to the
-//!    minimum time of any remaining buffered data (in the stash or pushed
-//!    back as ineligible). Drop the capability entirely when the stash is
+//!    minimum time of any remaining buffered data (in the batcher or pushed
+//!    back as ineligible). Drop the capability entirely when the batcher is
 //!    empty.
 //!
 //! ## Stash flavors
@@ -72,10 +70,10 @@
 //! loop:
 //!
 //! * **Chunked**: the stash is differential's chunk merge batcher over
-//!   `ColumnChunk`s and the feedback arrangement is a spine of chunk batches.
-//!   Committed chunk bodies spill to the process buffer pool, the drain
-//!   loads sealed chunks one at a time, and prior state comes back through
-//!   bulk probes of the trace's batches.
+//!   time-major `ColumnChunk`s and the feedback arrangement is a spine of
+//!   chunk batches. Committed chunk bodies spill to the process buffer pool,
+//!   the drain loads sealed chunks one at a time, and prior state comes back
+//!   through bulk probes of the trace's batches.
 //! * **Paged**: the stash is the paged columnar merge batcher and the
 //!   feedback arrangement is a `ValRowSpine`. Cold chains page out of RSS
 //!   through the storage-owned column pager, and prior state comes back
@@ -124,10 +122,8 @@ use mz_timely_util::columnar::merge_batcher::{ColumnMergeBatcher, PagedChunker};
 use mz_timely_util::columnar::unload::UnloadBatch;
 use mz_timely_util::columnar::{Col2ValPagedBatcher, Column};
 use mz_timely_util::containers::stack::FueledBuilder;
-use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
 use std::convert::Infallible;
-use timely::Accountable;
-use timely::container::{CapacityContainerBuilder, PushInto};
+use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::operators::{Capability, CapabilitySet, Exchange as _};
@@ -298,9 +294,25 @@ where
 /// [`UpsertSourceTime`]).
 type UpsertUpdate<T, O> = (UpsertKey, T, UpsertDiff<O>);
 
-/// One stash chunk: a sorted, consolidated run of updates, resident or
-/// spilled to the buffer pool.
-type UpsertChunk<T, O> = ColumnChunk<UpsertKey, T, UpsertDiff<O>, StorageSpill>;
+/// One chunked-flavor stash update: [`UpsertUpdate`] with the time copied
+/// into the data, so the batcher sorts by `(time, key)`.
+///
+/// A seal at an upper then cuts a prefix of the batcher's chains. Its extract
+/// passes chunks wholly on either side of the upper through by their time
+/// bounds, so it rewrites only the chunk the upper splits. Its merges pass
+/// chunks through when their data ranges are disjoint, which holds between
+/// chains at different times, so data at a later time does not rewrite the
+/// stashed backlog; data at the same time merges as in any batcher (see
+/// [`ChunkedArm`] for what a pass-through still costs). Sorted by key, every
+/// chunk spans the stash's whole time range, so each seal would load and
+/// rewrite every chunk, which makes catching up on a tail of `n` timestamps
+/// quadratic in the tail. Within one time, entries stay sorted by key, which
+/// the drain's monotone probes rely on.
+type TimeMajorUpdate<T, O> = ((T, UpsertKey), T, UpsertDiff<O>);
+
+/// One chunked-flavor stash chunk: a sorted, consolidated run of time-major
+/// updates, resident or spilled to the buffer pool.
+type UpsertChunk<T, O> = ColumnChunk<(T, UpsertKey), T, UpsertDiff<O>, StorageSpill>;
 
 /// The chunked flavor's stash: differential's chunk merge batcher over
 /// `ColumnChunk`s. Data is pushed in unsorted. The batcher maintains
@@ -318,8 +330,11 @@ type UpsertChunkBatcher<T, O> = ChunkBatcher<UpsertChunk<T, O>>;
 type UpsertPagedBatcher<T, O> = ColumnMergeBatcher<UpsertKey, T, UpsertDiff<O>>;
 
 /// The chunker that sorts and consolidates raw input into the `Column` chunks
-/// both stash batchers consume.
+/// the paged stash batcher consumes.
 type UpsertChunker<T, O> = ColumnChunker<UpsertUpdate<T, O>>;
+
+/// [`UpsertChunker`]'s time-major counterpart, for the chunked stash.
+type TimeMajorChunker<T, O> = ColumnChunker<TimeMajorUpdate<T, O>>;
 
 /// The operator's data-output handle. A fueled `Vec` builder so the drain can
 /// `give_fueled` each emitted update and yield to timely under large snapshot
@@ -436,7 +451,7 @@ pub fn upsert_inner<'scope, T, FromTime>(
     PressOnDropButton,
 )
 where
-    T: BucketTimestamp + TotalOrder + Sync,
+    T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
     T: columnation::Columnation,
     T: columnar::Columnar + Default,
@@ -574,9 +589,7 @@ fn build_upsert_operator<'scope, A, T, FromTime>(
 )
 where
     A: UpsertStashArm<T, FromTime::Order>,
-    A::Batcher: PushInto<<A::Batcher as Batcher>::Output>,
-    <A::Batcher as Batcher>::Output: Accountable,
-    T: BucketTimestamp + TotalOrder + Sync,
+    T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
     T: columnation::Columnation,
     T: columnar::Columnar + Default,
@@ -624,22 +637,22 @@ where
 
         let mut hydrating = true;
 
-        // Source stash, bucketed by time (see `Stash`). Each bucket's batcher
-        // maintains geometrically-sized sorted chains and consolidates via
-        // the UpsertDiff Semigroup as data is pushed in, bounding memory to
-        // O(unique key-time pairs) even during large initial snapshots. How
-        // cold stash state leaves RSS is flavor-specific; see the arm impls.
-        let mut stash = Stash::<T, A::Batcher>::new(A::new_batcher);
-        // The chunker sorts and consolidates raw input into the `Column` chunks
-        // the stash batchers consume.
-        let mut chunker: UpsertChunker<T, FromTime::Order> = Default::default();
+        // Source stash. The batcher maintains geometrically-sized sorted
+        // chains and consolidates via the UpsertDiff Semigroup as data is
+        // pushed in, bounding memory to O(unique key-time pairs) even during
+        // large initial snapshots. How cold stash state leaves RSS is
+        // flavor-specific; see the arm impls.
+        let mut batcher = A::new_batcher();
+        // The chunker sorts and consolidates raw input into the chunks the
+        // batcher consumes.
+        let mut chunker = A::Chunker::default();
         // Scratch buffer for accumulating source events before flushing to
-        // the stash. Drained on each iteration via the chunker.
+        // the batcher. Drained on each iteration via the chunker.
         let mut push_buffer: Vec<UpsertUpdate<T, FromTime::Order>> = Vec::new();
 
         // Capability held at the minimum time of any buffered data. When
         // Some, the operator may still produce output; when None, the
-        // stash is empty.
+        // batcher is empty.
         let mut stash_cap: Option<Capability<T>> = None;
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
 
@@ -651,9 +664,9 @@ where
         let mut rehydration_updates: u64 = 0;
 
         // Main operator loop. Each iteration performs four steps:
-        //   Step 1: Ingest source data into the stash.
+        //   Step 1: Ingest source data into the batcher.
         //   Step 2: Read the persist frontier and update rehydration state.
-        //   Step 3: Seal the stash, drain eligible entries, push back the rest.
+        //   Step 3: Seal the batcher, drain eligible entries, push back the rest.
         //   Step 4: Manage the output capability.
         loop {
             // Block until woken by source input or a persist frontier advance.
@@ -709,33 +722,10 @@ where
                 }
             }
 
-            // Everything the empty stash can still receive is buffered, at or
-            // past the input frontier, and at or past `resume_upper`, since
-            // Step 1 drops input below it.
-            if stash.min_time().is_none() {
-                let mut lowest = input_upper.clone();
-                for (_, ts, _) in &push_buffer {
-                    lowest.insert_ref(ts);
-                }
-                if PartialOrder::less_than(&lowest, &resume_upper) {
-                    lowest.clone_from(&resume_upper);
-                }
-                if !lowest.is_empty() {
-                    stash.advance_empty(&lowest);
-                }
-            }
-
-            // Flush buffered events through the chunker into the stash. This
+            // Flush buffered events through the chunker into the batcher. This
             // triggers the chunker + geometric chain merging, which consolidates
             // entries for the same (key, time) via the UpsertDiff Semigroup.
-            stash.push(&mut push_buffer, |updates, batcher| {
-                A::flush(updates, &mut chunker, batcher)
-            });
-            // Running out of fuel leaves the chain less well-formed, which
-            // costs `peel` more splits but not correctness, so the operator
-            // does not reactivate itself to finish.
-            let mut fuel = STASH_RESTORE_FUEL;
-            stash.restore(&mut fuel);
+            A::flush(&mut push_buffer, &mut chunker, &mut batcher);
 
             // Step 2: Read persist frontier.
             // The persist probe tells us which output times have been
@@ -776,32 +766,30 @@ where
             }
 
             // Step 3: Seal & drain.
-            // Seal each stash bucket holding a time below the seal upper (see
-            // `seal_upper`, just past persist_upper) to extract the
-            // source-finalized entries that can be processed now as sorted,
-            // consolidated chunks. A bucket's seal merges all its chains
-            // (O(N) linear merge of sorted data) and splits by time: entries
-            // below the seal upper are extracted, the rest stay in the bucket.
+            // Seal the batcher at `seal_upper`, just past persist_upper and at
+            // most input_upper, to extract source-finalized entries as sorted,
+            // consolidated chunks. The seal merges all internal chains and
+            // splits by time: entries below the seal upper are extracted, the
+            // rest stay in the batcher.
             //
             // Extracted entries are partitioned into:
             //   - Eligible (ts == persist_upper): processed now via a
             //     prior-value lookup in the persist trace.
             //   - Ineligible (persist_upper < ts < seal upper): persist
-            //     hasn't caught up yet, so pushed back into the stash.
-            //     These share persist_upper's `mz_repr::Timestamp`.
+            //     hasn't caught up yet, so pushed back into the batcher.
             //
             // We skip the seal entirely unless an eligible entry is at all
-            // possible. Sealing merges every chain of each bucket it touches
-            // regardless of how much it extracts, so sealing when nothing
-            // can be processed makes the operator quadratic in the number of
-            // wakeups (a real pathology during upstream snapshots and during
-            // rehydration when the source races ahead of persist).
+            // possible. `seal` merges all chains regardless of how much it
+            // extracts, so calling it when nothing can be processed makes
+            // the operator quadratic in the number of wakeups (a real
+            // pathology during upstream snapshots and during rehydration
+            // when the source races ahead of persist).
             //
             // For an entry at `ts` to be eligible we need
             // `ts == persist_upper && ts < input_upper`. The necessary
-            // preconditions, expressible without scanning the stash:
+            // preconditions, expressible without scanning the batcher:
             //   1. `cap.time() <= persist_upper`. Since `cap.time()` is
-            //      maintained as a lower bound on `min(ts in stash)`, if
+            //      maintained as a lower bound on `min(ts in batcher)`, if
             //      `cap.time() > persist_upper` then every buffered ts is
             //      strictly above persist_upper and none can equal it.
             //   2. `persist_upper < input_upper`. Otherwise no `ts` that
@@ -820,53 +808,63 @@ where
                 // Step 1 already consolidated `push_buffer` through the chunker
                 // (which readies a complete chunk per `push_into`), so the
                 // chunker holds nothing pending here and we can seal directly.
-                let upper = seal_upper(&persist_upper, &input_upper);
+                let (sealed, _description) = batcher.seal(seal_upper(&persist_upper, &input_upper));
+                // Frontier of data remaining in the batcher (ts >= seal upper).
+                let remaining_frontier = batcher.frontier().to_owned();
+
                 let mut ineligible = Vec::new();
-                for sealed in stash.seal(&upper) {
-                    // The drain emits eligible output directly through
-                    // `output_handle` (fueled), so there is no intermediate
-                    // output buffer to drain afterward.
-                    let drain_stats = A::drain(
-                        sealed,
-                        &mut ineligible,
-                        &output_handle,
-                        &*cap,
-                        &persist_upper,
-                        &mut persist_trace,
-                        source_config.worker_id,
-                        source_config.id,
-                    )
-                    .await;
+                // The drain emits eligible output directly through
+                // `output_handle` (fueled), so there is no intermediate
+                // output buffer to drain afterward.
+                let drain_stats = A::drain(
+                    sealed,
+                    &mut ineligible,
+                    &output_handle,
+                    &*cap,
+                    &persist_upper,
+                    &mut persist_trace,
+                    source_config.worker_id,
+                    source_config.id,
+                )
+                .await;
 
-                    upsert_metrics.multi_get_size.inc_by(drain_stats.eligible);
-                    upsert_metrics
-                        .multi_get_result_count
-                        .inc_by(drain_stats.result_count);
-                    upsert_metrics
-                        .multi_put_size
-                        .inc_by(drain_stats.output_count);
-                    upsert_metrics.upsert_inserts.inc_by(drain_stats.inserts);
-                    upsert_metrics.upsert_updates.inc_by(drain_stats.updates);
-                    upsert_metrics.upsert_deletes.inc_by(drain_stats.deletes);
-
-                    if hydrating {
-                        rehydration_total += drain_stats.inserts;
-                        rehydration_updates += drain_stats.eligible;
-                    }
-                }
+                upsert_metrics.multi_get_size.inc_by(drain_stats.eligible);
+                upsert_metrics
+                    .multi_get_result_count
+                    .inc_by(drain_stats.result_count);
+                upsert_metrics
+                    .multi_put_size
+                    .inc_by(drain_stats.output_count);
+                upsert_metrics.upsert_inserts.inc_by(drain_stats.inserts);
+                upsert_metrics.upsert_updates.inc_by(drain_stats.updates);
+                upsert_metrics.upsert_deletes.inc_by(drain_stats.deletes);
                 upsert_metrics
                     .restashed
                     .inc_by(u64::cast_from(ineligible.len()));
-                stash.push(&mut ineligible, |updates, batcher| {
-                    A::flush(updates, &mut chunker, batcher)
-                });
+
+                if hydrating {
+                    rehydration_total += drain_stats.inserts;
+                    rehydration_updates += drain_stats.eligible;
+                }
 
                 // Step 4: Capability management.
                 // Downgrade the output capability to the minimum time of any
-                // remaining data, entries left in a bucket or pushed back.
-                match stash.min_time() {
+                // remaining data: either entries still in the batcher (at or
+                // above the seal upper) or ineligible entries being pushed back.
+                let min_ineligible_ts = ineligible.iter().map(|(_, ts, _)| ts).min().cloned();
+                A::flush(&mut ineligible, &mut chunker, &mut batcher);
+
+                // `Option::min` alone would be wrong here, `None` sorts low.
+                // Chain the candidates and take the min over present ones.
+                let min_ts = remaining_frontier
+                    .elements()
+                    .first()
+                    .into_iter()
+                    .chain(min_ineligible_ts.as_ref())
+                    .min();
+                match min_ts {
                     Some(min_ts) => cap.downgrade(min_ts),
-                    // The stash is completely empty. Drop the capability so
+                    // Batcher is completely empty. Drop the capability so
                     // downstream operators can make progress.
                     None => stash_cap = None,
                 }
@@ -891,16 +889,15 @@ where
     )
 }
 
-/// The upper at which to seal the stash: the start of the `mz_repr::Timestamp`
-/// after `persist_upper`'s, capped at `input_upper` so no unfinalized time is
-/// extracted.
+/// The start of the `mz_repr::Timestamp` after `persist_upper`'s, capped at
+/// `input_upper` so no unfinalized time is extracted.
 ///
 /// Only entries at `persist_upper` are eligible in a round, and the drain
-/// returns every other extracted entry as a resident `Vec`, outside the buffer
-/// pool budget, to be re-pushed through the chunker. Sealing at `input_upper`
-/// instead would do that for the whole backlog between the two frontiers once
-/// per persist round trip, which is the entire source tail while the operator
-/// catches up from behind. Entries left in a bucket stay in its chains.
+/// returns every extracted entry past `persist_upper` as a resident `Vec`,
+/// outside the buffer pool budget, to be re-pushed through the chunker.
+/// Sealing at `input_upper` instead would do that for the whole backlog
+/// between the two frontiers once per persist round trip, which is the entire
+/// source tail while the operator catches up from behind.
 fn seal_upper<T>(persist_upper: &Antichain<T>, input_upper: &Antichain<T>) -> Antichain<T>
 where
     T: Timestamp + TotalOrder + Refines<mz_repr::Timestamp>,
@@ -915,242 +912,6 @@ where
 /// `None` when that timestamp is the maximum.
 fn next_outer<T: Refines<mz_repr::Timestamp>>(ts: &T) -> Option<T> {
     ts.clone().to_outer().try_step_forward().map(T::to_inner)
-}
-
-/// Records an operator round's `restore` may move between stash buckets. Fuel
-/// is checked before each split and charged after it, so one split can
-/// overshoot. Tests use 1, so restore regularly stops partway.
-const STASH_RESTORE_FUEL: i64 = if cfg!(test) { 1 } else { 1_000_000 };
-
-/// The source stash: updates bucketed by time in a [`BucketChain`], plus a
-/// front bucket for pushed-back updates below the chain's start.
-///
-/// A batcher sorts by key, so extracting the entries at one time costs a merge
-/// and split of everything it holds. Bucketing by time bounds a round's
-/// extraction to the buckets below the seal upper. The chain keeps its buckets
-/// near the start small and splits farther ones as the frontier reaches them.
-///
-/// Every time belongs to exactly one bucket: the chain's buckets partition the
-/// times from its start, and the front holds the times below it. Each bucket
-/// consolidates and drains on its own, so two updates for one `(key, time)` in
-/// different buckets would both be emitted against the same prior value.
-struct Stash<T, B>
-where
-    StashBucket<T, B>: Bucket,
-{
-    chain: BucketChain<StashBucket<T, B>>,
-    /// Updates pushed back below the chain's start after `peel` passed it.
-    front: StashBucket<T, B>,
-}
-
-impl<T, B> Stash<T, B>
-where
-    T: BucketTimestamp + TotalOrder + Refines<mz_repr::Timestamp>,
-    B: Batcher<Time = T> + PushInto<<B as Batcher>::Output>,
-    <B as Batcher>::Output: Accountable,
-{
-    fn new(new_batcher: fn() -> B) -> Self {
-        Stash {
-            chain: BucketChain::new(StashBucket::new(new_batcher)),
-            front: StashBucket::new(new_batcher),
-        }
-    }
-
-    /// The least time held, or `None` when the stash is empty.
-    fn min_time(&self) -> Option<&T> {
-        std::iter::once(&self.front)
-            .chain(self.chain.buckets())
-            .filter_map(|bucket| bucket.frontier.as_option())
-            .min()
-    }
-
-    /// Routes `updates` to their buckets by time and pushes each bucket's
-    /// share into it through `flush`, emptying `updates`.
-    fn push<D>(
-        &mut self,
-        updates: &mut Vec<(UpsertKey, T, D)>,
-        mut flush: impl FnMut(&mut Vec<(UpsertKey, T, D)>, &mut B),
-    ) {
-        while let Some((_, time, _)) = updates.first() {
-            let range = self.chain.range_of(time);
-            let chain = &self.chain;
-            let in_range = |ts: &T| match &range {
-                Some(range) => range.contains(ts),
-                None => chain.range_of(ts).is_none(),
-            };
-            // Source input lands in one bucket in the common case, so it is
-            // flushed in place to keep `updates`' capacity.
-            let mut routed = if updates.iter().all(|(_, ts, _)| in_range(ts)) {
-                None
-            } else {
-                Some(
-                    updates
-                        .extract_if(.., |(_, ts, _)| in_range(ts))
-                        .collect::<Vec<_>>(),
-                )
-            };
-            let bucket = match &range {
-                Some(range) => self
-                    .chain
-                    .find_mut(&range.start)
-                    .expect("range of a bucket"),
-                None => &mut self.front,
-            };
-            let here = routed.as_mut().unwrap_or(updates);
-            bucket.note_times(here.iter().map(|(_, ts, _)| ts));
-            flush(here, &mut bucket.batcher);
-        }
-    }
-
-    /// Seals the buckets holding a time below `upper`, one per item, and
-    /// yields what each extracted.
-    ///
-    /// A seal can load the extracted chunks into memory, so sealing lazily
-    /// keeps one bucket's output resident while the caller drains it. The
-    /// chain's buckets wholly below `upper` leave the chain when this is
-    /// called, so later updates below them go to the front.
-    ///
-    /// NOTE: the iterator owns those buckets, so dropping it before it is
-    /// exhausted drops their updates.
-    fn seal<'a>(
-        &'a mut self,
-        upper: &'a Antichain<T>,
-    ) -> impl Iterator<Item = Vec<B::Output>> + 'a {
-        let Stash { chain, front } = self;
-        let peeled = chain.peel(upper.borrow());
-        let front = std::iter::once(front)
-            .filter_map(move |front| front.holds_below(upper).then(|| front.seal(upper.clone())));
-        let peeled = peeled.into_iter().filter_map(move |mut bucket| {
-            if bucket.frontier.is_empty() {
-                return None;
-            }
-            let sealed = bucket.seal(upper.clone());
-            assert!(bucket.frontier.is_empty(), "peeled bucket past its end");
-            Some(sealed)
-        });
-        // An `upper` inside an `mz_repr::Timestamp` falls in a bucket that
-        // `peel` keeps, since the chain splits only between timestamps.
-        let straddling = std::iter::once(chain).filter_map(move |chain| {
-            let bucket = chain.find_mut(upper.as_option()?)?;
-            bucket
-                .holds_below(upper)
-                .then(|| bucket.seal(upper.clone()))
-        });
-        front.chain(peeled).chain(straddling)
-    }
-
-    /// Drops the chain's buckets below `lowest`, the least time the empty stash
-    /// can still receive, so the chain's first buckets are small where data
-    /// arrives.
-    fn advance_empty(&mut self, lowest: &Antichain<T>) {
-        assert!(self.min_time().is_none(), "advancing a non-empty stash");
-        drop(self.chain.peel(lowest.borrow()));
-    }
-
-    /// Splits buckets toward a well-formed chain until `fuel` runs out.
-    fn restore(&mut self, fuel: &mut i64) {
-        self.chain.restore(fuel);
-    }
-}
-
-/// One time range of the [`Stash`], with its own batcher.
-struct StashBucket<T, B> {
-    batcher: B,
-    /// The least time held, or empty when the bucket holds nothing: the
-    /// batcher's frontier after its last seal, lowered by every push since.
-    frontier: Antichain<T>,
-    /// At or above every time held: the greatest time pushed since the bucket
-    /// was last empty.
-    max_time: Option<T>,
-    new_batcher: fn() -> B,
-}
-
-impl<T, B> StashBucket<T, B>
-where
-    T: Timestamp + TotalOrder,
-    B: Batcher<Time = T>,
-{
-    fn new(new_batcher: fn() -> B) -> Self {
-        StashBucket {
-            batcher: new_batcher(),
-            frontier: Antichain::new(),
-            max_time: None,
-            new_batcher,
-        }
-    }
-
-    fn holds_below(&self, upper: &Antichain<T>) -> bool {
-        self.frontier.iter().any(|ts| !upper.less_equal(ts))
-    }
-
-    /// Records the times of updates about to be pushed into the batcher.
-    fn note_times<'a>(&mut self, times: impl Iterator<Item = &'a T>)
-    where
-        T: 'a,
-    {
-        for ts in times {
-            self.frontier.insert_ref(ts);
-            if self.max_time.as_ref().is_none_or(|max| max.less_than(ts)) {
-                self.max_time = Some(ts.clone());
-            }
-        }
-    }
-
-    /// Extracts the updates below `upper`.
-    ///
-    /// A seal leaves `upper` as the batcher's lower bound, and
-    /// `Description::new` panics on an empty lower bound, so a bucket sealed
-    /// at an empty `upper` must not be sealed again.
-    fn seal(&mut self, upper: Antichain<T>) -> Vec<B::Output> {
-        let (sealed, _description) = self.batcher.seal(upper);
-        self.frontier = self.batcher.frontier().to_owned();
-        if self.frontier.is_empty() {
-            self.max_time = None;
-        }
-        sealed
-    }
-}
-
-impl<T, B> Bucket for StashBucket<T, B>
-where
-    T: BucketTimestamp + TotalOrder,
-    B: Batcher<Time = T> + PushInto<<B as Batcher>::Output>,
-    <B as Batcher>::Output: Accountable,
-{
-    type Timestamp = T;
-
-    /// Moves the updates below `timestamp` into a new lower bucket.
-    ///
-    /// A bucket wholly on one side of `timestamp` splits without a seal.
-    /// Otherwise the seal reads the whole bucket, which for the paged flavor
-    /// loads every chunk, and the extracted chunks are pushed into the new
-    /// batcher.
-    fn split(mut self, timestamp: &T, fuel: &mut i64) -> (Self, Self) {
-        let empty = StashBucket::new(self.new_batcher);
-        if self.frontier.iter().all(|ts| timestamp.less_equal(ts)) {
-            return (empty, self);
-        }
-        if self
-            .max_time
-            .as_ref()
-            .is_some_and(|max| max.less_than(timestamp))
-        {
-            return (self, empty);
-        }
-        let (frontier, max_time) = (self.frontier.clone(), self.max_time.clone());
-        let mut lower = empty;
-        for chunk in self.seal(Antichain::from_elem(timestamp.clone())) {
-            let records = chunk.record_count();
-            if records > 0 {
-                // The lower half holds the bucket's least times.
-                lower.frontier = frontier.clone();
-                lower.max_time = max_time.clone();
-            }
-            *fuel = fuel.saturating_sub(records);
-            lower.batcher.push_into(chunk);
-        }
-        (lower, self)
-    }
 }
 
 /// The flavor-specific pieces of the upsert-v2 operator: the stash batcher,
@@ -1171,35 +932,21 @@ where
     /// it.
     type Batcher: Batcher<Time = T> + 'static;
 
+    /// Sorts and consolidates raw updates into the batcher's chunks.
+    type Chunker: Default + 'static;
+
     /// A new stash batcher for one source dataflow.
     fn new_batcher() -> Self::Batcher;
 
-    /// Push one sorted, consolidated chunk body into the batcher, in the
-    /// batcher's chunk representation.
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: ColumnBody<UpsertUpdate<T, O>>);
-
-    /// Consolidate `updates` through `chunker` into chunk bodies and push
-    /// them into `batcher`, emptying `updates` (keeping its capacity). The
-    /// chunker readies a fully-consolidated chunk per `push_into`, so the
-    /// `extract` loop drains everything it produced.
+    /// Consolidate `updates` through `chunker` into chunks and push them into
+    /// `batcher`, emptying `updates` (keeping its capacity). The chunker
+    /// readies a fully-consolidated chunk per `push_into`, so nothing stays
+    /// pending in it between calls.
     fn flush(
         updates: &mut Vec<UpsertUpdate<T, O>>,
-        chunker: &mut UpsertChunker<T, O>,
+        chunker: &mut Self::Chunker,
         batcher: &mut Self::Batcher,
-    ) {
-        use timely::container::{ContainerBuilder as _, PushInto as _};
-        if updates.is_empty() {
-            return;
-        }
-        let mut raw: Column<UpsertUpdate<T, O>> = Default::default();
-        for update in updates.drain(..) {
-            raw.push_into(&update);
-        }
-        chunker.push_into(&mut raw);
-        while let Some(chunk) = chunker.extract() {
-            Self::push_chunk(batcher, std::mem::take(chunk));
-        }
-    }
+    );
 
     /// Classify one sealed stash against `persist_upper` and emit eligible
     /// output; see [`DrainStats`].
@@ -1215,17 +962,46 @@ where
     ) -> DrainStats;
 }
 
-/// The chunked flavor: [`UpsertChunkBatcher`] stash, [`FeedbackSpine`]
-/// feedback arrangement, bulk-probe drain.
+/// The shared body of the arms' `flush`: writes each update into a raw
+/// column through `record`, consolidates it through `chunker`, and hands each
+/// readied chunk to `push`.
+fn flush_through<T, O, U, C>(
+    updates: &mut Vec<UpsertUpdate<T, O>>,
+    chunker: &mut C,
+    mut record: impl FnMut(UpsertUpdate<T, O>, &mut Column<U>),
+    mut push: impl FnMut(C::Container),
+) where
+    U: columnar::Columnar,
+    C: ContainerBuilder + for<'a> PushInto<&'a mut Column<U>>,
+    C::Container: Default,
+{
+    if updates.is_empty() {
+        return;
+    }
+    let mut raw: Column<U> = Default::default();
+    for update in updates.drain(..) {
+        record(update, &mut raw);
+    }
+    chunker.push_into(&mut raw);
+    while let Some(chunk) = chunker.extract() {
+        push(std::mem::take(chunk));
+    }
+}
+
+/// The chunked flavor: time-major [`UpsertChunkBatcher`] stash,
+/// [`FeedbackSpine`] feedback arrangement, bulk-probe drain.
 ///
 /// NOTE: the seal's chain merge loads the bodies of the chunks it actually
-/// merges, while untouched survivors keep their spilled bodies. The
-/// partition against the upper passes chunks whose resident time bounds fall
-/// entirely on one side through without loading them, so only chunks the
-/// upper splits round-trip the pool codec. The drain then loads sealed
-/// chunks one at a time, so a large drain (a frontier advance releasing a
-/// snapshot's worth of stash at once) holds at most one chunk resident
-/// rather than the whole backlog.
+/// merges. Chunks whose data ranges are disjoint pass through, and the
+/// partition against the upper passes chunks wholly on one side of it
+/// through, so only chunks the upper splits are rewritten (see
+/// [`TimeMajorUpdate`]). Two costs remain per seal. A spilled body that ages
+/// to `compress_min_depth` through a pass-through is loaded once and
+/// re-spilled compressed. A resident chunk's time bounds are recomputed by
+/// scanning its time column, so with spilling off a seal still reads every
+/// stashed time. The drain then loads sealed chunks one at a time, so a large
+/// drain (a frontier advance releasing a snapshot's worth of stash at once)
+/// holds at most one chunk resident rather than the whole backlog.
 struct ChunkedArm;
 
 impl<T, O> UpsertStashArm<T, O> for ChunkedArm
@@ -1238,13 +1014,23 @@ where
 {
     type Spine = FeedbackSpine<T>;
     type Batcher = UpsertChunkBatcher<T, O>;
+    type Chunker = TimeMajorChunker<T, O>;
 
     fn new_batcher() -> Self::Batcher {
         Batcher::new(None, 0)
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: ColumnBody<UpsertUpdate<T, O>>) {
-        batcher.push_into(ColumnChunk::from_body(chunk));
+    fn flush(
+        updates: &mut Vec<UpsertUpdate<T, O>>,
+        chunker: &mut Self::Chunker,
+        batcher: &mut Self::Batcher,
+    ) {
+        flush_through(
+            updates,
+            chunker,
+            |(key, ts, diff), raw| raw.push_into(&((ts.clone(), key), ts, diff)),
+            |chunk| batcher.push_into(ColumnChunk::from_body(chunk)),
+        );
     }
 
     async fn drain(
@@ -1286,6 +1072,7 @@ where
 {
     type Spine = FundedValRowSpine<UpsertKey, T, Diff>;
     type Batcher = UpsertPagedBatcher<T, O>;
+    type Chunker = UpsertChunker<T, O>;
 
     fn new_batcher() -> Self::Batcher {
         let mut batcher: UpsertPagedBatcher<T, O> = Batcher::new(None, 0);
@@ -1293,9 +1080,19 @@ where
         batcher
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: ColumnBody<UpsertUpdate<T, O>>) {
-        // The pager's chains are edge containers, so the body goes back onto one.
-        batcher.push_into(Column::from(chunk));
+    fn flush(
+        updates: &mut Vec<UpsertUpdate<T, O>>,
+        chunker: &mut Self::Chunker,
+        batcher: &mut Self::Batcher,
+    ) {
+        flush_through(
+            updates,
+            chunker,
+            |update, raw| raw.push_into(&update),
+            // The pager's chains are edge containers, so the body goes back
+            // onto one.
+            |chunk| batcher.push_into(Column::from(chunk)),
+        );
     }
 
     async fn drain(
@@ -1391,7 +1188,7 @@ struct DrainStats {
 /// probe hits for its keys) is resident regardless of drain size. Only the
 /// re-stashed ineligible set is materialized.
 async fn drain_sealed_input_chunked<T, O>(
-    sealed: impl Iterator<Item = ColumnBody<UpsertUpdate<T, O>>>,
+    sealed: impl Iterator<Item = ColumnBody<TimeMajorUpdate<T, O>>>,
     ineligible: &mut Vec<UpsertUpdate<T, O>>,
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
@@ -1433,10 +1230,11 @@ where
         let mut start = 0;
         while start < total {
             // Pass 1: this window's sorted, deduplicated probe keys. The
-            // chunk is sorted by (key, time), so a window is a contiguous
-            // record range, probes come out sorted, and dedup is a neighbor
-            // test. The window closes where its PROBE_WINDOW + 1st distinct
-            // eligible key would begin.
+            // chunk is sorted by (time, key) and eligible entries share one
+            // time, so they are contiguous and key-sorted: a window is a
+            // contiguous record range, probes come out sorted, and dedup is
+            // a neighbor test. The window closes where its PROBE_WINDOW + 1st
+            // distinct eligible key would begin.
             let mut probe_col = <UpsertKey as columnar::Columnar>::Container::default();
             let mut probe_count = 0usize;
             let mut end = total;
@@ -1444,7 +1242,7 @@ where
                 use columnar::Push;
                 let mut last_probe: Option<&UpsertKey> = None;
                 for index in start..total {
-                    let (key, ts, _diff) = view.get(index);
+                    let ((_, key), ts, _diff) = view.get(index);
                     let ts = <T as columnar::Columnar>::into_owned(ts);
                     if matches!(classify_time(persist_upper, &ts), TimeClass::Eligible) {
                         if last_probe != Some(key) {
@@ -1507,7 +1305,7 @@ where
 
             // Pass 3: classify and emit this window's records.
             for index in start..end {
-                let (key, ts, diff) = view.get(index);
+                let ((_, key), ts, diff) = view.get(index);
                 let ts = <T as columnar::Columnar>::into_owned(ts);
                 match classify_time(persist_upper, &ts) {
                     TimeClass::AlreadyPersisted => continue,
@@ -2039,11 +1837,11 @@ mod test {
         assert_eq!(actual, expected);
     }
 
-    /// A tail that arrives over several input frontier advances spreads over
-    /// several stash buckets, and still drains in time order per key.
+    /// A tail that arrives over several input frontier advances, so over
+    /// several batcher chains, drains in time order per key.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
-    fn source_tail_across_stash_buckets() {
+    fn source_tail_across_rounds() {
         let actual = upsert_test!(|input, persist, worker| {
             let (ka, kb) = (key(1), key(2));
             let (a0, a2, b1, b2) = (row(1, 0), row(1, 2), row(2, 1), row(2, 2));
@@ -2209,8 +2007,8 @@ mod test {
         assert_eq!(actual, expected);
     }
 
-    /// Data far ahead of the frontier drains once persist reaches it, after
-    /// the stash's chain has split down to its timestamp.
+    /// Data far ahead of the frontier stays stashed through earlier rounds
+    /// and drains once persist reaches it.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn far_ahead_data_drains() {
@@ -2338,23 +2136,144 @@ mod test {
         );
     }
 
-    /// Drives a [`Stash`] through a pseudo-random sequence of pushes, restores,
-    /// seals and push-backs, checking it against a model that maps each
-    /// `(time, key)` to the greatest order pushed for it, which is what
+    /// A persist frontier that jumps into the middle of a stashed tail drops
+    /// the entries it passed, drains the one it lands on, and keeps the rest
+    /// in the stash for later rounds without extracting them.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn persist_jump_into_tail() {
+        let actual = upsert_test!(|input, persist, worker, registry| {
+            for t in 2..=8 {
+                let k = i64::try_from(t).expect("small");
+                input.send(((key(k), Some(Ok(row(k, k))), 1), new_ts(t), Diff::ONE));
+            }
+            input.advance_to(new_ts(10));
+            for _ in 0..5 {
+                worker.step();
+            }
+            persist.advance_to(new_ts(5));
+            for _ in 0..5 {
+                worker.step();
+            }
+            for t in 6..=9 {
+                persist.advance_to(new_ts(t));
+                input.advance_to(new_ts(10 + t));
+                for _ in 0..5 {
+                    worker.step();
+                }
+            }
+
+            let restashed: u64 = registry
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_storage_upsert_restashed_total")
+                .flat_map(|family| family.get_metric())
+                .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+                .sum();
+            assert_eq!(restashed, 0, "the kept tail was extracted and pushed back");
+        });
+        let expected: Vec<(Result<Row, DataflowError>, _, _)> = (5..=8)
+            .map(|t| {
+                let k = i64::try_from(t).expect("small");
+                (Ok(row(k, k)), new_ts(t), Diff::ONE)
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
+    /// A tail of several timestamps, each larger than one committed chunk,
+    /// drains correctly when the chunked stash spills, and each seal passes
+    /// the spilled chunks wholly past its upper through. The paged flavor
+    /// stays resident and is the reference.
+    ///
+    /// Each timestamp's 25k updates fill one to two committed chunks. Loading
+    /// commits each chunk once and ages it into a compressed body once, and
+    /// a seal re-commits at most the two pieces of the chunk it splits, so
+    /// the pool sees about 3 inserts per timestamp (34 here). A seal that
+    /// rewrote every remaining chunk would add about one per remaining
+    /// timestamp per round, roughly 100 more over 12 timestamps.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn spilled_tail_drains_across_split_chunks() {
+        use mz_ore::pool::Pool;
+        use mz_timely_util::columnar::chunk::set_spill_override;
+
+        let pool = Pool::new().expect("pool creation");
+        set_spill_override(Some(pool.clone()));
+
+        const TIMESTAMPS: u64 = 12;
+        const KEYS: i64 = 25_000;
+        let actual = upsert_test!(|input, persist, worker, registry| {
+            let mut batch = Vec::new();
+            let mut offset = 0;
+            for t in 0..TIMESTAMPS {
+                for k in 0..KEYS {
+                    offset += 1;
+                    let v = row(k, i64::from(offset));
+                    batch.push(((key(k), Some(Ok(v)), offset), new_ts(t), Diff::ONE));
+                }
+            }
+            input.send_batch(&mut batch);
+            input.advance_to(new_ts(TIMESTAMPS));
+            for _ in 0..5 {
+                worker.step();
+            }
+            for t in 1..=TIMESTAMPS {
+                persist.advance_to(new_ts(t));
+                input.advance_to(new_ts(TIMESTAMPS + t));
+                for _ in 0..5 {
+                    worker.step();
+                }
+            }
+
+            let restashed: u64 = registry
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_storage_upsert_restashed_total")
+                .flat_map(|family| family.get_metric())
+                .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+                .sum();
+            assert_eq!(restashed, 0, "updates pushed back during catch-up");
+        });
+
+        set_spill_override(None);
+        let inserts = pool.stats().inserts;
+        assert!(inserts > 0, "chunks should have spilled through the pool");
+        assert!(
+            inserts <= 5 * TIMESTAMPS,
+            "{inserts} pool inserts: seals rewrote chunks past their upper"
+        );
+
+        // No feedback reaches persist, so every update drains as an insert.
+        let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = Vec::new();
+        let mut offset = 0;
+        for t in 0..TIMESTAMPS {
+            for k in 0..KEYS {
+                offset += 1;
+                expected.push((Ok(row(k, i64::from(offset))), new_ts(t), Diff::ONE));
+            }
+        }
+        let mut actual = actual;
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
+    }
+
+    /// Drives an arm's stash batcher through a pseudo-random sequence of
+    /// pushes, seals and push-backs, checking it against a model that maps
+    /// each `(time, key)` to the greatest order pushed for it, which is what
     /// consolidation keeps. Every seal must extract exactly the model's
-    /// entries below the upper, and the stash's least time must match the
-    /// model's after every step.
+    /// entries below the upper, and the least time held, the batcher's
+    /// frontier plus the pushed-back entries, must match the model's.
     fn stash_matches_model<A>(
         decode: impl Fn(Vec<<A::Batcher as Batcher>::Output>) -> Vec<(UpsertKey, Ts, i32)>,
     ) where
         A: UpsertStashArm<Ts, i32>,
-        A::Batcher: PushInto<<A::Batcher as Batcher>::Output>,
-        <A::Batcher as Batcher>::Output: Accountable,
     {
         use std::collections::BTreeMap;
 
-        let mut stash = Stash::<Ts, A::Batcher>::new(A::new_batcher);
-        let mut chunker: UpsertChunker<Ts, i32> = Default::default();
+        let mut batcher = A::new_batcher();
+        let mut chunker = A::Chunker::default();
         let mut model: BTreeMap<(Ts, UpsertKey), i32> = BTreeMap::new();
         let mut state: u64 = 0x2545_f491_4f6c_dd1d;
         let mut next = move |n: u64| {
@@ -2366,7 +2285,7 @@ mod test {
         let mut upper = sub_ts(0, 0);
         let mut order = 0;
         for _ in 0..2000 {
-            match next(4) {
+            match next(3) {
                 0 | 1 => {
                     // Source input arrives at or past the seal upper.
                     let mut updates = Vec::new();
@@ -2383,20 +2302,15 @@ mod test {
                         };
                         updates.push((k, ts, diff));
                     }
-                    stash.push(&mut updates, |updates, batcher| {
-                        A::flush(updates, &mut chunker, batcher)
-                    });
-                }
-                2 => {
-                    let mut fuel = i64::try_from(next(3)).expect("small");
-                    stash.restore(&mut fuel);
+                    A::flush(&mut updates, &mut chunker, &mut batcher);
                 }
                 _ => {
                     let outer = u64::from(upper.0) + next(5);
                     upper = std::cmp::max(sub_ts(outer, next(3)), upper);
-                    let mut extracted: Vec<_> = stash
-                        .seal(&Antichain::from_elem(upper))
-                        .flat_map(&decode)
+                    let (sealed, _description) = batcher.seal(Antichain::from_elem(upper));
+                    let mut least = batcher.frontier().to_owned();
+                    let mut extracted: Vec<_> = decode(sealed)
+                        .into_iter()
                         .map(|(k, ts, order)| (ts, k, order))
                         .collect();
                     extracted.sort();
@@ -2418,21 +2332,17 @@ mod test {
                                 value: None,
                             };
                             pushed_back.push((k, ts, diff));
+                            least.insert(ts);
                         }
                     }
-                    stash.push(&mut pushed_back, |updates, batcher| {
-                        A::flush(updates, &mut chunker, batcher)
-                    });
+                    A::flush(&mut pushed_back, &mut chunker, &mut batcher);
+                    assert_eq!(
+                        least.as_option(),
+                        model.keys().next().map(|(ts, _)| ts),
+                        "least time held"
+                    );
                 }
             }
-            if stash.min_time().is_none() {
-                stash.advance_empty(&Antichain::from_elem(upper));
-            }
-            assert_eq!(
-                stash.min_time(),
-                model.keys().next().map(|(ts, _)| ts),
-                "least time held"
-            );
         }
     }
 
@@ -2466,7 +2376,7 @@ mod test {
                 let body = chunk.into_body();
                 let view = body.borrow();
                 for index in 0..view.len() {
-                    let (k, ts, diff) = view.get(index);
+                    let ((_, k), ts, diff) = view.get(index);
                     let diff = <UpsertDiff<i32> as columnar::Columnar>::into_owned(diff);
                     out.push((
                         *k,
@@ -2475,6 +2385,10 @@ mod test {
                     ));
                 }
             }
+            assert!(
+                out.is_sorted_by_key(|(k, ts, _)| (*ts, *k)),
+                "sealed chunks are time-major"
+            );
             out
         });
     }
@@ -2495,8 +2409,18 @@ mod test {
         // Capped at the input frontier, which may sit inside the outer timestamp.
         assert_eq!(seal_upper(&at(5, 0), &at(5, 7)), at(5, 7));
         assert_eq!(seal_upper(&at(5, 0), &at(6, 0)), at(6, 0));
-        // An empty input frontier finalizes everything.
+        // An empty input frontier caps nothing. Times past the next outer
+        // timestamp stay stashed, as they cannot be eligible this round.
         assert_eq!(seal_upper(&at(5, 0), &Antichain::new()), at(6, 0));
+        // At the maximum outer timestamp there is no next one to stop at.
+        assert_eq!(
+            seal_upper(&at(u64::MAX, 2), &at(u64::MAX, 7)),
+            at(u64::MAX, 7)
+        );
+        assert_eq!(
+            seal_upper(&at(u64::MAX, 2), &Antichain::new()),
+            Antichain::new()
+        );
     }
 
     #[mz_ore::test]
@@ -2773,8 +2697,8 @@ mod test {
     /// neither `ts == persist_upper` nor `ts > persist_upper`), mirroring v1's
     /// `relevant = persist_upper.less_equal(ts)`. Were it instead re-stashed,
     /// the data would be stranded forever — `persist_upper` only advances, so
-    /// `ts == persist_upper` could never again hold — and its stash bucket's
-    /// frontier would pin the operator's output capability at `ts = 5`, BELOW the shard
+    /// `ts == persist_upper` could never again hold — and `min_ineligible_ts`
+    /// would pin the operator's output capability at `ts = 5`, BELOW the shard
     /// upper, where it would stay for good. Dropping it lets the frontier
     /// advance freely.
     #[mz_ore::test]
