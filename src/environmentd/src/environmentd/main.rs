@@ -62,7 +62,8 @@ use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{
-    MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
+    GrpcPubSubClient, MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PersistPubSubClient,
+    PersistPubSubClientConfig, PubSubClientConnection, PubSubSender,
 };
 use mz_secrets::SecretsController;
 use mz_secrets_cli::{SecretsControllerKind, SecretsReaderCliArgs};
@@ -375,13 +376,16 @@ pub struct Args {
     persist_consensus_url: Option<SensitiveUrl>,
     /// The Persist PubSub URL.
     ///
-    /// This URL is passed to `clusterd` for discovery of the Persist PubSub service.
+    /// This URL is passed to `clusterd` and used by this process in external mode.
     #[clap(
         long,
         env = "PERSIST_PUBSUB_URL",
         default_value = "http://localhost:6879"
     )]
     persist_pubsub_url: String,
+    /// Use the external Persist PubSub service instead of starting an in-process relay.
+    #[clap(long, env = "PERSIST_PUBSUB_EXTERNAL")]
+    persist_pubsub_external: bool,
     /// The number of worker threads created for the IsolatedRuntime used for
     /// storage related tasks. A negative value will subtract from the number
     /// of threads returned by [`num_cpus::get`].
@@ -968,8 +972,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // Start with compaction disabled, later enable it if we're not in read-only mode.
     persist_config.disable_compaction();
 
-    let persist_pubsub_server = PersistGrpcPubSubServer::new(&persist_config, &metrics_registry);
-    let persist_pubsub_client = persist_pubsub_server.new_same_process_connection();
+    let persist_pubsub_server = (!args.persist_pubsub_external)
+        .then(|| PersistGrpcPubSubServer::new(&persist_config, &metrics_registry));
+    let persist_pubsub_client = persist_pubsub_server
+        .as_ref()
+        .map(PersistGrpcPubSubServer::new_same_process_connection);
 
     match args.persist_isolated_runtime_threads {
         // Use the default.
@@ -984,33 +991,49 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         }
     };
 
-    let _server = runtime.spawn_named(
-        || "persist::rpc::server",
-        async move {
-            info!(
-                "listening for Persist PubSub connections on {}",
-                args.internal_persist_pubsub_listen_addr
-            );
-            // Intentionally do not bubble up errors here, we don't want to take
-            // down environmentd if there are any issues with the pubsub server.
-            let res = persist_pubsub_server
-                .serve(args.internal_persist_pubsub_listen_addr)
-                .await;
-            error!("Persist Pubsub server exited {:?}", res);
-        }
-        .instrument(tracing::info_span!("persist::rpc::server")),
-    );
+    let _server = persist_pubsub_server.map(|persist_pubsub_server| {
+        runtime.spawn_named(
+            || "persist::rpc::server",
+            async move {
+                info!(
+                    "listening for Persist PubSub connections on {}",
+                    args.internal_persist_pubsub_listen_addr
+                );
+                // Intentionally do not bubble up errors here, we don't want to take
+                // down environmentd if there are any issues with the pubsub server.
+                let res = persist_pubsub_server
+                    .serve(args.internal_persist_pubsub_listen_addr)
+                    .await;
+                error!("Persist Pubsub server exited {:?}", res);
+            }
+            .instrument(tracing::info_span!("persist::rpc::server")),
+        )
+    });
 
     let persist_clients = {
         // PersistClientCache may spawn tasks, so run within a tokio runtime context
         let _tokio_guard = runtime.enter();
         PersistClientCache::new(persist_config, &metrics_registry, |cfg, metrics| {
-            let sender: Arc<dyn PubSubSender> = Arc::new(MetricsSameProcessPubSubSender::new(
-                cfg,
-                persist_pubsub_client.sender,
-                metrics,
-            ));
-            PubSubClientConnection::new(sender, persist_pubsub_client.receiver)
+            match persist_pubsub_client {
+                Some(client) => {
+                    let sender: Arc<dyn PubSubSender> = Arc::new(
+                        MetricsSameProcessPubSubSender::new(cfg, client.sender, metrics),
+                    );
+                    PubSubClientConnection::new(sender, client.receiver)
+                }
+                None => GrpcPubSubClient::connect(
+                    PersistPubSubClientConfig {
+                        url: args.persist_pubsub_url.clone(),
+                        caller_id: format!(
+                            "environmentd:{}:{}",
+                            args.environment_id,
+                            std::process::id()
+                        ),
+                        persist_cfg: cfg.clone(),
+                    },
+                    metrics,
+                ),
+            }
         })
     };
 
@@ -1221,11 +1244,13 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     for (name, handle) in &server.http_listener_handles {
         println!("{} HTTP address: {}", name, handle.local_addr);
     }
-    // TODO move persist pubsub address like metrics address?
-    println!(
-        " Internal Persist PubSub address: {}",
-        args.internal_persist_pubsub_listen_addr
-    );
+    if !args.persist_pubsub_external {
+        // TODO move persist pubsub address like metrics address?
+        println!(
+            " Internal Persist PubSub address: {}",
+            args.internal_persist_pubsub_listen_addr
+        );
+    }
 
     println!(" Root trace ID: {id}");
 
