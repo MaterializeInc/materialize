@@ -146,6 +146,17 @@ step), Materialize will select the most [recently created capture
 instance](/ingest-data/sql-server/#capture-instance-selection) (i.e., the
 capture instance with the newly added column `b`).
 
+{{< warning >}}
+
+Once the new capture instance exists, SQL Server no longer prevents dropping
+the index that the old capture instance uses. Do not drop the `PRIMARY KEY` or
+`UNIQUE` constraint behind that index until you have re-created the table in
+Materialize from the new capture instance (see next step). Dropping it earlier
+leaves the existing Materialize table with a [key](/ingest-data/sql-server/#keys)
+that the upstream data no longer satisfies.
+
+{{< /warning >}}
+
 See also:
 
 - [Capture instance

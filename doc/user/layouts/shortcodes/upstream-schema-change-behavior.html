@@ -79,12 +79,29 @@ constraint drop](/ingest-data/{{ $connector
 Materialize ignores foreign key and `CHECK` constraint changes. You can add or
 drop them without affecting ingestion.
 
-Adding a `UNIQUE` constraint does not affect ingestion. Dropping a `UNIQUE`
-constraint puts the affected table into an error state.
+Materialize records only the `PRIMARY KEY` or `UNIQUE` constraint that backs
+the capture instance's index as a key. See
+[Keys](/ingest-data/sql-server/#keys) for how that constraint is chosen.
 
-SQL Server does not allow dropping a `PRIMARY KEY` from a table while change data
-capture is enabled on it. A primary key that existed when Materialize began
-ingesting the table therefore cannot be dropped upstream.
+Adding a `PRIMARY KEY` or `UNIQUE` constraint does not affect ingestion.
+Dropping one that the capture instance does not use does not affect ingestion
+either, because Materialize never recorded it as a key.
+
+SQL Server rejects dropping the constraint that the capture instance uses, with
+error 22979, as long as that capture instance is the newest one for the table.
+Creating a newer capture instance with a different index lifts that protection.
+If you then drop the constraint, the Materialize table keeps a key that the
+upstream data no longer satisfies, and queries that rely on the key can return
+wrong results. To change the key of a table, create the new capture instance,
+[re-create the table in
+Materialize](/ingest-data/sql-server/source-versioning/#c-create-a-new-table-from-the-source-in-materialize)
+so that it ingests from the new capture instance, and only then drop the old
+constraint upstream.
+
+Tables created in Materialize before v26.49 record every `PRIMARY KEY` and
+`UNIQUE` constraint that existed when the table was created. Dropping one of
+those upstream is not detected and leaves the table with a stale key. Re-create
+the table to record only the capture instance's constraint.
 
 Adding or removing a `NOT NULL` constraint on an ingested column requires an
 upstream `ALTER COLUMN`, which puts the affected table into an error state. See
