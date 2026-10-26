@@ -8,7 +8,9 @@
 # by the Apache License, Version 2.0.
 
 import os
+import re
 import sys
+import time
 
 from materialize import MZ_ROOT
 from materialize.mzcompose.composition import (
@@ -31,6 +33,15 @@ SERVICES = [
     SqlServer(),
     Testdrive(),
     Materialized(system_parameter_defaults={"enable_rbac_checks": "false"}),
+    # The console image on its own. Nothing listens at MZ_ENDPOINT, so every
+    # proxied request fails with a 502.
+    ServiceDefinition(
+        name="console",
+        config={
+            "mzbuild": "console",
+            "environment": ["MZ_ENDPOINT=http://127.0.0.1:9"],
+        },
+    ),
     ServiceDefinition(
         name="console-runner",
         config={
@@ -119,6 +130,64 @@ def workflow_sql_tests(c: Composition) -> None:
             ]
         ),
     )
+
+
+def workflow_nginx_metrics(c: Composition) -> None:
+    """
+    Check that the console image's nginx counts the requests it serves, by
+    location and status, on its metrics listener.
+    """
+    c.up("console")
+
+    def fetch(url: str, check: bool = True) -> str:
+        # busybox wget exits non-zero on an HTTP error status.
+        return c.exec(
+            "console", "wget", "-q", "-O", "-", url, capture=True, check=check
+        ).stdout
+
+    for _ in range(30):
+        if (
+            c.exec(
+                "console",
+                "wget",
+                "-q",
+                "-O",
+                "/dev/null",
+                "http://127.0.0.1:8080/",
+                check=False,
+            ).returncode
+            == 0
+        ):
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("the console never started serving")
+
+    fetch("http://127.0.0.1:8080/api/sql", check=False)
+    metrics = fetch("http://127.0.0.1:8081/metrics")
+
+    def value(series: str) -> float:
+        match = re.search(rf"^{re.escape(series)} (\S+)$", metrics, re.MULTILINE)
+        assert match, f"{series} missing from:\n{metrics}"
+        return float(match.group(1))
+
+    assert value('mz_console_http_requests_total{location="app",status="200"}') == 1
+    assert value('mz_console_http_requests_total{location="api",status="502"}') == 1
+    # The proxied request is timed, and the histogram's buckets add up to its count.
+    count = value('mz_console_http_request_duration_seconds_count{location="api"}')
+    assert count == 1
+    assert (
+        value(
+            'mz_console_http_request_duration_seconds_bucket{location="api",le="+Inf"}'
+        )
+        == count
+    )
+
+    # Scrapes are not counted, so a second one sees the same request totals.
+    def requests(text: str) -> list[str]:
+        return [l for l in text.splitlines() if l.startswith("mz_console_http_request")]
+
+    assert requests(fetch("http://127.0.0.1:8081/metrics")) == requests(metrics)
 
 
 def workflow_list_versions(c: Composition) -> None:

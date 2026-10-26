@@ -767,6 +767,24 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      - id: console-nginx-metrics
+        topics: [kafka, mysql, postgres, sql-server]
+        label: "Console nginx metrics"
+        depends_on: build-aarch64
+        timeout_in_minutes: 15
+        inputs:
+          - console/Dockerfile
+          - console/misc/docker/**
+          - test/console/**
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: console
+              run: nginx-metrics
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        coverage: skip
+        sanitizer: skip
+
       - id: console-sql-test
         topics: [kafka, mysql, postgres, sql-server]
         label: "Console SQL"

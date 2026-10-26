@@ -696,3 +696,77 @@ impl k8s_controller::Context for Context {
         Ok(None)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use mz_cloud_resources::crd::console::v1alpha1::ConsoleSpec;
+
+    use super::*;
+
+    fn test_context(enable_prometheus_scrape_annotations: bool) -> Context {
+        Context::new(Config {
+            enable_security_context: false,
+            enable_prometheus_scrape_annotations,
+            image_pull_policy: KubernetesImagePullPolicy::IfNotPresent,
+            scheduler_name: None,
+            console_node_selector: vec![],
+            console_affinity: None,
+            console_tolerations: None,
+            console_default_resources: None,
+            network_policies_ingress_enabled: false,
+            network_policies_ingress_cidrs: vec![],
+            default_certificate_specs: DefaultCertificateSpecs::default(),
+            console_http_port: 8080,
+            console_internal_http_port: 8081,
+            balancerd_http_port: 6876,
+        })
+    }
+
+    fn test_console() -> Console {
+        let mut console = Console::new(
+            "test",
+            ConsoleSpec {
+                console_image_ref: "materialize/console:v0.0.0".to_owned(),
+                ..Default::default()
+            },
+        );
+        console.metadata.namespace = Some("test".to_owned());
+        console.metadata.uid = Some("test".to_owned());
+        console.status = Some(console.status());
+        console
+    }
+
+    #[mz_ore::test]
+    fn metrics_listener_is_exposed_and_annotated_when_enabled() {
+        for annotate in [false, true] {
+            let deployment =
+                test_context(annotate).create_console_deployment_object(&test_console());
+            let template = deployment.spec.unwrap().template;
+            let container = &template.spec.unwrap().containers[0];
+
+            let port = container
+                .ports
+                .iter()
+                .flatten()
+                .find(|port| port.name.as_deref() == Some("internal-http"))
+                .expect("the metrics port is declared");
+            assert_eq!(port.container_port, 8081);
+            let listener = container
+                .env
+                .iter()
+                .flatten()
+                .find(|var| var.name == "MZ_NGINX_METRICS_LISTENER_CONFIG")
+                .expect("nginx is told where to listen");
+            assert_eq!(listener.value.as_deref(), Some("listen 8081;"));
+
+            let scrape_port = template
+                .metadata
+                .and_then(|meta| meta.annotations)
+                .and_then(|annotations| annotations.get("prometheus.io/port").cloned());
+            assert_eq!(scrape_port.is_some(), annotate);
+            if annotate {
+                assert_eq!(scrape_port.as_deref(), Some("8081"));
+            }
+        }
+    }
+}
