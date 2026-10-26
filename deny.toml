@@ -95,8 +95,8 @@ skip = [
     { name = "nix", version = "0.26.4" },
     # tokio-tungstenite still pulls 0.29.
     { name = "tungstenite", version = "0.29.0" },
-    # libduckdb-sys still pulls 6.
-    { name = "zip", version = "6.0.0" },
+    # duckdb pins comfy-table to 7.1 for its MSRV, which still pulls 0.28.
+    { name = "crossterm", version = "0.28.1" },
     # flate2 is on 0.9, while apache-avro and backtrace still pull 0.8.
     { name = "miniz_oxide", version = "0.8.9" },
     # reqsign-core is on 0.7, while opendal still pulls 0.6.
@@ -110,9 +110,8 @@ skip = [
     # Used by tokio-postgres (MaterializeInc/rust-postgres fork)
     { name = "phf", version = "0.13.1" },
     { name = "phf_shared", version = "0.13.1" },
-    # Used by iceberg, iceberg-catalog-rest, libduckdb-sys (build), segment, and
-    # the iceberg connection code in mz-storage-types, whose client crosses into
-    # iceberg's API.
+    # Used by iceberg, iceberg-catalog-rest, segment, and the iceberg connection
+    # code in mz-storage-types, whose client crosses into iceberg's API.
     { name = "reqwest", version = "0.12.28" },
     # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
     { name = "darling_macro", version = "0.20.11" },
@@ -137,19 +136,6 @@ skip = [
     # arrow
     { name = "hashbrown", version = "0.16.1" },
     { name = "hashbrown", version = "0.17.1" },
-    # duckdb pins arrow 57 while the workspace is on 58, so mz-testdrive links
-    # both majors. They never meet: duckdb's arrow stays inside duckdb's own API.
-    { name = "arrow", version = "57.1.0" },
-    { name = "arrow-arith", version = "57.1.0" },
-    { name = "arrow-array", version = "57.2.0" },
-    { name = "arrow-buffer", version = "57.3.0" },
-    { name = "arrow-cast", version = "57.2.0" },
-    { name = "arrow-data", version = "57.2.0" },
-    { name = "arrow-ord", version = "57.2.0" },
-    { name = "arrow-row", version = "57.1.0" },
-    { name = "arrow-schema", version = "57.2.0" },
-    { name = "arrow-select", version = "57.2.0" },
-    { name = "arrow-string", version = "57.1.0" },
     # base64 0.22 is still used by arrow, axum, eventsource-client, gcp_auth,
     # headers, iceberg, jsonwebtoken, kube, mysql_common, parquet, pem 3,
     # postgres-protocol, prost-reflect, reqwest 0.12, tonic, tower-http,
@@ -187,7 +173,7 @@ skip = [
     # held back by tower-lsp 0.20 (mz-deploy LSP server)
     { name = "dashmap", version = "5.5.3" },
     { name = "tower", version = "0.4.13" },
-    # held back by duckdb 1.4 (rusqlite in mz-deploy's build cache is on 0.12)
+    # held back by duckdb 1.10506 (rusqlite in mz-deploy's build cache is on 0.12)
     { name = "hashlink", version = "0.10.0" },
     # held back by owo-colors 4.3 (mz-deploy terminal styling)
     { name = "supports-color", version = "2.1.0" },
@@ -284,6 +270,8 @@ wrappers = [
     "tracing-log",
     "tracing",
     "tungstenite",
+    "ureq",
+    "ureq-proto",
     "zopfli",
 ]
 
@@ -344,6 +332,7 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "CC0-1.0",
+    "CDLA-Permissive-2.0",
     "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
