@@ -1882,27 +1882,45 @@ impl CatalogImplication {
                 connection,
                 parsed_full_name,
             } => match parsed_item {
-                CatalogItem::Table(table) => {
-                    self.absorb_table(table, Some(parsed_full_name), catalog_update.diff)
-                }
+                CatalogItem::Table(table) => self.absorb_table(
+                    table,
+                    Some(parsed_full_name.to_string()),
+                    catalog_update.diff,
+                ),
                 CatalogItem::Source(source) => {
                     self.absorb_source(
                         (source, connection),
-                        Some(parsed_full_name),
+                        Some(parsed_full_name.to_string()),
                         catalog_update.diff,
                     );
                 }
                 CatalogItem::Sink(sink) => {
-                    self.absorb_sink(sink, Some(parsed_full_name), catalog_update.diff);
+                    self.absorb_sink(
+                        sink,
+                        Some(parsed_full_name.to_string()),
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::Index(index) => {
-                    self.absorb_index(index, Some(parsed_full_name), catalog_update.diff);
+                    self.absorb_index(
+                        index,
+                        Some(parsed_full_name.to_string()),
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::MaterializedView(mv) => {
-                    self.absorb_materialized_view(mv, Some(parsed_full_name), catalog_update.diff);
+                    self.absorb_materialized_view(
+                        mv,
+                        Some(parsed_full_name.to_string()),
+                        catalog_update.diff,
+                    );
                 }
                 CatalogItem::View(view) => {
-                    self.absorb_view(view, Some(parsed_full_name), catalog_update.diff);
+                    self.absorb_view(
+                        view,
+                        Some(parsed_full_name.to_string()),
+                        catalog_update.diff,
+                    );
                 }
 
                 CatalogItem::Secret(secret) => {
@@ -1914,7 +1932,7 @@ impl CatalogImplication {
                 CatalogItem::MetricSink(metric_sink) => {
                     self.absorb_metric_sink(
                         metric_sink,
-                        Some(parsed_full_name),
+                        Some(parsed_full_name.to_string()),
                         catalog_update.diff,
                     );
                 }
@@ -2008,7 +2026,7 @@ fn webhook_sources_to_restart(updates: &[ParsedStateUpdate]) -> BTreeSet<Catalog
             names
                 .entry(durable_item.id)
                 .or_insert(CatalogImplicationKind::None)
-                .transition(parsed_full_name.as_str(), None, update.diff)
+                .transition(parsed_full_name, None, update.diff)
                 .expect("webhook updates must be consolidated");
         }
     }
@@ -2037,7 +2055,7 @@ fn partition_cluster_replica_drops(
 mod tests {
     use super::*;
     use mz_repr::{GlobalId, RelationDesc, RelationVersion, VersionedRelationDesc};
-    use mz_sql::names::ResolvedIds;
+    use mz_sql::names::{FullItemName, RawDatabaseSpecifier, ResolvedIds};
     use std::collections::BTreeMap;
 
     fn create_test_table(name: &str) -> Table {
@@ -2059,10 +2077,15 @@ mod tests {
 
     fn webhook_update(
         id: u64,
-        full_name: &str,
+        [database, schema, item]: [&str; 3],
         diff: StateDiff,
         as_table: bool,
     ) -> ParsedStateUpdate {
+        let full_name = FullItemName {
+            database: RawDatabaseSpecifier::Name(database.to_string()),
+            schema: schema.to_string(),
+            item: item.to_string(),
+        };
         let data_source = DataSourceDesc::Webhook {
             validate_using: None,
             body_format: mz_sql::plan::WebhookBodyFormat::Text,
@@ -2095,7 +2118,7 @@ mod tests {
                     oid: 1,
                     global_id: GlobalId::User(id),
                     schema_id: mz_sql::names::SchemaId::User(1),
-                    name: full_name.rsplit('.').next().expect("item name").to_string(),
+                    name: full_name.item.clone(),
                     create_sql: format!("CREATE SOURCE {full_name} FROM WEBHOOK BODY FORMAT TEXT"),
                     owner_id: mz_repr::role_id::RoleId::User(1),
                     privileges: vec![],
@@ -2104,7 +2127,7 @@ mod tests {
                 },
                 parsed_item,
                 connection: None,
-                parsed_full_name: full_name.to_string(),
+                parsed_full_name: full_name,
             },
             ts: mz_repr::Timestamp::MIN,
             diff,
@@ -2114,8 +2137,9 @@ mod tests {
     #[mz_ore::test]
     fn webhook_item_and_schema_renames_invalidate_both_representations() {
         for as_table in [false, true] {
-            for new_name in ["db.schema.renamed", "db.renamed.hook"] {
-                let before = webhook_update(1, "db.schema.hook", StateDiff::Retraction, as_table);
+            for new_name in [["db", "schema", "renamed"], ["db", "renamed", "hook"]] {
+                let before =
+                    webhook_update(1, ["db", "schema", "hook"], StateDiff::Retraction, as_table);
                 let after = webhook_update(1, new_name, StateDiff::Addition, as_table);
                 for updates in [
                     vec![before.clone(), after.clone()],
@@ -2131,10 +2155,40 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn webhook_invalidation_preserves_dotted_name_components() {
+        for as_table in [false, true] {
+            let before = webhook_update(1, ["db", "a", "b.c"], StateDiff::Retraction, as_table);
+            let after = webhook_update(1, ["db", "a.b", "c"], StateDiff::Addition, as_table);
+            let full_name = |update: &ParsedStateUpdate| {
+                let ParsedStateUpdateKind::Item {
+                    parsed_full_name, ..
+                } = &update.kind
+                else {
+                    unreachable!();
+                };
+                parsed_full_name.to_string()
+            };
+            assert_eq!(full_name(&before), full_name(&after));
+            for updates in [
+                vec![before.clone(), after.clone()],
+                vec![after.clone(), before.clone()],
+            ] {
+                assert_eq!(
+                    webhook_sources_to_restart(&updates),
+                    BTreeSet::from([CatalogItemId::User(1)])
+                );
+            }
+            let unchanged = webhook_update(1, ["db", "a", "b.c"], StateDiff::Addition, as_table);
+            assert!(webhook_sources_to_restart(&[before, unchanged]).is_empty());
+        }
+    }
+
+    #[mz_ore::test]
     fn webhook_invalidation_uses_net_names_not_intermediate_operations() {
         for as_table in [false, true] {
-            let before = webhook_update(1, "db.schema.hook", StateDiff::Retraction, as_table);
-            let after = webhook_update(1, "db.schema.hook", StateDiff::Addition, as_table);
+            let before =
+                webhook_update(1, ["db", "schema", "hook"], StateDiff::Retraction, as_table);
+            let after = webhook_update(1, ["db", "schema", "hook"], StateDiff::Addition, as_table);
             // An unchanged endpoint, including a rename away and back, needs no restart.
             assert!(webhook_sources_to_restart(&[before.clone(), after.clone()]).is_empty());
             // Create-then-rename has only a final addition. Drops use drop cleanup.
@@ -2142,8 +2196,8 @@ mod tests {
             assert!(webhook_sources_to_restart(&[before]).is_empty());
         }
 
-        let mut before = webhook_update(1, "db.schema.old", StateDiff::Retraction, true);
-        let mut after = webhook_update(1, "db.schema.new", StateDiff::Addition, true);
+        let mut before = webhook_update(1, ["db", "schema", "old"], StateDiff::Retraction, true);
+        let mut after = webhook_update(1, ["db", "schema", "new"], StateDiff::Addition, true);
         for update in [&mut before, &mut after] {
             let ParsedStateUpdateKind::Item { parsed_item, .. } = &mut update.kind else {
                 unreachable!();
@@ -2156,10 +2210,10 @@ mod tests {
     #[mz_ore::test]
     fn webhook_atomic_name_swap_invalidates_each_item() {
         let updates = [
-            webhook_update(1, "db.schema.a", StateDiff::Retraction, true),
-            webhook_update(2, "db.schema.b", StateDiff::Retraction, true),
-            webhook_update(2, "db.schema.a", StateDiff::Addition, true),
-            webhook_update(1, "db.schema.b", StateDiff::Addition, true),
+            webhook_update(1, ["db", "schema", "a"], StateDiff::Retraction, true),
+            webhook_update(2, ["db", "schema", "b"], StateDiff::Retraction, true),
+            webhook_update(2, ["db", "schema", "a"], StateDiff::Addition, true),
+            webhook_update(1, ["db", "schema", "b"], StateDiff::Addition, true),
         ];
         assert_eq!(
             webhook_sources_to_restart(&updates),
