@@ -414,6 +414,8 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     pub(crate) mode: Mode,
     /// Joined writers may publish updates but cannot upgrade shared Persist metadata.
     is_join: bool,
+    /// Set only after this writable handle commits fresh initialization.
+    initialized_catalog: bool,
     prewarming_plan_build: Option<String>,
     /// Since handle to control compaction.
     since_handle: SinceHandle<SourceData, (), Timestamp, StorageDiff>,
@@ -1363,6 +1365,7 @@ impl UnopenedPersistCatalogState {
             // Unopened catalogs are always writeable until they're opened in an explicit mode.
             mode: Mode::Writable,
             is_join: false,
+            initialized_catalog: false,
             prewarming_plan_build: None,
             since_handle,
             write_handle,
@@ -1746,6 +1749,7 @@ impl UnopenedPersistCatalogState {
         let mut catalog = PersistCatalogState {
             mode: self.mode,
             is_join: join,
+            initialized_catalog: false,
             prewarming_plan_build,
             since_handle: self.since_handle,
             write_handle: self.write_handle,
@@ -1792,7 +1796,10 @@ impl UnopenedPersistCatalogState {
                     })) if protected => continue,
                     Err(error) => return Err(error),
                 };
-            let txn = if txn.get_config(USER_VERSION_KEY.into()).is_some() {
+            // Resample on every attempt so a conflicting initializer cannot
+            // transfer initialization provenance to this handle.
+            let initializing = txn.get_config(USER_VERSION_KEY.into()).is_none();
+            let txn = if !initializing {
                 // Ad-hoc migration: Initialize the `migration_version` expected by adapter to be
                 // present in existing catalogs.
                 //
@@ -1831,7 +1838,9 @@ impl UnopenedPersistCatalogState {
                 catalog.apply_updates_and_consolidate(updates)?;
             } else {
                 match txn.commit_internal(commit_ts).await {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        catalog.initialized_catalog = initializing && mode == Mode::Writable;
+                    }
                     Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
                         ..
                     })) if protected => continue,
@@ -2862,6 +2871,10 @@ impl DurableCatalogState for PersistCatalogState {
 
     fn is_join(&self) -> bool {
         self.is_join
+    }
+
+    fn initialized_catalog(&self) -> bool {
+        self.initialized_catalog
     }
 
     async fn mark_bootstrap_complete(&mut self) {

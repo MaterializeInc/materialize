@@ -445,6 +445,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// it for initialization or migration. Joining does not authorize bootstrap.
     fn is_join(&self) -> bool;
 
+    /// Whether this writable handle committed fresh catalog initialization.
+    ///
+    /// This is transient, handle-local provenance, not the catalog's current
+    /// initialization status. Reopens, joins, read-only and savepoint handles
+    /// return false.
+    fn initialized_catalog(&self) -> bool;
+
     /// Marks the bootstrap process as complete.
     ///
     /// Captures the consumed read-protection mode and transaction WAL identity used

@@ -22,6 +22,95 @@ use crate::durable::{
     test_bootstrap_args,
 };
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_initialized_catalog_open_modes() {
+    let builder =
+        TestCatalogStateBuilder::new(mz_persist_client::PersistClient::new_for_tests().await)
+            .with_default_deploy_generation();
+    let args = test_bootstrap_args();
+    let mut fresh = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &args)
+        .await
+        .expect("initialize fresh catalog");
+    assert!(fresh.initialized_catalog());
+    fresh.mark_bootstrap_complete().await;
+    assert!(fresh.initialized_catalog());
+    fresh.expire().await;
+
+    let reopened = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &args)
+        .await
+        .expect("reopen initialized catalog");
+    assert!(!reopened.initialized_catalog());
+    reopened.expire().await;
+
+    let savepoint = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_savepoint(SYSTEM_TIME().into(), &args)
+        .await
+        .expect("open savepoint");
+    assert!(!savepoint.initialized_catalog());
+    savepoint.expire().await;
+
+    let read_only = builder
+        .unwrap_build()
+        .await
+        .open_read_only(&args)
+        .await
+        .expect("open read-only catalog");
+    assert!(!read_only.initialized_catalog());
+    read_only.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_initialized_catalog_join() {
+    let builder =
+        TestCatalogStateBuilder::new(mz_persist_client::PersistClient::new_for_tests().await)
+            .with_default_deploy_generation();
+    let mut originator = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .expect("initialize originator");
+    originator
+        .sync_to_current_updates()
+        .await
+        .expect("consume initialization updates");
+    let mut txn = originator
+        .transaction()
+        .await
+        .expect("open protection transaction");
+    txn.set_config("catalog_read_protection_enabled".into(), Some(2))
+        .expect("enable protected joins");
+    let ts = txn.upper();
+    txn.commit(ts)
+        .await
+        .expect("commit protection configuration");
+
+    let joined = builder
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("join initialized catalog");
+    assert!(!joined.initialized_catalog());
+    assert!(originator.initialized_catalog());
+    joined.expire().await;
+    originator.expire().await;
+}
+
 /// Test that the catalog forces users to upgrade one major version at a time.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
