@@ -96,6 +96,45 @@ async fn connect_ctp_error<Out: Message, In: Message>(
 
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
+fn test_stalled_handshake_times_out() {
+    let mut sim = setup();
+    const IDLE_TIMEOUT: Duration = Duration::from_secs(2);
+    let (ready_tx, mut ready_rx) = mpsc::unbounded_channel();
+
+    sim.host("server", move || {
+        let ready_tx = ready_tx.clone();
+        async move {
+            let listener = Listener::bind("turmoil:0.0.0.0:7777").await?;
+            ready_tx.send(())?;
+            let (_stream, _peer) = listener.accept().await?;
+            future::pending().await
+        }
+    });
+
+    sim.client("client", async move {
+        ready_rx.recv().await.expect("server must be listening");
+        let result = tokio::time::timeout(
+            IDLE_TIMEOUT * 2,
+            transport::Client::<(), ()>::connect(
+                "turmoil:server:7777",
+                VERSION,
+                TIMEOUT,
+                IDLE_TIMEOUT,
+                NoopMetrics,
+            ),
+        )
+        .await
+        .expect("a successful TCP connect must not leave the CTP handshake unbounded");
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error:#}");
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
 fn test_bidirectional_communication() {
     let mut sim = setup();
 
@@ -456,6 +495,26 @@ fn test_idle_timeout() {
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
 fn test_keepalive() {
+    #[derive(Clone, Default)]
+    struct IdleMetrics {
+        bytes_received: Arc<AtomicUsize>,
+        messages_received: Arc<AtomicUsize>,
+    }
+
+    impl transport::Metrics<i32, i32> for IdleMetrics {
+        fn bytes_sent(&mut self, _len: usize) {}
+
+        fn bytes_received(&mut self, len: usize) {
+            self.bytes_received.fetch_add(len, Ordering::SeqCst);
+        }
+
+        fn message_sent(&mut self, _msg: &i32) {}
+
+        fn message_received(&mut self, _msg: &i32) {
+            self.messages_received.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     let mut sim = setup();
 
     sim.host("server", move || async {
@@ -484,8 +543,16 @@ fn test_keepalive() {
     });
 
     sim.client("client", async move {
+        let metrics = IdleMetrics::default();
         let mut client =
-            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, metrics.clone()).await;
+
+        let received_before = metrics.bytes_received.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        // A healthy but idle connection must receive actual heartbeat bytes, not just
+        // stay open because timeout enforcement is absent.
+        assert!(metrics.bytes_received.load(Ordering::SeqCst) >= received_before + 16);
+        assert_eq!(metrics.messages_received.load(Ordering::SeqCst), 0);
 
         client.recv().await?;
 
