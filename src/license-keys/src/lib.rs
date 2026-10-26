@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::{anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use jsonwebtoken::{Algorithm, DecodingKey, TokenData, Validation};
 use serde::{Deserialize, Serialize};
 
@@ -143,36 +143,28 @@ fn validate_with_roots(
     root_pubkeys: &[&str],
     intermediate_certs: &[String],
 ) -> anyhow::Result<ValidatedLicenseKey> {
-    let mut err = None;
-    for pubkey in root_pubkeys {
+    let mut errs = Vec::new();
+    for (i, pubkey) in root_pubkeys.iter().enumerate() {
         match validate_with_pubkey(license_key, pubkey) {
-            Ok(key) => {
-                return Ok(key);
-            }
-            Err(e) => {
-                err = Some(e);
-            }
+            Ok(key) => return Ok(key),
+            Err(e) => errs.push(format!("root key {i}: {e:#}")),
         }
     }
 
-    for cert in intermediate_certs {
-        match validate_intermediate(cert, root_pubkeys)
-            .and_then(|pubkey| validate_with_pubkey(license_key, &pubkey))
-        {
-            Ok(key) => {
-                return Ok(key);
-            }
-            Err(e) => {
-                err = Some(e);
-            }
+    for (i, cert) in intermediate_certs.iter().enumerate() {
+        let res = validate_intermediate(cert, root_pubkeys)
+            .context("invalid certificate")
+            .and_then(|pubkey| validate_with_pubkey(license_key, &pubkey));
+        match res {
+            Ok(key) => return Ok(key),
+            Err(e) => errs.push(format!("intermediate certificate {i}: {e:#}")),
         }
     }
 
-    if let Some(err) = err {
-        Err(err)
-    } else {
-        Err(anyhow!("no public key found"))
+    if errs.is_empty() {
+        bail!("no public key found");
     }
+    bail!("license key validation failed:\n  {}", errs.join("\n  "))
 }
 
 /// Returns the public key PEM carried by `cert` if a root key signed it.
@@ -428,6 +420,18 @@ mod tests {
         assert!(
             validate_with_roots(&int_key, roots, &[untrusted_cert]).is_err(),
             "certificate must be signed by a root key"
+        );
+
+        let mut revoked = license_payload();
+        revoked.jti = REVOKED_KEYS[0].to_string();
+        let revoked_key = sign(&root_priv, "JWT", &revoked);
+        let err = validate_with_roots(&revoked_key, roots, std::slice::from_ref(&cert))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("root key 0: revoked license key")
+                && err.contains("intermediate certificate 0: "),
+            "error must report every attempt: {err}"
         );
 
         let expired_cert = sign(
