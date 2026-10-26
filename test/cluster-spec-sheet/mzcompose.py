@@ -19,6 +19,7 @@ import itertools
 import json
 import os
 import re
+import subprocess
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
@@ -42,7 +43,6 @@ from materialize.cluster_spec_sheet_qps import (
     validate_qps_result,
 )
 from materialize.mz_env_util import print_environment_id
-from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
@@ -118,18 +118,18 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 
 @functools.cache
 def staging_version() -> str:
-    # Cached: the version cannot change within a run, and `parse_cargo` shells
-    # out to cargo, whose failure must not surface inside a region retry loop.
+    # Reuse the existing reference images without rebuilding Rust.
     sha = os.environ.get(
         "QPS_LATENCY_IMAGE_SHA", "02ffe6e1bdfbe2477e9317235049ae682ab9fa75"
     )
-    return f"{MzVersion.parse_cargo()}--pr.g{sha}"
+    return f"v26.48.0-dev.0--pr.g{sha}"
 
 
 SERVICES = [
     # Overridden below
     Mz(app_password=""),
     Materialized(
+        image="materialize/materialized:v26.48.0-dev.0--pr.g02ffe6e1bdfbe2477e9317235049ae682ab9fa75",
         propagate_crashes=True,
         additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
     ),
@@ -1956,6 +1956,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 runner.run_query("SELECT * FROM qps_gen_view")
             runner.run_query("SET cluster = 'c'")
             assert isinstance(runner.target, CloudTarget)
+            binary_versions: dict[str, str] = {}
             for label, sha in (
                 ("A1", "02ffe6e1bdfbe2477e9317235049ae682ab9fa75"),
                 ("B", "dd0d704272eadad2abcbc8e956e1be6e9d8b0ab2"),
@@ -1966,12 +1967,38 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                     os.environ["QPS_LATENCY_IMAGE_SHA"] = sha
                     staging_version.cache_clear()
                     enable_region(runner.target, envd_cpus=32)
+                if sha not in binary_versions:
+                    reported = subprocess.check_output(
+                        [
+                            "docker",
+                            "run",
+                            "--rm",
+                            f"materialize/environmentd:{staging_version()}",
+                            "--version",
+                        ],
+                        text=True,
+                        timeout=180,
+                    )
+                    match = re.search(r"\b[0-9a-f]{9}\b", reported)
+                    if match is None:
+                        raise UIError(
+                            f"Cannot identify cached binary version: {reported!r}"
+                        )
+                    binary_versions[sha] = match.group(0)
+                expected_binary_sha = binary_versions[sha]
+                print(
+                    f"--- {label}: requested image {sha}, embedded binary {expected_binary_sha}"
+                )
+                if label == "B" and len(set(binary_versions.values())) != 2:
+                    raise UIError(
+                        "The two reference images unexpectedly report the same binary"
+                    )
                 deadline = time.monotonic() + 900
                 while True:
                     try:
                         with runner.target.new_connection() as conn:
                             version = conn.execute("SELECT mz_version()").fetchone()[0]
-                        if sha[:9] in version:
+                        if expected_binary_sha in version:
                             print(f"--- {label}: verified serving version {version}")
                             break
                     except psycopg.Error as e:
@@ -1981,6 +2008,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                     time.sleep(5)
                 self.latency_control_label = label
                 self.latency_control_sha = sha
+                self.latency_control_reported_version = version
                 for disable_statement_logging in (False, True):
                     self.measure(runner, size, 1, "prepared", disable_statement_logging)
         finally:
@@ -2055,6 +2083,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         result.update(
             latency_control_label=self.latency_control_label,
             latency_control_image_sha=self.latency_control_sha,
+            latency_control_reported_version=self.latency_control_reported_version,
             replica_cpu_peak_percent=replica_cpu,
             replica_cpu_samples=replica_samples,
             warnings=warnings,
