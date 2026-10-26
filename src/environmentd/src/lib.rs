@@ -885,7 +885,7 @@ impl Listeners {
                 environment_id: config.environment_id,
                 license_key: license_key.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
-                report_interval: Duration::from_secs(3600),
+                report_interval: Duration::from_secs(600),
             });
         } else if config.test_only_dummy_segment_client {
             // We only have access to a segment client in production but we

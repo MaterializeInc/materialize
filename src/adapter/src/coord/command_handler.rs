@@ -1267,6 +1267,13 @@ impl Coordinator {
         {
             self.metrics.as_of_queries.with_label_values(&labels).inc();
         }
+        metrics::record_statement_features(
+            &self.metrics.sql_features,
+            &self.metrics.feature_usage,
+            session_type,
+            application_name,
+            &stmt,
+        );
 
         self.handle_execute_inner(stmt, params, ctx).await
     }

@@ -17,9 +17,10 @@ use mz_ore::metrics::{
 };
 use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
 use mz_sql::ast::{
-    AsOf, AstInfo, CopyRelation, CopyStatement, SelectStatement, Statement, StatementKind,
+    AsOf, AstInfo, CopyRelation, CopyStatement, Raw, SelectStatement, Statement, StatementKind,
     SubscribeOutput, SubscribeStatement,
 };
+use mz_sql::feature_usage::statement_features;
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::IsolationLevel;
@@ -28,6 +29,7 @@ use prometheus::core::{AtomicU64, GenericCounter};
 use prometheus::{Histogram, HistogramVec, IntCounter, IntCounterVec, IntGaugeVec};
 
 use crate::statement_logging::StatementExecutionStrategy;
+use crate::telemetry::FeatureUsage;
 
 pub(crate) const OCC_CALLER_SESSION: &str = "session";
 pub(crate) const OCC_CALLER_BACKGROUND: &str = "background";
@@ -50,6 +52,8 @@ pub struct Metrics {
     pub hydration_history_sweep_duration_seconds: Histogram,
     pub subscribe_outputs: IntCounterVec,
     pub as_of_queries: IntCounterVec,
+    pub sql_features: IntCounterVec,
+    pub feature_usage: FeatureUsage,
     pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
     pub linearize_read_fast_path: IntCounter,
@@ -170,6 +174,12 @@ impl Metrics {
                 help: "The total number of SELECT and SUBSCRIBE executions with an AS OF clause.",
                 var_labels: ["session_type", "kind", "statement", "application_name"],
             )),
+            sql_features: registry.register(metric!(
+                name: "mz_sql_feature_usage_total",
+                help: "The total number of executed statements using the given SQL feature.",
+                var_labels: ["session_type", "feature"],
+            )),
+            feature_usage: FeatureUsage::default(),
             canceled_peeks: registry.register(metric!(
                 name: "mz_canceled_peeks_total",
                 help: "The total number of canceled peeks since process start.",
@@ -336,6 +346,8 @@ impl Metrics {
             query_total: self.query_total.clone(),
             subscribe_outputs: self.subscribe_outputs.clone(),
             as_of_queries: self.as_of_queries.clone(),
+            sql_features: self.sql_features.clone(),
+            feature_usage: self.feature_usage.clone(),
             by_cluster: self.by_cluster.clone(),
             optimization_notices: self.optimization_notices.clone(),
             statement_logging_records: self.statement_logging_records.clone(),
@@ -353,6 +365,8 @@ pub struct SessionMetrics {
     query_total: IntCounterVec,
     subscribe_outputs: IntCounterVec,
     as_of_queries: IntCounterVec,
+    sql_features: IntCounterVec,
+    feature_usage: FeatureUsage,
     by_cluster: ClusterLabeledMetrics,
     optimization_notices: IntCounterVec,
     statement_logging_records: IntCounterVec,
@@ -383,6 +397,21 @@ impl SessionMetrics {
 
     pub(crate) fn by_cluster(&self) -> &ClusterLabeledMetrics {
         &self.by_cluster
+    }
+
+    pub(crate) fn record_statement_features(
+        &self,
+        session_type: &'static str,
+        application_name: ApplicationNameHint,
+        stmt: &Statement<Raw>,
+    ) {
+        record_statement_features(
+            &self.sql_features,
+            &self.feature_usage,
+            session_type,
+            application_name,
+            stmt,
+        );
     }
 
     pub(crate) fn optimization_notices(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
@@ -418,6 +447,29 @@ where
     T: AstInfo,
 {
     statement_kind_label_value(StatementKind::from(stmt))
+}
+
+/// Counts the SQL features `stmt` uses in `sql_features`, and, for user
+/// sessions, its feature set in `feature_usage`.
+///
+/// System sessions are excluded from `feature_usage` because it feeds product
+/// telemetry, and system sessions include the telemetry loop's own queries.
+pub(crate) fn record_statement_features(
+    sql_features: &IntCounterVec,
+    feature_usage: &FeatureUsage,
+    session_type: &'static str,
+    application_name: ApplicationNameHint,
+    stmt: &Statement<Raw>,
+) {
+    let features = statement_features(stmt);
+    for feature in &features {
+        sql_features
+            .with_label_values(&[session_type, &feature.to_string()])
+            .inc();
+    }
+    if session_type == "user" {
+        feature_usage.record(application_name.as_str(), &features);
+    }
 }
 
 pub(crate) fn subscribe_output_label_value<T>(output: &SubscribeOutput<T>) -> &'static str
