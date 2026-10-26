@@ -67,12 +67,13 @@ pub async fn preflight_0dt(
         info!("this deployment is a new generation; booting in read only mode");
         Ok(true)
     } else if catalog_generation == deploy_generation {
-        // A process restarts in place only while it is read-only and has not
-        // announced itself ready to promote, so finding its own generation in
-        // the catalog means another process of this generation, in a pod that
-        // replaced this one, has been promoted. Booting writable would fence
-        // that process. Kubernetes does not restart a deleted pod, so leave the
-        // restart to it.
+        // Only read-only code paths restart in place, so finding this
+        // generation in the catalog means a process of it has been promoted:
+        // one in a pod that replaced this one, or, after a skipped catch-up,
+        // this container's previous process, whose read-only bootstrap
+        // restarted after the takeover. Booting writable would fence a
+        // replacement. Halting leaves the restart to Kubernetes, which does not
+        // restart a deleted pod and restarts this one without the marker.
         if restarted_in_place {
             halt!(
                 "restarted in place, but deployment generation {} has been promoted; halting",
@@ -261,13 +262,21 @@ async fn check_ddl_changes(
     initial_user_items: &BTreeSet<CatalogItemId>,
     initial_user_replicas: &BTreeSet<ReplicaId>,
 ) {
-    let openable_adapter_storage = openable_catalog(
-        persist_client.clone(),
+    let mut openable_adapter_storage = openable_catalog(
+        persist_client,
         &environment_id,
         deploy_generation,
-        Arc::clone(&catalog_metrics),
+        catalog_metrics,
     )
     .await;
+
+    // `open_savepoint` consumes the openable, so read the generation first. A
+    // read this early can only report an older generation, and `preflight_0dt`
+    // halts a process restarted in place whose generation has been promoted.
+    let catalog_generation = openable_adapter_storage
+        .get_deployment_generation()
+        .await
+        .unwrap_or_terminate("unexpected error while reading the deployment generation");
 
     let mut catalog = openable_adapter_storage
         .open_savepoint(boot_ts, &bootstrap_args)
@@ -359,16 +368,6 @@ async fn check_ddl_changes(
     // Restart in place only while this generation is still read-only. Once a
     // process of this generation has been promoted, a restarted process would
     // only halt in `preflight_0dt`, so leave the restart to Kubernetes.
-    let catalog_generation = openable_catalog(
-        persist_client,
-        &environment_id,
-        deploy_generation,
-        catalog_metrics,
-    )
-    .await
-    .get_deployment_generation()
-    .await
-    .unwrap_or_terminate("unexpected error while reading the deployment generation");
     if catalog_generation < deploy_generation {
         restart_in_place!(
             "there have been DDL that we need to react to; rebooting in read-only mode. {}",

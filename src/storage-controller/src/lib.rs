@@ -1034,9 +1034,11 @@ impl StorageController for Controller {
                         this indicates concurrent deletion of a collection",
                         write_frontier, dependency_read_holds,
                     );
-                    // A read-only controller belongs to a deployment that is
-                    // still catching up, which can restart without Kubernetes
-                    // crash backoff.
+                    // A read-only controller can restart without Kubernetes
+                    // crash backoff. If its generation has been promoted
+                    // meanwhile, by a replacement pod or by this process after
+                    // a skipped catch-up, `preflight_0dt` halts the restarted
+                    // process.
                     if self.read_only {
                         restart_in_place!("{}", reason);
                     } else {
