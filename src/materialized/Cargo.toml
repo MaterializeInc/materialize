@@ -12,11 +12,12 @@ workspace = true
 [dependencies]
 mz-clusterd = { path = "../clusterd", default-features = false }
 mz-environmentd = { path = "../environmentd", default-features = false }
+mz-pubsubd = { path = "../pubsubd", default-features = false }
 
 [build-dependencies]
 custom-labels.workspace = true
 
 [features]
-default = ["mz-clusterd/default", "mz-environmentd/default"]
-jemalloc = ["mz-clusterd/jemalloc", "mz-environmentd/jemalloc"]
-tokio-console = ["mz-clusterd/tokio-console", "mz-environmentd/tokio-console"]
+default = ["mz-clusterd/default", "mz-environmentd/default", "mz-pubsubd/default"]
+jemalloc = ["mz-clusterd/jemalloc", "mz-environmentd/jemalloc", "mz-pubsubd/jemalloc"]
+tokio-console = ["mz-clusterd/tokio-console", "mz-environmentd/tokio-console", "mz-pubsubd/tokio-console"]

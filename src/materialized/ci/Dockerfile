@@ -21,7 +21,8 @@ COPY materialized entrypoint.sh /usr/local/bin/
 
 USER root
 RUN ln -s /usr/local/bin/materialized /usr/local/bin/environmentd \
-  && ln -s /usr/local/bin/materialized /usr/local/bin/clusterd
+  && ln -s /usr/local/bin/materialized /usr/local/bin/clusterd \
+  && ln -s /usr/local/bin/materialized /usr/local/bin/pubsubd
 USER materialize
 
 ENTRYPOINT ["tini", "--", "entrypoint.sh"]

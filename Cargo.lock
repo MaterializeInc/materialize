@@ -7590,6 +7590,7 @@ dependencies = [
  "custom-labels",
  "mz-clusterd",
  "mz-environmentd",
+ "mz-pubsubd",
 ]
 
 [[package]]
@@ -8307,6 +8308,25 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "mz-pubsubd"
+version = "26.46.0-dev.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "mz-alloc",
+ "mz-alloc-default",
+ "mz-build-info",
+ "mz-http-util",
+ "mz-orchestrator-tracing",
+ "mz-ore",
+ "mz-persist-client",
+ "num_cpus",
+ "rustls",
+ "tokio",
 ]
 
 [[package]]

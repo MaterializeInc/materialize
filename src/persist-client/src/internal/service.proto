@@ -7,8 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// Unlike other Persist proto definitions, these messages are not sent between
-// versions and do not have special compatibility requirements.
+// This relay envelope is shared across supported deployment versions. Preserve
+// the package, service and method names and existing field numbers and meanings.
+// Changes must remain interoperable with admitted older clients and relays.
+// Optional extensions cannot require forwarding unknown fields through a relay.
+//
+// The diff payload is opaque to the relay. Its encoding is governed by Persist's
+// shared state-format policy, not by the relay's binary version. Notifications
+// are best effort, with missed diffs recovered through durable storage.
 
 syntax = "proto3";
 

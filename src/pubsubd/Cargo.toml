@@ -1,0 +1,33 @@
+[package]
+name = "mz-pubsubd"
+description = "Materialize's environment-scoped Persist pubsub relay."
+version = "26.46.0-dev.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+mz-alloc = { path = "../alloc" }
+mz-alloc-default = { path = "../alloc-default", optional = true }
+mz-build-info = { path = "../build-info" }
+mz-http-util = { path = "../http-util" }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
+mz-ore = { path = "../ore", features = ["async", "panic", "tracing"] }
+mz-persist-client = { path = "../persist-client" }
+num_cpus.workspace = true
+rustls.workspace = true
+tokio.workspace = true
+
+[features]
+default = ["mz-alloc-default", "tokio-console"]
+jemalloc = ["mz-alloc/jemalloc"]
+tokio-console = ["mz-ore/tokio-console"]
+
+[package.metadata.unused-deps]
+ignore = ["mz-alloc-default"]

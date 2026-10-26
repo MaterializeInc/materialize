@@ -1236,6 +1236,9 @@ impl Drop for PubSubConnection {
 }
 
 #[cfg(test)]
+mod wire_tests;
+
+#[cfg(test)]
 mod pubsub_state {
     use std::str::FromStr;
     use std::sync::Arc;
