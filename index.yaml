@@ -2,6 +2,18 @@ apiVersion: v1
 entries:
   materialize-operator:
     - apiVersion: v2
+      appVersion: v26.48.0-rc.2
+      created: "2026-10-26T22:39:59Z"
+      description: Materialize Kubernetes Operator Helm Chart
+      digest: 99410c8483e818d47fecdbc45504b0f34a96adf8e15cff8e0da8f73158486df1
+      home: https://materialize.com
+      icon: https://materialize.com/favicon.ico
+      name: materialize-operator
+      type: application
+      urls:
+        - https://materializeinc.github.io/materialize/materialize-operator-v26.48.0-rc.2.tgz
+      version: v26.48.0-rc.2
+    - apiVersion: v2
       appVersion: v26.48.0-rc.1
       created: "2026-10-23T03:01:07Z"
       description: Materialize Kubernetes Operator Helm Chart
@@ -1621,4 +1633,4 @@ entries:
       urls:
         - https://materializeinc.github.io/materialize/materialize-operator-v25.1.0.tgz
       version: v25.1.0
-generated: "2026-10-23T17:26:25.046948296Z"
+generated: "2026-10-26T22:39:59.86391428Z"
