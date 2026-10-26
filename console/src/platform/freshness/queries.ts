@@ -35,11 +35,14 @@ const SCHEMA_OBJECT_TYPES = OBJECT_TYPE_FILTERS.schema.map(
 
 /** Whether an object belongs to the selected cluster or schema. */
 export function inFreshnessScope(scope: FreshnessScope, scopeId: string) {
+  // TODO: List subsources too. A schema scope already lists the tables a source
+  // ingests into, and Cluster Overview lists both.
   return (object: DatabaseObject) =>
-    scope === "cluster"
+    object.sourceType !== "subsource" &&
+    (scope === "cluster"
       ? isOnCluster(object, scopeId)
       : object.schemaId === scopeId &&
-        SCHEMA_OBJECT_TYPES.includes(object.objectType);
+        SCHEMA_OBJECT_TYPES.includes(object.objectType));
 }
 
 export const freshnessQueryKeys = {
