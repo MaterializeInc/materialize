@@ -2526,10 +2526,12 @@ impl StorageController for Controller {
         updates: Vec<(Row, Diff)>,
     ) {
         let id = self.introspection_ids[&type_];
-        if !updates.is_empty() {
-            self.collection_manager
-                .blind_write(id, vec![AppendOnlyUpdate::Rows(updates)]);
-        }
+        let updates = if updates.is_empty() {
+            Vec::new()
+        } else {
+            vec![AppendOnlyUpdate::Rows(updates)]
+        };
+        self.collection_manager.blind_write(id, updates);
     }
 
     fn append_status_introspection_updates(
