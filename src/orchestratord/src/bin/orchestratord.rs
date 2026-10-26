@@ -348,6 +348,8 @@ pub struct Args {
 
     #[clap(long, default_value = "8080")]
     console_http_port: u16,
+    #[clap(long, default_value = "8081")]
+    console_internal_http_port: u16,
 
     #[clap(long, default_value = "{}")]
     default_certificate_specs: DefaultCertificateSpecs,
@@ -899,6 +901,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             network_policies_ingress_cidrs: args.network_policies_ingress_cidrs,
             default_certificate_specs: args.default_certificate_specs,
             console_http_port: args.console_http_port,
+            console_internal_http_port: args.console_internal_http_port,
             balancerd_http_port: args.balancerd_http_port,
         };
         move || {

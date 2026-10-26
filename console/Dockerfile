@@ -46,8 +46,13 @@ LABEL maintainer="support@materialize.com" \
 
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY misc/docker/nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY misc/docker/metrics.js /etc/nginx/njs/metrics.js
+# The metrics need the njs module, and `load_module` only works in the main
+# context, ahead of the `http` block that includes the template.
+RUN sed -i '1i load_module modules/ngx_http_js_module.so;' /etc/nginx/nginx.conf
 
 ENV MZ_NGINX_LISTENER_CONFIG="listen 8080;"
+ENV MZ_NGINX_METRICS_LISTENER_CONFIG="listen 8081;"
 ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS='true'
 
 CMD ["nginx", "-g", "daemon off;"]

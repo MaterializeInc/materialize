@@ -72,6 +72,8 @@ pub struct Config {
     pub default_certificate_specs: DefaultCertificateSpecs,
 
     pub console_http_port: u16,
+    /// The plain HTTP port the console's nginx serves `/metrics` on.
+    pub console_internal_http_port: u16,
     pub balancerd_http_port: u16,
 }
 
@@ -264,12 +266,28 @@ impl Context {
         pod_template_labels.insert("app".to_owned(), "console".to_string());
         pod_template_labels.insert("materialize.cloud/app".to_owned(), console.app_name());
 
-        let ports = vec![ContainerPort {
-            container_port: self.config.console_http_port.into(),
-            name: Some("http".into()),
-            protocol: Some("TCP".into()),
-            ..Default::default()
-        }];
+        let ports = vec![
+            ContainerPort {
+                container_port: self.config.console_http_port.into(),
+                name: Some("http".into()),
+                protocol: Some("TCP".into()),
+                ..Default::default()
+            },
+            ContainerPort {
+                container_port: self.config.console_internal_http_port.into(),
+                name: Some("internal-http".into()),
+                protocol: Some("TCP".into()),
+                ..Default::default()
+            },
+        ];
+        let pod_template_annotations = self.config.enable_prometheus_scrape_annotations.then(|| {
+            btreemap! {
+                "prometheus.io/scrape".to_owned() => "true".to_string(),
+                "prometheus.io/port".to_owned() => self.config.console_internal_http_port.to_string(),
+                "prometheus.io/path".to_owned() => "/metrics".to_string(),
+                "prometheus.io/scheme".to_owned() => "http".to_string(),
+            }
+        });
 
         let scheme = match console.spec.balancerd.scheme {
             HttpConnectionScheme::Http => "http",
@@ -286,6 +304,15 @@ impl Context {
             )),
             ..Default::default()
         }];
+        // Plain HTTP whether or not the console itself serves TLS.
+        env.push(EnvVar {
+            name: "MZ_NGINX_METRICS_LISTENER_CONFIG".to_string(),
+            value: Some(format!(
+                "listen {};",
+                self.config.console_internal_http_port
+            )),
+            ..Default::default()
+        });
         let mut volumes = vec![Volume {
             name: "app-config".to_string(),
             config_map: Some(ConfigMapVolumeSource {
@@ -421,6 +448,7 @@ ssl_certificate_key /nginx/tls/tls.key;",
                 // owned by the deployment, not the materialize instance
                 metadata: Some(ObjectMeta {
                     labels: Some(pod_template_labels),
+                    annotations: pod_template_annotations,
                     ..Default::default()
                 }),
                 spec: Some(PodSpec {

@@ -68,6 +68,21 @@ If needed, update the configuration file located at:
 misc/docker/nginx.conf.template
 ```
 
+### Metrics
+
+Nginx serves Prometheus metrics at `/metrics` on a separate plain HTTP listener, port 8081 by default.
+Set `MZ_NGINX_METRICS_LISTENER_CONFIG` to move it, for example `MZ_NGINX_METRICS_LISTENER_CONFIG="listen 9113;"`.
+The njs module in `misc/docker/metrics.js` keeps the counters in shared memory, so they reset when the container restarts.
+
+| Metric | Type | Labels |
+|---|---|---|
+| `mz_console_http_requests_total` | counter | `location`, `status` |
+| `mz_console_http_request_duration_seconds` | histogram | `location` |
+| `mz_console_http_connections` | gauge | `state`: `active`, `reading`, `writing`, `waiting` |
+
+`location` names the block in `nginx.conf.template` that served the request: `app`, `static`, `api`, or `oauth_metadata`, and `other` for a request rejected before reaching one.
+WebSocket upgrades (status 101) are counted but not timed, because their duration is the length of the session.
+
 ### Health Check
 
 The container includes a health check that verifies the Nginx server is running:
