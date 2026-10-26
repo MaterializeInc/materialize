@@ -2801,6 +2801,7 @@ impl Coordinator {
         migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
         hydrate_migrated_mvs: bool,
         initial_builtin_table_updates: Vec<BuiltinTableUpdate>,
+        initialized_catalog: bool,
         cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
     ) -> Result<Option<Arc<crate::query_client::QueryClient>>, AdapterError> {
@@ -3532,6 +3533,12 @@ impl Coordinator {
                 .snapshot
                 .retain(|update| !configuration_ids.contains(&update.id));
         }
+        if self.catalog().state().catalog_read_protection_enabled() && !initialized_catalog {
+            // Only the fresh initializer seeds shared projections. Private replacement
+            // shards have already consumed their backfill, and originating bootstrap
+            // transaction diffs remain in the separate committed bucket.
+            builtin_table_updates.snapshot.clear();
+        }
         if self.controller.read_only() {
             info!(
                 "coordinator init: bootstrap: stashing builtin table updates while in read-only mode"
@@ -3714,7 +3721,7 @@ impl Coordinator {
         // that only starts after bootstrap finishes.
         let read_ts = write_ts;
 
-        let mut retained_across_restarts = BTreeSet::from([
+        let retained_across_restarts = BTreeSet::from([
             self.catalog()
                 .resolve_builtin_table(&MZ_STORAGE_USAGE_BY_SHARD),
             self.catalog()
@@ -3724,22 +3731,18 @@ impl Coordinator {
             self.catalog()
                 .resolve_builtin_table(&MZ_REPLICA_HYDRATION_HISTORY),
         ]);
-        if self.catalog().state().catalog_read_protection_enabled() {
-            retained_across_restarts.extend(builtin_configuration::table_ids(self.catalog()));
-            // Execution-qualified rows may belong to live peers. Their public
-            // views use committed incarnation membership to hide retired owners.
-            retained_across_restarts.extend([
-                self.catalog()
-                    .resolve_builtin_table(&mz_catalog::builtin::MZ_SESSIONS_RAW),
-                self.catalog()
-                    .resolve_builtin_table(&mz_catalog::builtin::MZ_SUBSCRIPTIONS_RAW),
-            ]);
-        }
+        // Shared projections, runtime rows and history belong to their own
+        // publishers. A protected adapter's startup cannot reset peer contents.
+        let reset_system_tables = !self.catalog().state().catalog_read_protection_enabled();
 
         let mut retraction_tasks = Vec::new();
         let system_tables: Vec<_> = table_metas
             .iter()
-            .filter(|meta| meta.id.is_system() && !retained_across_restarts.contains(&meta.id))
+            .filter(|meta| {
+                reset_system_tables
+                    && meta.id.is_system()
+                    && !retained_across_restarts.contains(&meta.id)
+            })
             .collect();
         let txns_shard = self
             .catalog()
@@ -6437,6 +6440,7 @@ pub fn serve(
         ;
         let OpenCatalogResult {
             mut catalog,
+            initialized_catalog,
             last_seen_version,
             migrated_storage_collections_0dt,
             new_builtin_collections,
@@ -6772,6 +6776,7 @@ pub fn serve(
                             migrated_storage_collections_0dt,
                             hydrate_migrated_mvs,
                             builtin_table_updates,
+                            initialized_catalog,
                             cached_global_exprs,
                             uncached_local_exprs,
                         )

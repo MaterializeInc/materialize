@@ -76,6 +76,7 @@ impl DerefMut for Catalog {
 
 pub struct OpenCatalogResult {
     pub catalog: Catalog,
+    pub initialized_catalog: bool,
     pub last_seen_version: Option<semver::Version>,
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     pub new_builtin_collections: BTreeSet<GlobalId>,
@@ -174,6 +175,7 @@ impl Catalog {
         async move {
             let mz_catalog::catalog::OpenCatalogResult {
                 catalog,
+                initialized_catalog,
                 last_seen_version,
                 migrated_storage_collections_0dt,
                 new_builtin_collections,
@@ -183,6 +185,7 @@ impl Catalog {
             } = open.await?;
             Ok(OpenCatalogResult {
                 catalog: Self(catalog),
+                initialized_catalog,
                 last_seen_version,
                 migrated_storage_collections_0dt,
                 new_builtin_collections,

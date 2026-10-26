@@ -110,6 +110,8 @@ pub struct InitializeStateResult {
 pub struct OpenCatalogResult {
     /// An opened [`Catalog`].
     pub catalog: Catalog,
+    /// Whether this handle committed fresh catalog initialization.
+    pub initialized_catalog: bool,
     /// See [`InitializeStateResult::last_seen_version`].
     pub last_seen_version: Option<Version>,
     /// See [`InitializeStateResult::migrated_storage_collections_0dt`]; `Replacement`-migrated
@@ -912,6 +914,7 @@ impl Catalog {
             let external_login_password_mz_system =
                 config.state.external_login_password_mz_system.take();
             let mut storage = config.storage;
+            let initialized_catalog = storage.initialized_catalog();
             let diagnostic_config = Arc::new(Self::diagnostic_state_config(&config.state));
 
             // BOXED FUTURE: Keep initialization's large future off the caller's stack.
@@ -998,6 +1001,7 @@ impl Catalog {
 
             Ok(OpenCatalogResult {
                 catalog,
+                initialized_catalog,
                 last_seen_version,
                 migrated_storage_collections_0dt,
                 new_builtin_collections,

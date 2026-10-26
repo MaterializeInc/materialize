@@ -776,6 +776,7 @@ impl Catalog {
 
         let OpenCatalogResult {
             catalog,
+            initialized_catalog: _,
             last_seen_version: _,
             migrated_storage_collections_0dt: _,
             new_builtin_collections: _,

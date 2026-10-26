@@ -75,7 +75,7 @@ use uuid::Uuid;
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
-async fn test_builtin_configuration_ready_on_startup() {
+async fn test_builtin_bootstrap_ready_on_startup() {
     let data_dir = tempfile::tempdir().expect("temporary data directory");
     let harness = test_util::TestHarness::default().data_directory(data_dir.path());
     let sizes = mz_catalog::config::ClusterReplicaSizeMap::for_tests();
@@ -136,6 +136,21 @@ async fn test_builtin_configuration_ready_on_startup() {
             .expect("read internal replica configuration");
         let actual: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
         assert_eq!(actual, expected_internal);
+        let seeded_columns = client
+            .query_one(
+                "SELECT count(*) FROM mz_catalog.mz_columns c \
+                 JOIN mz_catalog.mz_tables t ON c.id = t.id \
+                 JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id \
+                 WHERE s.name = 'mz_catalog' AND t.name = 'mz_columns'",
+                &[],
+            )
+            .await
+            .expect("read seeded builtin columns")
+            .get::<_, i64>(0);
+        assert_eq!(
+            usize::try_from(seeded_columns).expect("nonnegative column count"),
+            mz_catalog::builtin::MZ_COLUMNS.desc.arity()
+        );
         drop(internal_client);
         drop(client);
         drop(server);
