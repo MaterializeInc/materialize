@@ -100,7 +100,7 @@ use tracing::{info, warn};
 ///
 /// `pending_replacements` are the exports of replacement materialized views that are not applied
 /// yet. Their storage collection reports their target's write frontier, which constrains their
-/// as-of only softly. See [`Context::apply_downstream_storage_constraints`].
+/// as-of only softly, because applying a replacement waits for its target to catch up.
 pub fn run(
     dataflows: &mut [LirDataflowDescription],
     read_policies: &BTreeMap<GlobalId, ReadPolicy>,

@@ -4840,18 +4840,27 @@ fn test_replacement_materialized_view_ahead_of_target_survives_restart() {
             client.batch_execute(stmt).unwrap();
         }
 
-        let ahead: bool = client
-            .query_one(
-                "SELECT
-                     (SELECT f.read_frontier FROM mz_internal.mz_frontiers f
-                      JOIN mz_tables t ON f.object_id = t.id WHERE t.name = 't2')
-                     >=
-                     (SELECT f.write_frontier FROM mz_internal.mz_frontiers f
-                      JOIN mz_materialized_views m ON f.object_id = m.id WHERE m.name = 'mv')",
-                &[],
-            )
-            .unwrap()
-            .get(0);
+        // `mz_frontiers` reports a new collection only after its first frontier
+        // update, so the comparison is NULL until then.
+        let ahead: bool = Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let ahead: Option<bool> = client
+                    .query_one(
+                        "SELECT
+                             (SELECT f.read_frontier FROM mz_internal.mz_frontiers f
+                              JOIN mz_tables t ON f.object_id = t.id WHERE t.name = 't2')
+                             >=
+                             (SELECT f.write_frontier FROM mz_internal.mz_frontiers f
+                              JOIN mz_materialized_views m ON f.object_id = m.id
+                              WHERE m.name = 'mv')",
+                        &[],
+                    )
+                    .unwrap()
+                    .get(0);
+                ahead.ok_or("frontiers not reported yet")
+            })
+            .unwrap();
         assert!(ahead, "t2 must not be readable at the write frontier of mv");
     }
 
