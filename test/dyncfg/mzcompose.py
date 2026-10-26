@@ -38,16 +38,17 @@ UNPARSEABLE_PARAM = "enable_projection_pushdown_after_relation_cse"
 #
 # A scoped value is recorded as an override only when it differs from the
 # environment-wide value, so the baseline decides which rows exist. It is pinned
-# here, as flat top-level keys in the config file, rather than inherited from the
-# parameters' compiled-in defaults, which are not what an object resolves against
-# under this harness: `Materialized` renders `MZ_SYSTEM_PARAMETER_DEFAULT` from
-# `get_default_system_parameters`, which supplies `CLUSTER_PARAM` and
-# `REPLICA_PARAM`, in both cases as the opposite of their compiled-in default.
+# here, as environment-wide values in the config file, rather than inherited
+# from the parameters' compiled-in defaults, which are not what an object
+# resolves against under this harness: `Materialized` renders
+# `MZ_SYSTEM_PARAMETER_DEFAULT` from `get_default_system_parameters`, which
+# supplies `CLUSTER_PARAM` and `REPLICA_PARAM`, in both cases as the opposite of
+# their compiled-in default.
 #
-# Flat keys are applied to the sync loop's parameter set in the same tick that
-# refreshes the file cache, before the scoped passes read it, and the create-time
-# fold resolves against the catalog's system config, so the reconcile and the
-# create path both see this baseline.
+# Environment-wide values are applied to the sync loop's parameter set in the
+# same tick that refreshes the file cache, before the scoped passes read it, and
+# the create-time fold resolves against the catalog's system config, so the
+# reconcile and the create path both see this baseline.
 ENV_WIDE_PARAMS: dict[str, bool] = {
     CLUSTER_PARAM: False,
     REPLICA_PARAM: True,
@@ -66,9 +67,10 @@ def write_config(config_file: Path, params: dict[str, Any]) -> None:
 
 
 def assert_environment_wide_baseline(c: Composition) -> None:
-    """Check that the flat keys pinning `ENV_WIDE_PARAMS` took effect. Every
-    scoped assertion is derived from that baseline, so a stale one would surface
-    as an unexplained missing or extra row rather than as the premise it is.
+    """Check that the environment-wide values pinning `ENV_WIDE_PARAMS` took
+    effect. Every scoped assertion is derived from that baseline, so a stale one
+    would surface as an unexplained missing or extra row rather than as the
+    premise it is.
     Read as `mz_system`, since the parameters are not user-visible."""
     for param, value in ENV_WIDE_PARAMS.items():
         expected = "on" if value else "off"
@@ -134,8 +136,9 @@ def workflow_default(c: Composition) -> None:
 
             # A cluster with two replicas, `r1` and `r2`, so that a rule targeting
             # one replica and a rule targeting the whole cluster can contend for the
-            # same parameter. Created while the file is still flat, so the assertion
-            # that no scoped rows exist yet is meaningful.
+            # same parameter. Created while the file is still in the flat legacy
+            # format, which scopes nothing, so the assertion that no scoped rows
+            # exist yet is meaningful.
             c.testdrive(
                 input=dedent("""
                     $ postgres-execute connection=mz_system
@@ -149,12 +152,15 @@ def workflow_default(c: Composition) -> None:
                 """),
             )
 
+            # The same environment-wide values in the versioned format, which
+            # adds segments and rules alongside them.
             system_params_3: dict[str, Any] = {
-                # Flat keys keep their environment-wide meaning alongside the
-                # reserved segment and rule sections.
-                **ENV_WIDE_PARAMS,
-                "max_connections": 67,
-                "allowed_cluster_replica_sizes": "'25cc','50cc'",
+                "version": 2,
+                "global_parameters": {
+                    **ENV_WIDE_PARAMS,
+                    "max_connections": 67,
+                    "allowed_cluster_replica_sizes": "'25cc','50cc'",
+                },
                 "segments": {
                     # A segment declares the context kind its clauses match, so a
                     # cluster and its replicas need one segment each even when the
@@ -203,32 +209,6 @@ def workflow_default(c: Composition) -> None:
                             }
                         ],
                     },
-                    # A misspelled attribute makes the whole segment match nothing,
-                    # rather than widening it to every object.
-                    "typo": {
-                        "contextKind": "cluster",
-                        "clauses": [
-                            {
-                                "attribute": "cluster_nmae",
-                                "op": "in",
-                                "values": ["dyncfg_scoped"],
-                            }
-                        ],
-                    },
-                    # An invalid pattern fails closed the same way, so this matches
-                    # nothing rather than widening to every non-builtin cluster,
-                    # which is what its surviving clause alone allows.
-                    "bad-pattern": {
-                        "contextKind": "cluster",
-                        "clauses": [
-                            {"attribute": "is_builtin", "op": "in", "values": [False]},
-                            {
-                                "attribute": "cluster_name",
-                                "op": "matches",
-                                "values": ["^dyncfg_["],
-                            },
-                        ],
-                    },
                 },
                 "rules": [
                     {
@@ -260,13 +240,6 @@ def workflow_default(c: Composition) -> None:
                         },
                     },
                     {"segment": "absent-cluster", "parameters": {CLUSTER_PARAM: True}},
-                    {"segment": "typo", "parameters": {CLUSTER_PARAM_2: True}},
-                    {"segment": "bad-pattern", "parameters": {CLUSTER_PARAM_2: True}},
-                    # No such segment, so this rule is ignored.
-                    {
-                        "segment": "no-such-segment",
-                        "parameters": {CLUSTER_PARAM_2: True},
-                    },
                 ],
             }
 
@@ -292,6 +265,47 @@ def workflow_default(c: Composition) -> None:
                     > SELECT r.name, coalesce(p.value, 'env-wide') FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id LEFT JOIN mz_internal.mz_replica_system_parameters p ON p.replica_id = r.id AND p.name = '{REPLICA_PARAM}' WHERE c.name = 'dyncfg_scoped' ORDER BY r.name
                     r1 env-wide
                     r2 false
+                """),
+            )
+
+            # A structural defect anywhere rejects the whole document, so neither
+            # its environment-wide values nor its rules apply. The misspelled
+            # attribute would otherwise widen or narrow the segment, and reading
+            # the document as a flat map would prune every override. testdrive
+            # retries until a result matches, so these assertions hold only
+            # because the sleep gave the sync loop time to apply the document.
+            system_params_broken: dict[str, Any] = {
+                **system_params_3,
+                "global_parameters": {
+                    **system_params_3["global_parameters"],
+                    "max_connections": 68,
+                },
+                "segments": {
+                    **system_params_3["segments"],
+                    "scoped-cluster": {
+                        "contextKind": "cluster",
+                        "clauses": [
+                            {
+                                "attribute": "cluster_nmae",
+                                "op": "in",
+                                "values": ["dyncfg_scoped"],
+                            }
+                        ],
+                    },
+                },
+            }
+            write_config(config_file, system_params_broken)
+            c.sleep(2)
+            c.testdrive(
+                input=dedent(f"""
+                    > SHOW max_connections
+                    67
+
+                    > SELECT c.name, p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id ORDER BY c.name, p.name
+                    dyncfg_scoped {CLUSTER_PARAM} true
+
+                    > SELECT c.name, r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id ORDER BY c.name, r.name, p.name
+                    dyncfg_scoped r2 {REPLICA_PARAM} false
                 """),
             )
 
@@ -345,9 +359,9 @@ def workflow_default(c: Composition) -> None:
                     input=dedent(f"""
                         # The premise again, asserted ahead of the create rather than
                         # inferred from its result. `max_connections` is one of the
-                        # same flat keys and is user-visible, so a baseline that was
-                        # reset after all fails on this line instead of surfacing
-                        # below as an unexplained missing row.
+                        # same environment-wide values and is user-visible, so a
+                        # baseline that was reset after all fails on this line
+                        # instead of surfacing below as an unexplained missing row.
                         > SHOW max_connections
                         67
 
@@ -373,8 +387,8 @@ def workflow_default(c: Composition) -> None:
                     """),
                 )
 
-            # Dropping the segments and rules removes the overrides, returning every
-            # object to the environment-wide value. This is the periodic
+            # Returning to the flat legacy format, which scopes nothing, removes
+            # the overrides, returning every object to the environment-wide value. This is the periodic
             # reconcile's job, so it runs on the short interval and the resetting
             # testdrive.
             write_config(config_file, system_params_2)

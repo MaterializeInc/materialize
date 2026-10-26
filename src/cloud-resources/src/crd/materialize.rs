@@ -281,12 +281,15 @@ pub mod v1alpha1 {
         /// The ConfigMap must contain a `system-params.json` key whose value
         /// is a valid JSON object containing valid system parameters.
         ///
-        /// Each top-level key sets a parameter for the whole environment, except
-        /// for the two reserved keys `segments` and `rules`. A segment names a
-        /// context kind, `cluster` or `replica`, and the clauses selecting the
-        /// objects it matches, and a rule attaches parameters to a segment. For
-        /// each parameter the first matching rule wins. A segment matching no
-        /// live object, or one this version cannot evaluate, has no effect.
+        /// A document without a `version` key is a flat map whose every key sets
+        /// a parameter for the whole environment. A document with `"version": 2`
+        /// holds the environment-wide values under `global_parameters` and may
+        /// scope parameters to clusters or replicas: a segment names a context
+        /// kind, `cluster` or `replica`, and the clauses selecting the objects it
+        /// matches, and a rule attaches parameters to a segment. For each
+        /// parameter the first matching rule wins. A document with a structural
+        /// defect anywhere is ignored as a whole, leaving every current value and
+        /// override in place.
         ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
@@ -295,7 +298,8 @@ pub mod v1alpha1 {
         /// data:
         ///   system-params.json: |
         ///     {
-        ///       "max_connections": 1000,
+        ///       "version": 2,
+        ///       "global_parameters": {"max_connections": 1000},
         ///       "segments": {
         ///         "analytics": {
         ///           "contextKind": "cluster",
@@ -1590,12 +1594,15 @@ pub mod v1 {
         /// The ConfigMap must contain a `system-params.json` key whose value
         /// is a valid JSON object containing valid system parameters.
         ///
-        /// Each top-level key sets a parameter for the whole environment, except
-        /// for the two reserved keys `segments` and `rules`. A segment names a
-        /// context kind, `cluster` or `replica`, and the clauses selecting the
-        /// objects it matches, and a rule attaches parameters to a segment. For
-        /// each parameter the first matching rule wins. A segment matching no
-        /// live object, or one this version cannot evaluate, has no effect.
+        /// A document without a `version` key is a flat map whose every key sets
+        /// a parameter for the whole environment. A document with `"version": 2`
+        /// holds the environment-wide values under `global_parameters` and may
+        /// scope parameters to clusters or replicas: a segment names a context
+        /// kind, `cluster` or `replica`, and the clauses selecting the objects it
+        /// matches, and a rule attaches parameters to a segment. For each
+        /// parameter the first matching rule wins. A document with a structural
+        /// defect anywhere is ignored as a whole, leaving every current value and
+        /// override in place.
         ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
@@ -1604,7 +1611,8 @@ pub mod v1 {
         /// data:
         ///   system-params.json: |
         ///     {
-        ///       "max_connections": 1000,
+        ///       "version": 2,
+        ///       "global_parameters": {"max_connections": 1000},
         ///       "segments": {
         ///         "analytics": {
         ///           "contextKind": "cluster",

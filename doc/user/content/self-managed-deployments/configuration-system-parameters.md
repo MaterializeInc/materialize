@@ -60,10 +60,10 @@ data:
     }
 ```
 
-Each top-level key sets a parameter for the whole environment. To set a
-parameter for a subset of your clusters or replicas instead, see [Scoping
-Parameters to Clusters or
-Replicas](#scoping-parameters-to-clusters-or-replicas).
+In this flat format, each top-level key sets a parameter for the whole
+environment. To set a parameter for a subset of your clusters or replicas
+instead, use the versioned format described in [Scoping Parameters to Clusters
+or Replicas](#scoping-parameters-to-clusters-or-replicas).
 
 Apply the ConfigMap to your cluster:
 
@@ -168,9 +168,16 @@ take effect.
 
 ## Scoping Parameters to Clusters or Replicas
 
-Every top-level key in `system-params.json` sets a parameter for the whole
-environment, with two exceptions: `segments` and `rules` are reserved keys that
-together scope parameters to a subset of your clusters and replicas.
+To scope parameters to a subset of your clusters and replicas, write
+`system-params.json` in the versioned format, which has four top-level keys:
+
+- `version` is required and must be `2`. Its presence is what selects this
+  format.
+- `global_parameters` holds the environment-wide parameters, exactly as the
+  top-level keys of the flat format do.
+- `segments` and `rules` scope parameters, as described below.
+
+Every key except `version` is optional, and no other top-level key is allowed.
 
 - A **segment** is a named predicate over the attributes of a cluster or replica,
   for example "every replica of a legacy size family". Its shape follows the
@@ -191,8 +198,12 @@ metadata:
 data:
   system-params.json: |
     {
-      "max_connections": 1000,
-      "enable_lgalloc": true,
+      "version": 2,
+
+      "global_parameters": {
+        "max_connections": 1000,
+        "enable_lgalloc": true
+      },
 
       "segments": {
         "analytics-cluster": {
@@ -226,9 +237,11 @@ In this example, `max_connections` and `enable_lgalloc` apply environment-wide,
 the `analytics` cluster additionally enables `enable_eager_delta_joins`, and
 every replica of a legacy size family turns `enable_lgalloc` back off for itself.
 
-A ConfigMap that uses neither reserved key is a plain environment-wide parameter
-map. No system parameter is named `segments` or `rules`, so a flat ConfigMap can
-never be reinterpreted as a scoped one.
+A document without a `version` key is read in the flat format, and is
+equivalent to a versioned document holding the same keys under
+`global_parameters` with no segments and no rules. To move a flat ConfigMap to
+the versioned format, add `"version": 2` and move its keys into
+`global_parameters`.
 
 ### Segments
 
@@ -263,8 +276,8 @@ it:
 
 A `replica` segment may write clauses over cluster attributes alone, which selects
 every replica of the matching clusters. A `cluster` segment may not name a replica
-attribute at all, since a cluster does not have one; doing so makes the segment
-select nothing.
+attribute at all, since a cluster does not have one, and a ConfigMap whose
+segment does is rejected.
 
 The available attributes are:
 
@@ -328,14 +341,14 @@ Notes on `matches`:
   not.
 - Patterns must be JSON strings. A backslash has to be escaped for JSON, so the
   pattern `\d` is written `"\\d"`.
-- **An invalid pattern makes the whole segment select nothing.** See [Behavior
-  worth knowing](#behavior-worth-knowing).
+- **An invalid pattern rejects the whole ConfigMap.** See [Behavior worth
+  knowing](#behavior-worth-knowing).
 
 LaunchDarkly defines ten further operators, for numbers, dates, semantic versions,
 and referencing another segment. Materialize rejects all of them here: every
 attribute above is a string, so a numeric, date, or version comparison could only
 ever be false, and a rule already names the segment it applies to. Writing one
-makes the segment select nothing, with a warning saying why.
+rejects the ConfigMap, with a warning saying why.
 
 ### Negating a clause
 
@@ -387,7 +400,7 @@ objects that segment matches:
 - A rule that does not mention a parameter does not affect it, so a later rule
   may still set it.
 - A parameter no matching rule sets falls back to the environment-wide value,
-  that is, to the top-level key or to the parameter's default.
+  that is, to its `global_parameters` entry or to the parameter's default.
 
 `rules` is an array rather than an object because the order is part of the
 configuration, and the order of an object's keys is not preserved.
@@ -396,45 +409,52 @@ configuration, and the order of an object's keys is not preserved.
 
 - **Not every parameter can be scoped.** Only parameters whose scope is
   `cluster` or `replica` can be set in a rule. Any other parameter is ignored
-  there, so set it as a top-level key instead. `environmentd` logs a warning
+  there, so set it in `global_parameters` instead. `environmentd` logs a warning
   naming the parameter and the rule, which also catches a misspelled parameter
   name.
 - **A cluster-scoped parameter cannot be attached to a `replica` segment.** A
   cluster-scoped parameter, for example an optimizer feature, is consumed once
   per cluster when a dataflow is planned, so it must resolve identically for
   every replica of that cluster. A rule that supplies one through a `replica`
-  segment has that parameter dropped, with a warning naming the segment and the
+  segment has that parameter dropped, with a warning naming the rule and the
   parameter. Replica-scoped parameters can be attached to either kind of segment.
-- **A segment that Materialize cannot fully interpret selects nothing.** Any of
-  the following makes the whole segment select no cluster and no replica, so the
-  rules naming it do not apply:
+- **A structurally invalid ConfigMap is rejected as a whole.** Any of the
+  following makes Materialize ignore the entire document, including
+  `global_parameters`:
+  - a `version` other than `2`, or a top-level key other than the four above;
   - a missing or unrecognised `contextKind`, or a missing `clauses` list;
+  - a clause missing its `attribute`, `op`, or `values`;
   - an unknown `attribute`, or a replica attribute in a `cluster` segment;
   - an `op` that is not one of the five string operators;
   - `values` that is not a list of strings, numbers, or booleans;
   - an invalid `matches` pattern, or a `negate` that is not a boolean;
-  - an unknown key in a segment or in a clause.
+  - a rule missing its `segment` or `parameters`, or naming a segment that
+    `segments` does not define;
+  - an unknown key in a segment, a clause, or a rule;
+  - a section of the wrong type, for example `rules` written as an object.
 
-  This fails safe: ignoring the offending clause instead would widen the segment
-  to objects you did not target, and a segment whose every clause was ignored
-  would select everything. `environmentd` logs a warning naming the segment and
-  what is wrong with it. LaunchDarkly's `_id` on a clause is the one key that is
-  ignored rather than rejected, so a clause copied out of the LaunchDarkly API
-  works as written.
-- **A rule naming a segment that does not exist is ignored**, with a warning
-  naming the segment.
+  This fails safe: applying the rest of the document instead would widen a
+  segment to objects you did not target, or drop overrides you meant to keep.
+  Rejecting the ConfigMap is handled like a ConfigMap that cannot be parsed, see
+  below. `environmentd` logs a warning naming the path to the defect, for
+  example `segments.prod.clauses[1].op`. LaunchDarkly's `_id` on a clause is the
+  one unknown key that is ignored rather than rejected, so a clause copied out of
+  the LaunchDarkly API works as written.
 - **A segment matching nothing is not an error.** If you later create a cluster
   or replica the segment matches, the rules apply to it.
 - **A value that matches the environment-wide value records no override.**
   Overrides are only stored where they actually differ.
 - **An unparseable value is dropped, not rejected.** The rest of the file still
   applies and `environmentd` logs a warning naming the parameter and the rule.
+  The rule still decides that parameter for the objects it matches, so a later
+  rule does not apply instead.
 - **Removing a rule or segment removes the override**, returning the affected
   objects to the environment-wide value.
-- **A ConfigMap that cannot be read or parsed leaves the existing overrides in
-  place.** A malformed JSON document, or a deleted ConfigMap, carries no
-  information rather than an empty set of overrides, so nothing is removed until a
-  readable ConfigMap says so. Removing an override means editing the file, not
+- **A ConfigMap that cannot be read, parsed, or validated leaves every value in
+  place.** A malformed JSON document, a structurally invalid one, or a deleted
+  ConfigMap carries no information rather than an empty set of overrides, so
+  neither the environment-wide values nor the existing overrides change until a
+  valid ConfigMap says so. Removing an override means editing the file, not
   breaking it.
 
 To see which overrides are currently in effect, query:
