@@ -48,8 +48,6 @@ class QpsSweep:
         flags: list[str],
         concurrency: int,
         protocol: str,
-        *,
-        disable_statement_logging: bool = False,
     ) -> dict:
         options = dict(zip(flags[::2], flags[1::2]))
         params = parse_qs(options["-params"])
@@ -69,11 +67,12 @@ class QpsSweep:
             "libpq_envs": [
                 common
                 | {
-                    "PGOPTIONS": f"-c cluster={cluster} -c statement_timeout={int(self.query_timeout * 1000)}"
-                    + (
-                        " -c statement_logging_sample_rate=0"
-                        if disable_statement_logging
-                        else ""
+                    # Sweep-owned routing and timeout take precedence over caller options.
+                    "PGOPTIONS": " ".join(
+                        [
+                            *params.get("options", []),
+                            f"-c cluster={cluster} -c statement_timeout={int(self.query_timeout * 1000)}",
+                        ]
                     )
                 }
                 for cluster in clusters

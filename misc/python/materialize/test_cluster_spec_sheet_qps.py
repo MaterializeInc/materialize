@@ -12,6 +12,7 @@ import importlib.util
 import json
 import sys
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
 import pytest
 
@@ -45,8 +46,19 @@ def test_invalid_sweep(kwargs):
         QpsSweep([1], ["prepared"], **kwargs)
 
 
-@pytest.mark.parametrize("disable_statement_logging", [False, True])
-def test_connection_routing_and_escaping(disable_statement_logging):
+@pytest.mark.parametrize(
+    "options",
+    [
+        [],
+        ["-c statement_logging_sample_rate=0"],
+        [r"-c application_name=quote'and\\slash\ with\ spaces&plus+percent%"],
+        [
+            "-c cluster=other -c statement_timeout=1",
+            "-c statement_logging_sample_rate=0.5",
+        ],
+    ],
+)
+def test_connection_routing_and_escaping(options):
     flags = [
         "-driver",
         "postgres",
@@ -61,17 +73,17 @@ def test_connection_routing_and_escaping(disable_statement_logging):
         "-database",
         "materialize",
         "-params",
-        "sslmode=require&cluster=c",
+        urlencode(
+            {"sslmode": "require", "cluster": "c", "options": options}, doseq=True
+        ),
     ]
-    config = QpsSweep([1, 8], ["prepared"], clusters=3).config(
-        flags, 8, "prepared", disable_statement_logging=disable_statement_logging
-    )
+    config = QpsSweep([1, 8], ["prepared"], clusters=3).config(flags, 8, "prepared")
     assert len(config["libpq_envs"]) == 3
     for i, env in enumerate(config["libpq_envs"]):
         cluster = "c" if i == 0 else f"qps_{i}"
-        expected = f"-c cluster={cluster} -c statement_timeout=30000"
-        if disable_statement_logging:
-            expected += " -c statement_logging_sample_rate=0"
+        expected = " ".join(
+            [*options, f"-c cluster={cluster} -c statement_timeout=30000"]
+        )
         assert env["PGOPTIONS"] == expected
         assert config["cluster_names"][i] == cluster
         assert env["PGSSLMODE"] == "require"
@@ -273,7 +285,7 @@ def test_pgbench_measurement_records_max_latency(
         "-database",
         "materialize",
         "-params",
-        "sslmode=require",
+        urlencode({"sslmode": "require", "options": "-c application_name=benchmark"}),
     ]
     runner = SimpleNamespace(
         envd_cpus=2,
@@ -288,7 +300,15 @@ def test_pgbench_measurement_records_max_latency(
     ).measure(runner, "50cc", 1, "prepared", disable_statement_logging)
     config, composition = calls[0]
     assert composition is runner.target.composition
-    assert config["libpq_envs"][0]["PGOPTIONS"].startswith("-c cluster=c ")
+    expected_options = "-c application_name=benchmark"
+    if disable_statement_logging:
+        expected_options += " -c statement_logging_sample_rate=0"
+    assert config["libpq_envs"][0]["PGOPTIONS"] == (
+        expected_options + " -c cluster=c -c statement_timeout=30000"
+    )
+    assert flags[-1] == urlencode(
+        {"sslmode": "require", "options": "-c application_name=benchmark"}
+    )
     suffix = "_logging_disabled" if disable_statement_logging else ""
     assert results[0][0][:2] == (
         f"peek_qps{suffix}",

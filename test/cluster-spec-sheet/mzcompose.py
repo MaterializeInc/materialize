@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from functools import partial
 from textwrap import dedent
 from typing import Any, LiteralString, TextIO
+from urllib.parse import parse_qs, urlencode
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -1978,17 +1979,21 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         disable_statement_logging: bool = False,
     ) -> None:
         suffix = "_logging_disabled" if disable_statement_logging else ""
-        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters"
-        name += suffix
+        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters{suffix}"
         print(
             f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
         )
-        config = self.options.config(
-            runner.target.qps_connection_flags(),
-            concurrency,
-            protocol,
-            disable_statement_logging=disable_statement_logging,
-        )
+        flags = runner.target.qps_connection_flags().copy()
+        if disable_statement_logging:
+            params_index = flags.index("-params") + 1
+            params = parse_qs(flags[params_index])
+            params["options"] = [
+                " ".join(
+                    [*params.get("options", []), "-c statement_logging_sample_rate=0"]
+                )
+            ]
+            flags[params_index] = urlencode(params, doseq=True)
+        config = self.options.config(flags, concurrency, protocol)
         result = pgbench.run(config, runner.target.composition)
         validate_qps_result(result, concurrency, protocol)
         if (
