@@ -99,12 +99,13 @@ Policy changes affect subsequent queries; they do not stop in-flight work.
 
 ### Introspection
 
-The internal catalogs expose policy definitions and rules:
+The internal catalogs expose policy definitions, rules, and attachments:
 
 | Catalog | Columns |
 |---------|---------|
 | `mz_internal.mz_query_policies` | `id`, `name`, `mode`, `owner_id`, `privileges`, `oid` |
 | `mz_internal.mz_query_policy_rules` | `policy_id`, `name`, `action`, `metric`, `value` |
+| `mz_internal.mz_query_policy_attachments` | `policy_id`, `object_type`, `object_id` |
 
 These catalogs do not expose active statements or a violation log.
 
@@ -113,6 +114,20 @@ SELECT p.name AS policy_name, p.mode, r.name AS rule_name,
        r.action, r.metric, r.value
 FROM mz_internal.mz_query_policies AS p
 JOIN mz_internal.mz_query_policy_rules AS r ON r.policy_id = p.id;
+```
+
+To find every cluster and role attached to a policy before changing or dropping it:
+
+```mzsql
+SELECT a.object_type, coalesce(c.name, r.name) AS object_name
+FROM mz_internal.mz_query_policy_attachments AS a
+JOIN mz_internal.mz_query_policies AS p ON p.id = a.policy_id
+LEFT JOIN mz_catalog.mz_clusters AS c
+  ON a.object_type = 'cluster' AND c.id = a.object_id
+LEFT JOIN mz_catalog.mz_roles AS r
+  ON a.object_type = 'role' AND r.id = a.object_id
+WHERE p.name = 'serving_policy'
+ORDER BY a.object_type, object_name;
 ```
 
 ## Privileges

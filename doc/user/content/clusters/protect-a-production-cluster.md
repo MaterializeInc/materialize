@@ -136,7 +136,8 @@ replaces the entire rule set; changing only `MODE` preserves the rules. See
 [`ALTER QUERY POLICY`](/sql/alter-query-policy/).
 
 To remove a policy without `CASCADE`, first detach every cluster and role that
-uses it:
+uses it. Find those attachments in `mz_internal.mz_query_policy_attachments`
+using the [policy attachment lookup](/sql/create-query-policy/#introspection):
 
 ```mzsql
 ALTER CLUSTER serving RESET (QUERY POLICY);
