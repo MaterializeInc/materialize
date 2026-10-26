@@ -27,7 +27,7 @@ const buildRow = (
   lag: parse("00:00:01"),
   targetLag: parse("00:00:10"),
   isBottleneck: false,
-  parentSourceId: null,
+  isIngestion: false,
   peakLag: null,
   peakLagAt: null,
   ...overrides,

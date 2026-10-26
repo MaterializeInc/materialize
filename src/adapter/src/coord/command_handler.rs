@@ -22,7 +22,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::SYSTEM_CONN_ID;
@@ -82,7 +81,7 @@ use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::{StatementEndedExecutionReason, WatchSetCreation};
-use crate::util::ClientTransmitter;
+use crate::util::{ClientTransmitter, CompletedClientTransmitter};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
@@ -112,11 +111,9 @@ fn role_login_status(role: Option<&Role>) -> RoleLoginStatus {
 }
 
 impl Coordinator {
-    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
-    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    /// Dispatches a command in a size-bounded, heap-allocated future.
     pub(crate) fn handle_command(&mut self, mut cmd: Command) -> LocalBoxFuture<'_, ()> {
-        async move {
+        let future = async move {
             if let Some(session) = cmd.session_mut() {
                 session.apply_external_metadata_updates();
             }
@@ -195,8 +192,7 @@ impl Coordinator {
                 } => {
                     let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
 
-                    self.handle_execute(portal_name, session, tx, outer_ctx_extra)
-                        .await;
+                    Box::pin(self.handle_execute(portal_name, session, tx, outer_ctx_extra)).await;
                 }
 
                 Command::StartCopyFromStdin {
@@ -664,8 +660,8 @@ impl Coordinator {
                 }
             }
         }
-        .instrument(debug_span!("handle_command"))
-        .boxed_local()
+        .instrument(debug_span!("handle_command"));
+        crate::coord::box_dispatcher(future)
     }
 
     fn handle_role_can_login(
@@ -2001,6 +1997,8 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         let mut maybe_ctx = None;
+        // A COMMIT waiting for group commit or for its read to be linearized.
+        let mut maybe_commit_ctx = None;
 
         // Cancel all pending writes for this connection:
         // - At most one session-bound write (`UserWriteResponder::Session`),
@@ -2028,7 +2026,7 @@ impl Coordinator {
                     responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
                     ..
                 } => {
-                    maybe_ctx = Some(ctx);
+                    maybe_commit_ctx = Some(ctx);
                 }
                 PendingWriteTxn::User {
                     responder: UserWriteResponder::Internal { result, .. },
@@ -2061,10 +2059,24 @@ impl Coordinator {
         // Cancel reads waiting on being linearized. There is at most one linearized read per
         // session.
         if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
-            let ctx = pending_read_txn.take_context();
-            maybe_ctx = Some(ctx);
+            maybe_commit_ctx = Some(pending_read_txn.take_context());
         }
 
+        if let Some(ctx) = maybe_commit_ctx {
+            // The COMMIT already cleared the session's transaction status, so the transaction's
+            // `SET LOCAL` and staged variable values are the only transaction state left. Without
+            // ending them here they apply to the session's next transaction.
+            //
+            // NOTE: The error response cannot carry the changed parameters, so a reverted
+            // parameter in the notify set is not announced to the client.
+            let (ctx, result) = CompletedClientTransmitter::new(
+                ctx,
+                Err(AdapterError::Canceled),
+                EndTransactionAction::Rollback,
+            )
+            .finalize();
+            ctx.retire(result);
+        }
         if let Some(ctx) = maybe_ctx {
             ctx.retire(Err(AdapterError::Canceled));
         }

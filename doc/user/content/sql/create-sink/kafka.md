@@ -87,7 +87,7 @@ application) can correlate a data topic with its progress records without
 querying Materialize.
 
 The `materialize-sink-id` header will become generally available, and be added
-to every message, in v26.47.
+to every message, in v26.48.
 
 ### The `HEADERS` option
 
@@ -111,7 +111,7 @@ column must be of type `map[text => text]` or `map[text => bytea]`.
   * Materialize only supports using the `HEADERS` option with the [upsert
     envelope](#upsert-envelope).
 
-The `HEADERS` option will become generally available in v26.47.
+The `HEADERS` option will become generally available in v26.48.
 
 ## Formats
 

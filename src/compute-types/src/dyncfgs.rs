@@ -289,7 +289,7 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
 /// its own batch. Zero disables sharing.
 pub const MV_SINK_SHARED_BATCH_MAX_BYTES: Config<usize> = Config::new(
     "compute_mv_sink_shared_batch_max_bytes",
-    0,
+    1024 * 1024,
     "The size of a worker's updates for one batch interval below which the MV sink coalesces \
      them into a batch shared by the workers in one process. Zero disables sharing.",
     ParameterScope::Environment,

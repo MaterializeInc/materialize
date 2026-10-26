@@ -231,20 +231,59 @@ $ kafka-verify-data format=avro sort-messages=true sink=materialize.public.mv_si
 > DROP TABLE t_temp_dep
 
 
-# Test: attempting to replace constant MVs gives a helpful error
+# Test: attempting to replace sealed MVs gives a helpful error
+#
+# A constant MV seals once its dataflow runs. Hosting it on a cluster without
+# replicas defers that until we add one, so the replacement is created before
+# the target seals and applied after. The replacement's cluster never gets a
+# replica, so the replacement's frontier doesn't show the seal and
+# `APPLY REPLACEMENT` has to detect it from the target's frontier.
 
-> CREATE MATERIALIZED VIEW mv AS SELECT 1
+> CREATE CLUSTER sealing (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)
+> CREATE CLUSTER stalled (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)
 
-> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT 2
+> CREATE MATERIALIZED VIEW mv IN CLUSTER sealing AS SELECT 1
 
-# Wait until we observe the replacement advancing to the empty frontier.
+> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER stalled AS SELECT 2
+
+> ALTER CLUSTER sealing SET (REPLICATION FACTOR 1)
+
 > SELECT write_frontier
   FROM mz_internal.mz_frontiers f
   JOIN mz_materialized_views m ON f.object_id = m.id
-  WHERE m.name = 'rp'
+  WHERE m.name = 'mv'
 <null>
 
 ! ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 contains:materialized view mv is sealed and thus cannot be replaced
 
-> DROP MATERIALIZED VIEW mv CASCADE
+> DROP MATERIALIZED VIEW rp
+
+! CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER stalled AS SELECT 2
+contains:materialized view mv is sealed and thus cannot be replaced
+
+> DROP CLUSTER sealing CASCADE
+> DROP CLUSTER stalled CASCADE
+
+
+# Test: the target seals while `APPLY REPLACEMENT` waits for it
+#
+# Same setup, but the target's replica is added in the background. The replica
+# has to start before the target can seal, so the seal typically happens while
+# `APPLY REPLACEMENT` waits for the target's frontier, and it ends that wait.
+
+> CREATE CLUSTER sealing (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)
+> CREATE CLUSTER stalled (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)
+
+> CREATE MATERIALIZED VIEW mv IN CLUSTER sealing AS SELECT 1
+
+> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER stalled AS SELECT 2
+
+$ postgres-execute background=true connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
+ALTER CLUSTER sealing SET (REPLICATION FACTOR 1)
+
+! ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+contains:materialized view mv is sealed and thus cannot be replaced
+
+> DROP CLUSTER sealing CASCADE
+> DROP CLUSTER stalled CASCADE

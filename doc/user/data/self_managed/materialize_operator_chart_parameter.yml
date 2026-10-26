@@ -1126,30 +1126,6 @@
   linenumber: 452
   dependency: ""
   isglobal: false
-- key: telemetry.segmentApiKey
-  type: string
-  notationtype: ""
-  autodefault: ""
-  default: '`"hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A"`'
-  autodescription: ""
-  description: ""
-  section: ""
-  column: 3
-  linenumber: 453
-  dependency: ""
-  isglobal: false
-- key: telemetry.segmentClientSide
-  type: bool
-  notationtype: ""
-  autodefault: ""
-  default: '`true`'
-  autodescription: ""
-  description: ""
-  section: ""
-  column: 3
-  linenumber: 454
-  dependency: ""
-  isglobal: false
 - key: tls.defaultCertificateSpecs
   type: object
   notationtype: ""
