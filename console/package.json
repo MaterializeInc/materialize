@@ -54,7 +54,7 @@
     "@materializeinc/sql-pretty": "^26.44.1",
     "@rehookify/datepicker": "^6.6.8",
     "@segment/analytics-next": "^1.84.3",
-    "@sentry/react": "^10.45.0",
+    "@sentry/react": "^11.9.0",
     "@stripe/react-stripe-js": "^7.0.0",
     "@stripe/stripe-js": "^10.0.0",
     "@tanstack/db": "0.15.2",
