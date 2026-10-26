@@ -573,12 +573,9 @@ impl Coordinator {
                 Command::InstallFrontendPeekWatchSets {
                     conn_id,
                     watch_set,
-                    tx,
+                    permit: _permit,
                 } => {
-                    let result = self.install_peek_watch_sets(conn_id, watch_set).map_err(
-                        AdapterError::concurrent_dependency_drop_from_compute_lookup_error,
-                    );
-                    let _ = tx.send(result);
+                    self.observe_frontend_peek_dependencies(conn_id, watch_set);
                 }
                 Command::ExplainTimestamp {
                     conn_id,

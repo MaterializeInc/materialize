@@ -486,7 +486,10 @@ impl Message {
     fn untraced_statement_logging(&self) -> bool {
         matches!(
             self,
-            Message::Command(context, Command::FrontendStatementLogging(_)) if context.is_empty()
+            Message::Command(
+                context,
+                Command::FrontendStatementLogging(_) | Command::InstallFrontendPeekWatchSets { .. },
+            ) if context.is_empty()
         ) && !tracing::enabled!(target: "mz_adapter::coord::handle_message_loop", Level::DEBUG)
     }
 
@@ -4244,6 +4247,16 @@ impl Coordinator {
                         match msg {
                             Message::Command(_, Command::FrontendStatementLogging(event)) => {
                                 self.handle_frontend_statement_logging_event(event);
+                            }
+                            Message::Command(
+                                _,
+                                Command::InstallFrontendPeekWatchSets {
+                                    conn_id,
+                                    watch_set,
+                                    permit: _permit,
+                                },
+                            ) => {
+                                self.observe_frontend_peek_dependencies(conn_id, watch_set);
                             }
                             _ => unreachable!("only statement logging bypasses instrumentation"),
                         }
