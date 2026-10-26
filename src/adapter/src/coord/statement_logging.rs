@@ -822,6 +822,26 @@ impl Coordinator {
     /// `StatementLifecycleEvent::StorageDependenciesFinished` and
     /// `StatementLifecycleEvent::ComputeDependenciesFinished` respectively
     /// when the dependencies are ready at the given timestamp.
+    /// Observe logging milestones without participating in query execution.
+    pub(crate) fn observe_frontend_peek_dependencies(
+        &mut self,
+        conn_id: ConnectionId,
+        watch_set: WatchSetCreation,
+    ) {
+        fail::fail_point!("frontend_peek_watch_set_install");
+        // A queued observer must not recreate connection state after termination.
+        if !self.active_conns.contains_key(&conn_id) {
+            return;
+        }
+        let logging_id = watch_set.logging_id;
+        if let Err(error) = self.install_peek_watch_sets(conn_id, watch_set) {
+            // A concurrent drop can remove dependencies before this observation
+            // is processed. Do not invent a readiness milestone for them. The
+            // registered peek independently resolves the query's outcome.
+            tracing::debug!(?logging_id, ?error, "peek logging dependency was dropped");
+        }
+    }
+
     pub(crate) fn install_peek_watch_sets(
         &mut self,
         conn_id: ConnectionId,
