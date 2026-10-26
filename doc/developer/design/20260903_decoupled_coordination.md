@@ -559,8 +559,20 @@ observations may be unknown until the successor publishes. Published cumulative
 counters and retained history survive replacement and retirement under their
 existing retention semantics, rather than following active-row cleanup.
 Preserve public relation contracts through owner-qualified internal data where
-possible. Catalog-derived publication that remains outside views must also be
-idempotent across followers.
+possible.
+
+For remaining adapter-published catalog projections, M3 permits originator-only
+publication: only the successful committer publishes its commit's derived rows.
+Followers still apply catalog state and required effects, but do not republish
+those rows. Fresh initialization seeds them. Joining and restarting adapters
+neither reset shared tables nor replay full positive snapshots.
+
+This publication is neither atomic with DDL nor ordered across originators.
+Concurrent publications can arrive out of catalog order, and publication failure
+can leave missing or inconsistent rows indefinitely, including unmatched
+retractions. This accepted M3 limitation is confined to these catalog projections,
+not user-data writes, protection or runtime/session ownership. Catalog-backed
+conversion is separate work. M3 adds no publication watermark or recovery protocol.
 
 Physical Persist progress and usage require actual observations, not catalog
 compaction permission. Sampling and pruning retain their concurrency checks.
