@@ -10,11 +10,13 @@ write catalog changes and use a separate fast protocol for query execution.
 The goal is decoupling, preserving consistency guarantees, performance, and
 existing SQL behavior except for the [maintained-creation admission rules](#admission),
 including the [fresh sink cutoff](#fresh-sink-cutoff), and the plan-selection and
-introspection behavior of [written plans](#written-plans).
+introspection behavior of [written plans](#written-plans). M3 adds the
+[adapter lifecycle](#adapters-and-process-management-m3) and
+[multi-producer introspection ownership](#shared-maintenance-and-introspection).
 Losing an adapter must not disrupt maintained dataflows or other clients. Its own
 queries may fail. Transparent query or session failover is out of scope.
-For M2, table and webhook ticking and shard finalization remain
-adapter-owned and may pause while no adapter is live.
+Table and webhook ticking and shard finalization remain adapter-owned and may
+pause while no eligible adapter is live.
 
 Active and prewarming deployments coexist as independent catalog participants.
 Their adapters and lifecycle components are cooperating catalog writers, with
@@ -37,8 +39,8 @@ the recovery timestamp forward. Fresh environments must still survive same-versi
 restarts, replanning, and ownership handover.
 
 Native warm handover with replica-targeted MVs on managed clusters is outside
-M2. Reject that combination before promotion, leaving the active deployment
-intact, without retargeting or dropping the MVs. Preserve single-deployment
+these milestones. Reject that combination before promotion, leaving the active
+deployment intact, without retargeting or dropping the MVs. Preserve single-deployment
 behavior and handover support for pins to explicitly declared replicas on
 unmanaged clusters. The broader
 [replica-targeted MV semantics](#future-work-replica-targeted-mv-semantics)
@@ -437,9 +439,9 @@ serves a request and how replicated responses are merged belong to the query
 client. Environment-wide storage accounting dissolves along the way: critical
 since handles follow committed bounds, table registration is adapter-owned, and
 shard finalization applies committed retirement permission idempotently.
-For M2, adapters perform finalization and envd creates replica processes. M3 moves
-process management to controllerd and establishes ownership of remaining shared
-duties. DDL and table appends are request-scoped and stay with adapters.
+M3 places process management in controllerd, not database progress or shared
+maintenance. DDL and table appends stay with adapters, alongside
+[cooperative maintenance](#shared-maintenance-and-introspection).
 
 A replica's execution reads and live-index retention windows use its
 [realization-owned protection](#client-read-protection). A slow, hydrating or
@@ -450,42 +452,132 @@ object-owned retention, which do not end with the replica.
 ### Adapters and process management (M3)
 
 Split environmentd into adapterd for SQL serving and controllerd for catalog-driven
-process management. Controllerd owns both replica-set reconciliation and process
-provisioning, using the existing local-process and Kubernetes backends. It follows
-committed catalog state independently of adapters. Clusterd continues to own
-maintained dataflow enactment. Process management does not introduce an
-adapter-to-controller lifecycle command channel.
+process management. One controllerd manages each deployment identity, not each
+distinct binary version. Within a deployment, controllerd, adapterd and clusterd
+use the same release. Old and new deployments have their own controllers,
+adapters and replicas. Controllerd uses the existing replica-set policy and
+local-process/Kubernetes backends to reconcile its deployment's committed
+inventory, with matching launch configuration and deployment-local observations.
+Policy decisions commit before they authorize provisioning. Missing observations
+do not establish readiness or justify scaling to zero.
 
-Controllerd is launched externally. Fresh-environment initialization commits a
-default adapter declaration so the first SQL endpoint needs no SQL bootstrap.
-Starting or restarting an adapter joins the deployment, rather than repeating
-environment initialization, resetting shared system tables or promoting itself.
-Assign remaining environment-wide duties explicitly, including table ticking and
-registration, introspection and finalization. Do not duplicate singleton effects
-or hide them on a special serving adapter.
+Controllerd owns deployment initialization and process management, not SQL
+coordination, maintained-dataflow installation or shared database maintenance.
+Adapters discover and query replicas without lifecycle RPCs or provisioning
+privileges. Losing or restarting controllerd leaves healthy children running.
+Provisioning and recovery of failed processes may wait for its return, but
+running SQL, maintained execution and cooperative maintenance do not depend on it.
+
+The external launcher/operator launches controllers, authorizes promotion,
+manages routing and completes physical teardown after durable deployment
+retirement, even if the retired controller is gone. Starting a deployment's
+controller before its children does not require upgrading the old deployment's
+controller in place. Controller startup alone neither promotes a deployment nor
+authorizes incompatible catalog or Persist-format advancement.
+
+Initialization establishes a joinable deployment, including shared catalog and
+table infrastructure. A fresh environment gets a default adapter declaration so
+the first SQL endpoint needs no SQL bootstrap. An adapter joins its specified
+deployment without repeating initialization, resetting shared tables or promoting
+itself. Build-owned planning remains with adapters under
+[written plans](#written-plans), without a permanent planner leader.
 
 SQL supports `CREATE ADAPTER adapter_name (SIZE '<size>')`, `DROP ADAPTER` and
 `ALTER ADAPTER ... RENAME TO ...`. Creation acknowledges the catalog commit,
-not process readiness. A catalog relation lists adapters, requested sizes,
-endpoints and observed readiness or provisioning errors. Local sizes specify CPU
-and memory allocations using the backend's resource controls, with enforcement
-limitations explicit. Settle self-drop and removal of the last adapter with
-Aljoscha before implementing those cases.
+not process readiness. Catalog relations list declarations, requested sizes and
+deployment-qualified endpoints, readiness and provisioning errors. Local sizes
+specify CPU and memory allocations using the backend's resource controls, with
+enforcement limitations explicit. M3 rejects dropping the serving adapter or the
+last declared adapter.
 
 Adapter declarations have stable IDs independent of names. Rename does not change
 process identity or require a restart. Realizations are deployment-qualified.
-Controller-published endpoint and status describe that realization, separately
+Each realization has its own execution and protection. Replacing one adapter
+does not replace a peer. Temporary objects record enough durable execution
+ownership for targeted cleanup when temp DDL occurs, without a catalog record
+for every connection.
+
+Controller-published endpoint and status describe the realization, separately
 from user intent. The endpoint is a local pgwire address or a backend-appropriate
 routable address. An assigned endpoint does not establish readiness, and observed
 readiness does not guarantee a future connection.
 
+Cancellation is endpoint-local in M3. Shared activity exposes adapter ownership,
+and identifiers must be unambiguous within their scope. Query-local state and
+cleanup cannot collide across adapters. Connection and concurrency admission
+limits are per-adapter, while catalog object quotas remain shared. Cross-adapter
+cancellation routing and distributed connection quotas are outside M3.
+
 Controllerd exposes pretty-printed JSON over HTTP for inspection and visualization:
-the desired adapterd and clusterd inventory used by reconciliation, including
+its desired adapterd and clusterd inventory used by reconciliation, including
 processes not yet running, their identities, deployments, resources, endpoints
 and observed status. This is a view of desired state, not a second authority or a
 dump of credential-bearing launch arguments. Keep desired-state calculation
 separate from enactment. A passive exporter consumed by a Kubernetes controller
 is future work, not required for M3.
+
+### Shared maintenance and introspection
+
+No controllerd or designated serving adapter owns shared database progress.
+Any authorized adapter may advance idle table or webhook uppers. Coalesce toward
+required progress and skip empty advancement already accomplished by another
+writer, including after conflict. Table operations retain txn-WAL and oracle
+ordering. Legitimate multiwriter contention is not evidence of a failed process,
+and an empty tick's no-op rule does not acknowledge an uncommitted user write.
+
+Any authorized adapter may finish committed shard retirement. Physical
+finalization requires catalog-certified eligibility and definitive txn-WAL
+Forget, including application of preceding writes. Local adoption or detachment
+of handles does not retire shared registration. Concurrent attempts must be safe
+without a singleton finalizer.
+
+Introspection follows the producer of each fact:
+
+| Facts | Owner |
+| --- | --- |
+| Replica compute/storage observations | The replica, not duplicate adapter relay collectors |
+| Sessions, queries and webhook contributions | The adapter execution |
+| Catalog-derived facts | Catalog-derived relations, using raw-catalog views where possible |
+| Provisioning and process observations | The deployment's controllerd |
+| Shared reductions and sampling | Maintained SQL where appropriate, or concurrency-safe cooperating adapter work |
+
+Joining an adapter neither duplicates shared facts nor retracts peer rows.
+Current-state publications distinguish realization and execution so late
+predecessor writes cannot become successor state. After replacement, current
+observations may be unknown until the successor publishes. Published cumulative
+counters and retained history survive replacement and retirement under their
+existing retention semantics, rather than following active-row cleanup.
+Preserve public relation contracts through owner-qualified internal data where
+possible. Catalog-derived publication that remains outside views must also be
+idempotent across followers.
+
+Physical Persist progress and usage require actual observations, not catalog
+compaction permission. Sampling and pruning retain their concurrency checks.
+Reuse already-safe collectors, including hydration history, rather than rewriting
+all introspection. Expensive scans consult shared completed-work progress and
+stagger attempts. Occasional redundant measurement is acceptable, but duplicate
+logical publication or double retraction is not. This requires neither
+exactly-once task execution nor a general background-job or leader-election system.
+
+### Persist pubsub
+
+An environment-scoped pubsubd serves all adapters and replicas across deployments,
+at an endpoint managed by the external launcher/operator. It outlives individual
+deployments. Reuse the existing relay and remote clients, with one shared fanout
+service rather than unrelated servers that split subscribers.
+
+Pubsub is a best-effort accelerator for durably committed Persist diffs, not a
+durable authority. Loss and reconnect use the existing durable fallback. Outages
+may increase latency and backend traffic but must not prevent progress or gate
+serving on relay availability.
+
+The relay envelope must interoperate across the supported coexistence versions.
+Payload encoding remains governed by the catalog's
+[Persist-format policy](#version-compatibility), not the relay's binary version.
+The launcher can upgrade pubsubd ahead of new SQL children while serving existing
+clients. Verify supported old/new clients against the relay across that rollout.
+Neither a separate catalog-compatibility system nor pubsub HA machinery is
+required for M3.
 
 ### Written plans
 
@@ -688,10 +780,26 @@ general upgrade-version matrix.
 #### 3. Independent adapters and process management
 
 Deliver [adapterd and controllerd](#adapters-and-process-management-m3), with
-multiple adapters serving SQL, including DDL and writes, against shared replicas.
+environment-scoped [pubsubd](#persist-pubsub) and multiple adapters serving SQL,
+including DDL and writes, against shared replicas.
 Preserve cross-adapter catalog freshness, write ordering and independent client
 protection. Responses, cancellation, query-local dataflows and disconnect cleanup
 remain isolated. No serving adapter owns shared process management.
+
+Build through these slices, preserving working outcomes as the split progresses:
+
+1. **One default adapter.** Establish stable adapter identity and separate
+   initialization from join. Extract deployment-scoped process management and
+   environment-scoped pubsub, preserving M2 behavior.
+2. **Correct independent adapters.** Isolate executions, protection and cleanup.
+   Remove shared bootstrap resets and repair conflicting introspection writers.
+   Make table writes and maintenance cooperate without a privileged adapter.
+3. **SQL-managed lifecycle.** Expose creation, listing, rename, drop, resource
+   sizes, endpoints and readiness through the same reconciliation path.
+4. **Deployment coexistence and backends.** Exercise old/new deployment
+   controllers with shared pubsub, externally authorized promotion and retired
+   deployment cleanup. Complete local-process and Kubernetes integration through
+   their existing backends and external lifecycle owner.
 
 Demonstrate SQL creation, listing, rename and drop of adapters, endpoint discovery
 and the HTTP inventory. Use two adapters concurrently, kill one, and show
@@ -699,6 +807,11 @@ controllerd restoring it while the other continues serving against the same
 replicas. Creation and recovery must not repeat shared initialization or reset
 peer state. The local demo uses declared CPU/memory sizes, not manually launched
 extra adapters.
+
+Also demonstrate controller restart without disrupting healthy children and
+pubsub outage/recovery with adapters using remote pubsub. Preserve native warm
+handover under the split. Extend existing boundary coverage rather than creating
+a separate acceptance framework or general upgrade-version matrix.
 
 Retain the independent-client proof: one client advances or loses protection while
 another retains an older timestamp, the compaction enforcer recovers, and an

@@ -1,7 +1,7 @@
 # Decoupled coordination: implementer session prompt
 
 ```text
-Work on doc/developer/design/20260903_decoupled_coordination.md.
+Implement Milestone 3 in doc/developer/design/20260903_decoupled_coordination.md.
 
 Working PR: https://github.com/MaterializeInc/materialize/pull/38696
 Bookmark: decoupled-coordination
@@ -15,17 +15,20 @@ and steering supersede old proposals.
 
 Current steering
 
-Finish M2 with native ownership enabled, including compatible-version warm
-handover, before starting M3. Do not restore an adapter-side installer.
-The handoff identifies the current blocker, next comparison and design-decision
-point. Follow that endpoint rather than accumulating locally useful fixes that
-leave the same user-visible failure unresolved.
+M2 is closed within its approved scope, including the 60s publication default.
+Keep its demonstrated outcomes closed and regular regressions enabled. Preserve
+native maintained execution rather than restoring an adapter-side installer.
 
-Keep demonstrated outcome scopes closed and regular regression coverage enabled.
-Fix concrete integration failures without reopening an acceptance campaign or
-making unrelated fixture cleanup a prerequisite. The design owns SQL behavior,
-protection lifetime, deployment identity, compatibility and the M2 exclusions.
-Those contracts remain binding without being repeated as implementation tasks here.
+Follow the M3 slices in the design, starting with one controller-managed default
+adapter and separate pubsub. Continue through independent adapters, SQL-managed
+lifecycle and deployment/backend integration, not just the binary extraction.
+The handoff identifies the current slice, concrete gaps and next useful check.
+
+Controllerd is deployment-scoped process management, not a home for shared
+database duties. Fix multi-adapter ownership at the natural boundaries. Reuse
+safe collectors and existing backends rather than building a general background
+job framework or rewriting all introspection. The abandoned async catalog-owner
+refactor remains outside scope.
 
 Scope and working rules
 
@@ -35,37 +38,30 @@ disproportionate cost to Aljoscha and pause the affected work. Routine
 implementation decisions need no renewed approval.
 
 Compare disputed behavior with the baseline before introducing stronger
-guarantees or new machinery to satisfy a test. Check affected owners when
-changing a shared rule. Keep deliberately excluded owners explicit in the
-handoff rather than treating the whole correction as complete.
+guarantees or new machinery to satisfy a test. Check affected owners when changing
+a shared rule. Keep exclusions explicit and do not silently broaden the milestone.
 
 Add durable records only for required information that cannot be derived.
 Production test-only APIs need approval. Preserve freshness, structural
 validation, protection and definitive submitted-write outcomes. Do not tune
-Persist leases, statement deadlines or the 1s publication default, weaken safety
+Persist leases, statement deadlines or the 60s publication default, weaken safety
 checks, or invent scheduling guarantees to turn an unexplained failure green.
+Keep the upstream base pinned unless Aljoscha authorizes integration.
 
 Debugging and verification
 
+Rerun an exact failing command and inspect its output before broader diagnostics.
 Separate diagnosis from acceptance. Within the approved scratch budget, use
-smaller check subsets, shorter captures and reversible A/B patches without
-renewed approval. Choose a hypothesis and distinguishing measurement. Confirm
-that a reduced case retains the relevant cost or failure. An experimental
-candidate need not be ready to land or have its benefit proved beforehand.
-Keep ineffective experiments out of the landing history.
+focused subsets, short captures and reversible A/B patches without renewed
+approval. Choose a hypothesis and distinguishing measurement, retaining the
+relevant cost or failure in a reduction. Keep ineffective experiments out of
+landing history.
 
-Use existing metrics, profiles and narrow diagnostics before adding
-instrumentation. Verify effective runtime configuration and resources, not just
-CLI flags or CI queue labels. Use a matched baseline when attributing regressions.
-Keep fixture services available for inspection when useful, then use clean state
-for comparisons. Reuse run recipes and collect related evidence together.
-Batch independent reads, status checks and remote collection rather than taking
-a model round trip for each. Keep large raw captures in artifacts.
-
-Short experiments do not relax correctness or acceptance. Verify a promising
-repair against the original workload, concurrency and resource budget.
-Measure user-visible completion and protection/compaction progress separately.
-Triage unrelated failures without letting them displace the current blocker.
+Use existing metrics and narrow diagnostics first. Verify effective runtime
+configuration and resources, not just flags or queue labels. Attribute regressions
+with matched baselines. Verify repairs against the original workload, concurrency
+and resource budget. Keep SQL completion, protection progress and physical
+reclamation distinct. Unrelated failures must not displace the current slice.
 
 Follow repository instructions and skills. Use one dedicated x86_64 scratch
 worker via bin/scratch and misc/scratch/decoupled-coordination.json:
@@ -94,9 +90,9 @@ Batch shared fixture corrections instead of rediscovering them per test.
 
 Documentation and history
 
-The handoff is a resume pointer, not a work log. Keep only current outcomes,
-live blockers, the next useful comparison, its decision point and evidence
-pointers. Replace current state and remove resolved work. Do not append a
+The handoff is a resume pointer, not a work log. Keep only the current slice,
+outcomes, live blockers, the next useful check and evidence pointers.
+Replace current state and remove resolved work. Do not append a
 paragraph for each fix, experiment or verification run, or start another diary.
 Keep the PR description concise and reviewer-facing: motivation, approach, scope,
 current verification and open blockers, with evidence links. Update that summary
