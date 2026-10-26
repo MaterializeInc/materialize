@@ -302,14 +302,27 @@ impl From<StatusUpdate> for Row {
 /// An update to an append only collection.
 pub enum AppendOnlyUpdate {
     Row((Row, Diff)),
+    /// Transfer a packed batch without converting each row on the sender.
+    Rows(Vec<(Row, Diff)>),
     Status(StatusUpdate),
 }
 
 impl AppendOnlyUpdate {
-    pub fn into_row(self) -> (Row, Diff) {
+    /// Number of rows before any status deduplication.
+    pub fn row_count(&self) -> usize {
         match self {
-            AppendOnlyUpdate::Row((row, diff)) => (row, diff),
-            AppendOnlyUpdate::Status(status) => (Row::from(status), Diff::ONE),
+            AppendOnlyUpdate::Row(_) | AppendOnlyUpdate::Status(_) => 1,
+            AppendOnlyUpdate::Rows(rows) => rows.len(),
+        }
+    }
+
+    pub fn into_rows(self) -> impl Iterator<Item = (Row, Diff)> {
+        match self {
+            AppendOnlyUpdate::Rows(rows) => itertools::Either::Left(rows.into_iter()),
+            AppendOnlyUpdate::Row(row) => itertools::Either::Right(iter::once(row)),
+            AppendOnlyUpdate::Status(status) => {
+                itertools::Either::Right(iter::once((Row::from(status), Diff::ONE)))
+            }
         }
     }
 }
@@ -626,6 +639,44 @@ impl TryIntoProtocolNonce for StorageCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn append_only_batches_preserve_rows_and_diffs() {
+        let row = |n| Row::pack_slice(&[mz_repr::Datum::Int64(n)]);
+        let status = StatusUpdate::new(
+            GlobalId::User(1),
+            chrono::DateTime::from_timestamp(1, 0).expect("valid timestamp"),
+            Status::Running,
+        );
+        let status_row = Row::from(status.clone());
+        let updates = vec![
+            AppendOnlyUpdate::Row((row(1), Diff::ONE)),
+            AppendOnlyUpdate::Rows(vec![(row(2), Diff::ONE), (row(2), -Diff::ONE)]),
+            AppendOnlyUpdate::Rows(vec![]),
+            AppendOnlyUpdate::Status(status),
+            AppendOnlyUpdate::Rows(vec![(row(3), Diff::ONE)]),
+        ];
+        assert_eq!(
+            updates
+                .iter()
+                .map(AppendOnlyUpdate::row_count)
+                .sum::<usize>(),
+            5
+        );
+        assert_eq!(
+            updates
+                .into_iter()
+                .flat_map(AppendOnlyUpdate::into_rows)
+                .collect::<Vec<_>>(),
+            vec![
+                (row(1), Diff::ONE),
+                (row(2), Diff::ONE),
+                (row(2), -Diff::ONE),
+                (status_row, Diff::ONE),
+                (row(3), Diff::ONE),
+            ],
+        );
+    }
 
     /// Test to ensure the size of the `StorageCommand` enum doesn't regress.
     #[mz_ore::test]
