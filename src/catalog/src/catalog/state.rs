@@ -4667,6 +4667,8 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
     async fn client_read_requirements_preserve_strongest_overlapping_input() {
+        use crate::durable::{ClientRealization, DEFAULT_ADAPTER_ID};
+
         Catalog::with_debug(|mut catalog| async move {
             let mut ids = Vec::new();
             for (name, sql) in [
@@ -4687,7 +4689,7 @@ mod tests {
                 1,
                 crate::durable::objects::ClientIncarnationValue {
                     deployment_generation: 0,
-                    realization: crate::durable::ClientRealization::Adapter(crate::durable::DEFAULT_ADAPTER_ID),
+                    realization: ClientRealization::Adapter(DEFAULT_ADAPTER_ID),
                 },
             );
             for direct in [5, 50] {
