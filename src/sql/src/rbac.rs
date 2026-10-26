@@ -1194,19 +1194,25 @@ fn generate_rbac_requirements(
             options,
             strategy: _,
         }) => {
-            use plan::AlterOptionParameter::{Set, Unchanged};
-            let attachment_only = !matches!(options.query_policy, Unchanged)
-                && matches!(options.availability_zones, Unchanged)
-                && matches!(options.introspection_debugging, Unchanged)
-                && matches!(options.introspection_interval, Unchanged)
-                && matches!(options.arrangement_compression, Unchanged)
-                && matches!(options.managed, Unchanged)
-                && matches!(options.replicas, Unchanged)
-                && matches!(options.replication_factor, Unchanged)
-                && matches!(options.size, Unchanged)
-                && matches!(options.schedule, Unchanged)
-                && matches!(options.workload_class, Unchanged)
-                && matches!(options.auto_scaling_strategy, Unchanged);
+            use plan::AlterOptionParameter::{Reset, Set, Unchanged};
+            // New cluster options must explicitly participate in this ownership exemption.
+            let attachment_only = matches!(
+                options,
+                plan::PlanClusterOption {
+                    availability_zones: Unchanged,
+                    introspection_debugging: Unchanged,
+                    introspection_interval: Unchanged,
+                    arrangement_compression: Unchanged,
+                    managed: Unchanged,
+                    replicas: Unchanged,
+                    replication_factor: Unchanged,
+                    size: Unchanged,
+                    schedule: Unchanged,
+                    workload_class: Unchanged,
+                    auto_scaling_strategy: Unchanged,
+                    query_policy: Set(_) | Reset,
+                }
+            );
             let mut privileges = Vec::new();
             if !matches!(options.query_policy, Unchanged) {
                 privileges.push((
