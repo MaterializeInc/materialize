@@ -413,11 +413,29 @@ impl Controller {
     /// is returned to the client on the next call to [`Self::process`].
     pub fn install_compute_watch_set(
         &mut self,
-        mut objects: BTreeSet<GlobalId>,
+        objects: BTreeSet<GlobalId>,
         t: Timestamp,
     ) -> Result<WatchSetId, CollectionLookupError> {
-        let ws_id = self.watch_set_id_gen.allocate_id();
+        match self.install_compute_watch_set_if_pending(objects, t)? {
+            Some(id) => Ok(id),
+            None => {
+                let id = self.watch_set_id_gen.allocate_id();
+                self.immediate_watch_sets.push(id);
+                Ok(id)
+            }
+        }
+    }
 
+    /// Installs a watch only if some dependencies are not yet ready for a read at `t`.
+    ///
+    /// Returns `None` when every write frontier is strictly beyond `t`, including
+    /// empty frontiers. No watch ID or completion response is created in that case.
+    /// Otherwise returns the ID that will be reported by [`Self::process`] once ready.
+    pub fn install_compute_watch_set_if_pending(
+        &mut self,
+        mut objects: BTreeSet<GlobalId>,
+        t: Timestamp,
+    ) -> Result<Option<WatchSetId>, CollectionLookupError> {
         // Collect all frontiers first, returning any errors
         let frontiers: BTreeMap<GlobalId, _> = objects
             .iter()
@@ -432,18 +450,18 @@ impl Controller {
             frontier.less_equal(&t)
         });
         if objects.is_empty() {
-            self.immediate_watch_sets.push(ws_id);
-        } else {
-            for id in objects.iter() {
-                self.unfulfilled_watch_sets_by_object
-                    .entry(*id)
-                    .or_default()
-                    .insert(ws_id);
-            }
-            self.unfulfilled_watch_sets.insert(ws_id, (objects, t));
+            return Ok(None);
         }
+        let ws_id = self.watch_set_id_gen.allocate_id();
+        for id in objects.iter() {
+            self.unfulfilled_watch_sets_by_object
+                .entry(*id)
+                .or_default()
+                .insert(ws_id);
+        }
+        self.unfulfilled_watch_sets.insert(ws_id, (objects, t));
 
-        Ok(ws_id)
+        Ok(Some(ws_id))
     }
 
     /// Install a _watch set_ in the controller.
@@ -456,11 +474,25 @@ impl Controller {
     /// is returned to the client on the next call to [`Self::process`].
     pub fn install_storage_watch_set(
         &mut self,
-        mut objects: BTreeSet<GlobalId>,
+        objects: BTreeSet<GlobalId>,
         t: Timestamp,
     ) -> Result<WatchSetId, CollectionMissing> {
-        let ws_id = self.watch_set_id_gen.allocate_id();
+        match self.install_storage_watch_set_if_pending(objects, t)? {
+            Some(id) => Ok(id),
+            None => {
+                let id = self.watch_set_id_gen.allocate_id();
+                self.immediate_watch_sets.push(id);
+                Ok(id)
+            }
+        }
+    }
 
+    /// Storage counterpart to [`Self::install_compute_watch_set_if_pending`].
+    pub fn install_storage_watch_set_if_pending(
+        &mut self,
+        mut objects: BTreeSet<GlobalId>,
+        t: Timestamp,
+    ) -> Result<Option<WatchSetId>, CollectionMissing> {
         let uppers = self
             .storage
             .collections_frontiers(objects.iter().cloned().collect())?
@@ -473,17 +505,17 @@ impl Controller {
             upper.less_equal(&t)
         });
         if objects.is_empty() {
-            self.immediate_watch_sets.push(ws_id);
-        } else {
-            for id in objects.iter() {
-                self.unfulfilled_watch_sets_by_object
-                    .entry(*id)
-                    .or_default()
-                    .insert(ws_id);
-            }
-            self.unfulfilled_watch_sets.insert(ws_id, (objects, t));
+            return Ok(None);
         }
-        Ok(ws_id)
+        let ws_id = self.watch_set_id_gen.allocate_id();
+        for id in objects.iter() {
+            self.unfulfilled_watch_sets_by_object
+                .entry(*id)
+                .or_default()
+                .insert(ws_id);
+        }
+        self.unfulfilled_watch_sets.insert(ws_id, (objects, t));
+        Ok(Some(ws_id))
     }
 
     /// Uninstalls a previously installed WatchSetId. The method is a no-op if the watch set has
