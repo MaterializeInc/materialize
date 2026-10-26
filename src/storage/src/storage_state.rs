@@ -506,7 +506,7 @@ pub struct StorageState {
     ///
     /// **NOTE**: Operators that append to this collection should take care to only add new
     /// status updates if the status of the ingestion/export in question has _changed_.
-    pub shared_status_updates: Rc<RefCell<Vec<StatusUpdate>>>,
+    pub shared_status_updates: Rc<RefCell<Vec<crate::replica::StatusEvent>>>,
 
     /// The latest status update for each object.
     pub latest_status_updates: BTreeMap<GlobalId, StatusUpdate>,
@@ -1645,7 +1645,24 @@ impl<'w> Worker<'w> {
         }
 
         // Pump updates into our state and stage them for reporting.
-        for shared_update in self.storage_state.shared_status_updates.take() {
+        for event in self.storage_state.shared_status_updates.take() {
+            let current = event.execution.is_none_or(|execution| {
+                self.storage_state.execution(event.owner) == Some(execution)
+            });
+            if let Some(progress) = &self.storage_state.replica_progress {
+                progress.send(
+                    crate::server::ReplicaStorageResponse::Status {
+                        event: event.clone(),
+                        current,
+                    }
+                    .into(),
+                );
+            }
+            if !current {
+                // A retired dataflow must not replace the current attempt's status.
+                continue;
+            }
+            let shared_update = event.update;
             self.send_storage_response(
                 response_tx,
                 StorageResponse::StatusUpdate(shared_update.clone()),
@@ -2252,7 +2269,7 @@ impl StorageState {
         self.ingestions.remove(&id);
         self.exports.remove(&id);
 
-        let _ = self.latest_status_updates.remove(&id);
+        self.latest_status_updates.remove(&id);
 
         // This will stop reporting of frontiers.
         //

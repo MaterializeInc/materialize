@@ -26,6 +26,13 @@ const SIBLING: GlobalId = GlobalId::User(12);
 const SINK: GlobalId = GlobalId::User(20);
 
 async fn native_controller(single_replica: bool) -> (Controller, StorageMetadata) {
+    native_controller_with_history(single_replica, false).await
+}
+
+async fn native_controller_with_history(
+    single_replica: bool,
+    publish_status_history: bool,
+) -> (Controller, StorageMetadata) {
     let (mut controller, _, _) = test_controller(true, false).await;
     let cluster = export_description(TABLE).instance_id;
     controller.create_instance(cluster, None);
@@ -125,10 +132,120 @@ async fn native_controller(single_replica: bool) -> (Controller, StorageMetadata
         ..Default::default()
     };
     controller
-        .create_collections_for_bootstrap(&metadata, None, descriptions, &BTreeSet::new())
+        .create_collections_for_bootstrap(
+            &metadata,
+            None,
+            descriptions,
+            &BTreeSet::new(),
+            publish_status_history,
+        )
         .await
         .unwrap();
     (controller, metadata)
+}
+
+#[mz_ore::test(tokio::test)]
+async fn registration_history_requires_publication_authority() {
+    for publish in [false, true] {
+        let (controller, _) = native_controller_with_history(false, publish).await;
+        for id in [SOURCE, TABLE, SIBLING, SINK] {
+            assert!(controller.collection_metadata(id).is_ok());
+            assert!(controller.collection_hydrated(id).unwrap());
+        }
+        let paused = controller
+            .stashed_responses
+            .iter()
+            .filter_map(|(replica, response)| match response {
+                StorageResponse::StatusUpdate(update) => {
+                    assert_eq!(*replica, None);
+                    assert_eq!(update.status, Status::Paused);
+                    Some(update.id)
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            paused,
+            if publish {
+                BTreeSet::from([SOURCE, TABLE, SIBLING, SINK])
+            } else {
+                BTreeSet::new()
+            }
+        );
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+async fn followed_lifecycle_enacts_without_history() {
+    let (mut controller, mut metadata) = native_controller(false).await;
+    let cluster = export_description(TABLE).instance_id;
+    let r1 = ReplicaId::User(1);
+    let r2 = ReplicaId::User(2);
+    controller.register_replica(cluster, r1);
+    controller.register_replica(cluster, r2);
+    status(&mut controller, TABLE, r1, Status::Running);
+    assert!(controller.collection_hydrated(TABLE).unwrap());
+    // Make any direct history append fail at the publication boundary. This
+    // covers per-replica Paused and Dropped, which bypass the deferred queue.
+    controller
+        .introspection_ids
+        .remove(&IntrospectionType::SourceStatusHistory);
+    controller
+        .introspection_ids
+        .remove(&IntrospectionType::SinkStatusHistory);
+    controller.drop_replica(cluster, r1, false);
+    assert!(!controller.collection_hydrated(TABLE).unwrap());
+    controller.drop_replica(cluster, r2, false);
+    assert!(
+        controller.instances[&cluster]
+            .replica_ids()
+            .next()
+            .is_none()
+    );
+    assert!(controller.collection_hydrated(TABLE).unwrap());
+    assert!(controller.stashed_responses.is_empty());
+
+    let second_cluster = StorageInstanceId::system(2).unwrap();
+    controller.create_instance(second_cluster, None);
+    let mut replacement = export_description(SIBLING);
+    replacement.instance_id = second_cluster;
+    controller
+        .alter_export(SINK, replacement.clone(), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        controller.collections[&SINK].data_source,
+        DataSource::Sink { desc: replacement }
+    );
+    assert_eq!(
+        controller.collections[&SINK].extra_state.instance_id(),
+        Some(second_cluster)
+    );
+    assert!(controller.stashed_responses.is_empty());
+
+    for id in [TABLE, SIBLING, SOURCE, SINK] {
+        metadata.collection_metadata.remove(&id);
+        metadata.compaction_bounds.remove(&id);
+    }
+    controller
+        .drop_tables(&metadata, vec![TABLE], false)
+        .unwrap();
+    let DataSource::Ingestion(desc) = &controller.collections[&SOURCE].data_source else {
+        panic!("source");
+    };
+    assert_eq!(
+        desc.source_exports.keys().copied().collect::<Vec<_>>(),
+        [SIBLING]
+    );
+    controller
+        .drop_sources(&metadata, vec![SIBLING, SOURCE], false)
+        .unwrap();
+    controller.drop_sinks(&metadata, vec![SINK], false).unwrap();
+    for id in [SOURCE, TABLE, SIBLING, SINK] {
+        assert!(controller.check_exists(id).is_err());
+    }
+    assert!(controller.dropped_objects.is_empty());
+    assert!(controller.stashed_responses.is_empty());
 }
 
 #[mz_ore::test(tokio::test)]
@@ -178,7 +295,7 @@ async fn native_lifecycle_is_inventory_only() {
     let mut replacement = export_description(SIBLING);
     replacement.instance_id = second_cluster;
     controller
-        .alter_export(SINK, replacement.clone())
+        .alter_export(SINK, replacement.clone(), true)
         .await
         .unwrap();
     assert_eq!(
@@ -194,7 +311,9 @@ async fn native_lifecycle_is_inventory_only() {
         metadata.collection_metadata.remove(&id);
         metadata.compaction_bounds.remove(&id);
     }
-    controller.drop_tables(&metadata, vec![TABLE]).unwrap();
+    controller
+        .drop_tables(&metadata, vec![TABLE], true)
+        .unwrap();
     let DataSource::Ingestion(current) = &controller.collections[&SOURCE].data_source else {
         panic!("source");
     };
@@ -202,7 +321,7 @@ async fn native_lifecycle_is_inventory_only() {
         current.source_exports.keys().copied().collect::<Vec<_>>(),
         [SIBLING]
     );
-    controller.drop_sinks(&metadata, vec![SINK]).unwrap();
+    controller.drop_sinks(&metadata, vec![SINK], true).unwrap();
     assert!(controller.dropped_objects.is_empty());
     assert!(controller.check_exists(TABLE).is_err());
     assert!(controller.check_exists(SINK).is_err());
@@ -237,7 +356,7 @@ async fn native_observations_preserve_sibling_hydration() {
     let (mut controller, _) = native_controller(false).await;
     let cluster = export_description(TABLE).instance_id;
     assert!(controller.collection_hydrated(TABLE).unwrap());
-    // Consume the zero-replica statuses before introducing replicas.
+    // Process pending observations before introducing replicas.
     controller.process().unwrap();
     let r1 = ReplicaId::User(1);
     let r2 = ReplicaId::User(2);
@@ -281,7 +400,7 @@ async fn native_observations_preserve_sibling_hydration() {
             .collections_hydrated_on_replicas(Some(vec![r2]), &cluster, &excluded)
             .unwrap()
     );
-    controller.drop_replica(cluster, r2);
+    controller.drop_replica(cluster, r2, true);
     assert!(!controller.collection_hydrated(TABLE).unwrap());
     assert!(controller.collection_hydrated(SIBLING).unwrap());
     status(&mut controller, TABLE, r2, Status::Running);
@@ -303,7 +422,7 @@ async fn native_observations_preserve_sibling_hydration() {
             .unwrap()
             .contains_key(&(SINK, Some(r1)))
     );
-    controller.drop_replica(cluster, r1);
+    controller.drop_replica(cluster, r1, true);
     controller.process().unwrap();
     assert!(controller.collection_hydrated(TABLE).unwrap());
     controller.register_replica(cluster, r1);
@@ -333,9 +452,9 @@ async fn single_replica_source_hydration_follows_lowest_member() {
             .unwrap()
     );
     status(&mut controller, SOURCE, low, Status::Running);
-    controller.drop_replica(cluster, high);
+    controller.drop_replica(cluster, high, true);
     assert!(controller.collection_hydrated(SOURCE).unwrap());
-    controller.drop_replica(cluster, low);
+    controller.drop_replica(cluster, low, true);
     assert!(
         controller
             .active_ingestion_exports(cluster)

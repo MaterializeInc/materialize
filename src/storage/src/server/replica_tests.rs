@@ -33,6 +33,71 @@ use tokio::time::timeout;
 use super::*;
 
 #[mz_ore::test(tokio::test)]
+async fn status_admission_fences_cross_worker_predecessors_and_restarts() {
+    timeout(Duration::from_secs(30), async {
+        let (commands, _commands_rx) = mpsc::unbounded_channel();
+        let (responses, responses_rx) = mpsc::unbounded_channel();
+        let mut endpoint =
+            ReplicaStorageBuilder((commands, std::thread::current(), responses_rx, 2))
+                .build(Arc::new(()));
+        let id = GlobalId::User(1);
+        let remap = GlobalId::User(2);
+        let old = endpoint.send(ingestion(id, remap));
+        let new = endpoint.send(ingestion(id, remap));
+        let status = |execution| ReplicaStorageResponse::Status {
+            event: StatusEvent {
+                owner: id,
+                execution: Some(execution),
+                history: mz_storage_client::controller::IntrospectionType::SourceStatusHistory,
+                update: mz_storage_client::client::StatusUpdate::new(
+                    id,
+                    mz_ore::now::to_datetime(100),
+                    mz_storage_client::client::Status::Running,
+                ),
+            },
+            current: true,
+        };
+        // The old reporting worker admitted its event before replacement, but
+        // another worker's successor event reaches the receiving endpoint first.
+        responses.send((1, status(new).into())).unwrap();
+        responses.send((0, status(old).into())).unwrap();
+        for (execution, admitted) in [(new, true), (old, false)] {
+            let Some(ReplicaStorageResponse::Status { event, current }) =
+                endpoint.recv().await.unwrap()
+            else {
+                panic!("genuine health transitions must survive fencing");
+            };
+            assert_eq!(event.execution, Some(execution));
+            assert_eq!(current, admitted);
+        }
+        responses
+            .send((
+                0,
+                ReplicaStorageResponse::RestartRequested { execution: new, id }.into(),
+            ))
+            .unwrap();
+        responses.send((1, status(new).into())).unwrap();
+        assert!(matches!(
+            endpoint.recv().await.unwrap(),
+            Some(ReplicaStorageResponse::RestartRequested { .. })
+        ));
+        assert!(matches!(
+            endpoint.recv().await.unwrap(),
+            Some(ReplicaStorageResponse::Status { current: false, .. })
+        ));
+        let final_execution = endpoint.send(ingestion(id, remap));
+        endpoint.send(StorageCommand::AllowCompaction(id, Antichain::new()));
+        responses.send((0, status(final_execution).into())).unwrap();
+        assert!(matches!(
+            endpoint.recv().await.unwrap(),
+            Some(ReplicaStorageResponse::Status { current: false, .. })
+        ));
+    })
+    .await
+    .expect("fenced events still reach history without waiting for another event");
+}
+
+#[mz_ore::test(tokio::test)]
 async fn native_storage_outlives_queries() {
     const CHILD: &str = "MZ_STORAGE_REPLICA_TEST_CHILD";
     const TEST: &str = "server::replica_tests::native_storage_outlives_queries";
@@ -215,7 +280,8 @@ async fn native_storage_outlives_queries() {
     while dropped.len() < 2 {
         match replica.recv().await.unwrap().unwrap() {
             ReplicaStorageResponse::ExecutionInput { .. }
-            | ReplicaStorageResponse::ExecutionStarted { .. } => continue,
+            | ReplicaStorageResponse::ExecutionStarted { .. }
+            | ReplicaStorageResponse::Status { .. } => continue,
             ReplicaStorageResponse::Response(StorageResponse::DroppedId(id)) => {
                 assert!(dropped.insert(id));
             }
@@ -240,7 +306,8 @@ async fn progress(replica: &mut ReplicaStorage, id: GlobalId, after: Timestamp) 
     loop {
         match replica.recv().await.unwrap().unwrap() {
             ReplicaStorageResponse::ExecutionInput { .. }
-            | ReplicaStorageResponse::ExecutionStarted { .. } => continue,
+            | ReplicaStorageResponse::ExecutionStarted { .. }
+            | ReplicaStorageResponse::Status { .. } => continue,
             ReplicaStorageResponse::Response(StorageResponse::FrontierUpper(actual, upper))
                 if actual == id =>
             {

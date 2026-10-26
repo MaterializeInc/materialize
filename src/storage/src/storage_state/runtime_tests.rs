@@ -219,6 +219,7 @@ fn step(worker: &mut Worker<'_>, startup: bool) {
     }
     let (discard, _) = mpsc::unbounded_channel();
     worker.report_dropped_ids(&discard);
+    worker.report_status_updates(&discard);
     worker.report_frontier_progress(&discard);
     for response in worker.storage_state.executions.as_mut().unwrap().report() {
         worker
@@ -289,6 +290,8 @@ fn native_health_requests_reauthorization_and_fences_retired_errors() {
         // Use the same health writer installed by the source renderer. Multiple
         // failures for this attempt must result in one local restart request.
         let old_health = DefaultWriter {
+            owner: id,
+            history: mz_storage_client::controller::IntrospectionType::SourceStatusHistory,
             execution: worker.storage_state.execution(id),
             command_tx: worker.storage_state.internal_cmd_tx.clone(),
             updates: Rc::clone(&worker.storage_state.shared_status_updates),
@@ -321,10 +324,54 @@ fn native_health_requests_reauthorization_and_fences_retired_errors() {
         old_health.send_halt(id, None);
         // A subsequent current-attempt failure must still be attributed to 3.
         let new_health = DefaultWriter {
+            owner: id,
+            history: mz_storage_client::controller::IntrospectionType::SourceStatusHistory,
             execution: worker.storage_state.execution(id),
             command_tx: worker.storage_state.internal_cmd_tx.clone(),
             updates: Rc::clone(&worker.storage_state.shared_status_updates),
         };
+        for (health, error) in [
+            (&old_health, "retired attempt"),
+            (&new_health, "current attempt"),
+        ] {
+            health.record_new_status(
+                id,
+                mz_ore::now::to_datetime(1),
+                mz_storage_client::client::Status::Stalled,
+                Some(error),
+                &Default::default(),
+                &Default::default(),
+                false,
+            );
+        }
+        let mut retired_history = false;
+        until(&mut worker, &mut responses, |response| {
+            let ReplicaStorageResponse::Status { event, current } = response else {
+                return false;
+            };
+            if event.update.error.as_deref() == Some("retired attempt") {
+                assert_eq!(event.execution, Some(2));
+                assert!(!current);
+                retired_history = true;
+            }
+            if event.update.error.as_deref() == Some("current attempt") {
+                assert_eq!(event.execution, Some(3));
+                assert!(current);
+                true
+            } else {
+                false
+            }
+        });
+        assert!(
+            retired_history,
+            "retirement must not erase original history"
+        );
+        assert_eq!(
+            worker.storage_state.latest_status_updates[&id]
+                .error
+                .as_deref(),
+            Some("current attempt")
+        );
         new_health.send_halt(id, None);
         until(&mut worker, &mut responses, |r| match r {
             ReplicaStorageResponse::RestartRequested {

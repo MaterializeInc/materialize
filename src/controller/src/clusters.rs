@@ -203,6 +203,7 @@ impl Controller {
         &mut self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
+        publish_status_history: bool,
     ) -> Result<(), anyhow::Error> {
         // We unconditionally deprovision even for unmanaged replicas to avoid
         // needing to keep track of which replicas are managed and which are
@@ -223,7 +224,8 @@ impl Controller {
         if !self.replica_owned_compute() {
             self.compute.drop_replica(cluster_id, replica_id)?;
         }
-        self.storage.drop_replica(cluster_id, replica_id);
+        self.storage
+            .drop_replica(cluster_id, replica_id, publish_status_history);
         Ok(())
     }
 

@@ -1336,6 +1336,18 @@ ORDER BY replica_id, process_id, occurred_at DESC",
     }),
 });
 
+pub static MZ_STORAGE_STATUSES_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
+    name: "mz_storage_statuses_raw",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::SOURCE_MZ_STORAGE_STATUSES_RAW_OID,
+    data_source: IntrospectionType::StorageStatuses.into(),
+    desc: mz_storage_client::healthcheck::MZ_STORAGE_STATUSES_RAW_DESC.clone(),
+    column_comments: BTreeMap::new(),
+    is_retained_metrics_object: false,
+    access: vec![],
+    ontology: None,
+});
+
 pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_source_status_history",
     schema: MZ_INTERNAL_SCHEMA,
@@ -2221,32 +2233,53 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
         ),
     ]),
     sql: "
-    WITH
-    -- The status history contains per-replica events and source-global events.
-    -- For the latter, replica_id is NULL. We turn these into '<source>', so that
-    -- we can treat them uniformly below.
-    uniform_status_history AS
-    (
-        SELECT
-            s.source_id,
-            COALESCE(s.replica_id, '<source>') as replica_id,
-            s.occurred_at,
-            s.status,
-            s.error,
-            s.details
-        FROM mz_internal.mz_source_status_history s
-        WHERE ((s.replica_id IS NULL AND s.deployment_generation IS NULL) OR s.deployment_generation IS NOT DISTINCT FROM (
-        SELECT max((data->>'deploy_generation')::uint8)
-        FROM mz_internal.mz_catalog_shared
-        WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1
-              FROM mz_internal.mz_catalog_shared
-              WHERE data->>'kind' = 'Config'
-                AND data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND data->'value'->'value' <> '0'::jsonb
+WITH
+    protected AS (
+        SELECT 1 FROM mz_internal.mz_catalog_shared
+        WHERE data->>'kind' = 'Config'
+          AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+          AND data->'value'->'value' <> '0'::jsonb
+    ),
+    object_placement AS (
+        SELECT id, cluster_id FROM mz_catalog.mz_sources
+        UNION ALL
+        SELECT t.id, s.cluster_id FROM mz_catalog.mz_tables t
+        JOIN mz_catalog.mz_sources s ON t.source_id = s.id
+    ),
+    -- Native current health is independent of retained history. Catalog placement
+    -- supplies paused state even when a lifecycle-history publication was lost.
+    uniform_statuses AS (
+        SELECT h.source_id, COALESCE(h.replica_id, '<source>') AS replica_id,
+               h.occurred_at, h.status, h.error, h.details
+        FROM mz_internal.mz_source_status_history h
+        WHERE h.deployment_generation IS NULL
+          AND NOT EXISTS (SELECT 1 FROM protected)
+        UNION ALL
+        SELECT c.id AS source_id, c.replica_id, c.occurred_at, c.status, c.error, c.details
+        FROM mz_internal.mz_storage_statuses_raw c
+        JOIN object_placement p ON p.id = c.id
+        JOIN mz_catalog.mz_cluster_replicas r ON r.id = c.replica_id AND r.cluster_id = p.cluster_id
+        WHERE EXISTS (SELECT 1 FROM protected)
+          AND c.deployment_generation = (
+              SELECT max((data->>'deploy_generation')::uint8)
+              FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'FenceToken'
           )
-    ))
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_shared
+              WHERE data->>'kind' = 'ClientIncarnation'
+                AND (data->'key'->>'id')::uint8 = c.client_incarnation
+                AND data->'value'->'realization'->'Replica' IS NOT NULL
+          )
+        UNION ALL
+        SELECT p.id AS source_id, '<source>' AS replica_id, NULL::timestamptz AS occurred_at,
+               'paused' AS status, NULL::text AS error,
+               jsonb_build_object('hints', jsonb_build_array('There is currently no replica running this source')) AS details
+        FROM object_placement p
+        WHERE EXISTS (SELECT 1 FROM protected)
+          AND p.cluster_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM mz_catalog.mz_cluster_replicas r WHERE r.cluster_id = p.cluster_id
+          )
     ),
     -- For getting the latest events, we first determine the latest per-replica
     -- events here and then apply precedence rules below.
@@ -2262,7 +2295,7 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
     (
         SELECT DISTINCT ON (source_id, replica_id)
             occurred_at, source_id, replica_id, status, error, details
-        FROM uniform_status_history
+        FROM uniform_statuses
         WHERE replica_id = '<source>'
             OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
             OR status = 'paused'
@@ -2522,33 +2555,51 @@ pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
     ]),
     sql: "
 WITH
--- The status history contains per-replica events and sink-global events.
--- For the latter, replica_id is NULL. We turn these into '<sink>', so that
--- we can treat them uniformly below.
-uniform_status_history AS
-(
-    SELECT
-        s.sink_id,
-        COALESCE(s.replica_id, '<sink>') as replica_id,
-        s.occurred_at,
-        s.status,
-        s.error,
-        s.details
-    FROM mz_internal.mz_sink_status_history s
-    WHERE ((s.replica_id IS NULL AND s.deployment_generation IS NULL) OR s.deployment_generation IS NOT DISTINCT FROM (
-        SELECT max((data->>'deploy_generation')::uint8)
-        FROM mz_internal.mz_catalog_shared
-        WHERE data->>'kind' = 'FenceToken'
-          AND EXISTS (
-              SELECT 1
-              FROM mz_internal.mz_catalog_shared
-              WHERE data->>'kind' = 'Config'
-                AND data->'key'->>'key' = 'catalog_read_protection_enabled'
-                AND data->'value'->'value' <> '0'::jsonb
+    protected AS (
+        SELECT 1 FROM mz_internal.mz_catalog_shared
+        WHERE data->>'kind' = 'Config'
+          AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+          AND data->'value'->'value' <> '0'::jsonb
+    ),
+    object_placement AS (
+        SELECT id, cluster_id FROM mz_catalog.mz_sinks
+    ),
+    -- Native current health is independent of retained history. Catalog placement
+    -- supplies paused state even when a lifecycle-history publication was lost.
+    uniform_statuses AS (
+        SELECT h.sink_id, COALESCE(h.replica_id, '<sink>') AS replica_id,
+               h.occurred_at, h.status, h.error, h.details
+        FROM mz_internal.mz_sink_status_history h
+        WHERE h.deployment_generation IS NULL
+          AND NOT EXISTS (SELECT 1 FROM protected)
+        UNION ALL
+        SELECT c.id AS sink_id, c.replica_id, c.occurred_at, c.status, c.error, c.details
+        FROM mz_internal.mz_storage_statuses_raw c
+        JOIN object_placement p ON p.id = c.id
+        JOIN mz_catalog.mz_cluster_replicas r ON r.id = c.replica_id AND r.cluster_id = p.cluster_id
+        WHERE EXISTS (SELECT 1 FROM protected)
+          AND c.deployment_generation = (
+              SELECT max((data->>'deploy_generation')::uint8)
+              FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'FenceToken'
           )
-    ))
-),
--- For getting the latest events, we first determine the latest per-replica
+          AND EXISTS (
+              SELECT 1 FROM mz_internal.mz_catalog_shared
+              WHERE data->>'kind' = 'ClientIncarnation'
+                AND (data->'key'->>'id')::uint8 = c.client_incarnation
+                AND data->'value'->'realization'->'Replica' IS NOT NULL
+          )
+        UNION ALL
+        SELECT p.id AS sink_id, '<sink>' AS replica_id, NULL::timestamptz AS occurred_at,
+               'paused' AS status, NULL::text AS error,
+               jsonb_build_object('hints', jsonb_build_array('There is currently no replica running this sink')) AS details
+        FROM object_placement p
+        WHERE EXISTS (SELECT 1 FROM protected)
+          AND p.cluster_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM mz_catalog.mz_cluster_replicas r WHERE r.cluster_id = p.cluster_id
+          )
+    ),
+    -- For getting the latest events, we first determine the latest per-replica
 -- events here and then apply precedence rules below.
 --
 -- We ignore per-replica events from replicas that no longer exist. A dropped
@@ -2562,7 +2613,7 @@ latest_per_replica_events AS
 (
     SELECT DISTINCT ON (sink_id, replica_id)
         occurred_at, sink_id, replica_id, status, error, details
-    FROM uniform_status_history
+    FROM uniform_statuses
     WHERE replica_id = '<sink>'
         OR replica_id IN (SELECT id FROM mz_catalog.mz_cluster_replicas)
         OR status = 'paused'

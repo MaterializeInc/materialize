@@ -959,6 +959,7 @@ mz_statement_execution_history
 mz_statement_execution_history_redacted
 mz_statement_lifecycle_history
 mz_storage_shards
+mz_storage_statuses_raw
 mz_storage_usage_by_shard
 mz_subscriptions
 mz_subscriptions_raw

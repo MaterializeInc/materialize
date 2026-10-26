@@ -141,6 +141,27 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|
         .finish()
 });
 
+/// Replica-owned current health, independent of historical-event retention.
+pub static MZ_STORAGE_STATUSES_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    MZ_SOURCE_STATUS_HISTORY_DESC
+        .clone()
+        .concat(
+            RelationDesc::builder()
+                .with_column("client_incarnation", SqlScalarType::UInt64.nullable(true))
+                .finish(),
+        )
+        .with_names([
+            "occurred_at",
+            "id",
+            "status",
+            "error",
+            "details",
+            "replica_id",
+            "deployment_generation",
+            "client_incarnation",
+        ])
+});
+
 pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC: LazyLock<RelationDesc> =
     LazyLock::new(|| {
         RelationDesc::builder()

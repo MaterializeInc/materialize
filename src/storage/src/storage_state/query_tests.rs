@@ -323,16 +323,30 @@ fn native_observation_subscription_and_current_status_reconnect() {
         assert_eq!(worker.storage_state.queries.len(), 2);
 
         let id = GlobalId::User(601);
+        let event = |update| crate::server::StatusEvent {
+            owner: id,
+            execution: None,
+            history: mz_storage_client::controller::IntrospectionType::SourceStatusHistory,
+            update,
+        };
         let mut status = StatusUpdate::new(id, mz_ore::now::to_datetime(1), Status::Running);
         worker
             .storage_state
             .shared_status_updates
             .borrow_mut()
-            .push(status.clone());
+            .push(event(status.clone()));
         worker.report_status_updates(&discard);
         assert_eq!(worker.storage_state.latest_status_updates[&id], status);
         assert!(observer_rx.try_recv().is_err());
-        assert!(progress.try_recv().is_err());
+        drive(&mut worker, |_| !progress.is_empty());
+        let crate::server::ReplicaStorageResponse::Status {
+            event: original,
+            current: true,
+        } = progress.try_recv().unwrap().1.response
+        else {
+            panic!("expected original transition before observer subscription")
+        };
+        assert_eq!(original.update, status);
 
         worker
             .storage_state
@@ -401,7 +415,7 @@ fn native_observation_subscription_and_current_status_reconnect() {
             .storage_state
             .shared_status_updates
             .borrow_mut()
-            .push(status.clone());
+            .push(event(status.clone()));
         worker.report_status_updates(&discard);
         assert_eq!(
             observer_rx.try_recv().unwrap(),
@@ -419,9 +433,28 @@ fn native_observation_subscription_and_current_status_reconnect() {
                 .storage_state
                 .shared_status_updates
                 .borrow_mut()
-                .push(status.clone());
+                .push(event(status.clone()));
             worker.report_status_updates(&discard);
         }
+        let mut history = Vec::new();
+        for _ in 0..3 {
+            drive(&mut worker, |_| !progress.is_empty());
+            let (_, response) = progress.try_recv().unwrap();
+            let crate::server::ReplicaStorageResponse::Status {
+                event,
+                current: true,
+            } = response.response
+            else {
+                panic!("expected original health transition")
+            };
+            history.push(event.update);
+        }
+        assert_eq!(
+            history.iter().map(|event| event.status).collect::<Vec<_>>(),
+            vec![Status::Paused, Status::Starting, Status::Running]
+        );
+        assert_eq!(history[1].timestamp, mz_ore::now::to_datetime(2));
+        assert_eq!(history[2].timestamp, mz_ore::now::to_datetime(2));
         let reconnect = Uuid::new_v4();
         let (reconnect_tx, mut reconnect_rx) = connect(&clients, reconnect, true);
         drive(&mut worker, |w| {

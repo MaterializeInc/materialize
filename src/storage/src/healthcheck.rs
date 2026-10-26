@@ -273,9 +273,11 @@ pub trait HealthOperator {
 
 /// A default `HealthOperator` for use in normal cases.
 pub struct DefaultWriter {
+    pub owner: GlobalId,
+    pub history: mz_storage_client::controller::IntrospectionType,
     pub execution: Option<u64>,
     pub command_tx: InternalCommandSender,
-    pub updates: Rc<RefCell<Vec<StatusUpdate>>>,
+    pub updates: Rc<RefCell<Vec<crate::replica::StatusEvent>>>,
 }
 
 impl HealthOperator for DefaultWriter {
@@ -289,7 +291,7 @@ impl HealthOperator for DefaultWriter {
         namespaced_errors: &BTreeMap<StatusNamespace, String>,
         write_namespaced_map: bool,
     ) {
-        self.updates.borrow_mut().push(StatusUpdate {
+        let update = StatusUpdate {
             id: collection_id,
             timestamp: ts,
             status,
@@ -304,6 +306,12 @@ impl HealthOperator for DefaultWriter {
                 BTreeMap::new()
             },
             replica_id: None,
+        };
+        self.updates.borrow_mut().push(crate::replica::StatusEvent {
+            owner: self.owner,
+            execution: self.execution,
+            history: self.history,
+            update,
         });
     }
 

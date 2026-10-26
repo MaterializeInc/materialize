@@ -1267,3 +1267,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17135  mz_catalog_shared_ind
 17136  mz_subscriptions_raw
 17137  mz_sessions_raw
+17138  mz_storage_statuses_raw

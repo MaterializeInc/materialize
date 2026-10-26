@@ -12,7 +12,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use mz_repr::{GlobalId, Timestamp};
-use mz_storage_client::client::{StorageCommand, StorageResponse};
+use mz_storage_client::client::{StatusUpdate, StorageCommand, StorageResponse};
+use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::sources::envelope::SourceEnvelope;
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
@@ -23,6 +24,14 @@ use timely::progress::Antichain;
 /// acknowledgements do not imply that an execution has finished reading.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ReplicaStorageResponse {
+    /// An original health transition, not an observation subscription snapshot.
+    Status {
+        /// Original transition, retained even when its attempt is no longer current.
+        event: StatusEvent,
+        /// Whether execution fencing admits this as current health. The receiving
+        /// endpoint also checks its replica-wide execution ownership.
+        current: bool,
+    },
     /// Revalidate current definition, eligibility, and execution/output authority before
     /// this attempt opens a transactional Kafka producer.
     KafkaPreOpen {
@@ -58,6 +67,19 @@ pub enum ReplicaStorageResponse {
         /// The ingestion or sink to reconstruct.
         id: GlobalId,
     },
+}
+
+/// A health transition with provenance captured by its producing dataflow.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StatusEvent {
+    /// Primary ingestion or sink that owns the event, including export events.
+    pub owner: GlobalId,
+    /// Native Run sequence, or None for legacy execution.
+    pub execution: Option<u64>,
+    /// Source or sink status history destination.
+    pub history: IntrospectionType,
+    /// Original transition and event timestamp.
+    pub update: StatusUpdate,
 }
 
 /// Output generations disambiguate late drop acknowledgements from a Run that

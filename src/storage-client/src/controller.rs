@@ -138,6 +138,9 @@ pub enum IntrospectionType {
 
     // Written by the Adapter for tracking AWS PrivateLink Connection Status History
     PrivatelinkConnectionStatusHistory,
+    /// Replica-owned current health. The controller advances the upper but does
+    /// not reconcile these rows or subject them to historical-event retention.
+    StorageStatuses,
 }
 
 impl IntrospectionType {
@@ -365,6 +368,14 @@ impl StorageWriteOp {
     }
 }
 
+/// Controls local storage enactment.
+///
+/// Lifecycle methods take `publish_status_history` separately from enactment.
+/// Only the successful catalog committer may set it to true for its effects.
+/// Followers and join/restart reconstruction must pass false, while still
+/// applying all local effects. Publication remains subject to read-only mode.
+/// This history permits missing events after publisher failure and unordered
+/// publication across commits. It is not authority for current catalog state.
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
     /// Marks the end of any initialization commands.
@@ -506,7 +517,12 @@ pub trait StorageController: Debug {
     fn replica_observations(&self) -> ReplicaObservationSender;
 
     /// Disconnects the storage instance from the specified replica.
-    fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId);
+    fn drop_replica(
+        &mut self,
+        instance_id: StorageInstanceId,
+        replica_id: ReplicaId,
+        publish_status_history: bool,
+    );
 
     /// Across versions of Materialize the nullability of columns for some objects can change based
     /// on updates to our optimizer.
@@ -547,12 +563,14 @@ pub trait StorageController: Debug {
         storage_metadata: &StorageMetadata,
         register_ts: Option<Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription)>,
+        publish_status_history: bool,
     ) -> Result<(), StorageError> {
         self.create_collections_for_bootstrap(
             storage_metadata,
             register_ts,
             collections,
             &BTreeSet::new(),
+            publish_status_history,
         )
         .await
     }
@@ -567,6 +585,7 @@ pub trait StorageController: Debug {
         register_ts: Option<Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
+        publish_status_history: bool,
     ) -> Result<(), StorageError>;
 
     /// Alters each identified ingestion to use the correlated [`SourceDesc`].
@@ -623,6 +642,7 @@ pub trait StorageController: Debug {
         &mut self,
         id: GlobalId,
         export: ExportDescription,
+        publish_status_history: bool,
     ) -> Result<(), StorageError>;
 
     /// For each identified export, alter its [`StorageSinkConnection`].
@@ -639,6 +659,7 @@ pub trait StorageController: Debug {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
+        publish_status_history: bool,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
@@ -646,6 +667,7 @@ pub trait StorageController: Debug {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
+        publish_status_history: bool,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
@@ -653,6 +675,7 @@ pub trait StorageController: Debug {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
+        publish_status_history: bool,
     ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
@@ -669,6 +692,7 @@ pub trait StorageController: Debug {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
+        publish_status_history: bool,
     );
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
@@ -685,6 +709,7 @@ pub trait StorageController: Debug {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
+        publish_status_history: bool,
     ) -> Result<(), StorageError>;
 
     /// Waits until the controller is ready to process a response.

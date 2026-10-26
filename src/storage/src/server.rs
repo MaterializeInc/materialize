@@ -31,8 +31,8 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::metrics::StorageMetrics;
-pub use crate::replica::ReplicaStorageResponse;
 use crate::replica::{OutputFrontier, OutputGenerations, ReplicaCommand, WorkerResponse};
+pub use crate::replica::{ReplicaStorageResponse, StatusEvent};
 use crate::storage_state::{StorageInstanceContext, Worker};
 
 /// The process-local storage runtime and its connection factory.
@@ -173,6 +173,17 @@ impl ReplicaStorage {
             match response {
                 response @ ReplicaStorageResponse::KafkaPreOpen { .. } => {
                     return Ok(Some(response));
+                }
+                ReplicaStorageResponse::Status { event, current } => {
+                    // Health ownership can move between workers. Their response
+                    // streams have no cross-worker ordering, so producer-local
+                    // admission alone cannot fence a delayed predecessor.
+                    let current = current
+                        && event.execution.is_some_and(|execution| {
+                            self.current.get(&event.owner) == Some(&execution)
+                                && !self.restarts.contains(&execution)
+                        });
+                    return Ok(Some(ReplicaStorageResponse::Status { event, current }));
                 }
                 ReplicaStorageResponse::ExecutionStarted { execution } => {
                     let workers = self.starts.get_mut(&execution).expect("admitted execution");

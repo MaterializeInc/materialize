@@ -921,7 +921,7 @@ impl Coordinator {
         if !replacement_drops.is_empty() {
             fail::fail_point!("after_catalog_drop_replica");
             for (cluster_id, replica_id) in replacement_drops {
-                self.drop_replica(cluster_id, replica_id);
+                self.drop_replica(cluster_id, replica_id, publish_derived_rows);
             }
         }
         for (cluster_id, replica_id, role, cluster_name, replica_name, config) in
@@ -942,22 +942,28 @@ impl Coordinator {
             self.pending_compute_installation_retry = None;
         }
         if !source_collections_to_create.is_empty() {
-            self.create_source_collections(source_collections_to_create)
+            self.create_source_collections(source_collections_to_create, publish_derived_rows)
                 .await?;
         }
 
         // Have to create sources first and then tables, because tables within
         // one transaction can depend on sources.
         if !table_collections_to_create.is_empty() {
-            self.create_table_collections(table_collections_to_create, execution_timestamps_to_set)
-                .await?;
+            self.create_table_collections(
+                table_collections_to_create,
+                execution_timestamps_to_set,
+                publish_derived_rows,
+            )
+            .await?;
         }
         // Sink inputs must exist before exports acquire their dependency read holds.
         for sink in sinks_to_create {
-            self.create_storage_export(sink.global_id(), &sink).await?;
+            self.create_storage_export(sink.global_id(), &sink, publish_derived_rows)
+                .await?;
         }
         for sink in sinks_to_alter {
-            self.alter_storage_export(&sink).await?;
+            self.alter_storage_export(&sink, publish_derived_rows)
+                .await?;
         }
         // Storage exists before compute imports it. Within compute, install indexes
         // immediately after their input so downstream plans can use same-batch indexes.
@@ -1274,15 +1280,18 @@ impl Coordinator {
                 if !txn_tables_to_drop.is_empty() {
                     self.detach_tables_via_committer(txn_tables_to_drop.into_iter().collect());
                 }
-                self.drop_tables(tables_to_drop.into_iter().collect_vec());
+                self.drop_tables(
+                    tables_to_drop.into_iter().collect_vec(),
+                    publish_derived_rows,
+                );
             }
 
             if !sources_to_drop.is_empty() {
-                self.drop_sources(sources_to_drop);
+                self.drop_sources(sources_to_drop, publish_derived_rows);
             }
 
             if !storage_sink_gids_to_drop.is_empty() {
-                self.drop_storage_sinks(storage_sink_gids_to_drop);
+                self.drop_storage_sinks(storage_sink_gids_to_drop, publish_derived_rows);
             }
 
             if !active_compute_sinks_to_drop.is_empty() {
@@ -1332,7 +1341,7 @@ impl Coordinator {
                 fail::fail_point!("after_catalog_drop_replica");
 
                 for (cluster_id, replica_id) in cluster_replicas_to_drop {
-                    self.drop_replica(cluster_id, replica_id);
+                    self.drop_replica(cluster_id, replica_id, publish_derived_rows);
                 }
             }
             if !clusters_to_drop.is_empty() {
@@ -1917,6 +1926,7 @@ impl Coordinator {
         &mut self,
         table_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
         execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
+        publish_status_history: bool,
     ) -> Result<(), AdapterError> {
         let registrations = table_collections_to_create
             .iter()
@@ -1948,7 +1958,12 @@ impl Coordinator {
             let storage_metadata = self.catalog.state().storage_metadata();
             self.controller
                 .storage
-                .create_collections(storage_metadata, Some(register_ts), collections)
+                .create_collections(
+                    storage_metadata,
+                    Some(register_ts),
+                    collections,
+                    publish_status_history,
+                )
                 .await
                 .unwrap_or_terminate("cannot fail to create collections");
         }
@@ -2005,6 +2020,7 @@ impl Coordinator {
     async fn create_source_collections(
         &mut self,
         source_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
+        publish_status_history: bool,
     ) -> Result<(), AdapterError> {
         let collections = source_collections_to_create.into_iter().collect_vec();
         self.register_adapter_storage_collections(&collections, &BTreeSet::new())
@@ -2017,6 +2033,7 @@ impl Coordinator {
                 storage_metadata,
                 None, // Sources don't need a write timestamp
                 collections,
+                publish_status_history,
             )
             .await
             .unwrap_or_terminate("cannot fail to create collections");

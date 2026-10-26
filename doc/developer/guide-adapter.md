@@ -43,6 +43,13 @@ reset shared projections or replay full positive snapshots. For these projection
 only, M3 accepts out-of-order publication and persistent inconsistency after
 publication failure. This does not relax user-data or runtime ownership.
 
+Native catalog-driven Paused/Dropped history has the same scoped M3 delivery
+limitation, including synthetic per-replica Paused markers. Only the successful committer
+publishes these events. Followers still enact local effects, and join/restart
+reconstruction emits no historical transitions. Current existence and zero-replica
+placement come from the catalog, not successful delivery of those events.
+Legacy controller-owned execution retains its runtime status reconstruction.
+
 Two contracts on the implications phase:
 
 - It is treated as infallible. `catalog_transact_with_context` does
@@ -299,6 +306,25 @@ an in-process counter and assuming no other writer exists --- is incorrect
 unless the backing store is also consulted or the invariant is otherwise
 guaranteed system-wide. Always ask: "does this still work if another node is
 running the same code against the same backing store?"
+
+### History retention must not restore superseded current state
+
+Filtering retained observations by a live process incarnation does not distinguish
+successive execution attempts within that process. Selecting the greatest attempt
+among retained rows is insufficient when pruning keeps rows by wall-clock time.
+A late predecessor event, or a backward clock adjustment, can make pruning delete
+the successor's row while retaining the predecessor's. The predecessor must not
+become current again merely because that history was pruned.
+
+Current-state authority must survive the applicable history-retention policy.
+Preserve genuine historical transitions and their retention semantics rather than
+discarding old-attempt events or changing the pruning order to satisfy a
+current-state query.
+
+Health reporting can move between workers across execution attempts. Per-worker
+FIFO and producer-local admission do not order those streams. Recheck execution
+ownership at the receiving endpoint, and retire current rows by execution rather
+than bare object ID. Preserve rejected predecessor transitions as history.
 
 ### Checklist for timestamp-related changes
 

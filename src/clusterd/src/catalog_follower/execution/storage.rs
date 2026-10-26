@@ -26,6 +26,7 @@ use timely::progress::Antichain;
 
 use super::{ReplicaEffects, ReplicaEnactment, storage_metadata};
 
+mod history;
 mod sinks;
 
 pub(super) struct StorageIo {
@@ -36,6 +37,7 @@ pub(super) struct StorageIo {
     preopens: Vec<(uuid::Uuid, u64, GlobalId)>,
     initialized: bool,
     writes_allowed: bool,
+    history: Option<history::History>,
 }
 
 impl StorageIo {
@@ -48,6 +50,7 @@ impl StorageIo {
             preopens: Vec::new(),
             initialized: false,
             writes_allowed: false,
+            history: None,
         }
     }
 
@@ -69,6 +72,12 @@ impl StorageIo {
 
     pub fn absorb(&mut self, response: ReplicaStorageResponse) {
         match response {
+            ReplicaStorageResponse::Status { event, current } => {
+                self.history
+                    .as_ref()
+                    .expect("history configured before storage execution")
+                    .record(event, current);
+            }
             ReplicaStorageResponse::KafkaPreOpen {
                 request,
                 execution,
@@ -87,6 +96,7 @@ impl StorageIo {
                 self.inputs.insert((execution, input), frontier);
             }
             ReplicaStorageResponse::RestartRequested { execution, id } => {
+                self.retire_statuses(execution);
                 self.restarts.insert((execution, id));
             }
             // Durable progress is sampled from Persist for recovery/publication.
@@ -98,6 +108,34 @@ impl StorageIo {
                 tracing::debug!(?response, "replica storage response");
             }
         }
+    }
+
+    fn retire_statuses(&self, execution: u64) {
+        if let Some(history) = &self.history {
+            history.retire_execution(execution);
+        }
+    }
+}
+
+impl ReplicaEnactment {
+    pub fn configure_status_history(
+        &mut self,
+        catalog: &Catalog,
+        persist: mz_persist_client::PersistClient,
+        deployment: u64,
+    ) -> anyhow::Result<()> {
+        if let Some(storage) = &mut self.io.storage
+            && storage.history.is_none()
+        {
+            storage.history = Some(history::History::new(
+                catalog,
+                persist,
+                self.replica,
+                deployment,
+                self.protection.incarnation(),
+            )?);
+        }
+        Ok(())
     }
 }
 
@@ -228,6 +266,7 @@ impl ReplicaEnactment {
                 .expect("installed ingestion");
             self.storage_state.starting.remove(&old.execution);
             let io = self.io.storage.as_mut().expect("storage endpoint");
+            io.retire_statuses(old.execution);
             for output in old
                 .definition
                 .collection_ids()
@@ -352,6 +391,7 @@ impl ReplicaEnactment {
             };
             let io = self.io.storage.as_mut().expect("storage endpoint");
             if let Some(old) = self.storage_state.ingestions.get(&id) {
+                io.retire_statuses(old.execution);
                 self.storage_state.starting.remove(&old.execution);
                 let outputs: BTreeSet<_> = definition.collection_ids().collect();
                 for removed in old

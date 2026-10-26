@@ -854,6 +854,7 @@ where
             | introspection_type @ IntrospectionType::SessionHistory
             | introspection_type @ IntrospectionType::StatementLifecycleHistory
             | introspection_type @ IntrospectionType::SqlText
+            | introspection_type @ IntrospectionType::StorageStatuses
             | introspection_type @ IntrospectionType::SourceStatusHistory
             | introspection_type @ IntrospectionType::SinkStatusHistory
             | introspection_type @ IntrospectionType::PrivatelinkConnectionStatusHistory
@@ -1280,6 +1281,7 @@ impl AppendOnlyWriteTask {
                 | Some(IntrospectionType::SessionHistory)
                 | Some(IntrospectionType::StatementLifecycleHistory)
                 | Some(IntrospectionType::SqlText)
+                | Some(IntrospectionType::StorageStatuses)
                 | None => None,
 
                 Some(introspection_type @ IntrospectionType::ShardMapping)
@@ -1396,6 +1398,8 @@ impl AppendOnlyWriteTask {
                 Vec::new()
             }
 
+            // Current rows belong to executions, not historical-event retention.
+            IntrospectionType::StorageStatuses => Vec::new(),
             IntrospectionType::SourceStatusHistory => {
                 let last_status_per_id = partially_truncate_status_history(
                     self.id,

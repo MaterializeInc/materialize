@@ -36,6 +36,7 @@ pub(super) async fn attempts(replica: &mut ReplicaStorage) {
                 }
             }
             ReplicaStorageResponse::Response(_)
+            | ReplicaStorageResponse::Status { .. }
             | ReplicaStorageResponse::ExecutionStarted { .. } => (),
             ReplicaStorageResponse::ExecutionInput { input, .. } if input != remap => (),
             response => panic!("unexpected response: {response:?}"),
@@ -64,6 +65,7 @@ pub(super) async fn attempts(replica: &mut ReplicaStorage) {
                 completed |= frontier.is_empty();
             }
             ReplicaStorageResponse::Response(_)
+            | ReplicaStorageResponse::Status { .. }
             | ReplicaStorageResponse::ExecutionStarted { .. } => (),
             ReplicaStorageResponse::ExecutionInput { input, .. } if input != remap => (),
             response => panic!("unexpected response: {response:?}"),
@@ -95,6 +97,7 @@ pub(super) async fn attempts(replica: &mut ReplicaStorage) {
                 }
             }
             ReplicaStorageResponse::Response(_)
+            | ReplicaStorageResponse::Status { .. }
             | ReplicaStorageResponse::ExecutionStarted { .. } => (),
             ReplicaStorageResponse::ExecutionInput { input, .. } if input != remap => (),
             response => panic!("unexpected response: {response:?}"),
@@ -141,6 +144,7 @@ async fn wait_for_input(
                 }
             }
             ReplicaStorageResponse::Response(_)
+            | ReplicaStorageResponse::Status { .. }
             | ReplicaStorageResponse::ExecutionStarted { .. } => (),
             // The parent test can still have retired inputs in the gather.
             ReplicaStorageResponse::ExecutionInput { .. } => (),

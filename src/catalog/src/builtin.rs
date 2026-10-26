@@ -1375,6 +1375,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_SHOW_ALL_MY_PRIVILEGES),
         Builtin::View(&MZ_SHOW_DEFAULT_PRIVILEGES),
         Builtin::View(&MZ_SHOW_MY_DEFAULT_PRIVILEGES),
+        Builtin::Source(&MZ_STORAGE_STATUSES_RAW),
         Builtin::Source(&MZ_SINK_STATUS_HISTORY),
         Builtin::View(&MZ_SINK_STATUSES),
         Builtin::Source(&MZ_SOURCE_STATUS_HISTORY),

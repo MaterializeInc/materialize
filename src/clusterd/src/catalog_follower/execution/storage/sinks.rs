@@ -136,6 +136,11 @@ impl ReplicaEnactment {
             self.storage_state.starting.remove(&old.execution);
             self.io
                 .storage
+                .as_ref()
+                .expect("storage endpoint")
+                .retire_statuses(old.execution);
+            self.io
+                .storage
                 .as_mut()
                 .expect("storage endpoint")
                 .endpoint
@@ -265,6 +270,11 @@ impl ReplicaEnactment {
                     restart: false,
                 },
             ) {
+                self.io
+                    .storage
+                    .as_ref()
+                    .expect("storage endpoint")
+                    .retire_statuses(old.execution);
                 self.storage_state.starting.remove(&old.execution);
             }
             self.storage_state.reads.insert(execution, holds);

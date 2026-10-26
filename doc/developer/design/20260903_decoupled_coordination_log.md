@@ -10,8 +10,8 @@ appending a work log. Detailed evidence stays outside these documents.
 
 Implementer session: `2026-09-14-13-05-31-256`. Bookmark:
 `decoupled-coordination`, based on pinned `d9a2c5dc40`. M2 remains closed,
-including the 60s default. M3 slice 1 is incomplete. No adapter uses remote
-pubsub yet, and controllerd/adapterd have not been implemented.
+including the 60s default. M3 slice 1 is incomplete. External pubsub works in
+opt-in environmentd mode, but controllerd/adapterd have not been implemented.
 
 The foundation includes standalone pubsubd, retained local supervision, replica
 launch specifications, named adapter declarations and catalog join without shared
@@ -21,46 +21,47 @@ These components have focused verification, not combined M3 acceptance.
 
 ## Resume here
 
-- CI140661's SLT 1–4 and Testdrive 4 failures reflect the
-  session/subscription table-to-view change. Testdrive 6 exhausted its 40-minute
-  budget while continuing through its final file. No individual stall or terminal
-  assertion was established. Its slowdown remains unresolved, not excluded.
-  See `ci140661/testdrive6-terminal.md`. Upgrade conversion and merge skew stay
-  excluded. Native recovery/promotion, parallel and retention jobs passed, as did
-  all five corrected realization-probe workflows. CI140661 does not cover the
-  configuration reconciliation in `a1f90e7e`. Cluster-thread assertions do not
-  propagate to callers, an unresolved harness gap. Do not count checkout failures
-  or unrerun corrections as passing.
-- Generated goldens are copied from the sole worker into the canonical checkout.
-  All 458 assertions in the five affected SLTs pass at `c2528002`, using the
-  standard 8-MiB debug stack from `bin/run`. The dev mzcompose invocation without
-  that setting overflows its stack. Coverage and exact SHOW-list checks pass.
-  `1ec60e5a` commits these expectations. Worker edits are preserved and its
-  `m3-catalog-goldens` containers stopped without deleting data.
-- Configuration reconciliation before readiness is committed in `a1f90e7e`.
-  Focused startup, restart and prewarming checks, formatting and Clippy pass.
-  Complete multi-adapter promotion/concurrency verification remains open.
-- `1447ab13` adds fresh-only projection seeding. Review, strict shared-consumer
-  Clippy, formatting and three startup/restart/prewarming checks pass at `75ca6a61`.
-  Protected join/restart reset and snapshot replay are disabled, preserving own
-  bootstrap diffs and private backfill. See `fresh-bootstrap-verification.log`.
-  `TxnsHandle::adopt` exists and is tested but is not wired into
-  adapter startup. Local adoption does not register or advance the WAL, or establish
-  readiness/write authority.
-- `67c0e028` separates local authentication overrides from durable shared
-  credentials. Review, strict Clippy, formatting and seven password/HTTP/SCRAM
-  tests pass. See `durable-role-auth-verification.log`.
-  `bootstrap-owner-inventory.md` classifies all 27 builtin tables.
-- Session/subscription rows are execution-qualified and public views filter live
-  incarnations. Existing SQL and bootstrap-progress tests pass, but retired-row
-  cleanup and runtime concurrency coverage remain missing.
+- Native status ownership is implemented and locally verified. One private current
+  relation is independent of unchanged history schemas and retention. Replica
+  receive-time fencing and attempt-qualified retirement reject late predecessors.
+  Catalog placement supplies paused health. Only successful committers publish
+  native catalog-driven Paused/Dropped history. Followers retain local effects,
+  join/restart emits no lifecycle history, and legacy reconstruction is unchanged.
+  Strict Clippy, formatting, real binaries, 33 focused tests, native SQL lifecycle
+  smoke and 534 assertions in seven existing catalog SLTs pass. Broad integration
+  and physical retired-row cleanup remain open. See `current-health-simple-verified.tar.gz`,
+  `current-health-final-catalog-verified.tar.gz`, `current-health-fence-followup.md`
+  and `lifecycle-originator-status-review.md` with its disposition.
+- Continue the finite table-initialization boundary, then controllerd/adapterd.
+  `finite-table-initializer-next-boundary.md` is research, not implementation.
+  `c03c2a0e` establishes finite storage metadata, not txn-WAL readiness or complete
+  controller startup. `TxnsHandle::adopt` is tested but not wired into startup.
+  Adoption alone does not register/advance the WAL or establish write authority.
+- External pubsub is verified in `6798d042`, including protected SQL, outage and
+  reconnect. Shared bootstrap snapshots are fresh-only. Active configuration
+  reconciliation and durable-only credential publication have focused verification,
+  but combined multi-adapter promotion/concurrency remains open. Session/subscription
+  rows are execution-qualified and filtered, with physical cleanup still missing.
+- Latest recorded broad integration is CI140687 at `b2ea75aa`: 90 checks passed,
+  testdrive 6 failed on six missing Starting history rows after replica recreation.
+  The original 37-file shard and focused status-history run pass on scratch under
+  the aggregate 8-CPU/16-GiB slice. Replica-owned publication closes the demonstrated
+  pre-subscription loss window, but this was not trace-proven as the CI cause.
+  Rerun broad integration for the status slice rather than claiming that failure
+  resolved. The preceding cumulative slowdown remains unexplained.
+  Console/prod failed against production cloud services, not this branch's server.
+  See `ci140687/failures.md` and `ci140687/starting-history-owner.md`.
+- Native recovery/promotion, parallel, retention and corrected realization probes
+  passed CI140661. Upgrade conversion and merge skew stay excluded. Cluster-thread
+  assertions do not propagate to callers, an unresolved harness gap. Do not count
+  checkout failures or unrerun corrections as passing.
 
-Evidence is under `~/.local/share/aj/m3-evidence/`. Start with `ci140661/` and
-`ci140586/current-failure-classification.md` for CI, `config-bootstrap-local-verification.log`
-and `config-bootstrap-cas-verification.log` for readiness, and
-`session-publication-boundary.md` for session cleanup. `foundation-handoff-detail.md`
-holds completed foundation verification pointers. Broad combined verification is
-still open.
+Evidence is under `~/.local/share/aj/m3-evidence/`. Completed foundation pointers
+are in `foundation-handoff-detail.md` and `pre-status-closeout-handoff.md`.
+`session-publication-boundary.md` describes session cleanup. Broad combined M3
+verification remains open. Scratch retains generated golden edits already copied
+and preserved here. Check/preserve them before another push. Its standard SLT
+runner uses the ignored `target/debug -> ../target-xcompile/debug` alias.
 
 ## Boundaries to preserve
 

@@ -406,6 +406,9 @@ pub(crate) async fn run(
             owner.storage.take(),
         ));
     }
+    if let Some(execution) = &mut owner.execution {
+        execution.configure_status_history(&catalog, persist.clone(), config.deploy_generation)?;
+    }
     let execution = &mut owner.execution;
     // None forces initial configuration in both lanes, even without catalog effects.
     let mut configured_persist_state_version = None;

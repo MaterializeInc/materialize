@@ -845,6 +845,10 @@ mz_storage_shards
 SOURCE
 materialize
 mz_internal
+mz_storage_statuses_raw
+SOURCE
+materialize
+mz_internal
 mz_storage_usage_by_shard
 BASE TABLE
 materialize

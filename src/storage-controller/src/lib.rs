@@ -628,7 +628,12 @@ impl StorageController for Controller {
         )
     }
 
-    fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId) {
+    fn drop_replica(
+        &mut self,
+        instance_id: StorageInstanceId,
+        replica_id: ReplicaId,
+        publish_status_history: bool,
+    ) {
         let instance = &self.instances[&instance_id];
         let (ingestions, exports): (Vec<_>, Vec<_>) = if let Some(legacy) = &instance.legacy {
             (
@@ -728,7 +733,7 @@ impl StorageController for Controller {
         }
 
         instance.drop_replica(replica_id);
-        if self.replica_owned {
+        if self.replica_owned && publish_status_history {
             let ids = self
                 .collections
                 .iter()
@@ -739,7 +744,7 @@ impl StorageController for Controller {
             self.queue_native_paused_statuses(ids);
         }
 
-        if !self.read_only {
+        if publish_status_history && !self.read_only {
             if !source_status_updates.is_empty() {
                 self.append_status_introspection_updates(
                     IntrospectionType::SourceStatusHistory,
@@ -847,6 +852,7 @@ impl StorageController for Controller {
         register_ts: Option<Timestamp>,
         mut collections: Vec<(GlobalId, CollectionDescription)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
+        publish_status_history: bool,
     ) -> Result<(), StorageError> {
         self.migrated_storage_collections
             .extend(migrated_storage_collections.iter().cloned());
@@ -1258,7 +1264,7 @@ impl StorageController for Controller {
             self.collections.insert(id, collection_state);
         }
 
-        if self.replica_owned {
+        if self.replica_owned && publish_status_history {
             self.queue_native_paused_statuses(new_collections.iter().copied());
         }
         self.append_shard_mappings(new_collections.into_iter(), Diff::ONE);
@@ -1622,6 +1628,7 @@ impl StorageController for Controller {
         &mut self,
         id: GlobalId,
         new_description: ExportDescription,
+        publish_status_history: bool,
     ) -> Result<(), StorageError> {
         if self.replica_owned {
             let collection = self
@@ -1637,7 +1644,9 @@ impl StorageController for Controller {
             };
             *instance_id = new_description.instance_id;
             *desc = new_description;
-            self.queue_native_paused_statuses([id]);
+            if publish_status_history {
+                self.queue_native_paused_statuses([id]);
+            }
             return Ok(());
         }
         let from_id = new_description.sink.from;
@@ -1884,6 +1893,7 @@ impl StorageController for Controller {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
+        publish_status_history: bool,
     ) -> Result<(), StorageError> {
         for id in &identifiers {
             match self.collection(*id)?.data_source {
@@ -1895,7 +1905,7 @@ impl StorageController for Controller {
         // Physical finalization separately requires shared txn-WAL retirement. Read
         // accounting may already be retired, but execution cleanup is ours.
         if !identifiers.is_empty() {
-            self.drop_sources_unvalidated(storage_metadata, identifiers)?;
+            self.drop_sources_unvalidated(storage_metadata, identifiers, publish_status_history)?;
         }
 
         Ok(())
@@ -1905,15 +1915,17 @@ impl StorageController for Controller {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
+        publish_status_history: bool,
     ) -> Result<(), StorageError> {
         self.validate_collection_ids(identifiers.iter().cloned())?;
-        self.drop_sources_unvalidated(storage_metadata, identifiers)
+        self.drop_sources_unvalidated(storage_metadata, identifiers, publish_status_history)
     }
 
     fn drop_sources_unvalidated(
         &mut self,
         storage_metadata: &StorageMetadata,
         ids: Vec<GlobalId>,
+        publish_status_history: bool,
     ) -> Result<(), StorageError> {
         // Keep track of which ingestions we have to execute still, and which we
         // have to change because of dropped subsources.
@@ -2035,7 +2047,7 @@ impl StorageController for Controller {
             status_updates.push(StatusUpdate::new(*id, status_now, Status::Dropped));
         }
 
-        if !self.read_only {
+        if publish_status_history && !self.read_only {
             self.append_status_introspection_updates(
                 IntrospectionType::SourceStatusHistory,
                 status_updates,
@@ -2103,9 +2115,10 @@ impl StorageController for Controller {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
+        publish_status_history: bool,
     ) -> Result<(), StorageError> {
         self.validate_export_ids(identifiers.iter().cloned())?;
-        self.drop_sinks_unvalidated(storage_metadata, identifiers);
+        self.drop_sinks_unvalidated(storage_metadata, identifiers, publish_status_history);
         Ok(())
     }
 
@@ -2113,6 +2126,7 @@ impl StorageController for Controller {
         &mut self,
         storage_metadata: &StorageMetadata,
         mut sinks_to_drop: Vec<GlobalId>,
+        publish_status_history: bool,
     ) {
         // Ignore exports that have already been removed.
         sinks_to_drop.retain(|id| self.is_sink(*id));
@@ -2157,7 +2171,7 @@ impl StorageController for Controller {
             }
         }
 
-        if !self.read_only {
+        if publish_status_history && !self.read_only {
             self.append_status_introspection_updates(
                 IntrospectionType::SinkStatusHistory,
                 status_updates,
@@ -2402,7 +2416,12 @@ impl StorageController for Controller {
                     if let Some(id) = replica_id {
                         status_update.replica_id = Some(id);
                     }
-                    status_updates.push(status_update);
+                    // Native replicas publish original transitions themselves.
+                    // Observation snapshots establish hydration, not history.
+                    // Shared zero-replica events have no producer and remain here.
+                    if !self.replica_owned || observation_replica.is_none() {
+                        status_updates.push(status_update);
+                    }
                 }
                 (Some(replica), StorageResponse::QueryReady) if self.replica_owned => {
                     // A connection's fresh snapshot, not a cached status from
@@ -3428,7 +3447,9 @@ where
         }
     }
 
-    /// Zero-replica status comes from inventory, never an installation command history.
+    /// Queues zero-replica history for an originating committed effect.
+    /// Callers must check publication authority before enqueueing because response
+    /// processing cannot recover which catalog effect produced the event.
     fn queue_native_paused_statuses(&mut self, ids: impl IntoIterator<Item = GlobalId>) {
         let now = mz_ore::now::to_datetime((self.now)());
         for id in ids {
@@ -3899,7 +3920,8 @@ impl From<&IntrospectionType> for CollectionManagerKind {
             | IntrospectionType::StatementExecutionHistory
             | IntrospectionType::SessionHistory
             | IntrospectionType::StatementLifecycleHistory
-            | IntrospectionType::SqlText => CollectionManagerKind::AppendOnly,
+            | IntrospectionType::SqlText
+            | IntrospectionType::StorageStatuses => CollectionManagerKind::AppendOnly,
         }
     }
 }
@@ -4349,6 +4371,142 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn history_retention_preserves_replica_owned_current_statuses() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let (controller, collections, persist) = test_controller(true, false).await;
+            let status_row = |seconds, incarnation, status| {
+                Row::pack_slice(&[
+                    Datum::TimestampTz(
+                        DateTime::from_timestamp(seconds, 0)
+                            .unwrap()
+                            .try_into()
+                            .unwrap(),
+                    ),
+                    Datum::String("u1"),
+                    Datum::String(status),
+                    Datum::Null,
+                    Datum::Null,
+                    Datum::String("u1"),
+                    Datum::UInt64(0),
+                    Datum::UInt64(incarnation),
+                ])
+            };
+            // Wall clocks can move backwards between client incarnations.
+            // History retention orders by time, not by execution provenance.
+            let predecessor = status_row(20, 1, "stalled");
+            let successor = status_row(10, 2, "running");
+            for (id, introspection_type, desc, expected) in [
+                (
+                    GlobalId::System(1),
+                    IntrospectionType::SourceStatusHistory,
+                    MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
+                    vec![Row::pack(predecessor.iter().take(7))],
+                ),
+                (
+                    GlobalId::System(2),
+                    IntrospectionType::StorageStatuses,
+                    mz_storage_client::healthcheck::MZ_STORAGE_STATUSES_RAW_DESC.clone(),
+                    vec![predecessor.clone(), successor.clone()],
+                ),
+            ] {
+                let shard = ShardId::new();
+                let metadata = StorageMetadata {
+                    collection_metadata: [(id, shard)].into_iter().collect(),
+                    compaction_bounds: [(id, frontier(0))].into_iter().collect(),
+                    ..Default::default()
+                };
+                let mut description = CollectionDescription::for_other(desc.clone(), None);
+                description.data_source = DataSource::Introspection(introspection_type);
+                collections
+                    .create_collections_for_bootstrap(
+                        &metadata,
+                        None,
+                        vec![(id, description)],
+                        &BTreeSet::new(),
+                    )
+                    .await
+                    .unwrap();
+                let mut writer = persist
+                    .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                        shard,
+                        Arc::new(desc.clone()),
+                        Arc::new(UnitSchema),
+                        Diagnostics::for_tests(),
+                    )
+                    .await
+                    .unwrap();
+                writer
+                    .compare_and_append(
+                        [predecessor.clone(), successor.clone()].map(|row| {
+                            let row =
+                                if introspection_type == IntrospectionType::SourceStatusHistory {
+                                    Row::pack(row.iter().take(7))
+                                } else {
+                                    row
+                                };
+                            ((SourceData(Ok(row)), ()), Timestamp::MIN, 1)
+                        }),
+                        frontier(0),
+                        frontier(1),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+
+                // Exercise both startup and joining a shard already prepared by
+                // another collection-manager task.
+                for _ in 0..2 {
+                    let mut parameters = controller.config.parameters.clone();
+                    parameters.keep_n_source_status_history_entries = 1;
+                    controller
+                        .collection_manager
+                        .register_append_only_collection(
+                            id,
+                            writer,
+                            false,
+                            Some(AppendOnlyIntrospectionConfig {
+                                introspection_type,
+                                config_set: Arc::clone(controller.config.config_set()),
+                                parameters,
+                                storage_collections: Arc::clone(&controller.storage_collections),
+                            }),
+                        );
+                    // The task prepares before servicing append requests. An
+                    // empty acknowledged append is a barrier without adding rows.
+                    controller
+                        .collection_manager
+                        .monotonic_appender(id)
+                        .unwrap()
+                        .append(Vec::new())
+                        .await
+                        .unwrap();
+                    let mut actual = collections.snapshot_latest(id).await.unwrap();
+                    let mut expected = expected.clone();
+                    actual.sort();
+                    expected.sort();
+                    assert_eq!(actual, expected, "{introspection_type:?}");
+                    controller
+                        .collection_manager
+                        .unregister_collection(id)
+                        .await;
+                    writer = persist
+                        .open_writer(
+                            shard,
+                            Arc::new(desc.clone()),
+                            Arc::new(UnitSchema),
+                            Diagnostics::for_tests(),
+                        )
+                        .await
+                        .unwrap();
+                }
+                writer.expire().await;
+            }
+        })
+        .await
+        .expect("status preparation must complete");
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn drop_tables_after_read_state_retired() {
         let (mut controller, collections, _) = export_test_controller().await;
         let table = GlobalId::User(1);
@@ -4400,7 +4558,13 @@ mod tests {
             ..Default::default()
         };
         controller
-            .create_collections_for_bootstrap(&metadata, None, descriptions, &BTreeSet::new())
+            .create_collections_for_bootstrap(
+                &metadata,
+                None,
+                descriptions,
+                &BTreeSet::new(),
+                false,
+            )
             .await
             .unwrap();
 
@@ -4425,22 +4589,26 @@ mod tests {
 
         // Validate the whole batch before performing any execution cleanup.
         assert!(matches!(
-            controller.drop_tables(&metadata, vec![table, unknown]),
+            controller.drop_tables(&metadata, vec![table, unknown], true),
             Err(StorageError::IdentifierMissing(id)) if id == unknown
         ));
         assert!(matches!(
-            controller.drop_sources(&metadata, vec![source, unknown]),
+            controller.drop_sources(&metadata, vec![source, unknown], true),
             Err(StorageError::IdentifierMissing(id)) if id == unknown
         ));
         assert!(controller.collection(table).is_ok());
         assert!(controller.collection(source).is_ok());
 
-        controller.drop_tables(&metadata, vec![table]).unwrap();
+        controller
+            .drop_tables(&metadata, vec![table], true)
+            .unwrap();
         assert!(matches!(
             controller.collection(table),
             Err(StorageError::IdentifierMissing(id)) if id == table
         ));
-        controller.drop_sources(&metadata, vec![source]).unwrap();
+        controller
+            .drop_sources(&metadata, vec![source], true)
+            .unwrap();
         assert!(matches!(
             controller.collection(source),
             Err(StorageError::IdentifierMissing(id)) if id == source
@@ -4583,7 +4751,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(matches!(
-            controller.alter_export(sink, description.clone()).await,
+            controller.alter_export(sink, description.clone(), true).await,
             Err(StorageError::ReadBeforeSince(id)) if id == input
         ));
         writer
@@ -4595,7 +4763,10 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        controller.alter_export(sink, description).await.unwrap();
+        controller
+            .alter_export(sink, description, true)
+            .await
+            .unwrap();
         let command = controller.instances[&instance]
             .legacy
             .as_ref()

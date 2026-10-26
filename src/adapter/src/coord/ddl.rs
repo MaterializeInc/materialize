@@ -1882,19 +1882,28 @@ impl Coordinator {
         ))
     }
 
-    pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
+    pub(crate) fn drop_replica(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        publish_status_history: bool,
+    ) {
         self.cluster_replica_statuses
             .remove_cluster_replica_statuses(&cluster_id, &replica_id);
         self.drop_introspection_subscribes(replica_id);
         self.drop_metric_sinks(replica_id);
 
         self.controller
-            .drop_replica(cluster_id, replica_id)
+            .drop_replica(cluster_id, replica_id, publish_status_history)
             .expect("dropping replica must not fail");
     }
 
     /// A convenience method for dropping sources.
-    pub(crate) fn drop_sources(&mut self, sources: Vec<(CatalogItemId, GlobalId)>) {
+    pub(crate) fn drop_sources(
+        &mut self,
+        sources: Vec<(CatalogItemId, GlobalId)>,
+        publish_status_history: bool,
+    ) {
         for (item_id, gid) in &sources {
             self.active_webhooks.remove(item_id);
             let cleanup = self.adapter_storage.unregister(*gid);
@@ -1904,13 +1913,17 @@ impl Coordinator {
         let source_gids = sources.into_iter().map(|(_id, gid)| gid).collect();
         self.controller
             .storage
-            .drop_sources(storage_metadata, source_gids)
+            .drop_sources(storage_metadata, source_gids, publish_status_history)
             .unwrap_or_terminate("cannot fail to drop sources");
     }
 
     /// A convenience method for dropping tables.
     /// Physical finalization independently waits for shared txn-WAL retirement.
-    pub(crate) fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>) {
+    pub(crate) fn drop_tables(
+        &mut self,
+        tables: Vec<(CatalogItemId, GlobalId)>,
+        publish_status_history: bool,
+    ) {
         for (item_id, gid) in &tables {
             self.active_webhooks.remove(item_id);
             let cleanup = self.adapter_storage.unregister(*gid);
@@ -1922,7 +1935,7 @@ impl Coordinator {
         let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_tables(storage_metadata, table_gids)
+            .drop_tables(storage_metadata, table_gids, publish_status_history)
             .unwrap_or_terminate("cannot fail to drop tables");
     }
 
@@ -2072,11 +2085,15 @@ impl Coordinator {
         self.retire_compute_sinks(drop_sinks).await
     }
 
-    pub(crate) fn drop_storage_sinks(&mut self, sink_gids: Vec<GlobalId>) {
+    pub(crate) fn drop_storage_sinks(
+        &mut self,
+        sink_gids: Vec<GlobalId>,
+        publish_status_history: bool,
+    ) {
         let storage_metadata = self.catalog.state().storage_metadata();
         self.controller
             .storage
-            .drop_sinks(storage_metadata, sink_gids)
+            .drop_sinks(storage_metadata, sink_gids, publish_status_history)
             .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
@@ -2179,6 +2196,7 @@ impl Coordinator {
         &mut self,
         id: GlobalId,
         sink: &Sink,
+        publish_status_history: bool,
     ) -> Result<(), AdapterError> {
         let (desc, read_holds) = self.storage_export_description(id, sink)?;
         let collection_desc = CollectionDescription {
@@ -2193,19 +2211,28 @@ impl Coordinator {
         let res = self
             .controller
             .storage
-            .create_collections(storage_metadata, None, vec![(id, collection_desc)])
+            .create_collections(
+                storage_metadata,
+                None,
+                vec![(id, collection_desc)],
+                publish_status_history,
+            )
             .await;
         // Legacy installation takes over these temporary dependency holds.
         drop(read_holds);
         Ok(res?)
     }
 
-    pub(crate) async fn alter_storage_export(&mut self, sink: &Sink) -> Result<(), AdapterError> {
+    pub(crate) async fn alter_storage_export(
+        &mut self,
+        sink: &Sink,
+        publish_status_history: bool,
+    ) -> Result<(), AdapterError> {
         let (desc, read_holds) = self.storage_export_description(sink.global_id(), sink)?;
         let res = self
             .controller
             .storage
-            .alter_export(sink.global_id(), desc)
+            .alter_export(sink.global_id(), desc, publish_status_history)
             .await;
         drop(read_holds);
         Ok(res?)

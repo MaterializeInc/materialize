@@ -574,6 +574,14 @@ retractions. This accepted M3 limitation is confined to these catalog projection
 not user-data writes, protection or runtime/session ownership. Catalog-backed
 conversion is separate work. M3 adds no publication watermark or recovery protocol.
 
+Catalog-driven Paused/Dropped history, including synthetic per-replica Paused
+markers, is also published only by the successful committer. Followers and
+join/restart reconstruction do not manufacture these historical transitions.
+M3 accepts missing events after publisher failure and unordered publication across
+commits for this history only. Current object existence and zero-replica placement
+come from the catalog, independently of history delivery. Transactionally recorded
+lifecycle events, potentially through the audit log, are a longer-term direction.
+
 Physical Persist progress and usage require actual observations, not catalog
 compaction permission. Sampling and pruning retain their concurrency checks.
 Reuse already-safe collectors, including hydration history, rather than rewriting

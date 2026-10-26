@@ -64,6 +64,7 @@ async fn catalog_counter_ingests_after_writer_and_query_drop() {
     let location = PersistLocation::new_in_mem();
     let persist = clients.open(location.clone()).await.unwrap();
     let mut writer = debug_catalog(&persist, Some(ShardId::new())).await;
+    writer.initialize_storage_metadata().await.unwrap();
     assert!(writer.state().catalog_read_protection_enabled());
     let cluster = writer.user_clusters().next().unwrap();
     let config = follower::Config {

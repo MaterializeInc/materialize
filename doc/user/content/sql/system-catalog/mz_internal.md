@@ -1384,6 +1384,7 @@ debugging.
 | `error`                  | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`                | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 
+
 ## `mz_sink_status_history`
 
 The `mz_sink_status_history` table contains rows describing the
@@ -1506,6 +1507,8 @@ debugging.
 | `status`                 | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.              |
 | `error`                  | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`                | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
+
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_statuses_raw -->
 
 ## `mz_source_status_history`
 

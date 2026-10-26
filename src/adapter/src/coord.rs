@@ -4152,6 +4152,8 @@ impl Coordinator {
                     Some(register_ts),
                     ready,
                     &migrated_storage_collections,
+                    // Reconstructing existing sources is not a lifecycle transition.
+                    false,
                 )
                 .await
                 .unwrap_or_terminate("cannot fail to create collections");
