@@ -71,9 +71,6 @@ Readers query `committed_orders` instead of `raw_orders`.
 
 ## Considerations
 
-- The `materialize-sink-id` header is in private preview until it becomes
-  generally available in v26.48. See [The `materialize-sink-id`
-  header](/sql/create-sink/kafka/#the-materialize-sink-id-header).
 - The progress topic is shared by every sink that uses the same Kafka
   connection. Always filter progress records by key.
 - Materialize writes a progress record each time the sink's frontier advances,
