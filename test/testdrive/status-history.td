@@ -230,20 +230,20 @@ pg_tbl         paused    "{\"hints\":[\"The replica running this source has been
 mysql          paused    "{\"hints\":[\"The replica running this source has been dropped\"]}"   ${replica_id_1}
 mysql_tbl      paused    "{\"hints\":[\"The replica running this source has been dropped\"]}"   ${replica_id_1}
 
-# The dropped replica's 'paused' must win over the older source-global 'paused'.
+# Current paused health comes from catalog placement, independently of history.
 > SELECT o.name, s.status, s.details FROM mz_internal.mz_source_statuses s JOIN mz_objects o USING (id)
-accounts       paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
-auction        paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
-auctions       paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
-bids           paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
-organizations  paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
-users          paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
-kafka          paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
-kafka_tbl      paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
-pg             paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
-pg_tbl         paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
-mysql          paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
-mysql_tbl      paused  "{\"hints\":[\"The replica running this source has been dropped\"]}"
+accounts       paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
+auction        paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
+auctions       paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
+bids           paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
+organizations  paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
+users          paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
+kafka          paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
+kafka_tbl      paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
+pg             paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
+pg_tbl         paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
+mysql          paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
+mysql_tbl      paused  "{\"hints\":[\"There is currently no replica running this source\"]}"
 
 > ALTER CLUSTER sources SET (REPLICATION FACTOR 1)
 
@@ -443,10 +443,10 @@ kafka1  paused    "{\"hints\":[\"The replica running this sink has been dropped\
   LIMIT 1
 kafka2  paused    "{\"hints\":[\"The replica running this sink has been dropped\"]}"   ${replica_id_1}
 
-# The dropped replica's 'paused' must win over the older sink-global 'paused'.
+# Current paused health comes from catalog placement, independently of history.
 > SELECT o.name, s.status, s.details FROM mz_internal.mz_sink_statuses s JOIN mz_objects o USING (id)
-kafka1  paused  "{\"hints\":[\"The replica running this sink has been dropped\"]}"
-kafka2  paused  "{\"hints\":[\"The replica running this sink has been dropped\"]}"
+kafka1  paused  "{\"hints\":[\"There is currently no replica running this sink\"]}"
+kafka2  paused  "{\"hints\":[\"There is currently no replica running this sink\"]}"
 
 > ALTER CLUSTER sinks SET (REPLICATION FACTOR 1)
 
