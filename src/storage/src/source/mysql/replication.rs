@@ -66,6 +66,7 @@ use mz_mysql_util::{
 };
 use mz_ore::cast::CastFrom;
 use mz_repr::GlobalId;
+use mz_storage_types::dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, GtidState, gtid_set_frontier};
@@ -113,9 +114,17 @@ pub(crate) fn render<'scope>(
     let op_name = format!("MySqlReplicationReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
+    // Read at render time, matching the value the persist sink reads in the same dataflow build.
+    // A read in the async body can observe an `UpdateConfiguration` sequenced after this dataflow's
+    // creation and disagree with the sink because the `ConfigSet` is updated in place.
+    // A nonzero lookahead is the switch, see `STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD`.
+    let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
+        .get(config.config.config_set())
+        .is_zero();
+
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
-    // One data output port per source export, in output index order. All ports advance in
-    // lockstep. Every export observes the same frontier.
+    // One data output port per source export, in output index order. See
+    // `ReplContext::downgrade_data_cap_sets` for when each port advances.
     let export_count = config.source_exports.len();
     let mut data_outputs = Vec::with_capacity(export_count);
     let mut data_streams = Vec::with_capacity(export_count);
@@ -329,6 +338,7 @@ pub(crate) fn render<'scope>(
                 &mut data_outputs,
                 data_cap_sets,
                 rewinds,
+                concurrent_replication,
             );
             repl_context.downgrade_data_cap_sets("resume", resume_upper);
 

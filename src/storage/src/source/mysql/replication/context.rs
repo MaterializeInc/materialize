@@ -35,6 +35,8 @@ pub(super) struct ReplContext<'a> {
     // Owned values:
     pub(super) rewinds: BTreeMap<usize, RewindRequest>,
     pub(super) errored_outputs: BTreeSet<usize>,
+    /// Whether ports without a pending rewind advance on their own instead of in lockstep.
+    concurrent_replication: bool,
 }
 
 impl<'a> ReplContext<'a> {
@@ -47,6 +49,7 @@ impl<'a> ReplContext<'a> {
         data_outputs: &'a mut DataOutputs,
         data_cap_sets: &'a mut [CapabilitySet<GtidPartition>],
         rewinds: BTreeMap<usize, RewindRequest>,
+        concurrent_replication: bool,
     ) -> Self {
         Self {
             config,
@@ -58,11 +61,13 @@ impl<'a> ReplContext<'a> {
             data_cap_sets,
             rewinds,
             errored_outputs: BTreeSet::new(),
+            concurrent_replication,
         }
     }
 
-    /// Drops the rewind requests that `new_upper` has passed, then advances the frontier of the
-    /// data capability sets to `new_upper` once no rewind request is pending.
+    /// Drops the rewind requests that `new_upper` has passed, then advances the data capability
+    /// sets to `new_upper`. A port with a pending rewind stays at the minimum. Without concurrent
+    /// replication every port stays there until no rewind is pending.
     pub(super) fn downgrade_data_cap_sets(
         &mut self,
         reason: &str,
@@ -94,9 +99,14 @@ impl<'a> ReplContext<'a> {
         });
 
         // A pending rewind emits negated snapshot data at the minimum timestamp. Its port has to
-        // keep the minimum capability until the rewind resolves. The other ports wait as well and
-        // every export observes the same frontier.
-        if self.rewinds.is_empty() {
+        // keep the minimum capability until the rewind resolves.
+        if self.concurrent_replication {
+            for (output_index, cap_set) in self.data_cap_sets.iter_mut().enumerate() {
+                if !self.rewinds.contains_key(&output_index) {
+                    cap_set.downgrade(&*new_upper);
+                }
+            }
+        } else if self.rewinds.is_empty() {
             for cap_set in self.data_cap_sets.iter_mut() {
                 cap_set.downgrade(&*new_upper);
             }
