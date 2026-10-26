@@ -19,9 +19,9 @@ import { buildClusterSourceExportsQuery } from "./clusterSourceExports";
 const TEST_SCHEMA = "test_cluster_source_exports";
 
 /**
- * Source u1 runs on cluster c1 and ingests into subsource s1 and table t1.
- * Source u2 runs on cluster c2 and ingests into table t2. Table t3 is written
- * with INSERT, and p1 is u1's progress collection.
+ * Source u10 runs on cluster u1 and ingests into subsource u11 and table u13,
+ * with u12 as its progress collection. Source u20 runs on cluster u2 and
+ * ingests into table u21. Table u30 is written with INSERT.
  */
 const SEED = `
   > DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE;
@@ -40,19 +40,19 @@ const SEED = `
       source_id TEXT
     );
   > INSERT INTO ${TEST_SCHEMA}.mz_sources VALUES
-      ('u1', 'postgres', 'c1'),
-      ('u2', 'postgres', 'c2'),
-      ('s1', 'subsource', NULL),
-      ('p1', 'progress', NULL);
+      ('u10', 'postgres', 'u1'),
+      ('u11', 'subsource', NULL),
+      ('u12', 'progress', NULL),
+      ('u20', 'postgres', 'u2');
   > INSERT INTO ${TEST_SCHEMA}.mz_object_dependencies VALUES
-      ('s1', 'u1'),
-      ('u1', 'p1'),
-      ('t1', 'u1'),
-      ('t2', 'u2');
+      ('u10', 'u12'),
+      ('u11', 'u10'),
+      ('u13', 'u10'),
+      ('u21', 'u20');
   > INSERT INTO ${TEST_SCHEMA}.mz_tables VALUES
-      ('t1', 'u1'),
-      ('t2', 'u2'),
-      ('t3', NULL);
+      ('u13', 'u10'),
+      ('u21', 'u20'),
+      ('u30', NULL);
 `;
 
 describe("buildClusterSourceExportsQuery", () => {
@@ -60,7 +60,7 @@ describe("buildClusterSourceExportsQuery", () => {
     await testdrive(SEED);
 
     const result = await executeSqlHttp(
-      buildClusterSourceExportsQuery("c1").compile(),
+      buildClusterSourceExportsQuery("u1").compile(),
       {
         sessionVariables: {
           cluster: QUICKSTART_CLUSTER,
@@ -69,6 +69,9 @@ describe("buildClusterSourceExportsQuery", () => {
       },
     );
 
-    expect(result.rows.map((row) => row.exportId).sort()).toEqual(["s1", "t1"]);
+    expect(result.rows.map((row) => row.exportId).sort()).toEqual([
+      "u11",
+      "u13",
+    ]);
   });
 });

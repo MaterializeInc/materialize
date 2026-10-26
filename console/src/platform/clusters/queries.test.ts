@@ -9,7 +9,7 @@
 
 import { focusManager } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { millisecondsInMinute } from "date-fns/constants";
+import { millisecondsInHour, millisecondsInMinute } from "date-fns/constants";
 import { createStore } from "jotai";
 import { delay, http, HttpResponse } from "msw";
 import parse from "postgres-interval";
@@ -40,6 +40,7 @@ import {
   buildFreshnessData,
   clusterQueryKeys,
   replicaStatusesUpdatedAt,
+  useClusterFreshness,
   useClusterLineageIds,
   useFreshnessObjects,
   useObjectHydrationStretches,
@@ -1042,7 +1043,7 @@ describe("useFreshnessObjects", () => {
       snapshotComplete: true,
     });
 
-    await waitFor(() => expect(result.current?.[0].objectName).toBe("after"));
+    await waitFor(() => expect(result.current![0].objectName).toBe("after"));
     expect(result.current).not.toBe(first);
   });
 
@@ -1083,7 +1084,7 @@ describe("useFreshnessObjects", () => {
     // u33 is the source's progress collection and u34 a table written with
     // INSERT, so neither belongs to the cluster.
     await waitFor(() =>
-      expect(result.current?.map((o) => o.objectId)).toEqual([
+      expect(result.current!.map((o) => o.objectId)).toEqual([
         "u30",
         "u31",
         "u32",
@@ -1111,8 +1112,60 @@ describe("useFreshnessObjects", () => {
 
     expect(result.current).toBeUndefined();
     await waitFor(() =>
-      expect(result.current?.map((o) => o.objectId)).toEqual(["u30", "u31"]),
+      expect(result.current!.map((o) => o.objectId)).toEqual(["u30", "u31"]),
     );
+  });
+
+  it("lets the freshness series wait for the exports and fetch once", async () => {
+    const seriesObjectIds: string[] = [];
+    server.use(
+      http.post("*/api/sql", ({ request }) => {
+        const queryKey = JSON.parse(
+          new URL(request.url).searchParams.get("query_key") ?? "[]",
+        );
+        if (queryKey[1]?.scope !== "clusterFreshnessSeries") return undefined;
+        seriesObjectIds.push(queryKey[1].objectIds);
+        return HttpResponse.json({
+          results: [
+            mapKyselyToTabular({
+              rows: [],
+              columns: buildColumns(["bucketStart", "objectId", "lag"]),
+            }),
+          ],
+        });
+      }),
+    );
+    mockClusterSourceExports(["u31"]);
+    const store = createStore();
+    store.set(allObjects, {
+      data: [
+        buildDatabaseObject({
+          id: "u30",
+          objectType: "source",
+          sourceType: "postgres",
+        }),
+        buildDatabaseObject({
+          id: "u31",
+          objectType: "source",
+          sourceType: "subsource",
+          clusterId: null,
+        }),
+      ],
+      error: undefined,
+      snapshotComplete: true,
+    });
+    const ProviderWrapper = await createProviderWrapper({ store });
+
+    const { result } = renderHook(
+      () => {
+        const objects = useFreshnessObjects("u1");
+        return useClusterFreshness({ lookbackMs: millisecondsInHour, objects });
+      },
+      { wrapper: ProviderWrapper },
+    );
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(seriesObjectIds).toEqual(["u30,u31"]);
   });
 
   it("reports nothing until the all-objects snapshot is in", async () => {
@@ -1128,7 +1181,7 @@ describe("useFreshnessObjects", () => {
       snapshotComplete: true,
     });
     await waitFor(() =>
-      expect(result.current?.map((o) => o.objectId)).toEqual(["u10"]),
+      expect(result.current!.map((o) => o.objectId)).toEqual(["u10"]),
     );
   });
 
@@ -1151,7 +1204,7 @@ describe("useFreshnessObjects", () => {
     );
 
     await waitFor(() =>
-      expect(result.current?.map((o) => o.objectId)).toEqual(["u30"]),
+      expect(result.current!.map((o) => o.objectId)).toEqual(["u30"]),
     );
   });
 
@@ -1161,11 +1214,10 @@ describe("useFreshnessObjects", () => {
       objectType: "source",
       sourceType: "postgres",
     });
-    const { result, store, values, exportCalls } = await renderFreshnessObjects(
+    const { result, store, values } = await renderFreshnessObjects(
       [source],
       [],
     );
-    await waitFor(() => expect(exportCalls.count).toBe(1));
     await waitFor(() => expect(result.current).toBeDefined());
     const answered = values.length;
 
@@ -1184,7 +1236,7 @@ describe("useFreshnessObjects", () => {
     });
 
     await waitFor(() =>
-      expect(result.current?.map((o) => o.objectId)).toEqual(["u30", "u35"]),
+      expect(result.current!.map((o) => o.objectId)).toEqual(["u30", "u35"]),
     );
     // The card keeps the previous list while the new one is looked up.
     expect(values.slice(answered)).not.toContain(undefined);
@@ -1197,7 +1249,7 @@ describe("useFreshnessObjects", () => {
       sourceType: "subsource",
       clusterId: null,
     });
-    const { result, store, exportCalls } = await renderFreshnessObjects(
+    const { result, store } = await renderFreshnessObjects(
       [
         buildDatabaseObject({
           id: "u30",
@@ -1225,9 +1277,8 @@ describe("useFreshnessObjects", () => {
     });
 
     await waitFor(() =>
-      expect(result.current?.map((o) => o.objectId)).toEqual(["u30", "u31"]),
+      expect(result.current!.map((o) => o.objectId)).toEqual(["u30", "u31"]),
     );
-    expect(exportCalls.count).toBe(1);
   });
 
   it("does not look up exports for a cluster with no sources", async () => {
@@ -1249,7 +1300,7 @@ describe("useFreshnessObjects", () => {
     });
 
     await waitFor(() => expect(renders.count).toBeGreaterThan(before));
-    expect(result.current?.map((o) => o.objectId)).toEqual(["u10"]);
+    expect(result.current!.map((o) => o.objectId)).toEqual(["u10"]);
     expect(exportCalls.count).toBe(0);
   });
 
@@ -1259,7 +1310,7 @@ describe("useFreshnessObjects", () => {
       buildDatabaseObject({ id: "u11", name: "\u0002" }),
     ]);
 
-    expect(result.current?.map((o) => [o.objectId, o.objectName])).toEqual([
+    expect(result.current!.map((o) => [o.objectId, o.objectName])).toEqual([
       ["u10", "orders\u0001u2"],
       ["u11", "\u0002"],
     ]);

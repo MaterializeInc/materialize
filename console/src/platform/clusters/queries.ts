@@ -1502,8 +1502,6 @@ export function isOnCluster(object: DatabaseObject, clusterId: string) {
 
 /**
  * IDs of the subsources and tables that `clusterId`'s sources ingest into.
- * `isOnCluster` never matches them, because they carry no `cluster_id`.
- *
  * Undefined until the cluster's sources are known and, if it has any, the
  * first lookup answers. A failed lookup yields no IDs.
  */
@@ -1559,11 +1557,9 @@ export function useClusterSourceExportIds(
     placeholderData: keepPreviousData,
   });
 
-  return useMemo(() => {
-    if (!sourcesKnown) return undefined;
-    if (!hasSources || isError) return new Set<string>();
-    return data ? new Set(data) : undefined;
-  }, [sourcesKnown, hasSources, isError, data]);
+  if (!sourcesKnown) return undefined;
+  if (!hasSources || isError) return new Set();
+  return data ? new Set(data) : undefined;
 }
 
 /**
