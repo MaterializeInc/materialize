@@ -480,6 +480,16 @@ pub enum Message {
 }
 
 impl Message {
+    /// Logging updates retain their channel ordering without per-message spans.
+    /// Preserve instrumentation when a sender supplies a trace context or when
+    /// detailed coordinator diagnostics are enabled.
+    fn untraced_statement_logging(&self) -> bool {
+        matches!(
+            self,
+            Message::Command(context, Command::FrontendStatementLogging(_)) if context.is_empty()
+        ) && !tracing::enabled!(target: "mz_adapter::coord::handle_message_loop", Level::DEBUG)
+    }
+
     /// Returns a string to identify the kind of [`Message`], useful for logging.
     pub const fn kind(&self) -> &'static str {
         match self {
@@ -4196,15 +4206,18 @@ impl Coordinator {
                 message_batch.observe(f64::cast_lossy(messages.len()));
 
                 for msg in messages.drain(..) {
-                    // All message processing functions trace. Start a parent span
-                    // for them to make it easy to find slow messages.
+                    let untraced_statement_logging = msg.untraced_statement_logging();
                     let msg_kind = msg.kind();
-                    let span = span!(
-                        target: "mz_adapter::coord::handle_message_loop",
-                        Level::INFO,
-                        "coord::handle_message",
-                        kind = msg_kind
-                    );
+                    let span = if untraced_statement_logging {
+                        tracing::Span::none()
+                    } else {
+                        span!(
+                            target: "mz_adapter::coord::handle_message_loop",
+                            Level::INFO,
+                            "coord::handle_message",
+                            kind = msg_kind
+                        )
+                    };
 
                     // Record the last kind of message in case we get stuck. For
                     // execute commands, we additionally stash the user's SQL,
@@ -4227,7 +4240,16 @@ impl Coordinator {
                     };
 
                     let start = Instant::now();
-                    self.handle_message(msg).instrument(span.clone()).await;
+                    if untraced_statement_logging {
+                        match msg {
+                            Message::Command(_, Command::FrontendStatementLogging(event)) => {
+                                self.handle_frontend_statement_logging_event(event);
+                            }
+                            _ => unreachable!("only statement logging bypasses instrumentation"),
+                        }
+                    } else {
+                        self.handle_message(msg).instrument(span.clone()).await;
+                    }
                     let duration = start.elapsed();
 
                     self.metrics
@@ -5688,6 +5710,42 @@ mod execute_context_tests {
     use crate::command::Response;
     use crate::session::Session;
     use crate::util::ClientTransmitter;
+
+    #[mz_ore::test]
+    fn statement_logging_dispatch_preserves_diagnostics() {
+        let message = |context| {
+            Message::Command(
+                context,
+                Command::FrontendStatementLogging(
+                    crate::statement_logging::FrontendStatementLoggingEvent::Lifecycle {
+                        id: StatementLoggingId(uuid::Uuid::new_v4()),
+                        event: StatementLifecycleEvent::ExecutionBegan,
+                        when: 0,
+                    },
+                ),
+            )
+        };
+        let ordinary = tracing_subscriber::fmt()
+            .with_max_level(Level::INFO)
+            .finish();
+        tracing::subscriber::with_default(ordinary, || {
+            assert!(message(OpenTelemetryContext::empty()).untraced_statement_logging());
+            // Propagated fields conservatively retain the existing instrumented
+            // path, including unsampled traces and other propagation formats.
+            let context = OpenTelemetryContext::from(BTreeMap::from([(
+                "traceparent".to_string(),
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
+            )]));
+            assert!(!message(context).untraced_statement_logging());
+            assert!(!Message::LinearizeReads.untraced_statement_logging());
+        });
+        let diagnostics = tracing_subscriber::fmt()
+            .with_max_level(Level::DEBUG)
+            .finish();
+        tracing::subscriber::with_default(diagnostics, || {
+            assert!(!message(OpenTelemetryContext::empty()).untraced_statement_logging());
+        });
+    }
 
     #[mz_ore::test(tokio::test)]
     async fn test_retire_completed_barrier_answers_without_scheduling() {
