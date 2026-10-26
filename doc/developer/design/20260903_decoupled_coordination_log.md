@@ -34,7 +34,8 @@ serving. Also demonstrate dropping all adapters and recovering SQL through
 controllerd's HTTP list/create/drop API, without reinitializing the environment.
 This is not complete with two manually launched SQL processes.
 
-Next, integrate remote clients with the controller-managed default adapter.
+Next, establish the default adapter declaration and explicit realization identity,
+then integrate remote clients with the controller-managed adapter.
 The worker-generated Cargo.lock delta is preserved and applied locally, with no
 dependency version changes. Initialization/join boundary research is saved in
 `~/.local/share/aj/m3-evidence/initialization-join-boundary.md`.
@@ -42,13 +43,23 @@ Catalog/table initialization must be finite and separate from own-build planning
 and shared maintenance. The controller's local restart must not repeat a global
 system-table reset or treat a handle-local bootstrap flag as durable readiness.
 
+The local backend now supports retained supervision separately from explicit
+service deletion (`bbe00aba`). Four boundary tests, two existing in-runtime
+restart regressions, and all-target Clippy for the backend and both caller crates
+pass on scratch. Focused ownership review found a cancellable PID-file write,
+which is corrected. Existing callers retain coupled shutdown. Use
+`bin/cargo-test` for environmentd tests: direct nextest omitted the repository
+runner's standard stack setting and overflowed during catalog startup.
+
 Process provisioning research is saved alongside it in
-`process-provisioning-boundary.md`. Extract the existing service-spec/backend
-boundary, not the whole storage/compute controller. Local child drop guards,
-PID-only adoption and controller-owned TCP proxies do not yet satisfy restart
-continuity. Adapter SQL endpoints must remain usable independently of controllerd.
-Keep these corrections at the existing backend boundary, without another
-supervisor.
+`process-provisioning-boundary.md`. PID-only adoption and controller-owned TCP
+proxies still need correction before claiming controller restart continuity.
+Extract the existing service-spec/backend boundary, not the whole storage/compute
+controller. Adapter SQL endpoints must remain usable independently of controllerd.
+The declaration/identity map is in `adapter-declaration-boundary.md`.
+Reuse existing execution replacement and retirement, with exact adapter identity,
+and create the default declaration only in fresh initialization. Do not infer
+initialization from an empty adapter inventory or silently convert v95 state.
 
 ## Concrete starting points
 
