@@ -4477,6 +4477,15 @@ metrics:
   - worker_id
   source: src/storage/src/metrics/upsert.rs
   visibility: internal
+- name: mz_storage_upsert_restashed_total
+  help: >-
+    The number of updates the upsert v2 operator extracted from its stash before
+    the output caught up to their time, and pushed back.
+  labels:
+  - source_id
+  - worker_id
+  source: src/storage/src/metrics/upsert.rs
+  visibility: internal
 - name: mz_storage_upsert_state_rehydration_latency
   help: >-
     The latency, per-worker, in fractional seconds, of rehydrating the upsert state

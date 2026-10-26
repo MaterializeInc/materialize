@@ -104,6 +104,7 @@ use differential_dataflow::trace::chunk::{ChunkBatch, ChunkBatcher, ChunkBuilder
 use differential_dataflow::trace::{BatchReader, Batcher, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_dyncfg::ConfigSet;
+use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 // Only the fuzzing-gated `datum_seq_to_upsert_value` takes a `DatumSeq`.
 #[cfg(feature = "fuzzing")]
@@ -853,6 +854,9 @@ where
                         rehydration_updates += drain_stats.eligible;
                     }
                 }
+                upsert_metrics
+                    .restashed
+                    .inc_by(u64::cast_from(ineligible.len()));
                 stash.push(&mut ineligible, |updates, batcher| {
                     A::flush(updates, &mut chunker, batcher)
                 });
@@ -1745,6 +1749,7 @@ mod test {
     //! No test drives errors through the persist feedback, so every harness below closes
     //! the error input by dropping its handle.
 
+    use mz_ore::cast::CastLossy;
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::ShardId;
     use mz_repr::{Datum, Timestamp as MzTimestamp};
@@ -1801,8 +1806,13 @@ mod test {
     // operator arms. Returns one flavor's output for the caller's own
     // expected-value assertion.
     macro_rules! upsert_test {
-        (|$input:ident, $persist:ident, $worker:ident| $body:block) => {{
+        (|$input:ident, $persist:ident, $worker:ident| $body:block) => {
+            upsert_test!(|$input, $persist, $worker, _registry| $body)
+        };
+        // `$registry` holds the operator's upsert metrics, for `$body` to read.
+        (|$input:ident, $persist:ident, $worker:ident, $registry:ident| $body:block) => {{
             let run = |flavor: UpsertStashFlavor| {
+                let $registry = MetricsRegistry::new();
                 let output_handle = timely::execute_directly(move |$worker| {
                     let (mut $input, mut $persist, output_handle) = $worker
                         .dataflow::<MzTimestamp, _, _>(|scope| {
@@ -1812,8 +1822,7 @@ mod test {
                                 let (_persist_err_handle, persist_err_input) = scope.new_input();
                                 let source_id = GlobalId::User(0);
 
-                                let reg = MetricsRegistry::new();
-                                let upsert_defs = UpsertMetricDefs::register_with(&reg);
+                                let upsert_defs = UpsertMetricDefs::register_with(&$registry);
                                 let upsert_metrics =
                                     UpsertMetrics::new(&upsert_defs, source_id, 0, None);
 
@@ -2230,6 +2239,103 @@ mod test {
             (Ok(row(2, 1)), new_ts(5000), Diff::ONE),
         ];
         assert_eq!(actual, expected);
+    }
+
+    /// An update at a later subtime of the persist frontier's timestamp is
+    /// extracted with the eligible one, pushed back, and drained once persist
+    /// reaches it.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn later_subtime_is_pushed_back_and_drained() {
+        let actual = upsert_test!(|input, persist, worker, registry| {
+            let (k, a, b) = (key(1), row(1, 1), row(1, 2));
+            input.send(((k, Some(Ok(a.clone())), 1), sub_ts(1, 0), Diff::ONE));
+            input.send(((k, Some(Ok(b)), 2), sub_ts(1, 1), Diff::ONE));
+            input.advance_to(new_ts(2));
+            for _ in 0..5 {
+                worker.step();
+            }
+            persist.advance_to(sub_ts(1, 0));
+            for _ in 0..5 {
+                worker.step();
+            }
+            persist.send((a, sub_ts(1, 0), Diff::ONE));
+            persist.advance_to(sub_ts(1, 1));
+            for _ in 0..5 {
+                worker.step();
+            }
+            input.advance_to(new_ts(3));
+            for _ in 0..5 {
+                worker.step();
+            }
+
+            let restashed: u64 = registry
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_storage_upsert_restashed_total")
+                .flat_map(|family| family.get_metric())
+                .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+                .sum();
+            assert_eq!(restashed, 1, "the later subtime is pushed back once");
+        });
+
+        let (a, b) = (row(1, 1), row(1, 2));
+        let expected: Vec<(Result<Row, DataflowError>, _, _)> = vec![
+            (Ok(a.clone()), sub_ts(1, 0), Diff::ONE),
+            (Ok(a), sub_ts(1, 1), Diff::MINUS_ONE),
+            (Ok(b), sub_ts(1, 1), Diff::ONE),
+        ];
+        assert_eq!(actual, expected);
+    }
+
+    /// A source tail far ahead of persist, drained one timestamp per persist
+    /// advance, extracts only the timestamp being drained. Extracting the
+    /// whole tail each round would push it back every time, making catch-up
+    /// quadratic in the tail.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn tail_catch_up_restashes_nothing() {
+        const TIMESTAMPS: u64 = 20;
+        const PER_TS: i64 = 10;
+        let actual = upsert_test!(|input, persist, worker, registry| {
+            let mut offset = 0;
+            for t in 0..TIMESTAMPS {
+                let mut batch = Vec::new();
+                for k in 0..PER_TS {
+                    offset += 1;
+                    let v = row(k, i64::from(offset));
+                    batch.push(((key(k), Some(Ok(v)), offset), new_ts(t), Diff::ONE));
+                }
+                input.send_batch(&mut batch);
+                input.advance_to(new_ts(t + 1));
+                worker.step();
+            }
+
+            // The operator reads the persist frontier when input progress
+            // wakes it, so each round advances both.
+            for t in 1..=TIMESTAMPS {
+                persist.advance_to(new_ts(t));
+                worker.step();
+                input.advance_to(new_ts(TIMESTAMPS + t));
+                worker.step();
+            }
+
+            let restashed: u64 = registry
+                .gather()
+                .iter()
+                .filter(|family| family.name() == "mz_storage_upsert_restashed_total")
+                .flat_map(|family| family.get_metric())
+                .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+                .sum();
+            assert_eq!(restashed, 0, "updates pushed back during catch-up");
+        });
+
+        // No feedback reaches persist, so every update drains as an insert.
+        let inserts = actual.iter().filter(|(_, _, diff)| *diff == Diff::ONE);
+        assert_eq!(
+            u64::cast_from(inserts.count()),
+            TIMESTAMPS * PER_TS.unsigned_abs()
+        );
     }
 
     /// Drives a [`Stash`] through a pseudo-random sequence of pushes, restores,

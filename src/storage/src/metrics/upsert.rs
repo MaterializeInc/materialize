@@ -44,6 +44,7 @@ pub(crate) struct UpsertMetricDefs {
     pub(crate) multi_get_result_bytes: IntCounterVec,
     pub(crate) multi_put_latency: HistogramVec,
     pub(crate) multi_put_size: IntCounterVec,
+    pub(crate) restashed: IntCounterVec,
 
     // These are used by `rocksdb`.
     pub(crate) rocksdb_multi_get_latency: HistogramVec,
@@ -182,6 +183,12 @@ impl UpsertMetricDefs {
                     of getting values into the upsert state for this source. \
                     Specific implementations of upsert state may have more detailed \
                     metrics about sub-batches.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            restashed: registry.register(metric!(
+                name: "mz_storage_upsert_restashed_total",
+                help: "The number of updates the upsert v2 operator extracted from its \
+                    stash before the output caught up to their time, and pushed back.",
                 var_labels: ["source_id", "worker_id"],
             )),
             shared,
@@ -370,6 +377,7 @@ pub struct UpsertMetrics {
     pub(crate) multi_get_result_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub(crate) multi_get_result_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub(crate) multi_put_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) restashed: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
@@ -461,6 +469,9 @@ impl UpsertMetrics {
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_put_size: defs
                 .multi_put_size
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+            restashed: defs
+                .restashed
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
 
             shared: defs.shared(&source_id),
