@@ -505,9 +505,9 @@ pub struct SourceStatisticsUpdate {
     pub snapshot_records_staged: Gauge<ResettingNullableTotal>,
 
     pub snapshot_committed: Gauge<Boolean>,
-    // `offset_known` is enriched with a counter in `unpack` and `with_metrics` that is
-    // bumped whenever it regresses. This is distinct from `offset_committed`, which
-    // `error!` logs.
+    // `offset_known` is enriched with a counter in `unpack`, `ControllerSourceStatistics::new`,
+    // and `count_offset_known_regressions` that is bumped whenever it regresses. This is
+    // distinct from `offset_committed`, which `error!` logs.
     //
     // `offset_committed` is entirely in our control: it is calculated from source frontiers
     // that are guaranteed to never go backwards. Therefore, it regresses is a bug in how we
@@ -646,10 +646,12 @@ impl SourceStatisticsUpdate {
         updates_committed.incorporate(other.updates_committed, "updates_committed");
     }
 
-    /// Enrich statistics that use prometheus metrics.
-    pub fn with_metrics(mut self, metrics: &crate::metrics::StorageControllerMetrics) -> Self {
-        self.offset_known.0.regressions = Some(metrics.regressed_offset_known(self.id));
-        self
+    /// Counts `offset_known` regressions on `counter` instead of logging them.
+    pub fn count_offset_known_regressions(
+        &mut self,
+        counter: mz_ore::metrics::DeleteOnDropCounter<prometheus::core::AtomicU64, Vec<String>>,
+    ) {
+        self.offset_known.0.regressions = Some(counter);
     }
 }
 
@@ -761,7 +763,17 @@ pub struct ControllerSourceStatistics {
 }
 
 impl ControllerSourceStatistics {
-    pub fn new(id: GlobalId, replica_id: Option<ReplicaId>) -> Self {
+    pub fn new(
+        id: GlobalId,
+        replica_id: Option<ReplicaId>,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> Self {
+        let mut stats = Self::zero(id, replica_id);
+        stats.offset_known.0.regressions = Some(metrics.regressed_offset_known(id));
+        stats
+    }
+
+    fn zero(id: GlobalId, replica_id: Option<ReplicaId>) -> Self {
         Self {
             id,
             replica_id,
@@ -927,7 +939,7 @@ impl ZeroInitializedStats for ControllerSourceStatistics {
     }
 
     fn zero_stat(&self) -> Self {
-        ControllerSourceStatistics::new(self.id, self.replica_id)
+        ControllerSourceStatistics::zero(self.id, self.replica_id)
     }
 }
 
@@ -1181,5 +1193,45 @@ impl WebhookStatistics {
             offset_known: Gauge::gauge(None::<u64>),
             offset_committed: Gauge::gauge(None::<u64>),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_cluster_client::metrics::ControllerMetrics;
+    use mz_ore::metrics::MetricsRegistry;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn offset_known_regression_is_counted() {
+        let registry = MetricsRegistry::new();
+        let metrics = crate::metrics::StorageControllerMetrics::new(
+            &registry,
+            ControllerMetrics::new(&registry),
+        );
+        let id = GlobalId::User(1);
+        let update = |offset_known: u64| SourceStatisticsUpdate {
+            id,
+            messages_received: Default::default(),
+            bytes_received: Default::default(),
+            updates_staged: Default::default(),
+            updates_committed: Default::default(),
+            records_indexed: Default::default(),
+            bytes_indexed: Default::default(),
+            rehydration_latency_ms: Default::default(),
+            snapshot_records_known: Default::default(),
+            snapshot_records_staged: Default::default(),
+            snapshot_committed: Default::default(),
+            offset_known: Gauge::gauge(Some(offset_known)),
+            offset_committed: Default::default(),
+        };
+
+        let mut stats = ControllerSourceStatistics::new(id, None, &metrics);
+        stats.incorporate(update(10));
+        stats.incorporate(update(5));
+
+        assert_eq!(stats.offset_known.0.total, Some(10));
+        assert_eq!(metrics.regressed_offset_known(id).get(), 1);
     }
 }

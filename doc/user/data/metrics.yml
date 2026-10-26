@@ -3941,6 +3941,15 @@ metrics:
   - worker_id
   source: src/storage/src/statistics.rs
   visibility: internal
+- name: mz_source_regressed_offset_known
+  help: >-
+    The number of times offset_known reported by a worker went backwards, which an
+    upstream restore or failover can cause.
+  labels:
+  - source_id
+  - worker_id
+  source: src/storage/src/statistics.rs
+  visibility: internal
 - name: mz_source_rehydration_latency_ms
   help: >-
     The amount of time in milliseconds it took for the worker to rehydrate the

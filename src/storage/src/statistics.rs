@@ -58,6 +58,7 @@ pub(crate) struct SourceStatisticsMetricDefs {
     pub(crate) rehydration_latency_ms: IntGaugeVec,
 
     pub(crate) offset_known: UIntGaugeVec,
+    pub(crate) regressed_offset_known: IntCounterVec,
     pub(crate) offset_committed: UIntGaugeVec,
     pub(crate) snapshot_records_known: UIntGaugeVec,
     pub(crate) snapshot_records_staged: UIntGaugeVec,
@@ -67,6 +68,15 @@ pub(crate) struct SourceStatisticsMetricDefs {
 }
 
 impl SourceStatisticsMetricDefs {
+    pub(crate) fn regressed_offset_known(
+        &self,
+        id: GlobalId,
+        worker_id: usize,
+    ) -> DeleteOnDropCounter<AtomicU64, Vec<String>> {
+        self.regressed_offset_known
+            .get_delete_on_drop_metric(vec![id.to_string(), worker_id.to_string()])
+    }
+
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             snapshot_committed: registry.register(metric!(
@@ -124,6 +134,11 @@ impl SourceStatisticsMetricDefs {
                 var_labels: ["source_id", "worker_id", "shard_id"],
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Source],
+            )),
+            regressed_offset_known: registry.register(metric!(
+                name: "mz_source_regressed_offset_known",
+                help: "The number of times offset_known reported by a worker went backwards, which an upstream restore or failover can cause.",
+                var_labels: ["source_id", "worker_id"],
             )),
             offset_committed: registry.register(metric!(
                 name: "mz_source_offset_committed",
@@ -916,6 +931,7 @@ impl SinkStatistics {
 pub struct AggregatedStatistics {
     worker_id: usize,
     worker_count: usize,
+    metrics: SourceStatisticsMetricDefs,
     local_source_statistics: BTreeMap<GlobalId, (usize, GlobalId, SourceStatistics)>,
     local_sink_statistics: BTreeMap<GlobalId, (usize, SinkStatistics)>,
 
@@ -926,10 +942,15 @@ pub struct AggregatedStatistics {
 
 impl AggregatedStatistics {
     /// Initialize a new `AggregatedStatistics`.
-    pub fn new(worker_id: usize, worker_count: usize) -> Self {
+    pub(crate) fn new(
+        worker_id: usize,
+        worker_count: usize,
+        metrics: SourceStatisticsMetricDefs,
+    ) -> Self {
         AggregatedStatistics {
             worker_id,
             worker_count,
+            metrics,
             local_source_statistics: Default::default(),
             local_sink_statistics: Default::default(),
             global_source_statistics: Default::default(),
@@ -1053,9 +1074,17 @@ impl AggregatedStatistics {
                 let epoch_match = epoch >= *global_epoch;
                 let mut update = stat.as_update();
                 match (&mut stats[stat.worker_id], epoch_match) {
-                    (None, true) => stats[stat.worker_id] = Some(update),
+                    (None, true) => {
+                        update.count_offset_known_regressions(
+                            self.metrics.regressed_offset_known(stat.id, stat.worker_id),
+                        );
+                        stats[stat.worker_id] = Some(update);
+                    }
                     (None, false) => {
                         update.reset_gauges();
+                        update.count_offset_known_regressions(
+                            self.metrics.regressed_offset_known(stat.id, stat.worker_id),
+                        );
                         stats[stat.worker_id] = Some(update);
                     }
                     (Some(occupied), true) => occupied.incorporate(update),

@@ -2319,6 +2319,7 @@ impl StorageController for Controller {
                                     let mut stats = ControllerSourceStatistics::new(
                                         collection_id,
                                         Some(replica_id),
+                                        &self.metrics,
                                     );
                                     stats.incorporate(stat);
                                     vacant_entry.insert(stats);
