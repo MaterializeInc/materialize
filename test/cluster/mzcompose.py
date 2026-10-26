@@ -6383,10 +6383,11 @@ def workflow_test_read_frontier_advancement(
                 # only a failsafe.
                 cursor.execute("FETCH ALL sub WITH (timeout = '30s')")
             except DatabaseError as exc:
+                assert exc.sqlstate == "42704", exc
                 assert (
                     exc.diag.message_primary
-                    == 'query could not complete because relation "materialize.public.mv2" was dropped'
-                )
+                    == "relation 'materialize.public.mv2' was dropped"
+                ), exc
 
         subscribe_thread = Thread(target=subscribe)
         subscribe_thread.start()
@@ -8684,9 +8685,10 @@ def workflow_test_github_10102(c: Composition) -> None:
         try:
             cursor.execute("FETCH ALL c WITH (timeout = '30s')")
         except DatabaseError as exc:
+            assert exc.sqlstate == "42704", exc
             assert (
                 exc.diag.message_primary
-                == 'query could not complete because relation "materialize.public.mv" was dropped'
+                == "relation 'materialize.public.mv' was dropped"
             ), exc
 
     subscribe_thread = Thread(target=subscribe)
