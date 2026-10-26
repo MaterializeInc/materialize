@@ -2692,19 +2692,19 @@ fn test_query_policy_warn_notice() {
         .start_blocking();
 
     let mut admin = server.pg_config().connect(postgres::NoTls).unwrap();
-    admin
-        .batch_execute(
-            "CREATE TABLE t (a INT, b INT);
-             INSERT INTO t VALUES (1, 10), (1, 30), (2, 20);
-             CREATE DEFAULT INDEX ON t;
-             CREATE QUERY POLICY no_dataflows (MODE = 'warn', RULES (
-                 fast_only (action = 'reject', metric = 'query_plan_includes',
-                            value = 'slow_path_query')
-             ));
-             ALTER CLUSTER quickstart SET (QUERY POLICY = no_dataflows);
-             ALTER ROLE materialize SET query_policy = no_dataflows;",
-        )
-        .unwrap();
+    for stmt in [
+        "CREATE TABLE t (a INT, b INT)",
+        "INSERT INTO t VALUES (1, 10), (1, 30), (2, 20)",
+        "CREATE DEFAULT INDEX ON t",
+        "CREATE QUERY POLICY no_dataflows (MODE = 'warn', RULES (
+             fast_only (action = 'reject', metric = 'query_plan_includes',
+                        value = 'slow_path_query')
+         ))",
+        "ALTER CLUSTER quickstart SET (QUERY POLICY = no_dataflows)",
+        "ALTER ROLE materialize SET query_policy = no_dataflows",
+    ] {
+        admin.batch_execute(stmt).unwrap();
+    }
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     let mut client = server
