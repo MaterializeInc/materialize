@@ -1025,9 +1025,11 @@ Field                  | Type                         | Meaning
 `size_bytes`           | [`uint8`]                    | The number of storage bytes used by the object in the most recent assessment.
 {{< /if-unreleased >}}
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_sessions_raw -->
+
 ## `mz_sessions`
 
-The `mz_sessions` table contains a row for each active session in the system.
+The `mz_sessions` view contains a row for each active session in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_sessions -->
 | Field            | Type                           | Meaning                                                                                                                   |
@@ -1562,9 +1564,11 @@ it is set by the operator.
 | `event_type`   | [`text`]                     | The type of lifecycle event, e.g. `'execution-began'`, `'storage-dependencies-finished'`, `'compute-dependencies-finished'`, or `'execution-finished'` |
 | `occurred_at`  | [`timestamp with time zone`] | The time at which the event took place.                                                                                                                |
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_subscriptions_raw -->
+
 ## `mz_subscriptions`
 
-The `mz_subscriptions` table describes all active [`SUBSCRIBE`](/sql/subscribe)
+The `mz_subscriptions` view describes all active [`SUBSCRIBE`](/sql/subscribe)
 operations in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_subscriptions -->
