@@ -1388,12 +1388,6 @@ impl Coordinator {
                     | Statement::Declare(_)
                     | Statement::Discard(_)
                     | Statement::Execute(_)
-                    | Statement::ExplainPlan(_)
-                    | Statement::ExplainPushdown(_)
-                    | Statement::ExplainAnalyzeObject(_)
-                    | Statement::ExplainAnalyzeCluster(_)
-                    | Statement::ExplainTimestamp(_)
-                    | Statement::ExplainSinkSchema(_)
                     | Statement::Fetch(_)
                     | Statement::Prepare(_)
                     | Statement::Rollback(_)
@@ -1406,6 +1400,18 @@ impl Coordinator {
                     | Statement::Subscribe(_)
                     | Statement::Raise(_) => {
                         // Always safe.
+                    }
+
+                    Statement::ExplainPlan(_)
+                    | Statement::ExplainPushdown(_)
+                    | Statement::ExplainAnalyzeObject(_)
+                    | Statement::ExplainAnalyzeCluster(_)
+                    | Statement::ExplainSinkSchema(_)
+                    | Statement::ExplainTimestamp(_) => {
+                        // These results are not retained and checked during DDL replay.
+                        if ctx.session().transaction().is_ddl() {
+                            return ctx.retire(Err(AdapterError::DDLOnlyTransaction));
+                        }
                     }
 
                     Statement::Insert(InsertStatement {

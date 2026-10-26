@@ -121,6 +121,15 @@ impl PeekClient {
         // This must happen BEFORE statement logging setup to avoid orphaned execution records.
         if let Some(ref stmt) = stmt {
             match &**stmt {
+                Statement::ExplainPlan(_)
+                | Statement::ExplainPushdown(_)
+                | Statement::ExplainAnalyzeObject(_)
+                | Statement::ExplainAnalyzeCluster(_)
+                    if session.transaction().is_ddl() =>
+                {
+                    // Let coordinator admission enforce the DDL transaction restriction.
+                    return Ok(None);
+                }
                 Statement::Select(_)
                 | Statement::ExplainAnalyzeObject(_)
                 | Statement::ExplainAnalyzeCluster(_)

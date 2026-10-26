@@ -111,9 +111,6 @@ impl CatalogResultCommand {
 
     pub(crate) fn supports_statement(statement: &Statement<Raw>) -> bool {
         use mz_sql::ast::ShowStatement;
-        if matches!(statement, Statement::ExplainSinkSchema(_)) {
-            return true;
-        }
         let Statement::Show(show) = statement else {
             return false;
         };
@@ -165,14 +162,6 @@ impl CatalogResultCommand {
     pub(crate) fn result(plan: &Plan) -> Result<mz_repr::Row, AdapterError> {
         match plan {
             Plan::ShowCreate(show) => Ok(show.row.clone()),
-            Plan::ExplainSinkSchema(schema) => {
-                let value: serde_json::Value =
-                    serde_json::from_str(&schema.json_schema).map_err(|error| {
-                        AdapterError::Explain(mz_repr::explain::ExplainError::SerdeJsonError(error))
-                    })?;
-                let json = mz_repr::explain::json::json_string(&value);
-                Ok(mz_repr::Row::pack_slice(&[mz_repr::Datum::String(&json)]))
-            }
             _ => Err(AdapterError::Unsupported(
                 "non-deterministic catalog result",
             )),

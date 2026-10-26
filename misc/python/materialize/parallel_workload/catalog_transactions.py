@@ -26,37 +26,76 @@ def execute(conn: Connection, statement: str) -> Cursor:
     return conn.execute(statement.encode())
 
 
-def catalog_result_outcome(c: Composition, schema_result: bool) -> None:
+def explain_ddl_rejection(c: Composition) -> None:
+    with c.sql_connection() as txn:
+        execute(txn, "CREATE SCHEMA ddl_explain_rejection")
+        execute(txn, "CREATE VIEW ddl_explain_rejection.original AS SELECT 42 AS value")
+        execute(txn, "CREATE TABLE ddl_explain_rejection.input (value INT)")
+        execute(
+            txn,
+            "CREATE CONNECTION ddl_explain_rejection.kafka TO KAFKA "
+            "(BROKER 'localhost:1', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
+        )
+        execute(
+            txn,
+            "CREATE CONNECTION ddl_explain_rejection.registry TO CONFLUENT SCHEMA REGISTRY "
+            "(URL 'http://localhost:1') WITH (VALIDATE = false)",
+        )
+        for explain in (
+            "EXPLAIN RAW PLAN FOR VIEW {}",
+            "EXPLAIN RAW PLAN FOR SELECT * FROM {}",
+            "EXPLAIN VALUE SCHEMA FOR CREATE SINK ddl_explain_rejection.sink "
+            "FROM ddl_explain_rejection.input "
+            "INTO KAFKA CONNECTION ddl_explain_rejection.kafka (TOPIC 'explain-rejection') "
+            "FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION ddl_explain_rejection.registry "
+            "ENVELOPE DEBEZIUM",
+        ):
+            standalone = explain.format("ddl_explain_rejection.original")
+            assert execute(txn, standalone).fetchall()
+            execute(txn, "BEGIN")
+            assert execute(txn, standalone).fetchall()
+            execute(txn, "COMMIT")
+            for mode in ("direct", "prepared", "implicit"):
+                rename = "ALTER VIEW ddl_explain_rejection.original RENAME TO observed"
+                statement = explain.format("ddl_explain_rejection.observed")
+                if mode == "implicit":
+                    statement = f"{rename}; {statement}"
+                else:
+                    execute(txn, "BEGIN")
+                    execute(txn, rename)
+                    if mode == "prepared":
+                        execute(txn, f"PREPARE ddl_explain AS {statement}")
+                        statement = "EXECUTE ddl_explain"
+                try:
+                    result = execute(txn, statement)
+                    while result.nextset():
+                        pass
+                except Error as error:
+                    assert error.sqlstate == "25000", error
+                    assert "restricted to just modifying objects" in str(error)
+                else:
+                    raise AssertionError(f"EXPLAIN was allowed in DDL mode: {mode}")
+                finally:
+                    execute(txn, "ROLLBACK")
+                execute(txn, "DEALLOCATE ALL")
+                assert execute(
+                    txn, "SELECT * FROM ddl_explain_rejection.original"
+                ).fetchall() == [(42,)]
+
+
+def catalog_result_outcome(c: Composition) -> None:
     for interference in ("definition", "unrelated", "equivalent_replacement"):
-        schema = f"ddl_catalog_result_{int(schema_result)}_{interference}"
+        schema = f"ddl_catalog_result_{interference}"
         with c.sql_connection() as txn, c.sql_connection() as other:
             execute(other, f"CREATE SCHEMA {schema}")
             execute(other, f"CREATE TABLE {schema}.original (value INT)")
             execute(other, f"CREATE TABLE {schema}.unrelated (value INT)")
-            if schema_result:
-                execute(
-                    other,
-                    f"CREATE CONNECTION {schema}.kafka TO KAFKA "
-                    "(BROKER 'localhost:1', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
-                )
-                execute(
-                    other,
-                    f"CREATE CONNECTION {schema}.registry TO CONFLUENT SCHEMA REGISTRY "
-                    "(URL 'http://localhost:1') WITH (VALIDATE = false)",
-                )
             execute(txn, "BEGIN")
             execute(txn, f"ALTER TABLE {schema}.original RENAME TO observed")
-            statement = (
-                f"EXPLAIN VALUE SCHEMA FOR CREATE SINK {schema}.sink FROM {schema}.observed "
-                f"INTO KAFKA CONNECTION {schema}.kafka (TOPIC 'catalog-result') "
-                f"FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {schema}.registry "
-                "ENVELOPE DEBEZIUM"
-                if schema_result
-                else f"SHOW CREATE TABLE {schema}.observed"
-            )
+            statement = f"SHOW CREATE TABLE {schema}.observed"
             observed = execute(txn, statement).fetchone()
             assert observed is not None
-            assert "value" in observed[0 if schema_result else 1]
+            assert "value" in observed[1]
             execute(txn, f"ALTER TABLE {schema}.observed RENAME TO final")
             if interference == "equivalent_replacement":
                 execute(other, f"DROP TABLE {schema}.original")
@@ -80,29 +119,24 @@ def catalog_result_outcome(c: Composition, schema_result: bool) -> None:
             expected = "original" if interference == "definition" else "final"
             assert names == [(expected,), ("unrelated",)], (interference, names)
 
-    if not schema_result:
-        with c.sql_connection() as txn, c.sql_connection() as other:
-            execute(other, "CREATE SCHEMA ddl_inspection_before_ddl")
-            execute(
-                other, "CREATE TABLE ddl_inspection_before_ddl.original (value INT)"
-            )
-            execute(txn, "BEGIN")
-            before = execute(
-                txn, "SHOW CREATE TABLE ddl_inspection_before_ddl.original"
-            ).fetchone()
-            assert before is not None and "added" not in before[1]
-            execute(
-                txn, "ALTER TABLE ddl_inspection_before_ddl.original RENAME TO final"
-            )
-            execute(
-                other,
-                "ALTER TABLE ddl_inspection_before_ddl.original ADD COLUMN added TEXT",
-            )
-            execute(txn, "COMMIT")
-            after = execute(
-                other, "SHOW CREATE TABLE ddl_inspection_before_ddl.final"
-            ).fetchone()
-            assert after is not None and "added" in after[1]
+    with c.sql_connection() as txn, c.sql_connection() as other:
+        execute(other, "CREATE SCHEMA ddl_inspection_before_ddl")
+        execute(other, "CREATE TABLE ddl_inspection_before_ddl.original (value INT)")
+        execute(txn, "BEGIN")
+        before = execute(
+            txn, "SHOW CREATE TABLE ddl_inspection_before_ddl.original"
+        ).fetchone()
+        assert before is not None and "added" not in before[1]
+        execute(txn, "ALTER TABLE ddl_inspection_before_ddl.original RENAME TO final")
+        execute(
+            other,
+            "ALTER TABLE ddl_inspection_before_ddl.original ADD COLUMN added TEXT",
+        )
+        execute(txn, "COMMIT")
+        after = execute(
+            other, "SHOW CREATE TABLE ddl_inspection_before_ddl.final"
+        ).fetchone()
+        assert after is not None and "added" in after[1]
 
 
 def description_outcome(c: Composition) -> None:
