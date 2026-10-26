@@ -100,7 +100,7 @@ impl CatalogState {
         id: RoleId,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let role_auth = self.get_role_auth(&id);
+        let role_auth = self.get_durable_role_auth(&id);
         let role = self.get_role(&id);
         BuiltinTableUpdate::row(
             &*MZ_ROLE_AUTH,

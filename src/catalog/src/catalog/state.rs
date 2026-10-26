@@ -145,6 +145,9 @@ pub struct CatalogState {
     pub(super) network_policies_by_id: imbl::OrdMap<NetworkPolicyId, NetworkPolicy>,
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
     pub(super) role_auth_by_id: imbl::OrdMap<RoleId, RoleAuth>,
+    /// Process-local authentication only, never a shared catalog projection.
+    #[serde(skip)]
+    pub(super) mz_system_role_auth_override: Option<RoleAuth>,
 
     #[serde(skip)]
     pub(super) system_configuration: Arc<SystemVars>,
@@ -547,6 +550,7 @@ impl CatalogState {
             roles_by_id: Default::default(),
             network_policies_by_id: Default::default(),
             role_auth_by_id: Default::default(),
+            mz_system_role_auth_override: None,
             config: CatalogConfig {
                 start_time: Default::default(),
                 start_instant: Instant::now(),
@@ -1398,14 +1402,19 @@ impl CatalogState {
             .map(|id| &self.roles_by_id[id])
     }
 
-    pub(super) fn get_role_auth(&self, id: &RoleId) -> &RoleAuth {
+    /// Returns durable credentials for shared catalog projections.
+    pub(super) fn get_durable_role_auth(&self, id: &RoleId) -> &RoleAuth {
         self.role_auth_by_id
             .get(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing role auth for {id}"))
     }
 
+    /// Returns effective authentication credentials, including process-local overrides.
     pub(super) fn try_get_role_auth_by_id(&self, id: &RoleId) -> Option<&RoleAuth> {
-        self.role_auth_by_id.get(id)
+        self.mz_system_role_auth_override
+            .as_ref()
+            .filter(|auth| auth.role_id == *id)
+            .or_else(|| self.role_auth_by_id.get(id))
     }
 
     pub(super) fn try_get_network_policy_by_name(

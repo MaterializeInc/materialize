@@ -508,6 +508,7 @@ impl Catalog {
             roles_by_id: imbl::OrdMap::new(),
             network_policies_by_id: imbl::OrdMap::new(),
             role_auth_by_id: imbl::OrdMap::new(),
+            mz_system_role_auth_override: None,
             network_policies_by_name: imbl::OrdMap::new(),
             system_configuration: Arc::new(system_configuration),
             scoped_system_parameters: Default::default(),
@@ -678,34 +679,6 @@ impl Catalog {
         // and a deployment configured purely via `system_parameter_default` has
         // none, so sync explicitly here.
         state.system_config().sync_dyncfgs();
-
-        // Ensure mz_system has a password if configured to have one.
-        // It's important we do this after the `pre_item_updates` so that
-        // the mz_system role exists in the catalog.
-        {
-            if let Some(password) = config.external_login_password_mz_system {
-                let role_auth = RoleAuth {
-                    role_id: MZ_SYSTEM_ROLE_ID,
-                    // builtin roles should always use a secure scram iteration
-                    // <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
-                    password_hash: Some(
-                        scram256_hash(&password, &NonZeroU32::new(600_000).expect("known valid"))
-                            .map_err(|_| {
-                            CatalogError::Internal("Failed to hash mz_system password.".to_owned())
-                        })?,
-                    ),
-                    updated_at: SYSTEM_TIME(),
-                };
-                state
-                    .role_auth_by_id
-                    .insert(MZ_SYSTEM_ROLE_ID, role_auth.clone());
-                let builtin_table_update = state.generate_builtin_table_update(
-                    crate::memory::objects::StateUpdateKind::RoleAuth(role_auth.into()),
-                    crate::memory::objects::StateDiff::Addition,
-                );
-                builtin_table_updates.extend(builtin_table_update);
-            }
-        }
 
         let expr_cache_start = Instant::now();
         info!("startup: coordinator init: catalog open: expr cache open beginning");
@@ -932,8 +905,12 @@ impl Catalog {
     /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
     /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
     #[instrument(name = "catalog::open")]
-    pub fn open(config: Config<'_>) -> BoxFuture<'static, Result<OpenCatalogResult, CatalogError>> {
+    pub fn open(
+        mut config: Config<'_>,
+    ) -> BoxFuture<'static, Result<OpenCatalogResult, CatalogError>> {
         async move {
+            let external_login_password_mz_system =
+                config.state.external_login_password_mz_system.take();
             let mut storage = config.storage;
             let diagnostic_config = Arc::new(Self::diagnostic_state_config(&config.state));
 
@@ -944,7 +921,7 @@ impl Catalog {
                     .boxed()
                     .await?;
             let InitializeStateResult {
-                state,
+                mut state,
                 catalog_updates: _,
                 migrated_storage_collections_0dt,
                 new_builtin_collections,
@@ -954,6 +931,22 @@ impl Catalog {
                 cached_global_exprs,
                 uncached_local_exprs,
             } = result;
+
+            // Authentication overrides belong to this process, including writable
+            // joiners. They are not durable credentials or shared projection rows.
+            if let Some(password) = external_login_password_mz_system {
+                state.mz_system_role_auth_override = Some(RoleAuth {
+                    role_id: MZ_SYSTEM_ROLE_ID,
+                    // Builtin credentials use the secure SCRAM iteration count.
+                    password_hash: Some(
+                        scram256_hash(&password, &NonZeroU32::new(600_000).expect("known valid"))
+                            .map_err(|_| {
+                            CatalogError::Internal("Failed to hash mz_system password.".to_owned())
+                        })?,
+                    ),
+                    updated_at: SYSTEM_TIME(),
+                });
+            }
 
             let catalog = Catalog {
                 state,

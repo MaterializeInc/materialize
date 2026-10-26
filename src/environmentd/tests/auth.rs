@@ -4267,6 +4267,22 @@ async fn test_password_auth() {
         .await
         .unwrap();
 
+    // The process-local password authenticates without becoming a shared
+    // credential. The builtin table describes only durable catalog credentials.
+    assert_eq!(
+        mz_system_client
+            .query_one(
+                "SELECT count(*) FROM mz_catalog.mz_role_auth a \
+                 JOIN mz_catalog.mz_roles r ON a.role_id = r.id \
+                 WHERE r.name = 'mz_system' AND a.password_hash IS NOT NULL",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        0
+    );
+
     mz_system_client
         .execute("ALTER SYSTEM SET scram_iterations to 9999", &[])
         .await
