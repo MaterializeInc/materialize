@@ -3912,10 +3912,16 @@ impl Coordinator {
         let mut catalog_ids = Vec::new();
         let mut dataflows = Vec::new();
         let mut read_policies = BTreeMap::new();
+        let mut pending_replacements = BTreeSet::new();
         for entry in self.catalog.entries() {
             let gid = match entry.item() {
                 CatalogItem::Index(idx) => idx.global_id(),
-                CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
+                CatalogItem::MaterializedView(mv) => {
+                    if mv.replacement_target.is_some() {
+                        pending_replacements.insert(mv.global_id_writes());
+                    }
+                    mv.global_id_writes()
+                }
                 CatalogItem::MetricSink(metric_sink) => metric_sink.global_id,
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
@@ -3944,6 +3950,7 @@ impl Coordinator {
             &*self.controller.storage_collections,
             read_ts,
             self.controller.read_only(),
+            &pending_replacements,
         );
 
         let catalog = self.catalog_mut();

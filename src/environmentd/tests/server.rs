@@ -4778,6 +4778,97 @@ fn test_replacement_materialized_view_stale_expression_cache_entry_dropped_on_op
     }
 }
 
+// A pending replacement whose inputs are not readable at its target's write
+// frontier gets an as-of beyond that frontier. Bootstrapping must accept that
+// as-of instead of panicking in as-of selection, and applying the replacement
+// must wait for the target to catch up.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_replacement_materialized_view_ahead_of_target_survives_restart() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default(
+            "enable_replacement_materialized_views".to_string(),
+            "true".to_string(),
+        );
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for stmt in [
+            "CREATE CLUSTER c SIZE 'scale=1,workers=1'",
+            "CREATE TABLE t1 (a int)",
+            "INSERT INTO t1 VALUES (1)",
+            "CREATE MATERIALIZED VIEW mv IN CLUSTER c AS SELECT a FROM t1",
+        ] {
+            client.batch_execute(stmt).unwrap();
+        }
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 1);
+
+        // Without replicas, the write frontier of `mv` stops advancing.
+        client
+            .batch_execute("ALTER CLUSTER c SET (REPLICATION FACTOR 0)")
+            .unwrap();
+        Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let replicas: i64 = client
+                    .query_one(
+                        "SELECT count(*) FROM mz_cluster_replicas r \
+                         JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'c'",
+                        &[],
+                    )
+                    .unwrap()
+                    .get(0);
+                if replicas == 0 {
+                    Ok(())
+                } else {
+                    Err(format!("{replicas} replicas left"))
+                }
+            })
+            .unwrap();
+        std::thread::sleep(Duration::from_secs(2));
+
+        for stmt in [
+            "CREATE TABLE t2 (a int)",
+            "INSERT INTO t2 VALUES (2)",
+            "CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER c AS SELECT a FROM t2",
+        ] {
+            client.batch_execute(stmt).unwrap();
+        }
+
+        let ahead: bool = client
+            .query_one(
+                "SELECT
+                     (SELECT f.read_frontier FROM mz_internal.mz_frontiers f
+                      JOIN mz_tables t ON f.object_id = t.id WHERE t.name = 't2')
+                     >=
+                     (SELECT f.write_frontier FROM mz_internal.mz_frontiers f
+                      JOIN mz_materialized_views m ON f.object_id = m.id WHERE m.name = 'mv')",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert!(ahead, "t2 must not be readable at the write frontier of mv");
+    }
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client
+            .batch_execute("ALTER CLUSTER c SET (REPLICATION FACTOR 1)")
+            .unwrap();
+        client
+            .batch_execute("ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp")
+            .unwrap();
+        let row = client.query_one("SELECT a FROM mv", &[]).unwrap();
+        assert_eq!(row.get::<_, i32>(0), 2);
+    }
+}
+
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]

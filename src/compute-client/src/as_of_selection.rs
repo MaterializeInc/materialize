@@ -97,12 +97,17 @@ use tracing::{info, warn};
 /// Assigns the selected as-of to the provided dataflow descriptions and returns a set of
 /// `ReadHold`s that must not be dropped nor downgraded until the dataflows have been installed
 /// with the compute controller.
+///
+/// `pending_replacements` are the exports of replacement materialized views that are not applied
+/// yet. Their storage collection reports their target's write frontier, which constrains their
+/// as-of only softly. See [`Context::apply_downstream_storage_constraints`].
 pub fn run(
     dataflows: &mut [LirDataflowDescription],
     read_policies: &BTreeMap<GlobalId, ReadPolicy>,
     storage_collections: &dyn StorageCollections,
     current_time: Timestamp,
     read_only_mode: bool,
+    pending_replacements: &BTreeSet<GlobalId>,
 ) -> BTreeMap<GlobalId, ReadHold> {
     // Get read holds for the storage inputs of the dataflows.
     // This ensures that storage frontiers don't advance past the selected as-ofs.
@@ -136,7 +141,7 @@ pub fn run(
 
     // Apply hard constraints from upstream and downstream storage collections.
     ctx.apply_upstream_storage_constraints(&storage_read_holds);
-    ctx.apply_downstream_storage_constraints();
+    ctx.apply_downstream_storage_constraints(pending_replacements);
 
     // At this point all collections have as-of bounds that reflect what is required for
     // correctness. The current state isn't very usable though. In particular, most of the upper
@@ -471,7 +476,8 @@ impl<'a> Context<'a> {
     ///
     /// Failing to apply this constraint to a collection is an error. The storage collection it
     /// exports to may have times visible to readers skipped in its output, violating correctness.
-    fn apply_downstream_storage_constraints(&self) {
+    /// The exception are `pending_replacements`, for which the constraint is soft.
+    fn apply_downstream_storage_constraints(&self, pending_replacements: &BTreeSet<GlobalId>) {
         // Apply direct constraints from storage exports.
         for id in self.collections.keys() {
             let Ok(frontiers) = self.storage_collections.collection_frontiers(*id) else {
@@ -486,8 +492,18 @@ impl<'a> Context<'a> {
                 step_back_frontier(&frontiers.write_frontier)
             };
 
+            // A pending replacement reports its target's write frontier but doesn't write to it.
+            // Its inputs might not be readable at that frontier, for example when they were
+            // created after the target last wrote, so its as-of can be beyond it. Applying the
+            // replacement waits for the target's write frontier to reach the replacement's, which
+            // starts at the as-of. That wait, not this constraint, prevents skipped times.
+            let type_ = if pending_replacements.contains(id) {
+                ConstraintType::Soft
+            } else {
+                ConstraintType::Hard
+            };
             let constraint = Constraint {
-                type_: ConstraintType::Hard,
+                type_,
                 bound_type: BoundType::Upper,
                 frontier: &upper,
                 reason: &format!("storage export {id} write frontier"),
@@ -1157,6 +1173,7 @@ mod tests {
             current_time: $current_time:literal,
             $( read_policies: { $( $policy_id:literal: $policy:expr, )* }, )?
             $( read_only: $read_only:expr, )?
+            $( pending_replacements: [ $( $replacement_id:literal, )* ], )?
         }) => {
             #[mz_ore::test]
             fn $name() {
@@ -1185,12 +1202,17 @@ mod tests {
                 let read_only = false;
                 $( let read_only = $read_only; )?
 
+                let pending_replacements = BTreeSet::from([
+                    $($( $replacement_id.parse().unwrap(), )*)?
+                ]);
+
                 super::run(
                     &mut dataflows,
                     &read_policies,
                     &storage_frontiers,
                     $current_time.into(),
                     read_only,
+                    &pending_replacements,
                 );
 
                 let actual_as_ofs: Vec<_> = dataflows
@@ -1318,6 +1340,24 @@ mod tests {
         ],
         current_time: 15,
         read_only: true,
+    });
+
+    // A pending replacement's storage frontiers are those of its target. `u2` reads `s2`, which is
+    // not readable before the target's write frontier, so `u2` gets an as-of beyond it. `u3`'s
+    // inputs are readable there, so it gets an as-of that continues the target's output.
+    testcase!(pending_replacements, {
+        storage: {
+            "s1": (10, 30),
+            "s2": (20, 30),
+            "u2": (10, 15),
+            "u3": (10, 15),
+        },
+        dataflows: [
+            "u2" <- ["s2"] => 20,
+            "u3" <- ["s1"] => 14,
+        ],
+        current_time: 100,
+        pending_replacements: ["u2", "u3",],
     });
 
     // Regression test for database-issues#9273.
