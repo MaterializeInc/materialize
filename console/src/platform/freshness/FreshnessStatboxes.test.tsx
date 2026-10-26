@@ -22,6 +22,7 @@ import server from "~/api/mocks/server";
 import { renderComponent } from "~/test/utils";
 import { formatDurationExact } from "~/utils/format";
 
+import { NO_VALUE } from "./constants";
 import {
   FreshnessStatboxes,
   FreshnessStatboxesProps,
@@ -92,10 +93,6 @@ describe("FreshnessStatboxes", () => {
     await render({ latestPeak: 40_000 });
 
     expect(await screen.findByText(formatDurationExact(40_000))).toBeVisible();
-    // p99.9 matched the old pMAX, not the new one.
-    expect(
-      screen.queryByText("Same as pMAX at this range"),
-    ).not.toBeInTheDocument();
   });
 
   it("shows a newer minute as pMAX before the range has any readings", async () => {
@@ -103,10 +100,10 @@ describe("FreshnessStatboxes", () => {
     await render({ latestPeak: 5_000 });
 
     expect(await screen.findByText(formatDurationExact(5_000))).toBeVisible();
-    expect(screen.getAllByText("No readings in this range")).toHaveLength(3);
+    expect(screen.getAllByText(NO_VALUE)).toHaveLength(3);
   });
 
-  it("says how many minutes could not be read", async () => {
+  it("shows an unreadable minute at a percentile's rank as not queryable", async () => {
     mockPercentiles({
       peak: null,
       p90: "00:00:00.4",
@@ -115,34 +112,15 @@ describe("FreshnessStatboxes", () => {
     });
     await render();
 
-    expect(
-      await screen.findByText("At least one minute could not be read"),
-    ).toBeVisible();
-    expect(
-      screen.getByText("More than 1% of minutes could not be read"),
-    ).toBeVisible();
-    expect(screen.getAllByText(NULL_LAG_TEXT)).toHaveLength(3);
-  });
-
-  it("says when a percentile only repeats pMAX", async () => {
-    mockPercentiles({
-      peak: "00:00:03",
-      p90: "00:00:00.4",
-      p99: "00:00:01",
-      p99_9: "00:00:03",
-    });
-    await render();
-
-    expect(await screen.findByText("Same as pMAX at this range")).toBeVisible();
+    expect(await screen.findAllByText(NULL_LAG_TEXT)).toHaveLength(3);
+    expect(screen.getByText(formatDurationExact(400))).toBeVisible();
   });
 
   it("says so when the scope has no readings", async () => {
     mockPercentiles(undefined);
     await render();
 
-    expect(
-      await screen.findAllByText("No readings in this range"),
-    ).toHaveLength(4);
+    expect(await screen.findAllByText(NO_VALUE)).toHaveLength(4);
   });
 
   it("says so when the request fails", async () => {

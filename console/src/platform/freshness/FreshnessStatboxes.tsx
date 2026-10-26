@@ -21,33 +21,13 @@ import { LagPercentiles, useScopeLagPercentiles } from "./queries";
 interface CardSpec {
   key: keyof LagPercentiles;
   label: string;
-  /** What an unreadable value at this rank says about the minutes. */
-  unreadableCaption: string;
 }
 
-// Nearest rank lands on an unreadable minute only when more than the
-// percentile's tail is unreadable: 7 of 60 for p90, where 6 would not.
 const CARDS: CardSpec[] = [
-  {
-    key: "p90",
-    label: "p90",
-    unreadableCaption: "More than 10% of minutes could not be read",
-  },
-  {
-    key: "p99",
-    label: "p99",
-    unreadableCaption: "More than 1% of minutes could not be read",
-  },
-  {
-    key: "p99_9",
-    label: "p99.9",
-    unreadableCaption: "More than 0.1% of minutes could not be read",
-  },
-  {
-    key: "peak",
-    label: "pMAX",
-    unreadableCaption: "At least one minute could not be read",
-  },
+  { key: "p90", label: "p90" },
+  { key: "p99", label: "p99" },
+  { key: "p99_9", label: "p99.9" },
+  { key: "peak", label: "pMAX" },
 ];
 
 const StatCard = ({
@@ -63,21 +43,12 @@ const StatCard = ({
   const value = percentiles?.[spec.key];
   const unreadable = value === UNREADABLE;
 
-  // Only an edge state gets a caption.
-  const caption =
-    value === undefined
-      ? "No readings in this range"
-      : unreadable
-        ? spec.unreadableCaption
-        : spec.key !== "peak" && value === percentiles?.peak
-          ? "Same as pMAX at this range"
-          : undefined;
-
   return (
     <Box
       borderWidth="1px"
       borderColor={colors.border.primary}
       borderRadius="lg"
+      background="chakra-subtle-bg"
       padding="4"
     >
       <Text textStyle="text-small-heavy" color={colors.foreground.secondary}>
@@ -92,11 +63,6 @@ const StatCard = ({
             : unreadable
               ? NULL_LAG_TEXT
               : formatDurationExact(value)}
-        </Text>
-      )}
-      {!isLoading && caption && (
-        <Text textStyle="text-small" color={colors.foreground.secondary}>
-          {caption}
         </Text>
       )}
     </Box>
