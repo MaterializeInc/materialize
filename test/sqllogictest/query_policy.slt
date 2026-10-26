@@ -362,11 +362,39 @@ SELECT name, action, metric, value FROM mz_internal.mz_query_policy_rules;
 fast_only reject query_plan_includes slow_path_query
 memory_only reject query_plan_includes persist_read
 
+query TTT rowsort
+SELECT p.name, a.object_type, coalesce(c.name, r.name)
+FROM mz_internal.mz_query_policy_attachments a
+JOIN mz_internal.mz_query_policies p ON p.id = a.policy_id
+LEFT JOIN mz_clusters c ON a.object_type = 'cluster' AND c.id = a.object_id
+LEFT JOIN mz_roles r ON a.object_type = 'role' AND r.id = a.object_id;
+----
+no_dataflows cluster quickstart
+no_persist role guarded
+
+statement ok
+ALTER ROLE guarded SET query_policy = no_dataflows;
+
+query TTT rowsort
+SELECT p.name, a.object_type, coalesce(c.name, r.name)
+FROM mz_internal.mz_query_policy_attachments a
+JOIN mz_internal.mz_query_policies p ON p.id = a.policy_id
+LEFT JOIN mz_clusters c ON a.object_type = 'cluster' AND c.id = a.object_id
+LEFT JOIN mz_roles r ON a.object_type = 'role' AND r.id = a.object_id;
+----
+no_dataflows cluster quickstart
+no_dataflows role guarded
+
 statement ok
 ALTER ROLE guarded RESET query_policy;
 
 statement ok
 ALTER CLUSTER quickstart RESET (QUERY POLICY);
+
+query I
+SELECT count(*) FROM mz_internal.mz_query_policy_attachments;
+----
+0
 
 # Policy privileges and ownership keep a role alive independently of attachments.
 statement ok

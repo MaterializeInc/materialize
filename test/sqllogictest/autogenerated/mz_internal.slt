@@ -887,6 +887,7 @@ mz_postgres_source_tables
 mz_postgres_sources
 mz_prepared_statement_history
 mz_query_policies
+mz_query_policy_attachments
 mz_query_policy_rules
 mz_recent_activity_log
 mz_recent_activity_log_redacted

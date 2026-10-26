@@ -790,6 +790,59 @@ WHERE data->>'kind' = 'QueryPolicy'",
     }
 });
 
+pub static MZ_QUERY_POLICY_ATTACHMENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_query_policy_attachments",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_QUERY_POLICY_ATTACHMENTS_OID,
+        desc: RelationDesc::builder()
+            .with_column("policy_id", SqlScalarType::String.nullable(false))
+            .with_column("object_type", SqlScalarType::String.nullable(false))
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_key(vec![1, 2])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "policy_id",
+                "The attached policy. Corresponds to `mz_internal.mz_query_policies.id`.",
+            ),
+            (
+                "object_type",
+                "The attachment target type: `cluster` or `role`.",
+            ),
+            (
+                "object_id",
+                "The attachment target. Corresponds to `mz_catalog.mz_clusters.id` or `mz_catalog.mz_roles.id`, according to `object_type`.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL policy_id,
+    ASSERT NOT NULL object_type,
+    ASSERT NOT NULL object_id
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'value'->'config'->'query_policy') AS policy_id,
+    'cluster'::text AS object_type,
+    mz_internal.parse_catalog_id(data->'key'->'id') AS object_id
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Cluster'
+    AND data->'value'->'config'->'query_policy' IS NOT NULL
+UNION ALL
+SELECT
+    mz_internal.parse_catalog_id(data->'value'->'vars'->'query_policy') AS policy_id,
+    'role'::text AS object_type,
+    mz_internal.parse_catalog_id(data->'key'->'id') AS object_id
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Role'
+    AND data->'value'->'vars'->'query_policy' IS NOT NULL",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+});
+
 /// PostgreSQL-specific metadata about types that doesn't make sense to expose
 /// in the `mz_types` table as part of our public, stable API.
 pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
