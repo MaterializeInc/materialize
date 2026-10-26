@@ -13,17 +13,6 @@ use std::time::Duration;
 
 use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 
-/// Whether rendering should use `half_join2` rather than DD's `half_join` for delta joins.
-///
-/// `half_join2` avoids quadratic behavior in certain join patterns. This flag exists as an escape
-/// hatch to revert to the old implementation if issues arise.
-pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
-    "enable_compute_half_join2",
-    true,
-    "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
-    ParameterScope::Environment,
-);
-
 /// Whether rendering should collapse error multiplicities to one where it arranges errors.
 ///
 /// Error semantics depend only on whether an error is present, so its multiplicity carries no
@@ -826,7 +815,6 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
-        .add(&ENABLE_HALF_JOIN2)
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)

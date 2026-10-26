@@ -12,9 +12,8 @@ use std::sync::Arc;
 
 use differential_dataflow::trace::chunk::ChunkBatch;
 use differential_dataflow::trace::chunk::vec::VecChunk;
-use differential_dataflow::trace::{
-    Batch, BatchReader, Description, ExertionLogic, Trace, TraceReader,
-};
+use differential_dataflow::trace::implementations::spine_fueled::SpineBatch;
+use differential_dataflow::trace::{Description, ExertionLogic, Span, Trace, TraceReader};
 use timely::container::PushInto;
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::progress::Antichain;
@@ -50,32 +49,31 @@ fn spine() -> Spine<TestBatch> {
     spine
 }
 
-fn batch(time: u64, keys: std::ops::Range<u64>) -> TestBatch {
+fn batch(time: u64, keys: std::ops::Range<u64>) -> Span<u64, TestBatch> {
     let description = Description::new(
         Antichain::from_elem(time),
         Antichain::from_elem(time + 1),
         Antichain::from_elem(0),
     );
     if keys.is_empty() {
-        return Rc::new(ChunkBatch::empty(
-            Antichain::from_elem(time),
-            Antichain::from_elem(time + 1),
-        ));
+        return Span::new(description, None);
     }
     let mut chunk = VecChunk::default();
     for key in keys {
         chunk.push_into(((key, 0u64), time, 1i64));
     }
-    Rc::new(ChunkBatch::new(vec![chunk], description))
+    Span::new(description, Some(Rc::new(ChunkBatch::new(vec![chunk]))))
 }
 
-/// Row counts of the non-empty batches, largest layer first. Empty batches,
-/// such as the one `close` inserts, carry no updates and are ignored.
+/// Row counts of the non-empty batches, largest layer first. Spans without
+/// updates, such as the one `close` inserts, are ignored.
 fn shape(spine: &Spine<TestBatch>) -> Vec<usize> {
     let mut lens = Vec::new();
-    spine.map_batches(|batch| {
-        if batch.len() > 0 {
-            lens.push(batch.len());
+    spine.map_spans(|span| {
+        if let Some(batch) = &span.inner {
+            if batch.len() > 0 {
+                lens.push(batch.len());
+            }
         }
     });
     lens
@@ -83,9 +81,9 @@ fn shape(spine: &Spine<TestBatch>) -> Vec<usize> {
 
 /// Insert a batch and, as the upsert operator does as persist advances, let
 /// the spine merge everything below the new upper.
-fn insert(spine: &mut Spine<TestBatch>, batch: TestBatch) {
-    let upper = batch.upper().clone();
-    spine.insert(batch);
+fn insert(spine: &mut Spine<TestBatch>, span: Span<u64, TestBatch>) {
+    let upper = span.upper().clone();
+    spine.insert(span);
     spine.set_physical_compaction(upper.borrow());
 }
 

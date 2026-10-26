@@ -9,13 +9,12 @@
 
 //! Tests of the fueled cursor walk that produces an index peek's rows.
 
+use differential_dataflow::batcher::Batcher;
+use differential_dataflow::trace::Navigable;
 use differential_dataflow::trace::cursor::CursorList;
-use differential_dataflow::trace::implementations::ord_neu::OrdValBatcher;
-use differential_dataflow::trace::{Batcher, Builder, Navigable};
 use mz_expr::{EvalError, MirScalarExpr};
 use mz_repr::{Datum, ReprScalarType, Row, Timestamp};
-use mz_row_spine::{ArcOrdValBuilder, ArcOrdValSpine};
-use timely::container::PushInto;
+use mz_row_spine::{ArcOrdValBatcher, ArcOrdValSpine};
 use timely::progress::Antichain;
 
 use super::*;
@@ -28,14 +27,17 @@ fn row(value: u8) -> Row {
 
 /// Builds a single-batch trace holding `keys`, and a cursor over it.
 fn trace(keys: &[Row]) -> (TraceCursor<TestTrace>, TraceStorage<TestTrace>) {
-    let updates: Vec<((Row, Row), Timestamp, Diff)> = keys
+    let mut updates: Vec<((Row, Row), Timestamp, Diff)> = keys
         .iter()
         .map(|key| ((key.clone(), Row::default()), Timestamp::MIN, Diff::ONE))
         .collect();
-    let mut batcher = OrdValBatcher::<Row, Row, Timestamp, Diff>::new(None, 0);
-    batcher.push_into(updates);
-    let (mut chain, description) = batcher.seal(Antichain::from_elem(Timestamp::MAX));
-    let batch = ArcOrdValBuilder::<Row, Row, Timestamp, Diff>::seal(&mut chain, description);
+    let mut batcher = ArcOrdValBatcher::<Row, Row, Timestamp, Diff>::new(None, 0);
+    Batcher::<Vec<((Row, Row), Timestamp, Diff)>>::insert(&mut batcher, &mut updates);
+    let (batch, _frontier) = Batcher::<Vec<((Row, Row), Timestamp, Diff)>>::extract(
+        &mut batcher,
+        Antichain::from_elem(Timestamp::MAX).borrow(),
+    );
+    let batch = batch.expect("updates were pushed, so the batch is non-empty");
     let storage = vec![batch];
     let cursor = CursorList::new(vec![storage[0].cursor()], &storage);
     (cursor, storage)

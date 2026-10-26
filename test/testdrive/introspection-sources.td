@@ -250,7 +250,7 @@ true true
 > CREATE DEFAULT INDEX ii_empty ON t3
 
 > SELECT records, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_empty'
-<null> true true
+<null> <null> <null>
 
 # Tests that arrangement sizes are approximate
 
@@ -261,7 +261,7 @@ true true
 # We have 16 workers, and only want to ensure that the sizes are not egregious.
 
 > SELECT records, size < 16 * 1024, allocations < 512 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
-<null> true true
+<null> <null> <null>
 
 > INSERT INTO t4 SELECT 1
 
