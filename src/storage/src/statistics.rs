@@ -40,6 +40,8 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::progress::frontier::Antichain;
 
+use crate::metrics::StatisticsMergeMetricDefs;
+
 // Note(guswynn): ordinarily these metric structs would be in the `metrics` modules, but we
 // put them here so they can be near the user-facing definitions as well.
 
@@ -58,7 +60,6 @@ pub(crate) struct SourceStatisticsMetricDefs {
     pub(crate) rehydration_latency_ms: IntGaugeVec,
 
     pub(crate) offset_known: UIntGaugeVec,
-    pub(crate) regressed_offset_known: IntCounterVec,
     pub(crate) offset_committed: UIntGaugeVec,
     pub(crate) snapshot_records_known: UIntGaugeVec,
     pub(crate) snapshot_records_staged: UIntGaugeVec,
@@ -68,15 +69,6 @@ pub(crate) struct SourceStatisticsMetricDefs {
 }
 
 impl SourceStatisticsMetricDefs {
-    pub(crate) fn regressed_offset_known(
-        &self,
-        id: GlobalId,
-        worker_id: usize,
-    ) -> DeleteOnDropCounter<AtomicU64, Vec<String>> {
-        self.regressed_offset_known
-            .get_delete_on_drop_metric(vec![id.to_string(), worker_id.to_string()])
-    }
-
     pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
         Self {
             snapshot_committed: registry.register(metric!(
@@ -134,11 +126,6 @@ impl SourceStatisticsMetricDefs {
                 var_labels: ["source_id", "worker_id", "shard_id"],
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Source],
-            )),
-            regressed_offset_known: registry.register(metric!(
-                name: "mz_source_regressed_offset_known",
-                help: "The number of times offset_known reported by a worker went backwards, which an upstream restore or failover can cause.",
-                var_labels: ["source_id", "worker_id"],
             )),
             offset_committed: registry.register(metric!(
                 name: "mz_source_offset_committed",
@@ -931,13 +918,16 @@ impl SinkStatistics {
 pub struct AggregatedStatistics {
     worker_id: usize,
     worker_count: usize,
-    metrics: SourceStatisticsMetricDefs,
+    metrics: StatisticsMergeMetricDefs,
     local_source_statistics: BTreeMap<GlobalId, (usize, GlobalId, SourceStatistics)>,
     local_sink_statistics: BTreeMap<GlobalId, (usize, SinkStatistics)>,
 
     global_source_statistics:
         BTreeMap<GlobalId, (usize, GlobalId, Vec<Option<SourceStatisticsUpdate>>)>,
     global_sink_statistics: BTreeMap<GlobalId, (usize, Vec<Option<SinkStatisticsUpdate>>)>,
+    /// One counter per worker slot of `global_source_statistics`, bumped when that worker
+    /// reports a lower `offset_known` than the slot holds.
+    regressed_offset_known: BTreeMap<GlobalId, Vec<DeleteOnDropCounter<AtomicU64, Vec<String>>>>,
 }
 
 impl AggregatedStatistics {
@@ -945,7 +935,7 @@ impl AggregatedStatistics {
     pub(crate) fn new(
         worker_id: usize,
         worker_count: usize,
-        metrics: SourceStatisticsMetricDefs,
+        metrics: StatisticsMergeMetricDefs,
     ) -> Self {
         AggregatedStatistics {
             worker_id,
@@ -955,6 +945,7 @@ impl AggregatedStatistics {
             local_sink_statistics: Default::default(),
             global_source_statistics: Default::default(),
             global_sink_statistics: Default::default(),
+            regressed_offset_known: Default::default(),
         }
     }
 
@@ -989,6 +980,7 @@ impl AggregatedStatistics {
         self.local_sink_statistics.remove(&id);
         self.global_source_statistics.remove(&id);
         self.global_sink_statistics.remove(&id);
+        self.regressed_offset_known.remove(&id);
     }
 
     /// Advance the _global epoch_ for statistics.
@@ -1020,6 +1012,7 @@ impl AggregatedStatistics {
         id: GlobalId,
         ingestion_id: GlobalId,
         resume_upper: Antichain<Timestamp>,
+        shard_id: &mz_persist_client::ShardId,
         stats: F,
     ) {
         self.local_source_statistics
@@ -1036,6 +1029,11 @@ impl AggregatedStatistics {
             self.global_source_statistics
                 .entry(id)
                 .or_insert_with(|| (0, ingestion_id, vec![None; self.worker_count]));
+            self.regressed_offset_known.entry(id).or_insert_with(|| {
+                (0..self.worker_count)
+                    .map(|worker_id| self.metrics.regressed_offset_known(id, worker_id, shard_id))
+                    .collect()
+            });
         }
     }
 
@@ -1074,20 +1072,17 @@ impl AggregatedStatistics {
                 let epoch_match = epoch >= *global_epoch;
                 let mut update = stat.as_update();
                 match (&mut stats[stat.worker_id], epoch_match) {
-                    (None, true) => {
-                        update.count_offset_known_regressions(
-                            self.metrics.regressed_offset_known(stat.id, stat.worker_id),
-                        );
-                        stats[stat.worker_id] = Some(update);
-                    }
+                    (None, true) => stats[stat.worker_id] = Some(update),
                     (None, false) => {
                         update.reset_gauges();
-                        update.count_offset_known_regressions(
-                            self.metrics.regressed_offset_known(stat.id, stat.worker_id),
-                        );
                         stats[stat.worker_id] = Some(update);
                     }
-                    (Some(occupied), true) => occupied.incorporate(update),
+                    (Some(occupied), true) => {
+                        let regressed = occupied.incorporate(update);
+                        if regressed.offset_known {
+                            self.regressed_offset_known[&stat.id][stat.worker_id].inc();
+                        }
+                    }
                     (Some(occupied), false) => occupied.incorporate_counters(update),
                 }
             }

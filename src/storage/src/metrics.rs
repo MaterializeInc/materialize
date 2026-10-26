@@ -28,8 +28,11 @@
 //! needing to interact with metrics _definitions_ into the code that actually bumps those
 //! metrics.
 
-use mz_ore::metrics::MetricsRegistry;
+use mz_ore::metric;
+use mz_ore::metrics::{DeleteOnDropCounter, IntCounterVec, MetricsRegistry};
+use mz_persist_client::ShardId;
 use mz_repr::GlobalId;
+use prometheus::core::AtomicU64;
 
 use crate::statistics::{SinkStatisticsMetricDefs, SourceStatisticsMetricDefs};
 
@@ -37,6 +40,38 @@ pub mod decode;
 pub mod sink;
 pub mod source;
 pub mod upsert;
+
+/// Metrics for the cross-worker statistics merge that worker 0 performs in
+/// `AggregatedStatistics`.
+#[derive(Clone, Debug)]
+pub(crate) struct StatisticsMergeMetricDefs {
+    regressed_offset_known: IntCounterVec,
+}
+
+impl StatisticsMergeMetricDefs {
+    pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            regressed_offset_known: registry.register(metric!(
+                name: "mz_source_regressed_offset_known",
+                help: "The number of times offset_known reported by a worker went backwards, which an upstream restore or failover can cause.",
+                var_labels: ["source_id", "worker_id", "shard_id"],
+            )),
+        }
+    }
+
+    pub(crate) fn regressed_offset_known(
+        &self,
+        id: GlobalId,
+        worker_id: usize,
+        shard_id: &ShardId,
+    ) -> DeleteOnDropCounter<AtomicU64, Vec<String>> {
+        self.regressed_offset_known.get_delete_on_drop_metric(vec![
+            id.to_string(),
+            worker_id.to_string(),
+            shard_id.to_string(),
+        ])
+    }
+}
 
 /// A top-level struct holding all various _definitions_ of all metrics
 /// use by the `mz-storage` crate.
@@ -58,6 +93,8 @@ pub struct StorageMetrics {
     // user-facing data.
     pub(crate) source_statistics: SourceStatisticsMetricDefs,
     pub(crate) sink_statistics: SinkStatisticsMetricDefs,
+
+    pub(crate) statistics_merge: StatisticsMergeMetricDefs,
 }
 
 impl StorageMetrics {
@@ -71,6 +108,7 @@ impl StorageMetrics {
             sink_defs: sink::SinkMetricDefs::register_with(registry),
             source_statistics: SourceStatisticsMetricDefs::register_with(registry),
             sink_statistics: SinkStatisticsMetricDefs::register_with(registry),
+            statistics_merge: StatisticsMergeMetricDefs::register_with(registry),
         }
     }
 

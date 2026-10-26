@@ -256,7 +256,7 @@ impl StorageState {
         let aggregated_statistics = AggregatedStatistics::new(
             timely_worker_index,
             timely_worker_peers,
-            metrics.source_statistics.clone(),
+            metrics.statistics_merge.clone(),
         );
 
         let storage_state = StorageState {
@@ -735,6 +735,7 @@ impl<'w> Worker<'w> {
                         *export_id,
                         ingestion_id,
                         resume_upper.clone(),
+                        &export.storage_metadata.data_shard,
                         || {
                             SourceStatistics::new(
                                 *export_id,
