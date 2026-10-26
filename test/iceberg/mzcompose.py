@@ -939,7 +939,7 @@ def workflow_commit_overlap_recovery(c: Composition) -> None:
                 SELECT EXISTS (
                     SELECT 1 FROM mz_internal.mz_catalog_raw
                     WHERE data->>'kind' = 'ClientIncarnation'
-                      AND data->'value'->>'replica_id' IS NOT NULL
+                      AND data->'value'->'realization'->>'Replica' IS NOT NULL
                 )
             """).fetchone()
             assert row is not None

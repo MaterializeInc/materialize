@@ -2956,7 +2956,7 @@ def workflow_catalog_publication_measurement(
                     SELECT EXISTS (
                         SELECT 1 FROM mz_internal.mz_catalog_raw
                         WHERE data->>'kind' = 'ClientIncarnation'
-                          AND data->'value'->>'replica_id' IS NOT NULL
+                          AND data->'value'->'realization'->>'Replica' IS NOT NULL
                     )
                 """) == [(True,)], "measurement requires native replica execution"
             bound_count_before = len(bounds)

@@ -5489,7 +5489,7 @@ def cluster_replica_incarnation(c: Composition, cluster: str) -> str:
     matches = [
         incarnation
         for incarnation, client in incarnations.items()
-        if client["replica_id"] == {"User": int(replica_id[1:])}
+        if client["realization"] == {"Replica": {"User": int(replica_id[1:])}}
     ]
     assert len(matches) == 1, (replica_id, incarnations)
     return matches[0]
@@ -9512,7 +9512,7 @@ def workflow_adapter_loss(c: Composition) -> None:
                     SELECT EXISTS (
                         SELECT 1 FROM mz_internal.mz_catalog_raw
                         WHERE data->>'kind' = 'ClientIncarnation'
-                          AND data->'value'->>'replica_id' IS NOT NULL
+                          AND data->'value'->'realization'->>'Replica' IS NOT NULL
                     )
                 """).fetchone()
                 assert row is not None
@@ -9637,7 +9637,9 @@ def workflow_adapter_loss(c: Composition) -> None:
         snapshot = catalog_protection_snapshot(c)
         predecessors = snapshot["client_incarnations"]
         adapter_ids = {
-            key for key, owner in predecessors.items() if owner["replica_id"] is None
+            key
+            for key, owner in predecessors.items()
+            if "Adapter" in owner["realization"]
         }
         assert len(adapter_ids) == 1, predecessors
         adapter_grants = [
