@@ -355,6 +355,11 @@ pub struct Args {
     #[clap(long, hide = true)]
     disable_license_key_checks: bool,
 
+    /// Root-signed intermediate certificates whose keys may also sign license
+    /// keys. Passed through to environmentd.
+    #[clap(long, value_delimiter = ',')]
+    license_key_intermediate_cert: Vec<String>,
+
     #[clap(long)]
     disable_database_network_policies: bool,
 
@@ -758,6 +763,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .environmentd_internal_persist_pubsub_port,
             default_certificate_specs: args.default_certificate_specs.clone(),
             disable_license_key_checks: args.disable_license_key_checks,
+            license_key_intermediate_certs: args.license_key_intermediate_cert,
             disable_database_network_policies: args.disable_database_network_policies,
             tracing: args.tracing,
             orchestratord_namespace: namespace,
