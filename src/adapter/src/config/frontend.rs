@@ -192,14 +192,12 @@ impl From<LegacyConfigFile> for ConfigFileV2 {
 }
 
 impl ConfigFileV2 {
-    /// Parses the config-sync file's contents in either format, or describes
-    /// the first defect.
+    /// Parses the config-sync file's top-level object in either format, or
+    /// describes the first defect.
     ///
     /// An error is "no information about any parameter", which callers must keep
     /// distinct from a valid but empty document.
-    fn parse(contents: &str) -> Result<Self, String> {
-        let document: serde_json::Map<String, JsonValue> =
-            serde_json::from_str(contents).map_err(|e| e.to_string())?;
+    fn parse(document: serde_json::Map<String, JsonValue>) -> Result<Self, String> {
         // The format is chosen by the key's presence. Trying version 2 and
         // falling back to the flat format would read a defective version 2
         // document as a valid flat one, which prunes every scoped override.
@@ -809,15 +807,18 @@ impl SystemParameterFrontend {
                 None
             }
         };
-        let file = contents
-            .as_deref()
-            .and_then(|contents| match ConfigFileV2::parse(contents) {
+        let file = contents.as_deref().and_then(|contents| {
+            let parsed = serde_json::from_str(contents)
+                .map_err(|e| e.to_string())
+                .and_then(ConfigFileV2::parse);
+            match parsed {
                 Ok(file) => Some(Arc::new(file)),
                 Err(e) => {
                     warn!("could not parse system parameter sync file: {e}");
                     None
                 }
-            });
+            }
+        });
         if let Some(file) = &file {
             for diagnostic in self.scoped_rule_diagnostics(file, params) {
                 warn!("{diagnostic}");

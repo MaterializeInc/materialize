@@ -50,14 +50,19 @@ fn file_frontend() -> SystemParameterFrontend {
 /// The path a [`file_frontend`] reports in its warnings. Never opened.
 const CONFIG_PATH: &str = "/nonexistent/system-params.json";
 
+/// The top-level object of a document the test knows to be one.
+fn object(contents: &str) -> serde_json::Map<String, JsonValue> {
+    serde_json::from_str(contents).unwrap_or_else(|e| panic!("not a JSON object: {e}"))
+}
+
 /// Parses a document the test knows to be valid.
 fn parse(contents: &str) -> ConfigFileV2 {
-    ConfigFileV2::parse(contents).unwrap_or_else(|e| panic!("document does not parse: {e}"))
+    ConfigFileV2::parse(object(contents)).unwrap_or_else(|e| panic!("document does not parse: {e}"))
 }
 
 /// The error a document the test knows to be invalid is rejected with.
 fn parse_error(contents: &str) -> String {
-    ConfigFileV2::parse(contents).expect_err("document parses")
+    ConfigFileV2::parse(object(contents)).expect_err("document parses")
 }
 
 /// One tick of the sync loop's handling of the file: read it, then publish
@@ -364,10 +369,17 @@ fn test_parse_selects_format_by_version_key() {
 /// A document that is not a JSON object carries no information, which is
 /// distinct from an empty document.
 #[mz_ore::test]
-fn test_parse_rejects_non_object_document() {
-    assert!(ConfigFileV2::parse("[]").is_err());
-    assert!(ConfigFileV2::parse("not json").is_err());
-    assert_eq!(parse("{}"), ConfigFileV2::default());
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+fn test_refresh_rejects_non_object_document() {
+    let params = SynchronizedParameters::default();
+    let frontend = file_frontend();
+    let refresh = |contents: &str| {
+        frontend.refresh_config_file(Path::new(CONFIG_PATH), Ok(contents.to_string()), &params)
+    };
+
+    assert_eq!(refresh("[]"), None);
+    assert_eq!(refresh("not json"), None);
+    assert_eq!(refresh("{}").as_deref(), Some(&ConfigFileV2::default()));
 }
 
 /// Every structural defect fails the whole document, and the error names the
