@@ -77,18 +77,26 @@
 // environment in real time:
 // https://app.segment.com/materializeinc/sources/cloud_dev/debugger.
 
+use std::collections::BTreeMap;
+
 use anyhow::bail;
 use chrono::Utc;
 use futures::StreamExt;
+use itertools::Itertools;
 use mz_adapter::PeekResponseUnary;
 use mz_adapter::telemetry::{EventDetails, SegmentClientExt};
 use mz_build_info::BuildInfo;
 use mz_license_keys::ValidatedLicenseKey;
+use mz_ore::cast::CastLossy;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::{soft_panic_or_log, task};
+use mz_repr::Row;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_sql::catalog::EnvironmentId;
+use mz_sql::feature_usage::statement_features;
+use prometheus::IntCounterVec;
+use prometheus::core::Collector;
 use serde_json::json;
 use tokio::time::{self, Duration};
 
@@ -129,19 +137,15 @@ async fn report_loop(
         report_interval,
     }: Config,
 ) {
-    struct Stats {
-        deletes: u64,
-        inserts: u64,
-        selects: u64,
-        subscribes: u64,
-        updates: u64,
-    }
-
-    let mut last_stats: Option<Stats> = None;
+    let mut last_stats: Option<BTreeMap<String, u64>> = None;
 
     let mut interval = time::interval(report_interval);
     loop {
         interval.tick().await;
+
+        // Drained every tick, including the first, so that the first emitted
+        // rollup covers exactly one interval.
+        let feature_usage = adapter_client.metrics().feature_usage.drain();
 
         let traits = Retry::default()
             .initial_backoff(Duration::from_secs(1))
@@ -152,7 +156,7 @@ async fn report_loop(
                     .active_subscribes
                     .with_label_values(&["user"])
                     .get();
-                let mut rows_stream = adapter_client.support_execute_one(&format!("
+                let rows = support_query(&adapter_client, &format!("
                     SELECT jsonb_build_object(
                         'active_aws_privatelink_connections', (SELECT count(*) FROM mz_connections WHERE id LIKE 'u%' AND type = 'aws-privatelink')::int4,
                         'active_clusters', (SELECT count(*) FROM mz_clusters WHERE id LIKE 'u%')::int4,
@@ -183,26 +187,6 @@ async fn report_loop(
                         'active_subscribes', {active_subscribes}
                     )",
                 )).await?;
-
-                let mut row_iters = Vec::new();
-
-                while let Some(rows) = rows_stream.next().await {
-                    match rows {
-                        PeekResponseUnary::Rows(rows) => row_iters.push(rows),
-                        PeekResponseUnary::Canceled => bail!("query canceled"),
-                        PeekResponseUnary::Error(e) => bail!(e),
-                        PeekResponseUnary::DependencyDropped(dep) => {
-                            bail!("{}", dep.query_terminated_error())
-                        }
-                    }
-                }
-
-                let mut rows = Vec::new();
-                for mut row_iter in row_iters {
-                    while let Some(row) = row_iter.next() {
-                        rows.push(row.to_owned());
-                    }
-                }
 
                 assert_eq!(1, rows.len(), "expected one row but got: {:?}", rows);
                 let row = rows.into_first();
@@ -243,21 +227,24 @@ async fn report_loop(
             }),
         );
 
-        let query_total = &adapter_client.metrics().query_total;
-        let current_stats = Stats {
-            deletes: query_total.with_label_values(&["user", "delete"]).get(),
-            inserts: query_total.with_label_values(&["user", "insert"]).get(),
-            updates: query_total.with_label_values(&["user", "update"]).get(),
-            selects: query_total.with_label_values(&["user", "select"]).get(),
-            subscribes: query_total.with_label_values(&["user", "subscribe"]).get(),
-        };
+        let current_stats = user_statement_counts(&adapter_client.metrics().query_total);
         if let Some(last_stats) = &last_stats {
+            let delta = |kind: &str| {
+                let current = current_stats.get(kind).copied().unwrap_or(0);
+                current - last_stats.get(kind).copied().unwrap_or(0)
+            };
+            let statements: serde_json::Map<_, _> = current_stats
+                .keys()
+                .map(|kind| (kind.clone(), json!(delta(kind))))
+                .filter(|(_, count)| count != &json!(0))
+                .collect();
             let mut properties = json!({
-                "deletes": current_stats.deletes - last_stats.deletes,
-                "inserts": current_stats.inserts - last_stats.inserts,
-                "updates": current_stats.updates - last_stats.updates,
-                "selects": current_stats.selects - last_stats.selects,
-                "subscribes": current_stats.subscribes - last_stats.subscribes,
+                "deletes": delta("delete"),
+                "inserts": delta("insert"),
+                "updates": delta("update"),
+                "selects": delta("select"),
+                "subscribes": delta("subscribe"),
+                "statements": statements,
             });
             properties
                 .as_object_mut()
@@ -269,9 +256,200 @@ async fn report_loop(
                 properties,
                 EventDetails::default(),
             );
+
+            let sets = feature_usage
+                .counts
+                .into_iter()
+                .map(|((application_name, features), count)| {
+                    json!({
+                        "application_name": application_name,
+                        "features": features.split(',').collect::<Vec<_>>(),
+                        "count": count,
+                    })
+                })
+                .collect();
+            track_chunked(
+                &segment_client,
+                &environment_id,
+                "SQL Feature Usage Rolled Up",
+                json!({ "overflow": feature_usage.overflow }),
+                "feature_sets",
+                sets,
+            );
         }
         last_stats = Some(current_stats);
+
+        match object_feature_sets(&adapter_client).await {
+            Ok(sets) => track_chunked(
+                &segment_client,
+                &environment_id,
+                "SQL Object Features Snapshot",
+                json!({}),
+                "object_feature_sets",
+                sets,
+            ),
+            Err(e) => soft_panic_or_log!("unable to collect object feature sets: {e}"),
+        }
     }
+}
+
+/// Executes `sql` as the support user and returns all result rows.
+async fn support_query(
+    adapter_client: &mz_adapter::Client,
+    sql: &str,
+) -> Result<Vec<Row>, anyhow::Error> {
+    let mut rows_stream = adapter_client.support_execute_one(sql).await?;
+    let mut rows = Vec::new();
+    while let Some(response) = rows_stream.next().await {
+        match response {
+            PeekResponseUnary::Rows(mut row_iter) => {
+                while let Some(row) = row_iter.next() {
+                    rows.push(row.to_owned());
+                }
+            }
+            PeekResponseUnary::Canceled => bail!("query canceled"),
+            PeekResponseUnary::Error(e) => bail!(e),
+            PeekResponseUnary::DependencyDropped(dep) => {
+                bail!("{}", dep.query_terminated_error())
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// Returns the user session counts of `mz_query_total`, by statement type.
+fn user_statement_counts(query_total: &IntCounterVec) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::new();
+    for family in query_total.collect() {
+        for metric in family.get_metric() {
+            let label = |name: &str| {
+                metric
+                    .get_label()
+                    .iter()
+                    .find(|l| l.name() == name)
+                    .map(|l| l.value().to_string())
+            };
+            if label("session_type").as_deref() != Some("user") {
+                continue;
+            }
+            if let Some(kind) = label("statement_type") {
+                // `IntCounter` values are integers below 2^53, so this is exact.
+                counts.insert(kind, u64::cast_lossy(metric.get_counter().value()));
+            }
+        }
+    }
+    counts
+}
+
+/// Counts the live user objects by object type and the SQL feature set of
+/// their definition.
+async fn object_feature_sets(
+    adapter_client: &mz_adapter::Client,
+) -> Result<Vec<serde_json::Value>, anyhow::Error> {
+    let rows = support_query(
+        adapter_client,
+        "SELECT o.type, d.create_sql
+         FROM mz_objects o
+         JOIN (
+             SELECT id, create_sql FROM mz_views
+             UNION ALL SELECT id, create_sql FROM mz_materialized_views
+             UNION ALL SELECT id, create_sql FROM mz_indexes
+             UNION ALL SELECT id, create_sql FROM mz_sources
+             UNION ALL SELECT id, create_sql FROM mz_sinks
+             UNION ALL SELECT id, create_sql FROM mz_tables
+         ) d ON o.id = d.id
+         WHERE o.id LIKE 'u%' AND d.create_sql IS NOT NULL",
+    )
+    .await?;
+
+    let mut counts: BTreeMap<(String, String), u64> = BTreeMap::new();
+    for row in rows {
+        let mut datums = row.iter();
+        let object_type = datums.next().expect("two columns").unwrap_str();
+        let create_sql = datums.next().expect("two columns").unwrap_str();
+        let features = match mz_sql_parser::parser::parse_statements(create_sql) {
+            Ok(stmts) if stmts.len() == 1 => statement_features(&stmts[0].ast),
+            // Stored definitions always parse with the running version's
+            // parser, so this only fires on a bug.
+            _ => {
+                soft_panic_or_log!("unable to parse create_sql of a {object_type}");
+                continue;
+            }
+        };
+        let features = features.iter().join(",");
+        *counts
+            .entry((object_type.to_string(), features))
+            .or_default() += 1;
+    }
+    Ok(counts
+        .into_iter()
+        .map(|((object_type, features), count)| {
+            json!({
+                "object_type": object_type,
+                "features": features.split(',').collect::<Vec<_>>(),
+                "count": count,
+            })
+        })
+        .collect())
+}
+
+/// The serialized size budget for a chunked event's items. Segment rejects
+/// events over 32KB, and the remainder covers the envelope and the properties
+/// `environment_track` adds.
+const SEGMENT_CHUNK_BYTES: usize = 24 * 1024;
+
+/// Tracks `items` as one or more `event`s, each carrying `properties` plus a
+/// chunk of `items` under `items_key` that fits [`SEGMENT_CHUNK_BYTES`].
+///
+/// Each chunk carries `report_timestamp`, `chunk_index`, and `chunk_count` so
+/// downstream consumers can reassemble the chunks of one report. Nothing is
+/// tracked when `items` is empty.
+fn track_chunked(
+    segment_client: &mz_segment::Client,
+    environment_id: &EnvironmentId,
+    event: &str,
+    properties: serde_json::Value,
+    items_key: &str,
+    items: Vec<serde_json::Value>,
+) {
+    let chunks = chunk_by_size(items, SEGMENT_CHUNK_BYTES);
+    let report_timestamp = Utc::now().timestamp_millis();
+    let chunk_count = chunks.len();
+    for (chunk_index, chunk) in chunks.into_iter().enumerate() {
+        let mut properties = properties.clone();
+        let map = properties.as_object_mut().expect("properties is an object");
+        map.insert("report_timestamp".into(), json!(report_timestamp));
+        map.insert("chunk_index".into(), json!(chunk_index));
+        map.insert("chunk_count".into(), json!(chunk_count));
+        map.insert(items_key.into(), json!(chunk));
+        segment_client.environment_track(
+            environment_id,
+            event,
+            properties,
+            EventDetails::default(),
+        );
+    }
+}
+
+/// Splits `items` into chunks whose serialized size is at most `budget`. An
+/// item larger than `budget` gets a chunk of its own.
+fn chunk_by_size(items: Vec<serde_json::Value>, budget: usize) -> Vec<Vec<serde_json::Value>> {
+    let mut chunks = Vec::new();
+    let mut chunk = Vec::new();
+    let mut size = 0;
+    for item in items {
+        let item_size = item.to_string().len();
+        if !chunk.is_empty() && size + item_size > budget {
+            chunks.push(std::mem::take(&mut chunk));
+            size = 0;
+        }
+        size += item_size;
+        chunk.push(item);
+    }
+    if !chunk.is_empty() {
+        chunks.push(chunk);
+    }
+    chunks
 }
 
 /// Merges the build version and the license key's identity and state into the
@@ -320,7 +498,7 @@ mod tests {
     use mz_license_keys::ValidatedLicenseKey;
     use serde_json::json;
 
-    use super::build_segment_traits;
+    use super::{build_segment_traits, chunk_by_size};
 
     fn license_key(expiration: u64, expired: bool) -> ValidatedLicenseKey {
         ValidatedLicenseKey {
@@ -399,5 +577,23 @@ mod tests {
             None,
         );
         assert_eq!(&traits["license_expired"], &json!(false));
+    }
+
+    #[mz_ore::test]
+    fn chunks_respect_budget() {
+        // Each item serializes to 3 bytes, e.g. `"a"`.
+        let items: Vec<_> = ["a", "b", "c", "d", "e"].map(|s| json!(s)).into();
+        let chunks = chunk_by_size(items, 7);
+        assert_eq!(
+            chunks,
+            vec![
+                vec![json!("a"), json!("b")],
+                vec![json!("c"), json!("d")],
+                vec![json!("e")],
+            ]
+        );
+        let oversized = chunk_by_size(vec![json!("toolong"), json!("a")], 3);
+        assert_eq!(oversized, vec![vec![json!("toolong")], vec![json!("a")]]);
+        assert!(chunk_by_size(vec![], 3).is_empty());
     }
 }

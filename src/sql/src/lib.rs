@@ -148,6 +148,7 @@ pub use mz_repr::ORDINALITY_COL_NAME;
 
 pub mod ast;
 pub mod catalog;
+pub mod feature_usage;
 pub mod func;
 pub mod kafka_util;
 pub mod names;

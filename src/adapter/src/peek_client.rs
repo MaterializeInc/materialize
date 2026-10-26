@@ -1004,6 +1004,9 @@ fn count_statement(session: &Session, stmt: Option<&Statement<Raw>>) {
     if let Some(labels) = metrics::as_of_query_label_values(session_type, application_name, stmt) {
         session.metrics().as_of_queries(&labels).inc();
     }
+    session
+        .metrics()
+        .record_statement_features(session_type, application_name, stmt);
 }
 
 /// Whether someone else logs the end of execution for `response`: the

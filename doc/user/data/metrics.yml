@@ -4058,6 +4058,13 @@ metrics:
   - worker_id
   source: src/storage/src/statistics.rs
   visibility: internal
+- name: mz_sql_feature_usage_total
+  help: The total number of executed statements using the given SQL feature.
+  labels:
+  - feature
+  - session_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_sql_server_per_source_deletes
   help: The number of deletes for all tables in this source
   labels:
