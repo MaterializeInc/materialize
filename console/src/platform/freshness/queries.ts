@@ -181,12 +181,17 @@ export function useObjectLagPercentiles({
 /**
  * The peak and percentiles of every reading from every object in `objectIds`,
  * ranked together. Null when none of them has a reading in the range.
+ *
+ * `enabled` is false while `objectIds` is not yet the whole scope, because an
+ * empty list resolves to null, which reads as "no readings".
  */
 export function useScopeLagPercentiles({
   objectIds,
   lookbackMs,
-}: LagPercentilesParams) {
+  enabled = true,
+}: LagPercentilesParams & { enabled?: boolean }) {
   return useQuery({
+    enabled,
     queryKey: freshnessQueryKeys.scopeLagPercentiles({
       lookbackMs,
       objectIds,

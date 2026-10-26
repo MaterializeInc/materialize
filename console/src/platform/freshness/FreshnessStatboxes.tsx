@@ -78,6 +78,8 @@ export interface FreshnessStatboxesProps {
    * way `computeStats` folds "Now" into each object's, so the two agree.
    */
   latestPeak: number | undefined;
+  /** False until the scope's object list has loaded. The cards wait for it. */
+  objectsReady: boolean;
 }
 
 /**
@@ -90,11 +92,13 @@ const FreshnessStatboxesInner = ({
   objectIds,
   lookbackMs,
   latestPeak,
+  objectsReady,
 }: FreshnessStatboxesProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const { data, isLoading, isError } = useScopeLagPercentiles({
     objectIds,
     lookbackMs,
+    enabled: objectsReady,
   });
 
   // Only pMAX can take in a newer minute. A percentile is a rank among every
@@ -128,7 +132,8 @@ const FreshnessStatboxesInner = ({
             key={spec.key}
             spec={spec}
             percentiles={percentiles}
-            isLoading={isLoading}
+            // A disabled query is not loading, so it is not `isLoading`.
+            isLoading={!objectsReady || isLoading}
           />
         ))}
       </Grid>

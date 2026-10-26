@@ -22,6 +22,7 @@ import { allObjects } from "~/store/allObjects";
 import { allSchemas } from "~/store/allSchemas";
 import { buildDatabaseObject, renderComponent } from "~/test/utils";
 
+import { NO_VALUE } from "./constants";
 import FreshnessPage from "./FreshnessPage";
 
 const renderWithClusters = async (state: {
@@ -96,7 +97,7 @@ const recordRequests = () => {
 };
 
 describe("FreshnessPage cluster selection", () => {
-  const renderAt = async (search: string) =>
+  const renderAt = async (search: string, { objectsLoaded = true } = {}) =>
     renderComponent(<FreshnessPage />, {
       initializeState: (store) => {
         store.set(allClusters, {
@@ -105,9 +106,9 @@ describe("FreshnessPage cluster selection", () => {
           snapshotComplete: true,
         });
         store.set(allObjects, {
-          data: [OBJECT],
+          data: objectsLoaded ? [OBJECT] : [],
           error: undefined,
-          snapshotComplete: true,
+          snapshotComplete: objectsLoaded,
         });
       },
       initialRouterEntries: [search],
@@ -145,6 +146,18 @@ describe("FreshnessPage cluster selection", () => {
     ).toBeVisible();
     expect(screen.getByText("Summary")).toBeVisible();
     expect(screen.queryByText("Lag Over Time")).not.toBeInTheDocument();
+  });
+
+  it("shows no Summary values before the object list has loaded", async () => {
+    // A link can open the page before the objects subscribe delivers its
+    // snapshot. The empty list then is not an empty scope.
+    recordRequests();
+    await renderAt("/?cluster=u1", { objectsLoaded: false });
+
+    const summary = await screen.findByRole("region", {
+      name: "Summary percentiles",
+    });
+    expect(within(summary).queryByText(NO_VALUE)).not.toBeInTheDocument();
   });
 
   it("loads a cluster a link names", async () => {

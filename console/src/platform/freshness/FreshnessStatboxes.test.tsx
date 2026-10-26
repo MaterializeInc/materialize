@@ -63,6 +63,7 @@ const render = (props: Partial<FreshnessStatboxesProps> = {}) =>
       objectIds={OBJECT_IDS}
       lookbackMs={LOOKBACK_MS}
       latestPeak={undefined}
+      objectsReady
       {...props}
     />,
   );
@@ -121,6 +122,17 @@ describe("FreshnessStatboxes", () => {
     await render();
 
     expect(await screen.findAllByText(NO_VALUE)).toHaveLength(4);
+  });
+
+  it("shows no values until the scope's object list has loaded", async () => {
+    // Answers with no rows, so a request sent too early would show "—".
+    mockPercentiles(undefined);
+    await render({ objectIds: [], objectsReady: false });
+
+    expect(
+      await screen.findByRole("region", { name: "Summary percentiles" }),
+    ).toBeVisible();
+    expect(screen.queryByText(NO_VALUE)).not.toBeInTheDocument();
   });
 
   it("says so when the request fails", async () => {

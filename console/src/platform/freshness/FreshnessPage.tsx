@@ -242,6 +242,7 @@ const FreshnessContent = ({
               objectIds={statboxObjectIds}
               lookbackMs={lookbackMs}
               latestPeak={statboxLatestPeak}
+              objectsReady={snapshotComplete}
             />
           </AccordionPanel>
         </AccordionItem>
