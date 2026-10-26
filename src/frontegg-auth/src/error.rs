@@ -42,6 +42,26 @@ pub enum Error {
     Internal(Arc<anyhow::Error>),
 }
 
+impl Error {
+    /// Whether authentication failed because Frontegg could not be reached or answered with a
+    /// server error, rather than because it rejected the credentials.
+    pub fn is_unavailable(&self) -> bool {
+        match self {
+            Error::ReqwestError(e) => !e.status().is_some_and(|s| s.is_client_error()),
+            Error::Timeout(_) | Error::MiddlewareError(_) | Error::Internal(_) => true,
+            Error::InvalidPasswordFormat(_)
+            | Error::InvalidTokenFormat(_)
+            | Error::MissingClaims
+            | Error::TokenExpired
+            | Error::UnauthorizedTenant
+            | Error::InvalidAppPassword
+            | Error::WrongUser
+            | Error::UserNameTooLong
+            | Error::InvalidTenantApiTokenUser => false,
+        }
+    }
+}
+
 impl From<anyhow::Error> for Error {
     fn from(value: anyhow::Error) -> Self {
         Error::Internal(Arc::new(value))

@@ -573,6 +573,35 @@ async fn start_balancer_to(
 /// Narrows a metric to the pgwire listener's series.
 const PGWIRE: Option<&str> = Some("source=\"pgwire\"");
 
+const STATUS: &str = "mz_balancer_connection_status";
+const PGWIRE_SUCCESS: Option<&str> = Some("source=\"pgwire\",status=\"success\"");
+const PGWIRE_ERROR: Option<&str> = Some("source=\"pgwire\",status=\"error\"");
+
+/// Opens a pgwire connection and sends a startup message for `user` at protocol `version`.
+async fn send_startup(addr: SocketAddr, user: &str, version: i32) -> TcpStream {
+    let mut frame = BytesMut::new();
+    FrontendStartupMessage::Startup {
+        version,
+        params: BTreeMap::from([("user".to_string(), user.to_string())]),
+    }
+    .encode(&mut frame)
+    .unwrap();
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream.write_all(&frame).await.unwrap();
+    stream.flush().await.unwrap();
+    stream
+}
+
+/// Reads until balancerd closes the connection, returning what it sent.
+async fn read_to_close(stream: &mut TcpStream) -> String {
+    let mut received = Vec::new();
+    tokio::time::timeout(Duration::from_secs(30), stream.read_to_end(&mut received))
+        .await
+        .expect("balancerd should close the connection")
+        .unwrap();
+    String::from_utf8_lossy(&received).into_owned()
+}
+
 /// The current value of a metric, optionally narrowed to lines carrying `label`.
 async fn metric_value(internal_http: SocketAddr, name: &str, label: Option<&str>) -> Option<f64> {
     let body = reqwest::get(format!("http://{internal_http}/metrics"))
@@ -755,6 +784,8 @@ async fn test_connection_limit_covers_unresolved_connections() {
         "a connection beyond the limit should be refused at accept, not left to the deadline",
     );
     assert_metric(balancer.internal_http, REJECTED, None, 1.0).await;
+    // Refusing a connection is balancerd failing to serve it.
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_ERROR, 1.0).await;
 
     // The deadline reclaims the slot, so the limit is not a one-way door.
     assert!(
@@ -763,11 +794,80 @@ async fn test_connection_limit_covers_unresolved_connections() {
     );
     assert_metric(balancer.internal_http, ACTIVE, PGWIRE, 0.0).await;
     assert_metric(balancer.internal_http, TIMEOUTS, PGWIRE, 1.0).await;
+    // The deadline expired waiting on a client that never finished its startup frame.
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_SUCCESS, 1.0).await;
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_ERROR, 1.0).await;
     let mut after = startup_header_only(balancer.pgwire, 1 << 10).await;
     assert!(
         !was_closed(&mut after, Duration::from_millis(500)).await,
         "capacity should be available again once the deadline reclaimed the slot",
     );
+}
+
+/// `mz_balancer_connection_status` reports `error` only when balancerd or its backend could not
+/// serve the connection, not when the client ended or broke it.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_connection_status_blames_the_server_side() {
+    // Nothing listens on port 1, so every connection that gets as far as proxying fails there.
+    let balancer = start_balancer_to("127.0.0.1:1".to_string(), vec![], None).await;
+
+    // A client that hangs up before saying anything.
+    drop(TcpStream::connect(balancer.pgwire).await.unwrap());
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_SUCCESS, 1.0).await;
+
+    // A client asking for a protocol version balancerd does not speak is rejected, by the client's
+    // own doing.
+    let mut stream = send_startup(balancer.pgwire, "mz", VERSION_3 + 1).await;
+    assert_contains!(read_to_close(&mut stream).await, "protocol version");
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_SUCCESS, 2.0).await;
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_ERROR, 0.0).await;
+
+    // A well-formed client whose backend cannot be reached is balancerd's failure, even though
+    // the rejection itself was delivered cleanly.
+    let mut stream = send_startup(balancer.pgwire, "mz", VERSION_3).await;
+    assert_contains!(
+        read_to_close(&mut stream).await,
+        "upstream server not available"
+    );
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_ERROR, 1.0).await;
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_SUCCESS, 2.0).await;
+}
+
+/// A connection that reaches proxying records its setup, upstream connect, and lifetime.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_proxied_connection_durations() {
+    const SETUP: &str = "mz_balancer_connection_setup_duration_seconds_count";
+    const CONNECT: &str = "mz_balancer_upstream_connect_duration_seconds_count";
+    const LIFETIME: &str = "mz_balancer_connection_duration_seconds_count";
+
+    // Stands in for environmentd: accepts the proxied connection and hangs up.
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let balancer =
+        start_balancer_to(upstream.local_addr().unwrap().to_string(), vec![], None).await;
+    for name in [SETUP, CONNECT, LIFETIME] {
+        assert_metric(balancer.internal_http, name, PGWIRE, 0.0).await;
+    }
+
+    let mut client = send_startup(balancer.pgwire, "mz", VERSION_3).await;
+    let (forwarded, _) = tokio::time::timeout(Duration::from_secs(30), upstream.accept())
+        .await
+        .expect("balancerd should forward the connection upstream")
+        .unwrap();
+    assert_metric(balancer.internal_http, SETUP, PGWIRE, 1.0).await;
+    assert_metric(balancer.internal_http, CONNECT, PGWIRE, 1.0).await;
+    // Still open, so its lifetime is not recorded yet.
+    assert_metric(balancer.internal_http, LIFETIME, PGWIRE, 0.0).await;
+
+    // Proxying runs until both directions are done, so both sides hang up.
+    drop(forwarded);
+    read_to_close(&mut client).await;
+    drop(client);
+    assert_metric(balancer.internal_http, LIFETIME, PGWIRE, 1.0).await;
+    // A proxied connection is served, whichever side ends it.
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_SUCCESS, 1.0).await;
+    assert_metric(balancer.internal_http, STATUS, PGWIRE_ERROR, 0.0).await;
 }
 
 /// Waits for `/api/readyz` to answer `expected`. The limiter counts a connection once balancerd
