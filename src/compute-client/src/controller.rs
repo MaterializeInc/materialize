@@ -426,16 +426,38 @@ impl ComputeController {
         collection_id: GlobalId,
         instance_id: Option<ComputeInstanceId>,
     ) -> Result<CollectionFrontiers, CollectionLookupError> {
-        let collection = match instance_id {
-            Some(id) => self.instance(id)?.collection(collection_id)?,
+        Ok(self.collection(collection_id, instance_id)?.frontiers())
+    }
+
+    /// Tests whether the collection's write frontier is at or before `timestamp`.
+    ///
+    /// If no instance is specified, searches all instances. An empty frontier
+    /// returns false.
+    pub fn collection_write_frontier_less_equal(
+        &self,
+        collection_id: GlobalId,
+        instance_id: Option<ComputeInstanceId>,
+        timestamp: &Timestamp,
+    ) -> Result<bool, CollectionLookupError> {
+        let collection = self.collection(collection_id, instance_id)?;
+        Ok(collection
+            .shared
+            .lock_write_frontier(|frontier| frontier.less_equal(timestamp)))
+    }
+
+    fn collection(
+        &self,
+        collection_id: GlobalId,
+        instance_id: Option<ComputeInstanceId>,
+    ) -> Result<&Collection, CollectionLookupError> {
+        match instance_id {
+            Some(id) => Ok(self.instance(id)?.collection(collection_id)?),
             None => self
                 .instances
                 .values()
                 .find_map(|i| i.collections.get(&collection_id))
-                .ok_or(CollectionMissing(collection_id))?,
-        };
-
-        Ok(collection.frontiers())
+                .ok_or_else(|| CollectionMissing(collection_id).into()),
+        }
     }
 
     /// List compute collections that depend on the given collection.
