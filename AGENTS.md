@@ -18,28 +18,6 @@ Use the `mz-debug-ci` skill before the first `bk` or `gh pr checks` command, or 
 
 ## Code navigation
 
-For operation flow tracing, read first:
-
-* `doc/developer/generated/flows.md` — maps operations (query lifecycle, source ingestion, MV creation, sink lifecycle, catalog DDL, timestamp selection, persist read/write, controller architecture) to `crate::module` paths in execution order.
-* `doc/developer/generated/<crate>/_crate.md` — per-crate overview: modules, key types, dependencies.
-* `doc/developer/generated/<crate>/<module>.md` — per-file docs.
-
-> **READ-ONLY: `doc/developer/generated/` is generated, not authored.**
-> The entire `doc/developer/generated/` tree is maintained exclusively by the
-> recurring documentation agent, which runs the `update-docs` skill/command.
-> That agent is the *only* session permitted to create, edit, or delete files
-> under this directory.
->
-> In any other session: **treat `doc/developer/generated/` as read-only.** Use
-> it for navigation and context, but never edit, create, delete, or regenerate
-> files there — not even to "fix" something you noticed, and not as part of an
-> unrelated change. These files carry `source`/`revision` front-matter that the
-> recurring agent manages; hand edits desync that bookkeeping. If a generated
-> doc is wrong or stale, report it in your response rather than editing it, and
-> leave the correction to the `update-docs` agent. Do not stage or commit any
-> path under `doc/developer/generated/` unless you are explicitly running the
-> `update-docs` workflow.
-
 `console/` is the web Console. It was moved in from the standalone
 `MaterializeInc/console` repository, which is now archived and stale.
 
@@ -76,19 +54,6 @@ authors to squash on merge or to keep every intermediate commit green.
 * We value simplicity and clear abstractions. We especially care about
   designing the interfaces or boundaries between components well. This includes
   components, traits, interfaces, modules, and crates.
-* In code comments or inline documentation, we value clearly described
-  contracts and assumptions.
-* In code comments, we don't like "fluff" comments, comments that describe what
-  code does when it is obvious from the code. Good code should be readable. It
-  _is_ okay to call out tricky parts of the code or "nota benes".
-* In code comments and code documentation we value concise but complete
-  comments.
-* In code comments and documentation, don't refer to potential previous states
-  of the code, or things like future PRs, try not to use chronology in there,
-  except when it's needed to explain why a certain thing behaves as it does and
-  we need to record that knowledge. In general comments need to stand on their
-  own and make sense from just looking at them and the code around it, not
-  previous changes.
 * Avoid em-dashes for structuring sentences in any prose: code comments, specs,
   design docs, all of it. Restructure with full stops and commas instead. The
   same goes for semicolons, though one is fine where splitting would mangle the
@@ -162,6 +127,10 @@ imply it. No ASCII section-divider banners (`// ----- helpers -----`); item
 placement carries the structure. Performance claims in comments should state
 a constraint or a measured number, not unverifiable color ("the compiler can
 autovectorize this").
+
+A comment must make sense from the code around it, not from previous changes.
+Don't refer to earlier states of the code or to future PRs, unless the history
+explains why the code behaves as it does and that knowledge needs recording.
 
 Before keeping a sentence, ask whether a maintainer would get something wrong
 without it. If deleting it changes nothing they would do or believe, delete it,

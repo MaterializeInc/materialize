@@ -1270,12 +1270,20 @@ class Composition:
             exclusion_clause = f"name NOT IN ({excluded_items})"
 
         # starting sources are currently expected if no new data is produced, see database-issues#6605
+        # A source export with an empty write frontier is sealed, for example after a definite
+        # error ended its ingestion. A restart leaves it out of the dataflow, so its last status
+        # stays in place.
         results = self.sql_query(f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
                 status IN ('running', 'created', 'paused') OR
                 (type = 'progress' AND status = 'created')
+            )
+            AND id NOT IN (
+                SELECT object_id
+                FROM mz_internal.mz_frontiers
+                WHERE write_frontier IS NULL
             )
             AND {exclusion_clause}
             """)

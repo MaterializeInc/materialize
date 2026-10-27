@@ -353,6 +353,19 @@ tests:
       path: spec.template.spec.containers[0].args
       content: "--disable-license-key-checks"
 
+- it: should pass license key intermediate certificates
+  set:
+    operator.args.licenseKeyIntermediateCerts:
+    - cert-a
+    - cert-b
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--license-key-intermediate-cert=cert-a"
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--license-key-intermediate-cert=cert-b"
+
 - it: should have database network policies disabled by default
   asserts:
   - contains:

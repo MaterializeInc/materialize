@@ -399,6 +399,20 @@ RUN arch_zizmor=$(echo "$ARCH_GCC" | sed -e "s/amd64/x86_64/") \
     && mv zizmor /usr/local/bin \
     && rm zizmor.tar.gz
 
+# Install a pinned libduckdb for libduckdb-sys to link against via
+# `DUCKDB_LIB_DIR`, so builds don't download it. The testdrive image copies it
+# from here (`builder-files` in src/testdrive/ci/mzbuild.yml). The version must
+# match the libduckdb-sys crate (1.MAJOR_MINOR_PATCH.x encodes DuckDB
+# MAJOR.MINOR.PATCH), which bin/lint-versions checks. ldconfig makes it
+# loadable by test binaries, since Cargo only adds library paths inside the
+# target dir to their search path.
+RUN curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.5.6/libduckdb-linux-$ARCH_GO.zip > libduckdb.zip \
+    && if [ $ARCH_GO = amd64 ]; then echo 'b845005f5132a7d8180057c35e14a7626632258782f871a90861b19c1c03841b libduckdb.zip' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'b72ed9f05003f5e9d2015f7ceada6416b377d9dd33169cdde3c9e33897856eee libduckdb.zip' | sha256sum --check; fi \
+    && unzip libduckdb.zip libduckdb.so -d /usr/local/lib \
+    && ldconfig \
+    && rm libduckdb.zip
+
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
@@ -409,6 +423,7 @@ ENV PATH=/opt/google-cloud-sdk/bin:$PATH
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=1
 ENV HELM_PLUGINS=/usr/local/share/helm/plugins
+ENV DUCKDB_LIB_DIR=/usr/local/lib
 
 # Set up for a persistent volume to hold Cargo metadata, so that crate metadata
 # does not need to be refetched on every compilation.
