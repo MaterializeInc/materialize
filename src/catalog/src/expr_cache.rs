@@ -9,6 +9,7 @@
 
 //! A cache for optimized expressions.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
@@ -329,7 +330,11 @@ impl ExpressionCache {
                         }
                     }
                 }
-            } else if remove_prior_versions {
+            } else if remove_prior_versions
+                && build_version.cmp_precedence(&self.build_version) != Ordering::Greater
+            {
+                // Remove the entries of previous build versions. Entries of newer versions stay,
+                // since a 0dt deployment in its read-only phase reads them after promotion.
                 removed.prior_build_version += 1;
                 keys_to_remove.push((key.clone(), None));
             }
@@ -768,6 +773,33 @@ mod tests {
             assert_eq!(
                 global_entries, global_exps,
                 "Previous build version global expressions should still exist"
+            );
+        }
+
+        {
+            // Re-open the cache at the first build version as a leader, as when the old
+            // generation restarts while a 0dt deployment of the second one is in its read-only
+            // phase.
+            let (_cache, local_entries, global_entries) =
+                spawn(&first_build_version, &current_items, true).await;
+            assert_eq!(
+                local_entries, local_exps,
+                "a leader should keep its own build version's local expressions"
+            );
+            assert_eq!(
+                global_entries, global_exps,
+                "a leader should keep its own build version's global expressions"
+            );
+
+            let (_cache, local_entries, global_entries) =
+                spawn(&second_build_version, &current_items, false).await;
+            assert_eq!(
+                local_entries, new_gen_local_exps,
+                "a leader should not remove a newer build version's local expressions"
+            );
+            assert_eq!(
+                global_entries, new_gen_global_exps,
+                "a leader should not remove a newer build version's global expressions"
             );
         }
 
