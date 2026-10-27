@@ -7,11 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use openssl::ssl::{SslConnector, SslMethod};
-use openssl::x509::X509;
-use openssl::x509::store::X509StoreBuilder;
-use postgres_openssl::MakeTlsConnector;
 use std::collections::BTreeMap;
+
+use tokio_postgres::config::SslMode;
 
 use crate::error::{Context, OpError, OpErrorKind};
 use crate::fivetran_sdk::form_field::Type;
@@ -168,24 +166,18 @@ pub async fn connect(
         // Fivetran provides an empty string for optional parameters.
         .and_then(|val| if val.is_empty() { None } else { Some(val) });
 
-    // Compile in the CA certificate bundle downloaded by the build script, and
-    // configure the TLS connector to reference that compiled-in CA bundle,
-    // rather than attempting to use the system's CA bundle. This supports
-    // running in Fivetran's environment, where the CA bundle will not be
-    // available. This does introduce a small amount of risk, as the CA bundle
-    // will not be updated until we issue a new release of the Fivetran
-    // destination.
-    //
-    // TODO: depend on the system's certificate bundle instead, once Fivetran
-    // supports running destinations in a containerized environment.
-    let ca_bundle = include_bytes!(concat!(env!("OUT_DIR"), "/ca-certificate.crt"));
-    let ca_certs = X509::stack_from_pem(ca_bundle)?;
-    let mut cert_store = X509StoreBuilder::new()?;
-    for cert in ca_certs {
-        cert_store.add_cert(cert)?;
+    // NOTE: The connection itself keeps the default `sslmode=prefer`, so the
+    // connector gets its own config. Verification must stay `verify-full`.
+    let mut tls_config = tokio_postgres::Config::new();
+    tls_config.ssl_mode(SslMode::VerifyFull);
+    // The connector trusts the platform's root store. Fivetran's environment
+    // has none, so fall back to the bundle the build script downloaded, which
+    // only changes when we release the destination.
+    if rustls_native_certs::load_native_certs().certs.is_empty() {
+        let ca_bundle = include_bytes!(concat!(env!("OUT_DIR"), "/ca-certificate.crt"));
+        tls_config.ssl_root_cert(ca_bundle);
     }
-    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
-    builder.set_verify_cert_store(cert_store.build())?;
+    let tls_connector = mz_tls_util::make_tls_rustls(&tls_config)?;
 
     let options = if let Some(cluster) = cluster.as_ref() {
         format!("--cluster={}", utils::escape_options(cluster))
@@ -193,7 +185,6 @@ pub async fn connect(
         String::new()
     };
 
-    let tls_connector = MakeTlsConnector::new(builder.build());
     let (client, conn) = tokio_postgres::Config::new()
         .host(&host)
         .user(&user)

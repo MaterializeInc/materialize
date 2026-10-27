@@ -74,6 +74,8 @@ pub enum OpErrorKind {
     Filesystem(#[from] std::io::Error),
     #[error("cryptography error: {0:?}")]
     Crypto(#[from] openssl::error::ErrorStack),
+    #[error("TLS configuration error: {0:#}")]
+    Tls(#[from] mz_tls_util::TlsError),
     #[error("failure when parsing csv: {0:?}")]
     CsvReader(#[from] csv_async::Error),
     #[error("failed to map csv to table: {msg}\ntable: {table:?}\ncsv headers: {headers:?}")]
@@ -150,6 +152,7 @@ impl OpErrorKind {
             | PgTypeError(_)
             | MissingPrivilege { .. }
             | Crypto(_)
+            | Tls(_)
             | CsvMapping { .. }
             | Unsupported(_)
             | IdentError(_)
