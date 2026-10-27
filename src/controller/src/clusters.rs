@@ -598,8 +598,8 @@ impl Controller {
         } in actual
         {
             // We limit our attention here to replicas from the current deploy
-            // generation. Replicas from past generations are cleaned up during
-            // `Controller::allow_writes`.
+            // generation. A writable controller removes replicas from past
+            // generations in the background.
             if generation != self.deploy_generation {
                 continue;
             }
