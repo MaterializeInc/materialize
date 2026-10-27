@@ -57,10 +57,10 @@ These components have focused verification, not combined M3 acceptance.
   Research and review found a broader runtime prerequisite: fixed registration
   inventories can resurrect membership after peer DROP/Forget, even on the first
   attempt if timestamp allocation occurs afterward. Creator grants alone cannot
-  protect all followers. Aljoscha has been asked to approve catalog-certified,
-  single-attempt registration with refresh/re-derivation outside implications,
-  preserving CREATE completion and ALTER holds. Hold that runtime correction
-  pending the scope decision. See `table-registration-review-decision.md`,
+  protect all followers. Catalog-certified registration is now approved, including
+  fresh certification after conflicts and no resurrection after DROP/Forget.
+  Preserve CREATE completion, ALTER protection and write ordering at that boundary,
+  without a general retry framework. See `table-registration-review-decision.md`,
   `finite-table-drop-fence-boundary.md` and `runtime-table-registration-lifetime.md`.
   Conflict-exhaustion halts and append membership assertions are adjacent M3 gaps,
   not repairs established by this draft. Controllerd/adapterd remain unimplemented.
@@ -92,29 +92,26 @@ These components have focused verification, not combined M3 acceptance.
   test-local and reset afterward. Evidence and reviews: `ci140735/completed-sink-*`.
   The exact SHOW inventory assertion was reproduced and passes with the added
   private source expectation in `3a4b5472`. The full catalog.td file was not rerun.
-- Worker `i-0788036f0778687f1` is on `76c35667`, clean before sync, and expires
-  2026-10-28 19:01 UTC. `m3-terminal-health` is stopped with data preserved.
-  Older fixtures are stopped with data preserved. An idle cleanup removed only
-  older duplicate compiler incremental caches, retaining two recent variants per
-  crate. Watch disk usage before further builds. Evidence is checksum-verified
-  off-worker. Local formatting uses cached pinned Rust explicitly:
-  `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`, because the host override is older.
-- Current-status cleanup is wired but not runtime-verified. `90de705a` and `c43e293a` expose
-  eligibility from one cached committed prefix: below the allocation limit and
-  absent from all live deployments. Non-writable modes cannot issue certificates.
-  Independent review, strict Clippy and seven focused lifecycle, promotion and
-  mode tests passed. Evidence: `retirement-eligibility/`.
-  The direct-Persist helper streams signed retractions into a conditional batch.
-  Five storage-client tests passed, including two collectors at the same prefix
-  and late negative updates. `76c35667` adds one coalesced off-dispatch adapter task
-  using catalog-backed query holds. Strict adapter/storage-client Clippy and
-  scoped ownership reviews passed. The existing constant-sink restart fixture now
-  also asserts predecessor-row removal and successor preservation, but needs a run.
-  Session cleanup remains unwired and must use txn-WAL. Reports:
-  `retired-row-{conditional-review,adapter-review,scheduling-boundary}.md`.
-  Logs: `retired-rows/`. A broad package build exhausted worker disk. An exact repeat
-  reproduced that failure, then the focused storage-client command passed after
-  cache cleanup. Use that narrow command rather than rebuilding unrelated packages.
+- Worker `i-0788036f0778687f1` is clean on `22596f15`, tree-identical to published
+  `82c8c684`, with no build running. Retained fixtures are stopped with data
+  preserved. Last checked free space is 6 GiB. Audited cache/image cleanup and
+  verification logs are preserved in `retired-rows/followup-verification.tar.gz`.
+  Use focused builds and check disk before starting one. Local formatting uses
+  `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`.
+- The remaining status/session check is rebuilt-product CI140847 on `82c8c684`:
+  Testdrive 4 for unavailable terminal-source health and Cluster 4 for the
+  abandoned-session restart witness. Its x86 build is confirmed running, with
+  those workflows waiting. Do not count them as passed. Current-status cleanup
+  already passed the strengthened restart workflow in CI140837. Retirement
+  eligibility has seven focused tests and independent review, and the conditional
+  Persist reader/writer boundary has five passing tests including competing
+  collectors and late signed updates. Evidence: `retirement-eligibility/`,
+  `retired-rows/`, `session-cleanup-ownership-review.md`.
+- After focused status/session verification and the bounded registration repair,
+  prioritize one controllerd-managed default adapterd with external pubsub.
+  Independent adapters, SQL/HTTP lifecycle and backend/deployment integration
+  remain required, but additional maintenance refinements are not prerequisites
+  for this first end-to-end outcome.
 - Native recovery/promotion, parallel, retention and corrected realization probes
   passed CI140661. Upgrade conversion and merge skew stay excluded. Cluster-thread
   assertions do not propagate to callers, an unresolved harness gap. Do not count
