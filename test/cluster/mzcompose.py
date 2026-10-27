@@ -49,6 +49,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
@@ -77,6 +78,7 @@ SERVICES = [
         },
         support_external_clusterd=True,
     ),
+    MySql(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),
@@ -1575,6 +1577,66 @@ def workflow_pg_snapshot_freshness_release(c: Composition) -> None:
         c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
         c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
         c.run_testdrive_files("pg-snapshot-freshness/04-release.td")
+
+
+def workflow_mysql_snapshot_freshness(c: Composition) -> None:
+    """Test that already hydrated tables of a MySQL source keep ingesting CDC
+    while a newly added table's snapshot runs, and that a table added alongside
+    completes its own snapshot without waiting. The new table's snapshot is
+    held with the mysql_snapshot_pause failpoint."""
+
+    mysql_password = f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}"
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=mysql_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "mysql", "clusterd1")
+
+        c.run_testdrive_files(mysql_password, "mysql-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files(
+            mysql_password, "mysql-snapshot-freshness/02-add-tables.td"
+        )
+
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="clusterd1", workers=4)
+        ):
+            c.up("clusterd1")
+            c.run_testdrive_files("mysql-snapshot-freshness/03-verify.td")
+
+
+def workflow_mysql_snapshot_freshness_release(c: Composition) -> None:
+    """Test that a MySQL table whose snapshot is held while CDC streams into
+    it converges once the hold lifts within the same dataflow incarnation. What
+    commits is the snapshot plus the updates the persist sink staged behind the
+    held frontier, not a re-run snapshot. The hold is timed with the
+    mysql_snapshot_pause failpoint, long enough for the staging assertions of
+    the shared add-tables phase to run against a frontier that is still held."""
+
+    mysql_password = f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}"
+    with c.override(
+        # The release waits out the hold. After that the shard upper waits for
+        # the frontier to pass the ceiling the sink committed ahead of it.
+        Testdrive(no_reset=True, default_timeout="120s"),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=[
+                "FAILPOINTS=mysql_snapshot_pause=return(t_paused:30000)"
+            ],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "mysql", "clusterd1")
+
+        c.run_testdrive_files(mysql_password, "mysql-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files(
+            mysql_password, "mysql-snapshot-freshness/02-add-tables.td"
+        )
+        c.run_testdrive_files(mysql_password, "mysql-snapshot-freshness/04-release.td")
 
 
 def workflow_pg_seal_on_replay(c: Composition) -> None:

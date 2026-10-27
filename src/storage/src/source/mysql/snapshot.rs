@@ -1111,6 +1111,8 @@ pub(crate) fn render<'scope>(
                         None => continue,
                     };
 
+                    mysql_snapshot_failpoint_pause(&table.1).await;
+
                     let mut snapshot_staged = 0;
                     let (query, params) = build_snapshot_query(outputs, pk_range);
                     trace!(%id, "timely-{worker_id} reading snapshot query='{}'", query);
@@ -1191,6 +1193,30 @@ pub(crate) fn render<'scope>(
         errors,
         button.press_on_drop(),
     )
+}
+
+/// Test-only pause point, run before this worker reads any rows of `table`. Configuring the
+/// failpoint as `mysql_snapshot_pause=return(<table name>)` holds the snapshot of that table until
+/// the failpoint is deactivated. `return(<table name>:<millis>)` holds it for that many
+/// milliseconds instead. The snapshot then completes in the same dataflow incarnation.
+async fn mysql_snapshot_failpoint_pause(table: &str) {
+    let held_since = std::time::Instant::now();
+    loop {
+        let held = fail::eval("mysql_snapshot_pause", |payload| {
+            let (paused_table, millis) = payload
+                .as_deref()
+                .map(|p| p.split_once(':').unwrap_or((p, "")))
+                .unwrap_or_default();
+            paused_table == table
+                && millis.parse::<u64>().map_or(true, |millis| {
+                    held_since.elapsed() < Duration::from_millis(millis)
+                })
+        });
+        match held {
+            Some(true) => tokio::time::sleep(Duration::from_millis(100)).await,
+            _ => break,
+        }
+    }
 }
 
 /// Drops the capabilities of every data port whose output index is not in `keep`.

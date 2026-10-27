@@ -304,7 +304,7 @@ steps:
       queue: hetzner-aarch64-8cpu-16gb
 
   - id: cluster-tests
-    topics: [kafka, kafka-sink, postgres]
+    topics: [kafka, kafka-sink, mysql, postgres]
     label: Cluster
     depends_on: build-aarch64
     timeout_in_minutes: 30

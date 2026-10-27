@@ -2334,7 +2334,7 @@ steps:
               args: [--runtime=1200, --scenario=0dt-deploy, --threads=8]
 
   - id: slow-cluster
-    topics: [kafka, kafka-sink, postgres]
+    topics: [kafka, kafka-sink, mysql, postgres]
     label: Cluster (slow)
     depends_on: build-aarch64
     timeout_in_minutes: 30
