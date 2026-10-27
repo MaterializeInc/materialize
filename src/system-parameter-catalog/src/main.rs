@@ -17,11 +17,12 @@
 //!
 //! Regenerate with `bin/gen-system-parameter-catalog`.
 
+use std::ops::Bound;
 use std::path::PathBuf;
 
 use anyhow::{Context, bail};
-use mz_sql::session::vars::SystemVars;
-use mz_sql::session::vars::constraints::ValueConstraint;
+use mz_sql::session::vars::constraints::{DomainDescription, ValueConstraint};
+use mz_sql::session::vars::{SystemVars, VarDefinitionParts};
 use serde::Serialize;
 
 /// Version of the catalog format itself. Bump on any change to the shape of
@@ -49,9 +50,8 @@ struct Parameter {
     /// One of `environment`, `cluster`, `replica`.
     scope: &'static str,
     user_visible: bool,
-    /// `None` when the parameter has no constraint.
     #[serde(skip_serializing_if = "Option::is_none")]
-    constraint: Option<&'static str>,
+    constraint: Option<Constraint>,
     /// Name of the feature flag that must be enabled to get or set the
     /// parameter.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,15 +61,61 @@ struct Parameter {
     dyncfg: bool,
 }
 
-/// Returns the kind of a constraint.
-///
-/// Domain constraints are opaque trait objects that cannot describe their
-/// bounds, so only their kind is reported.
-fn constraint_kind(constraint: &ValueConstraint) -> &'static str {
-    match constraint {
-        ValueConstraint::ReadOnly => "read_only",
-        ValueConstraint::Fixed => "fixed",
-        ValueConstraint::Domain(_) => "domain",
+/// The values a parameter accepts beyond what its type allows.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum Constraint {
+    /// The parameter cannot be set.
+    ReadOnly,
+    /// The parameter can only be set to its current value.
+    Fixed,
+    NonNegativeNonNan,
+    NonZero,
+    /// An absent bound is unbounded.
+    Range {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        start: Option<RangeBound>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        end: Option<RangeBound>,
+    },
+}
+
+#[derive(Serialize)]
+struct RangeBound {
+    value: String,
+    inclusive: bool,
+}
+
+impl RangeBound {
+    fn from_bound(bound: Bound<String>) -> Option<Self> {
+        match bound {
+            Bound::Included(value) => Some(RangeBound {
+                value,
+                inclusive: true,
+            }),
+            Bound::Excluded(value) => Some(RangeBound {
+                value,
+                inclusive: false,
+            }),
+            Bound::Unbounded => None,
+        }
+    }
+}
+
+impl From<&ValueConstraint> for Constraint {
+    fn from(constraint: &ValueConstraint) -> Self {
+        match constraint {
+            ValueConstraint::ReadOnly => Constraint::ReadOnly,
+            ValueConstraint::Fixed => Constraint::Fixed,
+            ValueConstraint::Domain(domain) => match domain.describe() {
+                DomainDescription::NonNegativeNonNan => Constraint::NonNegativeNonNan,
+                DomainDescription::NonZero => Constraint::NonZero,
+                DomainDescription::Range { start, end } => Constraint::Range {
+                    start: RangeBound::from_bound(start),
+                    end: RangeBound::from_bound(end),
+                },
+            },
+        }
     }
 }
 
@@ -83,18 +129,28 @@ fn build_catalog() -> Catalog {
             let definition = vars
                 .definition(name)
                 .unwrap_or_else(|| panic!("synced var {name} should have a definition"));
+            // Destructured without `..`, so a new property fails to compile
+            // here until the catalog either emits or deliberately skips it.
+            let VarDefinitionParts {
+                name,
+                description,
+                user_visible,
+                default_value,
+                constraint,
+                require_feature_flag,
+                scope,
+                type_name,
+            } = definition.parts();
             Parameter {
                 name: name.to_string(),
-                type_name: var.type_name().into_owned(),
-                default: definition.default_value().format(),
-                description: var.description().to_string(),
-                scope: var.scope().as_str(),
-                user_visible: definition.user_visible,
-                constraint: definition.constraint.as_ref().map(constraint_kind),
-                requires_feature_flag: definition
-                    .require_feature_flag
-                    .map(|f| f.flag.name.as_str()),
-                dyncfg: vars.is_dyncfg_var(name),
+                type_name: type_name.into_owned(),
+                default: default_value.format(),
+                description: description.to_string(),
+                scope: scope.as_str(),
+                user_visible,
+                constraint: constraint.map(Constraint::from),
+                requires_feature_flag: require_feature_flag.map(|f| f.flag.name.as_str()),
+                dyncfg: vars.is_dyncfg_var(name.as_str()),
             }
         })
         .collect();
