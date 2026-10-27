@@ -669,32 +669,41 @@ WITH
             items AS i,
             jsonb_array_elements_text(i.column_defaults) WITH ORDINALITY AS d(value, ordinality)
     ),
-    user_columns AS (
+    cols AS (
         SELECT
             c.id,
+            col.ordinality,
             col.value->>'name' AS name,
-            -- WITH ORDINALITY numbers the list from one, which is what position reports
-            col.ordinality::uint8 AS position,
             (col.value->>'nullable')::bool AS nullable,
-            coalesce(custom.name, mz_internal.mz_type_name((col.value->>'type_oid')::oid), 'unknown') AS type,
-            d.default,
-            coalesce(custom.oid, (col.value->>'type_oid')::oid) AS type_oid,
-            (col.value->>'type_mod')::int4 AS type_mod
-        FROM
-            item_columns AS c
-            JOIN items AS i ON i.id = c.id
-            CROSS JOIN LATERAL jsonb_array_elements(c.columns) WITH ORDINALITY AS col(value, ordinality)
+            (col.value->>'type_oid')::oid AS type_oid,
+            (col.value->>'type_mod')::int4 AS type_mod,
             -- A column may have a custom type from a `CREATE TYPE` item of a list, map or record type.
             -- We store the catalog ID of the custom type in the catalog and join on items to get its type
             -- name and OID
-            CROSS JOIN LATERAL (
-                SELECT CASE
-                    WHEN jsonb_typeof(col.value->'custom_type') = 'object'
-                    THEN mz_internal.parse_catalog_id(col.value->'custom_type')
-                END
-            ) AS ct(custom_type)
-            LEFT JOIN items AS custom ON custom.id = ct.custom_type
-            LEFT JOIN defaults AS d ON d.id = c.id AND d.ordinality = col.ordinality
+            CASE
+                WHEN jsonb_typeof(col.value->'custom_type') = 'object'
+                THEN mz_internal.parse_catalog_id(col.value->'custom_type')
+            END AS custom_type
+        FROM
+            item_columns AS c
+            CROSS JOIN LATERAL jsonb_array_elements(c.columns) WITH ORDINALITY AS col(value, ordinality)
+    ),
+    user_columns AS (
+        SELECT
+            c.id,
+            c.name,
+            -- WITH ORDINALITY numbers the list from one, which is what position reports
+            c.ordinality::uint8 AS position,
+            c.nullable,
+            coalesce(custom.name, mz_internal.mz_type_name(c.type_oid), 'unknown') AS type,
+            d.default,
+            coalesce(custom.oid, c.type_oid) AS type_oid,
+            c.type_mod
+        FROM
+            cols AS c
+            JOIN items AS i ON i.id = c.id
+            LEFT JOIN items AS custom ON custom.id = c.custom_type
+            LEFT JOIN defaults AS d ON d.id = c.id AND d.ordinality = c.ordinality
     ),
     builtin_relations AS (
         SELECT

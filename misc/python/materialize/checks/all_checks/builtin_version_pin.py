@@ -41,7 +41,7 @@ _STABLE_BUILTINS: dict[str, MzVersion | None] = {
     "mz_cluster_replica_sizes": None,
     "mz_cluster_replicas": MzVersion.parse_mz("v26.30.0"),
     "mz_clusters": MzVersion.parse_mz("v26.30.0"),
-    "mz_columns": None,
+    "mz_columns": MzVersion.parse_mz("v26.49.0"),
     "mz_default_privileges": MzVersion.parse_mz("v26.30.0"),
     "mz_egress_ips": None,
     "mz_functions": None,

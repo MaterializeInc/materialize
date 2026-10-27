@@ -4837,19 +4837,19 @@ mz_catalog.mz_columns:
         Map: (#1 -> "gid"), parse_catalog_id(#3)
           →Read mz_internal.mz_catalog_raw
     cte l1 =
-      →Fused with Child Map/Filter/Project
-        Project: #0, #2..=#4
-        Map: case when ("object" = jsonb_typeof((#2{value} -> "custom_type"))) then parse_catalog_id((#2{value} -> "custom_type")) else null end
-          →Table Function jsonb_array_elements[with_ordinality](#1{columns})
-            →Differential Join %0:mz_catalog_raw[#0{id}] » %1:l0[#0{id}]
-              →Arrange (#0{id})
+      →Differential Join %1:l0[#0{id}] » %0[#0{id}]
+        →Arrange (#0{id})
+          →Fused with Child Map/Filter/Project
+            Project: #0, #3..=#8
+            Map: (#2{value} ->> "name"), text_to_boolean((#2{value} ->> "nullable")), text_to_oid((#2{value} ->> "type_oid")), text_to_integer((#2{value} ->> "type_mod")), case when ("object" = jsonb_typeof((#2{value} -> "custom_type"))) then parse_catalog_id((#2{value} -> "custom_type")) else null end
+              →Table Function jsonb_array_elements[with_ordinality](#1{columns})
                 →Fused with Child Map/Filter/Project
                   Project: #4, #5
                   Filter: ("ItemColumns" = #2) AND (#3) IS NOT NULL
                   Map: (#1 -> "id"), parse_catalog_id(#3), ((#0{data} -> "value") -> "columns")
                     →Read mz_internal.mz_catalog_raw
-              →Arrange (#0{id})
-                →Stream l0
+        →Arrange (#0{id})
+          →Stream l0
     cte l2 =
       →Fused with Child Map/Filter/Project
         Project: #0, #2, #3
@@ -4861,29 +4861,29 @@ mz_catalog.mz_columns:
                 →Read mz_internal.mz_catalog_raw
   →Return
     →Union
-      →Delta Join [%0:l1[#0, #2] » %2[#0, #1] » %1[#0]] [%1[#0] » %0:l1[#3] » %2[#0, #1]] [%2[#0, #1] » %0:l1[#0, #2] » %1[#0]]
+      →Delta Join [%0:l1[#0, #1] » %2[#0, #1] » %1[#0]] [%1[#0] » %0:l1[#6] » %2[#0, #1]] [%2[#0, #1] » %0:l1[#0, #1] » %1[#0]]
         path %0:
           after %2:
             Project: #0, #2..=#7, #10
             Map: case when (#9) IS NULL then null else #8 end
           after %1:
-            Project: #1, #3..=#5, #12, #7, #13, #6
-            Map: (#10) IS NULL, case when #11 then coalesce(mz_type_name(text_to_oid((#2{value} ->> "type_oid"))), "unknown") else coalesce(#8, mz_type_name(text_to_oid((#2{value} ->> "type_oid"))), "unknown") end, case when #11 then text_to_oid((#2{value} ->> "type_oid")) else coalesce(#9, text_to_oid((#2{value} ->> "type_oid"))) end
+            Project: #1, #2, #6, #3, #12, #7, #13, #5
+            Map: (#10) IS NULL, case when #11 then coalesce(mz_type_name(#4{type_oid}), "unknown") else coalesce(#8, mz_type_name(#4{type_oid}), "unknown") end, case when #11 then #4{type_oid} else coalesce(#9, #4{type_oid}) end
         path %1:
           after %0:
-            Project: #4, #6..=#12
-            Map: (#5{value} ->> "name"), bigint_to_uint8(#6{ordinality}), text_to_boolean((#5{value} ->> "nullable")), case when #3 then coalesce(mz_type_name(text_to_oid((#5{value} ->> "type_oid"))), "unknown") else coalesce(#1, mz_type_name(text_to_oid((#5{value} ->> "type_oid"))), "unknown") end, case when #3 then text_to_oid((#5{value} ->> "type_oid")) else coalesce(#2, text_to_oid((#5{value} ->> "type_oid"))) end, text_to_integer((#5{value} ->> "type_mod"))
+            Project: #4..=#7, #9..=#12
+            Map: bigint_to_uint8(#5{ordinality}), case when #3 then coalesce(mz_type_name(#8{type_oid}), "unknown") else coalesce(#1, mz_type_name(#8{type_oid}), "unknown") end, case when #3 then #8{type_oid} else coalesce(#2, #8{type_oid}) end
           after %2:
-            Project: #0, #2..=#5, #10, #6, #7
+            Project: #0, #2, #5, #3, #6, #10, #7, #4
             Map: case when (#9) IS NULL then null else #8 end
         path %2:
           after %0:
-            Project: #0, #3, #4, #2, #5..=#8
-            Map: (#3{value} ->> "name"), bigint_to_uint8(#1{ordinality}), text_to_boolean((#3{value} ->> "nullable")), text_to_integer((#3{value} ->> "type_mod"))
+            Project: #0, #3..=#7, #2, #8
+            Map: bigint_to_uint8(#1{ordinality})
           after %1:
-            Project: #1, #4..=#6, #12, #3, #13, #7
-            Map: (#10) IS NULL, case when #11 then coalesce(mz_type_name(text_to_oid((#2{value} ->> "type_oid"))), "unknown") else coalesce(#8, mz_type_name(text_to_oid((#2{value} ->> "type_oid"))), "unknown") end, case when #11 then text_to_oid((#2{value} ->> "type_oid")) else coalesce(#9, text_to_oid((#2{value} ->> "type_oid"))) end
-        →Arrange (#0, #2) (#3)
+            Project: #1, #2, #7, #3, #12, #6, #13, #5
+            Map: (#10) IS NULL, case when #11 then coalesce(mz_type_name(#4{type_oid}), "unknown") else coalesce(#8, mz_type_name(#4{type_oid}), "unknown") end, case when #11 then #4{type_oid} else coalesce(#9, #4{type_oid}) end
+        →Arrange (#0, #1) (#6)
           →Stream l1
         →Arrange (#0)
           →Union
@@ -4904,7 +4904,7 @@ mz_catalog.mz_columns:
                         →Distinct GroupAggregate
                           →Union
                             →Fused with Child Map/Filter/Project
-                              Project: #3
+                              Project: #6
                                 →Read l1
                             →Constant (1 row)
         →Arrange (#0, #1)
@@ -4926,7 +4926,7 @@ mz_catalog.mz_columns:
                       →Unarranged Raw Stream
                         →Distinct GroupAggregate
                           →Fused with Child Map/Filter/Project
-                            Project: #0, #2
+                            Project: #0, #1
                               →Read l1
       →Differential Join %1:mz_catalog_raw[#1{schema_name}, #2{name}] » %0[#0{schema_name}, #1{relation_name}]
         Final closure:
