@@ -90,7 +90,7 @@ export interface FreshnessStatboxesProps {
  * Pooling dilutes one slow object with the healthy ones' minutes, so these
  * describe the scope, not any one object, and never judge by the threshold.
  */
-const FreshnessStatboxesInner = ({
+const FreshnessStatboxesBase = ({
   objectIds,
   lookbackMs,
   latestPeak,
@@ -144,4 +144,4 @@ const FreshnessStatboxesInner = ({
   );
 };
 
-export const FreshnessStatboxes = React.memo(FreshnessStatboxesInner);
+export const FreshnessStatboxes = React.memo(FreshnessStatboxesBase);

@@ -277,7 +277,7 @@ export interface FreshnessTableProps {
  * cluster can carry thousands. It opens in the order it is given, which is
  * worst first by whatever the active predicate judges.
  */
-const FreshnessTableInner = ({
+const FreshnessTableBase = ({
   rows,
   scope,
   itemLabel = "objects",
@@ -312,4 +312,4 @@ const FreshnessTableInner = ({
  * stutter. The props it receives are memoized upstream for the same reason: a
  * single rebuilt array here would make this memo a no-op.
  */
-export const FreshnessTable = React.memo(FreshnessTableInner);
+export const FreshnessTable = React.memo(FreshnessTableBase);

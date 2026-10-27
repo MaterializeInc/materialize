@@ -149,7 +149,7 @@ const HighlightControls = ({
       padding="3"
     >
       <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-        Highlight objects that had a
+        Highlight objects whose
       </Text>
       <Select
         size="sm"
@@ -167,7 +167,8 @@ const HighlightControls = ({
         ))}
       </Select>
       <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-        freshness exceeding
+        {/* "Current" is this minute; the others summarize the range. */}
+        freshness {predicate === "current" ? "exceeds" : "exceeded"}
       </Text>
       <ThresholdInput
         {...thresholdControl.inputProps}

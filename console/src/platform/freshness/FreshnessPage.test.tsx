@@ -164,6 +164,19 @@ describe("FreshnessPage cluster selection", () => {
     expect(within(summary).queryByText(NO_VALUE)).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["current", "whose", "freshness exceeds"],
+    ["p90", "whose", "freshness exceeded"],
+    ["peak", "whose", "freshness exceeded"],
+  ])("words the threshold sentence for %s", async (predicate, lead, verb) => {
+    // "current" is now, so its verb is present; the rest span the range.
+    recordRequests();
+    await renderAt(`/?cluster=u1&exceeded=${predicate}`);
+
+    expect(await screen.findByText(`Highlight objects ${lead}`)).toBeVisible();
+    expect(screen.getByText(verb)).toBeVisible();
+  });
+
   it("loads a cluster a link names", async () => {
     const requests = recordRequests();
     await renderAt("/?cluster=u1");
