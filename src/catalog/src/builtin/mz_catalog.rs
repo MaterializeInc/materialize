@@ -1041,8 +1041,11 @@ WITH
             mz_internal.parse_catalog_create_sql(i.data->'value'->'definition'->'V1'->>'create_sql')->'key_parts' AS key_parts
         FROM
             mz_internal.mz_catalog_raw AS k
+            -- Filter to index items so the join arranges only their rows. A
+            -- persisted index's create_sql always starts with `CREATE INDEX`
             JOIN mz_internal.mz_catalog_raw AS i ON
                 i.data->>'kind' = 'Item' AND
+                i.data->'value'->'definition'->'V1'->>'create_sql' LIKE 'CREATE INDEX %' AND
                 i.data->'key'->'gid' = k.data->'key'->'id'
         WHERE k.data->>'kind' = 'IndexColumns'
     ),

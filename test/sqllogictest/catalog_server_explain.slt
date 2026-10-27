@@ -5015,10 +5015,10 @@ EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_index_columns";
 mz_catalog.mz_index_columns:
   →With
     cte l0 =
-      →Differential Join %0:mz_catalog_raw[((#0{data} -> "key") -> "id")] » %1:mz_catalog_raw[((#0{data} -> "key") -> "gid")]
-        after %1:
+      →Differential Join %1:mz_catalog_raw[((#0{data} -> "key") -> "gid")] » %0:mz_catalog_raw[((#0{data} -> "key") -> "id")]
+        after %0:
           Project: #3..=#5
-          Map: parse_catalog_id(((#1{data} -> "key") -> "id")), ((#1{data} -> "value") -> "columns"), (parse_catalog_create_sql(((((#2{data} -> "value") -> "definition") -> "V1") ->> "create_sql")) -> "key_parts")
+          Map: parse_catalog_id(((#2{data} -> "key") -> "id")), ((#2{data} -> "value") -> "columns"), (parse_catalog_create_sql(((((#1{data} -> "value") -> "definition") -> "V1") ->> "create_sql")) -> "key_parts")
         →Arrange (((#0{data} -> "key") -> "id"))
           →Fused with Child Map/Filter/Project
             Project: #0
@@ -5027,7 +5027,7 @@ mz_catalog.mz_index_columns:
         →Arrange (((#0{data} -> "key") -> "gid"))
           →Fused with Child Map/Filter/Project
             Project: #0
-            Filter: ((#1 -> "gid")) IS NOT NULL AND ("Item" = #2)
+            Filter: like["CREATE INDEX %"](((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql")) AND ((#1 -> "gid")) IS NOT NULL AND ("Item" = #2)
               →Read mz_internal.mz_catalog_raw
     cte l1 =
       →Fused with Child Map/Filter/Project

@@ -46,7 +46,7 @@ _STABLE_BUILTINS: dict[str, MzVersion | None] = {
     "mz_egress_ips": None,
     "mz_functions": None,
     "mz_iceberg_sinks": MzVersion.parse_mz("v26.38.0"),
-    "mz_index_columns": None,
+    "mz_index_columns": MzVersion.parse_mz("v26.49.0"),
     "mz_kafka_connections": MzVersion.parse_mz("v26.37.0"),
     "mz_kafka_sinks": MzVersion.parse_mz("v26.38.0"),
     "mz_kafka_sources": MzVersion.parse_mz("v26.34.0"),
