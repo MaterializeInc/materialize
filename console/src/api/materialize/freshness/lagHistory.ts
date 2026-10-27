@@ -140,7 +140,7 @@ export const LAG_PERCENTILES = { p90: 0.9, p99: 0.99, p99_9: 0.999 } as const;
  * The nearest-rank position of percentile `p` among `n` readings, counted from
  * the worst, which is 1. Matches the pick the percentile queries make in SQL.
  */
-export function rankFromWorst(p: number, n: number) {
+function rankFromWorst(p: number, n: number) {
   return n - Math.ceil(p * n) + 1;
 }
 

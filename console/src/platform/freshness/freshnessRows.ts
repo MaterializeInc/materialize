@@ -139,6 +139,18 @@ export const lagOrUnreadable = (lag: number | null) =>
 const currentFrom = (latest: number | null | undefined) =>
   latest === undefined ? null : lagOrUnreadable(latest);
 
+/**
+ * The stats of an object with no readings, for a line missing from
+ * `statsByKey`. The callers build both from the same lines, so none is.
+ */
+const EMPTY_STATS: ObjectStats = {
+  current: null,
+  peak: null,
+  p90: null,
+  p99: null,
+  p99_9: null,
+};
+
 const statFor = (stats: ObjectStats, predicate: Predicate) =>
   predicate === "current"
     ? stats.current
@@ -164,8 +176,7 @@ export function judgeLines(
   statsByKey: Map<string, ObjectStats>,
 ): ThresholdLineSeries<DataPoint>[] {
   return lines.map((line) => {
-    const stats =
-      statsByKey.get(line.key) ?? computeStats(undefined, undefined);
+    const stats = statsByKey.get(line.key) ?? EMPTY_STATS;
     return {
       key: line.key,
       label: line.label,
@@ -213,8 +224,7 @@ export function buildFreshnessRows({
 
   return judged
     .map((line) => {
-      const stats =
-        statsByKey.get(line.key) ?? computeStats(undefined, undefined);
+      const stats = statsByKey.get(line.key) ?? EMPTY_STATS;
       const object = objectsById.get(line.key);
       const hydration = hydrationByObjectId.get(line.key);
       // Inclusive, matching `isBreaching` on the graph and the Objects page's
