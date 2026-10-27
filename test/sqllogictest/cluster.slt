@@ -499,6 +499,7 @@ mz_probe  r1  scale=1,workers=2
 mz_system  r1  scale=1,workers=2
 quickstart  r1  scale=1,workers=2
 
+# Chained replica renames must be staged together for rollback and commit.
 statement ok
 CREATE CLUSTER REPLICA quickstart.foo_bar SIZE 'scale=1,workers=1'
 
