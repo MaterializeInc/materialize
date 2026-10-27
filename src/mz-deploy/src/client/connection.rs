@@ -155,9 +155,7 @@ impl Client {
         let mode = profile.sslmode.unwrap_or_else(|| default_sslmode(host));
         let hunt: Vec<&std::path::Path> =
             DEFAULT_CA_PATHS.iter().map(std::path::Path::new).collect();
-        let spec = plan_connector(mode, profile.sslrootcert.as_deref(), host, &hunt, |p| {
-            p.exists()
-        })?;
+        let spec = plan_connector(mode, profile.sslrootcert.as_deref(), &hunt, |p| p.exists())?;
         let connector = build_connector(spec)?;
 
         config.ssl_mode(tokio_ssl_mode(mode));
@@ -385,23 +383,16 @@ fn tokio_ssl_mode(mode: SslMode) -> tokio_postgres::config::SslMode {
     }
 }
 
-/// How `verify-full` should match the cert's SAN entries.
-#[derive(Debug)]
-enum HostCheck {
-    /// Match a DNS name. Host parsed as a non-IP string.
-    Dns(String),
-    /// Match an IPv4 or IPv6 literal. Host parsed as `IpAddr`.
-    Ip(std::net::IpAddr),
-}
-
 /// Pure-data representation of the TLS setup for a connection, derived from
 /// a profile's effective `SslMode` and `sslrootcert`.
 #[derive(Debug)]
 enum ConnectorSpec {
     NoTls,
     Tls {
-        verify: openssl::ssl::SslVerifyMode,
-        host_check: Option<HostCheck>,
+        /// Selects peer and hostname verification in
+        /// [`mz_tls_util::make_tls_rustls`]. `verify-full` checks the name
+        /// the connection was made to, whether a DNS name or an IP literal.
+        mode: tokio_postgres::config::SslMode,
         ca_source: CaSource,
     },
 }
@@ -416,16 +407,16 @@ enum CaSource {
     Explicit(std::path::PathBuf),
     /// Path discovered by walking `DEFAULT_CA_PATHS`.
     Hunted(std::path::PathBuf),
-    /// Fallback to OpenSSL's compiled-in default verify paths
-    /// (`set_default_verify_paths`). Used only when the hunt finds nothing
-    /// and no explicit path is set.
+    /// Only the platform's native roots, which the connector always trusts
+    /// when verifying. Used when the hunt finds nothing and no explicit path
+    /// is set.
     DefaultVerifyPaths,
 }
 
 /// Runtime-ready connector variant handed to `tokio_postgres::Config::connect`.
 enum Connector {
     NoTls,
-    Tls(postgres_openssl::MakeTlsConnector),
+    Tls(mz_tls_util::MakeRustlsConnect),
 }
 
 impl std::fmt::Debug for Connector {
@@ -441,7 +432,7 @@ impl std::fmt::Debug for Connector {
 ///
 /// Pure: does no network I/O and — aside from the injected `ca_exists`
 /// predicate — does no filesystem I/O. Returns a [`ConnectorSpec`] that
-/// [`build_connector`] then materializes into an OpenSSL context.
+/// [`build_connector`] then materializes into a rustls connector.
 ///
 /// `hunt_candidates` is the ordered list of default CA paths to probe when
 /// `sslrootcert` is not set. In production this is [`DEFAULT_CA_PATHS`];
@@ -449,34 +440,25 @@ impl std::fmt::Debug for Connector {
 fn plan_connector(
     mode: SslMode,
     sslrootcert: Option<&std::path::Path>,
-    host: &str,
     hunt_candidates: &[&std::path::Path],
     ca_exists: impl Fn(&std::path::Path) -> bool,
 ) -> Result<ConnectorSpec, ConnectionError> {
-    use openssl::ssl::SslVerifyMode;
+    use tokio_postgres::config::SslMode as TokioMode;
 
     match mode {
         SslMode::Disable => Ok(ConnectorSpec::NoTls),
         SslMode::Prefer | SslMode::Require => Ok(ConnectorSpec::Tls {
-            verify: SslVerifyMode::NONE,
-            host_check: None,
+            mode: TokioMode::Require,
             ca_source: CaSource::None,
         }),
         SslMode::VerifyCa | SslMode::VerifyFull => {
             let ca_source = resolve_ca_source(sslrootcert, hunt_candidates, ca_exists)?;
-            let host_check = if matches!(mode, SslMode::VerifyFull) {
-                Some(match host.parse::<std::net::IpAddr>() {
-                    Ok(ip) => HostCheck::Ip(ip),
-                    Err(_) => HostCheck::Dns(host.to_string()),
-                })
+            let mode = if matches!(mode, SslMode::VerifyFull) {
+                TokioMode::VerifyFull
             } else {
-                None
+                TokioMode::VerifyCa
             };
-            Ok(ConnectorSpec::Tls {
-                verify: SslVerifyMode::PEER,
-                host_check,
-                ca_source,
-            })
+            Ok(ConnectorSpec::Tls { mode, ca_source })
         }
     }
 }
@@ -501,57 +483,24 @@ fn resolve_ca_source(
     Ok(CaSource::DefaultVerifyPaths)
 }
 
-/// Convert a [`ConnectorSpec`] into a runtime [`Connector`] by wiring up the
-/// OpenSSL context. All filesystem I/O for CAs happens here.
+/// Convert a [`ConnectorSpec`] into a runtime [`Connector`]. All filesystem
+/// I/O for CAs happens here.
 fn build_connector(spec: ConnectorSpec) -> Result<Connector, ConnectionError> {
-    use openssl::ssl::{SslConnector, SslMethod};
-
     match spec {
         ConnectorSpec::NoTls => Ok(Connector::NoTls),
-        ConnectorSpec::Tls {
-            verify,
-            host_check,
-            ca_source,
-        } => {
-            let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|e| {
-                ConnectionError::Message(format!("Failed to create TLS builder: {}", e))
-            })?;
-
+        ConnectorSpec::Tls { mode, ca_source } => {
+            let mut tls_config = tokio_postgres::Config::new();
+            tls_config.ssl_mode(mode);
             match ca_source {
-                CaSource::None => {}
+                CaSource::None | CaSource::DefaultVerifyPaths => {}
                 CaSource::Explicit(path) | CaSource::Hunted(path) => {
-                    builder
-                        .set_ca_file(&path)
-                        .map_err(|_| ConnectionError::TlsCaNotFound)?;
-                }
-                CaSource::DefaultVerifyPaths => {
-                    builder
-                        .set_default_verify_paths()
-                        .map_err(|_| ConnectionError::TlsCaNotFound)?;
+                    let ca = std::fs::read(&path).map_err(|_| ConnectionError::TlsCaNotFound)?;
+                    tls_config.ssl_root_cert(&ca);
                 }
             }
-
-            builder.set_verify(verify);
-
-            if let Some(check) = host_check {
-                let param = builder.verify_param_mut();
-                match check {
-                    HostCheck::Dns(name) => {
-                        param
-                            .set_host(&name)
-                            .map_err(|e| ConnectionError::Message(format!("{}", e)))?;
-                    }
-                    HostCheck::Ip(ip) => {
-                        param
-                            .set_ip(ip)
-                            .map_err(|e| ConnectionError::Message(format!("{}", e)))?;
-                    }
-                }
-            }
-
-            Ok(Connector::Tls(postgres_openssl::MakeTlsConnector::new(
-                builder.build(),
-            )))
+            let tls = mz_tls_util::make_tls_rustls(&tls_config)
+                .map_err(|e| ConnectionError::Message(format!("{e:#}")))?;
+            Ok(Connector::Tls(tls))
         }
     }
 }
@@ -560,9 +509,9 @@ fn build_connector(spec: ConnectorSpec) -> Result<Connector, ConnectionError> {
 /// into the most specific `ConnectionError` variant.
 ///
 /// Rules:
-/// - OpenSSL error found in the source chain + `mode` is `verify-*` →
+/// - rustls error found in the source chain + `mode` is `verify-*` →
 ///   [`ConnectionError::TlsVerification`] (with `hostname_suffix` if the
-///   OpenSSL message names a hostname / IP mismatch).
+///   certificate does not match the host name or IP).
 /// - `mode` is `require` / `verify-*` and the error message indicates the
 ///   server refused TLS → [`ConnectionError::TlsRequiredNotSupported`].
 /// - Otherwise → [`ConnectionError::Connect`].
@@ -575,11 +524,14 @@ fn classify_connect_error(
     // connection that produced this error, so `host` must be `Some` here.
     let host = profile.host.clone().unwrap_or_default();
     if matches!(mode, SslMode::VerifyCa | SslMode::VerifyFull) {
-        if let Some(ssl_msg) = ssl_error_in_chain(&source) {
-            let hostname_suffix = if ssl_msg.contains("hostname mismatch")
-                || ssl_msg.contains("Hostname mismatch")
-                || ssl_msg.contains("IP address mismatch")
-            {
+        if let Some(tls_err) = tls_error_in_chain(&source) {
+            let hostname_suffix = if matches!(
+                tls_err,
+                rustls::Error::InvalidCertificate(
+                    rustls::CertificateError::NotValidForName
+                        | rustls::CertificateError::NotValidForNameContext { .. }
+                )
+            ) {
                 " (hostname mismatch)"
             } else {
                 ""
@@ -612,17 +564,25 @@ fn classify_connect_error(
     }
 }
 
-/// Walk the source chain of a `tokio_postgres::Error` and return the string
-/// form of the first `openssl::error::ErrorStack` found.
-fn ssl_error_in_chain(err: &tokio_postgres::Error) -> Option<String> {
+/// Walk the source chain of a `tokio_postgres::Error` and return the first
+/// `rustls::Error` found.
+fn tls_error_in_chain(err: &tokio_postgres::Error) -> Option<&rustls::Error> {
     let mut cur: &(dyn std::error::Error + 'static) = err;
-    while let Some(source) = std::error::Error::source(cur) {
-        if source.is::<openssl::error::ErrorStack>() {
-            return Some(source.to_string());
+    loop {
+        if let Some(tls_err) = cur.downcast_ref::<rustls::Error>() {
+            return Some(tls_err);
         }
-        cur = source;
+        // NOTE: `io::Error::source` skips the error it wraps, which is where
+        // tokio-rustls puts the handshake failure.
+        if let Some(inner) = cur
+            .downcast_ref::<std::io::Error>()
+            .and_then(|io| io.get_ref())
+            .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+        {
+            return Some(inner);
+        }
+        cur = cur.source()?;
     }
-    None
 }
 
 /// Heuristic: does the error look like "server said no to our TLS request"?
@@ -757,24 +717,21 @@ mod tests {
 
     use std::path::Path;
 
+    use tokio_postgres::config::SslMode as TokioMode;
+
     #[mz_ore::test]
     fn plan_disable_produces_notls() {
-        let spec = plan_connector(SslMode::Disable, None, "example.com", &[], |_| false).unwrap();
+        let spec = plan_connector(SslMode::Disable, None, &[], |_| false).unwrap();
         assert!(matches!(spec, ConnectorSpec::NoTls));
     }
 
     #[mz_ore::test]
-    fn plan_prefer_and_require_have_verify_none_and_no_ca() {
+    fn plan_prefer_and_require_do_not_verify_and_load_no_ca() {
         for mode in [SslMode::Prefer, SslMode::Require] {
-            let spec = plan_connector(mode, None, "example.com", &[], |_| true).unwrap();
+            let spec = plan_connector(mode, None, &[], |_| true).unwrap();
             match spec {
-                ConnectorSpec::Tls {
-                    verify,
-                    host_check,
-                    ca_source,
-                } => {
-                    assert_eq!(verify, openssl::ssl::SslVerifyMode::NONE);
-                    assert!(host_check.is_none());
+                ConnectorSpec::Tls { mode, ca_source } => {
+                    assert_eq!(mode, TokioMode::Require);
                     assert!(matches!(ca_source, CaSource::None));
                 }
                 ConnectorSpec::NoTls => panic!("expected Tls for {:?}, got NoTls", mode),
@@ -783,23 +740,17 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn plan_verify_ca_has_peer_verify_no_host_check() {
+    fn plan_verify_ca_hunts_for_a_ca() {
         let spec = plan_connector(
             SslMode::VerifyCa,
             None,
-            "example.com",
             &[Path::new("/does/not/exist"), Path::new("/tmp/fake-ca.pem")],
             |p| p == Path::new("/tmp/fake-ca.pem"),
         )
         .unwrap();
         match spec {
-            ConnectorSpec::Tls {
-                verify,
-                host_check,
-                ca_source,
-            } => {
-                assert_eq!(verify, openssl::ssl::SslVerifyMode::PEER);
-                assert!(host_check.is_none());
+            ConnectorSpec::Tls { mode, ca_source } => {
+                assert_eq!(mode, TokioMode::VerifyCa);
                 assert!(
                     matches!(ca_source, CaSource::Hunted(p) if p == Path::new("/tmp/fake-ca.pem"))
                 );
@@ -809,40 +760,17 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn plan_verify_full_dns_host_check() {
+    fn plan_verify_full_checks_the_host() {
         let spec = plan_connector(
             SslMode::VerifyFull,
             None,
-            "example.com",
             &[Path::new("/tmp/fake-ca.pem")],
             |_| true,
         )
         .unwrap();
         match spec {
-            ConnectorSpec::Tls {
-                host_check: Some(HostCheck::Dns(ref name)),
-                ..
-            } => assert_eq!(name, "example.com"),
-            other => panic!("expected Tls with Dns host check, got {:?}", other),
-        }
-    }
-
-    #[mz_ore::test]
-    fn plan_verify_full_ip_host_check() {
-        let spec = plan_connector(
-            SslMode::VerifyFull,
-            None,
-            "10.0.0.5",
-            &[Path::new("/tmp/fake-ca.pem")],
-            |_| true,
-        )
-        .unwrap();
-        match spec {
-            ConnectorSpec::Tls {
-                host_check: Some(HostCheck::Ip(ip)),
-                ..
-            } => assert_eq!(ip, "10.0.0.5".parse::<std::net::IpAddr>().unwrap()),
-            other => panic!("expected Tls with Ip host check, got {:?}", other),
+            ConnectorSpec::Tls { mode, .. } => assert_eq!(mode, TokioMode::VerifyFull),
+            ConnectorSpec::NoTls => panic!("expected Tls, got NoTls"),
         }
     }
 
@@ -852,7 +780,6 @@ mod tests {
         let spec = plan_connector(
             SslMode::VerifyCa,
             Some(&explicit),
-            "example.com",
             &[Path::new("/tmp/should-be-ignored.pem")],
             |p| p == explicit.as_path(),
         )
@@ -872,7 +799,6 @@ mod tests {
         let err = plan_connector(
             SslMode::VerifyCa,
             Some(&explicit),
-            "example.com",
             &[Path::new("/tmp/fake-ca.pem")],
             |_| false,
         )
@@ -885,7 +811,6 @@ mod tests {
         let spec = plan_connector(
             SslMode::VerifyFull,
             None,
-            "example.com",
             &[Path::new("/nope1"), Path::new("/nope2")],
             |_| false,
         )
@@ -909,8 +834,7 @@ mod tests {
     #[mz_ore::test]
     fn build_prefer_returns_tls_no_ca_work() {
         let connector = build_connector(ConnectorSpec::Tls {
-            verify: openssl::ssl::SslVerifyMode::NONE,
-            host_check: None,
+            mode: TokioMode::Require,
             ca_source: CaSource::None,
         })
         .unwrap();
@@ -921,8 +845,7 @@ mod tests {
     #[mz_ore::test]
     fn build_explicit_missing_ca_returns_ca_not_found() {
         let err = build_connector(ConnectorSpec::Tls {
-            verify: openssl::ssl::SslVerifyMode::PEER,
-            host_check: None,
+            mode: TokioMode::VerifyCa,
             ca_source: CaSource::Explicit(std::path::PathBuf::from("/absolutely/not/a/real/file")),
         })
         .unwrap_err();
