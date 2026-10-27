@@ -21,6 +21,8 @@ COPY materialized entrypoint.sh /usr/local/bin/
 
 USER root
 RUN ln -s /usr/local/bin/materialized /usr/local/bin/environmentd \
+  && ln -s /usr/local/bin/materialized /usr/local/bin/adapterd \
+  && ln -s /usr/local/bin/materialized /usr/local/bin/controllerd \
   && ln -s /usr/local/bin/materialized /usr/local/bin/clusterd \
   && ln -s /usr/local/bin/materialized /usr/local/bin/pubsubd
 USER materialize

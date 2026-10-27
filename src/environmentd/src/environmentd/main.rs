@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use std::{cmp, env, iter, thread};
 
 use anyhow::{Context, bail};
-use clap::{ArgAction, Parser, ValueEnum};
+use clap::{ArgAction, CommandFactory, Parser, ValueEnum};
 use fail::FailScenario;
 use http::header::HeaderValue;
 use ipnet::IpNet;
@@ -350,6 +350,15 @@ pub struct Args {
         default_value_if("orchestrator", "process", Some("clusterd"))
     )]
     clusterd_image: Option<String>,
+    /// Adapter executable or image provisioned by controllerd.
+    #[clap(long, env = "ADAPTERD_IMAGE", default_value = "adapterd")]
+    adapterd_image: String,
+    /// JSON map from adapter size names to CPU and memory allocations.
+    #[clap(long, env = "ADAPTER_SIZES")]
+    adapter_sizes: Option<String>,
+    /// Written-plan namespace reported by the compatible adapterd executable.
+    #[clap(long, env = "ADAPTER_PLAN_BUILD")]
+    adapter_plan_build: Option<String>,
     /// A number representing the environment's generation.
     ///
     /// This is incremented to request that the new process perform a graceful
@@ -677,7 +686,7 @@ pub fn main() {
         env_prefix: Some("MZ_"),
         enable_version_flag: true,
     });
-    if let Err(err) = run(args) {
+    if let Err(err) = run(args, None) {
         panic!("environmentd: fatal: {}", err.display_with_causes());
     }
 }
@@ -690,12 +699,153 @@ pub fn adapter_main() {
     if args.adapter_id.is_none() {
         panic!("adapterd requires --adapter-id");
     }
-    if let Err(err) = run(args) {
+    if let Err(err) = run(args, None) {
         panic!("adapterd: fatal: {}", err.display_with_causes());
     }
 }
 
-fn run(mut args: Args) -> Result<(), anyhow::Error> {
+pub fn controller_main() {
+    let (args, matches): (Args, _) = cli::parse_args_with_matches(CliConfig {
+        env_prefix: Some("MZ_"),
+        enable_version_flag: true,
+    });
+    let result = controller_child_args(&matches).and_then(|child_args| run(args, Some(child_args)));
+    if let Err(err) = result {
+        panic!("controllerd: fatal: {}", err.display_with_causes());
+    }
+}
+
+// Forward resolved CLI/environment input, not process-local defaults or credentials
+// from diagnostic formatting. The provisioner owns identity and assigned listeners.
+fn controller_child_args(matches: &clap::ArgMatches) -> anyhow::Result<Vec<String>> {
+    let mut result = Vec::new();
+    for arg in Args::command().get_arguments() {
+        let Some(name) = arg.get_long() else { continue };
+        if matches!(
+            name,
+            "adapterd-image"
+                | "adapter-sizes"
+                | "adapter-plan-build"
+                | "adapter-id"
+                | "deploy-generation"
+                | "process"
+                | "listeners-config-path"
+                | "listeners-config-json"
+                | "persist-pubsub-external"
+        ) {
+            continue;
+        }
+        if !matches!(
+            matches.value_source(arg.get_id().as_str()),
+            Some(clap::parser::ValueSource::CommandLine | clap::parser::ValueSource::EnvVariable)
+        ) {
+            continue;
+        }
+        match arg.get_action() {
+            ArgAction::SetTrue => {
+                if matches.get_flag(arg.get_id().as_str()) {
+                    result.push(format!("--{name}"));
+                }
+            }
+            ArgAction::SetFalse => {
+                if !matches.get_flag(arg.get_id().as_str()) {
+                    result.push(format!("--{name}"));
+                }
+            }
+            ArgAction::Count => {
+                for _ in 0..matches.get_count(arg.get_id().as_str()) {
+                    result.push(format!("--{name}"));
+                }
+            }
+            ArgAction::Set | ArgAction::Append => {
+                if let Some(values) = matches.get_raw(arg.get_id().as_str()) {
+                    for value in values {
+                        result.push(format!(
+                            "--{name}={}",
+                            value.to_str().context("child argument is not UTF-8")?
+                        ));
+                    }
+                }
+            }
+            _ => anyhow::bail!("cannot forward adapter argument --{name}"),
+        }
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod controller_cli_tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn child_arguments_preserve_values_but_not_controller_owned_fields() {
+        let matches = Args::command()
+            // Exercise environment-sourced input without mutating process-global
+            // environment while other tests run.
+            .mut_arg("http_host_name", |arg| arg.env("PATH"))
+            .try_get_matches_from([
+                "controllerd",
+                "--orchestrator=process",
+                "--secrets-controller=local-file",
+                "--orchestrator-process-secrets-directory=/tmp/secrets",
+                "--persist-blob-url=file:///tmp/blob",
+                "--environment-id=local-az1-00000000-0000-0000-0000-000000000001-0",
+                "--listeners-config-json={}",
+                "--metadata-backend-url=postgres://user:password@localhost/db",
+                "--adapterd-image=/tmp/adapterd",
+                "--adapter-sizes={}",
+                "--adapter-plan-build=26.46.0-dev.0+testbuild",
+                "--deploy-generation=7",
+                "--persist-pubsub-external",
+                "--unsafe-mode",
+                "--system-parameter-default=enable_catalog_read_protection=true",
+                "--system-parameter-default=max_tables=100",
+            ])
+            .expect("valid controller arguments");
+        let child = controller_child_args(&matches).expect("forward arguments");
+        assert!(child.contains(&"--unsafe-mode".to_string()));
+        assert!(
+            child.contains(
+                &"--metadata-backend-url=postgres://user:password@localhost/db".to_string()
+            )
+        );
+        for value in ["enable_catalog_read_protection=true", "max_tables=100"] {
+            assert!(child.contains(&format!("--system-parameter-default={value}")));
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            assert!(child.contains(&format!(
+                "--http-host-name={}",
+                path.to_str().expect("UTF-8 PATH")
+            )));
+        }
+        assert!(!child.iter().any(|arg| {
+            [
+                "--adapterd-image",
+                "--adapter-sizes",
+                "--adapter-plan-build",
+                "--deploy-generation",
+                "--listeners-config",
+                "--persist-pubsub-external",
+            ]
+            .iter()
+            .any(|prefix| arg.starts_with(prefix))
+        }));
+    }
+}
+
+fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(), anyhow::Error> {
+    let is_controller = controller_child_args.is_some();
+    let service_name = if is_controller {
+        "controllerd"
+    } else if args.adapter_id.is_some() {
+        "adapterd"
+    } else {
+        "environmentd"
+    };
+    anyhow::ensure!(
+        !is_controller || (args.adapter_id.is_none() && args.persist_pubsub_external),
+        "controllerd requires external pubsub and cannot join as an adapter"
+    );
     anyhow::ensure!(
         args.adapter_id.is_none() || args.persist_pubsub_external,
         "join-only adapters require --persist-pubsub-external"
@@ -768,7 +918,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // orchestrator, which intermingles log output from multiple services. Other
     // orchestrators separate log output from different services.
     args.tracing.log_prefix = if matches!(args.orchestrator, OrchestratorKind::Process) {
-        Some("environmentd".to_string())
+        Some(service_name.to_string())
     } else {
         None
     };
@@ -776,7 +926,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
     let tracing_handle = runtime.block_on(args.tracing.configure_tracing(
         StaticTracingConfig {
-            service_name: "environmentd",
+            service_name,
             build_info: BUILD_INFO,
         },
         metrics_registry.clone(),
@@ -960,7 +1110,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                             .orchestrator_process_wrapper
                             .map_or(Ok(vec![]), |s| shell_words::split(&s))?,
                         propagate_crashes: args.orchestrator_process_propagate_crashes,
-                        retain_on_shutdown: false,
+                        retain_on_shutdown: is_controller,
                         tcp_proxy: args.orchestrator_process_tcp_proxy_listen_addr.map(
                             |listen_addr| ProcessOrchestratorTcpProxyConfig {
                                 listen_addr,
@@ -1159,107 +1309,129 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let serve_start = Instant::now();
     info!("startup: envd init: serving beginning");
     let server = runtime.block_on(async {
-        let listeners = Listeners::bind(listeners_config).await?;
         let catalog_config = CatalogConfig {
             persist_clients,
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
         };
-        let server = listeners
-            .serve(crate::Config {
-                joined_adapter_id: args.adapter_id,
-                // Special modes.
-                unsafe_mode: args.unsafe_mode,
-                all_features: args.all_features,
-                // Connection options.
-                tls,
-                tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
-                external_login_password_mz_system: args.external_login_password_mz_system,
-                frontegg,
-                frontegg_oauth_issuer_url,
-                cors_allowed_origin,
-                cors_allowed_origin_list,
-                egress_addresses: args.announce_egress_address,
-                http_host_name: args.http_host_name,
-                internal_console_redirect_url: args.internal_console_redirect_url,
-                // Controller options.
-                controller,
-                secrets_controller,
-                cloud_resource_controller,
-                system_dyncfgs,
-                // Storage options.
-                storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
-                storage_usage_retention_period: args.storage_usage_retention_period,
-                // Adapter options.
-                catalog_config,
-                availability_zones: args.availability_zone,
-                cluster_replica_sizes,
-                timestamp_oracle_url,
-                segment_api_key: args.segment_api_key,
-                segment_client_side: args.segment_client_side,
-                test_only_dummy_segment_client: args.test_only_dummy_segment_client,
-                launchdarkly_sdk_key: args.launchdarkly_sdk_key,
-                launchdarkly_base_uri: args.launchdarkly_base_uri,
-                launchdarkly_key_map: args
-                    .launchdarkly_key_map
-                    .into_iter()
-                    .map(|kv| (kv.key, kv.value))
-                    .collect(),
-                config_sync_timeout: args.config_sync_timeout,
-                config_sync_loop_interval: args.config_sync_loop_interval,
-                config_sync_file_path: args.config_sync_file_path,
+        let config = crate::Config {
+            joined_adapter_id: args.adapter_id,
+            // Special modes.
+            unsafe_mode: args.unsafe_mode,
+            all_features: args.all_features,
+            // Connection options.
+            tls,
+            tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
+            external_login_password_mz_system: args.external_login_password_mz_system,
+            frontegg,
+            frontegg_oauth_issuer_url,
+            cors_allowed_origin,
+            cors_allowed_origin_list,
+            egress_addresses: args.announce_egress_address,
+            http_host_name: args.http_host_name,
+            internal_console_redirect_url: args.internal_console_redirect_url,
+            // Controller options.
+            controller,
+            secrets_controller,
+            cloud_resource_controller,
+            system_dyncfgs,
+            // Storage options.
+            storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
+            storage_usage_retention_period: args.storage_usage_retention_period,
+            // Adapter options.
+            catalog_config,
+            availability_zones: args.availability_zone,
+            cluster_replica_sizes,
+            timestamp_oracle_url,
+            segment_api_key: args.segment_api_key,
+            segment_client_side: args.segment_client_side,
+            test_only_dummy_segment_client: args.test_only_dummy_segment_client,
+            launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+            launchdarkly_base_uri: args.launchdarkly_base_uri,
+            launchdarkly_key_map: args
+                .launchdarkly_key_map
+                .into_iter()
+                .map(|kv| (kv.key, kv.value))
+                .collect(),
+            config_sync_timeout: args.config_sync_timeout,
+            config_sync_loop_interval: args.config_sync_loop_interval,
+            config_sync_file_path: args.config_sync_file_path,
 
-                // Bootstrap options.
-                environment_id: args.environment_id,
-                bootstrap_role: args.bootstrap_role,
-                bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
-                bootstrap_default_cluster_replication_factor: args
-                    .bootstrap_default_cluster_replication_factor,
-                bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
-                    size: args.bootstrap_builtin_system_cluster_replica_size,
-                    replication_factor: args.bootstrap_builtin_system_cluster_replication_factor,
-                },
-                bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
-                    size: args.bootstrap_builtin_catalog_server_cluster_replica_size,
-                    replication_factor: args
-                        .bootstrap_builtin_catalog_server_cluster_replication_factor,
-                },
-                bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
-                    size: args.bootstrap_builtin_probe_cluster_replica_size,
-                    replication_factor: args.bootstrap_builtin_probe_cluster_replication_factor,
-                },
-                bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
-                    size: args.bootstrap_builtin_support_cluster_replica_size,
-                    replication_factor: args.bootstrap_builtin_support_cluster_replication_factor,
-                },
-                bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
-                    size: args.bootstrap_builtin_analytics_cluster_replica_size,
-                    replication_factor: args.bootstrap_builtin_analytics_cluster_replication_factor,
-                },
-                system_parameter_defaults: args
-                    .system_parameter_default
-                    .into_iter()
-                    .map(|kv| (kv.key, kv.value))
-                    .collect(),
-                helm_chart_version: args.helm_chart_version.clone(),
-                license_key,
-                // AWS options.
-                aws_account_id: args.aws_account_id,
-                aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
-                // Observability options.
-                metrics_registry,
-                tracing_handle,
-                // Testing options.
-                now,
-                force_builtin_schema_migration,
-            })
+            // Bootstrap options.
+            environment_id: args.environment_id,
+            bootstrap_role: args.bootstrap_role,
+            bootstrap_default_cluster_replica_size: args.bootstrap_default_cluster_replica_size,
+            bootstrap_default_cluster_replication_factor: args
+                .bootstrap_default_cluster_replication_factor,
+            bootstrap_builtin_system_cluster_config: BootstrapBuiltinClusterConfig {
+                size: args.bootstrap_builtin_system_cluster_replica_size,
+                replication_factor: args.bootstrap_builtin_system_cluster_replication_factor,
+            },
+            bootstrap_builtin_catalog_server_cluster_config: BootstrapBuiltinClusterConfig {
+                size: args.bootstrap_builtin_catalog_server_cluster_replica_size,
+                replication_factor: args
+                    .bootstrap_builtin_catalog_server_cluster_replication_factor,
+            },
+            bootstrap_builtin_probe_cluster_config: BootstrapBuiltinClusterConfig {
+                size: args.bootstrap_builtin_probe_cluster_replica_size,
+                replication_factor: args.bootstrap_builtin_probe_cluster_replication_factor,
+            },
+            bootstrap_builtin_support_cluster_config: BootstrapBuiltinClusterConfig {
+                size: args.bootstrap_builtin_support_cluster_replica_size,
+                replication_factor: args.bootstrap_builtin_support_cluster_replication_factor,
+            },
+            bootstrap_builtin_analytics_cluster_config: BootstrapBuiltinClusterConfig {
+                size: args.bootstrap_builtin_analytics_cluster_replica_size,
+                replication_factor: args.bootstrap_builtin_analytics_cluster_replication_factor,
+            },
+            system_parameter_defaults: args
+                .system_parameter_default
+                .into_iter()
+                .map(|kv| (kv.key, kv.value))
+                .collect(),
+            helm_chart_version: args.helm_chart_version.clone(),
+            license_key,
+            // AWS options.
+            aws_account_id: args.aws_account_id,
+            aws_privatelink_availability_zones: args.aws_privatelink_availability_zones,
+            // Observability options.
+            metrics_registry,
+            tracing_handle,
+            // Testing options.
+            now,
+            force_builtin_schema_migration,
+        };
+        if let Some(child_args) = controller_child_args {
+            let sizes = serde_json::from_str(
+                args.adapter_sizes
+                    .as_deref()
+                    .context("controllerd requires --adapter-sizes")?,
+            )?;
+            let plan_build = args.adapter_plan_build.context(
+                "controllerd requires --adapter-plan-build from its compatible adapterd",
+            )?;
+            let launch = crate::controllerd::provisioning::AdapterProvisioningConfig {
+                image: args.adapterd_image,
+                init_container_image: config.controller.init_container_image.clone(),
+                args: child_args,
+                listeners: listeners_config,
+                generation: config.controller.deploy_generation,
+            };
+            crate::controllerd::run(config, launch, sizes, plan_build).await?;
+            return Ok(None);
+        }
+        let listeners = Listeners::bind(listeners_config).await?;
+        let server = listeners
+            .serve(config)
             .await
             .maybe_terminate("booting server")?;
-        Ok::<_, anyhow::Error>(server)
+        Ok::<_, anyhow::Error>(Some(server))
     })?;
     info!(
         "startup: envd init: serving complete in {:?}",
         serve_start.elapsed()
     );
+
+    let Some(server) = server else { return Ok(()) };
 
     let start_duration = envd_start.elapsed();
     metrics

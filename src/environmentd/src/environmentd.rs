@@ -10,4 +10,4 @@
 mod main;
 pub(self) mod sys;
 
-pub use main::{adapter_main, main};
+pub use main::{adapter_main, controller_main, main};

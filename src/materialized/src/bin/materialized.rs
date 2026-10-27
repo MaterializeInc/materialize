@@ -15,6 +15,8 @@ fn main() {
     match binary_path.file_name().and_then(OsStr::to_str) {
         Some("clusterd") => mz_clusterd::main(),
         Some("environmentd") => mz_environmentd::environmentd::main(),
+        Some("adapterd") => mz_environmentd::environmentd::adapter_main(),
+        Some("controllerd") => mz_environmentd::environmentd::controller_main(),
         Some("pubsubd") => mz_pubsubd::main(),
         other => panic!("Unknown executable: {other:?}"),
     }

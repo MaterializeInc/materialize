@@ -52,6 +52,15 @@ pub fn parse_args<O>(config: CliConfig) -> O
 where
     O: Parser,
 {
+    parse_args_with_matches(config).0
+}
+
+/// Parses arguments and retains their resolved values, including environment input.
+/// Callers forwarding configuration to children must not log credential-bearing matches.
+pub fn parse_args_with_matches<O>(config: CliConfig) -> (O, clap::ArgMatches)
+where
+    O: Parser,
+{
     // Construct the prefixed environment variable names for all
     // environment-enabled arguments, if requested. We have to construct these
     // names before constructing `clap` below to get the lifetimes to work out.
@@ -79,7 +88,8 @@ where
         clap = clap.mut_arg(*arg, |arg| arg.env_os(env));
     }
 
-    O::from_arg_matches(&clap.get_matches()).unwrap()
+    let matches = clap.get_matches();
+    (O::from_arg_matches(&matches).unwrap(), matches)
 }
 
 /// A command-line argument of the form `KEY=VALUE`.

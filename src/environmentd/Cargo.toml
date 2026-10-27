@@ -96,7 +96,7 @@ rand = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 rlimit.workspace = true
 rustls.workspace = true
-semver = { workspace = true, optional = true }
+semver.workspace = true
 sentry-tracing = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -172,7 +172,6 @@ test = [
     "rand",
     "regex",
     "postgres-openssl",
-    "semver",
     "sentry-tracing",
     "tempfile",
     "tokio-stream",

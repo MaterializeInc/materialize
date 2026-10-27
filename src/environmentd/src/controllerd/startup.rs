@@ -21,7 +21,10 @@ use mz_repr::Timestamp;
 /// Restart joins without migrations or positive snapshot publication. The launcher
 /// must pair same-build children and preserve deployment configuration. This does
 /// not implement recovery from interrupted fresh initialization or upgrades.
-pub async fn open_catalog(config: &crate::Config) -> anyhow::Result<Catalog> {
+pub async fn open_catalog(
+    config: &crate::Config,
+    adapter_sizes: &std::collections::BTreeMap<String, super::provisioning::AdapterAllocation>,
+) -> anyhow::Result<Catalog> {
     ensure!(
         config.joined_adapter_id.is_none(),
         "controller cannot be an adapter joiner"
@@ -85,13 +88,28 @@ pub async fn open_catalog(config: &crate::Config) -> anyhow::Result<Catalog> {
             client,
         )
     });
-    let remote_system_parameters = mz_adapter::load_remote_system_parameters(
+    let mut remote_system_parameters = mz_adapter::load_remote_system_parameters(
         &mut openable,
         sync_config,
         config.config_sync_timeout,
     )
     .await?;
     let fresh = !openable.is_initialized().await?;
+    let mut system_parameter_defaults = config.system_parameter_defaults.clone();
+    if fresh {
+        ensure!(
+            adapter_sizes.contains_key(mz_catalog::durable::DEFAULT_ADAPTER_SIZE),
+            "fresh controller initialization requires an allocation for the default adapter size"
+        );
+        // This deployment architecture requires native execution. The protection
+        // mode is latched at birth, so establish it before catalog initialization,
+        // rather than creating an environment this controller cannot serve.
+        let native = "enable_catalog_read_protection".to_string();
+        system_parameter_defaults.insert(native.clone(), "true".into());
+        if let Some(parameters) = remote_system_parameters.as_mut() {
+            parameters.insert(native, "true".into());
+        }
+    }
     let mut storage = if fresh {
         openable
             .open(
@@ -151,7 +169,7 @@ pub async fn open_catalog(config: &crate::Config) -> anyhow::Result<Catalog> {
             builtin_analytics_cluster_config: config
                 .bootstrap_builtin_analytics_cluster_config
                 .clone(),
-            system_parameter_defaults: config.system_parameter_defaults.clone(),
+            system_parameter_defaults,
             remote_system_parameters,
             availability_zones: config.availability_zones.clone(),
             egress_addresses: config.egress_addresses.clone(),

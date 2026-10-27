@@ -37,7 +37,7 @@ from materialize.mzcompose import (
 from materialize.ui import UIError
 from materialize.xcompile import Arch
 
-KNOWN_PROGRAMS = ["environmentd", "adapterd", "sqllogictest"]
+KNOWN_PROGRAMS = ["environmentd", "adapterd", "controllerd", "sqllogictest"]
 REQUIRED_SERVICES = ["clusterd"]
 
 SANITIZER_TARGET = (
@@ -211,7 +211,12 @@ def main() -> int:
     if args.program in KNOWN_PROGRAMS:
         build_func = _cargo_build
 
-        build_retcode, built_programs = build_func(args, extra_programs=[args.program])
+        extra_programs = (
+            ["adapterd", "pubsubd", args.program]
+            if args.program == "controllerd"
+            else [args.program]
+        )
+        build_retcode, built_programs = build_func(args, extra_programs=extra_programs)
 
         if args.build_only:
             return build_retcode
