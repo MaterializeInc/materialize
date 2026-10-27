@@ -21,29 +21,23 @@ These components have focused verification, not combined M3 acceptance.
 
 ## Resume here
 
-- CI140889 finished. Cargo tests passed, including retained TCP connection/PID,
-  hint-first/fallback/queued discovery, secret-log omission, launch policy and the
-  strengthened metadata freshness witness. Exact lines are in `ci140889/cargo.log`.
-  Clippy failed on the unused Itertools import and unread reservation vector, fixed
-  in `aa0e8bb3`. SLT 4 and 0dt smoke failed. Merge skew remains excluded. Do not
-  claim broad M3 acceptance from this scoped result.
-- Aljoscha confirmed controllerd owns finite active configuration reconciliation.
-  Draft snapshot `b80453e4` in catalog/deployment_configuration.rs opens leases before a NEW
-  WAL fence and reconciles sizes/egress/license with exact B+1 CAS. It rejects
-  joined/read-only/savepoint callers, resnapshots on conflict, expires readers and
-  starts no maintenance task. The existing native initialization witness now
-  covers configuration insertion, repeated reconciliation without duplicate rows,
-  and removal. Formatting passes. It is uncompiled, untested and
-  not wired into controllerd yet. Existing combined environmentd path is unchanged.
-  Next: verify helper with boundary tests and wire finite controller startup.
-  No controller incarnation or new durable record is needed. See
-  `controller-configuration-read-contract.md` for the inspected ordering contract.
-- Independent endpoint/launch review found three issues, now corrected locally:
-  launch argument credentials in INFO logs, a transient assignment-file deletion
-  during queued lifecycle cleanup, and oversized Kubernetes port names. Tests
-  now cover secret omission, concurrent discovery and long listener names.
-  Backend port names use bounded ordinals with lookup by configured listener name.
-  These fixes are formatted but uncompiled. See `adapter-endpoint-review.md`.
+- Finite controller initialization is not wired. Independent review found the
+  proposed replacement-table backfill was not restart-safe and could race joined
+  registration. Its transient replaced_items set disappears after migration commit,
+  and WAL registration can make an empty shard non-MIN before seeding. Removed only
+  that uncommitted wrapper/entry, preserving evidence outside the tree. Published
+  configuration reconciliation remains. No unsafe replacement shortcut was pushed.
+  Aljoscha was asked to approve recovering pending replacements from existing
+  migration records and blocking joiner registration until backfill completes.
+  Pause this affected work pending approval. See `replacement-backfill-review.md`.
+- CI140902 is failing compilation. Exact diagnostics: test-only zip_eq needs
+  Itertools imported inside its test module, and configuration leased-reader
+  codecs require explicit type parameters. Both are corrected locally, formatted
+  but not rerun. Clippy log `/tmp/m3-ci140902-clippy.log`, doctests log
+  `/tmp/m3-ci140902-doctests.log`. Builds remain live. Task #76 observes terminal
+  state, writing `/tmp/m3-ci140902-terminal.json`. Preserve the running jobs.
+  Scratch authentication remains expired, so exact local rerun is unavailable.
+- Review task #75 finished with the findings above. No agent is editing source.
 - Adapter launch specifications now live in
   `src/environmentd/src/controllerd/provisioning.rs`: stable deployment-qualified
   identity, declared CPU/memory allocation, single-process scale, listener policy
