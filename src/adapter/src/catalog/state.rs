@@ -898,12 +898,23 @@ impl CatalogState {
         name: &QualifiedItemName,
         conn_id: Option<&ConnectionId>,
     ) -> FullItemName {
+        self.try_resolve_full_name(name, conn_id)
+            .expect("database and schema must exist")
+    }
+
+    /// Like [`CatalogState::resolve_full_name`], but returns `None` if the
+    /// database or schema of `name` doesn't exist.
+    pub fn try_resolve_full_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: Option<&ConnectionId>,
+    ) -> Option<FullItemName> {
         let conn_id = conn_id.unwrap_or(&SYSTEM_CONN_ID);
 
         let database = match &name.qualifiers.database_spec {
             ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
             ResolvedDatabaseSpecifier::Id(id) => {
-                RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
+                RawDatabaseSpecifier::Name(self.database_by_id.get(id)?.name().to_string())
             }
         };
         // For temporary schemas, we know the name is always MZ_TEMP_SCHEMA,
@@ -911,20 +922,20 @@ impl CatalogState {
         let schema = match &name.qualifiers.schema_spec {
             SchemaSpecifier::Temporary => MZ_TEMP_SCHEMA.to_string(),
             SchemaSpecifier::Id(_) => self
-                .get_schema(
+                .try_get_schema(
                     &name.qualifiers.database_spec,
                     &name.qualifiers.schema_spec,
                     conn_id,
-                )
+                )?
                 .name()
                 .schema
                 .clone(),
         };
-        FullItemName {
+        Some(FullItemName {
             database,
             schema,
             item: name.item.clone(),
-        }
+        })
     }
 
     pub(super) fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName {
