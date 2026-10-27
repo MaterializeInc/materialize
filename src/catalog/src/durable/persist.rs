@@ -12,7 +12,7 @@ mod deployments;
 mod tests;
 
 use std::cmp::max;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
@@ -2742,6 +2742,23 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
                 .map(|key| key.id)
                 .collect(),
         })
+    }
+
+    async fn collection_shards_at_current(
+        &mut self,
+        ids: &BTreeSet<GlobalId>,
+    ) -> Result<BTreeMap<GlobalId, ShardId>, CatalogError> {
+        self.sync_to_current_upper().await?;
+        Ok(ids
+            .iter()
+            .filter_map(|id| {
+                self.update_applier
+                    .snapshot
+                    .storage_collection_metadata
+                    .get(&crate::durable::objects::StorageCollectionMetadataKey { id: *id })
+                    .map(|value| (*id, value.shard))
+            })
+            .collect())
     }
 
     #[mz_ore::instrument(level = "debug")]

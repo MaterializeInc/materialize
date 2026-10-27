@@ -364,9 +364,34 @@ impl GroupCommitter {
                         }
                     }
                     TableWriteCmd::Register { tables, result } => {
+                        let ids = tables.iter().map(|table| table.id).collect();
+                        let catalog_upper = &self.catalog_upper;
+                        let table_write_handle = &self.table_write_handle;
                         let Some(write_ts) = self
                             .write_to_txns(None, |ts, _advance_to| {
-                                self.table_write_handle.register(ts, tables.clone())
+                                let tables = &tables;
+                                let ids = &ids;
+                                async move {
+                                    // The fence may be a cached no-op. Fetch a fresh prefix
+                                    // after allocation so a peer's DROP/Forget cannot be
+                                    // followed by registration from stale preparation.
+                                    let mappings = catalog_upper
+                                        .collection_shards_at_current(ids)
+                                        .await
+                                        .unwrap_or_terminate(
+                                            "unable to certify table registration",
+                                        );
+                                    let admitted = tables
+                                        .iter()
+                                        .filter(|table| {
+                                            mappings.get(&table.id) == Some(&table.data_shard)
+                                        })
+                                        .cloned()
+                                        .collect();
+                                    // Even an empty registration must complete WAL time
+                                    // before the oracle and the CREATE/ALTER reply.
+                                    table_write_handle.register(ts, admitted).await
+                                }
                             })
                             .await
                         else {
@@ -493,11 +518,14 @@ impl GroupCommitter {
     /// timestamp, and applies a successful write to the oracle.
     ///
     /// Returns `None` when the table write worker shuts down.
-    async fn write_to_txns(
+    async fn write_to_txns<F>(
         &self,
         op_duration_metric: Option<&prometheus::Histogram>,
-        mut op: impl FnMut(Timestamp, Timestamp) -> oneshot::Receiver<Result<(), StorageError>>,
-    ) -> Option<WriteTimestamp> {
+        mut op: impl FnMut(Timestamp, Timestamp) -> F,
+    ) -> Option<WriteTimestamp>
+    where
+        F: Future<Output = Result<Result<(), StorageError>, oneshot::error::RecvError>>,
+    {
         // Persistent conflicts indicate an unexpected writer. Halt instead of spinning forever.
         let mut attempt = 0;
         loop {
@@ -541,12 +569,15 @@ impl GroupCommitter {
     /// Advancing the catalog upper first keeps the catalog readable at the
     /// oracle read timestamp. A write that lands is applied to the oracle
     /// before this returns.
-    async fn attempt_write_to_txns(
+    async fn attempt_write_to_txns<F>(
         &self,
         write_ts: &WriteTimestamp,
         op_duration_metric: Option<&prometheus::Histogram>,
-        op: impl FnOnce(Timestamp, Timestamp) -> oneshot::Receiver<Result<(), StorageError>>,
-    ) -> TxnsWriteAttempt {
+        op: impl FnOnce(Timestamp, Timestamp) -> F,
+    ) -> TxnsWriteAttempt
+    where
+        F: Future<Output = Result<Result<(), StorageError>, oneshot::error::RecvError>>,
+    {
         let catalog_upper_start = Instant::now();
         self.catalog_upper
             .advance_upper(write_ts.advance_to)

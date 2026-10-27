@@ -183,6 +183,21 @@ pub struct OpenCommittedCatalog {
 }
 
 impl CatalogUpperHandle {
+    /// Certifies requested collection mappings against a freshly fetched prefix.
+    ///
+    /// Registration callers must allocate and fence their WAL timestamp first,
+    /// and repeat certification after any definitive WAL conflict.
+    pub async fn collection_shards_at_current(
+        &self,
+        ids: &BTreeSet<GlobalId>,
+    ) -> Result<BTreeMap<GlobalId, mz_persist_client::ShardId>, crate::durable::CatalogError> {
+        self.storage
+            .lock()
+            .await
+            .collection_shards_at_current(ids)
+            .await
+    }
+
     /// Advances the durable catalog upper to at least `new_upper`.
     pub async fn advance_upper(
         &self,

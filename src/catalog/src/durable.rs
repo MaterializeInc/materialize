@@ -9,7 +9,7 @@
 
 //! This crate is responsible for durably storing and modifying the catalog contents.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
@@ -395,6 +395,15 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// Requires writable mode, since other modes can contain uncommitted changes.
     /// Sync first if a more recent certificate is needed.
     fn client_incarnation_retirement(&self) -> Result<ClientIncarnationRetirement, CatalogError>;
+
+    /// Fetches a current durable prefix and returns the requested collection mappings.
+    ///
+    /// Unlike a cached upper check, this observes commits above a caller's allocated
+    /// timestamp. It does not consume updates awaiting projection application.
+    async fn collection_shards_at_current(
+        &mut self,
+        ids: &BTreeSet<GlobalId>,
+    ) -> Result<BTreeMap<GlobalId, ShardId>, CatalogError>;
 
     /// Listen and return all updates that are currently in the catalog.
     ///
