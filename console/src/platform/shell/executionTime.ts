@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { Notice } from "~/api/materialize/types";
+import { capitalizeSentence } from "~/util";
 
 import { formatCommandDuration } from "./timings";
 
@@ -28,7 +29,7 @@ export const EXECUTION_TIME_MIN_VERSION = "26.49.0-dev";
 export const EXECUTION_TIME_NOTICE_CODE = "MZ012";
 
 const READ_HELP =
-  "In Materialize: the time Materialize took to produce the query's result. It does not include sending the rows to your browser, which happens after Materialize has computed the whole result.";
+  "The time Materialize took to produce the query's result. It does not include sending the rows to your browser, which happens after Materialize has computed the whole result.";
 
 // Only `staged` names its end point in the label: its number leaves out a
 // commit, which users would otherwise assume it covers.
@@ -37,11 +38,11 @@ const KINDS = {
   empty_result: { label: "in Materialize", help: READ_HELP },
   completed: {
     label: "in Materialize",
-    help: "In Materialize: the time Materialize took to complete the statement.",
+    help: "The time Materialize took to complete the statement.",
   },
   staged: {
     label: "in Materialize, staged",
-    help: "In Materialize: the time Materialize took for the statement, without the commit of its transaction, which comes after it.",
+    help: "The time Materialize took for the statement, without the commit of its transaction, which comes after it.",
   },
 } as const;
 
@@ -92,9 +93,13 @@ export function findExecutionTime(notices: Notice[]): ExecutionTime | null {
   return null;
 }
 
-/** What the execution time covers, for the result's tooltip. */
-export function describeExecutionTime(executionTime: ExecutionTime): string {
-  return KINDS[executionTime.kind].help;
+/** The result tooltip's row that says what the execution time covers. */
+export function describeExecutionTime(executionTime: ExecutionTime): {
+  label: string;
+  description: string;
+} {
+  const { label, help } = KINDS[executionTime.kind];
+  return { label: capitalizeSentence(label, false), description: help };
 }
 
 export function formatExecutionTime(executionTime: ExecutionTime): string {

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { Setter } from "jotai";
 import mitt from "mitt";
 import React from "react";
@@ -147,4 +147,112 @@ describe("HistoryOutput", () => {
       expect(screen.queryByText(/execution time:/)).toBeNull();
     },
   );
+
+  describe("timing tooltip", () => {
+    const executionTimeNotice = (kind: string) => ({
+      code: EXECUTION_TIME_NOTICE_CODE,
+      message: "execution time: 12.000 ms",
+      severity: "Notice" as const,
+      detail: JSON.stringify({ duration_us: 12000, kind }),
+    });
+    const displayState = {
+      isSubscribeManager: false,
+      isFollowingSubscribeManager: true,
+      currentTablePage: 0,
+      currentSubscribeManagerTablePage: 0,
+    };
+
+    async function openTooltip(button: HTMLElement) {
+      act(() => button.focus());
+      const tooltip = await screen.findByRole("tooltip");
+      // The tooltip fades in.
+      await waitFor(() => expect(tooltip).toBeVisible());
+      return tooltip;
+    }
+
+    it("opens on keyboard focus and explains each timing in its own row", async () => {
+      await renderHistoryOutput(
+        commandOutput({
+          commandSentTimeMs: 1000,
+          commandResults: [
+            {
+              notices: [executionTimeNotice("first_row")],
+              hasRows: false,
+              commandCompletePayload: "SELECT 2",
+              endTimeMs: 1148,
+            },
+          ],
+        }),
+      );
+
+      const tooltip = await openTooltip(
+        screen.getByRole("button", { name: "Timing details" }),
+      );
+
+      expect(within(tooltip).getByText("Returned in")).toBeVisible();
+      expect(
+        within(tooltip).getByText(/measured from sending the input\.$/),
+      ).toBeVisible();
+      expect(within(tooltip).getByText("In Materialize")).toBeVisible();
+      expect(
+        within(tooltip).getByText(/does not include sending the rows/),
+      ).toBeVisible();
+    });
+
+    it("says a later statement's round trip can be shorter than its time in Materialize", async () => {
+      await renderHistoryOutput(
+        commandOutput({
+          statements: [{ query: "SELECT 1" }, { query: "SELECT 2" }],
+          commandSentTimeMs: 1000,
+          commandResults: [
+            {
+              notices: [executionTimeNotice("first_row")],
+              hasRows: false,
+              commandCompletePayload: "SELECT 1",
+              endTimeMs: 1100,
+            },
+            {
+              notices: [executionTimeNotice("first_row")],
+              hasRows: false,
+              commandCompletePayload: "SELECT 1",
+              endTimeMs: 1104,
+            },
+          ],
+          commandResultsDisplayStates: [displayState, displayState],
+        }),
+      );
+
+      const [, second] = screen.getAllByRole("button", {
+        name: "Timing details",
+      });
+      expect(
+        within(await openTooltip(second)).getByText(
+          /measured from the previous result\. It can be shorter than the time in Materialize/,
+        ),
+      ).toBeVisible();
+    });
+
+    it("has only the round trip row without an execution time", async () => {
+      await renderHistoryOutput(
+        commandOutput({
+          commandSentTimeMs: 1000,
+          commandResults: [
+            {
+              notices: [],
+              hasRows: false,
+              commandCompletePayload: "CREATE TABLE",
+              endTimeMs: 1148,
+            },
+          ],
+        }),
+      );
+
+      const tooltip = await openTooltip(
+        screen.getByRole("button", { name: "Timing details" }),
+      );
+
+      expect(within(tooltip).getByText("Returned in")).toBeVisible();
+      expect(within(tooltip).queryByText("In Materialize")).toBeNull();
+    });
+  });
 });

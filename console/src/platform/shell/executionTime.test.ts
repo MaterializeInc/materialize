@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import {
+  describeExecutionTime,
   EXECUTION_TIME_NOTICE_CODE,
   findExecutionTime,
   formatExecutionTime,
@@ -73,6 +74,22 @@ describe("findExecutionTime", () => {
   it("returns null when no notice carries one it can read", () => {
     expect(findExecutionTime([])).toBeNull();
     expect(findExecutionTime([notice("{")])).toBeNull();
+  });
+});
+
+describe("describeExecutionTime", () => {
+  it("labels the tooltip row like the footer, capitalized", () => {
+    expect(describeExecutionTime({ kind: "staged", durationMs: 1 })).toEqual({
+      label: "In Materialize, staged",
+      description:
+        "The time Materialize took for the statement, without the commit of its transaction, which comes after it.",
+    });
+  });
+
+  it("explains that a read's time leaves out sending the rows", () => {
+    expect(
+      describeExecutionTime({ kind: "first_row", durationMs: 1 }).description,
+    ).toMatch(/does not include sending the rows/);
   });
 });
 
