@@ -16,20 +16,42 @@ deployment/backend acceptance remain open. Broad CI is not green.
 
 ## Resume here
 
-Continue the local SQL/HTTP lifecycle work. Uncommitted changes implement
-CREATE/DROP/RENAME ADAPTER parsing, planning, shared catalog mutations, response
-handling and mandatory superuser checks, including when optional RBAC is disabled.
-Configured size names are forwarded to adapters for shared size validation.
-Combined adapter/environmentd/sqllogictest all-target checks pass before the latest
-`mz_adapters` raw-catalog projection was added. Check that projection, rerun parser
-tests after switching to the standard unreserved keyword, add catalog and
-authorization boundary coverage, and run strict Clippy.
+SQL/HTTP lifecycle is implemented locally, not yet runtime-verified. SQL supports
+CREATE/DROP/RENAME ADAPTER with mandatory superuser checks even when optional RBAC
+is disabled. Both paths use validated catalog operations and stable identities.
+HTTP exposes `/api/adapters` and `/api/inventory`, without authentication, on
+`127.0.0.1:6882` by default. Catalog conflicts get bounded refresh/retry before 409.
+Responses exclude launch arguments and credentials. Provisioning stays in
+controllerd and policy stays in adapters.
 
-Controller HTTP administration and deployment-qualified endpoint/status publication
-remain to implement. Use the same catalog ops as SQL. Durable content commit already
-allocates and completes through the oracle in `durable/persist.rs`. Preserve that
-completion boundary. HTTP is unauthenticated, with access control outside the
-process. Do not restore controller-owned policy extraction from recovery history.
+Independent lifecycle review approved the catalog/authority/fencing boundaries.
+Its conflict handling and silent replica-error findings are fixed. Catalog listing
+uses normal PUBLIC metadata privileges, unknown IDs return 404 and duplicate names
+409. The claimed HTTP task error loss was rejected: the ore task handle returns
+its inner result, so `result?` already propagates the I/O error.
+
+Strict adapter/environmentd/sqllogictest all-target Clippy passes after review fixes.
+Parser tests pass (76 passed, one ignored). Catalog lifecycle and builtin descriptor
+tests also pass after the listing-grant correction.
+Catalog enumeration fixtures and an RBAC-disabled SQL denial regression are added,
+not yet executed. HTTP transport unit tests compile but remain unexecuted.
+
+`bin/controllerd --optimized` and [its recipe](../controllerd.md) now reuse the
+existing launcher, with separate state/metadata defaults, independently managed
+external pubsub and signal forwarding only to controllerd. Fourteen scoped Python
+tests, Black and Ruff pass. Real startup/adoption through this entry point remains
+to verify. Scratch SSO is expired; user has been asked to run `bin/scratch login`.
+Do not substitute another worker or a broad build on the small editing VM.
+
+Next: run the reviewed SQL/HTTP lifecycle witness on new matching binaries, including
+self-drop, zero-adapter restart and HTTP recovery. The syntax-checked private script
+is `sql-http-adapter-lifecycle-smoke.py`; it has not run. Also exercise the public
+launcher. Finish deployment-qualified SQL endpoint/status publication: review
+recommended a change-only AdapterRuntime catalog record, using the existing fenced
+handle and raw-catalog projections. Current schema is branch-owned v96, extend it
+in place with its snapshot/hash updates rather than adding a migration. Keep
+process status separate from SQL readiness. Existing `/api/readyz` reports adapter
+client availability. Status publication has not been implemented.
 
 The catch-up repair is published as `d6f662f7` in CI141032. It applies and enacts
 one transaction at a time against its matching projection, invalidating snapshots
