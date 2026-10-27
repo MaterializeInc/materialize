@@ -18,10 +18,6 @@
 # Check out https://www.postgresql.org/docs/13/auth-pg-hba-conf.html
 # for more details.
 
-# TODO: Reenable when database-issues#4009 is fixed
-$ skip-if
-SELECT true
-
 > CREATE SECRET ssl_ca AS '${arg.ssl-ca}'
 > CREATE SECRET ssl_cert AS '${arg.ssl-cert}'
 > CREATE SECRET ssl_key AS '${arg.ssl-key}'
@@ -57,7 +53,7 @@ INSERT INTO numbers VALUES (1, true, 'one');
 $ set-regex match=(\d{1,3}\.){3}\d{1,3} replacement=(HOST)
 
 # server: host, client: disable => OK
-> CREATE CONNECTION pgconn TO POSTGRES ( (
+> CREATE CONNECTION pgconn TO POSTGRES (
   HOST postgres,
   USER host,
   SSL MODE disable,
@@ -110,16 +106,13 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
 DELETE FROM numbers WHERE number = 2;
 
 # server: hostssl, client: disable => ERROR
-> CREATE CONNECTION pgconn TO POSTGRES (
+! CREATE CONNECTION pgconn TO POSTGRES (
   HOST postgres,
   USER hostssl,
   SSL MODE disable,
   DATABASE postgres
   );
-! CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostssl", database "postgres", SSL off
-> DROP CONNECTION pgconn;
+contains:db error: FATAL: pg_hba.conf rejects connection for host "(HOST)", user "hostssl", database "postgres"
 
 # server: hostssl, client: require => OK
 > CREATE CONNECTION pgconn TO POSTGRES (
@@ -144,16 +137,13 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
 DELETE FROM numbers WHERE number = 2;
 
 # server: hostssl, client: verify-ca => ERROR
-> CREATE CONNECTION pgconn TO POSTGRES (
+! CREATE CONNECTION pgconn TO POSTGRES (
   HOST postgres,
   USER hostssl,
   SSL MODE verify_ca,
   DATABASE postgres
   );
-! CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
 regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
-> DROP CONNECTION pgconn;
 
 # server: hostssl, client: verify-ca => OK
 > CREATE CONNECTION pgconn TO POSTGRES (
@@ -179,16 +169,13 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
 DELETE FROM numbers WHERE number = 2;
 
 # server: hostssl, client: verify-full => ERROR
-> CREATE CONNECTION pgconn TO POSTGRES (
+! CREATE CONNECTION pgconn TO POSTGRES (
     HOST postgres,
     USER hostssl,
     SSL MODE verify_full,
     DATABASE postgres
   );
-! CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
 regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
-> DROP CONNECTION pgconn;
 
 # server: hostssl, client: verify-full => OK
 > CREATE CONNECTION pgconn TO POSTGRES (
@@ -236,40 +223,31 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
 DELETE FROM numbers WHERE number = 2;
 
 # server: hostnossl, client: require => ERROR
-> CREATE CONNECTION pgconn TO POSTGRES (
+! CREATE CONNECTION pgconn TO POSTGRES (
   HOST postgres,
   USER hostnossl,
   SSL MODE require,
   DATABASE postgres
   );
-! CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnossl", database "postgres", SSL on
-> DROP CONNECTION pgconn;
+contains:db error: FATAL: pg_hba.conf rejects connection for host "(HOST)", user "hostnossl", database "postgres"
 
 # server: hostnossl, client: verify-ca => ERROR
-> CREATE CONNECTION pgconn TO POSTGRES (
+! CREATE CONNECTION pgconn TO POSTGRES (
   HOST postgres,
   USER hostnossl,
   SSL MODE verify_ca,
   DATABASE postgres
   );
-! CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
 regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
-> DROP CONNECTION pgconn;
 
 # server: hostnossl, client: verify-full => ERROR
-> CREATE CONNECTION pgconn TO POSTGRES (
+! CREATE CONNECTION pgconn TO POSTGRES (
   HOST postgres,
   USER hostnossl,
   SSL MODE verify_full,
   DATABASE postgres
   );
-! CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
 regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
-> DROP CONNECTION pgconn;
 
 # server: certuser, client: require => OK
 > CREATE CONNECTION pgconn TO POSTGRES (
@@ -297,20 +275,17 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres:5432
 DELETE FROM numbers WHERE number = 2;
 
 # server: certuser, client: verify-ca => ERROR
-> CREATE CONNECTION pgconn TO POSTGRES (
+! CREATE CONNECTION pgconn TO POSTGRES (
   HOST postgres,
   USER certuser,
   SSL MODE verify_ca,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres
   );
-! CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
 contains:db error: FATAL: connection requires a valid client certificate
-> DROP CONNECTION pgconn;
 
 # server: certuser, client: verify-ca (wrong cert) => ERROR
-> CREATE CONNECTION pgconn TO POSTGRES (
+! CREATE CONNECTION pgconn TO POSTGRES (
   HOST postgres,
   USER certuser,
   SSL MODE verify_ca,
@@ -319,10 +294,7 @@ contains:db error: FATAL: connection requires a valid client certificate
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres
   );
-! CREATE SOURCE "mz_source"
-  FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
 contains:db error: FATAL: certificate authentication failed for user "certuser"
-> DROP CONNECTION pgconn;
 
 # server: certuser, client: verify-ca => OK
 > CREATE CONNECTION pgconn TO POSTGRES (
