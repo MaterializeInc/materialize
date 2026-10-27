@@ -162,7 +162,7 @@ mcp-developer
 {"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{}}}
 ----
 422 Unprocessable Entity
-Failed to deserialize the JSON body into the target type: .: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 99
+Failed to deserialize the JSON body into the target type: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 99
 
 # =============================================================================
 # JSON-RPC protocol validation
@@ -213,7 +213,7 @@ MCP-Protocol-Version: 2026-07-28
 {"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{}}}
 ----
 422 Unprocessable Entity
-Failed to deserialize the JSON body into the target type: .: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 99
+Failed to deserialize the JSON body into the target type: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 99
 
 # An unknown notification with params is still a notification.
 mcp-developer
