@@ -30,11 +30,8 @@ export function buildObjectDetailsQuery(params: {
     .selectFrom("mz_objects as o")
     .innerJoin("mz_object_fully_qualified_names as ofqn", "o.id", "ofqn.id")
     // System schemas don't have a database
-    .leftJoin("mz_object_lifetimes as ol", (join) =>
-      join
-        .onRef("ol.id", "=", "o.id")
-        .onRef("ol.object_type", "=", "o.type")
-        .on("ol.event_type", "=", "create"),
+    .leftJoin("mz_object_history as oh", (join) =>
+      join.onRef("oh.id", "=", "o.id").onRef("oh.object_type", "=", "o.type"),
     )
     .leftJoin("mz_sources as s", "s.id", "o.id")
     .innerJoin("mz_roles as r", "r.id", "o.owner_id")
@@ -60,7 +57,7 @@ export function buildObjectDetailsQuery(params: {
       "ofqn.schema_name as schemaName",
       "ofqn.database_name as databaseName",
       "r.name as owner",
-      "ol.occurred_at as createdAt",
+      "oh.created_at as createdAt",
       "c.id as clusterId",
       "c.name as clusterName",
     ])

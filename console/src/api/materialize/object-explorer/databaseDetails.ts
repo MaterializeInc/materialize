@@ -21,7 +21,8 @@ export function buildDatabaseDetailsQuery(params: { name: string }) {
   return (
     queryBuilder
       .selectFrom("mz_databases as d")
-      // Due to an ID migration, some schemas won't have a matching create record
+      // Some databases have no create record: an ID migration renumbered them,
+      // or the event aged out of mz_object_lifetimes.
       .leftJoin("mz_object_lifetimes as ol", (join) =>
         join
           .onRef("ol.id", "=", "d.id")

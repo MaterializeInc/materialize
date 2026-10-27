@@ -43,11 +43,8 @@ export function buildSourceListQuery({
     .innerJoin("mz_schemas as sc", "sc.id", "s.schema_id")
     .innerJoin("mz_databases as d", "d.id", "sc.database_id")
     .innerJoin("mz_clusters as c", "c.id", "s.cluster_id")
-    .innerJoin("mz_object_lifetimes as ol", (join) =>
-      join
-        .onRef("ol.id", "=", "s.id")
-        .on("ol.event_type", "=", "create")
-        .on("ol.object_type", "=", "source"),
+    .innerJoin("mz_object_history as oh", (join) =>
+      join.onRef("oh.id", "=", "s.id").on("oh.object_type", "=", "source"),
     )
     .innerJoin(getOwners().as("owners"), "owners.id", "s.owner_id")
     .innerJoin("mz_source_statuses as st", "st.id", "s.id")
@@ -69,7 +66,7 @@ export function buildSourceListQuery({
       "st.status",
       "st.error",
       "stat.snapshot_committed as snapshotCommitted",
-      "ol.occurred_at as createdAt",
+      (eb) => eb.ref("oh.created_at").$notNull().as("createdAt"),
       "c.id as clusterId",
       "c.name as clusterName",
       "cn.id as connectionId",

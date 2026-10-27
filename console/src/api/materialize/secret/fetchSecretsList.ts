@@ -30,16 +30,13 @@ export function buildSecretsListQuery({
     .innerJoin("mz_schemas as sc", "sc.id", "s.schema_id")
     .innerJoin("mz_databases as d", "d.id", "sc.database_id")
     .innerJoin(getOwners().as("owners"), "owners.id", "s.owner_id")
-    .innerJoin("mz_object_lifetimes as ol", (join) =>
-      join
-        .onRef("ol.id", "=", "s.id")
-        .on("ol.event_type", "=", "create")
-        .on("ol.object_type", "=", "secret"),
+    .innerJoin("mz_object_history as oh", (join) =>
+      join.onRef("oh.id", "=", "s.id").on("oh.object_type", "=", "secret"),
     )
     .select([
       "s.id",
       "s.name",
-      "ol.occurred_at as createdAt",
+      (eb) => eb.ref("oh.created_at").$notNull().as("createdAt"),
       "d.name as databaseName",
       "sc.name as schemaName",
       "owners.isOwner",

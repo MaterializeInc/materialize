@@ -38,11 +38,12 @@ export function buildWorkflowGraphNodesQuery({
           .selectFrom("mz_objects as o")
           .innerJoin("mz_schemas as sc", "sc.id", "o.schema_id")
           .innerJoin("mz_databases as d", "d.id", "sc.database_id")
-          .innerJoin("mz_object_lifetimes as ol", (join) =>
+          .innerJoin("mz_object_history as oh", (join) =>
             join
-              .onRef("ol.id", "=", "o.id")
-              .on("ol.event_type", "=", "create")
-              .on((eb) => eb("ol.object_type", "=", eb.ref("o.type"))),
+              .onRef("oh.id", "=", "o.id")
+              .on((eb) => eb("oh.object_type", "=", eb.ref("o.type")))
+              // System objects have no creation time.
+              .on("oh.created_at", "is not", null),
           )
           .where(
             sql<SqlBool>`o.id in (${sql.join(objectIds.map((id) => lit(id)))})`,
@@ -53,7 +54,7 @@ export function buildWorkflowGraphNodesQuery({
             "sc.name as schemaName",
             "o.name",
             "o.type",
-            "ol.occurred_at as createdAt",
+            (eb) => eb.ref("oh.created_at").$notNull().as("createdAt"),
           ]),
       )
       // TODO: (#3400) Remove once all subsources are tables

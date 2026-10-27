@@ -26,7 +26,8 @@ export function buildSchemaDetailsQuery(params: SchemaDetailsParameters) {
     .selectFrom("mz_schemas as s")
     // System schemas don't have a database
     .leftJoin("mz_databases as d", "d.id", "s.database_id")
-    // Due to an ID migration, some schemas won't have a matching create record
+    // Some schemas have no create record: an ID migration renumbered them, or
+    // the event aged out of mz_object_lifetimes.
     .leftJoin("mz_object_lifetimes as ol", (join) =>
       join
         .onRef("ol.id", "=", "s.id")

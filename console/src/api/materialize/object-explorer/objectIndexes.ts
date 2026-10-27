@@ -30,12 +30,8 @@ export function buildObjectIndexesQuery(params: ObjectIndexesParameters) {
       "indexNames.id",
       "indexes.id",
     )
-    // System objects don't have audit events
-    .leftJoin("mz_object_lifetimes as lifetimes", (join) =>
-      join
-        .onRef("lifetimes.id", "=", "indexNames.id")
-        .on("lifetimes.event_type", "=", "create"),
-    )
+    // System objects have no creation time
+    .leftJoin("mz_object_history as history", "history.id", "indexNames.id")
     .innerJoin("mz_roles as roles", "roles.id", "indexes.owner_id")
     .innerJoin("mz_show_indexes as showIndexes", (join) =>
       join
@@ -48,7 +44,7 @@ export function buildObjectIndexesQuery(params: ObjectIndexesParameters) {
       "indexNames.database_name as databaseName",
       "indexNames.schema_name as schemaName",
       "roles.name as owner",
-      "lifetimes.occurred_at as createdAt",
+      "history.created_at as createdAt",
       "showIndexes.key as indexedColumns",
     ])
     .where("objectNames.name", "=", params.name)
