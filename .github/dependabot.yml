@@ -161,7 +161,10 @@ updates:
         - minor
         - patch
 - package-ecosystem: pip
-  directory: /ci/builder
+  directories:
+    - /ci/builder
+    - /test/adbc
+    - /test/terraform/azure-temporary
   schedule:
     interval: weekly
     day: sunday
@@ -245,24 +248,12 @@ updates:
       update-types:
         - minor
         - patch
-- package-ecosystem: pip
-  directory: /misc/mcp-materialize
-  schedule:
-    interval: weekly
-    day: sunday
-    time: "22:00"
-  cooldown:
-    default-days: 3
-  open-pull-requests-limit: 50
-  labels: [A-dependencies]
-  groups:
-    simple:
-      applies-to: version-updates
-      update-types:
-        - minor
-        - patch
-- package-ecosystem: pip
-  directory: /misc/mcp-materialize-agents
+# uv projects need the `uv` ecosystem. Under `pip` these directories produced
+# no update PRs at all, and `uv.lock` was never bumped.
+- package-ecosystem: uv
+  directories:
+    - /misc/mcp-materialize
+    - /misc/mcp-materialize-agents
   schedule:
     interval: weekly
     day: sunday
