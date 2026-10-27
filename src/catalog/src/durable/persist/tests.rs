@@ -155,7 +155,10 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
         .expect("join catalog");
     joiner.sync_to_current_updates().await.expect("drain join");
     assert_eq!(
-        joiner.collection_shards_at_current(&ids).await.unwrap(),
+        joiner
+            .collection_shards_at_current(&ids)
+            .await
+            .expect("certify current collection mappings"),
         mappings
     );
     let cached_upper = joiner.current_upper().await;
@@ -176,7 +179,10 @@ async fn test_collection_certification_refreshes_past_cached_fence() {
         .await
         .expect("cached fence");
     assert_eq!(
-        joiner.collection_shards_at_current(&ids).await.unwrap(),
+        joiner
+            .collection_shards_at_current(&ids)
+            .await
+            .expect("certify current collection mappings"),
         BTreeMap::from([(retained, mappings[&retained])])
     );
     assert!(
