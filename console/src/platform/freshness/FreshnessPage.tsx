@@ -575,50 +575,53 @@ const FreshnessPage = () => {
         ) : (
           // Names both scopes whichever is active, so a reader who arrived by
           // cluster learns that schemas are on offer too.
-          <Text textStyle="text-small" color={colors.foreground.secondary}>
+          <Text textStyle="text-base">
             Select a cluster or schema to see the freshness of its objects.
           </Text>
         )}
 
-        <VStack
-          alignItems="flex-start"
-          spacing="2"
-          color={colors.foreground.secondary}
-        >
-          <Text textStyle="text-small">
-            Freshness is wallclock lag: how far behind wall clock time an
-            object&rsquo;s results are. Each object reports it once a minute. A
-            percentile ranks those minutes, so p99 is the lag that 99% of
-            minutes stayed at or under. The Summary section pools the readings
-            for all objects shown and ranks those results together.
-          </Text>
-          <Text textStyle="text-small">
-            The graph displays 60 points per object. Each point describes the
-            worst lag observed on that object during a timespan equal to 1/60 of
-            the selected time window. At 6 hours, for example, each point
-            represents the worst minute during a 6-minute span.
-          </Text>
-          <Text textStyle="text-small">
-            A percentile needs enough readings to differ from pMAX: about 100
-            for p99 and 1,000 for p99.9. Over 1 hour an object has 60, so its
-            p99 equals its pMAX. A scope with few objects displays this same
-            convergence in the Summary section.
-          </Text>
-          <Text textStyle="text-small">
-            The &ldquo;Now&rdquo; column in the tables and the
-            &ldquo;current&rdquo; option in the threshold menu display the
-            reading from the latest minute. The final point on the graph
-            displays the worst minute in the most recent timespan (e.g., 24
-            minutes at a 24 hour time window). Therefore, at longer time
-            windows, the last point on the graph can sit above the
-            &ldquo;Now&rdquo; reading in the table.
-          </Text>
-          <Text textStyle="text-small">
-            pMAX (in the table, as a threshold option and in the Summary)
-            updates once per minute. The graph and all percentiles refresh once
-            per timespan.
-          </Text>
-        </VStack>
+        {/* Explains the numbers above, so it waits until there are some. */}
+        {selected && (
+          <VStack
+            alignItems="flex-start"
+            spacing="2"
+            color={colors.foreground.secondary}
+          >
+            <Text textStyle="text-small">
+              Freshness is wallclock lag: how far behind wall clock time an
+              object&rsquo;s results are. Each object reports it once a minute.
+              A percentile ranks those minutes, so p99 is the lag that 99% of
+              minutes stayed at or under. The Summary section pools the readings
+              for all objects shown and ranks those results together.
+            </Text>
+            <Text textStyle="text-small">
+              The graph displays 60 points per object. Each point describes the
+              worst lag observed on that object during a timespan equal to 1/60
+              of the selected time window. At 6 hours, for example, each point
+              represents the worst minute during a 6-minute span.
+            </Text>
+            <Text textStyle="text-small">
+              A percentile needs enough readings to differ from pMAX: about 100
+              for p99 and 1,000 for p99.9. Over 1 hour an object has 60, so its
+              p99 equals its pMAX. A scope with few objects displays this same
+              convergence in the Summary section.
+            </Text>
+            <Text textStyle="text-small">
+              The &ldquo;Now&rdquo; column in the tables and the
+              &ldquo;current&rdquo; option in the threshold menu display the
+              reading from the latest minute. The final point on the graph
+              displays the worst minute in the most recent timespan (e.g., 24
+              minutes at a 24 hour time window). Therefore, at longer time
+              windows, the last point on the graph can sit above the
+              &ldquo;Now&rdquo; reading in the table.
+            </Text>
+            <Text textStyle="text-small">
+              pMAX (in the table, as a threshold option and in the Summary)
+              updates once per minute. The graph and all percentiles refresh
+              once per timespan.
+            </Text>
+          </VStack>
+        )}
       </VStack>
     </MainContentContainer>
   );

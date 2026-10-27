@@ -78,6 +78,8 @@ const CLUSTER: Cluster = {
   replicationFactor: 1,
 } as unknown as Cluster;
 
+const NOTE = /Freshness is wallclock lag/;
+
 const PROMPT =
   "Select a cluster or schema to see the freshness of its objects.";
 
@@ -133,6 +135,8 @@ describe("FreshnessPage cluster selection", () => {
     expect(screen.getByText("Select a cluster")).toBeVisible();
     expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
     expect(requests).toEqual([]);
+    // The fine print explains numbers that are not on screen yet.
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
   });
 
   it("shows the Summary and the controls before the data arrives", async () => {
@@ -167,6 +171,7 @@ describe("FreshnessPage cluster selection", () => {
     expect(await screen.findByText("quickstart")).toBeVisible();
     await waitFor(() => expect(requests.length).toBeGreaterThan(0));
     expect(screen.queryByText(PROMPT)).not.toBeInTheDocument();
+    expect(screen.getByText(NOTE)).toBeVisible();
   });
 });
 
@@ -234,6 +239,7 @@ describe("FreshnessPage schema scope", () => {
 
     expect(await screen.findByText(PROMPT)).toBeVisible();
     expect(screen.getByText("Select a schema")).toBeVisible();
+    expect(screen.queryByText(NOTE)).not.toBeInTheDocument();
     expect(screen.queryByText("analytics.public")).not.toBeInTheDocument();
     expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
   });
