@@ -289,7 +289,9 @@ def ensure_views(mz, sf, bodies):
             f"SELECT 1 FROM mz_views v JOIN mz_schemas s ON v.schema_id = s.id "
             f"WHERE s.name = '{sch}' AND v.name = '{v}';"
         ):
-            mz(f"CREATE VIEW {sch}.{v} AS {bodies[q]};", search_path=sch)
+            # The index and MV processes reach this check together once the
+            # source is running, so both can see the view missing.
+            mz(f"CREATE VIEW IF NOT EXISTS {sch}.{v} AS {bodies[q]};", search_path=sch)
 
 
 def create_idx_workload(mz, sf, arm, slot):
