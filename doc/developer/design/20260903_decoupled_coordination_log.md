@@ -21,6 +21,58 @@ These components have focused verification, not combined M3 acceptance.
 
 ## Resume here
 
+- Independent endpoint/launch review found three issues, now corrected locally:
+  launch argument credentials in INFO logs, a transient assignment-file deletion
+  during queued lifecycle cleanup, and oversized Kubernetes port names. Tests
+  now cover secret omission, concurrent discovery and long listener names.
+  Backend port names use bounded ordinals with lookup by configured listener name.
+  These fixes are formatted but uncompiled. See `adapter-endpoint-review.md`.
+- Adapter launch specifications now live in
+  `src/environmentd/src/controllerd/provisioning.rs`: stable deployment-qualified
+  identity, declared CPU/memory allocation, single-process scale, listener policy
+  preserved with backend-assigned TCP addresses, and external pubsub. Tests cover
+  listener policy, resources and rename-stable arguments. This new module is
+  formatted but uncompiled. It does not yet implement controllerd startup.
+- Source snapshot `bae88fe9` contains the joined-serving, retained-TCP, launch
+  specification and metadata-freshness work. It is a draft verification snapshot,
+  not verified M3 acceptance. Scratch SSO remains expired. CI140882 finished, so
+  the next draft-PR run can verify this combined source without canceling prior
+  work. All background tasks and subagents have finished.
+- The draft contains join-only adapterd and retained direct-TCP endpoint support.
+  Aljoscha approved hint-first local allocation: try the default port, otherwise
+  discover a free one, and retain it across controller restarts. The backend uses
+  `ServicePort.requires_tcp`, atomic assignment files beside PID metadata and
+  existing process adoption. No proxy or new catalog records. Independent worker
+  implemented backend code/tests. Parent inspected the diff. Formatting passes,
+  but backend builds/tests have not run. See `controllerd-local-endpoints-decision.md`.
+- Join-only adapterd passed combined catalog/environmentd/sqllogictest all-target
+  Clippy and the admission/certification regressions. Removing the admitted-member
+  guard made its regression fail at the expected assertion, then restoration
+  passed. Matching environmentd, adapterd and clusterd product builds passed at
+  `e599a09c`. Evidence: `adapterd-positive-checks.log`,
+  `adapterd-admission-negative.log`, worker `adapterd-admission-restored.log`,
+  `adapterd-environmentd-build.log`, `adapterd-product-build.log`.
+  Public serve enforces process restrictions even for embedded callers. Joiners
+  leave shared configuration rows unchanged. No promotion task runs in adapterd.
+- Real takeover smoke has NOT passed end-to-end. Run `46105ed7` exited during
+  table-writer initialization on CatalogOutOfSync while replicas published updates.
+  Local finite metadata initialization now refreshes/retries at its natural catalog
+  boundary, with strengthened test_multi_subscriber_catalog. That fix is uncompiled.
+  Exact smoke repeat `accc2af1` successfully joined adapterd, preserved replica PIDs
+  and shared configuration, queried an existing MV and resumed WAL writes. It then
+  timed out on a newly created MV with pending_plans={User(513)}. Development
+  environmentd and adapterd use different executable build IDs for written-plan
+  namespaces. This is the leading fixture hypothesis, not yet verified against
+  actual binaries. Do not weaken the witness or namespace safety to pass it.
+  Existing --version output now includes written-plan-build for provisioner use.
+  Adapterd also accepts only --process=0, as injected by the local backend.
+  These latest CLI changes are uncompiled. Fixture: `adapterd-join-smoke.py`.
+  Both failed fixtures cleaned up successfully. Worker run directories preserve logs.
+- Next check after access returns: verify actual binary plan namespaces and the
+  strengthened catalog regression, including negative control. Build/check the
+  combined backend changes and run its new lifetime tests. Then wire controllerd
+  finite initialization and launch using the actual adapter planning namespace.
+  Do not sync a mixed in-progress snapshot. All subagents have finished.
 - Next main outcome: one controllerd-managed default adapterd with external pubsub.
   `controllerd-extraction-map.md` identifies existing launch/backend seams and the
   coordinator-bound managed-policy context to move. Preserve the existing replica
@@ -59,28 +111,31 @@ These components have focused verification, not combined M3 acceptance.
   come from `mz_sessions` via `pg_backend_pid()`, not process-scoped `mz_session_id()`.
   Evidence: `ci140847/session-fixture/{exact-repeat,fixed,full-fixed}.log`,
   `retirement-eligibility/`, `retired-rows/`, `session-cleanup-ownership-review.md`.
-- CI140847 on published `82c8c684` finished. Testdrive 4 passes rebuilt-product
-  unavailable-health expectations. Its Cluster 4 fixture failure is reproduced
-  and corrected locally as above. Cluster 1 repeated the unexplained MV-frontier
-  failure. SLT 4 has two status EXPLAIN mismatches. Upgrade conversion and merge
-  skew remain excluded, not passing. New combined draft-PR CI is pending.
-  Logs and annotations: `ci140847/README.txt`.
+- CI140876 on `0324369e` finished. Its Linux Clippy failure was reproduced:
+  two assertion unwraps in the certification test. Verified repair `b9755c93` is
+  published. CI140882 finished: Clippy/Cargo tests passed, Cluster 1, SLT 4
+  and 0dt smoke failed. Adapterd/backend verification snapshot follows this repair. CI140876 also failed macOS Clippy, SLT 4 and 0dt smoke, not yet fully
+  inspected. Merge skew remains excluded. Logs: `ci140876/build.json`, `clippy.log`.
+  Prior CI140847 Testdrive 4 passes unavailable-health expectations. Cluster 4's
+  session-ID fixture is corrected and its full shard passed locally. Cluster 1's
+  MV-frontier failure and two SLT 4 status EXPLAIN mismatches remain unresolved.
+  Upgrade conversion remains excluded. Prior logs: `ci140847/README.txt`.
 - External pubsub, fresh-only shared seeding, active configuration reconciliation,
   durable-only credential publication and execution-qualified session/subscription
   ownership have focused verification. Combined independent-adapter concurrency,
   promotion and retirement remain open. Native recovery/promotion, parallel and
   retention regressions remain enabled. The cluster-thread assertion propagation
   gap remains unresolved. Do not count checkout failures or unrerun corrections.
-- Worker `i-0788036f0778687f1` is clean on `5c18ca2b`, with no build or test running.
-  Negative-control revisions are no longer checked out. Its real binaries at
-  `5da971ac` differ only in test code from the current implementation. Retained
-  unrelated fixtures/data are preserved. Last free space is about 5 GiB.
-  Use the combined `-p mz-catalog -p mz-adapter --lib` feature set for focused tests.
-  Selecting adapter alone rebuilt another dependency variant and exhausted disk.
-  Audited stale/incomplete incremental cleanup preserved compiled outputs and
-  current test caches. See `finite-startup-cache-reclamation.log` and
-  `finite-alter-cache-cleanup.log`. Keep the worker idle and clean before syncing.
-  Local formatting uses `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`.
+- Worker `i-0788036f0778687f1` is clean on `e599a09c`, with no task left running.
+  Scratch SSO expired. Aljoscha must run `bin/scratch login`; request already sent.
+  Do not replace the worker or block all implementation on that access issue.
+  Test codegen exhausted disk and exact retry could not start. Audited inactive
+  dependency incremental caches reclaimed about 15 GiB, preserving changed-crate
+  caches, compiled products and fixtures. Tests and product builds then passed.
+  Last free space was about 9 GiB during product linking. Evidence:
+  `adapterd-inactive-cache-audit.txt`, `adapterd-inactive-cache-reclamation.log`.
+  Use combined `-p mz-catalog -p mz-adapter --lib` for focused catalog/adapter tests.
+  Local formatting: `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`.
 
 Evidence is under `~/.local/share/aj/m3-evidence/`. Completed foundation pointers
 are in `foundation-handoff-detail.md` and `pre-status-closeout-handoff.md`.
