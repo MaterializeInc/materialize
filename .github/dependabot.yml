@@ -131,6 +131,7 @@ updates:
     - /misc/mcp-materialize-agents
     - /ci/builder
     - /test
+    - /test/playwright
   schedule:
     interval: weekly
     day: sunday
