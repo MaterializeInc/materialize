@@ -17,13 +17,14 @@ import pathlib
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import psutil
 import psycopg
@@ -113,12 +114,10 @@ def main() -> int:
     parser.add_argument(
         "--postgres",
         help="Postgres/CockroachDB connection string",
-        default=os.getenv("MZDEV_POSTGRES", DEFAULT_POSTGRES),
     )
     parser.add_argument(
         "--blob",
         help="Blob storage connection string",
-        default=os.getenv("MZDEV_BLOB", DEFAULT_BLOB),
     )
     parser.add_argument(
         "--release",
@@ -199,7 +198,40 @@ def main() -> int:
         help="Path to json file with environmentd listeners configuration.",
         default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth.json",
     )
+    parser.add_argument(
+        "--controller-data-directory",
+        type=pathlib.Path,
+        default=MZ_ROOT / "mzdata-controllerd",
+        help="Separate local controller state (never use environmentd's mzdata)",
+    )
+    parser.add_argument(
+        "--pubsub-url",
+        default="http://127.0.0.1:6879",
+        help="Existing external pubsub service for controllerd",
+    )
+    parser.add_argument(
+        "--adapter-sizes",
+        default='{"1":{"cpu_limit":1,"memory_limit":"4 GiB"}}',
+        help="Controller adapter size allocations as JSON (must include size 1 for fresh initialization)",
+    )
     args = parser.parse_intermixed_args()
+    if args.program == "controllerd" and args.reset:
+        raise UIError(
+            "controllerd does not support --reset; preserve its metadata and children"
+        )
+    # Controller state and metadata must not implicitly reuse environmentd's.
+    default_postgres = (
+        "postgres://root@localhost:26257/materialize_controllerd"
+        if args.program == "controllerd"
+        else DEFAULT_POSTGRES
+    )
+    default_blob = (
+        f"file://{args.controller_data_directory.resolve()}/persist/blob"
+        if args.program == "controllerd"
+        else DEFAULT_BLOB
+    )
+    args.postgres = args.postgres or os.getenv("MZDEV_POSTGRES", default_postgres)
+    args.blob = args.blob or os.getenv("MZDEV_BLOB", default_blob)
 
     # Handle `+toolchain` like rustup.
     args.channel = None
@@ -284,35 +316,16 @@ def main() -> int:
 
             MZDATA.mkdir(exist_ok=True)
             scratch.mkdir(exist_ok=True)
-            environment_file = MZDATA / "environment-id"
-            try:
-                environment_id = environment_file.read_text().rstrip()
-            except FileNotFoundError:
-                environment_id = f"local-az1-{uuid.uuid4()}-0"
-                environment_file.write_text(environment_id)
-
             print(f"persist-blob-url: {args.blob}")
             print(f"listeners config path: {args.listeners_config_path}")
-            command += [
-                f"--listeners-config-path={args.listeners_config_path}",
-                "--orchestrator=process",
-                f"--orchestrator-process-secrets-directory={MZDATA}/secrets",
-                "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
-                f"--orchestrator-process-prometheus-service-discovery-directory={MZDATA}/prometheus",
-                f"--orchestrator-process-scratch-directory={scratch}",
-                "--secrets-controller=local-file",
-                f"--persist-consensus-url={args.postgres}?options=--search_path=consensus",
-                f"--persist-blob-url={args.blob}",
-                f"--timestamp-oracle-url={args.postgres}?options=--search_path=tsoracle",
-                f"--environment-id={environment_id}",
-                "--bootstrap-role=materialize",
-                f"--cluster-replica-sizes={json.dumps(cluster_replica_size_map())}",
-                f"--bootstrap-default-cluster-replica-size={bootstrap_cluster_replica_size()}",
-                *args.args,
-            ]
+            command += _environment_args(args, MZDATA, scratch) + args.args
             if args.monitoring:
                 command += ["--opentelemetry-endpoint=http://localhost:4317"]
             # Common stack overflows in Debug mode
+            if not args.release and not args.optimized:
+                env["RUST_MIN_STACK"] = RUST_MIN_STACK
+        elif args.program == "controllerd":
+            command += _controller_args(args, binaries_dir) + args.args
             if not args.release and not args.optimized:
                 env["RUST_MIN_STACK"] = RUST_MIN_STACK
         elif args.program == "sqllogictest":
@@ -385,6 +398,9 @@ def main() -> int:
     else:
         raise UIError(f"unknown program {args.program}")
 
+    if args.program == "controllerd":
+        return _run_controller(command, env)
+
     # We fork off a process that moves to its own process group and then runs
     # `command`. This parent process continues running until `command` exits,
     # and then kills `command`'s process group. This avoids leaking "grandchild"
@@ -446,6 +462,122 @@ def main() -> int:
         proc = subprocess.run(command, env=env)
 
     exit(proc.returncode)
+
+
+def _environment_args(
+    args: argparse.Namespace,
+    data: pathlib.Path,
+    scratch: pathlib.Path,
+    proxy_addr: str = "0.0.0.0",
+) -> list[str]:
+    environment_file = data / "environment-id"
+    try:
+        environment_id = environment_file.read_text().rstrip()
+    except FileNotFoundError:
+        environment_id = f"local-az1-{uuid.uuid4()}-0"
+        environment_file.write_text(environment_id)
+    return [
+        f"--listeners-config-path={args.listeners_config_path}",
+        "--orchestrator=process",
+        f"--orchestrator-process-secrets-directory={data}/secrets",
+        f"--orchestrator-process-tcp-proxy-listen-addr={proxy_addr}",
+        f"--orchestrator-process-prometheus-service-discovery-directory={data}/prometheus",
+        f"--orchestrator-process-scratch-directory={scratch}",
+        "--secrets-controller=local-file",
+        f"--persist-consensus-url={_schema_url(args.postgres, 'consensus')}",
+        f"--persist-blob-url={args.blob}",
+        f"--timestamp-oracle-url={_schema_url(args.postgres, 'tsoracle')}",
+        f"--environment-id={environment_id}",
+        "--bootstrap-role=materialize",
+        f"--cluster-replica-sizes={json.dumps(cluster_replica_size_map())}",
+        f"--bootstrap-default-cluster-replica-size={bootstrap_cluster_replica_size()}",
+    ]
+
+
+def _schema_url(url: str, schema: str) -> str:
+    parsed = urlparse(url)
+    query = parse_qsl(parsed.query)
+    # Preserve SSL and other connection options, including existing options.
+    options = " ".join(value for key, value in query if key == "options")
+    query = [(key, value) for key, value in query if key != "options"]
+    query.append(("options", f"{options} --search_path={schema}".strip()))
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _controller_args(args: argparse.Namespace, binaries: pathlib.Path) -> list[str]:
+    data = args.controller_data_directory.resolve()
+    if data == MZDATA.resolve():
+        raise UIError("controllerd requires state separate from environmentd's mzdata")
+    # Discover the namespace from the actual executable, not the source version
+    # or controller build. Different builds can write different plan formats.
+    version = subprocess.check_output(
+        [str(binaries / "adapterd"), "--version"], text=True
+    )
+    builds = [
+        line.removeprefix("written-plan-build: ").strip()
+        for line in version.splitlines()
+        if line.startswith("written-plan-build: ")
+    ]
+    if len(builds) != 1 or not builds[0]:
+        raise UIError("adapterd --version did not report one written-plan-build")
+
+    pubsub = urlparse(args.pubsub_url)
+    if pubsub.scheme not in ("http", "https") or not pubsub.hostname or not pubsub.port:
+        raise UIError("--pubsub-url requires an http(s) URL with an explicit port")
+    try:
+        with socket.create_connection((pubsub.hostname, pubsub.port), timeout=5):
+            pass
+    except OSError as e:
+        raise UIError(
+            f"external pubsub is unreachable: {e}",
+            hint="Start pubsubd separately. See doc/developer/controllerd.md.",
+        )
+
+    with _connect_sql(args.postgres) as dbconn:
+        if not (data / "environment-id").exists():
+            with dbconn.cursor() as cur:
+                cur.execute(
+                    "SELECT schema_name FROM information_schema.schemata "
+                    "WHERE schema_name IN ('consensus', 'tsoracle', 'storage')"
+                )
+                if cur.fetchone() is not None:
+                    raise UIError(
+                        "fresh controllerd state requires unused metadata; "
+                        "existing environments cannot be converted"
+                    )
+        data.mkdir(parents=True, exist_ok=True)
+        scratch = data / "scratch"
+        scratch.mkdir(exist_ok=True)
+        command = _environment_args(args, data, scratch, proxy_addr="127.0.0.1")
+        for schema in ["consensus", "tsoracle", "storage"]:
+            _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
+    command += [
+        f"--adapterd-image={binaries / 'adapterd'}",
+        f"--adapter-plan-build={builds[0]}",
+        f"--adapter-sizes={args.adapter_sizes}",
+        "--persist-pubsub-external",
+        f"--persist-pubsub-url={args.pubsub_url}",
+    ]
+    return command
+
+
+def _run_controller(command: list[str], env: dict[str, str]) -> int:
+    print(f"$ {' '.join(command)}", flush=True)
+    # Isolate terminal signals from retained adapters and replicas. Forward only
+    # to controllerd, never kill its process group on exit (including a panic).
+    proc = subprocess.Popen(command, env=env, start_new_session=True)
+
+    def forward(signum, frame):
+        proc.send_signal(signum)
+
+    handlers = {
+        sig: signal.signal(sig, forward) for sig in (signal.SIGINT, signal.SIGTERM)
+    }
+    try:
+        return proc.wait()
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
 
 
 def _cargo_build(
@@ -621,4 +753,4 @@ def _handle_lingering_services(kill: bool = False) -> None:
 
 if __name__ == "__main__":
     with ui.error_handler("run"):
-        main()
+        sys.exit(main())
