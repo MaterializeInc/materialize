@@ -429,8 +429,7 @@ impl Coordinator {
     /// Realize shared explicit declarations without borrowing a peer's inventory.
     /// The existing catalog transaction owns admission and derived provisioning.
     pub(super) async fn reconcile_declared_replicas(&mut self) -> Result<(), AdapterError> {
-        if !self.controller.replica_owned_compute() || !self.controller.manages_replica_processes()
-        {
+        if !self.controller.replica_owned_compute() {
             return Ok(());
         }
         let mut declarations: BTreeMap<_, Vec<_>> = BTreeMap::new();

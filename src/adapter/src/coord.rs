@@ -5132,9 +5132,9 @@ impl Coordinator {
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             self.spawn_catalog_info_metrics_task();
-            if self.controller.manages_replica_processes() {
-                self.spawn_cluster_controller_task();
-            }
+            // Adapters commit replica policy decisions even when controllerd
+            // owns process provisioning. Catalog preconditions arbitrate peers.
+            self.spawn_cluster_controller_task();
             self.spawn_caught_up_check_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
