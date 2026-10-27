@@ -648,7 +648,7 @@ impl Session {
                 ops: TransactionOps::Peeks { determination, .. },
                 access: _,
                 id: _,
-                ..
+                pending_catalog_results: _,
             }) => Some(determination.clone()),
             _ => None,
         }
@@ -669,7 +669,7 @@ impl Session {
                 },
                 access: _,
                 id: _,
-                ..
+                pending_catalog_results: _,
             })
         )
     }
