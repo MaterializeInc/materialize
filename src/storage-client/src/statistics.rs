@@ -21,9 +21,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use mz_controller_types::ReplicaId;
+use mz_ore::metrics::DeleteOnDropCounter;
 use serde::{Deserialize, Serialize};
 
 use mz_repr::{GlobalId, RelationDesc, Row, SqlScalarType};
+
+type RegressionCounter = DeleteOnDropCounter<prometheus::core::AtomicU64, Vec<String>>;
 
 pub static MZ_SOURCE_STATISTICS_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
@@ -327,38 +330,15 @@ impl From<bool> for Boolean {
 }
 
 /// A numerical gauge that never regresses.
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct Total {
     /// Defaults to 0. Can be skipped on updates from clusterd.
     total: Option<u64>,
-    /// If provided, it is bumped on regressions, as opposed to `error!`
-    /// logs.
-    #[serde(skip)]
-    regressions:
-        Option<mz_ore::metrics::DeleteOnDropCounter<prometheus::core::AtomicU64, Vec<String>>>,
 }
 
 impl From<Option<u64>> for Total {
     fn from(f: Option<u64>) -> Self {
-        Total {
-            total: f,
-            regressions: None,
-        }
-    }
-}
-
-impl Clone for Total {
-    fn clone(&self) -> Self {
-        Self {
-            total: self.total,
-            regressions: None,
-        }
-    }
-}
-
-impl PartialEq for Total {
-    fn eq(&self, other: &Self) -> bool {
-        self.total == other.total
+        Total { total: f }
     }
 }
 
@@ -366,6 +346,25 @@ impl Total {
     /// Pack this `Total` into a `u64`, defaulting to 0.
     fn pack(&self) -> u64 {
         self.total.unwrap_or_default()
+    }
+
+    /// Keeps the higher of the two values. Returns the refused `(current, incoming)` pair when
+    /// `other` is lower, leaving what to do about it to the caller.
+    fn merge(&mut self, other: Self) -> Option<(u64, u64)> {
+        match (&mut self.total, other.total) {
+            (_, None) => None,
+            (None, Some(other)) => {
+                self.total = Some(other);
+                None
+            }
+            (Some(this), Some(other)) => {
+                if other < *this {
+                    return Some((*this, other));
+                }
+                *this = other;
+                None
+            }
+        }
     }
 }
 
@@ -388,32 +387,14 @@ impl StorageMetric for Total {
             .sum();
 
         // If any are none, we can't aggregate.
-        // self.regressions is only meaningful in incorporation.
         Self {
             total: (!any_none).then_some(inner),
-            regressions: None,
         }
     }
 
     fn incorporate(&mut self, other: Self, field_name: &'static str) {
-        match (&mut self.total, other.total) {
-            (_, None) => {}
-            (None, Some(other)) => self.total = Some(other),
-            (Some(this), Some(other)) => {
-                if other < *this {
-                    if let Some(metric) = &self.regressions {
-                        metric.inc()
-                    } else {
-                        tracing::error!(
-                            "total gauge {field_name} erroneously regressed from {} to {}",
-                            this,
-                            other
-                        );
-                    }
-                    return;
-                }
-                *this = other
-            }
+        if let Some((from, to)) = self.merge(other) {
+            tracing::error!("total gauge {field_name} erroneously regressed from {from} to {to}");
         }
     }
 }
@@ -505,26 +486,24 @@ pub struct SourceStatisticsUpdate {
     pub snapshot_records_staged: Gauge<ResettingNullableTotal>,
 
     pub snapshot_committed: Gauge<Boolean>,
-    // `offset_known` is enriched with a counter in `unpack` and `with_metrics` that is
-    // bumped whenever it regresses. This is distinct from `offset_committed`, which
-    // `error!` logs.
+    // `offset_committed` is calculated from source frontiers, which never go backwards, so a
+    // regression is a bug in how we calculate it and `incorporate` logs it as an error.
     //
-    // `offset_committed` is entirely in our control: it is calculated from source frontiers
-    // that are guaranteed to never go backwards. Therefore, it regresses is a bug in how we
-    // calculate it.
-    //
-    // `offset_known` is calculated based on information the upstream service of the source gives
-    // us. This is meaningfully less reliable, and can cause regressions in the value. Some known
-    // cases that cause this are:
-    // - A Kafka topic being deleted and recreated.
-    // - A Postgres source being restored to a backup.
-    //
-    // We attempt to communicate both of these to the user using the source status system tables.
-    // While emitting a regressed `offset_known` can be at least partially avoided in the source
-    // implementation, we avoid noisy sentry alerts by instead bumping a counter that can be used
-    // if a scenario requires more investigation.
+    // `offset_known` comes from the upstream system, which can legitimately move it backwards,
+    // for example when a Kafka topic is deleted and recreated or a Postgres database is restored
+    // from a backup. `incorporate` reports that regression to the caller instead of logging it,
+    // and callers count it on a metric. The source status system tables are where we attempt to
+    // communicate these upstream events to the user.
     pub offset_known: Gauge<Total>,
     pub offset_committed: Gauge<Total>,
+}
+
+/// Gauges whose incoming value [`SourceStatisticsUpdate::incorporate`] refused because it was
+/// lower than the value already held. Whether that is an error is the caller's decision.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub struct Regressions {
+    pub offset_known: bool,
 }
 
 impl SourceStatisticsUpdate {
@@ -598,7 +577,7 @@ impl SourceStatisticsUpdate {
         self.snapshot_records_staged.0.reset();
     }
 
-    pub fn incorporate(&mut self, other: SourceStatisticsUpdate) {
+    pub fn incorporate(&mut self, other: SourceStatisticsUpdate) -> Regressions {
         let SourceStatisticsUpdate {
             messages_received,
             bytes_received,
@@ -626,8 +605,11 @@ impl SourceStatisticsUpdate {
         snapshot_records_staged
             .incorporate(other.snapshot_records_staged, "snapshot_records_staged");
         snapshot_committed.incorporate(other.snapshot_committed, "snapshot_committed");
-        offset_known.incorporate(other.offset_known, "offset_known");
         offset_committed.incorporate(other.offset_committed, "offset_committed");
+
+        Regressions {
+            offset_known: offset_known.0.merge(other.offset_known.0).is_some(),
+        }
     }
 
     /// Incorporate only the counters of the given update, ignoring gauge values.
@@ -644,12 +626,6 @@ impl SourceStatisticsUpdate {
         bytes_received.incorporate(other.bytes_received, "bytes_received");
         updates_staged.incorporate(other.updates_staged, "updates_staged");
         updates_committed.incorporate(other.updates_committed, "updates_committed");
-    }
-
-    /// Enrich statistics that use prometheus metrics.
-    pub fn with_metrics(mut self, metrics: &crate::metrics::StorageControllerMetrics) -> Self {
-        self.offset_known.0.regressions = Some(metrics.regressed_offset_known(self.id));
-        self
     }
 }
 
@@ -682,10 +658,10 @@ impl PackableStats for SourceStatisticsUpdate {
 
     fn unpack(
         row: Row,
-        metrics: &crate::metrics::StorageControllerMetrics,
+        _metrics: &crate::metrics::StorageControllerMetrics,
     ) -> (GlobalId, Option<ReplicaId>, Self) {
         let mut iter = row.iter();
-        let mut s = Self {
+        let s = Self {
             id: iter.next().unwrap().unwrap_str().parse().unwrap(),
 
             messages_received: iter.next().unwrap().unwrap_uint64().into(),
@@ -712,7 +688,6 @@ impl PackableStats for SourceStatisticsUpdate {
             offset_committed: Gauge::gauge(Some(iter.next().unwrap().unwrap_uint64())),
         };
 
-        s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
         (s.id, None, s)
     }
 }
@@ -722,7 +697,7 @@ impl PackableStats for SourceStatisticsUpdate {
 ///
 /// This mirrors [SourceStatisticsUpdate] and we update ourselve by
 /// incorporating them using [ControllerSourceStatistics::incorporate]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ControllerSourceStatistics {
     pub id: GlobalId,
 
@@ -758,10 +733,30 @@ pub struct ControllerSourceStatistics {
 
     // For implementing `ZeroInitializedStats`.
     needs_zero_initialization: bool,
+
+    /// Bumped each time this replica reports a lower `offset_known` than the one held. See the
+    /// `offset_known` field of [`SourceStatisticsUpdate`] for why that is not an error.
+    regressed_offset_known: RegressionCounter,
 }
 
 impl ControllerSourceStatistics {
-    pub fn new(id: GlobalId, replica_id: Option<ReplicaId>) -> Self {
+    pub fn new(
+        id: GlobalId,
+        replica_id: Option<ReplicaId>,
+        metrics: &crate::metrics::StorageControllerMetrics,
+    ) -> Self {
+        Self::zeroed(
+            id,
+            replica_id,
+            metrics.regressed_offset_known(id, replica_id),
+        )
+    }
+
+    fn zeroed(
+        id: GlobalId,
+        replica_id: Option<ReplicaId>,
+        regressed_offset_known: RegressionCounter,
+    ) -> Self {
         Self {
             id,
             replica_id,
@@ -779,6 +774,7 @@ impl ControllerSourceStatistics {
             offset_committed: Default::default(),
             last_updated: Instant::now(),
             needs_zero_initialization: true,
+            regressed_offset_known,
         }
     }
 
@@ -802,6 +798,7 @@ impl ControllerSourceStatistics {
             offset_committed,
             last_updated,
             needs_zero_initialization: _,
+            regressed_offset_known,
         } = self;
 
         messages_received.incorporate(update.messages_received, "messages_received");
@@ -815,8 +812,10 @@ impl ControllerSourceStatistics {
         snapshot_records_staged
             .incorporate(update.snapshot_records_staged, "snapshot_records_staged");
         snapshot_committed.incorporate(update.snapshot_committed, "snapshot_committed");
-        offset_known.incorporate(update.offset_known, "offset_known");
         offset_committed.incorporate(update.offset_committed, "offset_committed");
+        if offset_known.0.merge(update.offset_known.0).is_some() {
+            regressed_offset_known.inc();
+        }
 
         *last_updated = Instant::now();
     }
@@ -874,7 +873,7 @@ impl PackableStats for ControllerSourceStatistics {
             )
         };
 
-        let mut s = Self {
+        let s = Self {
             id,
             replica_id,
 
@@ -904,9 +903,9 @@ impl PackableStats for ControllerSourceStatistics {
             // This is coming from a Row, so we have definitely already written
             // out a "zero update" at some point.
             needs_zero_initialization: false,
+            regressed_offset_known: metrics.regressed_offset_known(id, replica_id),
         };
 
-        s.offset_known.0.regressions = Some(metrics.regressed_offset_known(s.id));
         (s.id, replica_id, s)
     }
 }
@@ -927,7 +926,11 @@ impl ZeroInitializedStats for ControllerSourceStatistics {
     }
 
     fn zero_stat(&self) -> Self {
-        ControllerSourceStatistics::new(self.id, self.replica_id)
+        Self::zeroed(
+            self.id,
+            self.replica_id,
+            self.regressed_offset_known.clone(),
+        )
     }
 }
 
@@ -1181,5 +1184,78 @@ impl WebhookStatistics {
             offset_known: Gauge::gauge(None::<u64>),
             offset_committed: Gauge::gauge(None::<u64>),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_cluster_client::metrics::ControllerMetrics;
+    use mz_ore::metrics::MetricsRegistry;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn offset_known_regression_is_counted() {
+        let registry = MetricsRegistry::new();
+        let metrics = crate::metrics::StorageControllerMetrics::new(
+            &registry,
+            ControllerMetrics::new(&registry),
+        );
+        let id = GlobalId::User(1);
+        let update = |offset_known: u64| SourceStatisticsUpdate {
+            id,
+            messages_received: Default::default(),
+            bytes_received: Default::default(),
+            updates_staged: Default::default(),
+            updates_committed: Default::default(),
+            records_indexed: Default::default(),
+            bytes_indexed: Default::default(),
+            rehydration_latency_ms: Default::default(),
+            snapshot_records_known: Default::default(),
+            snapshot_records_staged: Default::default(),
+            snapshot_committed: Default::default(),
+            offset_known: Gauge::gauge(Some(offset_known)),
+            offset_committed: Default::default(),
+        };
+
+        let mut stats = ControllerSourceStatistics::new(id, None, &metrics);
+        stats.incorporate(update(10));
+        stats.incorporate(update(5));
+
+        assert_eq!(stats.offset_known.0.total, Some(10));
+        assert_eq!(stats.regressed_offset_known.get(), 1);
+    }
+
+    #[mz_ore::test]
+    fn source_update_reports_offset_known_regression() {
+        let id = GlobalId::User(1);
+        let update = |offset_known: u64, offset_committed: u64| SourceStatisticsUpdate {
+            id,
+            messages_received: Default::default(),
+            bytes_received: Default::default(),
+            updates_staged: Default::default(),
+            updates_committed: Default::default(),
+            records_indexed: Default::default(),
+            bytes_indexed: Default::default(),
+            rehydration_latency_ms: Default::default(),
+            snapshot_records_known: Default::default(),
+            snapshot_records_staged: Default::default(),
+            snapshot_committed: Default::default(),
+            offset_known: Gauge::gauge(Some(offset_known)),
+            offset_committed: Gauge::gauge(Some(offset_committed)),
+        };
+
+        let mut stats = update(10, 10);
+        assert_eq!(
+            stats.incorporate(update(12, 12)),
+            Regressions {
+                offset_known: false
+            }
+        );
+        assert_eq!(
+            stats.incorporate(update(5, 12)),
+            Regressions { offset_known: true }
+        );
+        assert_eq!(stats.offset_known.0.total, Some(12));
     }
 }

@@ -40,6 +40,8 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::progress::frontier::Antichain;
 
+use crate::metrics::{StatisticsMergeMetricDefs, StatisticsMergeMetrics};
+
 // Note(guswynn): ordinarily these metric structs would be in the `metrics` modules, but we
 // put them here so they can be near the user-facing definitions as well.
 
@@ -916,24 +918,33 @@ impl SinkStatistics {
 pub struct AggregatedStatistics {
     worker_id: usize,
     worker_count: usize,
+    metrics: StatisticsMergeMetricDefs,
     local_source_statistics: BTreeMap<GlobalId, (usize, GlobalId, SourceStatistics)>,
     local_sink_statistics: BTreeMap<GlobalId, (usize, SinkStatistics)>,
 
     global_source_statistics:
         BTreeMap<GlobalId, (usize, GlobalId, Vec<Option<SourceStatisticsUpdate>>)>,
     global_sink_statistics: BTreeMap<GlobalId, (usize, Vec<Option<SinkStatisticsUpdate>>)>,
+    /// Kept in step with `global_source_statistics`.
+    merge_metrics: BTreeMap<GlobalId, StatisticsMergeMetrics>,
 }
 
 impl AggregatedStatistics {
     /// Initialize a new `AggregatedStatistics`.
-    pub fn new(worker_id: usize, worker_count: usize) -> Self {
+    pub(crate) fn new(
+        worker_id: usize,
+        worker_count: usize,
+        metrics: StatisticsMergeMetricDefs,
+    ) -> Self {
         AggregatedStatistics {
             worker_id,
             worker_count,
+            metrics,
             local_source_statistics: Default::default(),
             local_sink_statistics: Default::default(),
             global_source_statistics: Default::default(),
             global_sink_statistics: Default::default(),
+            merge_metrics: Default::default(),
         }
     }
 
@@ -968,6 +979,7 @@ impl AggregatedStatistics {
         self.local_sink_statistics.remove(&id);
         self.global_source_statistics.remove(&id);
         self.global_sink_statistics.remove(&id);
+        self.merge_metrics.remove(&id);
     }
 
     /// Advance the _global epoch_ for statistics.
@@ -999,6 +1011,7 @@ impl AggregatedStatistics {
         id: GlobalId,
         ingestion_id: GlobalId,
         resume_upper: Antichain<Timestamp>,
+        shard_id: &mz_persist_client::ShardId,
         stats: F,
     ) {
         self.local_source_statistics
@@ -1015,6 +1028,9 @@ impl AggregatedStatistics {
             self.global_source_statistics
                 .entry(id)
                 .or_insert_with(|| (0, ingestion_id, vec![None; self.worker_count]));
+            self.merge_metrics.entry(id).or_insert_with(|| {
+                StatisticsMergeMetrics::new(&self.metrics, id, shard_id, self.worker_count)
+            });
         }
     }
 
@@ -1058,7 +1074,12 @@ impl AggregatedStatistics {
                         update.reset_gauges();
                         stats[stat.worker_id] = Some(update);
                     }
-                    (Some(occupied), true) => occupied.incorporate(update),
+                    (Some(occupied), true) => {
+                        let regressed = occupied.incorporate(update);
+                        if regressed.offset_known {
+                            self.merge_metrics[&stat.id].inc_regressed_offset_known(stat.worker_id);
+                        }
+                    }
                     (Some(occupied), false) => occupied.incorporate_counters(update),
                 }
             }
