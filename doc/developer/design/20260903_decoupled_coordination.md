@@ -828,6 +828,14 @@ Preserve cross-adapter catalog freshness, write ordering and independent client
 protection. Responses, cancellation, query-local dataflows and disconnect cleanup
 remain isolated. No serving adapter owns shared process management.
 
+Provide `bin/controllerd --optimized` as the local development entry point.
+With documented metadata-store prerequisites in place, it builds the required
+binaries, configures the local environment, starts or connects to external pubsub,
+and launches controllerd. Controllerd provisions the catalog-declared adapters
+and replicas, including the default adapter on fresh initialization. Include a
+short recipe for startup, SQL/HTTP access and stopping/restarting without resetting
+state. Exercise the local demo through this entry point, not only a private harness.
+
 Build through these slices, preserving working outcomes as the split progresses:
 
 1. **One default adapter.** Establish stable adapter identity and separate

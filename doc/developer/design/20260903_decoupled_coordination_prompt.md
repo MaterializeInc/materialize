@@ -24,6 +24,10 @@ adapter and separate pubsub. Continue through independent adapters, SQL/HTTP-man
 lifecycle and deployment/backend integration, not just the binary extraction.
 The handoff identifies the current slice, concrete gaps and next useful check.
 
+M3 includes `bin/controllerd --optimized` and a short local startup recipe, using
+the existing developer launcher machinery. Verify the local demo through that
+user-facing entry point, not only the test harness.
+
 Work outcome-first: get the smallest real end-to-end slice of the main outcome
 working early. Use that integration to expose architectural risks and determine
 which supporting work is actually needed. Limit preparation to concrete blockers
