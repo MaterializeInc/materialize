@@ -403,12 +403,13 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
         let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
         let ops = vec![
-            catalog::Op::DropObjects(
-                drop_ids
+            catalog::Op::DropObjects {
+                objects: drop_ids
                     .iter()
                     .map(|id| catalog::DropObjectInfo::Item(*id))
                     .collect(),
-            ),
+                cascade: false,
+            },
             catalog::Op::CreateItem {
                 id: item_id,
                 name: name.clone(),

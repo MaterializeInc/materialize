@@ -144,6 +144,12 @@ impl Coordinator {
         let config = cluster.config.clone();
         let mut new_config = config.clone();
 
+        match options.query_policy {
+            Set(policy) => new_config.query_policy = policy,
+            Reset => new_config.query_policy = None,
+            Unchanged => {}
+        }
+
         match (&new_config.variant, &options.managed) {
             (Managed(_), Reset) | (Managed(_), Unchanged) | (Managed(_), Set(true)) => {}
             (Managed(_), Set(false)) => new_config.variant = Unmanaged,
@@ -782,6 +788,7 @@ impl Coordinator {
             variant,
             workload_class,
             if_not_exists,
+            query_policy,
         }: CreateClusterPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_cluster");
@@ -821,6 +828,7 @@ impl Coordinator {
         let config = ClusterConfig {
             variant: cluster_variant,
             workload_class,
+            query_policy,
         };
         let ops = vec![catalog::Op::CreateCluster {
             id,
@@ -1957,6 +1965,7 @@ fn alter_changes_reconfiguration_target(options: &PlanClusterOption) -> bool {
         schedule: _,
         workload_class: _,
         auto_scaling_strategy: _,
+        query_policy: _,
     } = options;
     !matches!(size, Unchanged)
         || !matches!(replication_factor, Unchanged)

@@ -2683,6 +2683,74 @@ fn test_dataflow_error_codes() {
 
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
+fn test_query_policy_warn_notice() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_query_policies".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_query_policy_enforcement".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut admin = server.pg_config().connect(postgres::NoTls).unwrap();
+    for stmt in [
+        "CREATE TABLE t (a INT, b INT)",
+        "INSERT INTO t VALUES (1, 10), (1, 30), (2, 20)",
+        "CREATE DEFAULT INDEX ON t",
+        "CREATE QUERY POLICY no_dataflows (MODE = 'warn', RULES (
+             fast_only (action = 'reject', metric = 'query_plan_includes',
+                        value = 'slow_path_query')
+         ))",
+        "ALTER CLUSTER quickstart SET (QUERY POLICY = no_dataflows)",
+        "ALTER ROLE materialize SET query_policy = no_dataflows",
+    ] {
+        admin.batch_execute(stmt).unwrap();
+    }
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| tx.unbounded_send(notice).unwrap())
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let row = client.query_one("SELECT sum(b) FROM t", &[]).unwrap();
+    assert_eq!(row.get::<_, i64>(0), 60);
+
+    let notice = rx.try_recv().expect("missing query policy warning");
+    assert_eq!(notice.severity(), "NOTICE");
+    assert_eq!(notice.code(), &SqlState::SUCCESSFUL_COMPLETION);
+    assert_eq!(
+        notice.message(),
+        "query would be rejected under query policy \"no_dataflows\" (rule \"fast_only\"): \
+         this query would build a temporary dataflow"
+    );
+    assert_eq!(
+        notice.detail(),
+        Some(
+            "Query policy \"no_dataflows\" rule \"fast_only\" applies to this query on cluster \
+             \"quickstart\". Policy mode is 'warn', so this rule does not reject the query."
+        )
+    );
+    assert_eq!(
+        notice.hint(),
+        Some(
+            "Run EXPLAIN to inspect the query plan. Create an index that serves the query on this \
+             cluster, or use a cluster and role whose query policies permit this plan."
+        )
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "a policy attached to both the role and cluster must warn only once"
+    );
+
+    let row = client.query_one("SELECT 42", &[]).unwrap();
+    assert_eq!(row.get::<_, i32>(0), 42);
+    assert!(rx.try_recv().is_err(), "a nonmatching query must not warn");
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_emit_timestamp_notice() {
     let server = test_util::TestHarness::default().start_blocking();
 

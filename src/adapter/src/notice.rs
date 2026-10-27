@@ -122,6 +122,7 @@ pub enum AdapterNotice {
         notice: String,
         hint: String,
     },
+    QueryPolicyWarning(crate::query_policy::QueryPolicyViolation),
     WebhookSourceCreated {
         url: url::Url,
     },
@@ -217,6 +218,7 @@ impl AdapterNotice {
             },
             AdapterNotice::UnknownSessionDatabase(_) => Severity::Notice,
             AdapterNotice::OptimizerNotice { .. } => Severity::Notice,
+            AdapterNotice::QueryPolicyWarning(_) => Severity::Notice,
             AdapterNotice::WebhookSourceCreated { .. } => Severity::Notice,
             AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
             AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
@@ -250,6 +252,10 @@ impl AdapterNotice {
                     .into(),
             ),
             AdapterNotice::QueryTimestamp { explanation } => Some(format!("\n{explanation}")),
+            AdapterNotice::QueryPolicyWarning(violation) => Some(format!(
+                "{} Policy mode is 'warn', so this rule does not reject the query.",
+                violation.detail(),
+            )),
             AdapterNotice::CascadeDroppedObject { objects } => Some(
                 objects
                     .iter()
@@ -290,6 +296,7 @@ impl AdapterNotice {
                     .into(),
             ),
             AdapterNotice::OptimizerNotice { notice: _, hint } => Some(hint.clone()),
+            AdapterNotice::QueryPolicyWarning(violation) => Some(violation.hint().into()),
             AdapterNotice::DroppedInUseIndex(..) => Some("To free up the resources used by the index, recreate all the above-mentioned objects.".into()),
             AdapterNotice::IntrospectionClusterUsage => Some("Use the new name instead.".into()),
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Some("Use the new name instead.".into()),
@@ -348,6 +355,7 @@ impl AdapterNotice {
             AdapterNotice::UnknownSessionDatabase(_) => SqlState::from_code("MZ004"),
             AdapterNotice::DefaultClusterDoesNotExist { .. } => SqlState::from_code("MZ005"),
             AdapterNotice::OptimizerNotice { .. } => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::QueryPolicyWarning(_) => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::DroppedInUseIndex { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PerReplicaLogRead { .. } => SqlState::SUCCESSFUL_COMPLETION,
@@ -368,6 +376,13 @@ impl AdapterNotice {
 impl fmt::Display for AdapterNotice {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            AdapterNotice::QueryPolicyWarning(violation) => write!(
+                f,
+                "query would be rejected under query policy {} (rule {}): {}",
+                violation.policy.quoted(),
+                violation.rule.quoted(),
+                violation.reason(),
+            ),
             AdapterNotice::DatabaseAlreadyExists { name } => {
                 write!(f, "database {} already exists, skipping", name.quoted())
             }

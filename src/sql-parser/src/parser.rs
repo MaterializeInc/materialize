@@ -2157,6 +2157,9 @@ impl<'a> Parser<'a> {
         } else if self.peek_keywords(&[NETWORK, POLICY]) {
             self.parse_create_network_policy()
                 .map_parser_err(StatementKind::CreateNetworkPolicy)
+        } else if self.peek_keywords(&[QUERY, POLICY]) {
+            self.parse_create_query_policy()
+                .map_parser_err(StatementKind::CreateQueryPolicy)
         } else {
             let index = self.index;
 
@@ -4688,6 +4691,7 @@ impl<'a> Parser<'a> {
             SIZE,
             SCHEDULE,
             WORKLOAD,
+            QUERY,
         ])?;
         let name = match option {
             AUTO => {
@@ -4719,6 +4723,10 @@ impl<'a> Parser<'a> {
             WORKLOAD => {
                 self.expect_keyword(CLASS)?;
                 ClusterOptionName::WorkloadClass
+            }
+            QUERY => {
+                self.expect_keyword(POLICY)?;
+                ClusterOptionName::QueryPolicy
             }
             _ => unreachable!(),
         };
@@ -5108,16 +5116,27 @@ impl<'a> Parser<'a> {
                 }))
             }
             ObjectType::NetworkPolicy => {
-                let names = self.parse_comma_separated(|parser| {
-                    Ok(UnresolvedObjectName::NetworkPolicy(
-                        parser.parse_identifier()?,
-                    ))
-                })?;
+                let names =
+                    self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
                 Ok(Statement::DropObjects(DropObjectsStatement {
-                    object_type: ObjectType::NetworkPolicy,
+                    object_type,
                     if_exists,
                     names,
                     cascade: false,
+                }))
+            }
+            ObjectType::QueryPolicy => {
+                let names =
+                    self.parse_comma_separated(|parser| parser.parse_object_name(object_type))?;
+                let cascade = matches!(
+                    self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
+                    Some(CASCADE),
+                );
+                Ok(Statement::DropObjects(DropObjectsStatement {
+                    object_type,
+                    if_exists,
+                    names,
+                    cascade,
                 }))
             }
             ObjectType::Cluster => self.parse_drop_clusters(if_exists),
@@ -5220,6 +5239,85 @@ impl<'a> Parser<'a> {
             name,
             options,
         }))
+    }
+
+    fn parse_create_query_policy(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[QUERY, POLICY])?;
+        let name = self.parse_identifier()?;
+        let options = self.parse_query_policy_options()?;
+        Ok(Statement::CreateQueryPolicy(CreateQueryPolicyStatement {
+            name,
+            options,
+        }))
+    }
+
+    fn parse_alter_query_policy(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        if self.parse_keyword(OWNER) {
+            self.expect_keyword(TO)?;
+            let new_owner = self.parse_identifier()?;
+            return Ok(Statement::AlterOwner(AlterOwnerStatement {
+                object_type: ObjectType::QueryPolicy,
+                if_exists: false,
+                name: UnresolvedObjectName::QueryPolicy(name),
+                new_owner,
+            }));
+        }
+        self.expect_keyword(SET)?;
+        let options = self.parse_query_policy_options()?;
+        Ok(Statement::AlterQueryPolicy(AlterQueryPolicyStatement {
+            name,
+            options,
+        }))
+    }
+
+    fn parse_query_policy_options(&mut self) -> Result<Vec<QueryPolicyOption<Raw>>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let options = self.parse_comma_separated(|parser| {
+            match parser.expect_one_of_keywords(&[MODE, RULES])? {
+                MODE => {
+                    let _ = parser.consume_token(&Token::Eq);
+                    Ok(QueryPolicyOption::Mode(parser.parse_value()?))
+                }
+                RULES => {
+                    let _ = parser.consume_token(&Token::Eq);
+                    parser.expect_token(&Token::LParen)?;
+                    let rules = if parser.consume_token(&Token::RParen) {
+                        vec![]
+                    } else {
+                        let rules = parser.parse_comma_separated(|parser| {
+                            let name = parser.parse_identifier()?;
+                            parser.expect_token(&Token::LParen)?;
+                            let options = parser.parse_comma_separated(|parser| {
+                                let name = parser.parse_identifier()?;
+                                let name = match name.as_str().to_ascii_lowercase().as_str() {
+                                    "action" => QueryPolicyRuleOptionName::Action,
+                                    "metric" => QueryPolicyRuleOptionName::Metric,
+                                    "value" => QueryPolicyRuleOptionName::Value,
+                                    _ => {
+                                        return parser_err!(
+                                            parser,
+                                            parser.peek_prev_pos(),
+                                            "expected ACTION, METRIC, or VALUE"
+                                        );
+                                    }
+                                };
+                                let value = parser.parse_optional_option_value()?;
+                                Ok(QueryPolicyRuleOption { name, value })
+                            })?;
+                            parser.expect_token(&Token::RParen)?;
+                            Ok(QueryPolicyRuleDefinition { name, options })
+                        })?;
+                        parser.expect_token(&Token::RParen)?;
+                        rules
+                    };
+                    Ok(QueryPolicyOption::Rules(rules))
+                }
+                _ => unreachable!(),
+            }
+        })?;
+        self.expect_token(&Token::RParen)?;
+        Ok(options)
     }
 
     fn parse_create_network_policy(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -6026,6 +6124,9 @@ impl<'a> Parser<'a> {
             ObjectType::NetworkPolicy => self
                 .parse_alter_network_policy()
                 .map_parser_err(StatementKind::AlterNetworkPolicy),
+            ObjectType::QueryPolicy => self
+                .parse_alter_query_policy()
+                .map_parser_err(StatementKind::AlterQueryPolicy),
             // Metric sinks are adapter-created and not a user surface, so they deliberately
             // support no ALTER at all, `RENAME TO` and `OWNER TO` included. REASSIGN OWNED
             // works off object ids and is unaffected.
@@ -6790,7 +6891,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Schema
             | ObjectType::Func
             | ObjectType::Subsource
-            | ObjectType::NetworkPolicy => {
+            | ObjectType::NetworkPolicy
+            | ObjectType::QueryPolicy => {
                 unreachable!("parse_alter_views called with unsupported object type: {object_type}")
             }
         };
@@ -7641,6 +7743,7 @@ impl<'a> Parser<'a> {
             ObjectType::NetworkPolicy => {
                 UnresolvedObjectName::NetworkPolicy(self.parse_identifier()?)
             }
+            ObjectType::QueryPolicy => UnresolvedObjectName::QueryPolicy(self.parse_identifier()?),
         })
     }
 
@@ -8429,6 +8532,7 @@ impl<'a> Parser<'a> {
                 ObjectType::Connection => ShowObjectType::Connection,
                 ObjectType::Cluster => ShowObjectType::Cluster,
                 ObjectType::NetworkPolicy => ShowObjectType::NetworkPolicy,
+                ObjectType::QueryPolicy => ShowObjectType::QueryPolicy,
                 ObjectType::MaterializedView => {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::MaterializedView { in_cluster }
@@ -10058,7 +10162,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Connection
             | ObjectType::Database
             | ObjectType::Schema
-            | ObjectType::NetworkPolicy => Ok(object_type),
+            | ObjectType::NetworkPolicy
+            | ObjectType::QueryPolicy => Ok(object_type),
         }
     }
 
@@ -10083,6 +10188,7 @@ impl<'a> Parser<'a> {
                 SCHEMA,
                 FUNCTION,
                 NETWORK,
+                QUERY,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -10124,6 +10230,10 @@ impl<'a> Parser<'a> {
                     }
                     ObjectType::NetworkPolicy
                 }
+                QUERY => {
+                    self.expect_keyword(POLICY)?;
+                    ObjectType::QueryPolicy
+                }
                 _ => unreachable!(),
             },
         )
@@ -10131,6 +10241,9 @@ impl<'a> Parser<'a> {
 
     /// Look for an object type and return it if it matches.
     fn parse_object_type(&mut self) -> Option<ObjectType> {
+        if self.parse_keywords(&[QUERY, POLICY]) {
+            return Some(ObjectType::QueryPolicy);
+        }
         Some(
             match self.parse_one_of_keywords(&[
                 TABLE,
@@ -10201,6 +10314,9 @@ impl<'a> Parser<'a> {
 
     /// Bail out if the current token is not an object type in the plural form, or consume and return it if it is.
     fn expect_plural_object_type(&mut self) -> Result<ObjectType, ParserError> {
+        if self.parse_keywords(&[QUERY, POLICIES]) {
+            return Ok(ObjectType::QueryPolicy);
+        }
         Ok(
             match self.expect_one_of_keywords(&[
                 TABLES,
@@ -10254,6 +10370,9 @@ impl<'a> Parser<'a> {
 
     /// Look for an object type in the plural form and return it if it matches.
     fn parse_plural_object_type(&mut self) -> Option<ObjectType> {
+        if self.parse_keywords(&[QUERY, POLICIES]) {
+            return Some(ObjectType::QueryPolicy);
+        }
         Some(
             match self.parse_one_of_keywords(&[
                 TABLES,
@@ -10328,6 +10447,9 @@ impl<'a> Parser<'a> {
     /// Bail out if the current token is not a privilege object type, or consume and
     /// return it if it is.
     fn expect_plural_object_type_for_privileges(&mut self) -> Result<ObjectType, ParserError> {
+        if self.parse_keywords(&[QUERY, POLICIES]) {
+            return Ok(ObjectType::QueryPolicy);
+        }
         if let Some(object_type) = self.parse_one_of_keywords(&[VIEWS, SOURCES]) {
             return parser_err!(
                 self,
@@ -10397,6 +10519,7 @@ impl<'a> Parser<'a> {
                 CONNECTIONS,
                 DATABASES,
                 SCHEMAS,
+                QUERY,
             ])? {
                 SYSTEM => SystemObjectType::System,
                 TABLES => SystemObjectType::Object(ObjectType::Table),
@@ -10406,6 +10529,10 @@ impl<'a> Parser<'a> {
                 CONNECTIONS => SystemObjectType::Object(ObjectType::Connection),
                 DATABASES => SystemObjectType::Object(ObjectType::Database),
                 SCHEMAS => SystemObjectType::Object(ObjectType::Schema),
+                QUERY => {
+                    self.expect_keyword(POLICIES)?;
+                    SystemObjectType::Object(ObjectType::QueryPolicy)
+                }
                 _ => unreachable!(),
             },
         )
@@ -10425,6 +10552,7 @@ impl<'a> Parser<'a> {
                 CREATEDB,
                 CREATECLUSTER,
                 CREATENETWORKPOLICY,
+                CREATEQUERYPOLICY,
             ])? {
                 INSERT => Privilege::INSERT,
                 SELECT => Privilege::SELECT,
@@ -10436,6 +10564,7 @@ impl<'a> Parser<'a> {
                 CREATEDB => Privilege::CREATEDB,
                 CREATECLUSTER => Privilege::CREATECLUSTER,
                 CREATENETWORKPOLICY => Privilege::CREATENETWORKPOLICY,
+                CREATEQUERYPOLICY => Privilege::CREATEQUERYPOLICY,
                 _ => unreachable!(),
             },
         )
@@ -10502,6 +10631,7 @@ impl<'a> Parser<'a> {
             SCHEMA,
             CLUSTER,
             NETWORK,
+            QUERY,
         ])? {
             TABLE => {
                 let name = self.parse_raw_name()?;
@@ -10573,6 +10703,12 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(POLICY)?;
                 let name = self.parse_raw_network_policy_name()?;
                 CommentObjectType::NetworkPolicy { name }
+            }
+            QUERY => {
+                self.expect_keyword(POLICY)?;
+                CommentObjectType::QueryPolicy {
+                    name: self.parse_identifier()?,
+                }
             }
             _ => unreachable!(),
         };

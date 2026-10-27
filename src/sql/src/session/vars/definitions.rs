@@ -575,6 +575,13 @@ pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_QUERY_POLICIES: VarDefinition = VarDefinition::new(
+    "max_query_policies",
+    value!(u32; 25),
+    "The maximum number of query policies in the region.",
+    true,
+);
+
 pub static MAX_RULES_PER_NETWORK_POLICY: VarDefinition = VarDefinition::new(
     "max_rules_per_network_policy",
     value!(u32; 25),
@@ -2284,6 +2291,18 @@ feature_flags!(
         desc: "ENABLE NETWORK POLICIES",
         default: true,
         enable_for_item_parsing: true,
+    },
+    {
+        name: enable_query_policies,
+        desc: "Enable creating and managing query policies and their attachments.",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_query_policy_enforcement,
+        desc: "Enable checking attached query policies during query admission.",
+        default: false,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_create_table_from_source,

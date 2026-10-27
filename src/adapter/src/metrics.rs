@@ -35,6 +35,7 @@ pub(crate) const OCC_CALLER_BACKGROUND: &str = "background";
 #[derive(Debug, Clone)]
 pub struct Metrics {
     pub query_total: IntCounterVec,
+    pub query_policy_queries: IntCounterVec,
     pub active_sessions: IntGaugeVec,
     pub active_subscribes: IntGaugeVec,
     pub active_internal_subscribes: IntGaugeVec,
@@ -90,6 +91,11 @@ impl Metrics {
                 var_labels: ["session_type", "statement_type"],
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Environment],
+            )),
+            query_policy_queries: registry.register(metric!(
+                name: "mz_query_policy_queries_total",
+                help: "Queries rejected by an enforced query policy or only warned by observe-only policies. Each query is counted once.",
+                var_labels: ["outcome"],
             )),
             active_sessions: registry.register(metric!(
                 name: "mz_active_sessions",
@@ -337,6 +343,7 @@ impl Metrics {
             subscribe_outputs: self.subscribe_outputs.clone(),
             as_of_queries: self.as_of_queries.clone(),
             by_cluster: self.by_cluster.clone(),
+            query_policy_queries: self.query_policy_queries.clone(),
             optimization_notices: self.optimization_notices.clone(),
             statement_logging_records: self.statement_logging_records.clone(),
             statement_logging_unsampled_bytes: self.statement_logging_unsampled_bytes.clone(),
@@ -354,6 +361,7 @@ pub struct SessionMetrics {
     subscribe_outputs: IntCounterVec,
     as_of_queries: IntCounterVec,
     by_cluster: ClusterLabeledMetrics,
+    query_policy_queries: IntCounterVec,
     optimization_notices: IntCounterVec,
     statement_logging_records: IntCounterVec,
     statement_logging_unsampled_bytes: IntCounter,
@@ -379,6 +387,10 @@ impl SessionMetrics {
 
     pub(crate) fn as_of_queries(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
         self.as_of_queries.with_label_values(label_values)
+    }
+
+    pub(crate) fn query_policy_queries(&self, outcome: &str) -> GenericCounter<AtomicU64> {
+        self.query_policy_queries.with_label_values(&[outcome])
     }
 
     pub(crate) fn by_cluster(&self) -> &ClusterLabeledMetrics {

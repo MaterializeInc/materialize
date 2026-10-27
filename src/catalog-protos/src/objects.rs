@@ -348,6 +348,63 @@ pub struct NetworkPolicyValue {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct QueryPolicyKey {
+    pub id: QueryPolicyId,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub enum QueryPolicyId {
+    System(u64),
+    User(u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct QueryPolicyValue {
+    pub name: String,
+    pub mode: QueryPolicyMode,
+    pub rules: Vec<QueryPolicyRule>,
+    pub owner_id: RoleId,
+    pub privileges: Vec<MzAclItem>,
+    pub oid: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+#[serde(rename_all = "snake_case")]
+pub enum QueryPolicyMode {
+    Warn,
+    Enforce,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct QueryPolicyRule {
+    pub name: String,
+    pub value: QueryPlanFeature,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+#[serde(rename_all = "snake_case")]
+pub enum QueryPlanFeature {
+    SlowPathQuery,
+    PersistRead,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ServerConfigurationKey {
     pub name: String,
 }
@@ -443,6 +500,7 @@ pub enum CommentObject {
     Cluster(ClusterId),
     ClusterReplica(ClusterReplicaId),
     NetworkPolicy(NetworkPolicyId),
+    QueryPolicy(QueryPolicyId),
 }
 
 #[derive(
@@ -923,6 +981,8 @@ pub enum ClusterSchedule {
 pub struct ClusterConfig {
     pub workload_class: Option<String>,
     pub variant: ClusterVariant,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_policy: Option<QueryPolicyId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1178,6 +1238,8 @@ pub struct RoleMembershipEntry {
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct RoleVars {
     pub entries: Vec<RoleVarsEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_policy: Option<QueryPolicyId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1938,6 +2000,7 @@ pub mod audit_log_event_v1 {
         ContinualTask = 17,
         NetworkPolicy = 18,
         MetricSink = 19,
+        QueryPolicy = 20,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2009,6 +2072,7 @@ pub enum StateUpdateKind {
     IdAlloc(IdAlloc),
     Item(Item),
     NetworkPolicy(NetworkPolicy),
+    QueryPolicy(QueryPolicy),
     Role(Role),
     RoleAuth(RoleAuth),
     Schema(Schema),
@@ -2138,6 +2202,13 @@ pub struct RoleAuth {
 pub struct NetworkPolicy {
     pub key: NetworkPolicyKey,
     pub value: NetworkPolicyValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct QueryPolicy {
+    pub key: QueryPolicyKey,
+    pub value: QueryPolicyValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2287,4 +2358,5 @@ pub enum ObjectType {
     Func = 15,
     NetworkPolicy = 17,
     MetricSink = 18,
+    QueryPolicy = 19,
 }

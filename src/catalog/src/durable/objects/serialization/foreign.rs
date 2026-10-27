@@ -18,6 +18,7 @@ use mz_persist_types::ShardId;
 use mz_proto::TryFromProtoError;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::query_policy_id::QueryPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{
@@ -28,7 +29,8 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     AutoScalingStrategy, ClusterSchedule, NetworkPolicyRule, NetworkPolicyRuleAction,
-    NetworkPolicyRuleDirection, OnHydration, OnTimeoutAction, PolicyAddress,
+    NetworkPolicyRuleDirection, OnHydration, OnTimeoutAction, PolicyAddress, QueryPlanFeature,
+    QueryPolicyMode, QueryPolicyRule,
 };
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_types::instances::StorageInstanceId;
@@ -170,7 +172,10 @@ impl RustType<proto::RoleVars> for RoleVars {
             })
             .collect();
 
-        proto::RoleVars { entries }
+        proto::RoleVars {
+            entries,
+            query_policy: self.query_policy.into_proto(),
+        }
     }
 
     fn from_proto(proto: proto::RoleVars) -> Result<Self, TryFromProtoError> {
@@ -183,7 +188,64 @@ impl RustType<proto::RoleVars> for RoleVars {
             })
             .collect::<Result<_, _>>()?;
 
-        Ok(RoleVars { map })
+        Ok(RoleVars {
+            map,
+            query_policy: proto.query_policy.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::QueryPolicyId> for QueryPolicyId {
+    fn into_proto(&self) -> proto::QueryPolicyId {
+        match self {
+            Self::User(id) => proto::QueryPolicyId::User(*id),
+            Self::System(id) => proto::QueryPolicyId::System(*id),
+        }
+    }
+
+    fn from_proto(proto: proto::QueryPolicyId) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            proto::QueryPolicyId::User(id) => Self::User(id),
+            proto::QueryPolicyId::System(id) => Self::System(id),
+        })
+    }
+}
+
+impl RustType<proto::QueryPolicyMode> for QueryPolicyMode {
+    fn into_proto(&self) -> proto::QueryPolicyMode {
+        match self {
+            Self::Warn => proto::QueryPolicyMode::Warn,
+            Self::Enforce => proto::QueryPolicyMode::Enforce,
+        }
+    }
+
+    fn from_proto(proto: proto::QueryPolicyMode) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            proto::QueryPolicyMode::Warn => Self::Warn,
+            proto::QueryPolicyMode::Enforce => Self::Enforce,
+        })
+    }
+}
+
+impl RustType<proto::QueryPolicyRule> for QueryPolicyRule {
+    fn into_proto(&self) -> proto::QueryPolicyRule {
+        proto::QueryPolicyRule {
+            name: self.name.clone(),
+            value: match self.value {
+                QueryPlanFeature::SlowPathQuery => proto::QueryPlanFeature::SlowPathQuery,
+                QueryPlanFeature::PersistRead => proto::QueryPlanFeature::PersistRead,
+            },
+        }
+    }
+
+    fn from_proto(proto: proto::QueryPolicyRule) -> Result<Self, TryFromProtoError> {
+        Ok(Self {
+            name: proto.name,
+            value: match proto.value {
+                proto::QueryPlanFeature::SlowPathQuery => QueryPlanFeature::SlowPathQuery,
+                proto::QueryPlanFeature::PersistRead => QueryPlanFeature::PersistRead,
+            },
+        })
     }
 }
 
@@ -262,6 +324,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             ObjectType::Func => proto::ObjectType::Func,
             ObjectType::NetworkPolicy => proto::ObjectType::NetworkPolicy,
             ObjectType::MetricSink => proto::ObjectType::MetricSink,
+            ObjectType::QueryPolicy => proto::ObjectType::QueryPolicy,
         }
     }
 
@@ -284,6 +347,7 @@ impl RustType<proto::ObjectType> for ObjectType {
             proto::ObjectType::Func => Ok(ObjectType::Func),
             proto::ObjectType::NetworkPolicy => Ok(ObjectType::NetworkPolicy),
             proto::ObjectType::MetricSink => Ok(ObjectType::MetricSink),
+            proto::ObjectType::QueryPolicy => Ok(ObjectType::QueryPolicy),
             proto::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
@@ -427,6 +491,7 @@ impl RustType<proto::CommentObject> for CommentObjectId {
             CommentObjectId::NetworkPolicy(network_policy_id) => {
                 proto::CommentObject::NetworkPolicy(network_policy_id.into_proto())
             }
+            CommentObjectId::QueryPolicy(id) => proto::CommentObject::QueryPolicy(id.into_proto()),
             CommentObjectId::Schema((database, schema)) => {
                 proto::CommentObject::Schema(proto::ResolvedSchema {
                     database: database.into_proto(),
@@ -468,6 +533,7 @@ impl RustType<proto::CommentObject> for CommentObjectId {
             proto::CommentObject::NetworkPolicy(global_id) => {
                 CommentObjectId::NetworkPolicy(global_id.into_rust()?)
             }
+            proto::CommentObject::QueryPolicy(id) => CommentObjectId::QueryPolicy(id.into_rust()?),
             proto::CommentObject::Role(role_id) => CommentObjectId::Role(role_id.into_rust()?),
             proto::CommentObject::Database(database_id) => {
                 CommentObjectId::Database(database_id.into_rust()?)

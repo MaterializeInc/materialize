@@ -240,6 +240,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedMaterializedView
             | ExecuteResponse::CreatedType
             | ExecuteResponse::CreatedNetworkPolicy
+            | ExecuteResponse::CreatedQueryPolicy
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::DeclaredCursor
             | ExecuteResponse::Deleted(_)

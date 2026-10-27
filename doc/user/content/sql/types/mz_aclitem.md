@@ -38,6 +38,7 @@ A list of all privileges and their abbreviations are below:
 | `CREATEDB`            | Allows creating databases.                                                                     | B("dataBase")       | System                                        |
 | `CREATECLUSTER`       | Allows creating clusters.                                                                      | N("compute Node")   | System                                        |
 | `CREATENETWORKPOLICY` | Allows creating network policies.                                                              | P("network Policy") | System                                        |
+| `CREATEQUERYPOLICY`   | Allows creating query policies.                                                                | Q("Query policy")   | System                                        |
 
 The `CREATEROLE` privilege is very powerful. It allows roles to grant and revoke membership in
 other roles, even if it doesn't have explicit membership in those roles. As a consequence, any role

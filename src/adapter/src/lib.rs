@@ -47,6 +47,7 @@ mod frontend_peek;
 mod frontend_read_then_write;
 mod notice;
 mod optimize;
+mod query_policy;
 mod util;
 
 pub mod catalog;
