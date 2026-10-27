@@ -10,6 +10,7 @@ This minimal wrapper is tailored to the spec-sheet sweep. Transaction logs provi
 pooled percentiles and maximum latency after warmup.
 """
 
+import json
 import math
 import re
 import shlex
@@ -253,6 +254,7 @@ def measure(config: dict, root: Path, container: str) -> dict:
     )
     results = []
     logging_rates = []
+    idle_timeout_settings = []
     processes = []
     script = root / "query.sql"
     script.write_text(config["query"].rstrip("; \n") + ";\n")
@@ -288,22 +290,23 @@ def measure(config: dict, root: Path, container: str) -> dict:
                 "-v",
                 "ON_ERROR_STOP=1",
                 "-c",
-                f"SELECT current_setting('cluster'), current_setting('statement_logging_sample_rate')::float, count(*) FROM ({config['query']}) q",
+                f"SELECT current_setting('cluster'), current_setting('statement_logging_sample_rate')::float, current_setting('idle_in_transaction_session_timeout'), count(*) FROM ({config['query']}) q",
             ),
             capture_output=True,
             text=True,
             timeout=config["query_timeout_seconds"] + 10,
         )
         fields = preflight.stdout.strip().split("|")
-        if preflight.returncode or len(fields) != 3:
+        if preflight.returncode or len(fields) != 4:
             print(preflight.stdout, preflight.stderr, file=sys.stderr)
             raise ValueError(f"cluster {i}: routing/row-count preflight failed")
         if (
             fields[0] != config["cluster_names"][i]
-            or int(fields[2]) != config["expected_rows"]
+            or int(fields[3]) != config["expected_rows"]
         ):
             raise ValueError(f"cluster {i}: unexpected cluster or row count: {fields}")
         logging_rates.append(float(fields[1]))
+        idle_timeout_settings.append(fields[2])
     capacity_text = container_output(
         container,
         "sh",
@@ -319,12 +322,57 @@ def measure(config: dict, root: Path, container: str) -> dict:
     before = cpu_stat(container)
     wall_start = time.monotonic()
     peak_thread_percent = 0.0
-    container_pid = subprocess.check_output(
-        ["docker", "inspect", "--format", "{{.State.Pid}}", container], text=True
-    ).strip()
-    network_samples = []
-    network_probe_enabled = True
-    next_network_sample = wall_start
+    network_path = root / "tcp-info.jsonl"
+    network_errors = (root / "tcp-errors.log").open("w+")
+    network_output = network_path.open("w")
+    network_name = "qps-tcp-" + container[:12]
+    # The harness may run directly on the host, so its hostname is not a CID.
+    # Reuse only an existing trusted CI-builder image, without pulling one.
+    network_probe = None
+    try:
+        images = subprocess.check_output(
+            [
+                "docker",
+                "image",
+                "ls",
+                "--format",
+                "{{.ID}}",
+                "--filter",
+                "reference=materialize/ci-builder:*",
+                "--filter",
+                "reference=ghcr.io/materializeinc/materialize/ci-builder:*",
+            ],
+            text=True,
+            timeout=10,
+        ).splitlines()
+        if not images:
+            raise RuntimeError("No cached CI-builder image for optional TCP probe")
+        diagnostic = (
+            MZ_ROOT / "misc/python/materialize/qps_tcp_diagnostic.py"
+        ).read_text()
+        network_probe = subprocess.Popen(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--pull=never",
+                "--name",
+                network_name,
+                "--network",
+                "container:" + container,
+                "--entrypoint",
+                "python3",
+                images[0],
+                "-u",
+                "-c",
+                diagnostic,
+            ],
+            stdout=network_output,
+            stderr=network_errors,
+        )
+    except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+        network_errors.write(str(error) + "\n")
+        network_errors.flush()
     try:
         for i, n in enumerate(assignments):
             output = (root / f"summary-{i}").open("w+")
@@ -382,39 +430,6 @@ def measure(config: dict, root: Path, container: str) -> dict:
                 signal_clients(container, "ALRM")
                 stopped = True
             now = time.monotonic()
-            if network_probe_enabled and now >= next_network_sample:
-                # Enter only the network namespace, retaining the host's ss binary.
-                try:
-                    sample = subprocess.run(
-                        [
-                            "nsenter",
-                            "-t",
-                            container_pid,
-                            "-n",
-                            "ss",
-                            "-tin",
-                            "state",
-                            "established",
-                        ],
-                        capture_output=True,
-                        text=True,
-                        timeout=3,
-                    )
-                    network_samples.append(
-                        {
-                            "observed_at": time.time(),
-                            "status": sample.returncode,
-                            "tcp_info": sample.stdout,
-                            "error": sample.stderr,
-                        }
-                    )
-                    network_probe_enabled = sample.returncode == 0
-                except (OSError, subprocess.TimeoutExpired) as error:
-                    network_samples.append(
-                        {"observed_at": time.time(), "error": str(error)}
-                    )
-                    network_probe_enabled = False
-                next_network_sample = now + 5
             current = thread_ticks(container)
             if current:
                 peak_thread_percent = max(
@@ -442,6 +457,20 @@ def measure(config: dict, root: Path, container: str) -> dict:
                 raise ValueError(f"cluster {i}: pgbench exited with status {status}")
             results.append(summary(text))
     finally:
+        if network_probe is not None:
+            try:
+                subprocess.run(
+                    ["docker", "rm", "-f", network_name],
+                    capture_output=True,
+                    timeout=10,
+                )
+                network_probe.wait(timeout=10)
+            except subprocess.SubprocessError as error:
+                network_errors.write(str(error) + "\n")
+                network_probe.kill()
+                network_probe.wait()
+        network_output.close()
+        network_errors.close()
         signal_clients(container, "KILL")
         for process, output in processes:
             if process.poll() is None:
@@ -471,17 +500,28 @@ def measure(config: dict, root: Path, container: str) -> dict:
         warnings.append(
             "a pgbench thread reached 90% CPU; qualify with more driver threads"
         )
+    network_samples = []
+    network_error_text = (root / "tcp-errors.log").read_text()
+    for line in network_path.read_text().splitlines():
+        try:
+            network_samples.append(json.loads(line))
+        except json.JSONDecodeError:
+            network_error_text += "Incomplete optional TCP sample discarded\n"
     return result | {
         "concurrency": clients,
         "clusters": len(assignments),
         "protocol": config["protocol"],
         "errors": 0,
         "statement_logging_sample_rates": logging_rates,
+        "idle_in_transaction_timeout_settings": idle_timeout_settings,
         "driver_name": "pgbench",
         "threads_per_cluster": 1,
         "pgbench_version": container_output(container, "pgbench", "--version").strip(),
         "native_summaries": results,
-        "network_diagnostics": network_samples,
+        "network_diagnostics": {
+            "samples": network_samples,
+            "errors": network_error_text,
+        },
         "driver": {
             "cpu_percent": 100 * cpu / capacity,
             "cpu_cores": cpu,

@@ -1951,18 +1951,20 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 runner.run_query(f"SET cluster = '{cluster}'")
                 runner.run_query("SELECT * FROM qps_gen_view")
             runner.run_query("SET cluster = 'c'")
-            # Keep the default-logging series intact, then repeat on the same
-            # clusters with sampling disabled in every benchmark connection.
-            for disable_statement_logging in (False, True):
-                for protocol in self.options.protocols:
-                    for concurrency in self.options.concurrencies:
-                        self.measure(
-                            runner,
-                            size,
-                            concurrency,
-                            protocol,
-                            disable_statement_logging,
-                        )
+            # Start without statement logging, then isolate the idle timeout
+            # within each logging mode on the same deployment and query routes.
+            for disable_statement_logging in (True, False):
+                for disable_idle_timeout in (False, True):
+                    for protocol in self.options.protocols:
+                        for concurrency in self.options.concurrencies:
+                            self.measure(
+                                runner,
+                                size,
+                                concurrency,
+                                protocol,
+                                disable_statement_logging,
+                                disable_idle_timeout,
+                            )
         finally:
             runner.run_query("SET cluster = 'c'")
             runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
@@ -1976,8 +1978,11 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         concurrency: int,
         protocol: str,
         disable_statement_logging: bool = False,
+        disable_idle_timeout: bool = False,
     ) -> None:
         suffix = "_logging_disabled" if disable_statement_logging else ""
+        if disable_idle_timeout:
+            suffix += "_idle_timeout_disabled"
         name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters{suffix}"
         print(
             f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
@@ -1989,6 +1994,18 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             params["options"] = [
                 " ".join(
                     [*params.get("options", []), "-c statement_logging_sample_rate=0"]
+                )
+            ]
+            flags[params_index] = urlencode(params, doseq=True)
+        if disable_idle_timeout:
+            params_index = flags.index("-params") + 1
+            params = parse_qs(flags[params_index])
+            params["options"] = [
+                " ".join(
+                    [
+                        *params.get("options", []),
+                        "-c idle_in_transaction_session_timeout=0",
+                    ]
                 )
             ]
             flags[params_index] = urlencode(params, doseq=True)
