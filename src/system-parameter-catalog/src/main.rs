@@ -42,7 +42,7 @@ struct Parameter {
     /// The type name the registry reports.
     #[serde(rename = "type")]
     type_name: String,
-    /// The compiled-in default, in the form that parses back to the same value.
+    /// The compiled-in default, as `Value::format` renders it.
     default: String,
     description: String,
     /// One of `environment`, `cluster`, `replica`.
