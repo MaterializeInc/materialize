@@ -28,6 +28,10 @@ M3 includes `bin/controllerd --optimized` and a short local startup recipe, usin
 the existing developer launcher machinery. Verify the local demo through that
 user-facing entry point, not only the test harness.
 
+Include `GET /api/collections`: pretty JSON with collection ID, name and observed
+Persist since, with SQL LIKE patterns in the `id`/`name` URL filters. Follow the
+design's read-only inspection contract and document browser/curl usage.
+
 Work outcome-first: get the smallest real end-to-end slice of the main outcome
 working early. Use that integration to expose architectural risks and determine
 which supporting work is actually needed. Limit preparation to concrete blockers
