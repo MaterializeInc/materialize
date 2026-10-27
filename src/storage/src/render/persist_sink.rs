@@ -425,7 +425,10 @@ pub(crate) fn render<'scope>(
 /// and upper) that writers should use for writing the next set of batches to
 /// persist.
 ///
-/// With a `lookahead`, and while the frontier sits at `snapshot_time`, it also commits to a
+/// No description is minted until the frontier passes `snapshot_time`. The first one then covers
+/// the snapshot.
+///
+/// With a `lookahead`, and until the frontier passes `snapshot_time`, it also commits to a
 /// ceiling that far past the data and broadcasts it on the second output. A
 /// ceiling is not a description: it gives the writers a bound to group updates under before the
 /// frontier certifies anything, and it binds this operator, which mints nothing below an
@@ -572,25 +575,26 @@ fn mint_batch_descriptions<'scope>(
         let mut committed: Option<mz_repr::Timestamp> = None;
 
         // The wait sits at the bottom of the loop, so a mint pass runs once before the first
-        // event as well as after every event. A fresh export's snapshot lands at the minimum and
-        // its frontier never moves during it, so no event announces the pin. Its first ceiling
-        // has to go out ahead of the snapshot's rows rather than alongside them.
+        // event as well as after every event. A snapshotting export reads as such from the first
+        // activation, before any event arrives, so its first ceiling goes out ahead of the
+        // snapshot's rows rather than alongside them.
         loop {
-            // `desired_frontier` starts at the minimum. A fresh export's as_of is the minimum too,
-            // so it reads as snapshotting from the first activation. A later as_of waits for the
-            // progress statement that moves the frontier there. A row can arrive ahead of that
-            // statement, and committing on it would anchor the ceiling at the shard upper instead
-            // of the snapshot's time.
+            // A description ending at the snapshot time would put the shard upper at the as_of
+            // with the snapshot not yet written. The as_of is the remap shard's since, and
+            // `StorageCollections::create_collections_for_bootstrap` asserts that a remap since
+            // is below the upper of every export whose upper is past the minimum. The next
+            // environmentd restart would trip it.
             let snapshot_in_progress = snapshot_time
                 .as_ref()
-                .is_some_and(|time| *time == desired_frontier);
+                .is_some_and(|time| PartialOrder::less_equal(&desired_frontier, time));
 
             while let Some(mint) = next_mint(
                 &current_upper,
                 &desired_frontier,
                 &remap_upper,
                 committed,
-                lookahead.filter(|_| snapshot_in_progress),
+                lookahead,
+                snapshot_in_progress,
             ) {
                 let lower = current_upper
                     .as_option()
@@ -724,20 +728,24 @@ enum Mint {
 ///     This is the current value of the ceiling. If set, the upper of a minted description will be
 ///     at or beyond this.
 /// * `lookahead` (Optional):
-///     If present, `desired_frontier` is pinned to `as_of` (e.g. due to snapshot), so we advance
-///     `committed` as `remap_upper` + `lookahead` to consolidate in-flight data into one shared
-///     batch.
+///     If present, and while `snapshot_in_progress`, we advance `committed` as `remap_upper` +
+///     `lookahead` to consolidate in-flight data into one shared batch.
+/// * `snapshot_in_progress`:
+///     `desired_frontier` has not passed the snapshot time. No description is minted until it
+///     does.
 fn next_mint(
     current_upper: &Antichain<mz_repr::Timestamp>,
     desired_frontier: &Antichain<mz_repr::Timestamp>,
     remap_upper: &Antichain<mz_repr::Timestamp>,
     committed: Option<mz_repr::Timestamp>,
     lookahead: Option<u64>,
+    snapshot_in_progress: bool,
 ) -> Option<Mint> {
     let frontier_reached = |ts: mz_repr::Timestamp| {
         PartialOrder::less_equal(&Antichain::from_elem(ts), desired_frontier)
     };
-    if committed.is_none_or(frontier_reached)
+    if !snapshot_in_progress
+        && committed.is_none_or(frontier_reached)
         && PartialOrder::less_than(current_upper, desired_frontier)
     {
         return Some(Mint::Description(desired_frontier.clone()));
@@ -745,7 +753,7 @@ fn next_mint(
 
     // A bunch of checks that will return None (meaning there's no ceiling).
     // If feature is not enabled or not snapshotting...
-    let lookahead = lookahead?;
+    let lookahead = lookahead.filter(|_| snapshot_in_progress)?;
 
     // If the data shard has advanced to empty frontier...
     let lower = *current_upper.as_option()?;
@@ -1129,9 +1137,8 @@ fn write_batches<'scope>(
                         );
                     }
 
-                    // If snapshotting, and the as_of = T, where T is greater than the minimum,
-                    // the minter emits a description covering `(0, T)` and `Commitment{lower:T}`.
-                    // The open builder must wait for the appropriate description.
+                    // The open builder declared the commitment's lower, so only the description
+                    // starting there can finish it.
                     if let Some(held) = commitment.filter(|held| held.lower == lower)
                         && let Some(builder) = open_builder.take()
                     {
@@ -2273,7 +2280,7 @@ mod tests {
     /// frontier reaches its ceiling. Every row is in it, whatever its timestamp.
     fn one_batch() -> Vec<EmittedBatch> {
         vec![EmittedBatch {
-            lower: 1,
+            lower: 0,
             upper: PIPELINE_DONE,
             data_max_ts: PIPELINE_PINNED_TIMES + 1,
             inserts: PIPELINE_SNAPSHOT_ROWS + PIPELINE_PINNED_TIMES * PIPELINE_PER_TIME,
@@ -2335,7 +2342,7 @@ mod tests {
         assert!(
             emitted
                 .iter()
-                .all(|b| (b.lower, b.upper) == (1, PIPELINE_DONE)),
+                .all(|b| (b.lower, b.upper) == (0, PIPELINE_DONE)),
             "all finished under the one description the frontier's advance derives: {emitted:?}"
         );
         assert_eq!(
@@ -2833,7 +2840,7 @@ mod tests {
     }
 
     /// The remap upper is broadcast, so the minting worker paces on its own copy of it without a
-    /// row on any worker: on the pin a lookahead past the upper, then past each tick.
+    /// row on any worker. On the first activation a lookahead past the upper, then past each tick.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
     async fn mint_batch_descriptions_paces_on_the_remap_upper_without_data() {
@@ -2931,7 +2938,7 @@ mod tests {
         .await;
 
         let collected = collected.lock().expect("not poisoned").clone();
-        assert_eq!(collected, vec![6, 9, 13, 15]);
+        assert_eq!(collected, vec![4, 6, 9, 13, 15]);
     }
 
     #[mz_ore::test]
@@ -2962,9 +2969,9 @@ mod tests {
         );
     }
 
-    /// The ceiling is committed the moment the frontier pins, a lookahead past the remap upper,
-    /// and re-committed as the upper ticks, all under the one description's lower. The rows do not
-    /// enter into it. Without a lookahead a pinned frontier commits nothing.
+    /// The ceiling is committed on the first activation, a lookahead past the remap upper, and
+    /// re-committed as the upper ticks, all under the shard upper. The rows do not enter into it.
+    /// Without a lookahead a pinned frontier commits nothing.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
     async fn mint_batch_descriptions_commits_a_ceiling_ahead_of_the_remap_upper() {
@@ -2989,11 +2996,11 @@ mod tests {
             )
             .await,
             Minted {
-                // Only the one the first frontier advance derives. The description spanning the
-                // snapshot needs the frontier to reach the ceiling, which this script never does.
-                descriptions: vec![(0, 1)],
-                // On the pin, then a lookahead past each tick.
-                commitments: vec![(1, 6), (1, 9), (1, 13), (1, 15)],
+                // The description spanning the snapshot needs the frontier to reach the ceiling,
+                // which this script never does.
+                descriptions: vec![],
+                // On the first activation, then a lookahead past each tick.
+                commitments: vec![(0, 4), (0, 6), (0, 9), (0, 13), (0, 15)],
             },
         );
 
@@ -3006,17 +3013,14 @@ mod tests {
                 script
             )
             .await,
-            Minted {
-                descriptions: vec![(0, 1)],
-                commitments: vec![],
-            },
+            Minted::default(),
             "without a lookahead a pinned frontier commits nothing",
         );
     }
 
-    /// Commitments are made only while the frontier sits at the snapshot time. Once the frontier
-    /// moves, no more commitments are made, and the outstanding commitment is honored until the
-    /// frontier reaches it.
+    /// Commitments are made only until the frontier passes the snapshot time. After that, no more
+    /// commitments are made, and the outstanding commitment is honored until the frontier reaches
+    /// it.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
     async fn mint_batch_descriptions_honors_its_commitment_once_the_frontier_moves_again() {
@@ -3028,7 +3032,7 @@ mod tests {
             vec![
                 Step::Tick(2),
                 Step::AdvanceTo(1),
-                // Below the ceiling committed on the pin, so this mints nothing.
+                // Past the snapshot time but below the outstanding ceiling, so this mints nothing.
                 Step::AdvanceTo(2),
                 // The snapshot is over, so this commits nothing either.
                 Step::Tick(9),
@@ -3040,8 +3044,8 @@ mod tests {
         assert_eq!(
             emitted,
             Minted {
-                descriptions: vec![(0, 1), (1, 6)],
-                commitments: vec![(1, 6)],
+                descriptions: vec![(0, 6)],
+                commitments: vec![(0, 4), (0, 6)],
             },
             "past hydration the minter should wait for the frontier to pass its ceiling and \
             derive from the frontier alone after that",
@@ -3083,52 +3087,67 @@ mod tests {
             )
             .await,
             Minted {
-                descriptions: vec![(0, 1)],
-                commitments: vec![(1, 6), (1, 13)],
+                descriptions: vec![],
+                commitments: vec![(0, 4), (0, 6), (0, 13)],
             },
             "the same script commits when the export snapshots at 1",
         );
     }
 
-    /// A source may send rows at the snapshot time under a delayed capability before it has
-    /// downgraded its own, so rows can reach the minter while the frontier still sits at the
-    /// minimum, with the remap upper ticking all the while. Nothing is committed until the frontier
-    /// reaches the snapshot time, so the commitment's lower is the snapshot time and not the shard
-    /// upper the rows were seen under.
+    /// A snapshot time past the shard upper is the shape of a table added to a running source.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
-    async fn mint_batch_descriptions_waits_for_the_frontier_to_reach_the_snapshot_time() {
-        let emitted = run_mint_batch_descriptions(
-            test_target(),
-            test_persist_clients(),
-            Some(4),
-            Some(frontier(1)),
-            vec![
-                Step::Tick(3),
-                Step::Updates(1, 1),
-                Step::AdvanceTo(1),
-                Step::Tick(4),
-                Step::AdvanceTo(8),
-            ],
-        )
-        .await;
+    async fn mint_batch_descriptions_describes_nothing_until_the_frontier_passes_the_snapshot_time()
+    {
+        let script = vec![
+            Step::Tick(6),
+            Step::AdvanceTo(5),
+            Step::Updates(5, 4),
+            Step::Tick(7),
+            Step::AdvanceTo(11),
+        ];
+
         assert_eq!(
-            emitted,
+            run_mint_batch_descriptions(
+                test_target(),
+                test_persist_clients(),
+                None,
+                Some(frontier(5)),
+                script.clone(),
+            )
+            .await,
             Minted {
-                descriptions: vec![(0, 1), (1, 8)],
-                // On the pin a lookahead past the upper, then re-committed past the tick.
-                commitments: vec![(1, 7), (1, 8)],
+                descriptions: vec![(0, 11)],
+                commitments: vec![],
             },
+            "the frontier reaching the snapshot time should describe nothing, and the first \
+            description should cover the snapshot",
+        );
+
+        assert_eq!(
+            run_mint_batch_descriptions(
+                test_target(),
+                test_persist_clients(),
+                Some(4),
+                Some(frontier(5)),
+                script,
+            )
+            .await,
+            Minted {
+                descriptions: vec![(0, 11)],
+                commitments: vec![(0, 4), (0, 10), (0, 11)],
+            },
+            "every commitment should share the shard upper as its lower",
         );
     }
 
-    /// A fresh source's snapshot lands at the minimum and its frontier never leaves it during the
-    /// snapshot, so no progress statement announces the pin. The first ceiling goes out on the
-    /// first activation, ahead of every row and before the remap upper is known, and is raised as
-    /// the upper ticks.
+    /// A snapshotting export reads as pinned before any progress statement arrives. A fresh
+    /// source's frontier never leaves the minimum during its snapshot, and a later snapshot time
+    /// is not yet reached. Either way the first ceiling goes out on the first activation, ahead of
+    /// every row and before the remap upper is known, and is raised as the upper ticks.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
-    async fn mint_batch_descriptions_commits_on_the_first_activation_at_a_minimum_snapshot_time() {
+    async fn mint_batch_descriptions_commits_on_the_first_activation() {
         // Replication rows land first, the snapshot's own rows at the pinned time arrive behind
         // them, and the frontier never moves.
         let script = vec![
@@ -3166,33 +3185,71 @@ mod tests {
                 script,
             )
             .await,
-            Minted::default(),
-            "a snapshot time the frontier has not reached commits nothing, however far the remap \
-            upper runs",
+            Minted {
+                descriptions: vec![],
+                commitments: vec![(0, 4), (0, 10), (0, 14)],
+            },
+            "a snapshot time the frontier has not reached should commit the same way",
         );
     }
 
     #[mz_ore::test]
     fn next_mint_derives_from_the_frontier_or_commits_a_ceiling_ahead() {
+        let past = false;
+        let pinned = true;
+
         // Everything below the frontier has arrived, so that is the description, lookahead or not.
         assert_eq!(
-            next_mint(&frontier(5), &frontier(7), &frontier(100), None, Some(8)),
+            next_mint(
+                &frontier(5),
+                &frontier(7),
+                &frontier(100),
+                None,
+                Some(8),
+                past
+            ),
             Some(Mint::Description(frontier(7)))
         );
         assert_eq!(
-            next_mint(&frontier(5), &frontier(7), &frontier(0), None, None),
+            next_mint(&frontier(5), &frontier(7), &frontier(0), None, None, past),
             Some(Mint::Description(frontier(7)))
+        );
+        // Past the snapshot a lookahead commits nothing.
+        assert_eq!(
+            next_mint(
+                &frontier(5),
+                &frontier(5),
+                &frontier(6),
+                None,
+                Some(8),
+                past
+            ),
+            None
         );
 
         // A pinned frontier with no lookahead has nothing to commit.
         assert_eq!(
-            next_mint(&frontier(5), &frontier(5), &frontier(14), None, None),
+            next_mint(
+                &frontier(5),
+                &frontier(5),
+                &frontier(14),
+                None,
+                None,
+                pinned
+            ),
             None
         );
         // Pinned with nothing committed yet: the ceiling goes out a lookahead past the remap
         // upper.
         assert_eq!(
-            next_mint(&frontier(5), &frontier(5), &frontier(6), None, Some(8)),
+            next_mint(
+                &frontier(5),
+                &frontier(5),
+                &frontier(6),
+                None,
+                Some(8),
+                pinned
+            ),
             Some(Mint::Ceiling(ts(14)))
         );
         // A ceiling already a lookahead past the upper stands, so the minter does not re-commit
@@ -3203,7 +3260,8 @@ mod tests {
                 &frontier(5),
                 &frontier(6),
                 Some(ts(14)),
-                Some(8)
+                Some(8),
+                pinned
             ),
             None
         );
@@ -3214,14 +3272,22 @@ mod tests {
                 &frontier(5),
                 &frontier(7),
                 Some(ts(14)),
-                Some(8)
+                Some(8),
+                pinned
             ),
             Some(Mint::Ceiling(ts(15)))
         );
         // An upper so far behind the shard upper that the ceiling would not clear it, as before
         // the first remap progress event, commits nothing.
         assert_eq!(
-            next_mint(&frontier(5), &frontier(5), &frontier(0), None, Some(4)),
+            next_mint(
+                &frontier(5),
+                &frontier(5),
+                &frontier(0),
+                None,
+                Some(4),
+                pinned
+            ),
             None
         );
         // A closed remap stream has no upper to commit past.
@@ -3231,15 +3297,41 @@ mod tests {
                 &frontier(5),
                 &Antichain::new(),
                 Some(ts(14)),
-                Some(8)
+                Some(8),
+                pinned
             ),
             None
+        );
+
+        // A frontier that has not passed the snapshot time describes nothing, even past the shard
+        // upper, and a ceiling's lower stays at the shard upper.
+        assert_eq!(
+            next_mint(&frontier(0), &frontier(5), &frontier(6), None, None, pinned),
+            None
+        );
+        assert_eq!(
+            next_mint(
+                &frontier(0),
+                &frontier(5),
+                &frontier(6),
+                None,
+                Some(8),
+                pinned
+            ),
+            Some(Mint::Ceiling(ts(14)))
         );
 
         // An outstanding ceiling the frontier has not reached suppresses the description that
         // would otherwise be derived from it, which is what binds the commitment.
         assert_eq!(
-            next_mint(&frontier(5), &frontier(9), &frontier(9), Some(ts(20)), None),
+            next_mint(
+                &frontier(5),
+                &frontier(9),
+                &frontier(9),
+                Some(ts(20)),
+                None,
+                past
+            ),
             None
         );
         // Once the frontier reaches it, the one description covering the whole ceiling goes out.
@@ -3249,7 +3341,8 @@ mod tests {
                 &frontier(20),
                 &frontier(20),
                 Some(ts(20)),
-                None
+                None,
+                past
             ),
             Some(Mint::Description(frontier(20)))
         );
@@ -3257,7 +3350,14 @@ mod tests {
         // A fresh shard's minimum upper pins like any other time, and before the remap upper is
         // known the ceiling goes out a lookahead past the minimum.
         assert_eq!(
-            next_mint(&frontier(0), &frontier(0), &frontier(0), None, Some(8)),
+            next_mint(
+                &frontier(0),
+                &frontier(0),
+                &frontier(0),
+                None,
+                Some(8),
+                pinned
+            ),
             Some(Mint::Ceiling(ts(8)))
         );
         // A collection that is done has no next description.
@@ -3267,7 +3367,8 @@ mod tests {
                 &frontier(7),
                 &frontier(100),
                 None,
-                Some(8)
+                Some(8),
+                past
             ),
             None
         );
