@@ -1430,7 +1430,9 @@ impl AppendOnlyWriteTask {
             let new: Vec<_> = updates
                 .into_iter()
                 .filter(|r| match r {
-                    AppendOnlyUpdate::Row(_) | AppendOnlyUpdate::Rows(_) => true,
+                    AppendOnlyUpdate::Row(_)
+                    | AppendOnlyUpdate::Rows(_)
+                    | AppendOnlyUpdate::DeferredRows(_) => true,
                     AppendOnlyUpdate::Status(update) => {
                         match (
                             previous_statuses
@@ -1445,7 +1447,9 @@ impl AppendOnlyWriteTask {
                 })
                 .collect();
             previous_statuses.extend(new.iter().filter_map(|update| match update {
-                AppendOnlyUpdate::Row(_) | AppendOnlyUpdate::Rows(_) => None,
+                AppendOnlyUpdate::Row(_)
+                | AppendOnlyUpdate::Rows(_)
+                | AppendOnlyUpdate::DeferredRows(_) => None,
                 AppendOnlyUpdate::Status(update) => {
                     Some(((update.id, update.replica_id), update.status))
                 }
