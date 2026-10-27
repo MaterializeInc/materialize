@@ -5,8 +5,10 @@ menu:
   main:
     name: "Monitor freshness"
     identifier: monitor-freshness
-    parent: transform-data
-    weight: 84
+    parent: freshness
+    weight: 20
+aliases:
+  - /transform-data/monitor-freshness/
 ---
 
 [Freshness](/fundamentals/concepts/reaction-time/#freshness) measures the time from when a
@@ -16,7 +18,7 @@ to summarize a whole window of freshness observations with a CCDF or an HDR
 histogram.
 
 If freshness is worse than expected, see [Freshness
-troubleshooting](/transform-data/freshness-troubleshooting/) to diagnose and
+troubleshooting](/transform-data/freshness/troubleshoot-freshness/) to diagnose and
 resolve the cause.
 
 ## Track freshness over time
@@ -51,6 +53,11 @@ output like the following:
 Each row is one minute-binned observation of the object's wallclock lag, most
 recent first. Here lag holds steady at about two seconds, which is the expected,
 healthy pattern for a lightly loaded object.
+
+Wallclock lag is recorded in whole seconds, rounded up, so sub-second lag
+reads as `00:00:01`. To measure sub-second freshness, see [Fine tune for
+sub-second
+freshness](/transform-data/freshness/subsecond-freshness/#step-3-verify-freshness-with-end-to-end-latency).
 
 {{< note >}}
 
