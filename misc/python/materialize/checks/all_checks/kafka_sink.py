@@ -1699,7 +1699,7 @@ class KafkaSinkUpsertKeyLostOnUpgrade(Check):
     """Upsert sink whose key a newer optimizer no longer derives.
 
     Catalog bootstrap re-plans every sink's persisted `create_sql` against the
-    keys the running optimizer derives. Since v26.47 `time_to_text` no longer
+    keys the running optimizer derives. Since v26.49 `time_to_text` no longer
     preserves uniqueness, so the key `k` below is valid on older versions only.
     We create the sink on the old base version and assert the environment
     still boots and the sink survives the upgrade.
@@ -1708,7 +1708,7 @@ class KafkaSinkUpsertKeyLostOnUpgrade(Check):
     def _can_run(self, e: Executor) -> bool:
         # Only reproducible when the base version still accepts the key;
         # otherwise the CREATE SINK in initialize() fails up-front.
-        return self.base_version < MzVersion.parse_mz("v26.47.0-dev")
+        return self.base_version < MzVersion.parse_mz("v26.49.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""
