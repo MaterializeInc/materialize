@@ -3429,16 +3429,16 @@ impl Coordinator {
         );
 
         debug!("startup: coordinator init: bootstrap: initializing migrated builtin tables");
-        let builtin_configuration = self
-            .catalog()
-            .state()
-            .catalog_read_protection_enabled()
-            .then(|| {
-                builtin_configuration::Reconciliation::new(
-                    self.catalog(),
-                    &builtin_table_updates.snapshot,
-                )
-            });
+        // Joiners reconstruct local configuration but cannot replace the active
+        // deployment's shared rows with their own launch inputs.
+        let initialize_configuration = self.catalog().state().catalog_read_protection_enabled()
+            && !self.catalog().storage().await.is_join();
+        let builtin_configuration = initialize_configuration.then(|| {
+            builtin_configuration::Reconciliation::new(
+                self.catalog(),
+                &builtin_table_updates.snapshot,
+            )
+        });
 
         // When 0dt is enabled, we create new shards for any migrated builtin storage collections.
         // In read-only mode, the migrated builtin tables (which are a subset of migrated builtin
@@ -5132,7 +5132,9 @@ impl Coordinator {
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             self.spawn_catalog_info_metrics_task();
-            self.spawn_cluster_controller_task();
+            if self.controller.manages_replica_processes() {
+                self.spawn_cluster_controller_task();
+            }
             self.spawn_caught_up_check_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
@@ -6802,24 +6804,26 @@ pub fn serve(
                             uncached_local_exprs,
                         )
                         .await?;
-                    if coord.catalog().state().catalog_read_protection_enabled() {
-                        if !read_only_controllers {
-                            let observed = coord.controller.list_replica_services().await
-                                .map_err(AdapterError::Orchestrator)?;
-                            // Writable creation commits before provisioning. Read
-                            // membership after listing, not from bootstrap inventory.
-                            let live = coord.catalog().committed_cluster_replicas().await?;
-                            coord.controller
-                                .remove_orphaned_replicas_from_snapshot(observed, live)
-                                .map_err(AdapterError::Orchestrator)?;
+                    if coord.controller.manages_replica_processes() {
+                        if coord.catalog().state().catalog_read_protection_enabled() {
+                            if !read_only_controllers {
+                                let observed = coord.controller.list_replica_services().await
+                                    .map_err(AdapterError::Orchestrator)?;
+                                // Writable creation commits before provisioning. Read
+                                // membership after listing, not from bootstrap inventory.
+                                let live = coord.catalog().committed_cluster_replicas().await?;
+                                coord.controller
+                                    .remove_orphaned_replicas_from_snapshot(observed, live)
+                                    .map_err(AdapterError::Orchestrator)?;
+                            }
+                            // A prewarming savepoint can provision private replicas.
+                            // Durable membership is not authority to delete them.
+                        } else {
+                            coord.controller.remove_orphaned_replicas(
+                                coord.catalog().get_next_user_replica_id().await?,
+                                coord.catalog().get_next_system_replica_id().await?,
+                            ).await.map_err(AdapterError::Orchestrator)?;
                         }
-                        // A prewarming savepoint can provision private replicas.
-                        // Durable membership is not authority to delete them.
-                    } else {
-                        coord.controller.remove_orphaned_replicas(
-                            coord.catalog().get_next_user_replica_id().await?,
-                            coord.catalog().get_next_system_replica_id().await?,
-                        ).await.map_err(AdapterError::Orchestrator)?;
                     }
 
                     if let Some(retention_period) = storage_usage_retention_period {

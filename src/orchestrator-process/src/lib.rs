@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fmt::Debug;
@@ -131,6 +131,10 @@ pub struct ProcessOrchestrator {
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
     scratch_directory: PathBuf,
     launch_spec: LaunchSpec,
+    // Latest synchronous ensures, shared across namespaces. Queued drops use
+    // this to preserve records already published by a subsequent ensure.
+    // As with PID adoption, a metadata directory has one lifecycle owner.
+    tcp_assignments: Arc<Mutex<BTreeMap<PathBuf, TcpAssignments>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -243,6 +247,7 @@ impl ProcessOrchestrator {
             tcp_proxy,
             scratch_directory,
             launch_spec,
+            tcp_assignments: Default::default(),
         })
     }
 }
@@ -262,6 +267,7 @@ impl Orchestrator for ProcessOrchestrator {
                 tcp_proxy: self.tcp_proxy.clone(),
                 scratch_directory: self.scratch_directory.clone(),
                 launch_spec: self.launch_spec,
+                tcp_assignments: Arc::clone(&self.tcp_assignments),
             });
 
             let services = Arc::new(Mutex::new(BTreeMap::new()));
@@ -302,6 +308,7 @@ struct NamespacedProcessOrchestratorConfig {
     tcp_proxy: Option<ProcessOrchestratorTcpProxyConfig>,
     scratch_directory: PathBuf,
     launch_spec: LaunchSpec,
+    tcp_assignments: Arc<Mutex<BTreeMap<PathBuf, TcpAssignments>>>,
 }
 
 impl NamespacedProcessOrchestratorConfig {
@@ -342,11 +349,28 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         scale: NonZero<u16>,
         port: &ServicePort,
     ) -> Result<Vec<String>, anyhow::Error> {
-        Ok(ProcessService {
-            run_dir: self.config.service_run_dir(id),
-            scale,
+        let run_dir = self.config.service_run_dir(id);
+        if port.requires_tcp {
+            let assignments = read_tcp_assignments(&run_dir)?;
+            (0..usize::from(scale.get()))
+                .map(|i| {
+                    assignments
+                        .get(i)
+                        .and_then(|a| a.get(&port.name))
+                        .map(ToString::to_string)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "TCP port {} for service {id} process {i} is not assigned",
+                                port.name
+                            )
+                        })
+                })
+                .collect()
+        } else {
+            Ok((0..scale.get())
+                .map(|i| socket_path(&run_dir, &port.name, i))
+                .collect())
         }
-        .addresses(&port.name))
     }
 
     fn ensure_service(
@@ -354,10 +378,36 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         id: &str,
         config: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
+        // Serialize assignment and enqueueing with drops across all namespaces.
+        let mut assignments = self.config.tcp_assignments.lock().expect("lock poisoned");
+        let run_dir = self.config.service_run_dir(id);
+        let mut tcp = assign_tcp_ports(&self.config.metadata_dir, &run_dir, &config)?;
+        if tcp.iter().any(|ports| !ports.is_empty()) {
+            write_tcp_assignments(&run_dir, &tcp)?;
+            assignments.insert(run_dir.clone(), tcp.clone());
+        }
+        for ports in &mut tcp {
+            ports.retain(|name, _| {
+                config
+                    .ports
+                    .iter()
+                    .any(|p| p.name == *name && p.requires_tcp)
+            });
+        }
         let service = ProcessService {
-            run_dir: self.config.service_run_dir(id),
+            run_dir,
             scale: config.scale,
+            tcp,
         };
+        let peer_addrs = (0..config.scale.get())
+            .map(|i| {
+                config
+                    .ports
+                    .iter()
+                    .map(|port| (port.name.clone(), service.address(&port.name, i)))
+                    .collect()
+            })
+            .collect();
 
         // Enable disk if the size does not disable it.
         let disk = config.disk_limit != Some(DiskLimit::ZERO);
@@ -366,6 +416,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
             image: config.image,
             args: config.args,
             ports: config.ports,
+            peer_addrs,
             memory_limit: config.memory_limit,
             cpu_limit: config.cpu_limit,
             scale: config.scale,
@@ -382,6 +433,8 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
     }
 
     fn drop_service(&self, id: &str) -> Result<(), anyhow::Error> {
+        let mut assignments = self.config.tcp_assignments.lock().expect("lock poisoned");
+        assignments.remove(&self.config.service_run_dir(id));
         self.send_command(WorkerCommand::DropService { id: id.to_string() });
         Ok(())
     }
@@ -484,6 +537,8 @@ struct EnsureServiceConfig {
     pub args: Box<dyn Fn(ServiceAssignments) -> Vec<String> + Send + Sync>,
     /// Ports to expose.
     pub ports: Vec<ServicePort>,
+    /// Addresses selected before the lifecycle command was queued.
+    pub peer_addrs: Vec<BTreeMap<String, String>>,
     /// An optional limit on the memory that the service can use.
     pub memory_limit: Option<MemoryLimit>,
     /// An optional limit on the CPU that the service can use.
@@ -501,9 +556,11 @@ struct EnsureServiceConfig {
 
 /// A task executing blocking work for a [`NamespacedProcessOrchestrator`] in the background.
 ///
-/// This type exists to enable making [`NamespacedProcessOrchestrator::ensure_service`] and
-/// [`NamespacedProcessOrchestrator::drop_service`] non-blocking, allowing invocation of these
-/// methods in latency-sensitive contexts.
+/// Required TCP endpoint assignment and metadata publication happen synchronously.
+/// Process lifecycle work remains queued.
+///
+/// This keeps process startup and termination off the caller's path, allowing
+/// lifecycle requests from latency-sensitive contexts.
 ///
 /// Note that, apart from `ensure_service` and `drop_service`, this worker also handles blocking
 /// orchestrator calls that query service state (such as `list_services`). These need to be
@@ -613,6 +670,7 @@ impl OrchestratorWorker {
             image,
             args,
             ports: ports_in,
+            peer_addrs,
             memory_limit,
             cpu_limit,
             scale,
@@ -648,19 +706,6 @@ impl OrchestratorWorker {
             None => (),
         }
 
-        // Create sockets for all processes in the service.
-        let mut peer_addrs = Vec::new();
-        for i in 0..scale.into() {
-            let addresses = ports_in
-                .iter()
-                .map(|port| {
-                    let addr = socket_path(&run_dir, &port.name, i);
-                    (port.name.clone(), addr)
-                })
-                .collect();
-            peer_addrs.push(addresses);
-        }
-
         {
             let mut services = self.services.lock().expect("lock poisoned");
 
@@ -681,7 +726,12 @@ impl OrchestratorWorker {
                 let mut ports = vec![];
                 let mut tcp_proxy_addrs = BTreeMap::new();
                 for port in &ports_in {
-                    let tcp_proxy_listener = match &self.config.tcp_proxy {
+                    let tcp_proxy_listener = match self
+                        .config
+                        .tcp_proxy
+                        .as_ref()
+                        .filter(|_| !port.requires_tcp)
+                    {
                         None => None,
                         Some(tcp_proxy) => {
                             let listener = StdTcpListener::bind((tcp_proxy.listen_addr, 0))
@@ -817,12 +867,19 @@ impl OrchestratorWorker {
         }
 
         // Clean up the on-disk state of the service.
-        if let Err(e) = remove_dir_all(run_dir).await {
-            if e.kind() != io::ErrorKind::NotFound {
-                warn!(
-                    "error cleaning up run directory for {full_id}: {}",
-                    e.display_with_causes()
-                );
+        {
+            let assignments = self.config.tcp_assignments.lock().expect("lock poisoned");
+            // A later ensure has already returned this endpoint. Keep its
+            // assignment file continuously visible to read-only discoverers,
+            // including those in other processes that do not share this mutex.
+            let retain_assignment = assignments.contains_key(&run_dir);
+            if let Err(e) = clean_service_run_dir(&run_dir, retain_assignment) {
+                if e.kind() != io::ErrorKind::NotFound {
+                    warn!(
+                        "error cleaning up run directory for {full_id}: {}",
+                        e.display_with_causes()
+                    );
+                }
             }
         }
         if let Err(e) = remove_dir_all(scratch_dir).await {
@@ -917,13 +974,11 @@ impl OrchestratorWorker {
                     memory_limit.as_ref(),
                     cpu_limit.as_ref(),
                 );
+                // Launch arguments can contain credentials, including through
+                // wrappers. Log only the executable, never the argument vector.
                 info!(
-                    "launching {full_id}-{i} via {} {}...",
+                    "launching {full_id}-{i} via {}",
                     cmd.as_std().get_program().to_string_lossy(),
-                    cmd.as_std()
-                        .get_args()
-                        .map(|arg| arg.to_string_lossy())
-                        .join(" ")
                 );
                 if suppress_output {
                     cmd.stdout(Stdio::null());
@@ -1329,6 +1384,113 @@ impl From<ProcessStatus> for ServiceStatus {
     }
 }
 
+// Only direct TCP assignments need storage. Unix addresses remain pure derivations.
+type TcpAssignments = Vec<BTreeMap<String, SocketAddr>>;
+const TCP_ASSIGNMENTS_FILE: &str = "tcp-ports.json";
+
+fn clean_service_run_dir(run_dir: &Path, retain_assignment: bool) -> io::Result<()> {
+    if !retain_assignment {
+        return std::fs::remove_dir_all(run_dir);
+    }
+    for entry in std::fs::read_dir(run_dir)? {
+        let entry = entry?;
+        if entry.file_name() == TCP_ASSIGNMENTS_FILE {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn read_tcp_assignments(run_dir: &Path) -> Result<TcpAssignments, anyhow::Error> {
+    match std::fs::read(run_dir.join(TCP_ASSIGNMENTS_FILE)) {
+        Ok(bytes) => serde_json::from_slice(&bytes).context("reading TCP assignments"),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn write_tcp_assignments(
+    run_dir: &Path,
+    assignments: &TcpAssignments,
+) -> Result<(), anyhow::Error> {
+    std::fs::create_dir_all(run_dir)?;
+    let temporary = run_dir.join("tcp-ports.json.tmp");
+    std::fs::write(&temporary, serde_json::to_vec(assignments)?)?;
+    std::fs::rename(temporary, run_dir.join(TCP_ASSIGNMENTS_FILE))?;
+    Ok(())
+}
+
+fn assign_tcp_ports(
+    metadata_dir: &Path,
+    run_dir: &Path,
+    config: &ServiceConfig,
+) -> Result<TcpAssignments, anyhow::Error> {
+    if !config.ports.iter().any(|port| port.requires_tcp) {
+        return Ok(Vec::new());
+    }
+    let previous = read_tcp_assignments(run_dir)?;
+    let mut used = BTreeSet::new();
+    // Retained services may not be listening yet. Their records still reserve
+    // endpoints, including services in namespaces not adopted by this owner.
+    for entry in std::fs::read_dir(metadata_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            for ports in read_tcp_assignments(&entry.path())? {
+                used.extend(ports.into_values());
+            }
+        }
+    }
+    // Keep old reservations until explicit deletion. A queued scale change can
+    // still have children about to bind the previous assignments.
+    let mut assignments = previous.clone();
+    assignments.resize_with(
+        assignments.len().max(usize::from(config.scale.get())),
+        BTreeMap::new,
+    );
+    for i in 0..usize::from(config.scale.get()) {
+        let ports = &mut assignments[i];
+        for port in config.ports.iter().filter(|port| port.requires_tcp) {
+            let address = match previous.get(i).and_then(|ports| ports.get(&port.name)) {
+                // Never probe an existing assignment: a retained child can own it.
+                Some(address) => *address,
+                None => {
+                    let hint = SocketAddr::from(([127, 0, 0, 1], port.port_hint));
+                    let listener = if !used.contains(&hint) {
+                        StdTcpListener::bind(hint).ok()
+                    } else {
+                        None
+                    };
+                    let listener = match listener {
+                        Some(listener) if !used.contains(&listener.local_addr()?) => listener,
+                        candidate => {
+                            // Keep rejected ephemeral sockets bound until selection
+                            // finishes so the OS cannot keep returning the same port.
+                            let mut rejected: Vec<_> = candidate.into_iter().collect();
+                            loop {
+                                let listener = StdTcpListener::bind(("127.0.0.1", 0))?;
+                                if !used.contains(&listener.local_addr()?) {
+                                    break listener;
+                                }
+                                rejected.push(listener);
+                            }
+                        }
+                    };
+                    // Reserve-release races are an accepted dev-backend limitation.
+                    listener.local_addr()?
+                }
+            };
+            used.insert(address);
+            ports.insert(port.name.clone(), address);
+        }
+    }
+    Ok(assignments)
+}
+
 fn socket_path(run_dir: &Path, port: &str, process: u16) -> String {
     let desired = run_dir
         .join(format!("{port}-{process}"))
@@ -1355,12 +1517,23 @@ struct AddressedTcpListener {
 struct ProcessService {
     run_dir: PathBuf,
     scale: NonZero<u16>,
+    tcp: TcpAssignments,
+}
+
+impl ProcessService {
+    fn address(&self, port: &str, process: u16) -> String {
+        self.tcp
+            .get(usize::from(process))
+            .and_then(|a| a.get(port))
+            .map(ToString::to_string)
+            .unwrap_or_else(|| socket_path(&self.run_dir, port, process))
+    }
 }
 
 impl Service for ProcessService {
     fn addresses(&self, port: &str) -> Vec<String> {
         (0..self.scale.get())
-            .map(|i| socket_path(&self.run_dir, port, i))
+            .map(|i| self.address(port, i))
             .collect()
     }
 }
@@ -1389,6 +1562,7 @@ mod tests {
                     tcp_proxy: None,
                     scratch_directory: PathBuf::new(),
                     launch_spec: LaunchSpec::Direct,
+                    tcp_assignments: Default::default(),
                 }),
                 services: Default::default(),
                 service_event_rx,
@@ -1404,6 +1578,7 @@ mod tests {
                 let port = ServicePort {
                     name: "compute".into(),
                     port_hint: 2100,
+                    requires_tcp: false,
                 };
                 let addresses = orchestrator.service_addresses(id, scale, &port).unwrap();
                 assert!(command_rx.try_recv().is_err());

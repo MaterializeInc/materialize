@@ -1033,10 +1033,23 @@ impl Catalog {
     ///
     /// Deployment initialization must complete table infrastructure separately
     /// before launching joiners. Joined handles only validate existing mappings.
+    /// Consumes committed updates before validation. Callers must reconstruct
+    /// local state from the resulting catalog, not a preceding inventory.
     pub async fn initialize_storage_metadata(
         &mut self,
     ) -> Result<(), crate::durable::CatalogError> {
-        self.initialize_storage_metadata_inner(None).await
+        loop {
+            self.sync_to_current_updates().await?;
+            match self.initialize_storage_metadata_inner(None).await {
+                // Replica publications may arrive while the catalog is opening.
+                // Refresh and rebuild the inventory rather than treating a peer
+                // commit as a startup failure or validating a mixed prefix.
+                Err(crate::durable::CatalogError::Durable(
+                    crate::durable::DurableCatalogError::CatalogOutOfSync { .. },
+                )) => continue,
+                result => return result,
+            }
+        }
     }
 
     async fn initialize_storage_metadata_inner(

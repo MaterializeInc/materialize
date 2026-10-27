@@ -253,6 +253,13 @@ pub trait OpenableDurableCatalogState: Debug + Send {
         plan_build: &str,
     ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
 
+    /// Joins a prewarming deployment already admitted by its initializer.
+    /// Unlike `join_prewarming`, this cannot admit a new deployment member.
+    async fn join_admitted_prewarming(
+        self: Box<Self>,
+        plan_build: &str,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError>;
+
     /// Joins the active durable generation, ignoring the builder's pending generation.
     /// Promotion racing admission or a later write returns a generation fence.
     /// Rebuild and join again to discover the newly active generation.

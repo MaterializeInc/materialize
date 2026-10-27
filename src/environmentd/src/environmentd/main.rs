@@ -84,6 +84,10 @@ static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(Non
 static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
     iter::once(BUILD_INFO.human_version(None))
         .chain(build_info())
+        .chain(iter::once(format!(
+            "written-plan-build: {}",
+            mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO)
+        )))
         .join("\n")
 });
 
@@ -114,8 +118,13 @@ pub struct Args {
         env = "LISTENERS_CONFIG_PATH",
         value_name = "PATH",
         action = ArgAction::Set,
+        required_unless_present = "listeners_config_json",
+        conflicts_with = "listeners_config_json",
     )]
-    listeners_config_path: PathBuf,
+    listeners_config_path: Option<PathBuf>,
+    /// Inline listener configuration for backend-assigned process addresses.
+    #[clap(long, env = "LISTENERS_CONFIG_JSON", value_name = "JSON")]
+    listeners_config_json: Option<String>,
     /// Password for the mz_system user.
     #[clap(
         long,
@@ -347,6 +356,12 @@ pub struct Args {
     /// transition of power from the prior generation.
     #[clap(long, env = "DEPLOY_GENERATION", default_value = "0")]
     deploy_generation: u64,
+    /// Join a declared adapter without initializing or managing the deployment.
+    #[clap(long, env = "ADAPTER_ID")]
+    adapter_id: Option<mz_repr::AdapterId>,
+    /// Backend process index. An adapter realization has exactly one process.
+    #[clap(long, hide = true, value_parser = clap::value_parser!(u16).range(0..1))]
+    process: Option<u16>,
 
     /// Can be provided in place of both persist_consensus_url and
     /// timestamp_oracle_url in order to point both at the same backend
@@ -667,7 +682,24 @@ pub fn main() {
     }
 }
 
+pub fn adapter_main() {
+    let args: Args = cli::parse_args(CliConfig {
+        env_prefix: Some("MZ_"),
+        enable_version_flag: true,
+    });
+    if args.adapter_id.is_none() {
+        panic!("adapterd requires --adapter-id");
+    }
+    if let Err(err) = run(args) {
+        panic!("adapterd: fatal: {}", err.display_with_causes());
+    }
+}
+
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
+    anyhow::ensure!(
+        args.adapter_id.is_none() || args.persist_pubsub_external,
+        "join-only adapters require --persist-pubsub-external"
+    );
     mz_ore::panic::install_enhanced_handler();
 
     // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK and the
@@ -774,8 +806,11 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let frontegg_oauth_issuer_url = args.frontegg.oauth_issuer_url().map(str::to_string);
     let frontegg = FronteggAuthenticator::from_args(args.frontegg, &metrics_registry)?;
     let listeners_config: ListenersConfig = {
-        let f = File::open(args.listeners_config_path)?;
-        serde_json::from_reader(f)?
+        match (args.listeners_config_path, args.listeners_config_json) {
+            (Some(path), None) => serde_json::from_reader(File::open(path)?)?,
+            (None, Some(json)) => serde_json::from_str(&json)?,
+            _ => bail!("exactly one listener configuration is required"),
+        }
     };
 
     for (_, listener) in &listeners_config.sql {
@@ -1078,6 +1113,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let replica_http_locator = Arc::new(ReplicaHttpLocator::default());
     let controller = ControllerConfig {
+        manage_replica_processes: args.adapter_id.is_none(),
         timestamp_oracle_url: timestamp_oracle_url.clone(),
         timestamp_oracle_clock_file: None,
         build_info: &BUILD_INFO,
@@ -1130,6 +1166,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         };
         let server = listeners
             .serve(crate::Config {
+                joined_adapter_id: args.adapter_id,
                 // Special modes.
                 unsafe_mode: args.unsafe_mode,
                 all_features: args.all_features,

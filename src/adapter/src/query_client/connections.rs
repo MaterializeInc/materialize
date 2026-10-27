@@ -84,6 +84,7 @@ impl StorageReplicaTarget {
                 &ServicePort {
                     name: "storagectl".into(),
                     port_hint: 2100,
+                    requires_tcp: false,
                 },
             )?,
         };
@@ -477,6 +478,7 @@ async fn run(
                         name: "computectl".into(),
                         // Production computectl port, shared with lifecycle provisioning.
                         port_hint: 2101,
+                        requires_tcp: false,
                     },
                 )?,
             };

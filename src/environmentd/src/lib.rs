@@ -78,6 +78,7 @@ use crate::http::{HttpConfig, HttpServer, InternalRouteConfig};
 
 pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 
+pub mod controllerd;
 mod deployment;
 pub mod environmentd;
 pub mod http;
@@ -91,6 +92,10 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Config {
+    /// Join this declared adapter in the specified deployment without initialization
+    /// or process-management authority. `None` retains combined environmentd mode.
+    pub joined_adapter_id: Option<mz_repr::AdapterId>,
+
     // === Special modes. ===
     /// Whether to permit usage of unsafe features. This is never meant to run
     /// in production.
@@ -381,7 +386,10 @@ impl Listeners {
     ///
     /// Returns a handle to the server once it is fully booted.
     #[instrument(name = "environmentd::serve")]
-    pub async fn serve(self, config: Config) -> Result<Server, AdapterError> {
+    pub async fn serve(self, mut config: Config) -> Result<Server, AdapterError> {
+        if config.joined_adapter_id.is_some() {
+            config.controller.manage_replica_processes = false;
+        }
         let serve_start = Instant::now();
         info!("startup: envd serve: beginning");
         info!("startup: envd serve: preamble beginning");
@@ -711,7 +719,7 @@ impl Listeners {
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };
 
-        let (caught_up_trigger, bootstrapped) = if read_only {
+        let (caught_up_trigger, bootstrapped) = if read_only && config.joined_adapter_id.is_none() {
             let (caught_up_trigger, caught_up_receiver) = mz_ore::channel::trigger::channel();
             let (bootstrapped, bootstrapped_receiver) = tokio::sync::oneshot::channel();
             let catchup_config = CatchupConfig {
@@ -743,10 +751,30 @@ impl Listeners {
         info!("startup: envd serve: durable catalog open beginning");
 
         // Load the adapter durable storage.
+        if config.joined_adapter_id.is_some()
+            && !openable_adapter_storage
+                .catalog_read_protection_enabled()
+                .await?
+        {
+            return Err(anyhow!(
+                "adapterd requires a native deployment initialized by controllerd"
+            )
+            .into());
+        }
         let mut adapter_storage = if protected_prewarming {
             let build =
                 mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO).to_string();
-            openable_adapter_storage.join_prewarming(&build).await?
+            if config.joined_adapter_id.is_some() {
+                openable_adapter_storage
+                    .join_admitted_prewarming(&build)
+                    .await?
+            } else {
+                openable_adapter_storage.join_prewarming(&build).await?
+            }
+        } else if config.joined_adapter_id.is_some() {
+            let adapter_storage = openable_adapter_storage.join().await?;
+            deployment_state.set_is_leader();
+            adapter_storage
         } else if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
@@ -834,7 +862,7 @@ impl Listeners {
                     Some(catalog_timestamp_oracle.clone()),
                 )
                 .await?
-                .join_prewarming(
+                .join_admitted_prewarming(
                     &mz_catalog::catalog::Catalog::expression_build_version(&BUILD_INFO)
                         .to_string(),
                 )
@@ -845,7 +873,9 @@ impl Listeners {
         };
         let envd_epoch = adapter_storage.epoch();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
-            adapter_id: mz_catalog::durable::DEFAULT_ADAPTER_ID,
+            adapter_id: config
+                .joined_adapter_id
+                .unwrap_or(mz_catalog::durable::DEFAULT_ADAPTER_ID),
             connection_context: config.controller.connection_context.clone(),
             connection_limit_callback,
             controller_config: config.controller,

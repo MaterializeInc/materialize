@@ -995,9 +995,11 @@ impl Listeners {
         let inner = self
             .inner
             .serve(crate::Config {
+                joined_adapter_id: None,
                 catalog_config,
                 timestamp_oracle_url: Some(timestamp_oracle_url.clone()),
                 controller: ControllerConfig {
+                    manage_replica_processes: true,
                     timestamp_oracle_url: Some(timestamp_oracle_url.clone()),
                     timestamp_oracle_clock_file,
                     build_info: &crate::BUILD_INFO,

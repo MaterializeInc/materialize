@@ -30,7 +30,7 @@ pub use mz_controller_types::clusters::{
 use mz_controller_types::dyncfgs::CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
-use mz_orchestrator::{Service, ServiceEvent};
+use mz_orchestrator::{Service, ServiceEvent, ServicePort};
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{halt, instrument};
 use mz_repr::GlobalId;
@@ -153,6 +153,37 @@ impl Controller {
                 };
                 metrics_task = None;
             }
+            ReplicaLocation::Managed(m) if !self.manage_replica_processes => {
+                let service = ReplicaServiceName {
+                    cluster_id,
+                    replica_id,
+                    generation: self.deploy_generation,
+                }
+                .to_string();
+                let addresses = |name: &str, port_hint| {
+                    self.orchestrator.service_addresses(
+                        &service,
+                        m.allocation.scale,
+                        &ServicePort {
+                            name: name.into(),
+                            port_hint,
+                            requires_tcp: false,
+                        },
+                    )
+                };
+                storage_location = ClusterReplicaLocation {
+                    ctl_addrs: addresses("storagectl", 2100)?,
+                };
+                compute_location = ClusterReplicaLocation {
+                    ctl_addrs: addresses("computectl", 2101)?,
+                };
+                self.replica_http_locator.register_replica(
+                    cluster_id,
+                    replica_id,
+                    addresses("internal-http", 6878)?,
+                );
+                metrics_task = None;
+            }
             ReplicaLocation::Managed(m) => {
                 let (service, metrics_task_join_handle) = self.provision_replica(
                     cluster_id,
@@ -231,6 +262,9 @@ impl Controller {
 
     /// Removes replicas from past generations in a background task.
     pub(crate) fn remove_past_generation_replicas_in_background(&self) {
+        if !self.manage_replica_processes {
+            return;
+        }
         let deploy_generation = self.deploy_generation;
         let dyncfg = Arc::clone(self.compute.dyncfg());
         let orchestrator = Arc::clone(&self.orchestrator);
@@ -347,6 +381,9 @@ impl Controller {
     }
 
     pub fn events_stream(&self) -> BoxStream<'static, ClusterEvent> {
+        if !self.manage_replica_processes {
+            return futures::stream::pending().boxed();
+        }
         let deploy_generation = self.deploy_generation;
 
         fn translate_event(event: ServiceEvent) -> Result<(ClusterEvent, u64), anyhow::Error> {
@@ -473,6 +510,9 @@ impl Controller {
         replica_id: ReplicaId,
         generation: u64,
     ) -> Result<(), anyhow::Error> {
+        if !self.manage_replica_processes {
+            return Ok(());
+        }
         let service_name = ReplicaServiceName {
             cluster_id,
             replica_id,

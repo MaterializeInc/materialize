@@ -76,6 +76,9 @@ pub struct ControllerConfig {
     pub build_info: &'static BuildInfo,
     /// The orchestrator implementation to use.
     pub orchestrator: Arc<dyn Orchestrator>,
+    /// Whether this process owns replica provisioning, retirement and observations.
+    /// Join-only SQL adapters discover endpoints without managing processes.
+    pub manage_replica_processes: bool,
     /// The persist location where all storage collections will be written to.
     pub persist_location: PersistLocation,
     /// The shared EpochMilliseconds oracle used by replica catalog writers.
@@ -168,6 +171,7 @@ pub struct Controller {
     read_only: bool,
     /// The cluster orchestrator.
     orchestrator: Arc<dyn NamespacedOrchestrator>,
+    manage_replica_processes: bool,
     /// Tracks the readiness of the underlying controllers.
     readiness: Readiness,
     /// Tasks for collecting replica metrics.
@@ -317,6 +321,7 @@ impl Controller {
             deploy_generation,
             read_only,
             orchestrator: _,
+            manage_replica_processes: _,
             readiness,
             metrics_tasks: _,
             metrics_tx: _,
@@ -368,7 +373,9 @@ impl Controller {
         &self,
         config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
     ) {
-        self.orchestrator.update_scheduling_config(config);
+        if self.manage_replica_processes {
+            self.orchestrator.update_scheduling_config(config);
+        }
     }
     /// Marks the end of any initialization commands.
     ///
@@ -378,6 +385,11 @@ impl Controller {
     pub fn initialization_complete(&mut self) {
         self.storage.initialization_complete();
         self.compute.initialization_complete();
+    }
+
+    /// Whether this process owns replica lifecycle rather than only local handles.
+    pub fn manages_replica_processes(&self) -> bool {
+        self.manage_replica_processes
     }
 
     /// Reports whether the controller is in read only mode.
@@ -774,6 +786,7 @@ impl Controller {
             deploy_generation: config.deploy_generation,
             read_only,
             orchestrator: config.orchestrator.namespace("cluster"),
+            manage_replica_processes: config.manage_replica_processes,
             readiness: Readiness::NotReady,
             metrics_tasks: BTreeMap::new(),
             metrics_tx,

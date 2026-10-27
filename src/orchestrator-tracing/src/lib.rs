@@ -523,6 +523,7 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
             service_config.ports.push(ServicePort {
                 name: "tokio-console".into(),
                 port_hint: 6669,
+                requires_tcp: false,
             });
         }
         self.inner.ensure_service(id, service_config)

@@ -614,6 +614,20 @@ async fn test_deployment_admission_promotion_and_restart() {
 
     let (pending_cfg, pending_builder) =
         admission_participant(&mut cache, organization_id, 2, &v2).await;
+    let error = pending_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .join_admitted_prewarming(&v2.to_string())
+        .await
+        .err()
+        .expect("a joining adapter cannot initialize deployment membership");
+    assert!(
+        error
+            .to_string()
+            .contains("joining requires an initialized deployment"),
+        "{error}"
+    );
     let pending = pending_builder
         .unwrap_build()
         .await
@@ -628,7 +642,7 @@ async fn test_deployment_admission_promotion_and_restart() {
     let restart = restart_builder.clone().unwrap_build().await;
     assert_eq!(restart_cfg.state_version_target(), v1);
     let restart = restart
-        .join_prewarming(&v2.to_string())
+        .join_admitted_prewarming(&v2.to_string())
         .await
         .expect("admitted deployment can restart prewarming");
     assert_eq!(restart_cfg.state_version_target(), v1);

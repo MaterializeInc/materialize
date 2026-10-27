@@ -1263,6 +1263,7 @@ enum OpenPurpose<'a> {
     Promotion(&'a BootstrapArgs),
     Join,
     Prewarm(&'a str),
+    JoinAdmittedPrewarm(&'a str),
 }
 
 impl UnopenedPersistCatalogState {
@@ -1433,11 +1434,13 @@ impl UnopenedPersistCatalogState {
     ) -> Result<Box<PersistCatalogState>, CatalogError> {
         let bootstrap_args = match purpose {
             OpenPurpose::Bootstrap(args) | OpenPurpose::Promotion(args) => Some(args),
-            OpenPurpose::Join | OpenPurpose::Prewarm(_) => None,
+            OpenPurpose::Join | OpenPurpose::Prewarm(_) | OpenPurpose::JoinAdmittedPrewarm(_) => {
+                None
+            }
         };
         let join = bootstrap_args.is_none();
         let prewarming_plan_build = match purpose {
-            OpenPurpose::Prewarm(build) => {
+            OpenPurpose::Prewarm(build) | OpenPurpose::JoinAdmittedPrewarm(build) => {
                 let version = build.parse::<semver::Version>().map_err(|_| {
                     DurableCatalogError::NotWritable("invalid prewarming plan namespace".into())
                 })?;
@@ -1547,7 +1550,12 @@ impl UnopenedPersistCatalogState {
                 .deploy_generation;
             if protection_enabled
                 && durable_generation.is_some_and(|generation| generation < admitted_generation)
-                && matches!(purpose, OpenPurpose::Promotion(_) | OpenPurpose::Prewarm(_))
+                && matches!(
+                    purpose,
+                    OpenPurpose::Promotion(_)
+                        | OpenPurpose::Prewarm(_)
+                        | OpenPurpose::JoinAdmittedPrewarm(_)
+                )
             {
                 // Revalidate on every CAS attempt. A serving writer can add a
                 // targeted MV after prewarming starts or promotion is authorized.
@@ -1582,6 +1590,16 @@ impl UnopenedPersistCatalogState {
             let mut admission_updates = Vec::new();
             let admission = if matches!(self.mode, Mode::Writable) {
                 let previous = self.update_applier.deployment_admission.as_ref();
+                if matches!(purpose, OpenPurpose::JoinAdmittedPrewarm(_))
+                    && !previous.is_some_and(|admission| {
+                        admission.members.contains_key(&admitted_generation)
+                    })
+                {
+                    return Err(DurableCatalogError::NotWritable(
+                        "joining requires an initialized deployment".into(),
+                    )
+                    .into());
+                }
                 let mut admission = match previous {
                     Some(value) => value.clone(),
                     None if protection_enabled => {
@@ -2040,6 +2058,19 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
                 Mode::Writable,
                 Timestamp::minimum(),
                 OpenPurpose::Prewarm(plan_build),
+            )
+            .await?)
+    }
+
+    async fn join_admitted_prewarming(
+        self: Box<Self>,
+        plan_build: &str,
+    ) -> Result<Box<dyn DurableCatalogState>, CatalogError> {
+        Ok(self
+            .open_inner(
+                Mode::Writable,
+                Timestamp::minimum(),
+                OpenPurpose::JoinAdmittedPrewarm(plan_build),
             )
             .await?)
     }

@@ -2191,10 +2191,8 @@ async fn test_multi_subscriber_catalog() {
         .initialize_storage_metadata()
         .await
         .expect("initializer establishes storage infrastructure");
-    writer_catalog_peer
-        .sync_to_current_updates()
-        .await
-        .expect("joiner follows infrastructure");
+    // The joiner still has the preceding prefix. Metadata completion must adopt
+    // the initializer's publication itself before validating shared mappings.
     let infrastructure_upper = writer_catalog.current_upper().await;
     writer_catalog_peer
         .initialize_storage_metadata()

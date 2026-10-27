@@ -1902,12 +1902,16 @@ mod tests {
                 _worker: mz_ore::task::spawn(|| "discovery-test", std::future::pending())
                     .abort_on_drop(),
             };
-            for scale in [1, 3, 12] {
+            for (scale, requires_tcp) in [1, 3, 12]
+                .into_iter()
+                .flat_map(|scale| [false, true].map(|tcp| (scale, tcp)))
+            {
                 let scale = NonZero::new(scale).unwrap();
                 let id = "u1-replica-1";
                 let port = mz_orchestrator::ServicePort {
                     name: "compute".into(),
                     port_hint: 2100 + scale.get(),
+                    requires_tcp,
                 };
                 let infos_before = orchestrator.service_infos.lock().unwrap().len();
                 let addresses = orchestrator.service_addresses(id, scale, &port).unwrap();
