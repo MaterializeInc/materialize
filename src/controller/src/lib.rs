@@ -436,19 +436,27 @@ impl Controller {
         mut objects: BTreeSet<GlobalId>,
         t: Timestamp,
     ) -> Result<Option<WatchSetId>, CollectionLookupError> {
-        // Collect all frontiers first, returning any errors
-        let frontiers: BTreeMap<GlobalId, _> = objects
-            .iter()
-            .map(|id| {
-                self.compute
-                    .collection_frontiers(*id, None)
-                    .map(|f| (*id, f.write_frontier))
-            })
-            .collect::<Result<_, _>>()?;
+        // Only mutate the local dependency set until all lookups succeed.
+        // An error must not allocate a watch ID or leave a partially installed watch.
+        let mut lookup_error = None;
         objects.retain(|id| {
-            let frontier = frontiers.get(id).expect("just collected");
-            frontier.less_equal(&t)
+            if lookup_error.is_some() {
+                return true;
+            }
+            match self
+                .compute
+                .collection_write_frontier_less_equal(*id, None, &t)
+            {
+                Ok(pending) => pending,
+                Err(error) => {
+                    lookup_error = Some(error);
+                    true
+                }
+            }
         });
+        if let Some(error) = lookup_error {
+            return Err(error);
+        }
         if objects.is_empty() {
             return Ok(None);
         }
