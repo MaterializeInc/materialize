@@ -21,120 +21,72 @@ These components have focused verification, not combined M3 acceptance.
 
 ## Resume here
 
-- Current-health fallback is approved: catalog placement supplies `paused` with no
-  replicas, otherwise use a current report or `unknown`. Missing health is neither
-  healthy nor failed. Terminal source outcomes may be unavailable after restart.
-  Preserve conclusions from ordinary recovery, including completed-sink running.
-  Do not scan storage or replay history for status, or invent event timestamps.
-  SQL fallback, documentation, Console consumers and terminal-source expectations
-  implement this contract. Thirteen focused Console tests, full TypeScript,
-  targeted ESLint, formatting and generated catalog-documentation checks pass.
-  Exact SQL definitions pass focused native checks on the retained older binary:
-  missing source/sink health, paused placement, real reports, completed-sink running
-  and webhook behavior. This is not rebuilt-product verification. See
-  `unknown-health/REPORT.md`. Updated restart fixtures await CI.
-- Native status ownership is implemented and locally verified. One private current
-  relation is independent of unchanged history schemas and retention. Replica
-  receive-time fencing and attempt-qualified retirement reject late predecessors.
-  Catalog placement supplies paused health. Only successful committers publish
-  native catalog-driven Paused/Dropped history. Followers retain local effects,
-  join/restart emits no lifecycle history, and legacy reconstruction is unchanged.
-  Strict Clippy, formatting, real binaries, 33 focused tests, native SQL lifecycle
-  smoke and 534 assertions in seven existing catalog SLTs pass. Broad integration
-  remains open. Retired current rows use conditional Persist retractions under
-  catalog-certified retirement and read protection. The strengthened constant-sink
-  restart workflow passes in CI140837, including predecessor cleanup and current
-  health preservation. Session/subscription cleanup uses the existing conditional
-  WAL submission path, with ownership review and strict Clippy passing at
-  `67fe0f43`. Its abandoned-session restart witness awaits runtime verification.
-  See `current-health-simple-verified.tar.gz`,
-  `current-health-final-catalog-verified.tar.gz`, `current-health-fence-followup.md`
-  and `lifecycle-originator-status-review.md` with its disposition.
-- Finite table completion is an uncommitted draft in `catalog/table.rs`. The
-  all-target catalog check passes at `0ec81d0a`, but the operation is not wired or
-  tested. The worker has since moved to the published revision for CI reproduction. The generated lock
-  change adds only the internal txn-WAL dependency.
-  Research and review found a broader runtime prerequisite: fixed registration
-  inventories can resurrect membership after peer DROP/Forget, even on the first
-  attempt if timestamp allocation occurs afterward. Creator grants alone cannot
-  protect all followers. Catalog-certified registration is now approved, including
-  fresh certification after conflicts and no resurrection after DROP/Forget.
-  Preserve CREATE completion, ALTER protection and write ordering at that boundary,
-  without a general retry framework. See `table-registration-review-decision.md`,
-  `finite-table-drop-fence-boundary.md` and `runtime-table-registration-lifetime.md`.
-  Conflict-exhaustion halts and append membership assertions are adjacent M3 gaps,
-  not repairs established by this draft. Controllerd/adapterd remain unimplemented.
-- External pubsub is verified in `6798d042`, including protected SQL, outage and
-  reconnect. Shared bootstrap snapshots are fresh-only. Active configuration
-  reconciliation and durable-only credential publication have focused verification,
-  but combined multi-adapter promotion/concurrency remains open. Session/subscription
-  rows are execution-qualified and filtered, with physical cleanup verification open.
-- CI140837 on `1c201f9e` finished with 92 passing jobs. Testdrive 4 reports
-  terminal sources as created instead of historical paused. Upgrade conversion
-  (catalog v92 versus v96) and merge skew remain excluded, not passing. The
-  three-poll MV-frontier failure recurred in Cluster 1 and remains unexplained.
-  See `ci140837/{build,annotations}.json`. Do not restore history-derived current
-  health. The approved unavailable-health fallback above resolves the terminal-source
-  semantics, with current-status expectations adjusted explicitly.
-- Completed-sink health is corrected in published `1d7d9a1b`. A restart after
-  observing terminal recovery publication reproduced the old created status.
-  The correction uses actual empty Persist output, not a null recovery requirement,
-  and publishes current-only running with unknown event time. No producer starts
-  and no historical transition is manufactured. Placement, definition and shard
-  changes retract the observation. Production cadence remains 60s.
-  Strict Clippy and all 33 focused regressions pass. The additional real-Persist
-  regression in `3f6788aa` passes null-requirement rejection, terminal-output
-  admission and placement retirement.
-  The strengthened existing constant-sink workflow passes under the aggregate
-  8-CPU/16-GiB budget with unchanged 20s SQL deadlines, unchanged history count,
-  unknown transition time and the sanity restart. All five containers' kernel
-  cgroups and effective limits were verified. Its short publication interval is
-  test-local and reset afterward. Evidence and reviews: `ci140735/completed-sink-*`.
-  The exact SHOW inventory assertion was reproduced and passes with the added
-  private source expectation in `3a4b5472`. The full catalog.td file was not rerun.
-- Worker `i-0788036f0778687f1` is clean on `53b39e50`, checking the
-  registration correction and finite initializer with strict adapter all-target
-  Clippy. Do not sync while that command runs. Output:
-  `~/m3-evidence/registration-certification-fixed-clippy.log`.
-  Free space is 3.3 GiB. The session-fixture research guards are preserved in
-  worker Git stashes and `~/m3-evidence/ci140847-research-guards.patch`.
+- Next main outcome: one controllerd-managed default adapterd with external pubsub.
+  `controllerd-extraction-map.md` identifies existing launch/backend seams and the
+  coordinator-bound managed-policy context to move. Preserve the existing replica
+  policy and deployment-local readiness. Controllerd must not contain a coordinator
+  or shared maintenance. Independent adapters, SQL/HTTP lifecycle and complete
+  backend/deployment integration remain required.
+- Finite table completion and local adoption are committed in `f2de04ad`.
+  Writable native startup initializes storage metadata and completes certified WAL
+  registration before constructing local controllers. It adopts routes/tidy and
+  uses the existing committer to complete later bootstrap WAL time without duplicate
+  registration. It recovers committed CREATE/ALTER whose originating implications
+  never ran. Legacy/read-only startup is unchanged.
+  Strict adapter all-target Clippy, formatting and two boundary regressions pass.
+  Both regressions fail for their expected bug when their respective fixes are
+  removed, then pass after restoration. Rebuilt environmentd/clusterd pass SQL
+  startup, CREATE/write/ALTER, two restarts with preserved rows and resumed writes,
+  a maintained query and DROP with external pubsub. Concurrent DROP/Forget still
+  needs multi-adapter end-to-end coverage. Evidence:
+  `finite-table-final-verified.log`, `finite-table-product-smoke.tar.gz`,
+  `finite-table-alter-recovery-negative.log`, `finite-table-wiring-review.md`.
+- Runtime registration certification is in `05a4c836`, with its writable-mode
+  guard and fresh-prefix regression in `d23adca2`. Certification fetches current
+  mappings after each oracle allocation, including cached no-op fences and retries.
+  Preserve CREATE completion, ALTER protection and write ordering. See
+  `table-registration-certification-decision.md` and
+  `finite-table-drop-fence-boundary.md`. Conflict-exhaustion halts and append
+  membership assertions remain adjacent M3 gaps, not repaired by finite startup.
+- Native current-health ownership, catalog-derived paused placement and unknown
+  fallback are implemented. Successful committers alone publish native
+  Paused/Dropped history. Completed sinks recover current running from terminal
+  Persist output without fabricated event time or historical replay. Conditional
+  Persist retirement removes predecessor status/session rows while preserving
+  successor rows. The strengthened constant-sink/session restart witness and the
+  full original Cluster 4 shard pass locally under the retained 8-CPU/16-GiB budget
+  and unchanged deadlines. The witness correction is `98df7ff1`: SQL session UUIDs
+  come from `mz_sessions` via `pg_backend_pid()`, not process-scoped `mz_session_id()`.
+  Evidence: `ci140847/session-fixture/{exact-repeat,fixed,full-fixed}.log`,
+  `retirement-eligibility/`, `retired-rows/`, `session-cleanup-ownership-review.md`.
+- CI140847 on published `82c8c684` finished. Testdrive 4 passes rebuilt-product
+  unavailable-health expectations. Its Cluster 4 fixture failure is reproduced
+  and corrected locally as above. Cluster 1 repeated the unexplained MV-frontier
+  failure. SLT 4 has two status EXPLAIN mismatches. Upgrade conversion and merge
+  skew remain excluded, not passing. New combined draft-PR CI is pending.
+  Logs and annotations: `ci140847/README.txt`.
+- External pubsub, fresh-only shared seeding, active configuration reconciliation,
+  durable-only credential publication and execution-qualified session/subscription
+  ownership have focused verification. Combined independent-adapter concurrency,
+  promotion and retirement remain open. Native recovery/promotion, parallel and
+  retention regressions remain enabled. The cluster-thread assertion propagation
+  gap remains unresolved. Do not count checkout failures or unrerun corrections.
+- Worker `i-0788036f0778687f1` is clean on `5c18ca2b`, with no build or test running.
+  Negative-control revisions are no longer checked out. Its real binaries at
+  `5da971ac` differ only in test code from the current implementation. Retained
+  unrelated fixtures/data are preserved. Last free space is about 5 GiB.
+  Use the combined `-p mz-catalog -p mz-adapter --lib` feature set for focused tests.
+  Selecting adapter alone rebuilt another dependency variant and exhausted disk.
+  Audited stale/incomplete incremental cleanup preserved compiled outputs and
+  current test caches. See `finite-startup-cache-reclamation.log` and
+  `finite-alter-cache-cleanup.log`. Keep the worker idle and clean before syncing.
   Local formatting uses `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`.
-- CI140847 finished. Testdrive 4 passed, verifying unavailable terminal-source
-  health on the rebuilt product. Cluster 4 failed before the abandoned-session
-  restart: its witness used `mz_session_id()`, which identifies the process,
-  not the SQL session. The fixture correction in `98df7ff1` selects the session UUID
-  through `mz_sessions.connection_id = pg_backend_pid()`. The exact original
-  shard command reproduced the failure. The corrected constant-sink workflow
-  passes, including physical session removal, successor session preservation,
-  completed-sink health and sanity restart, with unchanged 20s deadlines under
-  the aggregate 8-CPU/16-GiB budget. The corrected full shard rerun also passes. Cluster 1 repeated the MV-frontier failure. SLT 4 has two
-  status EXPLAIN mismatches. Upgrade conversion and merge skew remain excluded.
-  Logs and annotations: `ci140847/README.txt`. Reproduction and passing
-  fixture logs: `ci140847/session-fixture/{exact-repeat,fixed,full-fixed}.log`.
-- Runtime registration certification is committed at `05a4c836`, but its strict
-  Clippy run failed on a missing `GlobalId` import. The uncommitted correction
-  includes that import and rejects non-writable certification. Neither the
-  correction nor the committer boundary has completed verification.
-  Current-status cleanup already passed the strengthened restart in CI140837.
-  Retirement eligibility has seven focused tests and independent review, and
-  the conditional Persist reader/writer boundary has five passing tests.
-  Evidence: `retirement-eligibility/`, `retired-rows/`,
-  `session-cleanup-ownership-review.md`.
-- After focused status/session verification and the bounded registration repair,
-  prioritize one controllerd-managed default adapterd with external pubsub.
-  Independent adapters, SQL/HTTP lifecycle and backend/deployment integration
-  remain required, but additional maintenance refinements are not prerequisites
-  for this first end-to-end outcome.
-- Native recovery/promotion, parallel, retention and corrected realization probes
-  passed CI140661. Upgrade conversion and merge skew stay excluded. Cluster-thread
-  assertions do not propagate to callers, an unresolved harness gap. Do not count
-  checkout failures or unrerun corrections as passing.
 
 Evidence is under `~/.local/share/aj/m3-evidence/`. Completed foundation pointers
 are in `foundation-handoff-detail.md` and `pre-status-closeout-handoff.md`.
 `session-publication-boundary.md` describes session cleanup. Broad combined M3
-verification remains open. Generated worker goldens were preserved and committed
-in `13c3fdf5` before syncing the finite draft. The standard SLT runner uses the ignored `target/debug -> ../target-xcompile/debug` alias.
+verification remains open. The standard SLT runner uses the ignored
+`target/debug -> ../target-xcompile/debug` alias.
 
 Scratch access improves iteration but must not stall it for extended SSO outages.
 Use local verification within available disk/memory or draft-PR CI as a fallback.
