@@ -25,6 +25,10 @@ skip = [
     # Materialize uses serde-saphyr 2.0.0. kube-client 4.2.0 still requires
     # 0.0.29. Remove this exception once kube-client moves to serde-saphyr 2.
     { name = "serde-saphyr", version = "=0.0.29" },
+    # Materialize uses lru 0.19. aws-sdk-s3 (through 1.155.0), launchdarkly-server-sdk
+    # (through 3.3.2), and mysql_async (through 0.37.1) still require ^0.18.2.
+    # Remove this exception once those crates release with lru 0.19.
+    { name = "lru", version = "=0.18.5" },
 
     # arrayvec had a significant API change in 0.7
     { name = "arrayvec", version = "0.5.2" },
