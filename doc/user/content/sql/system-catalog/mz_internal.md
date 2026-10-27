@@ -1379,11 +1379,16 @@ debugging.
 | `id`                     | [`text`]                        | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                           |
 | `name`                   | [`text`]                        | The name of the sink.                                                                                            |
 | `type`                   | [`text`]                        | The type of the sink.                                                                                            |
-| `last_status_change_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the sink status change.                                                                  |
-| `status`                 | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.              |
+| `last_status_change_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the sink status change. `NULL` when unavailable.                                                                  |
+| `status`                 | [`text`]                        | The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, `dropped`, or `unknown`. `unknown` means current health is unavailable, not healthy or failed.              |
 | `error`                  | [`text`]                        | If the sink is in an error state, the error message.                                                             |
 | `details`                | [`jsonb`]                       | Additional metadata provided by the sink. In case of error, may contain a `hint` field with helpful suggestions. |
 
+
+With catalog-following execution, no replicas means `paused`. Otherwise, a
+missing current health report means `unknown`. Ordinary recovery may establish
+that a completed sink is `running`. Retained history does not supply current
+health, and an unavailable status-change timestamp remains `NULL`.
 
 ## `mz_sink_status_history`
 
@@ -1503,12 +1508,18 @@ debugging.
 | `id`                     | [`text`]                        | The ID of the source. Corresponds to [`mz_catalog.mz_sources.id`](../mz_catalog#mz_sources).                       |
 | `name`                   | [`text`]                        | The name of the source.                                                                                            |
 | `type`                   | [`text`]                        | The type of the source.                                                                                            |
-| `last_status_change_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the source status change.                                                                  |
-| `status`                 | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.              |
+| `last_status_change_at`  | [`timestamp with time zone`]    | Wall-clock timestamp of the source status change. `NULL` when unavailable.                                                                  |
+| `status`                 | [`text`]                        | The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `dropped`, or `unknown`. `unknown` means current health is unavailable, not healthy or failed.              |
 | `error`                  | [`text`]                        | If the source is in an error state, the error message.                                                             |
 | `details`                | [`jsonb`]                       | Additional metadata provided by the source. In case of error, may contain a `hint` field with helpful suggestions. |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_statuses_raw -->
+
+With catalog-following execution, no replicas means `paused`. Otherwise, a
+missing current health report means `unknown`. Webhook and progress sources
+report `running` without replica health. A finished source may have no
+current outcome or error after restart. Retained history does not supply current
+health, and an unavailable status-change timestamp remains `NULL`.
 
 ## `mz_source_status_history`
 

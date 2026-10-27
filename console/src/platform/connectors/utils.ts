@@ -10,7 +10,8 @@
 import { ConnectorStatus } from "~/api/materialize/types";
 import { ByteUnit, convertBytes } from "~/utils/format";
 
-export type HealthStatus = "healthy" | "unhealthy" | "paused" | "all";
+export type HealthStatus =
+  "healthy" | "unhealthy" | "paused" | "unavailable" | "all";
 
 export type ConnectorStatusInfo =
   | { status: string; type: string }
@@ -63,10 +64,12 @@ export const snapshotEstimateNote = (type: string | null) => {
 };
 
 /**
- * Derives a simple `healthy` | `unhealthy` status from the underlying connector status.
+ * Derives a health filter category without treating missing health as a failure.
  */
 export function connectorHealthStatus(status: ConnectorStatus): HealthStatus {
   switch (status) {
+    case "unknown":
+      return "unavailable";
     case "created":
       return "healthy";
     case "starting":

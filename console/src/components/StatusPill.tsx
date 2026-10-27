@@ -44,6 +44,7 @@ const getConnectorColorScheme = (status: ConnectorStatus) => {
     case "failed":
       return "red";
     case "dropped":
+    case "unknown":
       return "gray";
   }
 };
@@ -97,6 +98,9 @@ const colorSchemeToStyles = {
 };
 
 const getConnectorStatusLabel = (connector: ConnectorStatusInfo) => {
+  if (connector.status === "unknown") {
+    return "Unavailable";
+  }
   if (snapshotting(connector)) {
     return "Snapshotting";
   }

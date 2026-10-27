@@ -133,6 +133,7 @@ export interface Schema {
 export type DatabaseObject = Schema | SchemaObject | Cluster | ClusterReplica;
 
 export type ConnectorStatus =
+  | "unknown"
   | "created"
   | "dropped"
   | "failed"

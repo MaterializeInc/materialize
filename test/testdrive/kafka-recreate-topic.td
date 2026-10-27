@@ -145,26 +145,19 @@ $ kafka-create-topic topic=good-topic
   ENVELOPE NONE
 > COMMIT
 
-# After suspending the cluster (by scaling the replication factor to 0), the
-# latest state is paused for sources that previously reported as stalled.
-# Because their last state _is_ in fact paused. Errored sources don't restart,
-# so they will not go through the source lifecycle on restarting the replica,
-# so they remain paused.
-
-# Before suspending the cluster, we see the errors in the status collection.
-# For source0 and source1, we already went through a couple suspension cycles,
-# so they already report as paused. With source2 online, we didn't yet do a
-# suspend-restart cycle.
+# Finished sources publish no new health after replica reconstruction, so their
+# current status is unknown. source2 has not undergone a suspend-restart cycle,
+# so its current error is still available.
 
 > SELECT name, status, error FROM mz_internal.mz_source_statuses
 name            status    error
 -------------------------------
 good_source     running   <null>
 good_source_tbl running   <null>
-source0         paused    <null>
-source0_tbl     paused    <null>
-source1         paused    <null>
-source1_tbl     paused    <null>
+source0         unknown   <null>
+source0_tbl     unknown   <null>
+source1         unknown   <null>
+source1_tbl     unknown   <null>
 source2         stalled   "kafka: source must be dropped and recreated due to failure: topic was recreated"
 source2_tbl     stalled   "kafka: source must be dropped and recreated due to failure: topic was recreated"
 
@@ -174,6 +167,10 @@ source2_tbl     stalled   "kafka: source must be dropped and recreated due to fa
 > ALTER CLUSTER to_recreate SET (REPLICATION FACTOR 0)
 > SELECT count(*) FROM mz_cluster_replicas cr JOIN mz_clusters c ON c.id = cr.cluster_id WHERE c.name = 'to_recreate'
 0
+
+> SELECT DISTINCT status, last_status_change_at FROM mz_internal.mz_source_statuses WHERE type != 'progress'
+paused <null>
+
 > ALTER CLUSTER to_recreate SET (REPLICATION FACTOR 1)
 
 $ kafka-ingest format=bytes topic=good-topic repeat=1
@@ -184,19 +181,22 @@ text
 ----
 1
 
-# After another suspend-restart cycle, source2 also reports as paused.
+# After another suspend-restart cycle, source2's current health is also unavailable.
 
 > SELECT name, status, error FROM mz_internal.mz_source_statuses WHERE type != 'progress'
 name            status    error
 -------------------------------
 good_source     running   <null>
 good_source_tbl running   <null>
-source0         paused    <null>
-source0_tbl     paused    <null>
-source1         paused    <null>
-source1_tbl     paused    <null>
-source2         paused    <null>
-source2_tbl     paused    <null>
+source0         unknown   <null>
+source0_tbl     unknown   <null>
+source1         unknown   <null>
+source1_tbl     unknown   <null>
+source2         unknown   <null>
+source2_tbl     unknown   <null>
+
+> SELECT DISTINCT last_status_change_at FROM mz_internal.mz_source_statuses WHERE status = 'unknown'
+<null>
 
 # Testdrive expects all sources to end in a healthy state, so manufacture that
 # by dropping sources.

@@ -43,7 +43,9 @@ export const SourceDiagnostics = ({
   const error = sourceStatus?.error;
   // `snapshot_committed` is authoritative. Judging by the staged/known ratio
   // would report a live source as stuck at 99% forever.
-  const snapshotting = sourceStatus?.snapshotCommitted === false;
+  const snapshotting =
+    sourceStatus?.status !== "unknown" &&
+    sourceStatus?.snapshotCommitted === false;
   if (!error && !snapshotting) return null;
 
   const snapshotKnown = stats?.snapshotRecordsKnown ?? 0;

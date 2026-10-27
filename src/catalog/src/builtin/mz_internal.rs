@@ -2217,11 +2217,11 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
         ("type", "The type of the source."),
         (
             "last_status_change_at",
-            "Wall-clock timestamp of the source status change.",
+            "Wall-clock timestamp of the source status change. `NULL` when unavailable.",
         ),
         (
             "status",
-            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
+            "The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `dropped`, or `unknown`. `unknown` means current health is unavailable, not healthy or failed.",
         ),
         (
             "error",
@@ -2409,7 +2409,7 @@ SELECT
             type = 'webhook' OR
             type = 'progress'
         THEN 'running'
-        ELSE COALESCE(status, 'created')
+        ELSE COALESCE(status, CASE WHEN EXISTS (SELECT 1 FROM protected) THEN 'unknown' ELSE 'created' END)
     END AS status,
     error,
     details
@@ -2538,11 +2538,11 @@ pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
         ("type", "The type of the sink."),
         (
             "last_status_change_at",
-            "Wall-clock timestamp of the sink status change.",
+            "Wall-clock timestamp of the sink status change. `NULL` when unavailable.",
         ),
         (
             "status",
-            "The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.",
+            "The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, `dropped`, or `unknown`. `unknown` means current health is unavailable, not healthy or failed.",
         ),
         (
             "error",
@@ -2649,7 +2649,7 @@ SELECT
     name,
     mz_sinks.type,
     occurred_at as last_status_change_at,
-    coalesce(status, 'created') as status,
+    coalesce(status, CASE WHEN EXISTS (SELECT 1 FROM protected) THEN 'unknown' ELSE 'created' END) as status,
     error,
     details
 FROM mz_catalog.mz_sinks

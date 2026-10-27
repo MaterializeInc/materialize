@@ -21,6 +21,18 @@ These components have focused verification, not combined M3 acceptance.
 
 ## Resume here
 
+- Current-health fallback is approved: catalog placement supplies `paused` with no
+  replicas, otherwise use a current report or `unknown`. Missing health is neither
+  healthy nor failed. Terminal source outcomes may be unavailable after restart.
+  Preserve conclusions from ordinary recovery, including completed-sink running.
+  Do not scan storage or replay history for status, or invent event timestamps.
+  SQL fallback, documentation, Console consumers and terminal-source expectations
+  implement this contract. Thirteen focused Console tests, full TypeScript,
+  targeted ESLint, formatting and generated catalog-documentation checks pass.
+  Exact SQL definitions pass focused native checks on the retained older binary:
+  missing source/sink health, paused placement, real reports, completed-sink running
+  and webhook behavior. This is not rebuilt-product verification. See
+  `unknown-health/REPORT.md`. Updated restart fixtures await CI.
 - Native status ownership is implemented and locally verified. One private current
   relation is independent of unchanged history schemas and retention. Replica
   receive-time fencing and attempt-qualified retirement reject late predecessors.
@@ -29,7 +41,13 @@ These components have focused verification, not combined M3 acceptance.
   join/restart emits no lifecycle history, and legacy reconstruction is unchanged.
   Strict Clippy, formatting, real binaries, 33 focused tests, native SQL lifecycle
   smoke and 534 assertions in seven existing catalog SLTs pass. Broad integration
-  and physical retired-row cleanup remain open. See `current-health-simple-verified.tar.gz`,
+  remains open. Retired current rows use conditional Persist retractions under
+  catalog-certified retirement and read protection. The strengthened constant-sink
+  restart workflow passes in CI140837, including predecessor cleanup and current
+  health preservation. Session/subscription cleanup uses the existing conditional
+  WAL submission path, with ownership review and strict Clippy passing at
+  `67fe0f43`. Its abandoned-session restart witness awaits runtime verification.
+  See `current-health-simple-verified.tar.gz`,
   `current-health-final-catalog-verified.tar.gz`, `current-health-fence-followup.md`
   and `lifecycle-originator-status-review.md` with its disposition.
 - Finite table completion is an uncommitted draft in `catalog/table.rs`. The
@@ -50,15 +68,14 @@ These components have focused verification, not combined M3 acceptance.
   reconnect. Shared bootstrap snapshots are fresh-only. Active configuration
   reconciliation and durable-only credential publication have focused verification,
   but combined multi-adapter promotion/concurrency remains open. Session/subscription
-  rows are execution-qualified and filtered, with physical cleanup still missing.
-- CI140760 on `1d7d9a1b` finished with 93 passing jobs, including both parallel
-  shards, all cluster shards and testdrive 6. Testdrive 4 still reports the new
-  private source missing from SHOW expectations and terminal sources reporting
-  created instead of sticky historical paused. Upgrade conversion (catalog v92
-  versus v96) and merge skew remain excluded, not passing. The earlier three-poll
-  MV-frontier failure did not recur, but its cause is not established.
-  See `ci140760/{build,annotations}.json`. Do not restore history-derived current
-  health or silently relax terminal-source assertions. Their semantics need a decision.
+  rows are execution-qualified and filtered, with physical cleanup verification open.
+- CI140837 on `1c201f9e` finished with 92 passing jobs. Testdrive 4 reports
+  terminal sources as created instead of historical paused. Upgrade conversion
+  (catalog v92 versus v96) and merge skew remain excluded, not passing. The
+  three-poll MV-frontier failure recurred in Cluster 1 and remains unexplained.
+  See `ci140837/{build,annotations}.json`. Do not restore history-derived current
+  health. The approved unavailable-health fallback above resolves the terminal-source
+  semantics, with current-status expectations adjusted explicitly.
 - Completed-sink health is corrected in published `1d7d9a1b`. A restart after
   observing terminal recovery publication reproduced the old created status.
   The correction uses actual empty Persist output, not a null recovery requirement,

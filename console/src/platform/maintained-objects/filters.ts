@@ -89,6 +89,7 @@ export const objectTypeFilterFn = arrayMatchFilter<MaintainedObjectType>(
  * snapshot, so both the pill and this filter fold in `snapshot_committed`.
  */
 export const SOURCE_STATUS_BUCKETS = [
+  "unknown",
   "snapshotting",
   "running",
   "starting",
@@ -100,6 +101,7 @@ export const SOURCE_STATUS_BUCKETS = [
 export type SourceStatusBucket = (typeof SOURCE_STATUS_BUCKETS)[number];
 
 export const SOURCE_STATUS_LABELS: Record<SourceStatusBucket, string> = {
+  unknown: "Unavailable",
   snapshotting: "Snapshotting",
   running: "Running",
   starting: "Starting",

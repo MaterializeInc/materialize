@@ -89,10 +89,9 @@ class SourceErrors(Check):
         return Testdrive(
             dedent(
                 # We check two things: a) that the expected (sub)sources are
-                # stalled, and b) that they report the expected error. Only
-                # checking the error using bool_and wouldn't work because this
-                # check ignores NULL values, so would succeed if, say, all
-                # sources are in state 'running'.
+                # stalled or have unavailable health, and b) that any reported
+                # error matches. Checking only the error with bool_and ignores
+                # NULL values, so would succeed if all sources were running.
                 #
                 # TODO(aljoscha): We recently migrated the status history
                 # collection, so all updates are lost when upgrading. This has
@@ -109,11 +108,15 @@ class SourceErrors(Check):
                 # take precedence over errors. To fix this, we might want to
                 # rewrite this test to look at mz_source_status_history
                 # instead, which contains the full history.
+                #
+                # Catalog-following execution reports unknown when a finished
+                # source publishes no current health after reconstruction. This
+                # does not establish either recovery or failure.
                 """
                 $ set-sql-timeout duration=120s
                 > SELECT
                         coalesce(bool_and(error ~* 'publication .+ does not exist'), true) as matches,
-                        bool_and(status IN ('stalled', 'created', 'paused')) as is_stalled
+                        bool_and(status IN ('stalled', 'created', 'paused', 'unknown')) as is_stalled_or_unavailable
                     FROM mz_internal.mz_source_statuses
                     WHERE
                         name IN ('source_errors_sourcea', 'source_errors_sourceb', 'source_errors_tablea', 'source_errors_tableb');

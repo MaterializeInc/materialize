@@ -45,17 +45,24 @@ const NonRunningSourcesInsight = ({
 
   const { colors } = useTheme<MaterializeTheme>();
   const nonRunningSources = Object.entries(planInsights.nonRunningSources);
+  const hasUnknownStatus = nonRunningSources.some(
+    ([, source]) => source.status === "unknown",
+  );
 
   return (
     <NoticeContainer>
       <NoticeContent>
         <HStack>
           <Text color={colors.foreground.primary} textStyle="text-ui-med">
-            Your query is blocked by an unavailable source
+            {hasUnknownStatus
+              ? "Your query depends on a source with unavailable health"
+              : "Your query is blocked by an unavailable source"}
           </Text>
         </HStack>
         <Text color={colors.foreground.primary} textStyle="text-base">
-          Your query depends on at least one source that is unavailable.
+          {hasUnknownStatus
+            ? "Current health is unavailable for at least one source. This does not necessarily indicate a source failure."
+            : "Your query depends on at least one source that is unavailable."}
         </Text>
         <NoticeUnorderedList
           list={nonRunningSources.map(

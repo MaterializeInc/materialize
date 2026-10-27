@@ -30,6 +30,7 @@ const options: HealthStatusOption[] = [
   { id: "unhealthy", label: "Unhealthy" },
   { id: "healthy", label: "Healthy" },
   { id: "paused", label: "Paused" },
+  { id: "unavailable", label: "Unavailable" },
   { id: "all", label: "All Statuses" },
 ];
 

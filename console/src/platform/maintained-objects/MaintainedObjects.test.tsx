@@ -154,6 +154,34 @@ describe("MaintainedObjects", () => {
     expect(within(row).getByText("Stalled")).toBeVisible();
   });
 
+  it("displays and filters unknown source health as unavailable", async () => {
+    const user = userEvent.setup();
+    const unknownSrc = buildObject({
+      id: "u106",
+      name: "unknown_src",
+      objectType: "source",
+      sourceType: "postgres",
+      sourceStatus: {
+        status: "unknown",
+        error: null,
+        snapshotCommitted: false,
+      },
+    });
+    await renderMaintainedObjects({ objects: [unknownSrc, eventsSrc] });
+
+    const row = await screen.findByRole("row", { name: /unknown_src/ });
+    expect(within(row).getByText("Unavailable")).toBeVisible();
+    expect(within(row).queryByText("Snapshotting")).not.toBeInTheDocument();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Filter status" }),
+    );
+    await user.click(await screen.findByLabelText("Unavailable"));
+    expect(screen.getByText("unknown_src")).toBeVisible();
+    expect(screen.queryByText("events_src")).not.toBeInTheDocument();
+    expect(screen.getByText("Status: Unavailable")).toBeVisible();
+  });
+
   it("filters rows by status and reflects it in a chip", async () => {
     const user = userEvent.setup();
     await renderMaintainedObjects();

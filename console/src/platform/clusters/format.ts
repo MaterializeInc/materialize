@@ -97,6 +97,8 @@ export function formatTableLagInfo(lagInfo: LagInfo | null | undefined) {
 
 export const sourceStatusToColor = (status: ConnectorStatus): string => {
   switch (status) {
+    case "unknown":
+      return colors.gray[500];
     case "created":
     case "starting":
     case "paused":
@@ -112,6 +114,8 @@ export const sourceStatusToColor = (status: ConnectorStatus): string => {
 
 export const humanizeSourceStatus = (status: ConnectorStatus): string => {
   switch (status) {
+    case "unknown":
+      return "Unavailable";
     case "created":
       return "Created";
     case "starting":

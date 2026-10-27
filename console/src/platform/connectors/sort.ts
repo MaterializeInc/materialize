@@ -22,6 +22,7 @@ type ConnectorStatusOrderMapping = {
   [k in ConnectorStatus]: number;
 };
 const connectorStatusSortOrder: ConnectorStatusOrderMapping = {
+  unknown: 0,
   stalled: 1,
   starting: 2,
   failed: 3,

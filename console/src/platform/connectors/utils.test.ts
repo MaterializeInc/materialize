@@ -7,10 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { calculateAxisTicks } from "./utils";
+import { calculateAxisTicks, connectorHealthStatus } from "./utils";
 
 const oneThird = 1 / 3;
 const twoThirds = 2 / 3;
+
+describe("connector health", () => {
+  it("keeps unavailable health distinct from healthy, failed, and paused", () => {
+    expect(connectorHealthStatus("unknown")).toBe("unavailable");
+    expect(connectorHealthStatus("running")).toBe("healthy");
+    expect(connectorHealthStatus("failed")).toBe("unhealthy");
+    expect(connectorHealthStatus("paused")).toBe("paused");
+  });
+});
 
 describe("calculateAxisTicks", () => {
   it("empty domain results in a single tick", () => {
