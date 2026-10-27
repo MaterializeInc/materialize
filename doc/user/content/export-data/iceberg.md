@@ -39,6 +39,10 @@ so consuming it means reconstructing current state from the `_mz_diff` column:
 
 {{% include-headless "/headless/iceberg-sinks/append-mode-current-state" %}}
 
+To keep every version of every row with its validity interval instead of
+only current state, see [Build SCD Type 2 history from an Iceberg
+sink](/export-data/patterns/scd-type-2-iceberg/).
+
 For the query to do this in a specific engine's dialect, along with the setup
 that engine requires, see:
 
