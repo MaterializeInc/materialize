@@ -202,6 +202,7 @@ mod tests {
             &ShardId::new(),
             envelope,
             Antichain::from_elem(Timestamp::minimum()),
+            Antichain::from_elem(Timestamp::minimum()),
         )
     }
 
