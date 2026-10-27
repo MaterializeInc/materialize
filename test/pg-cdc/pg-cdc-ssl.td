@@ -18,10 +18,6 @@
 # Check out https://www.postgresql.org/docs/13/auth-pg-hba-conf.html
 # for more details.
 
-# TODO: Reenable when database-issues#4009 is fixed
-$ skip-if
-SELECT true
-
 > CREATE SECRET ssl_ca AS '${arg.ssl-ca}'
 > CREATE SECRET ssl_cert AS '${arg.ssl-cert}'
 > CREATE SECRET ssl_key AS '${arg.ssl-key}'
