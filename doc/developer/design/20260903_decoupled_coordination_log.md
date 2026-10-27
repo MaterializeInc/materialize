@@ -32,25 +32,61 @@ These components have focused verification, not combined M3 acceptance.
   and physical retired-row cleanup remain open. See `current-health-simple-verified.tar.gz`,
   `current-health-final-catalog-verified.tar.gz`, `current-health-fence-followup.md`
   and `lifecycle-originator-status-review.md` with its disposition.
-- Continue the finite table-initialization boundary, then controllerd/adapterd.
-  `finite-table-initializer-next-boundary.md` is research, not implementation.
-  `c03c2a0e` establishes finite storage metadata, not txn-WAL readiness or complete
-  controller startup. `TxnsHandle::adopt` is tested but not wired into startup.
-  Adoption alone does not register/advance the WAL or establish write authority.
+- Finite table completion is an uncommitted draft in `catalog/table.rs`. The
+  all-target catalog check passes at `0ec81d0a`, but the operation is not wired or
+  tested. The worker has since moved to the published revision for CI reproduction. The generated lock
+  change adds only the internal txn-WAL dependency.
+  Research and review found a broader runtime prerequisite: fixed registration
+  inventories can resurrect membership after peer DROP/Forget, even on the first
+  attempt if timestamp allocation occurs afterward. Creator grants alone cannot
+  protect all followers. Aljoscha has been asked to approve catalog-certified,
+  single-attempt registration with refresh/re-derivation outside implications,
+  preserving CREATE completion and ALTER holds. Hold that runtime correction
+  pending the scope decision. See `table-registration-review-decision.md`,
+  `finite-table-drop-fence-boundary.md` and `runtime-table-registration-lifetime.md`.
+  Conflict-exhaustion halts and append membership assertions are adjacent M3 gaps,
+  not repairs established by this draft. Controllerd/adapterd remain unimplemented.
 - External pubsub is verified in `6798d042`, including protected SQL, outage and
   reconnect. Shared bootstrap snapshots are fresh-only. Active configuration
   reconciliation and durable-only credential publication have focused verification,
   but combined multi-adapter promotion/concurrency remains open. Session/subscription
   rows are execution-qualified and filtered, with physical cleanup still missing.
-- Latest recorded broad integration is CI140687 at `b2ea75aa`: 90 checks passed,
-  testdrive 6 failed on six missing Starting history rows after replica recreation.
-  The original 37-file shard and focused status-history run pass on scratch under
-  the aggregate 8-CPU/16-GiB slice. Replica-owned publication closes the demonstrated
-  pre-subscription loss window, but this was not trace-proven as the CI cause.
-  Rerun broad integration for the status slice rather than claiming that failure
-  resolved. The preceding cumulative slowdown remains unexplained.
-  Console/prod failed against production cloud services, not this branch's server.
-  See `ci140687/failures.md` and `ci140687/starting-history-owner.md`.
+- CI140760 on `1d7d9a1b` finished with 93 passing jobs, including both parallel
+  shards, all cluster shards and testdrive 6. Testdrive 4 still reports the new
+  private source missing from SHOW expectations and terminal sources reporting
+  created instead of sticky historical paused. Upgrade conversion (catalog v92
+  versus v96) and merge skew remain excluded, not passing. The earlier three-poll
+  MV-frontier failure did not recur, but its cause is not established.
+  See `ci140760/{build,annotations}.json`. Do not restore history-derived current
+  health or silently relax terminal-source assertions. Their semantics need a decision.
+- Completed-sink health is corrected in published `1d7d9a1b`. A restart after
+  observing terminal recovery publication reproduced the old created status.
+  The correction uses actual empty Persist output, not a null recovery requirement,
+  and publishes current-only running with unknown event time. No producer starts
+  and no historical transition is manufactured. Placement, definition and shard
+  changes retract the observation. Production cadence remains 60s.
+  Strict Clippy and all 33 focused regressions pass. The additional real-Persist
+  regression in `3f6788aa` passes null-requirement rejection, terminal-output
+  admission and placement retirement.
+  The strengthened existing constant-sink workflow passes under the aggregate
+  8-CPU/16-GiB budget with unchanged 20s SQL deadlines, unchanged history count,
+  unknown transition time and the sanity restart. All five containers' kernel
+  cgroups and effective limits were verified. Its short publication interval is
+  test-local and reset afterward. Evidence and reviews: `ci140735/completed-sink-*`.
+  The exact SHOW inventory assertion was reproduced and passes with the added
+  private source expectation in `3a4b5472`. The full catalog.td file was not rerun.
+- Worker `i-0788036f0778687f1` is on `3f6788aa`, clean before sync, and expires
+  2026-10-28 19:01 UTC. `m3-terminal-health` remains available for inspection.
+  Older fixtures are stopped with data preserved. An idle cleanup removed only
+  older duplicate compiler incremental caches, retaining two recent variants per
+  crate. Watch disk usage before further builds. Evidence is checksum-verified
+  off-worker. Local formatting uses cached pinned Rust explicitly:
+  `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`, because the host override is older.
+- Physical retired-row cleanup is still unimplemented. Research identifies the
+  existing snapshot/CAS boundaries and a conservative same-snapshot incarnation
+  eligibility rule. See `retired-row-cleanup-boundary.md`. Missing membership alone
+  is insufficient, and cleanup must handle late signed updates without collector
+  double-retractions. This is separate from the pending table-registration decision.
 - Native recovery/promotion, parallel, retention and corrected realization probes
   passed CI140661. Upgrade conversion and merge skew stay excluded. Cluster-thread
   assertions do not propagate to callers, an unresolved harness gap. Do not count
@@ -59,9 +95,11 @@ These components have focused verification, not combined M3 acceptance.
 Evidence is under `~/.local/share/aj/m3-evidence/`. Completed foundation pointers
 are in `foundation-handoff-detail.md` and `pre-status-closeout-handoff.md`.
 `session-publication-boundary.md` describes session cleanup. Broad combined M3
-verification remains open. Scratch retains generated golden edits already copied
-and preserved here. Check/preserve them before another push. Its standard SLT
-runner uses the ignored `target/debug -> ../target-xcompile/debug` alias.
+verification remains open. Generated worker goldens were preserved and committed
+in `13c3fdf5` before syncing the finite draft. The standard SLT runner uses the ignored `target/debug -> ../target-xcompile/debug` alias.
+
+Scratch access improves iteration but must not stall it for extended SSO outages.
+Use local verification within available disk/memory or draft-PR CI as a fallback.
 
 ## Boundaries to preserve
 
