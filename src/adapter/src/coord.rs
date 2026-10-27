@@ -5425,11 +5425,24 @@ pub async fn load_remote_system_parameters(
         //       LaunchDarkly configuration, for when LaunchDarkly comes
         //       back online.
         //    6. Reboot environmentd.
+        let synced_once = storage.has_system_config_synced_once().await?;
         let mut params = SynchronizedParameters::new(SystemVars::default());
         let frontend_sync = async {
             let frontend =
                 Arc::new(SystemParameterFrontend::from(&system_parameter_sync_config).await?);
             frontend.pull(&mut params);
+            // Booting now would mark the configuration as synced while it holds
+            // compiled-in defaults, which blocking on LaunchDarkly above exists
+            // to prevent. A missing or unreadable file is no defect, so it
+            // boots on defaults as before.
+            if !synced_once {
+                if let Some(defect) = frontend.config_file_defect() {
+                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                        "refusing to boot on compiled-in defaults, as no system \
+                         configuration has been synced yet: {defect}"
+                    )));
+                }
+            }
             let ops = params
                 .modified()
                 .into_iter()
@@ -5446,7 +5459,7 @@ pub async fn load_remote_system_parameters(
                 frontend: Some(frontend),
             })
         };
-        if !storage.has_system_config_synced_once().await? {
+        if !synced_once {
             frontend_sync.await
         } else {
             match mz_ore::future::timeout(system_parameter_sync_timeout, frontend_sync).await {

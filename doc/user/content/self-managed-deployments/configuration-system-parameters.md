@@ -494,6 +494,16 @@ other context kind.
   neither the environment-wide values nor the existing overrides change until a
   valid ConfigMap says so. Removing an override means editing the file, not
   breaking it.
+- **On first boot, a ConfigMap that is invalid or targets another release stops
+  `environmentd` from starting.** Until an environment has synced its
+  configuration once, there are no values to keep, so applying nothing would
+  start it on compiled-in defaults instead of the configuration you wrote.
+  `environmentd` exits with an error naming the file and either both releases or
+  the defect, for example `refusing to boot on compiled-in defaults, as no system
+  configuration has been synced yet: system parameter sync file
+  /path/to/system-params.json targets release v26.46.1, running v26.47.0`. Fix
+  the ConfigMap and `environmentd` starts on its next restart. A missing or
+  unreadable ConfigMap does not block the first boot.
 
 To see which overrides are currently in effect, query:
 

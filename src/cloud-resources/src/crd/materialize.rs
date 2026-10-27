@@ -291,7 +291,9 @@ pub mod v1alpha1 {
         /// name the release it targets in `release`, equal to the first word of
         /// `mz_version()`, such as `v26.46.1`. A document with a structural
         /// defect anywhere, or for another release, is ignored as a whole,
-        /// leaving every current value and override in place. The
+        /// leaving every current value and override in place. Before the
+        /// environment has synced its configuration once, such a document
+        /// stops `environmentd` from starting instead. The
         /// `mz_parameter_frontend_file_status` and
         /// `mz_parameter_frontend_file_last_applied_time_seconds` metrics report
         /// whether and when the document was last applied.
@@ -1605,7 +1607,9 @@ pub mod v1 {
         /// name the release it targets in `release`, equal to the first word of
         /// `mz_version()`, such as `v26.46.1`. A document with a structural
         /// defect anywhere, or for another release, is ignored as a whole,
-        /// leaving every current value and override in place. The
+        /// leaving every current value and override in place. Before the
+        /// environment has synced its configuration once, such a document
+        /// stops `environmentd` from starting instead. The
         /// `mz_parameter_frontend_file_status` and
         /// `mz_parameter_frontend_file_last_applied_time_seconds` metrics report
         /// whether and when the document was last applied.

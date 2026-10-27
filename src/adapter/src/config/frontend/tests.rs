@@ -1393,6 +1393,45 @@ fn test_diagnoses_rule_mistakes() {
     );
 }
 
+/// A file that exists but does not apply is a defect, which fails the first
+/// boot. A file that cannot be read is not.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+fn test_config_file_defect() {
+    let params = SynchronizedParameters::default();
+    let frontend = file_frontend();
+    let defect = |read: io::Result<String>| {
+        sync_tick(&frontend, &params, read);
+        frontend.config_file_defect()
+    };
+
+    assert_eq!(
+        frontend.config_file_defect(),
+        None,
+        "defect before any read"
+    );
+    assert_eq!(defect(Ok(scoped_file(true))), None);
+    assert_eq!(defect(Err(io::Error::from(io::ErrorKind::NotFound))), None);
+    assert_eq!(
+        defect(Ok(scoped_file(true).replace(RELEASE, OTHER_RELEASE))).as_deref(),
+        Some(
+            "system parameter sync file /nonexistent/system-params.json targets release \
+             v26.46.1, running v0.0.0+dummy"
+        )
+    );
+    assert_eq!(
+        defect(Ok(
+            r#"{"version": 2, "release": "v0.0.0+dummy", "rules": 7}"#.to_string()
+        ))
+        .as_deref(),
+        Some(
+            "system parameter sync file /nonexistent/system-params.json does not parse: \
+             rules: invalid type: number, expected a sequence"
+        )
+    );
+    assert_eq!(defect(Ok("{}".to_string())), None);
+}
+
 /// The status gauge is one-hot over the latest read's outcome, and the applied
 /// time advances on every read that parses, changed or not.
 #[mz_ore::test]

@@ -581,6 +581,9 @@ struct CachedConfigFile {
     /// The newest valid parse whose environment-wide section is committed to
     /// the catalog. The scoped passes read this. It survives a failed read.
     published: Option<Arc<ConfigFileV2>>,
+    /// Why [`Self::contents`] did not parse, or `None` if it parsed or the read
+    /// failed. See [`SystemParameterFrontend::config_file_defect`].
+    defect: Option<String>,
 }
 
 /// Whether `value`, a scoped source's raw value for `param_name`, is an
@@ -739,25 +742,33 @@ impl SystemParameterFrontend {
                 None
             }
         };
-        let (file, status) = match contents.as_deref().map(|contents| {
+        let (file, status, defect) = match contents.as_deref().map(|contents| {
             serde_json::from_str(contents)
                 .map_err(|e| ParseError::Invalid(e.to_string()))
                 .and_then(|document| {
                     ConfigFileV2::parse(document, &running_release(self.build_info))
                 })
         }) {
-            None => (None, ConfigFileStatus::Unreadable),
-            Some(Ok(file)) => (Some(Arc::new(file)), ConfigFileStatus::Ok),
+            None => (None, ConfigFileStatus::Unreadable, None),
+            Some(Ok(file)) => (Some(Arc::new(file)), ConfigFileStatus::Ok, None),
             Some(Err(ParseError::Invalid(e))) => {
                 warn!("could not parse system parameter sync file: {e}");
-                (None, ConfigFileStatus::Invalid)
+                let defect = format!(
+                    "system parameter sync file {} does not parse: {e}",
+                    path.display()
+                );
+                (None, ConfigFileStatus::Invalid, Some(defect))
             }
             Some(Err(ParseError::ReleaseMismatch { file, running })) => {
                 warn!(
                     "system parameter sync file targets release {file}, running {running}, \
                      keeping current values"
                 );
-                (None, ConfigFileStatus::ReleaseMismatch)
+                let defect = format!(
+                    "system parameter sync file {} targets release {file}, running {running}",
+                    path.display()
+                );
+                (None, ConfigFileStatus::ReleaseMismatch, Some(defect))
             }
         };
         for candidate in ConfigFileStatus::ALL {
@@ -778,6 +789,7 @@ impl SystemParameterFrontend {
             current: file.clone(),
             // Advanced only by `publish_config_file`.
             published,
+            defect,
         });
 
         file
@@ -820,6 +832,17 @@ impl SystemParameterFrontend {
                 cached.published = cached.current.clone();
             }
         }
+    }
+
+    /// Why the latest [`Self::pull`] read a config-sync file that exists but does
+    /// not apply, because it is malformed or targets another release. `None` if
+    /// it applies, could not be read, or the frontend is LaunchDarkly-backed.
+    pub fn config_file_defect(&self) -> Option<String> {
+        self.config_file
+            .lock()
+            .expect("config file cache lock poisoned")
+            .as_ref()
+            .and_then(|cached| cached.defect.clone())
     }
 
     /// Whether the frontend knows the desired state of the scoped parameters.
