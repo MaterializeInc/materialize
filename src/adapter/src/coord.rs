@@ -251,6 +251,7 @@ mod message_handler;
 mod metric_sink;
 mod privatelink_status;
 mod query_execution;
+mod retired_rows;
 mod sql;
 mod storage_bootstrap;
 mod validity;
@@ -2319,6 +2320,7 @@ pub struct Coordinator {
     hydration_history_replica_cursor: Option<ReplicaId>,
     /// Hydration-history sweep owned by the coordinator while one is in flight.
     hydration_history_sweep: Option<AbortOnDropHandle<()>>,
+    retired_rows_sweep: Option<AbortOnDropHandle<()>>,
     /// The curated metric sinks installed on each replica.
     ///
     /// Keyed replica-first so a replica's installs form one contiguous range: teardown on replica
@@ -5262,6 +5264,7 @@ impl Coordinator {
                         ).await {
                             warn!(%error, "unable to publish catalog read protection");
                         }
+                        self.collect_retired_rows();
                         // Only definitive outcomes reach here. Rebuild proposals on
                         // the next turn, retaining committed protection meanwhile.
                         // Conflicts retain the publication cadence rather than
@@ -5473,6 +5476,9 @@ impl Coordinator {
             // client. Release them before the coordinator runtime starts shutting
             // down the oracle workers.
             if let Some(sweep) = self.hydration_history_sweep.take() {
+                sweep.abort_and_wait().await;
+            }
+            if let Some(sweep) = self.retired_rows_sweep.take() {
                 sweep.abort_and_wait().await;
             }
             if let Some(subscriber) = self.compaction_bound_subscriber.take() {
@@ -6720,6 +6726,7 @@ pub fn serve(
                     introspection_subscribes: BTreeMap::new(),
                     hydration_history_replica_cursor: None,
                     hydration_history_sweep: None,
+                    retired_rows_sweep: None,
                     metric_sinks: BTreeMap::new(),
                     metric_sink_plans: BTreeMap::new(),
                     pending_compute_installations: BTreeSet::new(),

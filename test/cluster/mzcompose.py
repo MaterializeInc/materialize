@@ -7530,6 +7530,12 @@ def workflow_test_constant_sink(c: Composition) -> None:
             "SELECT count(*) FROM mz_internal.mz_sink_status_history h "
             "JOIN mz_sinks s ON s.id = h.sink_id WHERE s.name = 'snk'"
         )[0][0]
+        predecessor = c.sql_query(
+            "SELECT h.client_incarnation FROM mz_internal.mz_storage_statuses_raw h "
+            "JOIN mz_sinks s ON s.id = h.id WHERE s.name = 'snk'",
+            port=6877,
+            user="mz_system",
+        )[0][0]
         c.kill("materialized")
         c.up("materialized")
 
@@ -7553,6 +7559,19 @@ def workflow_test_constant_sink(c: Composition) -> None:
                   WHERE name = 'snk'
                 <null>
                 """))
+        c.testdrive(
+            dedent(f"""
+                > SELECT count(*) FROM mz_internal.mz_storage_statuses_raw h
+                  JOIN mz_sinks s ON s.id = h.id
+                  WHERE s.name = 'snk' AND h.client_incarnation = {predecessor}
+                0
+
+                > SELECT count(*) FROM mz_internal.mz_storage_statuses_raw h
+                  JOIN mz_sinks s ON s.id = h.id WHERE s.name = 'snk'
+                1
+                """),
+            args=["--materialize-url=postgres://mz_system@materialized:6877"],
+        )
         c.sql(
             "ALTER SYSTEM RESET catalog_read_protection_publish_interval",
             port=6877,

@@ -75,21 +75,29 @@ These components have focused verification, not combined M3 acceptance.
   test-local and reset afterward. Evidence and reviews: `ci140735/completed-sink-*`.
   The exact SHOW inventory assertion was reproduced and passes with the added
   private source expectation in `3a4b5472`. The full catalog.td file was not rerun.
-- Worker `i-0788036f0778687f1` is on `c43e293a`, clean before sync, and expires
+- Worker `i-0788036f0778687f1` is on `76c35667`, clean before sync, and expires
   2026-10-28 19:01 UTC. `m3-terminal-health` is stopped with data preserved.
   Older fixtures are stopped with data preserved. An idle cleanup removed only
   older duplicate compiler incremental caches, retaining two recent variants per
   crate. Watch disk usage before further builds. Evidence is checksum-verified
   off-worker. Local formatting uses cached pinned Rust explicitly:
   `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`, because the host override is older.
-- Physical retired-row cleanup is still unwired. `90de705a` and `c43e293a` expose
+- Current-status cleanup is wired but not runtime-verified. `90de705a` and `c43e293a` expose
   eligibility from one cached committed prefix: below the allocation limit and
   absent from all live deployments. Non-writable modes cannot issue certificates.
   Independent review, strict Clippy and seven focused lifecycle, promotion and
-  mode tests passed. Evidence: `retirement-eligibility/`. Missing membership alone
-  is insufficient. The collector still needs the snapshot/CAS boundary and repeated
-  cleanup of late signed updates described in `retired-row-cleanup-boundary.md`.
-  This is separate from the pending table-registration decision.
+  mode tests passed. Evidence: `retirement-eligibility/`.
+  The direct-Persist helper streams signed retractions into a conditional batch.
+  Five storage-client tests passed, including two collectors at the same prefix
+  and late negative updates. `76c35667` adds one coalesced off-dispatch adapter task
+  using catalog-backed query holds. Strict adapter/storage-client Clippy and
+  scoped ownership reviews passed. The existing constant-sink restart fixture now
+  also asserts predecessor-row removal and successor preservation, but needs a run.
+  Session cleanup remains unwired and must use txn-WAL. Reports:
+  `retired-row-{conditional-review,adapter-review,scheduling-boundary}.md`.
+  Logs: `retired-rows/`. A broad package build exhausted worker disk. An exact repeat
+  reproduced that failure, then the focused storage-client command passed after
+  cache cleanup. Use that narrow command rather than rebuilding unrelated packages.
 - Native recovery/promotion, parallel, retention and corrected realization probes
   passed CI140661. Upgrade conversion and merge skew stay excluded. Cluster-thread
   assertions do not propagate to callers, an unresolved harness gap. Do not count
