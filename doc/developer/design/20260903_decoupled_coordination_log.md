@@ -92,11 +92,12 @@ These components have focused verification, not combined M3 acceptance.
   test-local and reset afterward. Evidence and reviews: `ci140735/completed-sink-*`.
   The exact SHOW inventory assertion was reproduced and passes with the added
   private source expectation in `3a4b5472`. The full catalog.td file was not rerun.
-- Worker `i-0788036f0778687f1` is on `43f8dc48`, published `82c8c684` plus
-  the session-fixture correction only. A corrected full Cluster 4 rerun is active under `m3-session-ci140847` and `mzrepro.slice`.
-  Do not sync source while it runs. Worker-only research edits select that
-  project and reject accidental builds. Free space is 3.3 GiB.
-  Output: `~/m3-evidence/ci140847-cluster4-fixed.log`.
+- Worker `i-0788036f0778687f1` is clean on `53b39e50`, checking the
+  registration correction and finite initializer with strict adapter all-target
+  Clippy. Do not sync while that command runs. Output:
+  `~/m3-evidence/registration-certification-fixed-clippy.log`.
+  Free space is 3.3 GiB. The session-fixture research guards are preserved in
+  worker Git stashes and `~/m3-evidence/ci140847-research-guards.patch`.
   Local formatting uses `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`.
 - CI140847 finished. Testdrive 4 passed, verifying unavailable terminal-source
   health on the rebuilt product. Cluster 4 failed before the abandoned-session
@@ -106,10 +107,10 @@ These components have focused verification, not combined M3 acceptance.
   shard command reproduced the failure. The corrected constant-sink workflow
   passes, including physical session removal, successor session preservation,
   completed-sink health and sanity restart, with unchanged 20s deadlines under
-  the aggregate 8-CPU/16-GiB budget. The corrected full shard rerun is pending. Cluster 1 repeated the MV-frontier failure. SLT 4 has two
+  the aggregate 8-CPU/16-GiB budget. The corrected full shard rerun also passes. Cluster 1 repeated the MV-frontier failure. SLT 4 has two
   status EXPLAIN mismatches. Upgrade conversion and merge skew remain excluded.
   Logs and annotations: `ci140847/README.txt`. Reproduction and passing
-  fixture logs: `ci140847/session-fixture/{exact-repeat,fixed}.log`.
+  fixture logs: `ci140847/session-fixture/{exact-repeat,fixed,full-fixed}.log`.
 - Runtime registration certification is committed at `05a4c836`, but its strict
   Clippy run failed on a missing `GlobalId` import. The uncommitted correction
   includes that import and rejects non-writable certification. Neither the
