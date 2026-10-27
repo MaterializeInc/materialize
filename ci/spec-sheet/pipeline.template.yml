@@ -116,12 +116,12 @@ steps:
     depends_on: devel-docker-tags
     concurrency: 1
     concurrency_group: "cluster-spec-sheet-account-$$CI_CONCURRENCY_POOL_SLOT"
-    concurrency_pool: 20
+    concurrency_pool: 1
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster-spec-sheet
           run: default
-          args: [--cleanup, --target=cloud-staging, qps_envd_strong_scaling]
+          args: [--cleanup, --target=cloud-staging, --max-scale=48, "--qps-concurrencies=512", --qps-duration=60, --qps-warmup=10, qps_envd_strong_scaling]
     agents:
       queue: linux-aarch64-medium
 
