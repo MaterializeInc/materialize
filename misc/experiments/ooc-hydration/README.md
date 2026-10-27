@@ -33,10 +33,23 @@ The run is resumable: it skips (phase, trial, size) cells already present in
 `windows.csv`. `--phases` and `--arms` select subsets, so the index and MV
 phases can run as two concurrent processes with separate `--outdir`s.
 
+`--parallel-trials` runs all trials of a phase at once, trial n on clusters
+suffixed `_t<n>`. Add those cluster names to the LaunchDarkly rules first, and
+give `mv_first` at least as many trials as `mv_second`, because each
+second-write trial rehydrates the MVs of the first-write trial in its slot.
+More replicas share more nodes, so check pod placement when comparing arms.
+
 ## Memory
 
-Read the peaks from Prometheus for each window in `windows.csv`:
-`container_memory_working_set_bytes` and `container_memory_swap` for the
-replica pod, and `mz_column_pool_*` to confirm the arm. The `columnation` and
-`chunked` arms must write no pool extents, and `pool_raw` must record no
-compressed evictions.
+Read the peaks for each window in `windows.csv` from
+`mz_internal.mz_cluster_replica_metrics_history`, sampled once a minute.
+`memory_bytes` is RSS and `heap_bytes - memory_bytes` is swap; cast to
+`numeric` before subtracting, since both are unsigned. Pool extents are
+swap-backed, so swap includes them. Staging Prometheus had only a handful of
+cAdvisor samples per window.
+
+Confirm the arm from `mz_column_pool_extent_bytes_written_total`: the
+`columnation` and `chunked` arms must write no extents, and `pool_raw` writes
+more extent bytes than `pool_lz4`. `mz_column_pool_evictions_compress_total`
+counts every extent-writing eviction regardless of codec, so it does not tell
+`pool_raw` apart.

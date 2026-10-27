@@ -22,7 +22,8 @@ phases:
 Every arm owns two managed clusters, `idx_<arm>` and `mv_<arm>`, with one
 replica each. The arm's flags are applied out of band as LaunchDarkly rules on
 the replica context's `cluster_name`, so a recreated replica inherits its arm.
-All arms run concurrently.
+All arms run concurrently. With `--parallel-trials`, all trials of a phase run
+concurrently too, trial n on clusters `idx_<arm>_t<n>` and `mv_<arm>_t<n>`.
 
 Materialized views get their own cluster and their own objects per arm. With
 several replicas writing one sink, the first replica to write wins the race and
@@ -30,9 +31,10 @@ the others hold a correction buffer against already persisted data, which
 confounds both time and memory of a first write.
 
 Memory (peak RSS and swap) is not measured here. `windows.csv` records the
-replica id and wall-clock window of every cell; read the peaks from Prometheus
-for those windows (`container_memory_working_set_bytes`,
-`container_memory_swap`, `mz_column_pool_*`).
+replica id and wall-clock window of every cell. Read the peaks from
+`mz_internal.mz_cluster_replica_metrics_history` for those windows:
+`memory_bytes` is RSS and `heap_bytes - memory_bytes` is swap, sampled once a
+minute. Staging Prometheus had too few cAdvisor samples per window to use.
 
 The source uses a TICK INTERVAL so its write frontier never goes final.
 Without that, a bounded source's frontier is final and a freshly added replica
@@ -161,8 +163,18 @@ def src_cluster(sf):
     return f"ldgen_sf{sf}"
 
 
-def cluster(kind, arm):
-    return f"{kind}_{arm}"
+def tag(arm, slot):
+    """Name suffix of an arm's clusters and objects in `slot`.
+
+    Sequential trials all run in slot 1, which keeps the bare arm name. With
+    `--parallel-trials`, trial n runs in slot n on its own clusters, and the
+    LaunchDarkly rules must list those cluster names as well.
+    """
+    return arm if slot == 1 else f"{arm}_t{slot}"
+
+
+def cluster(kind, arm, slot=1):
+    return f"{kind}_{tag(arm, slot)}"
 
 
 def quote_list(values):
@@ -280,34 +292,34 @@ def ensure_views(mz, sf, bodies):
             mz(f"CREATE VIEW {sch}.{v} AS {bodies[q]};", search_path=sch)
 
 
-def create_idx_workload(mz, sf, arm):
-    sch, cl = schema(sf), cluster("idx", arm)
+def create_idx_workload(mz, sf, arm, slot):
+    sch, cl, sfx = schema(sf), cluster("idx", arm, slot), tag(arm, slot)
     for name, table, cols in BASE_INDEXES:
         mz(
-            f"CREATE INDEX IF NOT EXISTS {name}_{arm} IN CLUSTER {cl} "
+            f"CREATE INDEX IF NOT EXISTS {name}_{sfx} IN CLUSTER {cl} "
             f"ON {table} ({cols});",
             search_path=sch,
         )
     for q in QUERIES:
         v = f"v{q.lower()}"
-        mz(f"CREATE DEFAULT INDEX IF NOT EXISTS {v}_{arm} IN CLUSTER {cl} ON {sch}.{v};",
+        mz(f"CREATE DEFAULT INDEX IF NOT EXISTS {v}_{sfx} IN CLUSTER {cl} ON {sch}.{v};",
            search_path=sch)
 
 
-def create_mv_workload(mz, sf, arm, bodies):
-    sch, cl = schema(sf), cluster("mv", arm)
+def create_mv_workload(mz, sf, arm, slot, bodies):
+    sch, cl, sfx = schema(sf), cluster("mv", arm, slot), tag(arm, slot)
     for q in QUERIES:
         mz(
-            f"CREATE MATERIALIZED VIEW {sch}.m{q.lower()}_{arm} IN CLUSTER {cl} "
+            f"CREATE MATERIALIZED VIEW {sch}.m{q.lower()}_{sfx} IN CLUSTER {cl} "
             f"AS {bodies[q]};",
             search_path=sch,
         )
 
 
-def drop_mv_workload(mz, sf, arm):
-    sch = schema(sf)
+def drop_mv_workload(mz, sf, arm, slot):
+    sch, sfx = schema(sf), tag(arm, slot)
     for q in QUERIES:
-        mz(f"DROP MATERIALIZED VIEW IF EXISTS {sch}.m{q.lower()}_{arm};")
+        mz(f"DROP MATERIALIZED VIEW IF EXISTS {sch}.m{q.lower()}_{sfx};")
 
 
 def objects(mz, name):
@@ -442,32 +454,36 @@ def time_ns(mz, oids, rids):
     return out
 
 
-def run_cell(mz, sf, phase, trial, arms, size, bodies, timeout):
-    """Run one (phase, trial) across all arms concurrently.
+def run_cell(mz, sf, phase, trials, arms, size, bodies, timeout):
+    """Run `phase` for every (trial, slot) in `trials` across all arms concurrently.
 
     Returns (result_rows, window_rows).
     """
     kind = "idx" if phase == "idx" else "mv"
-    names = [cluster(kind, arm) for arm in arms]
-    print(f"  {phase} trial {trial}: {', '.join(names)}")
+    instances = {
+        cluster(kind, arm, slot): (arm, trial, slot)
+        for trial, slot in trials for arm in arms
+    }
+    names = list(instances)
+    print(f"  {phase} trials {[t for t, _ in trials]}: {', '.join(names)}")
     for name in names:
         ensure_cluster(mz, name, size)
 
     if phase == "idx":
         set_rf(mz, names, 0)
-        for arm in arms:
-            create_idx_workload(mz, sf, arm)
+        for arm, _, slot in instances.values():
+            create_idx_workload(mz, sf, arm, slot)
         time.sleep(RF_ZERO_SETTLE)
     elif phase == "mv_first":
         set_rf(mz, names, 0)
-        for arm in arms:
-            drop_mv_workload(mz, sf, arm)
-            create_mv_workload(mz, sf, arm, bodies)
+        for arm, _, slot in instances.values():
+            drop_mv_workload(mz, sf, arm, slot)
+            create_mv_workload(mz, sf, arm, slot, bodies)
         time.sleep(RF_ZERO_SETTLE)
     else:  # mv_second: needs MVs that already wrote, then RF 1 -> 0 -> 1.
-        for arm in arms:
-            if not objects(mz, cluster("mv", arm)):
-                raise RuntimeError(f"mv_{arm} has no MVs; run mv_first first")
+        for name in names:
+            if not objects(mz, name):
+                raise RuntimeError(f"{name} has no MVs; run mv_first first")
         set_rf(mz, names, 0)
         time.sleep(RF_ZERO_SETTLE)
 
@@ -491,7 +507,7 @@ def run_cell(mz, sf, phase, trial, arms, size, bodies, timeout):
     result_rows, window_rows = [], []
     for (name, oid), (hyd_s, wr_s) in sorted(done.items()):
         label, okind = objs_by_cluster[name][oid]
-        arm = name.split("_", 1)[1]
+        arm, trial, _ = instances[name]
         result_rows.append([
             sf, phase, arm, trial, label, okind,
             "" if hyd_s is None else hyd_s,
@@ -499,7 +515,7 @@ def run_cell(mz, sf, phase, trial, arms, size, bodies, timeout):
             tns.get((oid, rids[name]), ""),
         ])
     for name in names:
-        arm = name.split("_", 1)[1]
+        arm, trial, _ = instances[name]
         window_rows.append([
             sf, phase, arm, trial, name, rids[name], size, t0_db, t1_db,
             uptime0, uptime1, offline_events(mz, rids[name], t0_db, t1_db),
@@ -527,6 +543,10 @@ def main():
     ap.add_argument("--tick", default=DEFAULT_TICK)
     ap.add_argument("--outdir", default="ooc-hydration-results")
     ap.add_argument("--hydrate-timeout", type=int, default=3 * 3600)
+    ap.add_argument("--parallel-trials", action="store_true",
+                    help="run all trials of a phase at once, each on its own "
+                         "clusters (mv_second reuses mv_first's trials, so "
+                         "give mv_first at least as many)")
     ap.add_argument("--teardown", action="store_true",
                     help="drop the arm clusters and their objects at the end")
     args = ap.parse_args()
@@ -577,12 +597,21 @@ def main():
     ensure_source(mz, sf, args.source_size, args.tick)
     ensure_views(mz, sf, bodies)
     for phase in phases:
+        pending = []
         for trial in range(1, trials.get(phase, 1) + 1):
             if (phase, trial, args.size) in done_cells:
                 print(f"  {phase} trial {trial} done, skipping")
+            else:
+                pending.append(trial)
+        if args.parallel_trials:
+            batches = [[(t, t) for t in pending]]
+        else:
+            batches = [[(t, 1)] for t in pending]
+        for batch in batches:
+            if not batch:
                 continue
             result_rows, window_rows = run_cell(
-                mz, sf, phase, trial, arms, args.size, bodies,
+                mz, sf, phase, batch, arms, args.size, bodies,
                 args.hydrate_timeout,
             )
             rw.writerows(result_rows)
@@ -594,8 +623,10 @@ def main():
     # touch the clusters of this run's phases: a concurrent run of the other
     # workload is still measuring on its clusters.
     kinds = {"idx" if phase == "idx" else "mv" for phase in phases}
+    max_slot = max(trials.get(phase, 1) for phase in phases) if args.parallel_trials else 1
     for kind in sorted(kinds):
-        names = [cluster(kind, arm) for arm in arms]
+        names = [cluster(kind, arm, slot)
+                 for slot in range(1, max_slot + 1) for arm in arms]
         existing = [n for n in names
                     if mz.one(f"SELECT 1 FROM mz_clusters WHERE name = '{n}';")]
         set_rf(mz, existing, 0)
