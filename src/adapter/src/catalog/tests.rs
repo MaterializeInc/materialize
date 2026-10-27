@@ -208,7 +208,7 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
     let egress = catalog.get_entry(&egress_id).table().expect("egress table");
     let egress_shard = infrastructure.routes[&egress.global_id_writes()];
     let mut reader = persist
-        .open_leased_reader(
+        .open_leased_reader::<mz_storage_types::sources::SourceData, (), Timestamp, i64>(
             egress_shard,
             Arc::new(egress.desc.latest()),
             Arc::new(mz_persist_types::codec_impls::UnitSchema),

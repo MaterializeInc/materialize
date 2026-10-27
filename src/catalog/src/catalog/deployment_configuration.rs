@@ -90,7 +90,7 @@ impl Catalog {
                 .get(&global_id)
                 .context("configuration must have completed WAL registration")?;
             let reader = persist
-                .open_leased_reader(
+                .open_leased_reader::<SourceData, (), Timestamp, mz_storage_types::StorageDiff>(
                     shard,
                     Arc::new(table.desc.latest()),
                     Arc::new(UnitSchema),

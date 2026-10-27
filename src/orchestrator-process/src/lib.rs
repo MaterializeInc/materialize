@@ -1541,6 +1541,7 @@ impl Service for ProcessService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools;
 
     #[mz_ore::test(tokio::test)]
     async fn service_addresses_parity() {
