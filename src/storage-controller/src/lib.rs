@@ -2520,16 +2520,12 @@ impl StorageController for Controller {
         Ok(json_state)
     }
 
-    fn append_introspection_updates(
-        &mut self,
-        type_: IntrospectionType,
-        updates: Vec<(Row, Diff)>,
-    ) {
+    fn append_introspection_batch(&mut self, type_: IntrospectionType, updates: AppendOnlyUpdate) {
         let id = self.introspection_ids[&type_];
-        let updates = if updates.is_empty() {
+        let updates = if updates.row_count() == 0 {
             Vec::new()
         } else {
-            vec![AppendOnlyUpdate::Rows(updates)]
+            vec![updates]
         };
         self.collection_manager.blind_write(id, updates);
     }

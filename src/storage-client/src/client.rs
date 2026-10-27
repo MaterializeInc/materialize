@@ -304,6 +304,8 @@ pub enum AppendOnlyUpdate {
     Row((Row, Diff)),
     /// Transfer a packed batch without converting each row on the sender.
     Rows(Vec<(Row, Diff)>),
+    /// Serialize owned updates in the append task, preserving the batch boundary.
+    DeferredRows(Box<dyn ExactSizeIterator<Item = (Row, Diff)> + Send>),
     Status(StatusUpdate),
 }
 
@@ -313,12 +315,18 @@ impl AppendOnlyUpdate {
         match self {
             AppendOnlyUpdate::Row(_) | AppendOnlyUpdate::Status(_) => 1,
             AppendOnlyUpdate::Rows(rows) => rows.len(),
+            AppendOnlyUpdate::DeferredRows(rows) => rows.len(),
         }
     }
 
     pub fn into_rows(self) -> impl Iterator<Item = (Row, Diff)> {
         match self {
-            AppendOnlyUpdate::Rows(rows) => itertools::Either::Left(rows.into_iter()),
+            AppendOnlyUpdate::Rows(rows) => {
+                itertools::Either::Left(itertools::Either::Left(rows.into_iter()))
+            }
+            AppendOnlyUpdate::DeferredRows(rows) => {
+                itertools::Either::Left(itertools::Either::Right(rows))
+            }
             AppendOnlyUpdate::Row(row) => itertools::Either::Right(iter::once(row)),
             AppendOnlyUpdate::Status(status) => {
                 itertools::Either::Right(iter::once((Row::from(status), Diff::ONE)))
@@ -655,13 +663,16 @@ mod tests {
             AppendOnlyUpdate::Rows(vec![]),
             AppendOnlyUpdate::Status(status),
             AppendOnlyUpdate::Rows(vec![(row(3), Diff::ONE)]),
+            AppendOnlyUpdate::DeferredRows(Box::new(
+                vec![(row(4), Diff::ONE), (row(4), Diff::MINUS_ONE)].into_iter(),
+            )),
         ];
         assert_eq!(
             updates
                 .iter()
                 .map(AppendOnlyUpdate::row_count)
                 .sum::<usize>(),
-            5
+            7
         );
         assert_eq!(
             updates
@@ -674,8 +685,37 @@ mod tests {
                 (row(2), -Diff::ONE),
                 (status_row, Diff::ONE),
                 (row(3), Diff::ONE),
+                (row(4), Diff::ONE),
+                (row(4), Diff::MINUS_ONE),
             ],
         );
+    }
+
+    #[mz_ore::test]
+    fn deferred_rows_are_lazy_and_release_unconsumed_state() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let captured = Arc::clone(&calls);
+        let update = AppendOnlyUpdate::DeferredRows(Box::new((0..2_i32).map(move |n| {
+            captured.fetch_add(1, Ordering::Relaxed);
+            (
+                Row::pack_slice(&[mz_repr::Datum::Int64(i64::from(n))]),
+                Diff::ONE,
+            )
+        })));
+        assert_eq!(update.row_count(), 2);
+        let mut rows = update.into_rows();
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            rows.next(),
+            Some((Row::pack_slice(&[mz_repr::Datum::Int64(0)]), Diff::ONE))
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        drop(rows);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(Arc::strong_count(&calls), 1);
     }
 
     /// Test to ensure the size of the `StorageCommand` enum doesn't regress.
