@@ -2560,6 +2560,11 @@ impl Coordinator {
             optimize_dataflows_start.elapsed()
         );
 
+        info!(
+            missed_local = uncached_local_exprs.len(),
+            missed_global = uncached_global_exps.len(),
+            "optimized expressions without an expression cache hit at startup"
+        );
         // We don't need to wait for the cache to update.
         let _fut = self.catalog().update_expression_cache(
             uncached_local_exprs.into_iter().collect(),
