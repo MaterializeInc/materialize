@@ -90,10 +90,13 @@ def merge_logs(paths: list[Path], clients: int, warmup: float, duration: float) 
     seconds: dict[int, dict] = {}
     slow_transactions = []
     slow_count = 0
+    routes = {}
     for path in paths:
+        route_histogram = Counter()
         for client, latency, completed in records(path):
             if start <= completed < end:
                 histogram[latency] += 1
+                route_histogram[latency] += 1
                 second = completed // 1_000_000
                 bucket = seconds.setdefault(
                     second, {"queries": 0, "latency_us": 0, "max_latency_us": 0}
@@ -112,6 +115,15 @@ def merge_logs(paths: list[Path], clients: int, warmup: float, duration: float) 
                                 "latency_us": latency,
                             }
                         )
+        route_count = sum(route_histogram.values())
+        routes[path.name] = {
+            "queries": route_count,
+            "mean_latency_ms": (
+                sum(k * n for k, n in route_histogram.items()) / route_count / 1000
+                if route_count
+                else None
+            ),
+        }
     count = sum(histogram.values())
     if not count:
         raise ValueError("empty measurement window")
@@ -136,6 +148,7 @@ def merge_logs(paths: list[Path], clients: int, warmup: float, duration: float) 
         "p95_latency_ms": percentile(0.95),
         "p99_latency_ms": percentile(0.99),
         "max_latency_ms": max(histogram) / 1000,
+        "route_diagnostics": routes,
         "timing_diagnostics": {
             "seconds": seconds,
             "slow_threshold_us": 50_000,
@@ -306,6 +319,12 @@ def measure(config: dict, root: Path, container: str) -> dict:
     before = cpu_stat(container)
     wall_start = time.monotonic()
     peak_thread_percent = 0.0
+    container_pid = subprocess.check_output(
+        ["docker", "inspect", "--format", "{{.State.Pid}}", container], text=True
+    ).strip()
+    network_samples = []
+    network_probe_enabled = True
+    next_network_sample = wall_start
     try:
         for i, n in enumerate(assignments):
             output = (root / f"summary-{i}").open("w+")
@@ -363,6 +382,41 @@ def measure(config: dict, root: Path, container: str) -> dict:
                 signal_clients(container, "ALRM")
                 stopped = True
             now = time.monotonic()
+            if network_probe_enabled and now >= next_network_sample:
+                # Enter only the network namespace, retaining the host's ss binary.
+                try:
+                    sample = subprocess.run(
+                        [
+                            "sudo",
+                            "-n",
+                            "nsenter",
+                            "-t",
+                            container_pid,
+                            "-n",
+                            "ss",
+                            "-tin",
+                            "state",
+                            "established",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=3,
+                    )
+                    network_samples.append(
+                        {
+                            "observed_at": time.time(),
+                            "status": sample.returncode,
+                            "tcp_info": sample.stdout,
+                            "error": sample.stderr,
+                        }
+                    )
+                    network_probe_enabled = sample.returncode == 0
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    network_samples.append(
+                        {"observed_at": time.time(), "error": str(error)}
+                    )
+                    network_probe_enabled = False
+                next_network_sample = now + 5
             current = thread_ticks(container)
             if current:
                 peak_thread_percent = max(
@@ -429,6 +483,7 @@ def measure(config: dict, root: Path, container: str) -> dict:
         "threads_per_cluster": 1,
         "pgbench_version": container_output(container, "pgbench", "--version").strip(),
         "native_summaries": results,
+        "network_diagnostics": network_samples,
         "driver": {
             "cpu_percent": 100 * cpu / capacity,
             "cpu_cores": cpu,

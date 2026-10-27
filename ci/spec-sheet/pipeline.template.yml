@@ -14,6 +14,7 @@ steps:
     key: builds
     steps:
       - id: build-x86_64
+        skip: "Private diagnostic reuses the measured full-stack image"
         label: ":rust: Build x86_64"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
@@ -24,6 +25,7 @@ steps:
           queue: l-builder-linux-x86_64
 
       - id: build-aarch64
+        skip: "Private diagnostic reuses the measured full-stack image"
         label: ":rust: Build aarch64"
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
@@ -65,6 +67,7 @@ steps:
         skip: "currently broken"
 
       - id: devel-docker-tags
+        skip: "Private diagnostic reuses the measured full-stack image"
         label: Tag development docker images
         command: bin/ci-builder run min bin/pyactivate -m ci.test.dev_tag
         inputs:
@@ -113,7 +116,7 @@ steps:
   - id: cluster-spec-sheet-qps
     label: "Cluster spec sheet: QPS concurrency sweep (against Staging)"
     timeout_in_minutes: 3600
-    depends_on: devel-docker-tags
+    depends_on: []
     concurrency: 1
     concurrency_group: "cluster-spec-sheet-account-$$CI_CONCURRENCY_POOL_SLOT"
     concurrency_pool: 1
@@ -121,7 +124,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: cluster-spec-sheet
           run: default
-          args: [--cleanup, --target=cloud-staging, "--qps-concurrencies=512", --qps-duration=60, --qps-warmup=10, qps_envd_strong_scaling]
+          args: [--cleanup, --target=cloud-staging, "--qps-concurrencies=32,512", --qps-duration=60, --qps-warmup=10, qps_envd_strong_scaling]
     agents:
       queue: linux-aarch64-medium
 
