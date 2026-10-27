@@ -222,7 +222,7 @@ impl Session {
         if config.no_fast_path {
             return Ok(None);
         }
-        let compiled = match self.prepared_plans.get(query, cluster_id, &config) {
+        let compiled = match self.inner.prepared_plans.get(query, cluster_id, &config) {
             Some(compiled) => {
                 if compiled.is_some() {
                     self.metrics().prepared.template_hit.inc();
@@ -274,7 +274,7 @@ impl Session {
                     let serialized = serde_json::to_vec(&(&template, &finishing, &typ))
                         .map_err(|e| AdapterError::Internal(e.to_string()))?;
                     let bytes = serialized.len().saturating_mul(8).saturating_add(4096);
-                    let Some(charge) = self.prepared_plans.reserve(bytes) else {
+                    let Some(charge) = self.inner.prepared_plans.reserve(bytes) else {
                         self.metrics().prepared.admission_declined.inc();
                         admission_declined = true;
                         return Ok(None);
@@ -291,7 +291,8 @@ impl Session {
                 // Compilation is synchronous with session ownership and contains
                 // no await. Analysis context was checked against this catalog.
                 if !admission_declined {
-                    self.prepared_plans
+                    self.inner
+                        .prepared_plans
                         .insert(query, cluster_id, config, compiled.clone());
                 }
                 compiled
@@ -475,10 +476,11 @@ mod tests {
             assert_eq!(cache.usage.metrics.orphaned.get(), 1);
             // SQL SET ROLE is not implemented, but retained analysis must guard
             // every role component if the execution context changes internally.
-            let original_roles = session.role_metadata.clone();
+            let original_roles = session.inner.role_metadata.clone();
             for component in 0..3 {
-                session.role_metadata = original_roles.clone();
+                session.inner.role_metadata = original_roles.clone();
                 let roles = session
+                    .inner
                     .role_metadata
                     .as_mut()
                     .expect("test fixture must be valid");
