@@ -148,10 +148,10 @@ export function rankFromWorst(p: number, n: number) {
  * The most readings one object can have in a range: one a minute, plus one
  * because both ends of the window can hold a reading.
  *
- * NOTE: assumes `wallclock_lag_recording_interval` is at its 60 s default. An
- * environment that records more often has more readings than this, so the
- * percentile picks fall past the rows the queries keep and come back NULL,
- * which reads as unreadable.
+ * NOTE: holds whatever `wallclock_lag_recording_interval` is.
+ * `mz_wallclock_global_lag_history` truncates each reading to its minute and
+ * keeps one per object per minute, so recording more often adds no rows here,
+ * and recording less often only leaves fewer.
  */
 function maxReadingsPerObject(lookbackMs: number) {
   return lookbackMs / LATEST_READING_INTERVAL_MS + 1;
