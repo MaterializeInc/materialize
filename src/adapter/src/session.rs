@@ -561,21 +561,16 @@ impl Session {
         self.notice_filter(AdapterNotice::ExecutionTime(time))
     }
 
-    /// `time`, marked as staged if the current transaction holds work for its commit: writes, or
-    /// DDL that the commit applies. A staged write that affected no rows counts too, because it
-    /// leaves a `Writes` op behind, and so does any statement that follows such work in the same
-    /// transaction. Must be called before the statement settles, because settling can commit that
-    /// work.
-    pub fn mark_staged(&self, time: ExecutionTime) -> ExecutionTime {
-        let staged = matches!(
-            self.transaction().inner(),
-            Some(Transaction {
-                ops: TransactionOps::Writes(_)
-                    | TransactionOps::DDL { .. }
-                    | TransactionOps::SingleStatement { .. },
-                ..
-            })
-        );
+    /// Returns `time` with the kind `staged` if the current transaction holds work for its commit,
+    /// and `time` unchanged otherwise.
+    ///
+    /// Must be called before the statement settles, because settling can commit that work. A
+    /// statement that follows such work in the same transaction is marked too.
+    pub fn maybe_mark_staged(&self, time: ExecutionTime) -> ExecutionTime {
+        let staged = self
+            .transaction()
+            .inner()
+            .is_some_and(|txn| txn.ops.stages_work());
         if staged {
             ExecutionTime {
                 kind: ExecutionTimeKind::Staged,
@@ -1625,6 +1620,20 @@ pub enum TransactionOps {
         /// statement in the transaction (before any dry run).
         snapshot: Option<Snapshot>,
     },
+}
+
+impl TransactionOps {
+    /// Reports whether the transaction holds work for its commit: writes, DDL that the commit
+    /// applies, or a statement that runs at commit. A write that affected no rows counts too,
+    /// because it leaves a `Writes` op behind.
+    pub fn stages_work(&self) -> bool {
+        matches!(
+            self,
+            TransactionOps::Writes(_)
+                | TransactionOps::DDL { .. }
+                | TransactionOps::SingleStatement { .. }
+        )
+    }
 }
 
 impl Default for TransactionOps {

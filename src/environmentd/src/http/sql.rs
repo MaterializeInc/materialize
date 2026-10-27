@@ -731,7 +731,7 @@ impl SqlResult {
 
         let execution_time = rows_stream
             .take_execution_time()
-            .map(|time| client.session().mark_staged(time));
+            .map(|time| client.session().maybe_mark_staged(time));
         // TODO(SQL-815): `SqlResult::Rows` has no `parameters` field, so the parameters the
         // commit reverted (a `SET LOCAL` earlier in the group) are dropped.
         if let Err(err) = client.settle_statement(ends_group).await {
@@ -1397,7 +1397,7 @@ async fn stream_ws_peek_rows(
             None => {
                 let execution_time = rows_stream
                     .take_execution_time()
-                    .map(|time| client.session().mark_staged(time));
+                    .map(|time| client.session().maybe_mark_staged(time));
                 let settled = match client.settle_statement(ends_group).await {
                     Ok(settled) => settled,
                     Err(err) => {
@@ -1815,7 +1815,7 @@ async fn execute_stmt<S: ResultSender>(
             return Ok(SqlResult::err(client, e).into());
         }
     };
-    let execution_time = client.session().mark_staged(ExecutionTime::completed(
+    let execution_time = client.session().maybe_mark_staged(ExecutionTime::completed(
         executed.duration_since(execute_started),
     ));
     let tag = res.tag();

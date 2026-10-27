@@ -2181,7 +2181,7 @@ where
         let execution_time = self
             .adapter_client
             .session()
-            .mark_staged(ExecutionTime::completed(execute_started.elapsed()));
+            .maybe_mark_staged(ExecutionTime::completed(execute_started.elapsed()));
         self.send_pending_notices().await?;
         let mut tag = response.tag();
 
@@ -2787,7 +2787,7 @@ where
         let execution_time = rows
             .remaining
             .take_execution_time()
-            .map(|time| self.adapter_client.session().mark_staged(time));
+            .map(|time| self.adapter_client.session().maybe_mark_staged(time));
         let portal = self
             .adapter_client
             .session()
