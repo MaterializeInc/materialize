@@ -111,10 +111,10 @@ DELETE FROM numbers WHERE number = 2;
   USER hostssl,
   SSL MODE disable,
   DATABASE postgres
-  );
+  ) WITH (VALIDATE = false);
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostssl", database "postgres", SSL off
+contains:db error: FATAL: pg_hba.conf rejects connection for host "(HOST)", user "hostssl", database "postgres"
 > DROP CONNECTION pgconn;
 
 # server: hostssl, client: require => OK
@@ -145,7 +145,7 @@ DELETE FROM numbers WHERE number = 2;
   USER hostssl,
   SSL MODE verify_ca,
   DATABASE postgres
-  );
+  ) WITH (VALIDATE = false);
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
 regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
@@ -180,7 +180,7 @@ DELETE FROM numbers WHERE number = 2;
     USER hostssl,
     SSL MODE verify_full,
     DATABASE postgres
-  );
+  ) WITH (VALIDATE = false);
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
 regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
@@ -237,10 +237,10 @@ DELETE FROM numbers WHERE number = 2;
   USER hostnossl,
   SSL MODE require,
   DATABASE postgres
-  );
+  ) WITH (VALIDATE = false);
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnossl", database "postgres", SSL on
+contains:db error: FATAL: pg_hba.conf rejects connection for host "(HOST)", user "hostnossl", database "postgres"
 > DROP CONNECTION pgconn;
 
 # server: hostnossl, client: verify-ca => ERROR
@@ -249,7 +249,7 @@ contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnoss
   USER hostnossl,
   SSL MODE verify_ca,
   DATABASE postgres
-  );
+  ) WITH (VALIDATE = false);
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
 regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
@@ -261,7 +261,7 @@ regex:self[- ]signed certificate in certificate chain|invalid peer certificate: 
   USER hostnossl,
   SSL MODE verify_full,
   DATABASE postgres
-  );
+  ) WITH (VALIDATE = false);
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
 regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
@@ -299,7 +299,7 @@ DELETE FROM numbers WHERE number = 2;
   SSL MODE verify_ca,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres
-  );
+  ) WITH (VALIDATE = false);
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
 contains:db error: FATAL: connection requires a valid client certificate
@@ -314,7 +314,7 @@ contains:db error: FATAL: connection requires a valid client certificate
   SSL KEY SECRET ssl_wrong_key,
   SSL CERTIFICATE AUTHORITY SECRET ssl_ca,
   DATABASE postgres
-  );
+  ) WITH (VALIDATE = false);
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source')
 contains:db error: FATAL: certificate authentication failed for user "certuser"
