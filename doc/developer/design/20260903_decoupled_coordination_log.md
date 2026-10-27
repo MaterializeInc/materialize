@@ -6,58 +6,55 @@ The [PR](https://github.com/MaterializeInc/materialize/pull/38696) provides the
 reviewer-facing summary. Replace this handoff as work advances, rather than
 appending a work log. Detailed evidence stays outside these documents.
 
-## Current work: M3 independent adapters
+## Current work: M3 SQL/HTTP lifecycle
 
 Sole implementer: `2026-10-27-11-01-36-080`. Bookmark: `decoupled-coordination`,
 based on pinned `d9a2c5dc40`. M2 is closed, including the 60s publication default.
-The controller-managed default-adapter startup/restart demonstration passes.
-Independent adapters, SQL/HTTP lifecycle, replica-policy integration,
-zero-adapter recovery, interrupted initialization and deployment/backend
-acceptance remain open. Broad CI is not green.
+The controller-managed two-adapter demonstration passes. SQL/HTTP lifecycle,
+replica-policy integration, zero-adapter recovery, interrupted initialization and
+deployment/backend acceptance remain open. Broad CI is not green.
 
 ## Resume here
 
-Continue the controller-managed two-adapter demonstration, then SQL/HTTP lifecycle.
-An intermediate fixture may create declarations with the existing catalog-admin
-tool, but does not replace SQL/HTTP acceptance. The first two-adapter attempt hit
-Postgres's default 100-connection limit before adding the declaration. Match the
-repository fixture's 5,000-connection setting and rerun without product tuning.
+Continue the local SQL/HTTP lifecycle work. Uncommitted changes implement
+CREATE/DROP/RENAME ADAPTER parsing, planning, shared catalog mutations, response
+handling and mandatory superuser checks, including when optional RBAC is disabled.
+Configured size names are forwarded to adapters for shared size validation.
+Combined adapter/environmentd/sqllogictest all-target checks pass before the latest
+`mz_adapters` raw-catalog projection was added. Check that projection, rerun parser
+tests after switching to the standard unreserved keyword, add catalog and
+authorization boundary coverage, and run strict Clippy.
 
-Keep cluster-controller policy in adapterd, including declaration realization,
-burst scaling, reconfiguration and ON REFRESH scheduling. Controllerd only enacts
-committed process inventory, alongside its initialization and administrative API
-responsibilities. Separate policy enablement from `manages_replica_processes` in
-adapter task startup and declaration reconciliation. Preserve deployment-local
-observations and catalog precondition checks under concurrent adapters, without
-a designated policy adapter. With zero adapters, policy may pause while
-controllerd maintains committed processes.
+Controller HTTP administration and deployment-qualified endpoint/status publication
+remain to implement. Use the same catalog ops as SQL. Durable content commit already
+allocates and completes through the oracle in `durable/persist.rs`. Preserve that
+completion boundary. HTTP is unauthenticated, with access control outside the
+process. Do not restore controller-owned policy extraction from recovery history.
 
-The controller HTTP API is an unauthenticated port. Authentication and access
-control belong to the external system exposing it. Keep catalog validation and
-deployment fencing, but add no in-process HTTP auth machinery. SQL adapter
-management is superuser-only.
+The catch-up repair is published as `d6f662f7` in CI141032. It applies and enacts
+one transaction at a time against its matching projection, invalidating snapshots
+before enactment. Independent review approved it. Formatting, strict catalog/adapter
+lib/test Clippy, the multi-subscriber regression and the full catalog suite pass
+(396 passed, two ignored). Evidence: `prefix-review.md`,
+`prefix-reviewed-{test,clippy}.log`, `prefix-catalog-suite.log`.
 
-The recovery bookmark `recovery/concurrent-session-20261027` is not an
-implementation baseline. Its policy/observation extraction must not be resumed
-as a controller-owned policy migration. The older extraction reports are not
-ownership guidance. Follow the current design.
+Exact CI141032 binaries passed `two-managed-adapters-smoke.py` in
+`run-3b18bc7440e544cf8e1fd1045d5a0576/`. It verifies paused-peer CREATE/ALTER/DROP
+catch-up, cross-adapter DDL/writes, temporary-view isolation, replacement of only
+the failed adapter, and two controller restarts preserving child PIDs, sessions
+and maintained reads. Cleanup completed without errors. The witness source and
+product image digests/hashes are retained in that directory. Binaries are in
+`ci141032-product/`. The intermediate declaration uses the catalog-admin fixture,
+not the required lifecycle API. Postgres used 5000 connections and a 768 MiB limit.
 
-## Verified outcomes and open checks
+Policy task enablement is separate from process ownership in `bc10afcb`. Keep
+policy deployment-local and catalog-validated across adapters, without a leader.
+With zero adapters, policy may pause while controllerd maintains committed processes.
 
-- CI140930 binaries at `e15ac489` passed the managed startup/restart witness in
-  `run-0b7e58f7823243d5aac2742e69e3bf2a/`. Two controller restarts preserved the
-  adapter and four replica PIDs, SQL endpoint, held connection and temporary view.
-  Writes and maintained reads continued without controllerd. Restart applied
-  changed replica-size credits. New MV creation/query and table DROP succeeded.
-- CI140930 passed Clippy, native adapter-loss, SLT2 and the active/pending-generation
-  configuration test. Cargo reported 4,326 passes and the CLI fixture failure
-  corrected in `f98c1a23`. Verify that fix in the next combined run. Refresh CI
-  status before publishing and preserve any in-flight verification.
-- CI140921's pushdown snapshot failure was not reproduced in four focused runs
-  with its exact binary and service environment. See `slt2/`. This does not close
-  the parallel-shard failure. Earlier MV-frontier, status EXPLAIN and 0dt failures
-  remain unclosed unless demonstrated by a newer run. The cluster-thread assertion
-  propagation gap also remains open. Do not weaken assertions or deadlines.
+Published head: `d6f662f7`, CI141032. Preserve in-flight verification before another
+push. CI140970 reached terminal failure before this publication. Its Cargo and
+Clippy jobs passed. Earlier parallel SLT and upgrade failures remain unclosed.
+The focused SLT2 runs in `slt2/` did not establish the failure as a baseline flake.
 
 ## Boundaries and remaining risks
 
