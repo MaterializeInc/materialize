@@ -345,6 +345,10 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .expect("unable to sync");
         // Savepoint catalogs do not increment the epoch.
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
+        assert!(matches!(
+            state.client_incarnation_retirement(),
+            Err(CatalogError::Durable(DurableCatalogError::NotWritable(_)))
+        ));
 
         // Perform writes.
         let mut txn = state.transaction().await.unwrap();
@@ -500,6 +504,10 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
         .open_read_only(&test_bootstrap_args())
         .await
         .unwrap();
+    assert!(matches!(
+        read_only_state.client_incarnation_retirement(),
+        Err(CatalogError::Durable(DurableCatalogError::NotWritable(_)))
+    ));
     // Read-only catalogs do not increment the epoch.
     assert_eq!(
         read_only_state.epoch(),

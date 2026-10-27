@@ -759,6 +759,10 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         )
     );
     assert!(active.sync_to_current_updates().await.is_err());
+    assert!(active.client_incarnation_retirement().is_err());
+    let retirement = pending.client_incarnation_retirement().unwrap();
+    assert!(retirement.is_retired(active_client));
+    assert!(!retirement.is_retired(warm_client));
     let mut tx = pending.transaction().await.unwrap();
     tx.set_collection_compaction_bound(input, Some(11.into()))
         .unwrap();

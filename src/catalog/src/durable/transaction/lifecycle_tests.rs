@@ -71,6 +71,8 @@ async fn adapter_replacement_and_drop_preserve_other_adapter() {
         .await
         .unwrap();
     state.sync_to_current_updates().await.unwrap();
+    let empty_retirement = state.client_incarnation_retirement().unwrap();
+    assert!(empty_retirement.next_id.is_none());
     let mut tx = state.transaction().await.unwrap();
     tx.set_config("catalog_read_protection_enabled".into(), Some(1))
         .unwrap();
@@ -91,6 +93,9 @@ async fn adapter_replacement_and_drop_preserve_other_adapter() {
     let other = protect(&mut tx, ClientRealization::Adapter(b));
     commit(tx).await;
     let before = state.snapshot().await.unwrap();
+    let before_retirement = state.client_incarnation_retirement().unwrap();
+    assert!(!empty_retirement.is_retired(first));
+    assert!(!empty_retirement.is_retired(other));
 
     let mut tx = state.transaction().await.unwrap();
     let successor = tx
@@ -99,6 +104,13 @@ async fn adapter_replacement_and_drop_preserve_other_adapter() {
     assert_ne!(successor, first);
     commit(tx).await;
     let replaced = state.snapshot().await.unwrap();
+    let replaced_retirement = state.client_incarnation_retirement().unwrap();
+    // A newly admitted identity missing from an older prefix is unknown, not retired.
+    assert!(!before_retirement.is_retired(successor));
+    assert!(!before_retirement.is_retired(first));
+    assert!(replaced_retirement.is_retired(first));
+    assert!(!replaced_retirement.is_retired(successor));
+    assert!(!replaced_retirement.is_retired(other));
     let mut expected_clients = before.client_incarnations;
     let execution = expected_clients
         .remove(&ClientIncarnationKey { id: first })
@@ -126,6 +138,10 @@ async fn adapter_replacement_and_drop_preserve_other_adapter() {
     assert_eq!(tx.remove_adapter_declaration(a).unwrap().id, a);
     commit(tx).await;
     let dropped = state.snapshot().await.unwrap();
+    let dropped_retirement = state.client_incarnation_retirement().unwrap();
+    assert!(dropped_retirement.is_retired(first));
+    assert!(dropped_retirement.is_retired(successor));
+    assert!(!dropped_retirement.is_retired(other));
     expected_clients.remove(&ClientIncarnationKey { id: successor });
     expected_grants.remove(&ClientReadRequirementKey {
         incarnation: successor,
@@ -326,8 +342,17 @@ async fn realization_replacement_and_removal_preserve_other_owners() {
         insert_replica(&mut tx, CLUSTER, REPLICA);
         let peer = protect(&mut tx, ClientRealization::Replica(REPLICA));
         commit(tx).await;
+        let warm_retirement = prewarmer.client_incarnation_retirement().unwrap();
+        for client in [peer, affected, unrelated, adapter] {
+            assert!(!warm_retirement.is_retired(client));
+        }
         prewarmer.expire().await;
         state.sync_to_current_updates().await.unwrap();
+        let retirement = state.client_incarnation_retirement().unwrap();
+        assert!(retirement.is_retired(predecessor));
+        for client in [peer, affected, unrelated, adapter] {
+            assert!(!retirement.is_retired(client));
+        }
 
         let before = state.snapshot().await.unwrap();
         for client in [peer, affected, unrelated, adapter] {
@@ -362,6 +387,10 @@ async fn realization_replacement_and_removal_preserve_other_owners() {
         let mut retired = BTreeSet::from([affected]);
         if !matches!(removal, Removal::Scoped) {
             retired.insert(peer);
+        }
+        let retirement = state.client_incarnation_retirement().unwrap();
+        for client in [peer, affected, unrelated, adapter] {
+            assert_eq!(retirement.is_retired(client), retired.contains(&client));
         }
         let mut expected = before;
         for client in &retired {

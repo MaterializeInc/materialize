@@ -2718,6 +2718,32 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         self.with_snapshot(Ok).await
     }
 
+    fn client_incarnation_retirement(
+        &self,
+    ) -> Result<crate::durable::ClientIncarnationRetirement, CatalogError> {
+        self.validate_runtime()?;
+        if self.mode != Mode::Writable {
+            return Err(DurableCatalogError::NotWritable(
+                "incarnation retirement requires a writable catalog".into(),
+            )
+            .into());
+        }
+        let snapshot = &self.update_applier.snapshot;
+        Ok(crate::durable::ClientIncarnationRetirement {
+            next_id: snapshot
+                .id_allocator
+                .get(&crate::durable::objects::IdAllocKey {
+                    name: crate::durable::CLIENT_INCARNATION_ALLOC_KEY.into(),
+                })
+                .map(|value| value.next_id),
+            live: snapshot
+                .client_incarnations
+                .keys()
+                .map(|key| key.id)
+                .collect(),
+        })
+    }
+
     #[mz_ore::instrument(level = "debug")]
     async fn sync_to_current_updates(
         &mut self,

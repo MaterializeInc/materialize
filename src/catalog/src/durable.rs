@@ -9,6 +9,7 @@
 
 //! This crate is responsible for durably storing and modifying the catalog contents.
 
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
@@ -69,6 +70,7 @@ pub const USER_CLUSTER_ID_ALLOC_KEY: &str = "user_compute";
 pub const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
 pub const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub const ADAPTER_ID_ALLOC_KEY: &str = "adapter";
+pub const CLIENT_INCARNATION_ALLOC_KEY: &str = "client_incarnation";
 pub const DEFAULT_ADAPTER_ID: mz_repr::AdapterId = mz_repr::AdapterId(1);
 pub const DEFAULT_ADAPTER_SIZE: &str = "1";
 pub const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
@@ -312,6 +314,27 @@ pub trait OpenableDurableCatalogState: Debug + Send {
     async fn expire(self: Box<Self>);
 }
 
+/// Conservative eligibility for discarding execution-owned rows in this catalog's
+/// environment, derived from one committed catalog prefix.
+///
+/// Admission allocates a fresh incarnation and inserts its live record atomically.
+/// Identities below the allocation limit cannot be admitted again. Keeping both
+/// the limit and live set from the same prefix makes a stale certificate safe:
+/// it delays cleanup rather than treating a newer admission as retired.
+#[derive(Debug, Clone)]
+pub struct ClientIncarnationRetirement {
+    next_id: Option<u64>,
+    live: BTreeSet<u64>,
+}
+
+impl ClientIncarnationRetirement {
+    /// Whether this incarnation can never be live again in this catalog history.
+    /// A false result means live or unknown, not permission to discard its rows.
+    pub fn is_retired(&self, incarnation: u64) -> bool {
+        self.next_id.is_some_and(|next| incarnation < next) && !self.live.contains(&incarnation)
+    }
+}
+
 /// A read only API for the durable catalog state.
 #[async_trait]
 pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
@@ -365,6 +388,13 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// Validates fencing and the runtime identity bound by
     /// [`DurableCatalogState::mark_bootstrap_complete`] before returning it.
     async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
+
+    /// Returns cleanup eligibility from the cached committed prefix, across all
+    /// deployments. Validates the cached runtime context, but performs no I/O.
+    /// Missing allocation metadata conservatively leaves every identity unknown.
+    /// Requires writable mode, since other modes can contain uncommitted changes.
+    /// Sync first if a more recent certificate is needed.
+    fn client_incarnation_retirement(&self) -> Result<ClientIncarnationRetirement, CatalogError>;
 
     /// Listen and return all updates that are currently in the catalog.
     ///

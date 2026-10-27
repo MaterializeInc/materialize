@@ -3225,7 +3225,7 @@ impl<'a> Transaction<'a> {
             ))
             .into());
         }
-        let name = "client_incarnation".to_string();
+        let name = crate::durable::CLIENT_INCARNATION_ALLOC_KEY.to_string();
         if self
             .id_allocator
             .get(&IdAllocKey { name: name.clone() })
@@ -4036,7 +4036,7 @@ impl<'a> Transaction<'a> {
         for key in id_allocator.changed_keys() {
             if !matches!(
                 key.name.as_str(),
-                "client_incarnation"
+                crate::durable::CLIENT_INCARNATION_ALLOC_KEY
                     | USER_ITEM_ALLOC_KEY
                     | USER_REPLICA_ID_ALLOC_KEY
                     | SYSTEM_REPLICA_ID_ALLOC_KEY

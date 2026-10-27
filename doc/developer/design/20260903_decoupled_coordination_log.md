@@ -75,18 +75,21 @@ These components have focused verification, not combined M3 acceptance.
   test-local and reset afterward. Evidence and reviews: `ci140735/completed-sink-*`.
   The exact SHOW inventory assertion was reproduced and passes with the added
   private source expectation in `3a4b5472`. The full catalog.td file was not rerun.
-- Worker `i-0788036f0778687f1` is on `3f6788aa`, clean before sync, and expires
-  2026-10-28 19:01 UTC. `m3-terminal-health` remains available for inspection.
+- Worker `i-0788036f0778687f1` is on `c43e293a`, clean before sync, and expires
+  2026-10-28 19:01 UTC. `m3-terminal-health` is stopped with data preserved.
   Older fixtures are stopped with data preserved. An idle cleanup removed only
   older duplicate compiler incremental caches, retaining two recent variants per
   crate. Watch disk usage before further builds. Evidence is checksum-verified
   off-worker. Local formatting uses cached pinned Rust explicitly:
   `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`, because the host override is older.
-- Physical retired-row cleanup is still unimplemented. Research identifies the
-  existing snapshot/CAS boundaries and a conservative same-snapshot incarnation
-  eligibility rule. See `retired-row-cleanup-boundary.md`. Missing membership alone
-  is insufficient, and cleanup must handle late signed updates without collector
-  double-retractions. This is separate from the pending table-registration decision.
+- Physical retired-row cleanup is still unwired. `90de705a` and `c43e293a` expose
+  eligibility from one cached committed prefix: below the allocation limit and
+  absent from all live deployments. Non-writable modes cannot issue certificates.
+  Independent review, strict Clippy and seven focused lifecycle, promotion and
+  mode tests passed. Evidence: `retirement-eligibility/`. Missing membership alone
+  is insufficient. The collector still needs the snapshot/CAS boundary and repeated
+  cleanup of late signed updates described in `retired-row-cleanup-boundary.md`.
+  This is separate from the pending table-registration decision.
 - Native recovery/promotion, parallel, retention and corrected realization probes
   passed CI140661. Upgrade conversion and merge skew stay excluded. Cluster-thread
   assertions do not propagate to callers, an unresolved harness gap. Do not count
