@@ -1862,6 +1862,7 @@ mod tests {
                             key_arity: 0,
                         }),
                         Antichain::from_elem(Timestamp::minimum()),
+                        Antichain::from_elem(Timestamp::minimum()),
                     );
 
                     let (batches, button) = write_batches(
@@ -2134,6 +2135,7 @@ mod tests {
                             key_envelope: KeyEnvelope::None,
                             key_arity: 0,
                         }),
+                        Antichain::from_elem(Timestamp::minimum()),
                         Antichain::from_elem(Timestamp::minimum()),
                     );
 
