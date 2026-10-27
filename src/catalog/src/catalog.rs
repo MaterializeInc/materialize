@@ -105,6 +105,7 @@ mod migrate;
 mod apply;
 pub mod cluster_state;
 mod deployment_configuration;
+mod deployment_initialization;
 mod error;
 mod open;
 mod retention;

@@ -21,21 +21,30 @@ These components have focused verification, not combined M3 acceptance.
 
 ## Resume here
 
-- Finite controller initialization is not wired. Independent review found the
-  proposed replacement-table backfill was not restart-safe and could race joined
-  registration. Its transient replaced_items set disappears after migration commit,
-  and WAL registration can make an empty shard non-MIN before seeding. Removed only
-  that uncommitted wrapper/entry, preserving evidence outside the tree. Published
-  configuration reconciliation remains. No unsafe replacement shortcut was pushed.
-  Aljoscha was asked to approve recovering pending replacements from existing
-  migration records and blocking joiner registration until backfill completes.
-  Pause this affected work pending approval. See `replacement-backfill-review.md`.
+- Prioritize fresh-environment controllerd initialization, launch of its default
+  adapterd through external pubsub, and restart. Fresh initialization creates no
+  replacement shards, and ordinary same-build restart needs no replacement migration.
+  Replacement-migration recovery remains an explicit open upgrade requirement,
+  not a prerequisite for this demonstration. Integrate it with the affected upgrade
+  path while preserving existing compatibility restrictions. Do not admit an
+  incomplete replacement backfill or claim upgrade support from the fresh demo.
+  Independent review found the removed wrapper was not restart-safe: its transient
+  replaced_items set disappears after migration commit, and joined WAL registration
+  can make an empty replacement shard non-MIN before seeding. Evidence remains in
+  `replacement-backfill-review.md`. Configuration reconciliation remains committed.
+- Fresh-only finite initialization is implemented in
+  `catalog/deployment_initialization.rs` and exposed by controllerd's
+  `initialize_fresh`. It refuses non-fresh handles before opening, completes table
+  infrastructure, seeds originator projections once and reconciles configuration.
+  It contains no replacement backfill or long-running worker. Formatting passes,
+  compilation is pending. Controller startup, ordinary restart and process launch
+  still need wiring together. This is not the end-to-end demonstration.
 - CI140902 is failing compilation. Exact diagnostics: test-only zip_eq needs
   Itertools imported inside its test module, and configuration leased-reader
   codecs require explicit type parameters. Both are corrected locally, formatted
   but not rerun. Clippy log `/tmp/m3-ci140902-clippy.log`, doctests log
-  `/tmp/m3-ci140902-doctests.log`. Builds remain live. Task #76 observes terminal
-  state, writing `/tmp/m3-ci140902-terminal.json`. Preserve the running jobs.
+  `/tmp/m3-ci140902-doctests.log`. The Rust builds have failed. Only Console E2E/staging remains live
+  (`01a17dc8-f57f-4b4b-89a5-2ce8fad908ac`), confirmed through Buildkite. Preserve it.
   Scratch authentication remains expired, so exact local rerun is unavailable.
 - Review task #75 finished with the findings above. No agent is editing source.
 - Adapter launch specifications now live in
