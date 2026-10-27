@@ -118,15 +118,17 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 
 @functools.cache
 def staging_version() -> str:
-    # Cached: the version cannot change within a run, and `parse_cargo` shells
-    # out to cargo, whose failure must not surface inside a region retry loop.
-    return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
+    return os.environ.get(
+        "CI_QPS_BENCH_VERSION",
+        f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}",
+    )
 
 
 SERVICES = [
     # Overridden below
     Mz(app_password=""),
     Materialized(
+        image="materialize/materialized:v26.48.0-dev.0--pr.g4e23dbcbd4c8f966f2850208e57d04290ac738ed",
         propagate_crashes=True,
         additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
     ),
@@ -3353,7 +3355,7 @@ class EnvdCpuSweep(Scenario):
     # (So far, I haven't seen a difference between 16 and 32 in manual
     # testing in cloud. When we start seeing a difference, consider
     # extending to 64.)
-    ENVD_CPU_SCALES: list[int] = [1, 2, 4, 8, 16, 32]
+    ENVD_CPU_SCALES: list[int] = [48]
 
     def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
         self._name = name
@@ -3394,7 +3396,7 @@ class EnvdCpuSweep(Scenario):
     def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
         assert point.envd_cpus is not None
         assert self._fixed_replica_size is not None
-        reconfigure_envd_cpus(runner.target, point.envd_cpus, runner)
+        assert point.envd_cpus == 48  # Initialized directly at the measured allocation.
         # On Cloud the CPU change recreates the region, which drops the state that
         # `prepare` set up. Re-preparing is cheap, and harmless on Docker, where the
         # state survives the restart.
@@ -3420,7 +3422,7 @@ class EnvdCpuSweep(Scenario):
             # Recreating rather than enabling on top of the existing region keeps the
             # region out of the read-only limbo that a 0dt rollover would put it in, so
             # whatever runs after this scenario finds a usable region.
-            cloud_recreate_region_with_envd_cpus(runner.target, 2)
+            pass  # Final workflow cleanup deletes this experiment region.
 
 
 class EnvdObjectsSweep(Scenario):
@@ -3544,6 +3546,9 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
         # `--environmentd-extra-arg` with a 403 Forbidden, so this is staging-only.
         args += [
             "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s",
+            "--environmentd-extra-arg=--system-parameter-default=enable_frontend_transaction_completion=true",
+            "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_reuse=true",
+            "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_templates=true",
             # Pin the image built for this PR. Production does not accept a
             # custom version.
             "--version",
@@ -4169,7 +4174,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             # extrasaction="ignore"); to recover them, consult the artifact
             # CSV directly.
             for stream in streams.values():
-                stream.spec.upload(composition, stream.path, not test_failed)
+                print(f"--- Experiment only: omit analytics upload for {stream.path}")
 
             assert not test_failed
 
@@ -4267,7 +4272,8 @@ class CloudTarget(BenchTarget):
 
     def initialize(self) -> None:
         print("Soft-disabling and then enabling region using Mz ...")
-        cloud_disable_enable_and_wait(self)
+        enable_region(self, envd_cpus=48)
+        wait_for_envd(self)
 
         # Create new app password.
         new_app_password_name = "Materialize CLI (mz) - Cluster Spec Sheet"
