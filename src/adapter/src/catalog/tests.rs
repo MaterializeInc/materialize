@@ -199,7 +199,7 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
     let mut infrastructure = catalog
         .complete_table_infrastructure(
             persist.clone(),
-            Arc::new(mz_txn_wal::metrics::Metrics::new(&registry)),
+            Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new())),
             &oracle,
         )
         .await
@@ -222,7 +222,7 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
         Datum::Int32(32),
         Datum::String("192.0.2.1/32"),
     ]);
-    let desired = vec![mz_catalog::catalog::BuiltinTableUpdate::row(
+    let desired = [mz_catalog::catalog::BuiltinTableUpdate::row(
         egress_id,
         expected.clone(),
         mz_repr::Diff::ONE,
