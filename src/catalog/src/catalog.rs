@@ -265,6 +265,18 @@ impl Clone for Catalog {
 }
 
 impl Catalog {
+    /// Validates requested resources against the deployment launch configuration.
+    pub fn validate_adapter_size(size: &str, sizes: &BTreeSet<String>) -> Result<(), Error> {
+        if sizes.contains(size) {
+            Ok(())
+        } else {
+            Err(Error::new(ErrorKind::InvalidAdapterSize {
+                size: size.to_owned(),
+                expected: sizes.iter().cloned().collect(),
+            }))
+        }
+    }
+
     /// Attempts durable retirement of a prewarming deployment.
     ///
     /// Returns false on contention. Callers must retry outside the coordinator
@@ -2715,6 +2727,15 @@ impl SessionCatalog for CatalogStateView<'_> {
 
     fn is_system_schema_specifier(&self, schema: SchemaSpecifier) -> bool {
         self.state.is_system_schema_specifier(schema)
+    }
+
+    fn resolve_adapter(&self, name: &str) -> Result<mz_repr::AdapterId, SqlCatalogError> {
+        self.state
+            .adapter_declarations()
+            .values()
+            .find(|adapter| adapter.name == name)
+            .map(|adapter| adapter.id)
+            .ok_or_else(|| SqlCatalogError::UnknownAdapter(name.into()))
     }
 
     fn resolve_role(

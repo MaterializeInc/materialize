@@ -1341,6 +1341,7 @@ impl<'a> RunnerInner<'a> {
         };
         let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
         let server_config = mz_environmentd::Config {
+            adapter_size_names: Default::default(),
             joined_adapter_id: None,
             catalog_config,
             timestamp_oracle_url: Some(timestamp_oracle_url.clone()),

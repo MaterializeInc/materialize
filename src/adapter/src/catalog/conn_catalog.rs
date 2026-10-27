@@ -203,6 +203,10 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.view.is_system_schema_specifier(schema)
     }
 
+    fn resolve_adapter(&self, name: &str) -> Result<mz_repr::AdapterId, SqlCatalogError> {
+        self.view.resolve_adapter(name)
+    }
+
     fn resolve_role(
         &self,
         role_name: &str,

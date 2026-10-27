@@ -456,6 +456,17 @@ pub fn check_plan(
 ) -> Result<(), UnauthorizedError> {
     rbac_check_preamble(catalog, session)?;
 
+    // Adapter lifecycle is administrative even when optional RBAC checks are disabled.
+    if matches!(
+        plan,
+        Plan::CreateAdapter(_) | Plan::DropAdapter(_) | Plan::AlterAdapterRename(_)
+    ) && !session.is_superuser()
+    {
+        return Err(UnauthorizedError::Superuser {
+            action: "manage adapters".into(),
+        });
+    }
+
     // Check sql_impl function body dependencies against restrict_to_user_objects.
     // These are checked separately from the main resolved_ids because they are
     // implementation details that should not affect dependency tracking.
@@ -498,6 +509,10 @@ fn generate_rbac_requirements(
     role_id: RoleId,
 ) -> RbacRequirements {
     match plan {
+        Plan::CreateAdapter(_) | Plan::DropAdapter(_) | Plan::AlterAdapterRename(_) => {
+            RbacRequirements::default()
+        }
+
         Plan::CreateConnection(plan::CreateConnectionPlan {
             name,
             if_not_exists: _,

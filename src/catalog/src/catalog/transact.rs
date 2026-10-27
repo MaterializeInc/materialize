@@ -134,8 +134,31 @@ pub struct InjectedAuditEvent {
     pub user: Option<String>,
 }
 
+fn validate_adapter_name(name: &str) -> Result<(), CatalogError> {
+    if name.is_empty() || mz_sql_parser::ast::Ident::new(name.to_owned()).is_err() {
+        Err(CatalogError::Catalog(Error::new(
+            ErrorKind::InvalidAdapterName(name.to_owned()),
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Op {
+    CreateAdapter {
+        name: String,
+        size: String,
+    },
+    RenameAdapter {
+        id: mz_repr::AdapterId,
+        name: String,
+        to_name: String,
+    },
+    DropAdapter {
+        id: mz_repr::AdapterId,
+        name: String,
+    },
     /// Select immutable bytes written by this build. The expected selection and imports
     /// are checked in the same transaction as the accompanying DDL.
     SetWrittenPlan {
@@ -2896,6 +2919,55 @@ impl Catalog {
                         details,
                     )?;
                 }
+            }
+            Op::CreateAdapter { name, size } => {
+                validate_adapter_name(&name)?;
+                if tx
+                    .get_adapter_declarations()
+                    .any(|adapter| adapter.name == name)
+                {
+                    return Err(CatalogError::PlanError(PlanError::Catalog(
+                        SqlCatalogError::AdapterAlreadyExists(name),
+                    )));
+                }
+                let id = tx.allocate_adapter_id()?;
+                tx.set_adapter_declaration(crate::durable::objects::AdapterDeclaration {
+                    id,
+                    name,
+                    size,
+                })?;
+            }
+            Op::RenameAdapter { id, name, to_name } => {
+                validate_adapter_name(&to_name)?;
+                let mut adapter = tx
+                    .get_adapter_declaration(id)
+                    .filter(|adapter| adapter.name == name)
+                    .ok_or_else(|| {
+                        CatalogError::PlanError(PlanError::Catalog(
+                            SqlCatalogError::UnknownAdapter(name),
+                        ))
+                    })?;
+                if tx
+                    .get_adapter_declarations()
+                    .any(|other| other.id != id && other.name == to_name)
+                {
+                    return Err(CatalogError::PlanError(PlanError::Catalog(
+                        SqlCatalogError::AdapterAlreadyExists(to_name),
+                    )));
+                }
+                adapter.name = to_name;
+                tx.set_adapter_declaration(adapter)?;
+            }
+            Op::DropAdapter { id, name } => {
+                if !tx
+                    .get_adapter_declaration(id)
+                    .is_some_and(|adapter| adapter.name == name)
+                {
+                    return Err(CatalogError::PlanError(PlanError::Catalog(
+                        SqlCatalogError::UnknownAdapter(name),
+                    )));
+                }
+                tx.remove_adapter_declaration(id);
             }
             Op::CreateNetworkPolicy {
                 rules,

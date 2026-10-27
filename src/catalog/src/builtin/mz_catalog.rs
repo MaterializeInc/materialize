@@ -2397,6 +2397,39 @@ pub static MZ_OPERATORS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     }),
 });
 
+pub static MZ_ADAPTERS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_adapters",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_ADAPTERS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("size", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "Stable adapter identity, independent of its name or deployment.",
+            ),
+            ("name", "The name of the adapter declaration."),
+            ("size", "The requested adapter resource size."),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (ASSERT NOT NULL id, ASSERT NOT NULL name, ASSERT NOT NULL size) AS
+SELECT
+    'a' || (data->'key'->>'id') AS id,
+    data->'value'->>'name' AS name,
+    data->'value'->>'size' AS size
+FROM mz_internal.mz_catalog_shared
+WHERE data->>'kind' = 'AdapterDeclaration'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    });
+
 pub static MZ_CLUSTERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
         name: "mz_clusters",

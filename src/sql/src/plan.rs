@@ -133,6 +133,9 @@ use self::statement::ddl::ClusterAlterOptionExtracted;
 #[derive(Debug, EnumKind)]
 #[enum_kind(PlanKind)]
 pub enum Plan {
+    CreateAdapter(CreateAdapterPlan),
+    DropAdapter(DropAdapterPlan),
+    AlterAdapterRename(AlterAdapterRenamePlan),
     CreateConnection(CreateConnectionPlan),
     CreateDatabase(CreateDatabasePlan),
     CreateSchema(CreateSchemaPlan),
@@ -278,6 +281,9 @@ impl Plan {
             StatementKind::CreateIndex => &[PlanKind::CreateIndex],
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
+            StatementKind::CreateAdapter => &[PlanKind::CreateAdapter],
+            StatementKind::DropAdapter => &[PlanKind::DropAdapter],
+            StatementKind::AlterAdapterRename => &[PlanKind::AlterAdapterRename],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
@@ -341,6 +347,9 @@ impl Plan {
             Plan::CreateConnection(_) => "create connection",
             Plan::CreateDatabase(_) => "create database",
             Plan::CreateSchema(_) => "create schema",
+            Plan::CreateAdapter(_) => "create adapter",
+            Plan::DropAdapter(_) => "drop adapter",
+            Plan::AlterAdapterRename(_) => "rename adapter",
             Plan::CreateRole(_) => "create role",
             Plan::CreateCluster(_) => "create cluster",
             Plan::CreateClusterReplica(_) => "create cluster replica",
@@ -560,6 +569,25 @@ pub struct CreateSchemaPlan {
     pub database_spec: ResolvedDatabaseSpecifier,
     pub schema_name: String,
     pub if_not_exists: bool,
+}
+
+#[derive(Debug)]
+pub struct CreateAdapterPlan {
+    pub name: String,
+    pub size: String,
+}
+
+#[derive(Debug)]
+pub struct DropAdapterPlan {
+    pub id: mz_repr::AdapterId,
+    pub name: String,
+}
+
+#[derive(Debug)]
+pub struct AlterAdapterRenamePlan {
+    pub id: mz_repr::AdapterId,
+    pub name: String,
+    pub to_name: String,
 }
 
 #[derive(Debug)]

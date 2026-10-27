@@ -2392,3 +2392,132 @@ async fn catalog_invalid_cast_remains_typed() {
     })
     .await;
 }
+
+#[mz_ore::test(tokio::test)]
+async fn test_adapter_declaration_lifecycle() {
+    async fn apply(
+        catalog: &mut Catalog,
+        ops: Vec<Op>,
+    ) -> Result<(), crate::catalog::CatalogError> {
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(None, None, ts, None, ops)
+            .await
+            .map(|_| ())
+    }
+    fn id(catalog: &Catalog, name: &str) -> Option<mz_repr::AdapterId> {
+        catalog
+            .state()
+            .adapter_declarations()
+            .values()
+            .find(|adapter| adapter.name == name)
+            .map(|adapter| adapter.id)
+    }
+    let persist = PersistClient::new_for_tests().await;
+    let mut catalog = Catalog::open_debug_catalog(persist, Uuid::new_v4(), &test_bootstrap_args())
+        .await
+        .expect("open catalog");
+    let before = catalog.clone();
+    apply(
+        &mut catalog,
+        vec![Op::CreateAdapter {
+            name: "worker".into(),
+            size: "1".into(),
+        }],
+    )
+    .await
+    .expect("create adapter");
+    let original = id(&catalog, "worker").expect("created declaration");
+    assert!(!before.transient_revision_is_current());
+    assert!(
+        apply(
+            &mut catalog,
+            vec![Op::CreateAdapter {
+                name: "worker".into(),
+                size: "1".into()
+            }]
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(id(&catalog, "worker"), Some(original));
+    assert!(
+        apply(
+            &mut catalog,
+            vec![Op::CreateAdapter {
+                name: String::new(),
+                size: "1".into()
+            }]
+        )
+        .await
+        .is_err()
+    );
+
+    apply(
+        &mut catalog,
+        vec![Op::RenameAdapter {
+            id: original,
+            name: "worker".into(),
+            to_name: "renamed".into(),
+        }],
+    )
+    .await
+    .expect("rename adapter");
+    assert_eq!(id(&catalog, "renamed"), Some(original));
+    assert_eq!(id(&catalog, "worker"), None);
+    apply(
+        &mut catalog,
+        vec![Op::CreateAdapter {
+            name: "worker".into(),
+            size: "1".into(),
+        }],
+    )
+    .await
+    .expect("reuse name with a new identity");
+    let replacement = id(&catalog, "worker").expect("new declaration");
+    assert_ne!(replacement, original);
+    assert!(
+        apply(
+            &mut catalog,
+            vec![Op::RenameAdapter {
+                id: original,
+                name: "renamed".into(),
+                to_name: "worker".into(),
+            }]
+        )
+        .await
+        .is_err()
+    );
+
+    // A prepared name binding cannot remove either a renamed object or its replacement.
+    assert!(
+        apply(
+            &mut catalog,
+            vec![Op::DropAdapter {
+                id: original,
+                name: "worker".into(),
+            }]
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(id(&catalog, "renamed"), Some(original));
+    assert_eq!(id(&catalog, "worker"), Some(replacement));
+    apply(
+        &mut catalog,
+        vec![Op::DropAdapter {
+            id: original,
+            name: "renamed".into(),
+        }],
+    )
+    .await
+    .expect("drop renamed adapter");
+    assert_eq!(id(&catalog, "renamed"), None);
+    assert_eq!(id(&catalog, "worker"), Some(replacement));
+
+    let sizes = BTreeSet::from(["1".to_owned()]);
+    assert!(Catalog::validate_adapter_size("1", &sizes).is_ok());
+    assert!(Catalog::validate_adapter_size("missing", &sizes).is_err());
+    drop(before);
+    catalog.expire().await;
+}

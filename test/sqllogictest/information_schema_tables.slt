@@ -93,6 +93,10 @@ views
 VIEW
 materialize
 mz_catalog
+mz_adapters
+MATERIALIZED VIEW
+materialize
+mz_catalog
 mz_array_types
 BASE TABLE
 materialize

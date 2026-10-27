@@ -80,3 +80,22 @@ COMPLETE 0
 
 statement ok
 SET enable_session_rbac_checks TO false
+
+
+# Adapter management is administrative even when both optional checks are off.
+statement ok
+CREATE ROLE adapter_outsider LOGIN;
+
+simple conn=adapter_outsider,user=adapter_outsider
+SET enable_session_rbac_checks TO false;
+----
+COMPLETE 0
+
+simple conn=adapter_outsider,user=adapter_outsider
+CREATE ADAPTER rbac_forbidden_adapter (SIZE '1');
+----
+db error: ERROR: permission denied to manage adapters
+DETAIL: You must be a superuser to manage adapters
+
+statement ok
+DROP ROLE adapter_outsider;

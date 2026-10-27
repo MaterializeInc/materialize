@@ -45,8 +45,9 @@ use mz_repr::{
     preserves_order, strconv,
 };
 use mz_sql_parser::ast::{
-    self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
-    AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
+    self, AlterAdapterRenameStatement, AlterClusterAction, AlterClusterStatement,
+    AlterConnectionAction, AlterConnectionOption, AlterConnectionOptionName,
+    AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
     AlterMaterializedViewApplyReplacementStatement, AlterNetworkPolicyStatement,
     AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRetainHistoryStatement,
     AlterRoleOption, AlterRoleStatement, AlterSecretStatement, AlterSetClusterStatement,
@@ -57,33 +58,33 @@ use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
     ClusterAutoScalingStrategyOptionValue, ClusterFeature, ClusterFeatureName, ClusterOption,
     ClusterOptionName, ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType,
-    CommentStatement, ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement,
-    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateConnectionStatement, CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateMetricSinkOption, CreateMetricSinkOptionName,
-    CreateMetricSinkStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
-    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
-    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
-    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
-    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
-    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
-    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, GlueAvroOption, GlueAvroOptionName, IcebergSinkConfigOption, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
-    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
-    NetworkPolicyRuleOptionName, OnHydrationOptionValue, PgConfigOption, PgConfigOptionName,
-    ProtobufSchema, QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue,
-    RefreshOptionValue, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
-    SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption,
-    SqlServerConfigOptionName, Statement, TableConstraint, TableFromSourceColumns,
-    TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
-    ViewDefinition, WithOptionValue,
+    CommentStatement, ConnectionOption, ConnectionOptionName, CreateAdapterStatement,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
+    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
+    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    CreateMetricSinkOption, CreateMetricSinkOptionName, CreateMetricSinkStatement,
+    CreateNetworkPolicyStatement, CreateRoleStatement, CreateSchemaStatement,
+    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
+    CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
+    CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
+    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
+    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropAdapterStatement,
+    DropObjectsStatement, DropOwnedStatement, Expr, Format, FormatSpecifier, GlueAvroOption,
+    GlueAvroOptionName, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
+    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
+    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
+    OnHydrationOptionValue, PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
+    SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName, Statement,
+    TableConstraint, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
+    TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -4890,6 +4891,40 @@ fn plan_role_variable(
         },
     };
     Ok(plan)
+}
+
+pub fn plan_create_adapter(
+    _: &StatementContext,
+    CreateAdapterStatement { name, size }: CreateAdapterStatement,
+) -> Result<Plan, PlanError> {
+    Ok(Plan::CreateAdapter(crate::plan::CreateAdapterPlan {
+        name: normalize::ident(name),
+        size,
+    }))
+}
+
+pub fn plan_drop_adapter(
+    scx: &StatementContext,
+    DropAdapterStatement { name }: DropAdapterStatement,
+) -> Result<Plan, PlanError> {
+    let name = normalize::ident(name);
+    let id = scx.catalog.resolve_adapter(&name)?;
+    Ok(Plan::DropAdapter(crate::plan::DropAdapterPlan { id, name }))
+}
+
+pub fn plan_alter_adapter_rename(
+    scx: &StatementContext,
+    AlterAdapterRenameStatement { name, to_name }: AlterAdapterRenameStatement,
+) -> Result<Plan, PlanError> {
+    let name = normalize::ident(name);
+    let id = scx.catalog.resolve_adapter(&name)?;
+    Ok(Plan::AlterAdapterRename(
+        crate::plan::AlterAdapterRenamePlan {
+            id,
+            name,
+            to_name: normalize::ident(to_name),
+        },
+    ))
 }
 
 pub fn describe_create_role(

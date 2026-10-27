@@ -34,6 +34,71 @@ use mz_sql_parser::parser::{
 };
 
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn adapter_statement_kinds_and_visitors() -> Result<(), Box<dyn Error>> {
+    use mz_sql_parser::ast::{StatementKind, statement_kind_label_value};
+
+    struct Names(Vec<String>);
+    impl<'a> Visit<'a, Raw> for Names {
+        fn visit_ident(&mut self, ident: &'a Ident) {
+            self.0.push(ident.as_str().to_owned());
+        }
+    }
+    struct Rename;
+    impl<'a> VisitMut<'a, Raw> for Rename {
+        fn visit_ident_mut(&mut self, ident: &'a mut Ident) {
+            *ident = Ident::new(format!("{}_visited", ident.as_str())).unwrap();
+        }
+    }
+
+    for (sql, kind, label, names, rewritten) in [
+        (
+            "CREATE ADAPTER a (SIZE 'small')",
+            StatementKind::CreateAdapter,
+            "create_adapter",
+            vec!["a"],
+            "CREATE ADAPTER a_visited (SIZE 'small')",
+        ),
+        (
+            "DROP ADAPTER a",
+            StatementKind::DropAdapter,
+            "drop_adapter",
+            vec!["a"],
+            "DROP ADAPTER a_visited",
+        ),
+        (
+            "ALTER ADAPTER a RENAME TO b",
+            StatementKind::AlterAdapterRename,
+            "alter_adapter_rename",
+            vec!["a", "b"],
+            "ALTER ADAPTER a_visited RENAME TO b_visited",
+        ),
+    ] {
+        let mut statements = parse_statements(sql)?;
+        let stmt = &mut statements[0].ast;
+        assert_eq!(StatementKind::from(&*stmt), kind);
+        assert_eq!(statement_kind_label_value(kind), label);
+        let mut visitor = Names(Vec::new());
+        visitor.visit_statement(stmt);
+        assert_eq!(visitor.0, names);
+        Rename.visit_statement_mut(stmt);
+        assert_eq!(stmt.to_ast_string_simple(), rewritten);
+    }
+
+    for (sql, kind) in [
+        ("CREATE ADAPTER a", StatementKind::CreateAdapter),
+        ("DROP ADAPTER", StatementKind::DropAdapter),
+        (
+            "ALTER ADAPTER a SET SIZE '1'",
+            StatementKind::AlterAdapterRename,
+        ),
+    ] {
+        assert_eq!(parse_statements(sql).unwrap_err().statement, Some(kind));
+    }
+    Ok(())
+}
+
+#[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn datadriven() {
     walk("tests/testdata", |f| {

@@ -263,6 +263,48 @@ impl Coordinator {
                     let result = self.sequence_create_schema(ctx.session_mut(), plan).await;
                     ctx.retire(result);
                 }
+                Plan::CreateAdapter(plan) => {
+                    if let Err(error) = mz_catalog::catalog::Catalog::validate_adapter_size(
+                        &plan.size,
+                        &self.adapter_size_names,
+                    ) {
+                        ctx.retire(Err(error.into()));
+                        return;
+                    }
+
+                    self.sequence_catalog_commit(
+                        ctx,
+                        vec![crate::catalog::Op::CreateAdapter {
+                            name: plan.name,
+                            size: plan.size,
+                        }],
+                        ExecuteResponse::CreatedAdapter,
+                    )
+                    .await;
+                }
+                Plan::DropAdapter(plan) => {
+                    self.sequence_catalog_commit(
+                        ctx,
+                        vec![crate::catalog::Op::DropAdapter {
+                            id: plan.id,
+                            name: plan.name,
+                        }],
+                        ExecuteResponse::DroppedAdapter,
+                    )
+                    .await;
+                }
+                Plan::AlterAdapterRename(plan) => {
+                    self.sequence_catalog_commit(
+                        ctx,
+                        vec![crate::catalog::Op::RenameAdapter {
+                            id: plan.id,
+                            name: plan.name,
+                            to_name: plan.to_name,
+                        }],
+                        ExecuteResponse::RenamedAdapter,
+                    )
+                    .await;
+                }
                 Plan::CreateRole(plan) => {
                     self.sequence_create_role_sql(ctx, plan).await;
                 }

@@ -2459,6 +2459,9 @@ where
             | ExecuteResponse::CreatedMetricSink { .. }
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMaterializedView { .. }
+            | ExecuteResponse::CreatedAdapter
+            | ExecuteResponse::DroppedAdapter
+            | ExecuteResponse::RenamedAdapter
             | ExecuteResponse::CreatedRole
             | ExecuteResponse::CreatedSchema { .. }
             | ExecuteResponse::CreatedSecret { .. }

@@ -92,6 +92,7 @@ pub const BUILD_INFO: BuildInfo = build_info!();
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Config {
+    pub adapter_size_names: std::collections::BTreeSet<String>,
     /// Join this declared adapter in the specified deployment without initialization
     /// or process-management authority. `None` retains combined environmentd mode.
     pub joined_adapter_id: Option<mz_repr::AdapterId>,
@@ -873,6 +874,7 @@ impl Listeners {
         };
         let envd_epoch = adapter_storage.epoch();
         let (adapter_handle, adapter_client) = mz_adapter::serve(mz_adapter::Config {
+            adapter_size_names: config.adapter_size_names,
             adapter_id: config
                 .joined_adapter_id
                 .unwrap_or(mz_catalog::durable::DEFAULT_ADAPTER_ID),

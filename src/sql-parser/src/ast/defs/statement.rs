@@ -47,6 +47,7 @@ pub enum Statement<T: AstInfo> {
     Update(UpdateStatement<T>),
     Delete(DeleteStatement<T>),
     CreateConnection(CreateConnectionStatement<T>),
+    CreateAdapter(CreateAdapterStatement),
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
     CreateWebhookSource(CreateWebhookSourceStatement<T>),
@@ -67,6 +68,7 @@ pub enum Statement<T: AstInfo> {
     CreateNetworkPolicy(CreateNetworkPolicyStatement<T>),
     AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
+    AlterAdapterRename(AlterAdapterRenameStatement),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterObjectSwap(AlterObjectSwapStatement),
     AlterRetainHistory(AlterRetainHistoryStatement<T>),
@@ -84,6 +86,7 @@ pub enum Statement<T: AstInfo> {
     AlterTableAddColumn(AlterTableAddColumnStatement<T>),
     AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementStatement),
     Discard(DiscardStatement),
+    DropAdapter(DropAdapterStatement),
     DropObjects(DropObjectsStatement),
     DropOwned(DropOwnedStatement<T>),
     SetVariable(SetVariableStatement),
@@ -127,6 +130,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Update(stmt) => f.write_node(stmt),
             Statement::Delete(stmt) => f.write_node(stmt),
             Statement::CreateConnection(stmt) => f.write_node(stmt),
+            Statement::CreateAdapter(stmt) => f.write_node(stmt),
             Statement::CreateDatabase(stmt) => f.write_node(stmt),
             Statement::CreateSchema(stmt) => f.write_node(stmt),
             Statement::CreateWebhookSource(stmt) => f.write_node(stmt),
@@ -148,6 +152,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterNetworkPolicy(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
+            Statement::AlterAdapterRename(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterRetainHistory(stmt) => f.write_node(stmt),
             Statement::AlterObjectSwap(stmt) => f.write_node(stmt),
@@ -164,6 +169,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterTableAddColumn(stmt) => f.write_node(stmt),
             Statement::AlterMaterializedViewApplyReplacement(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
+            Statement::DropAdapter(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
             Statement::DropOwned(stmt) => f.write_node(stmt),
             Statement::SetVariable(stmt) => f.write_node(stmt),
@@ -235,6 +241,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Update => "update",
         StatementKind::Delete => "delete",
         StatementKind::CreateConnection => "create_connection",
+        StatementKind::CreateAdapter => "create_adapter",
         StatementKind::CreateDatabase => "create_database",
         StatementKind::CreateSchema => "create_schema",
         StatementKind::CreateWebhookSource => "create_webhook",
@@ -254,6 +261,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateSecret => "create_secret",
         StatementKind::CreateNetworkPolicy => "create_network_policy",
         StatementKind::AlterCluster => "alter_cluster",
+        StatementKind::AlterAdapterRename => "alter_adapter_rename",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterRetainHistory => "alter_retain_history",
         StatementKind::AlterObjectSwap => "alter_object_swap",
@@ -274,6 +282,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
             "alter_materialized_view_apply_replacement"
         }
         StatementKind::Discard => "discard",
+        StatementKind::DropAdapter => "drop_adapter",
         StatementKind::DropObjects => "drop_objects",
         StatementKind::DropOwned => "drop_owned",
         StatementKind::SetVariable => "set_variable",
@@ -588,6 +597,55 @@ impl<T: AstInfo> AstDisplay for DeleteStatement<T> {
     }
 }
 impl_display_t!(DeleteStatement);
+
+/// `CREATE ADAPTER name (SIZE 'size')`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateAdapterStatement {
+    pub name: Ident,
+    pub size: String,
+}
+
+impl AstDisplay for CreateAdapterStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE ADAPTER ");
+        f.write_node(&self.name);
+        f.write_str(" (SIZE ");
+        f.write_node(&display::escaped_string_literal(&self.size));
+        f.write_str(")");
+    }
+}
+impl_display!(CreateAdapterStatement);
+
+/// `DROP ADAPTER name`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropAdapterStatement {
+    pub name: Ident,
+}
+
+impl AstDisplay for DropAdapterStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DROP ADAPTER ");
+        f.write_node(&self.name);
+    }
+}
+impl_display!(DropAdapterStatement);
+
+/// `ALTER ADAPTER name RENAME TO new_name`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterAdapterRenameStatement {
+    pub name: Ident,
+    pub to_name: Ident,
+}
+
+impl AstDisplay for AlterAdapterRenameStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER ADAPTER ");
+        f.write_node(&self.name);
+        f.write_str(" RENAME TO ");
+        f.write_node(&self.to_name);
+    }
+}
+impl_display!(AlterAdapterRenameStatement);
 
 /// `CREATE DATABASE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

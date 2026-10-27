@@ -9,6 +9,7 @@
 
 //! Deployment-scoped process management, separate from SQL coordination.
 
+mod http;
 pub mod provisioning;
 mod runtime;
 mod startup;
@@ -38,73 +39,85 @@ pub async fn initialize_fresh(
         .await
 }
 
-/// Declared adapter intent and assigned addresses, not a readiness assertion.
-/// This representation deliberately excludes credential-bearing launch arguments.
-#[derive(Debug, serde::Serialize)]
+fn serialize_id<T: std::fmt::Display, S: serde::Serializer>(
+    id: &T,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_str(id)
+}
+
+/// Desired adapter resources and observations, without credential-bearing launch inputs.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AdapterInventoryEntry {
+    #[serde(serialize_with = "serialize_id")]
     pub id: mz_repr::AdapterId,
     pub name: String,
     pub size: String,
     pub generation: u64,
     pub service: String,
+    pub resources: Option<provisioning::AdapterAllocation>,
     pub endpoints: std::collections::BTreeMap<String, Vec<String>>,
+    pub observed_processes: Vec<mz_orchestrator::ServiceEvent>,
     pub provisioning_error: Option<String>,
 }
 
-/// Reconciles the deployment's adapter namespace against committed declarations.
-///
-/// The caller has completed deployment initialization and owns this deployment's
-/// process lifecycle. Pass a namespace used only for adapter services. An empty
-/// declaration set is valid and never causes a default declaration to be created.
-/// Addresses report assignment only. Process and SQL readiness are observed
-/// independently. Errors for one desired service do not hide the remaining intent.
+/// Calculates desired adapter inventory without contacting or changing the backend.
+pub fn desired_adapters(
+    catalog: &mz_catalog::catalog::Catalog,
+    launch: &provisioning::AdapterProvisioningConfig,
+    sizes: &std::collections::BTreeMap<String, provisioning::AdapterAllocation>,
+) -> Vec<AdapterInventoryEntry> {
+    catalog
+        .state()
+        .adapter_declarations()
+        .values()
+        .map(|declaration| {
+            let resources = sizes.get(&declaration.size).cloned();
+            AdapterInventoryEntry {
+                id: declaration.id,
+                name: declaration.name.clone(),
+                size: declaration.size.clone(),
+                generation: launch.generation,
+                service: provisioning::service_name(declaration.id, launch.generation),
+                provisioning_error: resources.is_none().then(|| "unknown adapter size".into()),
+                resources,
+                endpoints: Default::default(),
+                observed_processes: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// Enacts committed adapter inventory in this deployment's private namespace.
+/// Empty inventory is valid. Assigned endpoints do not establish readiness.
 pub async fn reconcile_adapters(
     catalog: &mut mz_catalog::catalog::Catalog,
     orchestrator: &dyn mz_orchestrator::NamespacedOrchestrator,
     launch: &provisioning::AdapterProvisioningConfig,
     sizes: &std::collections::BTreeMap<String, provisioning::AdapterAllocation>,
 ) -> anyhow::Result<Vec<AdapterInventoryEntry>> {
-    // List before refreshing committed membership, so a concurrent CREATE that
-    // was not visible to this list cannot be mistaken for an orphan.
+    // List before refreshing membership so a concurrent CREATE cannot look orphaned.
     let observed = orchestrator.list_services().await?;
     catalog.sync_to_current_updates().await?;
     anyhow::ensure!(
         catalog.storage().await.get_deployment_generation().await? == launch.generation,
         "adapter launch configuration belongs to a different deployment"
     );
-    let declarations = catalog.state().adapter_declarations();
-    let desired: std::collections::BTreeSet<_> = declarations
-        .keys()
-        .map(|id| provisioning::service_name(*id, launch.generation))
+    let mut inventory = desired_adapters(catalog, launch, sizes);
+    let desired: std::collections::BTreeSet<_> = inventory
+        .iter()
+        .map(|entry| entry.service.clone())
         .collect();
     for service in observed {
         if service_in_generation(&service, launch.generation) && !desired.contains(&service) {
             orchestrator.drop_service(&service)?;
         }
     }
-    let mut inventory = Vec::new();
-    for declaration in declarations.values() {
-        let service = provisioning::service_name(declaration.id, launch.generation);
-        let mut entry = AdapterInventoryEntry {
-            id: declaration.id,
-            name: declaration.name.clone(),
-            size: declaration.size.clone(),
-            generation: launch.generation,
-            service,
-            endpoints: Default::default(),
-            provisioning_error: None,
-        };
-        let Some(allocation) = sizes.get(&declaration.size) else {
-            entry.provisioning_error = Some("unknown adapter size".into());
-            inventory.push(entry);
+    for entry in &mut inventory {
+        let Some(allocation) = &entry.resources else {
             continue;
         };
-        match launch.service_config(
-            declaration.id,
-            &declaration.name,
-            &declaration.size,
-            allocation,
-        ) {
+        match launch.service_config(entry.id, &entry.name, &entry.size, allocation) {
             Ok(config) => {
                 let ports = config.ports.clone();
                 match orchestrator.ensure_service(&entry.service, config) {
@@ -115,7 +128,7 @@ pub async fn reconcile_adapters(
                                 .insert(port.name.clone(), service.addresses(&port.name));
                         }
                     }
-                    // Backend errors may include credential-bearing launch inputs.
+                    // Backend errors may contain credential-bearing launch inputs.
                     Err(_) => {
                         entry.provisioning_error =
                             Some("backend rejected adapter provisioning".into())
@@ -126,7 +139,6 @@ pub async fn reconcile_adapters(
                 entry.provisioning_error = Some("invalid adapter launch configuration".into())
             }
         }
-        inventory.push(entry);
     }
     orchestrator.flush().await?;
     Ok(inventory)
@@ -158,42 +170,76 @@ mod tests {
     }
 }
 
-/// Enacts committed replica realizations without constructing compute or storage
-/// controllers. Replica-set policy must commit its decisions before calling this.
-/// The orchestrator must be restricted to the cluster namespace.
+/// Desired replica resources and backend observations. Launch arguments stay private.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReplicaInventoryEntry {
+    #[serde(serialize_with = "serialize_id")]
+    pub cluster_id: mz_controller_types::ClusterId,
+    #[serde(serialize_with = "serialize_id")]
+    pub replica_id: mz_controller_types::ReplicaId,
+    pub cluster_name: String,
+    pub replica_name: String,
+    pub generation: u64,
+    pub service: String,
+    pub resources: mz_controller_types::clusters::ManagedReplicaLocation,
+    #[serde(skip)]
+    role: mz_controller_types::clusters::ClusterRole,
+    pub endpoints: std::collections::BTreeMap<String, Vec<String>>,
+    pub observed_processes: Vec<mz_orchestrator::ServiceEvent>,
+    pub provisioning_error: Option<String>,
+}
+
+/// Calculates the process inventory committed by adapter-owned replica policy.
+pub fn desired_replicas(
+    catalog: &mz_catalog::catalog::Catalog,
+    generation: u64,
+) -> Vec<ReplicaInventoryEntry> {
+    use mz_controller::clusters::{ReplicaLocation, ReplicaServiceName};
+    let mut desired = Vec::new();
+    for cluster in catalog.clusters() {
+        for replica in cluster.replicas() {
+            if let ReplicaLocation::Managed(location) = &replica.config.location {
+                let service = ReplicaServiceName {
+                    cluster_id: cluster.id,
+                    replica_id: replica.replica_id,
+                    generation,
+                }
+                .to_string();
+                desired.push(ReplicaInventoryEntry {
+                    cluster_id: cluster.id,
+                    replica_id: replica.replica_id,
+                    cluster_name: cluster.name.clone(),
+                    replica_name: replica.name.clone(),
+                    generation,
+                    service,
+                    resources: location.clone(),
+                    role: cluster.role(),
+                    endpoints: Default::default(),
+                    observed_processes: Vec::new(),
+                    provisioning_error: None,
+                });
+            }
+        }
+    }
+    desired
+}
+
+/// Enacts committed replica realizations without SQL coordination or replica-set policy.
 pub async fn reconcile_replicas(
     catalog: &mut mz_catalog::catalog::Catalog,
     orchestrator: &dyn mz_orchestrator::NamespacedOrchestrator,
     launch: &mz_controller::clusters::provisioning::ReplicaProvisioningConfig<'_>,
-) -> anyhow::Result<()> {
-    use mz_controller::clusters::{ReplicaLocation, ReplicaServiceName};
-
+) -> anyhow::Result<Vec<ReplicaInventoryEntry>> {
+    use mz_controller::clusters::ReplicaServiceName;
     let observed = orchestrator.list_services().await?;
     catalog.sync_to_current_updates().await?;
     anyhow::ensure!(
         catalog.storage().await.get_deployment_generation().await? == launch.deploy_generation,
         "replica launch configuration belongs to a different deployment"
     );
-    let mut desired = Vec::new();
-    for cluster in catalog.clusters() {
-        for replica in cluster.replicas() {
-            if let ReplicaLocation::Managed(location) = &replica.config.location {
-                desired.push((
-                    ReplicaServiceName {
-                        cluster_id: cluster.id,
-                        replica_id: replica.replica_id,
-                        generation: launch.deploy_generation,
-                    },
-                    cluster.name.clone(),
-                    replica.name.clone(),
-                    cluster.role(),
-                    location.clone(),
-                ));
-            }
-        }
-    }
+    let mut desired = desired_replicas(catalog, launch.deploy_generation);
     let live: std::collections::BTreeSet<_> =
-        desired.iter().map(|(name, ..)| name.to_string()).collect();
+        desired.iter().map(|entry| entry.service.clone()).collect();
     for service in observed {
         let name: ReplicaServiceName = service.parse()?;
         if name.generation == launch.deploy_generation && !live.contains(&service) {
@@ -202,24 +248,36 @@ pub async fn reconcile_replicas(
     }
     let overrides = mz_catalog::compute_config::replica_dyncfg_overrides(catalog);
     let affinity = catalog.system_config().enable_worker_core_affinity();
-    for (name, cluster_name, replica_name, role, location) in desired {
+    for entry in &mut desired {
         let launch = mz_controller::clusters::provisioning::ReplicaProvisioningConfig {
             replica_dyncfg_overrides: overrides
-                .get(&name.cluster_id)
-                .and_then(|replicas| replicas.get(&name.replica_id)),
+                .get(&entry.cluster_id)
+                .and_then(|replicas| replicas.get(&entry.replica_id)),
             ..*launch
         };
         let spec = launch.service_config(
-            name.cluster_id,
-            name.replica_id,
-            cluster_name,
-            replica_name,
-            role,
-            location,
+            entry.cluster_id,
+            entry.replica_id,
+            entry.cluster_name.clone(),
+            entry.replica_name.clone(),
+            entry.role.clone(),
+            entry.resources.clone(),
             affinity,
         )?;
-        orchestrator.ensure_service(&name.to_string(), spec)?;
+        let ports = spec.ports.clone();
+        match orchestrator.ensure_service(&entry.service, spec) {
+            Ok(service) => {
+                for port in ports {
+                    entry
+                        .endpoints
+                        .insert(port.name.clone(), service.addresses(&port.name));
+                }
+            }
+            Err(_) => {
+                entry.provisioning_error = Some("backend rejected replica provisioning".into())
+            }
+        }
     }
     orchestrator.flush().await?;
-    Ok(())
+    Ok(desired)
 }

@@ -225,6 +225,9 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedConnection
             | ExecuteResponse::CreatedDatabase
             | ExecuteResponse::CreatedSchema
+            | ExecuteResponse::CreatedAdapter
+            | ExecuteResponse::DroppedAdapter
+            | ExecuteResponse::RenamedAdapter
             | ExecuteResponse::CreatedRole
             | ExecuteResponse::CreatedCluster
             | ExecuteResponse::CreatedClusterReplica

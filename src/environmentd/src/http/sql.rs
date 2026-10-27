@@ -1727,6 +1727,9 @@ async fn execute_stmt<S: ResultSender>(
         ExecuteResponse::CreatedConnection { .. }
         | ExecuteResponse::CreatedDatabase { .. }
         | ExecuteResponse::CreatedSchema { .. }
+        | ExecuteResponse::CreatedAdapter
+        | ExecuteResponse::DroppedAdapter
+        | ExecuteResponse::RenamedAdapter
         | ExecuteResponse::CreatedRole
         | ExecuteResponse::CreatedCluster { .. }
         | ExecuteResponse::CreatedClusterReplica { .. }

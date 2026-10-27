@@ -27,6 +27,7 @@ Abort
 Access
 Account
 Action
+Adapter
 Add
 Added
 Address

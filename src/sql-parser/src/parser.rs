@@ -2071,7 +2071,10 @@ impl<'a> Parser<'a> {
 
     /// Parse a SQL CREATE statement
     fn parse_create(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
-        if self.peek_keyword(DATABASE) {
+        if self.parse_keyword(ADAPTER) {
+            self.parse_create_adapter()
+                .map_parser_err(StatementKind::CreateAdapter)
+        } else if self.peek_keyword(DATABASE) {
             self.parse_create_database()
                 .map_parser_err(StatementKind::CreateDatabase)
         } else if self.peek_keyword(SCHEMA) {
@@ -2170,6 +2173,33 @@ impl<'a> Parser<'a> {
                     .map_no_statement_parser_err()
             }
         }
+    }
+
+    fn parse_create_adapter(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_token(&Token::LParen)?;
+        self.expect_keyword(SIZE)?;
+        let size = self.parse_literal_string()?;
+        self.expect_token(&Token::RParen)?;
+        Ok(Statement::CreateAdapter(CreateAdapterStatement {
+            name,
+            size,
+        }))
+    }
+
+    fn parse_drop_adapter(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        Ok(Statement::DropAdapter(DropAdapterStatement { name }))
+    }
+
+    fn parse_alter_adapter_rename(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let name = self.parse_identifier()?;
+        self.expect_keywords(&[RENAME, TO])?;
+        let to_name = self.parse_identifier()?;
+        Ok(Statement::AlterAdapterRename(AlterAdapterRenameStatement {
+            name,
+            to_name,
+        }))
     }
 
     fn parse_create_database(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -5039,7 +5069,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
-        if self.parse_keyword(OWNED) {
+        if self.parse_keyword(ADAPTER) {
+            self.parse_drop_adapter()
+                .map_parser_err(StatementKind::DropAdapter)
+        } else if self.parse_keyword(OWNED) {
             self.parse_drop_owned()
                 .map_parser_err(StatementKind::DropOwned)
         } else {
@@ -5901,7 +5934,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_alter(&mut self) -> Result<Statement<Raw>, ParserStatementError> {
-        if self.parse_keyword(SYSTEM) {
+        if self.parse_keyword(ADAPTER) {
+            self.parse_alter_adapter_rename()
+                .map_parser_err(StatementKind::AlterAdapterRename)
+        } else if self.parse_keyword(SYSTEM) {
             self.parse_alter_system()
         } else if self.parse_keywords(&[DEFAULT, PRIVILEGES]) {
             self.parse_alter_default_privileges()

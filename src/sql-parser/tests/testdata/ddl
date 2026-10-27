@@ -3924,3 +3924,222 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = "map")
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = map)
 =>
 CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: TopicConfig, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("map")]))) }], key: None, headers: None }, format: None, envelope: None, mode: None, with_options: [] })
+
+# Adapter lifecycle
+
+parse-statement
+CREATE ADAPTER a (SIZE '1')
+----
+CREATE ADAPTER a (SIZE '1')
+=>
+CreateAdapter(CreateAdapterStatement { name: Ident("a"), size: "1" })
+
+parse-statement
+create /* contextual */ AdApTeR "Mixed""Name" (size 'small''size')
+----
+CREATE ADAPTER "Mixed""Name" (SIZE 'small''size')
+=>
+CreateAdapter(CreateAdapterStatement { name: Ident("Mixed\"Name"), size: "small'size" })
+
+parse-statement
+CREATE ADAPTER adapter (SIZE 'arbitrary size')
+----
+CREATE ADAPTER adapter (SIZE 'arbitrary size')
+=>
+CreateAdapter(CreateAdapterStatement { name: Ident("adapter"), size: "arbitrary size" })
+
+parse-statement
+DROP ADAPTER adapter
+----
+DROP ADAPTER adapter
+=>
+DropAdapter(DropAdapterStatement { name: Ident("adapter") })
+
+parse-statement
+DROP ADAPTER "Mixed""Name"
+----
+DROP ADAPTER "Mixed""Name"
+=>
+DropAdapter(DropAdapterStatement { name: Ident("Mixed\"Name") })
+
+parse-statement
+ALTER ADAPTER a RENAME TO b
+----
+ALTER ADAPTER a RENAME TO b
+=>
+AlterAdapterRename(AlterAdapterRenameStatement { name: Ident("a"), to_name: Ident("b") })
+
+parse-statement
+ALTER ADAPTER "Mixed""Name" RENAME TO "New Name"
+----
+ALTER ADAPTER "Mixed""Name" RENAME TO "New Name"
+=>
+AlterAdapterRename(AlterAdapterRenameStatement { name: Ident("Mixed\"Name"), to_name: Ident("New Name") })
+
+parse-statement
+ALTER ADAPTER adapter RENAME TO adapter
+----
+ALTER ADAPTER adapter RENAME TO adapter
+=>
+AlterAdapterRename(AlterAdapterRenameStatement { name: Ident("adapter"), to_name: Ident("adapter") })
+
+parse-statement
+SELECT adapter AS adapter FROM adapter adapter
+----
+SELECT adapter AS adapter FROM adapter AS adapter
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("adapter")]), alias: Some(Ident("adapter")) }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("adapter")])), alias: Some(TableAlias { name: Ident("adapter"), columns: [], strict: false }) }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+CREATE TABLE adapter (adapter int)
+----
+CREATE TABLE adapter (adapter int4)
+=>
+CreateTable(CreateTableStatement { name: UnresolvedItemName([Ident("adapter")]), columns: [ColumnDef { name: Ident("adapter"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], constraints: [], if_not_exists: false, temporary: false, with_options: [] })
+
+parse-statement
+CREATE ADAPTER a
+----
+error: Expected left parenthesis, found EOF
+CREATE ADAPTER a
+                ^
+
+parse-statement
+CREATE ADAPTER a ()
+----
+error: Expected SIZE, found right parenthesis
+CREATE ADAPTER a ()
+                  ^
+
+parse-statement
+CREATE ADAPTER a (SIZE)
+----
+error: Expected literal string, found right parenthesis
+CREATE ADAPTER a (SIZE)
+                      ^
+
+parse-statement
+CREATE ADAPTER a (SIZE 1)
+----
+error: Expected literal string, found number "1"
+CREATE ADAPTER a (SIZE 1)
+                       ^
+
+parse-statement
+CREATE ADAPTER a (SIZE = '1')
+----
+error: Expected literal string, found equals sign
+CREATE ADAPTER a (SIZE = '1')
+                       ^
+
+parse-statement
+CREATE ADAPTER a SIZE '1'
+----
+error: Expected left parenthesis, found SIZE
+CREATE ADAPTER a SIZE '1'
+                 ^
+
+parse-statement
+CREATE ADAPTER a (SIZE '1', SIZE '2')
+----
+error: Expected right parenthesis, found comma
+CREATE ADAPTER a (SIZE '1', SIZE '2')
+                          ^
+
+parse-statement
+CREATE ADAPTER a (UNKNOWN '1')
+----
+error: Expected SIZE, found UNKNOWN
+CREATE ADAPTER a (UNKNOWN '1')
+                  ^
+
+parse-statement
+CREATE ADAPTER a (SIZE '1', UNKNOWN '2')
+----
+error: Expected right parenthesis, found comma
+CREATE ADAPTER a (SIZE '1', UNKNOWN '2')
+                          ^
+
+parse-statement
+CREATE ADAPTER IF NOT EXISTS a (SIZE '1')
+----
+error: Expected left parenthesis, found NOT
+CREATE ADAPTER IF NOT EXISTS a (SIZE '1')
+                  ^
+
+parse-statement
+DROP ADAPTER IF EXISTS a
+----
+error: Expected end of statement, found EXISTS
+DROP ADAPTER IF EXISTS a
+                ^
+
+parse-statement
+DROP ADAPTER a CASCADE
+----
+error: Expected end of statement, found CASCADE
+DROP ADAPTER a CASCADE
+               ^
+
+parse-statement
+DROP ADAPTER a RESTRICT
+----
+error: Expected end of statement, found RESTRICT
+DROP ADAPTER a RESTRICT
+               ^
+
+parse-statement
+DROP ADAPTER a, b
+----
+error: Expected end of statement, found comma
+DROP ADAPTER a, b
+              ^
+
+parse-statement
+ALTER ADAPTER IF EXISTS a RENAME TO b
+----
+error: Expected RENAME, found EXISTS
+ALTER ADAPTER IF EXISTS a RENAME TO b
+                 ^
+
+parse-statement
+ALTER ADAPTER a SET (SIZE '2')
+----
+error: Expected RENAME, found SET
+ALTER ADAPTER a SET (SIZE '2')
+                ^
+
+parse-statement
+ALTER ADAPTER a SIZE '2'
+----
+error: Expected RENAME, found SIZE
+ALTER ADAPTER a SIZE '2'
+                ^
+
+parse-statement
+ALTER ADAPTER a RENAME b
+----
+error: Expected TO, found identifier "b"
+ALTER ADAPTER a RENAME b
+                       ^
+
+parse-statement
+ALTER ADAPTER a RENAME TO
+----
+error: Expected identifier, found EOF
+ALTER ADAPTER a RENAME TO
+                         ^
+
+parse-statement
+CREATE ADAPTER schema.a (SIZE '1')
+----
+error: Expected left parenthesis, found dot
+CREATE ADAPTER schema.a (SIZE '1')
+                     ^
+
+parse-statement
+CREATE "adapter" a (SIZE '1')
+----
+error: Expected DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, [TEMPORARY] TABLE, SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW after CREATE, found identifier "adapter"
+CREATE "adapter" a (SIZE '1')
+       ^

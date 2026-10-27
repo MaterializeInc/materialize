@@ -1455,6 +1455,7 @@ impl StagedContext for () {
 
 /// Configures a coordinator.
 pub struct Config {
+    pub adapter_size_names: BTreeSet<String>,
     pub adapter_id: mz_repr::AdapterId,
     pub controller_config: ControllerConfig,
     pub controller_envd_epoch: std::num::NonZeroI64,
@@ -2218,6 +2219,7 @@ impl ClusterReplicaStatuses {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Coordinator {
+    adapter_size_names: BTreeSet<String>,
     /// Stable shared declaration identity, qualified by this deployment at execution admission.
     adapter_id: mz_repr::AdapterId,
     /// The controller for the storage and compute layers.
@@ -6290,6 +6292,7 @@ impl Drop for LastMessage {
 /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
 pub fn serve(
     Config {
+        adapter_size_names,
         adapter_id,
         controller_config,
         controller_envd_epoch,
@@ -6704,6 +6707,7 @@ pub fn serve(
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let (group_committer_tx, group_committer_rx) = mpsc::unbounded_channel();
                 let mut coord = Coordinator {
+                    adapter_size_names,
                     controller,
                     table_write_handle,
                     adapter_storage,

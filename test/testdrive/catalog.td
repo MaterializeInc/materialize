@@ -537,6 +537,7 @@ mz_timezone_names          ""
 > SHOW MATERIALIZED VIEWS FROM mz_catalog
 name                  cluster             comment
 --------------------------------------------------
+mz_adapters           mz_catalog_server   ""
 mz_audit_events       mz_catalog_server   ""
 mz_aws_privatelink_connections mz_catalog_server ""
 mz_clusters           mz_catalog_server   ""

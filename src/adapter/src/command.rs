@@ -684,6 +684,12 @@ impl Transmittable for SystemVars {
 #[derivative(Debug)]
 #[enum_kind(ExecuteResponseKind, derive(PartialOrd, Ord))]
 pub enum ExecuteResponse {
+    /// Adapter creation was committed, without waiting for process readiness.
+    CreatedAdapter,
+    /// Adapter removal was committed, without waiting for process teardown.
+    DroppedAdapter,
+    /// The adapter declaration was renamed without changing its identity.
+    RenamedAdapter,
     /// The default privileges were altered.
     AlteredDefaultPrivileges,
     /// The requested object was altered.
@@ -902,6 +908,9 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::CreatedConnection => Ok(ExecuteResponse::CreatedConnection),
             ExecuteResponseKind::CreatedDatabase => Ok(ExecuteResponse::CreatedDatabase),
             ExecuteResponseKind::CreatedSchema => Ok(ExecuteResponse::CreatedSchema),
+            ExecuteResponseKind::CreatedAdapter => Ok(ExecuteResponse::CreatedAdapter),
+            ExecuteResponseKind::DroppedAdapter => Ok(ExecuteResponse::DroppedAdapter),
+            ExecuteResponseKind::RenamedAdapter => Ok(ExecuteResponse::RenamedAdapter),
             ExecuteResponseKind::CreatedRole => Ok(ExecuteResponse::CreatedRole),
             ExecuteResponseKind::CreatedCluster => Ok(ExecuteResponse::CreatedCluster),
             ExecuteResponseKind::CreatedClusterReplica => {
@@ -969,6 +978,9 @@ impl ExecuteResponse {
             CreatedConnection { .. } => Some("CREATE CONNECTION".into()),
             CreatedDatabase { .. } => Some("CREATE DATABASE".into()),
             CreatedSchema { .. } => Some("CREATE SCHEMA".into()),
+            CreatedAdapter => Some("CREATE ADAPTER".into()),
+            DroppedAdapter => Some("DROP ADAPTER".into()),
+            RenamedAdapter => Some("ALTER ADAPTER".into()),
             CreatedRole => Some("CREATE ROLE".into()),
             CreatedCluster { .. } => Some("CREATE CLUSTER".into()),
             CreatedClusterReplica { .. } => Some("CREATE CLUSTER REPLICA".into()),
@@ -1063,6 +1075,9 @@ impl ExecuteResponse {
             CreateConnection => &[CreatedConnection],
             CreateDatabase => &[CreatedDatabase],
             CreateSchema => &[CreatedSchema],
+            CreateAdapter => &[CreatedAdapter],
+            DropAdapter => &[DroppedAdapter],
+            AlterAdapterRename => &[RenamedAdapter],
             CreateRole => &[CreatedRole],
             CreateCluster => &[CreatedCluster],
             CreateClusterReplica => &[CreatedClusterReplica],

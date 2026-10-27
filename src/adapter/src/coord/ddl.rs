@@ -2540,6 +2540,9 @@ impl Coordinator {
                 | Op::Comment { .. }
                 | Op::CheckClusterState { .. }
                 | Op::CheckClusterDeclarations { .. }
+                | Op::CreateAdapter { .. }
+                | Op::DropAdapter { .. }
+                | Op::RenameAdapter { .. }
                 | Op::InjectAuditEvents { .. } => {}
             }
         }

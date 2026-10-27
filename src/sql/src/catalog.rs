@@ -170,6 +170,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Returns true if `schema` is an internal system schema, false otherwise
     fn is_system_schema_specifier(&self, schema: SchemaSpecifier) -> bool;
 
+    /// Resolves shared adapter intent, independent of its current execution.
+    fn resolve_adapter(&self, adapter_name: &str) -> Result<mz_repr::AdapterId, CatalogError> {
+        Err(CatalogError::UnknownAdapter(adapter_name.into()))
+    }
+
     /// Resolves the named role.
     fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
 
@@ -1421,6 +1426,10 @@ impl From<InvalidCloudProviderError> for InvalidEnvironmentIdError {
 /// An error returned by the catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogError {
+    /// Unknown adapter declaration.
+    UnknownAdapter(String),
+    /// Adapter declaration already exists.
+    AdapterAlreadyExists(String),
     /// Unknown database.
     UnknownDatabase(String),
     /// Database already exists.
@@ -1498,6 +1507,8 @@ impl fmt::Display for CatalogError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
+            Self::UnknownAdapter(name) => write!(f, "unknown adapter '{}'", name),
+            Self::AdapterAlreadyExists(name) => write!(f, "adapter '{name}' already exists"),
             Self::DatabaseAlreadyExists(name) => write!(f, "database '{name}' already exists"),
             Self::UnknownFunction { name, .. } => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownType { name, .. } => write!(f, "type \"{}\" does not exist", name),

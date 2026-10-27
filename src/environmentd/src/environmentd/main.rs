@@ -359,6 +359,14 @@ pub struct Args {
     /// Written-plan namespace reported by the compatible adapterd executable.
     #[clap(long, env = "ADAPTER_PLAN_BUILD")]
     adapter_plan_build: Option<String>,
+    /// Plain administrative HTTP listener. Access control must be provided externally.
+    #[clap(
+        long,
+        env = "CONTROLLER_HTTP_LISTEN_ADDR",
+        default_value = "127.0.0.1:6882"
+    )]
+    controller_http_listen_addr: std::net::SocketAddr,
+
     /// A number representing the environment's generation.
     ///
     /// This is incremented to request that the new process perform a graceful
@@ -724,8 +732,8 @@ fn controller_child_args(matches: &clap::ArgMatches) -> anyhow::Result<Vec<Strin
         if matches!(
             name,
             "adapterd-image"
-                | "adapter-sizes"
                 | "adapter-plan-build"
+                | "controller-http-listen-addr"
                 | "adapter-id"
                 | "deploy-generation"
                 | "process"
@@ -806,6 +814,7 @@ mod controller_cli_tests {
             .expect("valid controller arguments");
         let child = controller_child_args(&matches).expect("forward arguments");
         assert!(child.contains(&"--unsafe-mode".to_string()));
+        assert!(child.contains(&"--adapter-sizes={}".to_string()));
         assert!(
             child.contains(
                 &"--metadata-backend-url=postgres://user:password@localhost/db".to_string()
@@ -823,7 +832,6 @@ mod controller_cli_tests {
         assert!(!child.iter().any(|arg| {
             [
                 "--adapterd-image",
-                "--adapter-sizes",
                 "--adapter-plan-build",
                 "--deploy-generation",
                 "--listeners-config",
@@ -1315,7 +1323,17 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
             persist_clients,
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
         };
+        let adapter_sizes: std::collections::BTreeMap<
+            String,
+            crate::controllerd::provisioning::AdapterAllocation,
+        > = args
+            .adapter_sizes
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?
+            .unwrap_or_default();
         let config = crate::Config {
+            adapter_size_names: adapter_sizes.keys().cloned().collect(),
             joined_adapter_id: args.adapter_id,
             // Special modes.
             unsafe_mode: args.unsafe_mode,
@@ -1403,11 +1421,10 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
             force_builtin_schema_migration,
         };
         if let Some(child_args) = controller_child_args {
-            let sizes = serde_json::from_str(
-                args.adapter_sizes
-                    .as_deref()
-                    .context("controllerd requires --adapter-sizes")?,
-            )?;
+            anyhow::ensure!(
+                args.adapter_sizes.is_some(),
+                "controllerd requires --adapter-sizes"
+            );
             let plan_build = args.adapter_plan_build.context(
                 "controllerd requires --adapter-plan-build from its compatible adapterd",
             )?;
@@ -1418,7 +1435,14 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
                 listeners: listeners_config,
                 generation: config.controller.deploy_generation,
             };
-            crate::controllerd::run(config, launch, sizes, plan_build).await?;
+            crate::controllerd::run(
+                config,
+                launch,
+                adapter_sizes,
+                plan_build,
+                args.controller_http_listen_addr,
+            )
+            .await?;
             return Ok(None);
         }
         let listeners = Listeners::bind(listeners_config).await?;

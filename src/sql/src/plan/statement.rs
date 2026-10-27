@@ -148,6 +148,9 @@ pub fn describe(
         Statement::CreateConnection(stmt) => ddl::describe_create_connection(&scx, stmt)?,
         Statement::CreateDatabase(stmt) => ddl::describe_create_database(&scx, stmt)?,
         Statement::CreateIndex(stmt) => ddl::describe_create_index(&scx, stmt)?,
+        Statement::CreateAdapter(_)
+        | Statement::DropAdapter(_)
+        | Statement::AlterAdapterRename(_) => StatementDesc::new(None),
         Statement::CreateRole(stmt) => ddl::describe_create_role(&scx, stmt)?,
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
@@ -357,6 +360,9 @@ pub fn plan(
         Statement::CreateConnection(stmt) => ddl::plan_create_connection(scx, stmt),
         Statement::CreateDatabase(stmt) => ddl::plan_create_database(scx, stmt),
         Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt),
+        Statement::CreateAdapter(stmt) => ddl::plan_create_adapter(scx, stmt),
+        Statement::DropAdapter(stmt) => ddl::plan_drop_adapter(scx, stmt),
+        Statement::AlterAdapterRename(stmt) => ddl::plan_alter_adapter_rename(scx, stmt),
         Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
@@ -1085,6 +1091,9 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateConnection(_) => DDL,
             Statement::CreateDatabase(_) => DDL,
             Statement::CreateIndex(_) => DDL,
+            Statement::CreateAdapter(_)
+            | Statement::DropAdapter(_)
+            | Statement::AlterAdapterRename(_) => DDL,
             Statement::CreateRole(_) => DDL,
             Statement::CreateSchema(_) => DDL,
             Statement::CreateSecret(_) => DDL,

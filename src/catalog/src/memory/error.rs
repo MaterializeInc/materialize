@@ -143,6 +143,10 @@ pub enum ErrorKind {
     ManagedCluster(String),
     #[error(transparent)]
     VarError(#[from] VarError),
+    #[error("invalid adapter name {0:?}")]
+    InvalidAdapterName(String),
+    #[error("unknown adapter size {size}")]
+    InvalidAdapterSize { size: String, expected: Vec<String> },
     #[error("unknown cluster replica size {size}")]
     InvalidClusterReplicaSize { size: String, expected: Vec<String> },
     #[error("failed to get catalog setting: {0}")]
@@ -186,6 +190,9 @@ impl Error {
     pub fn hint(&self) -> Option<String> {
         match &self.kind {
             ErrorKind::VarError(e) => e.hint(),
+            ErrorKind::InvalidAdapterSize { expected, .. } => {
+                Some(format!("Valid adapter sizes are: {}", expected.join(", ")))
+            }
             ErrorKind::InvalidClusterReplicaSize { expected, .. } => Some(format!(
                 "Valid cluster replica sizes are: {}",
                 expected.join(", ")

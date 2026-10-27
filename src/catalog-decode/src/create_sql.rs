@@ -448,6 +448,9 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
         | AlterDefaultPrivileges(_)
         | ReassignOwned(_)
         | ValidateConnection(_)
+        | CreateAdapter(_)
+        | DropAdapter(_)
+        | AlterAdapterRename(_)
         | Comment(_) => return Err("not a CREATE item statement".into()),
     };
     info.insert("type", json!(item_type));
