@@ -8313,7 +8313,6 @@ dependencies = [
  "mz-ssh-util",
  "mz-tls-util",
  "openssh",
- "openssl",
  "postgres_array",
  "proptest",
  "proptest-derive",

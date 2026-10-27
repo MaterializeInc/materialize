@@ -191,10 +191,8 @@ impl Config {
         let mut postgres_config = self.inner.clone();
         configure(&mut postgres_config);
 
-        let mut tls = mz_tls_util::make_tls(&postgres_config).map_err(|tls_err| match tls_err {
-            mz_tls_util::TlsError::Generic(e) => PostgresError::Generic(e),
-            mz_tls_util::TlsError::OpenSsl(e) => PostgresError::PostgresSsl(e),
-        })?;
+        let mut tls = mz_tls_util::make_tls_rustls(&postgres_config)
+            .map_err(|tls_err| PostgresError::Generic(tls_err.into()))?;
 
         match &self.tunnel {
             TunnelConfig::Direct { resolved_ips } => {
@@ -245,7 +243,12 @@ impl Config {
                     .await
                     .map_err(PostgresError::Ssh)?;
 
-                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)?;
+                let tls = MakeTlsConnect::<TokioTcpStream>::make_tls_connect(&mut tls, host)
+                    .map_err(|e| {
+                        PostgresError::Generic(anyhow::anyhow!(
+                            "invalid TLS server name {host:?}: {e}"
+                        ))
+                    })?;
                 let tcp_stream = TokioTcpStream::connect(tunnel.local_addr())
                     .await
                     .map_err(PostgresError::SshIo)?;
