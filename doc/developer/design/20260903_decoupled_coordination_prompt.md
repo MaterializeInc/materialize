@@ -24,6 +24,13 @@ adapter and separate pubsub. Continue through independent adapters, SQL/HTTP-man
 lifecycle and deployment/backend integration, not just the binary extraction.
 The handoff identifies the current slice, concrete gaps and next useful check.
 
+Work outcome-first: get the smallest real end-to-end slice of the main outcome
+working early. Use that integration to expose architectural risks and determine
+which supporting work is actually needed. Limit preparation to concrete blockers
+of the next integration step, rather than completing supporting layers or
+edge-case inventories in advance. Stop preparing once that step is unblocked.
+Keep partial coverage explicit without weakening correctness or final acceptance.
+
 Controllerd is deployment-scoped process management, not a home for shared
 database duties. Fix multi-adapter ownership at the natural boundaries. Reuse
 safe collectors and existing backends rather than building a general background
