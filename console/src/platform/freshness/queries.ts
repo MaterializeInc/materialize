@@ -27,7 +27,6 @@ import { isOnCluster } from "~/platform/clusters/queries";
 import { sumPostgresIntervalMs } from "~/util";
 
 import { FreshnessScope, OBJECT_TYPE_FILTERS } from "./constants";
-import { UNREADABLE } from "./freshnessRows";
 
 export interface HydrationCounts {
   hydratedReplicas: number;
@@ -121,18 +120,18 @@ export function useLatestLag(objectIds: string[]) {
   });
 }
 
-/** Lags in milliseconds. `UNREADABLE` where the reading at that rank could not be taken. */
+/** Lags in milliseconds. Null where the reading at that rank could not be taken. */
 export interface LagPercentiles {
-  peak: number;
-  p90: number;
-  p99: number;
-  p99_9: number;
+  peak: number | null;
+  p90: number | null;
+  p99: number | null;
+  p99_9: number | null;
 }
 
 type PercentileRow = Record<keyof LagPercentiles, IPostgresInterval | null>;
 
 const lagMs = (lag: IPostgresInterval | null) =>
-  lag === null ? UNREADABLE : sumPostgresIntervalMs(lag);
+  lag === null ? null : sumPostgresIntervalMs(lag);
 
 const toLagPercentiles = (row: PercentileRow): LagPercentiles => ({
   peak: lagMs(row.peak),

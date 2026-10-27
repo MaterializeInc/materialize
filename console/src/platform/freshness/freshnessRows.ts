@@ -115,10 +115,10 @@ export function computeStats(
     // The percentiles refetch once per bin and the latest reading once a
     // minute, so a lag that starts between percentile fetches is only in
     // `current`.
-    peak: Math.max(percentiles.peak, current ?? -Infinity),
-    p90: percentiles.p90,
-    p99: percentiles.p99,
-    p99_9: percentiles.p99_9,
+    peak: Math.max(lagOrUnreadable(percentiles.peak), current ?? -Infinity),
+    p90: lagOrUnreadable(percentiles.p90),
+    p99: lagOrUnreadable(percentiles.p99),
+    p99_9: lagOrUnreadable(percentiles.p99_9),
   };
 }
 
@@ -131,9 +131,13 @@ export function computeStats(
  */
 export const UNREADABLE = Infinity;
 
-/** `null` is no reading at all, which is not the same as one that failed. */
+/** A lag from a query, where null is a reading that could not be taken. */
+export const lagOrUnreadable = (lag: number | null) =>
+  lag === null ? UNREADABLE : lag;
+
+/** Undefined is no reading at all, which is not the same as one that failed. */
 const currentFrom = (latest: number | null | undefined) =>
-  latest === null ? UNREADABLE : (latest ?? null);
+  latest === undefined ? null : lagOrUnreadable(latest);
 
 const statFor = (stats: ObjectStats, predicate: Predicate) =>
   predicate === "current"

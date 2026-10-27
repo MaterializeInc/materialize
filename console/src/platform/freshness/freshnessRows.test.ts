@@ -120,21 +120,13 @@ const hydrationByObjectId = new Map<string, HydrationCounts>(
 );
 
 /**
- * What the percentile query returns. `absent` has no readings in the range, so
- * it has no entry.
+ * What the percentile query returns, null where a reading could not be taken.
+ * `absent` has no readings in the range, so it has no entry.
  */
 const percentilesByObjectId = new Map<string, LagPercentiles>([
   ["spiky", { peak: 9_000, p90: 430, p99: 9_000, p99_9: 9_000 }],
   ["steady", { peak: 3_100, p90: 3_050, p99: 3_100, p99_9: 3_100 }],
-  [
-    "unreadable",
-    {
-      peak: UNREADABLE,
-      p90: UNREADABLE,
-      p99: UNREADABLE,
-      p99_9: UNREADABLE,
-    },
-  ],
+  ["unreadable", { peak: null, p90: null, p99: null, p99_9: null }],
 ]);
 
 const rowsFor = (predicate: Predicate, threshold: number) => {
@@ -174,8 +166,13 @@ describe("computeStats", () => {
     const stats = computeStats(null, percentilesByObjectId.get("unreadable"));
     // The graph breaks its line at these readings rather than drawing them.
     expect(accessorFor("unreadable")(data[4]!)).toBeNull();
-    expect(stats.peak).toBe(UNREADABLE);
-    expect(stats.current).toBe(UNREADABLE);
+    expect(stats).toEqual({
+      current: UNREADABLE,
+      peak: UNREADABLE,
+      p90: UNREADABLE,
+      p99: UNREADABLE,
+      p99_9: UNREADABLE,
+    });
   });
 
   it("counts a lag that started after the percentiles were fetched in pMAX", () => {
@@ -196,10 +193,10 @@ describe("computeStats", () => {
     // Unreadable once, hours ago, and healthy since: the worst thing in the
     // window, but not now and not one reading in ten.
     const stats = computeStats(400, {
-      peak: UNREADABLE,
+      peak: null,
       p90: 400,
-      p99: UNREADABLE,
-      p99_9: UNREADABLE,
+      p99: null,
+      p99_9: null,
     });
     const line = { key: "mv", yAccessor: () => null };
     const byKey = new Map([["mv", stats]]);

@@ -28,7 +28,6 @@ import { allObjects } from "~/store/allObjects";
 import { buildDatabaseObject, createProviderWrapper } from "~/test/utils";
 
 import { FreshnessScope } from "./constants";
-import { UNREADABLE } from "./freshnessRows";
 import {
   freshnessQueryKeys,
   inFreshnessScope,
@@ -152,7 +151,7 @@ describe("freshness queries", () => {
 });
 
 describe("useObjectLagPercentiles", () => {
-  it("reads a NULL lag as unreadable and leaves out an object with no readings", async () => {
+  it("passes a NULL lag through and leaves out an object with no readings", async () => {
     const params = { objectIds: ["u1", "u2", "u3"], lookbackMs: 3_600_000 };
     const interval = { type_oid: MzDataType.interval };
     server.use(
@@ -196,12 +195,8 @@ describe("useObjectLagPercentiles", () => {
           ["u1", { peak: 9_000, p90: 430, p99: 9_000, p99_9: 9_000 }],
           [
             "u2",
-            {
-              peak: UNREADABLE,
-              p90: 400,
-              p99: UNREADABLE,
-              p99_9: UNREADABLE,
-            },
+            // Unreadable readings arrive as null. `computeStats` marks them.
+            { peak: null, p90: 400, p99: null, p99_9: null },
           ],
         ]),
       ),
