@@ -590,8 +590,11 @@ def main():
             rf.flush()
             wf.flush()
 
-    # Leave clusters at RF 0 so idle arms do not hold nodes between runs.
-    for kind in ("idx", "mv"):
+    # Leave clusters at RF 0 so idle arms do not hold nodes between runs. Only
+    # touch the clusters of this run's phases: a concurrent run of the other
+    # workload is still measuring on its clusters.
+    kinds = {"idx" if phase == "idx" else "mv" for phase in phases}
+    for kind in sorted(kinds):
         names = [cluster(kind, arm) for arm in arms]
         existing = [n for n in names
                     if mz.one(f"SELECT 1 FROM mz_clusters WHERE name = '{n}';")]
