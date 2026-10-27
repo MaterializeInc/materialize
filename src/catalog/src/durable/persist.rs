@@ -39,7 +39,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_proto::TryFromProtoError;
-use mz_repr::Diff;
+use mz_repr::{Diff, GlobalId};
 use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
@@ -2748,6 +2748,13 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         &mut self,
         ids: &BTreeSet<GlobalId>,
     ) -> Result<BTreeMap<GlobalId, ShardId>, CatalogError> {
+        self.validate_runtime()?;
+        if self.mode != Mode::Writable {
+            return Err(DurableCatalogError::NotWritable(
+                "registration certification requires a writable catalog".into(),
+            )
+            .into());
+        }
         self.sync_to_current_upper().await?;
         Ok(ids
             .iter()

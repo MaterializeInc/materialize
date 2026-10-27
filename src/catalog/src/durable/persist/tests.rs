@@ -111,6 +111,85 @@ async fn test_initialized_catalog_join() {
     originator.expire().await;
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_collection_certification_refreshes_past_cached_fence() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use mz_persist_client::ShardId;
+    use mz_repr::GlobalId;
+    use mz_storage_client::controller::StorageTxn;
+
+    let builder =
+        TestCatalogStateBuilder::new(mz_persist_client::PersistClient::new_for_tests().await)
+            .with_default_deploy_generation();
+    let mut writer = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .expect("initialize catalog");
+    writer
+        .sync_to_current_updates()
+        .await
+        .expect("drain bootstrap");
+    let dropped = GlobalId::User(1000);
+    let retained = GlobalId::User(1001);
+    let mappings = BTreeMap::from([(dropped, ShardId::new()), (retained, ShardId::new())]);
+    let ids = BTreeSet::from([dropped, retained]);
+    let mut txn = writer.transaction().await.expect("transaction");
+    txn.set_config("catalog_read_protection_enabled".into(), Some(2))
+        .expect("enable joins");
+    txn.insert_collection_metadata(mappings.clone())
+        .expect("insert mappings");
+    // This durable-only test has no in-memory projection to update.
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.expect("commit mappings");
+    let mut joiner = builder
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("join catalog");
+    joiner.sync_to_current_updates().await.expect("drain join");
+    assert_eq!(
+        joiner.collection_shards_at_current(&ids).await.unwrap(),
+        mappings
+    );
+    let cached_upper = joiner.current_upper().await;
+
+    let mut txn = writer.transaction().await.expect("drop transaction");
+    assert_eq!(
+        txn.delete_collection_metadata(BTreeSet::from([dropped])),
+        vec![(dropped, mappings[&dropped])]
+    );
+    let _ = txn.get_and_commit_op_updates();
+    let ts = txn.upper();
+    txn.commit(ts).await.expect("commit retirement");
+
+    // The fence can be satisfied by the cached prefix, even though a peer has
+    // since removed a mapping. Certification must fetch the newer durable prefix.
+    joiner
+        .advance_upper(cached_upper)
+        .await
+        .expect("cached fence");
+    assert_eq!(
+        joiner.collection_shards_at_current(&ids).await.unwrap(),
+        BTreeMap::from([(retained, mappings[&retained])])
+    );
+    assert!(
+        !joiner
+            .sync_to_current_updates()
+            .await
+            .expect("projection updates remain available")
+            .is_empty()
+    );
+    joiner.expire().await;
+    writer.expire().await;
+}
+
 /// Test that the catalog forces users to upgrade one major version at a time.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`

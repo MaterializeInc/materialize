@@ -400,6 +400,7 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     ///
     /// Unlike a cached upper check, this observes commits above a caller's allocated
     /// timestamp. It does not consume updates awaiting projection application.
+    /// Requires writable mode because savepoints can contain uncommitted mappings.
     async fn collection_shards_at_current(
         &mut self,
         ids: &BTreeSet<GlobalId>,
