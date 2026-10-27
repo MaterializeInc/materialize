@@ -74,6 +74,14 @@ mod prepared;
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct Session {
+    // Allocate once per connection. Commands and responses transfer this owner
+    // without copying the session state or allocating on each handoff.
+    inner: Box<SessionInner>,
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+struct SessionInner {
     conn_id: ConnectionId,
     /// A globally unique identifier for the session. Not to be confused
     /// with `conn_id`, which may be reused.
@@ -131,11 +139,11 @@ pub struct Session {
 
 impl SessionMetadata for Session {
     fn conn_id(&self) -> &ConnectionId {
-        &self.conn_id
+        &self.inner.conn_id
     }
 
     fn client_ip(&self) -> Option<&IpAddr> {
-        self.client_ip.as_ref()
+        self.inner.client_ip.as_ref()
     }
 
     fn pcx(&self) -> &PlanContext {
@@ -147,13 +155,14 @@ impl SessionMetadata for Session {
     }
 
     fn role_metadata(&self) -> &RoleMetadata {
-        self.role_metadata
+        self.inner
+            .role_metadata
             .as_ref()
             .expect("role_metadata invariant violated")
     }
 
     fn vars(&self) -> &SessionVars {
-        &self.vars
+        &self.inner.vars
     }
 }
 
@@ -236,7 +245,7 @@ impl Session {
             client_ip: self.client_ip().copied(),
             pcx: self.pcx().clone(),
             role_metadata: self.role_metadata().clone(),
-            vars: self.vars.clone(),
+            vars: self.inner.vars.clone(),
         }
 
         // TODO: soft_assert that these are the same as Session.
@@ -258,30 +267,30 @@ impl Session {
         now: EpochMillis,
     ) -> Arc<QCell<PreparedStatementLoggingInfo>> {
         Arc::new(QCell::new(
-            &self.qcell_owner,
+            &self.inner.qcell_owner,
             PreparedStatementLoggingInfo::still_to_log(
                 raw_sql,
                 stmt,
                 now,
                 "".to_string(),
-                self.uuid,
+                self.inner.uuid,
                 false,
             ),
         ))
     }
 
     pub(crate) fn qcell_ro<'a, T2: 'a>(&'a self, cell: &'a Arc<QCell<T2>>) -> &'a T2 {
-        self.qcell_owner.ro(&*cell)
+        self.inner.qcell_owner.ro(&*cell)
     }
 
     pub(crate) fn qcell_rw<'a, T2: 'a>(&'a mut self, cell: &'a Arc<QCell<T2>>) -> &'a mut T2 {
-        self.qcell_owner.rw(&*cell)
+        self.inner.qcell_owner.rw(&*cell)
     }
 
     /// Returns a unique ID for the session.
     /// Not to be confused with `connection_id`, which can be reused.
     pub fn uuid(&self) -> Uuid {
-        self.uuid
+        self.inner.uuid
     }
 
     /// Creates a new dummy session.
@@ -341,32 +350,34 @@ impl Session {
         }
         let prepared_plans = prepared::PreparedPlanCache::new(metrics.prepared.cache.clone());
         Session {
-            conn_id,
-            uuid,
-            transaction: TransactionStatus::Default,
-            pcx: None,
-            metrics,
-            builtin_updates: None,
-            prepared_statements: BTreeMap::new(),
-            prepared_plans,
-            portals: BTreeMap::new(),
-            role_metadata: None,
-            client_ip,
-            vars,
-            notices_tx,
-            notices_rx,
-            next_transaction_id: 0,
-            secret_key: rand::random(),
-            external_metadata_rx,
-            qcell_owner: QCellOwner::new(),
-            session_oracles: BTreeMap::new(),
-            state_revision: 0,
+            inner: Box::new(SessionInner {
+                conn_id,
+                uuid,
+                transaction: TransactionStatus::Default,
+                pcx: None,
+                metrics,
+                builtin_updates: None,
+                prepared_statements: BTreeMap::new(),
+                prepared_plans,
+                portals: BTreeMap::new(),
+                role_metadata: None,
+                client_ip,
+                vars,
+                notices_tx,
+                notices_rx,
+                next_transaction_id: 0,
+                secret_key: rand::random(),
+                external_metadata_rx,
+                qcell_owner: QCellOwner::new(),
+                session_oracles: BTreeMap::new(),
+                state_revision: 0,
+            }),
         }
     }
 
     /// Returns the secret key associated with the session.
     pub fn secret_key(&self) -> u32 {
-        self.secret_key
+        self.inner.secret_key
     }
 
     fn new_pcx(&self, mut wall_time: DateTime<Utc>) -> PlanContext {
@@ -385,7 +396,7 @@ impl Session {
         isolation_level: Option<TransactionIsolationLevel>,
     ) -> Result<(), AdapterError> {
         // Check that current transaction state is compatible with new `access`
-        if let Some(txn) = self.transaction.inner() {
+        if let Some(txn) = self.inner.transaction.inner() {
             // `READ WRITE` prohibited if:
             // - Currently in `READ ONLY`
             // - Already performed a query
@@ -404,11 +415,11 @@ impl Session {
             }
         }
 
-        match std::mem::take(&mut self.transaction) {
+        match std::mem::take(&mut self.inner.transaction) {
             TransactionStatus::Default => {
-                let id = self.next_transaction_id;
-                self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
-                self.transaction = TransactionStatus::InTransaction(Transaction {
+                let id = self.inner.next_transaction_id;
+                self.inner.next_transaction_id = self.inner.next_transaction_id.wrapping_add(1);
+                self.inner.transaction = TransactionStatus::InTransaction(Transaction {
                     completion_owner: TransactionCompletionOwner::Coordinator,
                     pcx: self.new_pcx(wall_time),
                     ops: TransactionOps::None,
@@ -422,13 +433,14 @@ impl Session {
                 if access.is_some() {
                     txn.access = access;
                 }
-                self.transaction = TransactionStatus::InTransaction(txn);
+                self.inner.transaction = TransactionStatus::InTransaction(txn);
             }
             TransactionStatus::Failed(_) => unreachable!(),
         };
 
         if let Some(isolation_level) = isolation_level {
-            self.vars
+            self.inner
+                .vars
                 .set_local_transaction_isolation(isolation_level.into());
         }
 
@@ -438,9 +450,9 @@ impl Session {
     /// Starts either a single statement or implicit transaction based on the
     /// number of statements, but only if no transaction has been started already.
     pub fn start_transaction_implicit(&mut self, wall_time: DateTime<Utc>, stmts: usize) {
-        if let TransactionStatus::Default = self.transaction {
-            let id = self.next_transaction_id;
-            self.next_transaction_id = self.next_transaction_id.wrapping_add(1);
+        if let TransactionStatus::Default = self.inner.transaction {
+            let id = self.inner.next_transaction_id;
+            self.inner.next_transaction_id = self.inner.next_transaction_id.wrapping_add(1);
             let txn = Transaction {
                 completion_owner: TransactionCompletionOwner::Session,
                 pcx: self.new_pcx(wall_time),
@@ -449,8 +461,10 @@ impl Session {
                 id,
             };
             match stmts {
-                1 => self.transaction = TransactionStatus::Started(txn),
-                n if n > 1 => self.transaction = TransactionStatus::InTransactionImplicit(txn),
+                1 => self.inner.transaction = TransactionStatus::Started(txn),
+                n if n > 1 => {
+                    self.inner.transaction = TransactionStatus::InTransactionImplicit(txn)
+                }
                 _ => {}
             }
         }
@@ -472,17 +486,17 @@ impl Session {
     /// > An unnamed portal is destroyed at the end of the transaction
     #[must_use]
     pub fn clear_transaction(&mut self) -> TransactionStatus {
-        self.portals.clear();
-        self.prepared_plans.prune();
-        self.pcx = None;
-        self.state_revision += 1;
-        mem::take(&mut self.transaction)
+        self.inner.portals.clear();
+        self.inner.prepared_plans.prune();
+        self.inner.pcx = None;
+        self.inner.state_revision += 1;
+        mem::take(&mut self.inner.transaction)
     }
 
     /// Transfers transaction completion to the coordinator. Call before handing it any
     /// transaction-scoped state, including on paths that can fail after installing resources.
     pub(crate) fn require_coordinator_completion(&mut self) {
-        if let Some(txn) = self.transaction.inner_mut() {
+        if let Some(txn) = self.inner.transaction.inner_mut() {
             txn.completion_owner = TransactionCompletionOwner::Coordinator;
         }
     }
@@ -492,7 +506,7 @@ impl Session {
         &self,
         mut action: EndTransactionAction,
     ) -> Option<ReadOnlyCompletion> {
-        let txn = self.transaction.inner()?;
+        let txn = self.inner.transaction.inner()?;
         if txn.completion_owner != TransactionCompletionOwner::Session {
             return None;
         }
@@ -509,7 +523,7 @@ impl Session {
             | TransactionOps::SingleStatement { .. }
             | TransactionOps::DDL { .. } => return None,
         };
-        if matches!(self.transaction, TransactionStatus::Failed(_)) {
+        if matches!(self.inner.transaction, TransactionStatus::Failed(_)) {
             action = EndTransactionAction::Rollback;
         }
         Some(ReadOnlyCompletion {
@@ -524,12 +538,12 @@ impl Session {
 
     /// Marks the current transaction as failed.
     pub fn fail_transaction(mut self) -> Self {
-        match self.transaction {
+        match self.inner.transaction {
             TransactionStatus::Default => unreachable!(),
             TransactionStatus::Started(txn)
             | TransactionStatus::InTransactionImplicit(txn)
             | TransactionStatus::InTransaction(txn) => {
-                self.transaction = TransactionStatus::Failed(txn);
+                self.inner.transaction = TransactionStatus::Failed(txn);
             }
             TransactionStatus::Failed(_) => {}
         };
@@ -538,12 +552,12 @@ impl Session {
 
     /// Returns the current transaction status.
     pub fn transaction(&self) -> &TransactionStatus {
-        &self.transaction
+        &self.inner.transaction
     }
 
     /// Returns the current transaction status.
     pub fn transaction_mut(&mut self) -> &mut TransactionStatus {
-        &mut self.transaction
+        &mut self.inner.transaction
     }
 
     /// Returns the session's transaction code.
@@ -555,12 +569,12 @@ impl Session {
     /// they cannot be merged (i.e., a timestamp-dependent read cannot be
     /// merged to an insert).
     pub fn add_transaction_ops(&mut self, add_ops: TransactionOps) -> Result<(), AdapterError> {
-        self.transaction.add_ops(add_ops)
+        self.inner.transaction.add_ops(add_ops)
     }
 
     /// Returns a channel on which to send notices to the session.
     pub fn retain_notice_transmitter(&self) -> UnboundedSender<AdapterNotice> {
-        self.notices_tx.clone()
+        self.inner.notices_tx.clone()
     }
 
     /// Adds a notice to the session.
@@ -571,7 +585,7 @@ impl Session {
     /// Adds multiple notices to the session.
     pub fn add_notices(&self, notices: impl IntoIterator<Item = AdapterNotice>) {
         for notice in notices {
-            let _ = self.notices_tx.send(notice);
+            let _ = self.inner.notices_tx.send(notice);
         }
     }
 
@@ -582,6 +596,7 @@ impl Session {
         // This method is cancel safe because recv is cancel safe.
         loop {
             let notice = self
+                .inner
                 .notices_rx
                 .recv()
                 .await
@@ -596,7 +611,7 @@ impl Session {
     /// Returns a draining iterator over the notices attached to the session.
     pub fn drain_notices(&mut self) -> Vec<AdapterNotice> {
         let mut notices = Vec::new();
-        while let Ok(notice) = self.notices_rx.try_recv() {
+        while let Ok(notice) = self.inner.notices_rx.try_recv() {
             if let Some(notice) = self.notice_filter(notice) {
                 notices.push(notice);
             }
@@ -607,14 +622,14 @@ impl Session {
     /// Returns Some if the notice should be reported, otherwise None.
     fn notice_filter(&self, notice: AdapterNotice) -> Option<AdapterNotice> {
         // Filter out low threshold severity.
-        let minimum_client_severity = self.vars.client_min_messages();
+        let minimum_client_severity = self.inner.vars.client_min_messages();
         let sev = notice.severity();
         if !minimum_client_severity.should_output_to_client(&sev) {
             return None;
         }
         // Filter out notices for other clusters.
         if let AdapterNotice::ClusterReplicaStatusChanged { cluster, .. } = &notice {
-            if cluster != self.vars.cluster() {
+            if cluster != self.inner.vars.cluster() {
                 return None;
             }
         }
@@ -624,7 +639,7 @@ impl Session {
     /// Sets the transaction ops to `TransactionOps::None`. Must only be used after
     /// verifying that no transaction anomalies will occur if cleared.
     pub fn clear_transaction_ops(&mut self) {
-        if let Some(txn) = self.transaction.inner_mut() {
+        if let Some(txn) = self.inner.transaction.inner_mut() {
             txn.ops = TransactionOps::None;
         }
     }
@@ -634,7 +649,7 @@ impl Session {
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
     pub fn get_transaction_timestamp_determination(&self) -> Option<TimestampDetermination> {
-        match self.transaction.inner() {
+        match self.inner.transaction.inner() {
             Some(Transaction {
                 pcx: _,
                 ops: TransactionOps::Peeks { determination, .. },
@@ -649,7 +664,7 @@ impl Session {
     /// Whether this session has a timestamp for a read transaction.
     pub fn contains_read_timestamp(&self) -> bool {
         matches!(
-            self.transaction.inner(),
+            self.inner.transaction.inner(),
             Some(Transaction {
                 pcx: _,
                 ops: TransactionOps::Peeks {
@@ -682,7 +697,7 @@ impl Session {
             stmt.as_ref(),
             now,
             name.clone(),
-            self.uuid,
+            self.inner.uuid,
             false,
         );
         let statement = PreparedStatement {
@@ -690,25 +705,25 @@ impl Session {
             desc,
             query,
             state_revision,
-            logging: Arc::new(QCell::new(&self.qcell_owner, logging)),
+            logging: Arc::new(QCell::new(&self.inner.qcell_owner, logging)),
         };
-        self.prepared_statements.insert(name, statement);
-        self.prepared_plans.prune();
+        self.inner.prepared_statements.insert(name, statement);
+        self.inner.prepared_plans.prune();
     }
 
     /// Removes the prepared statement associated with `name`.
     ///
     /// Returns whether a statement previously existed.
     pub fn remove_prepared_statement(&mut self, name: &str) -> bool {
-        let removed = self.prepared_statements.remove(name).is_some();
-        self.prepared_plans.prune();
+        let removed = self.inner.prepared_statements.remove(name).is_some();
+        self.inner.prepared_plans.prune();
         removed
     }
 
     /// Removes all prepared statements.
     pub fn remove_all_prepared_statements(&mut self) {
-        self.prepared_statements.clear();
-        self.prepared_plans.clear();
+        self.inner.prepared_statements.clear();
+        self.inner.prepared_plans.clear();
     }
 
     /// Retrieves the prepared statement associated with `name`.
@@ -716,7 +731,7 @@ impl Session {
     /// This is unverified and could be incorrect if the underlying catalog has
     /// changed.
     pub fn get_prepared_statement_unverified(&self, name: &str) -> Option<&PreparedStatement> {
-        self.prepared_statements.get(name)
+        self.inner.prepared_statements.get(name)
     }
 
     /// Retrieves the prepared statement associated with `name`.
@@ -727,17 +742,17 @@ impl Session {
         &mut self,
         name: &str,
     ) -> Option<&mut PreparedStatement> {
-        self.prepared_statements.get_mut(name)
+        self.inner.prepared_statements.get_mut(name)
     }
 
     /// Returns the prepared statements for the session.
     pub fn prepared_statements(&self) -> &BTreeMap<String, PreparedStatement> {
-        &self.prepared_statements
+        &self.inner.prepared_statements
     }
 
     /// Returns the portals for the session.
     pub fn portals(&self) -> &BTreeMap<String, Portal> {
-        &self.portals
+        &self.inner.portals
     }
 
     /// Binds the specified portal to the specified prepared statement.
@@ -761,12 +776,12 @@ impl Session {
         state_revision: StateRevision,
     ) -> Result<(), AdapterError> {
         // The empty portal can be silently replaced.
-        if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
+        if !portal_name.is_empty() && self.inner.portals.contains_key(&portal_name) {
             return Err(AdapterError::DuplicateCursor(portal_name));
         }
-        self.state_revision += 1;
+        self.inner.state_revision += 1;
         let param_types = desc.param_types.clone();
-        self.portals.insert(
+        self.inner.portals.insert(
             portal_name,
             Portal {
                 stmt: stmt.map(Arc::new),
@@ -791,9 +806,9 @@ impl Session {
     ///
     /// If there is no such portal, this method does nothing. Returns whether that portal existed.
     pub fn remove_portal(&mut self, portal_name: &str) -> bool {
-        self.state_revision += 1;
-        let removed = self.portals.remove(portal_name).is_some();
-        self.prepared_plans.prune();
+        self.inner.state_revision += 1;
+        let removed = self.inner.portals.remove(portal_name).is_some();
+        self.inner.prepared_plans.prune();
         removed
     }
 
@@ -801,7 +816,7 @@ impl Session {
     ///
     /// If there is no such portal, returns `None`.
     pub fn get_portal_unverified(&self, portal_name: &str) -> Option<&Portal> {
-        self.portals.get(portal_name)
+        self.inner.portals.get(portal_name)
     }
 
     /// Retrieves a mutable reference to the specified portal.
@@ -811,17 +826,20 @@ impl Session {
     /// Note: When using the returned `PortalRefMut`, there is no need to increment
     /// `Session::state_revision`, because the portal's meaning is not changed.
     pub fn get_portal_unverified_mut(&mut self, portal_name: &str) -> Option<PortalRefMut<'_>> {
-        self.portals.get_mut(portal_name).map(|p| PortalRefMut {
-            stmt: &p.stmt,
-            desc: &p.desc,
-            query: &mut p.query,
-            state_revision: &mut p.state_revision,
-            parameters: &mut p.parameters,
-            result_formats: &mut p.result_formats,
-            logging: &mut p.logging,
-            state: &mut p.state,
-            lifecycle_timestamps: &mut p.lifecycle_timestamps,
-        })
+        self.inner
+            .portals
+            .get_mut(portal_name)
+            .map(|p| PortalRefMut {
+                stmt: &p.stmt,
+                desc: &p.desc,
+                query: &mut p.query,
+                state_revision: &mut p.state_revision,
+                parameters: &mut p.parameters,
+                result_formats: &mut p.result_formats,
+                logging: &mut p.logging,
+                state: &mut p.state,
+                lifecycle_timestamps: &mut p.lifecycle_timestamps,
+            })
     }
 
     /// Creates and installs a new portal.
@@ -835,12 +853,12 @@ impl Session {
         result_formats: Vec<Format>,
         state_revision: StateRevision,
     ) -> Result<String, AdapterError> {
-        self.state_revision += 1;
+        self.inner.state_revision += 1;
 
         // See: https://github.com/postgres/postgres/blob/84f5c2908dad81e8622b0406beea580e40bb03ac/src/backend/utils/mmgr/portalmem.c#L234
         for i in 0usize.. {
             let name = format!("<unnamed portal {}>", i);
-            match self.portals.entry(name.clone()) {
+            match self.inner.portals.entry(name.clone()) {
                 Entry::Occupied(_) => continue,
                 Entry::Vacant(entry) => {
                     entry.insert(Portal {
@@ -867,32 +885,32 @@ impl Session {
     /// Returns the parameters changed by [`SessionVars::reset_all`].
     pub fn reset(&mut self) -> BTreeMap<&'static str, String> {
         let _ = self.clear_transaction();
-        self.prepared_statements.clear();
-        self.prepared_plans.clear();
-        self.vars.reset_all()
+        self.inner.prepared_statements.clear();
+        self.inner.prepared_plans.clear();
+        self.inner.vars.reset_all()
     }
 
     /// Returns the [application_name] that created this session.
     ///
     /// [application_name]: (https://www.postgresql.org/docs/current/runtime-config-logging.html#GUC-APPLICATION-NAME)
     pub fn application_name(&self) -> &str {
-        self.vars.application_name()
+        self.inner.vars.application_name()
     }
 
     /// Returns a reference to the variables in this session.
     pub fn vars(&self) -> &SessionVars {
-        &self.vars
+        &self.inner.vars
     }
 
     /// Returns a mutable reference to the variables in this session.
     pub fn vars_mut(&mut self) -> &mut SessionVars {
-        &mut self.vars
+        &mut self.inner.vars
     }
 
     /// Drains any external metadata updates and applies the changes from the latest update.
     pub fn apply_external_metadata_updates(&mut self) {
         // If no sender is registered then there isn't anything to do.
-        let Some(rx) = &mut self.external_metadata_rx else {
+        let Some(rx) = &mut self.inner.external_metadata_rx else {
             return;
         };
 
@@ -904,25 +922,28 @@ impl Session {
         // Update our metadata! Note the short critical section (just a clone) to avoid blocking
         // the sending side of this watch channel.
         let metadata = rx.borrow_and_update().clone();
-        self.vars.set_external_user_metadata(metadata);
+        self.inner.vars.set_external_user_metadata(metadata);
     }
 
     /// Applies the internal user metadata to the session.
     pub fn apply_internal_user_metadata(&mut self, metadata: InternalUserMetadata) {
-        self.vars.set_internal_user_metadata(metadata);
+        self.inner.vars.set_internal_user_metadata(metadata);
     }
 
     /// Initializes the session's role metadata.
     pub fn initialize_role_metadata(&mut self, role_id: RoleId) {
-        self.role_metadata = Some(RoleMetadata::new(role_id));
+        self.inner.role_metadata = Some(RoleMetadata::new(role_id));
     }
 
     /// Ensures that a timestamp oracle exists for `timeline` and returns a mutable reference to
     /// the timestamp oracle.
     pub fn ensure_timestamp_oracle(&mut self, timeline: Timeline) -> &mut InMemoryTimestampOracle {
-        self.session_oracles.entry(timeline).or_insert_with(|| {
-            InMemoryTimestampOracle::new(Timestamp::minimum(), NowFn::from(Timestamp::minimum))
-        })
+        self.inner
+            .session_oracles
+            .entry(timeline)
+            .or_insert_with(|| {
+                InMemoryTimestampOracle::new(Timestamp::minimum(), NowFn::from(Timestamp::minimum))
+            })
     }
 
     /// Ensures that a timestamp oracle exists for reads and writes from/to a local input and
@@ -933,7 +954,7 @@ impl Session {
 
     /// Returns a reference to the timestamp oracle for `timeline`.
     pub fn get_timestamp_oracle(&self, timeline: &Timeline) -> Option<&InMemoryTimestampOracle> {
-        self.session_oracles.get(timeline)
+        self.inner.session_oracles.get(timeline)
     }
 
     /// If the current session is using the Strong Session Serializable isolation level advance the
@@ -946,19 +967,19 @@ impl Session {
 
     /// Returns the [`SessionMetrics`] instance associated with this [`Session`].
     pub fn metrics(&self) -> &SessionMetrics {
-        &self.metrics
+        &self.inner.metrics
     }
 
     /// Sets the `BuiltinTableAppendNotify` for this session.
     pub fn set_builtin_table_updates(&mut self, fut: BuiltinTableAppendNotify) {
-        let prev = self.builtin_updates.replace(fut);
+        let prev = self.inner.builtin_updates.replace(fut);
         mz_ore::soft_assert_or_log!(prev.is_none(), "replacing old builtin table notify");
     }
 
     /// Takes the stashed `BuiltinTableAppendNotify`, if one exists, and returns a [`Future`] that
     /// waits for the writes to complete.
     pub fn clear_builtin_table_updates(&mut self) -> Option<impl Future<Output = ()> + 'static> {
-        if let Some(fut) = self.builtin_updates.take() {
+        if let Some(fut) = self.inner.builtin_updates.take() {
             // Record how long we blocked for, if we blocked at all.
             let histogram = self
                 .metrics()
@@ -975,7 +996,7 @@ impl Session {
     /// Return the state_revision of the session, which can be used by dependent objects for knowing
     /// when to re-plan due to session state changes.
     pub fn state_revision(&self) -> u64 {
-        self.state_revision
+        self.inner.state_revision
     }
 }
 
