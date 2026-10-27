@@ -1058,7 +1058,7 @@ impl AggregatedStatistics {
                         update.reset_gauges();
                         stats[stat.worker_id] = Some(update);
                     }
-                    (Some(occupied), true) => occupied.incorporate(update),
+                    (Some(occupied), true) => occupied.incorporate_same_worker(update),
                     (Some(occupied), false) => occupied.incorporate_counters(update),
                 }
             }
