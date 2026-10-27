@@ -14,3 +14,6 @@ anyhow.workspace = true
 mz-sql = { path = "../sql" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }

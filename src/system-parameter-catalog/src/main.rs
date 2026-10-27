@@ -140,7 +140,7 @@ mod tests {
             .unwrap_or_else(|| panic!("{name} missing from catalog"))
     }
 
-    #[test]
+    #[mz_ore::test]
     fn deterministic_and_sorted() {
         let a = render_catalog().unwrap();
         assert_eq!(a, render_catalog().unwrap());
@@ -153,7 +153,7 @@ mod tests {
         assert_eq!(names, sorted, "names must be sorted and unique");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn contains_every_synced_parameter() {
         let vars = SystemVars::new();
         let params = parameters();
@@ -165,7 +165,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn defaults_round_trip_through_parse() {
         let vars = SystemVars::new();
         let mut failures = Vec::new();
@@ -189,7 +189,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn known_parameters() {
         let params = parameters();
 
