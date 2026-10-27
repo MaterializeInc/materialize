@@ -15,11 +15,21 @@ import { MaterializeTheme } from "~/theme";
 import { formatDurationExact } from "~/utils/format";
 
 import { NO_VALUE } from "./constants";
-import { UNREADABLE } from "./freshnessRows";
+import { lagOrUnreadable, UNREADABLE } from "./freshnessRows";
 import { LagPercentiles, useScopeLagPercentiles } from "./queries";
 
+/** The scope's percentiles, with an unreadable rank marked `UNREADABLE`. */
+type ScopeStats = Record<keyof LagPercentiles, number>;
+
+const toScopeStats = (percentiles: LagPercentiles): ScopeStats => ({
+  peak: lagOrUnreadable(percentiles.peak),
+  p90: lagOrUnreadable(percentiles.p90),
+  p99: lagOrUnreadable(percentiles.p99),
+  p99_9: lagOrUnreadable(percentiles.p99_9),
+});
+
 interface CardSpec {
-  key: keyof LagPercentiles;
+  key: keyof ScopeStats;
   label: string;
 }
 
@@ -36,7 +46,7 @@ const StatCard = ({
   isLoading,
 }: {
   spec: CardSpec;
-  percentiles: Partial<LagPercentiles> | null | undefined;
+  percentiles: Partial<ScopeStats> | null | undefined;
   isLoading: boolean;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -103,12 +113,13 @@ const FreshnessStatboxesInner = ({
 
   // Only pMAX can take in a newer minute. A percentile is a rank among every
   // minute in the range, which only the query has.
-  const percentiles: Partial<LagPercentiles> | null | undefined =
-    latestPeak === undefined || data === undefined
-      ? data
-      : data === null
+  const stats = data && toScopeStats(data);
+  const percentiles: Partial<ScopeStats> | null | undefined =
+    latestPeak === undefined || stats === undefined
+      ? stats
+      : stats === null
         ? { peak: latestPeak }
-        : { ...data, peak: Math.max(data.peak, latestPeak) };
+        : { ...stats, peak: Math.max(stats.peak, latestPeak) };
 
   if (isError && data === undefined) {
     return (
