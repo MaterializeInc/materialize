@@ -146,30 +146,53 @@ def workflow_nginx_metrics(c: Composition) -> None:
         ).stdout
 
     for _ in range(30):
-        if (
-            c.exec(
-                "console",
-                "wget",
-                "-q",
-                "-O",
-                "/dev/null",
-                "http://127.0.0.1:8080/",
-                check=False,
-            ).returncode
-            == 0
-        ):
+        result = c.exec(
+            "console",
+            "wget",
+            "-q",
+            "-O",
+            "-",
+            "http://127.0.0.1:8081/metrics",
+            capture=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            metrics = result.stdout
             break
         time.sleep(1)
     else:
         raise RuntimeError("the console never started serving")
 
-    fetch("http://127.0.0.1:8080/api/sql", check=False)
-    metrics = fetch("http://127.0.0.1:8081/metrics")
-
     def value(series: str) -> float:
         match = re.search(rf"^{re.escape(series)} (\S+)$", metrics, re.MULTILINE)
         assert match, f"{series} missing from:\n{metrics}"
         return float(match.group(1))
+
+    # Before any request, the rare series are already there at 0, so that
+    # `rate()` counts their first request.
+    for location in ["app", "static", "api", "oauth_metadata", "other"]:
+        assert (
+            value(
+                f'mz_console_http_requests_total{{location="{location}",status="502"}}'
+            )
+            == 0
+        )
+        assert (
+            value(
+                f'mz_console_http_request_duration_seconds_bucket{{location="{location}",le="+Inf"}}'
+            )
+            == 0
+        )
+        assert (
+            value(
+                f'mz_console_http_request_duration_seconds_count{{location="{location}"}}'
+            )
+            == 0
+        )
+
+    fetch("http://127.0.0.1:8080/")
+    fetch("http://127.0.0.1:8080/api/sql", check=False)
+    metrics = fetch("http://127.0.0.1:8081/metrics")
 
     assert value('mz_console_http_requests_total{location="app",status="200"}') == 1
     assert value('mz_console_http_requests_total{location="api",status="502"}') == 1

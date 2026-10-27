@@ -83,6 +83,9 @@ The njs module in `misc/docker/metrics.js` keeps the counters in shared memory, 
 `location` names the block in `nginx.conf.template` that served the request: `app`, `static`, `api`, or `oauth_metadata`, and `other` for a request rejected before reaching one.
 WebSocket upgrades (status 101) are counted but not timed, because their duration is the length of the session.
 
+From the first scrape, every location exports statuses 500, 502, 503, and 504 and its histogram at 0, and `api` also exports 101.
+A counter that first appears at 1 never counts that 1 in `rate()`, so without these zeros a pod's first error would be invisible.
+
 ### Health Check
 
 The container includes a health check that verifies the Nginx server is running:

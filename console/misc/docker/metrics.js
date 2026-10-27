@@ -21,6 +21,30 @@ const BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 
 const CONNECTION_STATES = ["active", "reading", "writing", "waiting"];
 
+// The values `$mz_metrics_location` takes in nginx.conf.template, and `other`
+// for a request that reached none of its locations.
+const LOCATIONS = ["app", "static", "api", "oauth_metadata", "other"];
+
+// The error statuses nginx produces itself, exported at 0 for every location.
+const SEEDED_STATUSES = ["500", "502", "503", "504"];
+
+// Adds rare series at 0, so that `rate()` counts their first request. A
+// counter that first appears at 1 never contributes that 1. `add` leaves a
+// key that already exists alone.
+function seed(metrics) {
+  LOCATIONS.forEach(function (location) {
+    SEEDED_STATUSES.forEach(function (status) {
+      metrics.add("requests|" + location + "|" + status, 0);
+    });
+    for (let i = 0; i <= BUCKETS.length; i++) {
+      metrics.add("bucket|" + location + "|" + i, 0);
+    }
+    metrics.add("sum_ms|" + location, 0);
+  });
+  // WebSocket upgrades, which `api` proxies.
+  metrics.add("requests|api|101", 0);
+}
+
 // Records a finished request. Evaluated as the `if=` condition of an access
 // log, so it runs in the log phase, once the status and request time are
 // final, and returns an empty string so that the log writes nothing.
@@ -46,11 +70,15 @@ function record(r) {
   return "";
 }
 
+// Seeding here, rather than when recording, is enough: a request recorded
+// before the first scrape is invisible to `rate()` either way.
 function render(r) {
   const requests = {};
   const buckets = {};
   const sums = {};
-  const items = ngx.shared.mz_console_metrics.items();
+  const metrics = ngx.shared.mz_console_metrics;
+  seed(metrics);
+  const items = metrics.items();
   for (let i = 0; i < items.length; i++) {
     const parts = items[i][0].split("|");
     const value = items[i][1];
