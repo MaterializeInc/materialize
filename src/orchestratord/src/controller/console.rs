@@ -763,10 +763,7 @@ mod tests {
                 .metadata
                 .and_then(|meta| meta.annotations)
                 .and_then(|annotations| annotations.get("prometheus.io/port").cloned());
-            assert_eq!(scrape_port.is_some(), annotate);
-            if annotate {
-                assert_eq!(scrape_port.as_deref(), Some("8081"));
-            }
+            assert_eq!(scrape_port.as_deref(), annotate.then_some("8081"));
         }
     }
 }

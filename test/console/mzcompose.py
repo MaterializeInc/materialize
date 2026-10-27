@@ -192,9 +192,23 @@ def workflow_nginx_metrics(c: Composition) -> None:
 
     fetch("http://127.0.0.1:8080/")
     fetch("http://127.0.0.1:8080/api/sql", check=False)
+    # A Kubernetes health check, which is not counted.
+    c.exec(
+        "console",
+        "wget",
+        "-q",
+        "-O",
+        "/dev/null",
+        "-U",
+        "kube-probe/1.33",
+        "http://127.0.0.1:8080/",
+    )
     metrics = fetch("http://127.0.0.1:8081/metrics")
 
     assert value('mz_console_http_requests_total{location="app",status="200"}') == 1
+    # The states add up to nginx's active connections, so there is no `active`.
+    assert 'state="active"' not in metrics
+    assert value('mz_console_http_connections{state="writing"}') >= 1
     assert value('mz_console_http_requests_total{location="api",status="502"}') == 1
     # The proxied request is timed, and the histogram's buckets add up to its count.
     count = value('mz_console_http_request_duration_seconds_count{location="api"}')

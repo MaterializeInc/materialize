@@ -18,6 +18,9 @@ js_set $mz_metrics_record mz_metrics.record;
 # Records each request in the log phase. `$mz_metrics_record` evaluates to an
 # empty string, so this log never writes a line.
 access_log /dev/null main if=$mz_metrics_record;
+# A request that reaches no location leaves `$mz_metrics_location` unset, and
+# is counted as `other`. Reading the unset variable would log a warning.
+uninitialized_variable_warn off;
 
 server {
 ${MZ_NGINX_LISTENER_CONFIG}

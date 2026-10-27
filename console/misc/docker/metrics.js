@@ -19,7 +19,9 @@
 // Seconds. The Prometheus client libraries' default buckets.
 const BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 
-const CONNECTION_STATES = ["active", "reading", "writing", "waiting"];
+// nginx's `$connections_active` is the sum of these, so summing over `state`
+// gives it.
+const CONNECTION_STATES = ["reading", "writing", "waiting"];
 
 // The values `$mz_metrics_location` takes in nginx.conf.template, and `other`
 // for a request that reached none of its locations.
@@ -49,6 +51,10 @@ function seed(metrics) {
 // log, so it runs in the log phase, once the status and request time are
 // final, and returns an empty string so that the log writes nothing.
 function record(r) {
+  // Kubernetes health checks are not traffic.
+  if ((r.headersIn["User-Agent"] || "").startsWith("kube-probe/")) {
+    return "";
+  }
   const metrics = ngx.shared.mz_console_metrics;
   const location = r.variables.mz_metrics_location || "other";
   const status = r.variables.status;
