@@ -21,6 +21,32 @@ These components have focused verification, not combined M3 acceptance.
 
 ## Resume here
 
+- Sole ownership restored at the user's request. Active source is verified
+  checkpoint `e15ac489` plus CLI fixture fix `f98c1a23`. Concurrent policy and
+  observation commits `1b1eaede`/`5ee3416f`, and their uncommitted extensions,
+  are NOT on this branch. Recovery bookmark `recovery/concurrent-session-20261027`
+  preserves them without publishing them. Do not resume those edits implicitly.
+- Corrected controller-managed startup/restart PASSED using CI140930 binaries
+  at `e15ac489`: evidence run `0b7e58f7823243d5aac2742e69e3bf2a`. Two controller
+  restarts retained the adapter and four replica PIDs, assigned SQL endpoint,
+  held client connection and its temporary view. SQL writes and maintained reads
+  worked with controller absent. Each restart applied changed replica-size credits.
+  New MV creation/query and table DROP succeeded afterward. Cleanup had no errors.
+  Exact witness and product identity are retained inside the run directory.
+  Local Docker works, so expired scratch SSO does not block these product tests.
+- CI140930 builds `e15ac489`. Clippy, native adapter-loss and SLT2 passed. Cargo
+  was confirmed running and is watched by task #97. The CLI fixture failure is
+  fixed locally by supplying required cluster flags, but `f98c1a23` is not published.
+  Other CI failures remain unresolved. Preserve the current CI run until terminal.
+- CI140921 pushdown.slt snapshot failure was not reproduced in four focused runs
+  using the exact CI binary and SqlLogicTest service environment. Evidence is
+  `slt2/`. This is not proof the parallel-shard failure is fixed. No expectations,
+  publication intervals or deadlines were changed. Owned local fixtures are removed.
+- Full M3 remains open: independent adapters, SQL/HTTP lifecycle, replica policy,
+  zero-adapter recovery, interrupted initialization, upgrade and backend acceptance.
+  HTTP/SQL lifecycle authorization is awaiting user input: proposed dedicated
+  internal-only controller HTTP listener and superuser-only SQL management.
+
 - Prioritize fresh-environment controllerd initialization, launch of its default
   adapterd through external pubsub, and restart. Fresh initialization creates no
   replacement shards, and ordinary same-build restart needs no replacement migration.
