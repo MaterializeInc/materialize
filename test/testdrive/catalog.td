@@ -597,6 +597,7 @@ mz_sql_text                                  source  <null>     ""
 mz_statement_execution_history               source  <null>     ""
 mz_statement_lifecycle_history               source  <null>     ""
 mz_storage_shards                            source  <null>     ""
+mz_storage_statuses_raw                      source  <null>     ""
 mz_wallclock_global_lag_histogram_raw        source  <null>     ""
 mz_wallclock_lag_history                     source  <null>     ""
 
