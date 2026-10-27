@@ -405,6 +405,7 @@ impl Session {
                 self.transaction = TransactionStatus::InTransaction(Transaction {
                     pcx: self.new_pcx(wall_time),
                     ops: TransactionOps::None,
+                    pending_catalog_results: Vec::new(),
                     access,
                     id,
                 });
@@ -437,6 +438,7 @@ impl Session {
             let txn = Transaction {
                 pcx: self.new_pcx(wall_time),
                 ops: TransactionOps::None,
+                pending_catalog_results: Vec::new(),
                 access: None,
                 id,
             };
@@ -497,6 +499,23 @@ impl Session {
     /// Returns the session's transaction code.
     pub fn transaction_code(&self) -> TransactionCode {
         self.transaction().into()
+    }
+
+    /// Retains a SHOW CREATE result for validation if this transaction commits DDL.
+    pub(crate) fn retain_catalog_result(
+        &mut self,
+        command: Arc<crate::catalog::command::CatalogResultCommand>,
+    ) {
+        let txn = self
+            .transaction_mut()
+            .inner_mut()
+            .expect("active transaction");
+        match &mut txn.ops {
+            TransactionOps::DDL { ops, .. } => {
+                ops.push(crate::catalog::Op::CatalogResult(command));
+            }
+            _ => txn.pending_catalog_results.push(command),
+        }
     }
 
     /// Retains a successful statement description for validation at DDL commit.
@@ -629,6 +648,7 @@ impl Session {
                 ops: TransactionOps::Peeks { determination, .. },
                 access: _,
                 id: _,
+                ..
             }) => Some(determination.clone()),
             _ => None,
         }
@@ -649,6 +669,7 @@ impl Session {
                 },
                 access: _,
                 id: _,
+                ..
             })
         )
     }
@@ -1331,17 +1352,42 @@ impl TransactionStatus {
     /// If the operations are compatible but the operation metadata doesn't match. Such as reads at
     /// different timestamps, reads on different timelines, reads on different clusters, etc. It's
     /// up to the caller to make sure these are aligned.
-    pub fn add_ops(&mut self, add_ops: TransactionOps) -> Result<(), AdapterError> {
+    pub fn add_ops(&mut self, mut add_ops: TransactionOps) -> Result<(), AdapterError> {
         match self {
-            TransactionStatus::Started(Transaction { ops, access, .. })
-            | TransactionStatus::InTransaction(Transaction { ops, access, .. })
-            | TransactionStatus::InTransactionImplicit(Transaction { ops, access, .. }) => {
+            TransactionStatus::Started(Transaction {
+                ops,
+                access,
+                pending_catalog_results,
+                ..
+            })
+            | TransactionStatus::InTransaction(Transaction {
+                ops,
+                access,
+                pending_catalog_results,
+                ..
+            })
+            | TransactionStatus::InTransactionImplicit(Transaction {
+                ops,
+                access,
+                pending_catalog_results,
+                ..
+            }) => {
                 match ops {
                     TransactionOps::None => {
                         if matches!(access, Some(TransactionAccessMode::ReadOnly))
                             && matches!(add_ops, TransactionOps::Writes(_))
                         {
                             return Err(AdapterError::ReadOnlyTransaction);
+                        }
+                        if let TransactionOps::DDL { ops, .. } = &mut add_ops {
+                            // Pre-DDL inspections belong before every mutation, without
+                            // restricting the transaction until it actually enters DDL mode.
+                            ops.splice(
+                                0..0,
+                                pending_catalog_results
+                                    .drain(..)
+                                    .map(crate::catalog::Op::CatalogResult),
+                            );
                         }
                         *ops = add_ops;
                     }
@@ -1481,6 +1527,8 @@ pub struct Transaction {
     pub pcx: PlanContext,
     /// Transaction operations.
     pub ops: TransactionOps,
+    /// SHOW CREATE results awaiting a possible transition to DDL mode.
+    pending_catalog_results: Vec<Arc<crate::catalog::command::CatalogResultCommand>>,
     /// Uniquely identifies the transaction on a per connection basis.
     /// Two transactions started from separate connections may share the
     /// same ID.

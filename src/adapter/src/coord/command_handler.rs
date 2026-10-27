@@ -1581,9 +1581,7 @@ impl Coordinator {
             }
         }
 
-        if ctx.session().transaction().is_ddl()
-            && catalog::command::CatalogResultCommand::supports_statement(&stmt)
-        {
+        if catalog::command::CatalogResultCommand::supports_statement(&stmt) {
             self.sequence_catalog_result_command(ctx, stmt, params);
             return;
         }

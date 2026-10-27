@@ -84,23 +84,38 @@ def explain_ddl_rejection(c: Composition) -> None:
 
 
 def catalog_result_outcome(c: Composition) -> None:
-    for interference in ("definition", "unrelated", "equivalent_replacement"):
-        schema = f"ddl_catalog_result_{interference}"
+    cases = [
+        (show_before_ddl, interference, False)
+        for show_before_ddl in (True, False)
+        for interference in ("definition", "unrelated", "equivalent_replacement")
+    ]
+    cases.append((True, "definition", True))
+    for show_before_ddl, interference, change_before_ddl in cases:
+        schema = (
+            f"ddl_catalog_result_{int(show_before_ddl)}_"
+            f"{interference}_{int(change_before_ddl)}"
+        )
         with c.sql_connection() as txn, c.sql_connection() as other:
             execute(other, f"CREATE SCHEMA {schema}")
             execute(other, f"CREATE TABLE {schema}.original (value INT)")
             execute(other, f"CREATE TABLE {schema}.unrelated (value INT)")
             execute(txn, "BEGIN")
-            execute(txn, f"ALTER TABLE {schema}.original RENAME TO observed")
-            statement = f"SHOW CREATE TABLE {schema}.observed"
+            if not show_before_ddl:
+                execute(txn, f"ALTER TABLE {schema}.original RENAME TO observed")
+            name = "original" if show_before_ddl else "observed"
+            statement = f"SHOW CREATE TABLE {schema}.{name}"
             observed = execute(txn, statement).fetchone()
             assert observed is not None
-            assert "value" in observed[1]
+            assert "value" in observed[1] and "added" not in observed[1]
+            if change_before_ddl:
+                execute(other, f"ALTER TABLE {schema}.original ADD COLUMN added TEXT")
+            if show_before_ddl:
+                execute(txn, f"ALTER TABLE {schema}.original RENAME TO observed")
             execute(txn, f"ALTER TABLE {schema}.observed RENAME TO final")
             if interference == "equivalent_replacement":
                 execute(other, f"DROP TABLE {schema}.original")
                 execute(other, f"CREATE TABLE {schema}.original (value INT)")
-            else:
+            elif not change_before_ddl:
                 target = "original" if interference == "definition" else "unrelated"
                 execute(other, f"ALTER TABLE {schema}.{target} ADD COLUMN added TEXT")
             try:
@@ -117,26 +132,38 @@ def catalog_result_outcome(c: Composition) -> None:
                 f"WHERE s.name = '{schema}' ORDER BY t.name",
             ).fetchall()
             expected = "original" if interference == "definition" else "final"
-            assert names == [(expected,), ("unrelated",)], (interference, names)
+            assert names == [(expected,), ("unrelated",)], (schema, names)
 
-    with c.sql_connection() as txn, c.sql_connection() as other:
-        execute(other, "CREATE SCHEMA ddl_inspection_before_ddl")
-        execute(other, "CREATE TABLE ddl_inspection_before_ddl.original (value INT)")
-        execute(txn, "BEGIN")
-        before = execute(
-            txn, "SHOW CREATE TABLE ddl_inspection_before_ddl.original"
-        ).fetchone()
-        assert before is not None and "added" not in before[1]
-        execute(txn, "ALTER TABLE ddl_inspection_before_ddl.original RENAME TO final")
-        execute(
-            other,
-            "ALTER TABLE ddl_inspection_before_ddl.original ADD COLUMN added TEXT",
-        )
-        execute(txn, "COMMIT")
-        after = execute(
-            other, "SHOW CREATE TABLE ddl_inspection_before_ddl.final"
-        ).fetchone()
-        assert after is not None and "added" in after[1]
+    for continuation in ("select", "insert", "rollback"):
+        schema = f"ddl_inspection_without_ddl_{continuation}"
+        with c.sql_connection() as txn, c.sql_connection() as other:
+            execute(other, f"CREATE SCHEMA {schema}")
+            execute(other, f"CREATE TABLE {schema}.original (value INT)")
+            execute(other, f"CREATE TABLE {schema}.data (value INT)")
+            execute(other, f"INSERT INTO {schema}.data VALUES (42)")
+            execute(txn, "BEGIN")
+            before = execute(txn, f"SHOW CREATE TABLE {schema}.original").fetchone()
+            assert before is not None and "added" not in before[1]
+            if continuation == "select":
+                assert execute(txn, f"SELECT * FROM {schema}.data").fetchall() == [
+                    (42,)
+                ]
+            elif continuation == "insert":
+                execute(txn, f"INSERT INTO {schema}.data VALUES (7)")
+            execute(other, f"ALTER TABLE {schema}.original ADD COLUMN added TEXT")
+            execute(txn, "ROLLBACK" if continuation == "rollback" else "COMMIT")
+            expected_rows = [(7,), (42,)] if continuation == "insert" else [(42,)]
+            assert (
+                execute(other, f"SELECT * FROM {schema}.data ORDER BY value").fetchall()
+                == expected_rows
+            )
+
+            # A finished transaction must not constrain the next DDL transaction.
+            execute(txn, "BEGIN")
+            execute(txn, f"ALTER TABLE {schema}.original RENAME TO final")
+            execute(txn, "COMMIT")
+            after = execute(other, f"SHOW CREATE TABLE {schema}.final").fetchone()
+            assert after is not None and "added" in after[1]
 
 
 def description_outcome(c: Composition) -> None:

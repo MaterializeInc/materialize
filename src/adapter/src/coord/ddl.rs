@@ -94,16 +94,7 @@ impl Coordinator {
         let command = Arc::new(command);
         ctx.session()
             .add_notices(command.notices().iter().cloned().map(Into::into));
-        let TransactionOps::DDL { ops, .. } = &mut ctx
-            .session_mut()
-            .transaction_mut()
-            .inner_mut()
-            .expect("DDL transaction")
-            .ops
-        else {
-            unreachable!("catalog result retention requires a DDL transaction");
-        };
-        ops.push(Op::CatalogResult(command));
+        ctx.session_mut().retain_catalog_result(command);
         ctx.retire(Ok(Self::send_immediate_rows(row)));
     }
 
