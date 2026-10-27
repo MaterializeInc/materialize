@@ -123,6 +123,7 @@ fn open(
         peek,
         errs,
         oks,
+        false,
         u64::MAX,
         StashBounds {
             eligible: stash_threshold_bytes.is_some(),

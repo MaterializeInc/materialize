@@ -211,10 +211,14 @@ where
     /// Both cursors are opened here, so that the scan holds everything it reads and needs neither
     /// trace handle again. The walks start without a row-iteration limit. The limit in effect is
     /// the caller's to supply to each [`PeekScan::step`].
+    ///
+    /// `diff_is_count` says the ok trace carries its last column in the diff, as
+    /// [`PeekResultIterator::new`] describes.
     pub(super) fn new(
         peek: &Peek,
         errs_handle: &mut ErrsHandle,
         oks_handle: &mut Tr,
+        diff_is_count: bool,
         max_result_size: u64,
         stash: StashBounds,
     ) -> Self {
@@ -230,6 +234,7 @@ where
             peek.timestamp,
             peek.literal_constraints.clone().as_deref_mut(),
             oks_handle,
+            diff_is_count,
             None,
             0,
         );

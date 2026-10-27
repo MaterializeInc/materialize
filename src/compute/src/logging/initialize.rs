@@ -212,7 +212,8 @@ impl LoggingContext<'_> {
                     .into_iter()
                     .map(|(log, collection)| {
                         let bundle = TraceBundle::new(collection.trace, errs.clone())
-                            .with_drop(collection.token);
+                            .with_drop(collection.token)
+                            .with_diff_is_count(log.diff_is_count());
                         (log, bundle)
                     })
                     .collect();

@@ -1925,8 +1925,9 @@ impl IndexPeek {
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus {
         let peek = &self.peek;
+        let diff_is_count = self.trace_bundle.diff_is_count();
         let (oks, errs) = self.trace_bundle.oks_errs_mut();
-        let mut scan = PeekScan::new(peek, errs, oks, max_result_size, stash);
+        let mut scan = PeekScan::new(peek, errs, oks, diff_is_count, max_result_size, stash);
 
         let outcome = scan.step(row_iteration_limit, fuel);
 

@@ -204,6 +204,19 @@ impl LogVariant {
             .unwrap_or_else(|| (0..arity).collect())
     }
 
+    /// Whether the log's arrangement carries its last column, `count`, in the diff.
+    ///
+    /// The arrangement of such a log holds the key columns and an empty value, and the
+    /// accumulated diff of a `(key, time)` is the value of `count`, which can be zero or
+    /// negative. Its updates are not a collection's multiplicities, so no reader may consume the
+    /// arrangement as a collection directly. Each reader instead converts every key with a
+    /// non-zero accumulation into one row that appends the accumulation as `count`, with
+    /// multiplicity one. The key is all columns but `count`, which makes the converted relation a
+    /// set.
+    pub fn diff_is_count(&self) -> bool {
+        matches!(self, LogVariant::Timely(TimelyLog::Reachability))
+    }
+
     /// Relation schemas for the logs.
     ///
     /// This types need to agree with the values that are produced
@@ -291,6 +304,8 @@ impl LogVariant {
                 .with_column("port", SqlScalarType::UInt64.nullable(false))
                 .with_column("update_type", SqlScalarType::String.nullable(false))
                 .with_column("time", SqlScalarType::MzTimestamp.nullable(true))
+                .with_column("count", SqlScalarType::Int64.nullable(false))
+                .with_key(vec![0, 1, 2, 3, 4, 5])
                 .finish(),
 
             LogVariant::Differential(DifferentialLog::ArrangementBatches)
@@ -423,6 +438,93 @@ impl LogVariant {
                 .with_column("value", SqlScalarType::UInt64.nullable(false))
                 .with_key(vec![0, 1, 2])
                 .finish(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::SqlScalarType;
+
+    use super::*;
+
+    /// Every log variant.
+    ///
+    /// NOTE: Nothing derives this list, so a new variant must be added here by hand.
+    fn all_variants() -> Vec<LogVariant> {
+        let timely = [
+            TimelyLog::Operates,
+            TimelyLog::Channels,
+            TimelyLog::Elapsed,
+            TimelyLog::Histogram,
+            TimelyLog::Addresses,
+            TimelyLog::Parks,
+            TimelyLog::MessagesSent,
+            TimelyLog::MessagesReceived,
+            TimelyLog::Reachability,
+            TimelyLog::BatchesSent,
+            TimelyLog::BatchesReceived,
+        ];
+        let differential = [
+            DifferentialLog::ArrangementBatches,
+            DifferentialLog::ArrangementRecords,
+            DifferentialLog::Sharing,
+            DifferentialLog::BatcherRecords,
+            DifferentialLog::BatcherSize,
+            DifferentialLog::BatcherCapacity,
+            DifferentialLog::BatcherAllocations,
+        ];
+        let compute = [
+            ComputeLog::DataflowCurrent,
+            ComputeLog::FrontierCurrent,
+            ComputeLog::PeekCurrent,
+            ComputeLog::PeekDuration,
+            ComputeLog::ImportFrontierCurrent,
+            ComputeLog::ArrangementHeapSize,
+            ComputeLog::ArrangementHeapCapacity,
+            ComputeLog::ArrangementHeapAllocations,
+            ComputeLog::ErrorCount,
+            ComputeLog::HydrationTime,
+            ComputeLog::OperatorHydrationStatus,
+            ComputeLog::LirMapping,
+            ComputeLog::DataflowGlobal,
+            ComputeLog::PrometheusMetrics,
+            ComputeLog::ResourceUsage,
+        ];
+        timely
+            .into_iter()
+            .map(LogVariant::from)
+            .chain(differential.into_iter().map(LogVariant::from))
+            .chain(compute.into_iter().map(LogVariant::from))
+            .collect()
+    }
+
+    #[mz_ore::test]
+    fn diff_is_count_layout() {
+        let marked: Vec<_> = all_variants()
+            .into_iter()
+            .filter(|variant| variant.diff_is_count())
+            .collect();
+        assert!(!marked.is_empty(), "no variant is marked diff-is-count");
+        for variant in marked {
+            let desc = variant.desc();
+            let arity = desc.arity();
+            assert!(arity > 0, "{variant:?} has no columns");
+            assert_eq!(
+                variant.index_by(),
+                (0..arity - 1).collect::<Vec<_>>(),
+                "{variant:?} must be keyed by all columns but the last",
+            );
+            let count_type = &desc.typ().column_types[arity - 1];
+            assert_eq!(
+                count_type.scalar_type,
+                SqlScalarType::Int64,
+                "{variant:?} must end in an Int64 column",
+            );
+            assert!(
+                !count_type.nullable,
+                "{variant:?} must end in a non-null column"
+            );
         }
     }
 }
