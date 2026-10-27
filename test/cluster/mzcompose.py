@@ -8373,7 +8373,7 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
                 "enable_eager_delta_joins": "false",
             },
             environment_extra=[
-                "MZ_STARTUP_LOG_FILTER=mz_adapter::coord=debug,info",
+                "MZ_STARTUP_LOG_FILTER=mz_adapter::coord=debug,mz_adapter::catalog::state=debug,info",
             ],
         ),
     ):
@@ -8391,12 +8391,18 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
             user="mz_system",
         )
 
+        # `CREATE VIEW v` comes after `CREATE OR REPLACE VIEW`, whose cache
+        # invalidation is not awaited. The cache applies writes in order, so
+        # once `v`'s awaited write returns, the invalidation is durable too.
         c.sql("""
             SET cluster = test_cache;
 
             CREATE TABLE t (a int);
             CREATE DEFAULT INDEX ON t;
             CREATE MATERIALIZED VIEW mv AS SELECT a + 1 AS b FROM t;
+            CREATE VIEW v_replaced AS SELECT a FROM t;
+            CREATE OR REPLACE VIEW v_replaced AS SELECT a + 1 AS a FROM t;
+            CREATE VIEW v AS SELECT a * 2 AS c FROM t WHERE a > 0;
 
             SELECT * FROM t;
             SELECT * FROM mv;
@@ -8421,6 +8427,23 @@ def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
             if re.search(r"global expression cache hit for User\(\d+\)", line)
         ]
         assert len(cache_hits) == 2, cache_hits
+
+        # A view has only a local expression. Only the restarted boot can hit its
+        # durable entry, so count nothing before that boot's startup marker.
+        view_id = c.sql_query("SELECT id FROM mz_views WHERE name = 'v'")[0][0]
+        restarted_boot = logs[logs.rindex("startup: envd init: beginning") :]
+        view_hit = f"local expression cache hit for User({view_id.removeprefix('u')})"
+        assert view_hit in restarted_boot, f"no '{view_hit}' after the restart"
+
+        # `CREATE OR REPLACE VIEW` invalidates the replaced view's entry right
+        # away, so the restarted boot finds no entry of a dropped item to remove.
+        reconciled = [
+            line
+            for line in restarted_boot.splitlines()
+            if "reconciled the expression cache" in line
+        ]
+        assert reconciled, "no expression cache reconciliation after the restart"
+        assert "removed_dropped_item=0" in reconciled[-1], reconciled[-1]
 
 
 def workflow_test_github_11219(c: Composition) -> None:
