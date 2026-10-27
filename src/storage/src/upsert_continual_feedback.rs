@@ -996,6 +996,7 @@ mod test {
                             &ShardId::new(),
                             envelope,
                             Antichain::from_elem(Timestamp::minimum()),
+                            Antichain::from_elem(Timestamp::minimum()),
                         );
 
                         let source_config = SourceExportCreationConfig {
@@ -1154,6 +1155,7 @@ mod test {
                             source_id,
                             &ShardId::new(),
                             envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
                             Antichain::from_elem(Timestamp::minimum()),
                         );
 
@@ -1359,6 +1361,7 @@ mod test {
                             source_id,
                             &ShardId::new(),
                             envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
                             Antichain::from_elem(Timestamp::minimum()),
                         );
 

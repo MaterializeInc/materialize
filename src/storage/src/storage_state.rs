@@ -733,6 +733,7 @@ impl<'w> Worker<'w> {
                         *export_id,
                         ingestion_id,
                         resume_upper.clone(),
+                        as_of.clone(),
                         || {
                             SourceStatistics::new(
                                 *export_id,
@@ -742,6 +743,7 @@ impl<'w> Worker<'w> {
                                 &export.storage_metadata.data_shard,
                                 export.data_config.envelope.clone(),
                                 resume_upper,
+                                as_of.clone(),
                             )
                         },
                     );
