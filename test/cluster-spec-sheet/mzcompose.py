@@ -42,7 +42,6 @@ from materialize.cluster_spec_sheet_qps import (
     validate_qps_result,
 )
 from materialize.mz_env_util import print_environment_id
-from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
@@ -118,10 +117,7 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 
 @functools.cache
 def staging_version() -> str:
-    return os.environ.get(
-        "CI_QPS_BENCH_VERSION",
-        f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}",
-    )
+    return os.environ["CI_QPS_BENCH_VERSION"]
 
 
 SERVICES = [
