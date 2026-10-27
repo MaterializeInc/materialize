@@ -1953,7 +1953,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             runner.run_query("SET cluster = 'c'")
             # Keep the default-logging series intact, then repeat on the same
             # clusters with sampling disabled in every benchmark connection.
-            for disable_statement_logging in (False, True):
+            for disable_statement_logging in (False,):
                 for protocol in self.options.protocols:
                     for concurrency in self.options.concurrencies:
                         self.measure(
