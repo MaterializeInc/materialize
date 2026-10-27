@@ -6549,6 +6549,7 @@ dependencies = [
  "mz-timestamp-oracle",
  "mz-tracing",
  "mz-transform",
+ "mz-txn-wal",
  "openssl",
  "paste",
  "prometheus",

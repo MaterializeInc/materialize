@@ -108,6 +108,8 @@ mod error;
 mod open;
 mod retention;
 mod state;
+mod table;
+pub use table::{TableInfrastructure, TableTxns};
 #[cfg(any(test, feature = "test"))]
 pub mod test_support;
 mod transact;

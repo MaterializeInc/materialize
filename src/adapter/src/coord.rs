@@ -4184,8 +4184,15 @@ impl Coordinator {
             )
             .await;
 
-        // Register txn-wal tables before the later system-table snapshot.
-        if !table_registrations.is_empty() {
+        // Writable native startup already completed and adopted table registration
+        // before constructing controllers. Complete this bootstrap timestamp too,
+        // without reinstalling its local routes. Legacy and read-only startup still
+        // need their table handles installed here.
+        let tables_completed =
+            self.catalog.state().catalog_read_protection_enabled() && !self.controller.read_only();
+        if tables_completed {
+            self.register_tables_via_committer(Vec::new()).await;
+        } else if !table_registrations.is_empty() {
             self.table_write_handle
                 .register(register_ts, table_registrations)
                 .await
@@ -6659,6 +6666,11 @@ pub fn serve(
                     catalog.initialize_table_writer(
                         persist_client.clone(), &controller_config.metrics_registry,
                         read_only_controllers,
+                        timestamp_oracles
+                            .get(&Timeline::EpochMilliseconds)
+                            .expect("epoch milliseconds oracle initialized")
+                            .oracle
+                            .as_ref(),
                     ),
                 ).unwrap_or_terminate("failed to initialize adapter table writer");
                 let controller = handle

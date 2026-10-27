@@ -64,6 +64,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-timestamp-oracle = { path = "../timestamp-oracle" }
 mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
+mz-txn-wal = { path = "../txn-wal" }
 openssl.workspace = true
 paste.workspace = true
 prometheus.workspace = true

@@ -455,10 +455,11 @@ impl Catalog {
         ))
     }
     pub(crate) async fn initialize_table_writer(
-        &self,
+        &mut self,
         persist: mz_persist_client::PersistClient,
         metrics_registry: &mz_ore::metrics::MetricsRegistry,
         read_only: bool,
+        oracle: &(dyn mz_timestamp_oracle::TimestampOracle<mz_repr::Timestamp> + Send + Sync),
     ) -> Result<
         (
             Arc<dyn crate::table_writer::TableWriteHandle>,
@@ -466,10 +467,17 @@ impl Catalog {
         ),
         mz_catalog::catalog::CatalogError,
     > {
-        let shard = self.txn_wal_shard().await?;
         let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(metrics_registry));
-        let writer =
-            crate::table_writer::open(persist, shard, Arc::clone(&metrics), read_only).await;
+        let writer = if !read_only && self.state().catalog_read_protection_enabled() {
+            self.initialize_storage_metadata().await?;
+            let infrastructure = self
+                .complete_table_infrastructure(persist.clone(), Arc::clone(&metrics), oracle)
+                .await?;
+            crate::table_writer::from_infrastructure(infrastructure, persist)
+        } else {
+            let shard = self.txn_wal_shard().await?;
+            crate::table_writer::open(persist, shard, Arc::clone(&metrics), read_only).await
+        };
         Ok((writer, metrics))
     }
     pub(crate) async fn initialize_controller(

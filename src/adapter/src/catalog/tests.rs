@@ -15,7 +15,7 @@ use mz_expr::{Eval, MirScalarExpr};
 use mz_ore::now::to_datetime;
 use mz_ore::{soft_assert_eq_or_log, task};
 use mz_repr::{CatalogItemId, Datum, Row, RowArena, SqlRelationType, SqlScalarType, Timestamp};
-use mz_sql::catalog::SessionCatalog;
+use mz_sql::catalog::{CatalogDatabase, SessionCatalog};
 use mz_sql::func::{Func, FuncImpl, OP_IMPLS, Operation};
 use mz_sql::names::{
     ItemQualifiers, PartialItemName, QualifiedItemName, ResolvedDatabaseSpecifier, SchemaSpecifier,
@@ -30,14 +30,51 @@ use crate::catalog::Catalog;
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::session::Session;
 
+#[derive(Debug)]
+struct TableBootstrapOracle(std::sync::Mutex<(Timestamp, Timestamp)>);
+
+#[async_trait::async_trait]
+impl mz_timestamp_oracle::TimestampOracle<Timestamp> for TableBootstrapOracle {
+    async fn write_ts(&self) -> mz_timestamp_oracle::WriteTimestamp {
+        let mut state = self.0.lock().expect("oracle lock");
+        state.1 = std::cmp::max(state.0, state.1).step_forward();
+        mz_timestamp_oracle::WriteTimestamp {
+            timestamp: state.1,
+            advance_to: state.1.step_forward(),
+        }
+    }
+
+    async fn peek_write_ts(&self) -> Timestamp {
+        self.0.lock().expect("oracle lock").1
+    }
+
+    async fn read_ts(&self) -> Timestamp {
+        self.0.lock().expect("oracle lock").0
+    }
+
+    async fn apply_write(&self, timestamp: Timestamp) {
+        let mut state = self.0.lock().expect("oracle lock");
+        state.0 = std::cmp::max(state.0, timestamp);
+        state.1 = std::cmp::max(state.1, timestamp);
+    }
+}
+
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
 async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates() {
     use mz_catalog::durable::{TestCatalogStateBuilder, test_bootstrap_args};
     use mz_ore::metrics::MetricsRegistry;
-    use mz_persist_client::PersistClient;
 
-    let persist = PersistClient::new_for_tests().await;
+    let mut config = mz_persist_client::cfg::PersistConfig::new_for_tests();
+    config.configs = Arc::new(mz_txn_wal::all_dyncfgs((*config.configs).clone()));
+    let persist = mz_persist_client::cache::PersistClientCache::new(
+        config,
+        &MetricsRegistry::new(),
+        |_, _| mz_persist_client::rpc::PubSubClientConnection::noop(),
+    )
+    .open(mz_persist_types::PersistLocation::new_in_mem())
+    .await
+    .expect("in-memory Persist");
     let organization = uuid::Uuid::new_v4();
     let bootstrap = test_bootstrap_args();
     let storage = TestCatalogStateBuilder::new(persist.clone())
@@ -65,12 +102,98 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
     )
     .await
     .expect("open protected catalog");
+    let upper = catalog.current_upper().await;
+    let oracle = TableBootstrapOracle(std::sync::Mutex::new((upper, upper)));
     let registry = MetricsRegistry::new();
     let (writer, _) = catalog
-        .initialize_table_writer(persist.clone(), &registry, false)
+        .initialize_table_writer(persist.clone(), &registry, false, &oracle)
         .await
         .expect("initialize the first table writer without restarting the catalog");
     let shard = catalog.txn_wal_shard().await.expect("initialized WAL");
+    drop(writer);
+
+    // Commit a table and an ALTER without running coordinator implications.
+    // Recovery must finish their shared infrastructure from catalog state alone.
+    let database = catalog.resolve_database("materialize").expect("database");
+    let database_spec = ResolvedDatabaseSpecifier::Id(database.id());
+    let schema = catalog
+        .resolve_schema_in_database(&database_spec, "public", &mz_catalog::SYSTEM_CONN_ID)
+        .expect("schema");
+    let name = QualifiedItemName {
+        qualifiers: ItemQualifiers {
+            database_spec,
+            schema_spec: schema.id.clone(),
+        },
+        item: "recover_alter".into(),
+    };
+    let (id, root_id) = catalog
+        .allocate_user_id_for_test()
+        .await
+        .expect("table IDs");
+    let ts = catalog.current_upper().await;
+    catalog
+        .transact(
+            None,
+            None,
+            ts,
+            None,
+            vec![crate::catalog::Op::CreateItem {
+                id,
+                name,
+                owner_id: mz_sql::session::user::MZ_SYSTEM_ROLE_ID,
+                item: mz_catalog::memory::objects::CatalogItem::Table(
+                    mz_catalog::memory::objects::Table {
+                        create_sql: Some("CREATE TABLE materialize.public.recover_alter ()".into()),
+                        desc: mz_repr::VersionedRelationDesc::new(mz_repr::RelationDesc::empty()),
+                        collections: [(mz_repr::RelationVersion::root(), root_id)].into(),
+                        conn_id: None,
+                        resolved_ids: mz_sql::names::ResolvedIds::empty(),
+                        custom_logical_compaction_window: None,
+                        is_retained_metrics_object: false,
+                        data_source: mz_catalog::memory::objects::TableDataSource::TableWrites {
+                            defaults: Vec::new(),
+                        },
+                    },
+                ),
+            }],
+        )
+        .await
+        .expect("commit table without registration");
+    let (_, new_id) = catalog
+        .allocate_user_id_for_test()
+        .await
+        .expect("version ID");
+    let ts = catalog.current_upper().await;
+    catalog
+        .transact(
+            None,
+            None,
+            ts,
+            None,
+            vec![crate::catalog::Op::AlterAddColumn {
+                id,
+                new_global_id: new_id,
+                name: "b".into(),
+                typ: SqlScalarType::Int64.nullable(true),
+                sql: mz_sql_parser::parser::parse_data_type("bigint").expect("type"),
+            }],
+        )
+        .await
+        .expect("commit ALTER without schema evolution");
+    let (writer, _) = catalog
+        .initialize_table_writer(persist.clone(), &MetricsRegistry::new(), false, &oracle)
+        .await
+        .expect("finish committed CREATE and ALTER");
+    let table_shard = catalog.state().storage_metadata().collection_metadata[&new_id];
+    let (_, schema, _) = persist
+        .latest_schema::<mz_storage_types::sources::SourceData, (), Timestamp, i64>(
+            table_shard,
+            mz_persist_client::Diagnostics::for_tests(),
+        )
+        .await
+        .expect("read recovered schema")
+        .expect("registered table schema");
+    assert_eq!(schema.arity(), 1);
     drop(writer);
 
     let mut peer = TestCatalogStateBuilder::new(persist.clone())
@@ -97,7 +220,7 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
         incarnation
     };
     let (writer, _) = catalog
-        .initialize_table_writer(persist, &MetricsRegistry::new(), true)
+        .initialize_table_writer(persist, &MetricsRegistry::new(), true, &oracle)
         .await
         .expect("open a WAL reader despite pending peer metadata");
     assert_eq!(

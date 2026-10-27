@@ -115,6 +115,25 @@ pub(crate) async fn open(
     Arc::new(worker)
 }
 
+/// Adopts a completed WAL prefix without repeating shared initialization.
+pub(crate) fn from_infrastructure(
+    infrastructure: mz_catalog::catalog::TableInfrastructure,
+    persist_client: PersistClient,
+) -> Arc<dyn TableWriteHandle> {
+    let mz_catalog::catalog::TableInfrastructure {
+        txns,
+        routes,
+        tidy,
+        completed_at: _,
+    } = infrastructure;
+    Arc::new(PersistTableWriteWorker::from_worker(TxnsTableWorker {
+        txns,
+        persist_client,
+        write_handles: routes,
+        tidy,
+    }))
+}
+
 #[derive(Debug, Clone)]
 struct PersistTableWriteWorker {
     inner: Arc<PersistTableWriteWorkerInner>,
@@ -278,17 +297,21 @@ impl PersistTableWriteWorker {
         txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
         persist_client: PersistClient,
     ) -> Self {
+        Self::from_worker(TxnsTableWorker {
+            txns,
+            persist_client,
+            write_handles: BTreeMap::new(),
+            tidy: Tidy::default(),
+        })
+    }
+
+    fn from_worker(mut worker: TxnsTableWorker) -> Self {
         let (tx, rx) =
             tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd)>();
-        mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
-            let mut worker = TxnsTableWorker {
-                txns,
-                persist_client,
-                write_handles: BTreeMap::new(),
-                tidy: Tidy::default(),
-            };
-            worker.run(rx).await
-        });
+        mz_ore::task::spawn(
+            || "PersistTableWriteWorker",
+            async move { worker.run(rx).await },
+        );
         Self {
             inner: Arc::new(PersistTableWriteWorkerInner::new(tx)),
         }
