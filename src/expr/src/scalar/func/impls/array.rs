@@ -55,7 +55,7 @@ pub struct CastArrayToString {
 
 // TODO? If we moved typeconv into `expr` we could determine the right inverse of
 // this cast.
-#[sqlfunc(CastArrayToString, sqlname = "arraytostr", preserves_uniqueness = true)]
+#[sqlfunc(CastArrayToString, sqlname = "arraytostr", preserves_uniqueness = super::text_preserves_uniqueness(&self.ty))]
 fn cast_array_to_string<'a>(&self, a: ExcludeNull<Datum<'a>>) -> Result<String, EvalError> {
     let mut buf = String::new();
     stringify_datum(&mut buf, *a, &self.ty)?;
