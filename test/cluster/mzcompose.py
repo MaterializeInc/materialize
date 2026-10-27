@@ -8065,6 +8065,51 @@ def workflow_test_mv_apply_replacement_wait(c: Composition) -> None:
     assert not thread.is_alive(), "APPLY REPLACEMENT should have completed"
 
 
+def workflow_test_mv_apply_replacement_stalled_sink(c: Composition) -> None:
+    """
+    Test that environmentd restarts after a materialized view is replaced while
+    a sink from it is stalled behind the replacement's as_of.
+    """
+
+    with c.override(Testdrive(no_reset=True)):
+        c.up("materialized", "kafka")
+
+        c.testdrive(dedent("""
+            > CREATE CLUSTER sink_cluster SIZE 'scale=1,workers=1'
+            > CREATE TABLE t (a int)
+            > INSERT INTO t VALUES (1)
+            > CREATE MATERIALIZED VIEW mv AS SELECT a FROM t
+            > CREATE CONNECTION kafka_conn
+              TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+            > CREATE SINK snk IN CLUSTER sink_cluster FROM mv
+              INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk-${testdrive.seed}')
+              FORMAT JSON ENVELOPE DEBEZIUM
+
+            # A sink whose write frontier is still the minimum is exempt from
+            # the dependency check on restart.
+            > SELECT f.write_frontier > 0::mz_timestamp
+              FROM mz_internal.mz_frontiers f
+              JOIN mz_sinks s ON s.id = f.object_id
+              WHERE s.name = 'snk'
+            true
+
+            > ALTER CLUSTER sink_cluster SET (REPLICATION FACTOR 0)
+
+            # The replacement's as_of is at least the since of t.
+            > SELECT tf.read_frontier > sf.write_frontier
+              FROM mz_internal.mz_frontiers tf, mz_internal.mz_frontiers sf, mz_tables t, mz_sinks s
+              WHERE t.name = 't' AND tf.object_id = t.id
+                AND s.name = 'snk' AND sf.object_id = s.id
+            true
+
+            > CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a FROM t
+            > ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+            """))
+
+        c.kill("materialized")
+        c.up("materialized")
+
+
 def workflow_github_10086(c: Composition) -> None:
     """
     Regression test for database-issues#10086, in which dropping a replacement
