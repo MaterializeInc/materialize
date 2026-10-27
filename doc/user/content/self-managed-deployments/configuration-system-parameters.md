@@ -169,15 +169,20 @@ take effect.
 ## Scoping Parameters to Clusters or Replicas
 
 To scope parameters to a subset of your clusters and replicas, write
-`system-params.json` in the versioned format, which has three top-level keys:
+`system-params.json` in the versioned format, which has four top-level keys:
 
 - `version` is required and must be `2`. Its presence is what selects this
   format.
+- `release` is required and names the Materialize release the document is
+  written for, for example `"v26.46.1"`. A document whose `release` is not the
+  running release is not applied, as described in [Targeting a
+  release](#targeting-a-release).
 - `globalParameters` holds the environment-wide parameters, exactly as the
   top-level keys of the flat format do.
 - `rules` scopes parameters, as described below.
 
-Every key except `version` is optional, and no other top-level key is allowed.
+`globalParameters` and `rules` are optional, and no other top-level key is
+allowed.
 
 Each element of `rules` selects a set of clusters or of replicas, for example
 "every replica of a legacy size family", and lists the parameters to apply to
@@ -199,6 +204,7 @@ data:
   system-params.json: |
     {
       "version": 2,
+      "release": "v26.46.1",
 
       "globalParameters": {
         "max_connections": 1000,
@@ -231,7 +237,52 @@ every replica of a legacy size family turns `enable_lgalloc` back off for itself
 A document without a `version` key is read in the flat format, and is
 equivalent to a versioned document holding the same keys under
 `globalParameters` with no rules. To move a flat ConfigMap to the versioned
-format, add `"version": 2` and move its keys into `globalParameters`.
+format, add `"version": 2` and the running `release`, and move its keys into
+`globalParameters`.
+
+### Targeting a release
+
+A parameter can change its name, type, or accepted values between releases, so a
+document vetted for one release is not necessarily valid for another. The
+`release` key ties a versioned document to the release it was written for.
+
+`release` must equal the running release exactly: the first word of what
+`SELECT mz_version()` returns, without the commit hash that follows it in
+parentheses. For example, if `mz_version()` returns `v26.46.1 (0123abcde)`, the
+release is `v26.46.1`. A development build reports a prerelease version such as
+`v26.48.0-dev.0`, and matches only that string.
+
+A document for another release is handled like a document that cannot be
+parsed: neither its environment-wide values nor its rules apply, and every
+environment-wide value and override keeps its current value. `environmentd`
+logs a warning naming both releases, for example `system parameter sync file
+targets release v26.46.1, running v26.47.0, keeping current values`. The
+release is checked before the rest of the document, so a document written for
+another release is reported as that, not as a schema error.
+
+During an upgrade, the old and the new generation of `environmentd` read the
+same ConfigMap. Whichever does not match the document keeps the values last
+synced, so no `environmentd` applies a document vetted for another release.
+After the upgrade, the new release keeps the configuration the previous release
+synced until you update `release`, and any parameters that changed, in the
+ConfigMap. Every upgrade, including a patch release, needs that edit before the
+ConfigMap applies again.
+
+The flat format names no release, so a flat document applies to every release.
+
+### Monitoring the ConfigMap
+
+A ConfigMap that is not applied freezes the configuration until it is fixed, so
+`environmentd` exports its state as metrics:
+
+- `mz_parameter_frontend_file_status` is a gauge per `status` label, `ok`,
+  `unreadable`, `invalid`, or `release_mismatch`. The latest read's status is
+  `1` and the others are `0`. Alert when `status="ok"` is not `1`.
+- `mz_parameter_frontend_file_last_applied_time_seconds` is the Unix time of the
+  latest read that was applied. Each successful read advances it, whether or not
+  the ConfigMap changed, so `time() -
+  mz_parameter_frontend_file_last_applied_time_seconds` measures how long the
+  configuration has been frozen.
 
 ### Rules
 
@@ -406,7 +457,8 @@ other context kind.
 - **A structurally invalid ConfigMap is rejected as a whole.** Any of the
   following makes Materialize ignore the entire document, including
   `globalParameters`:
-  - a `version` other than `2`, or a top-level key other than the three above;
+  - a `version` other than `2`, or a top-level key other than the four above;
+  - a missing `release`, or one that is not a string;
   - a rule missing its `contextKind`, `clauses`, or `parameters`, or with an
     unrecognised `contextKind`;
   - a clause missing its `attribute`, `op`, or `values`;
@@ -435,9 +487,10 @@ other context kind.
   rule does not apply instead.
 - **Removing a rule removes the override**, returning the affected objects to
   the environment-wide value.
-- **A ConfigMap that cannot be read, parsed, or validated leaves every value in
-  place.** A malformed JSON document, a structurally invalid one, or a deleted
-  ConfigMap carries no information rather than an empty set of overrides, so
+- **A ConfigMap that cannot be read, parsed, or validated, or that targets
+  another release, leaves every value in place.** A malformed JSON document, a
+  structurally invalid one, one for another release, or a deleted ConfigMap
+  carries no information rather than an empty set of overrides, so
   neither the environment-wide values nor the existing overrides change until a
   valid ConfigMap says so. Removing an override means editing the file, not
   breaking it.

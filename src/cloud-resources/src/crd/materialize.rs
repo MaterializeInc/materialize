@@ -287,9 +287,14 @@ pub mod v1alpha1 {
         /// scope parameters to clusters or replicas through `rules`: each rule
         /// names a context kind, `cluster` or `replica`, the clauses selecting
         /// the objects it matches, and the parameters to apply to them. For each
-        /// parameter the first matching rule wins. A document with a structural
-        /// defect anywhere is ignored as a whole, leaving every current value and
-        /// override in place.
+        /// parameter the first matching rule wins. A version 2 document must
+        /// name the release it targets in `release`, equal to the first word of
+        /// `mz_version()`, such as `v26.46.1`. A document with a structural
+        /// defect anywhere, or for another release, is ignored as a whole,
+        /// leaving every current value and override in place. The
+        /// `mz_parameter_frontend_file_status` and
+        /// `mz_parameter_frontend_file_last_applied_time_seconds` metrics report
+        /// whether and when the document was last applied.
         ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
@@ -299,6 +304,7 @@ pub mod v1alpha1 {
         ///   system-params.json: |
         ///     {
         ///       "version": 2,
+        ///       "release": "v26.46.1",
         ///       "globalParameters": {"max_connections": 1000},
         ///       "rules": [
         ///         {
@@ -1595,9 +1601,14 @@ pub mod v1 {
         /// scope parameters to clusters or replicas through `rules`: each rule
         /// names a context kind, `cluster` or `replica`, the clauses selecting
         /// the objects it matches, and the parameters to apply to them. For each
-        /// parameter the first matching rule wins. A document with a structural
-        /// defect anywhere is ignored as a whole, leaving every current value and
-        /// override in place.
+        /// parameter the first matching rule wins. A version 2 document must
+        /// name the release it targets in `release`, equal to the first word of
+        /// `mz_version()`, such as `v26.46.1`. A document with a structural
+        /// defect anywhere, or for another release, is ignored as a whole,
+        /// leaving every current value and override in place. The
+        /// `mz_parameter_frontend_file_status` and
+        /// `mz_parameter_frontend_file_last_applied_time_seconds` metrics report
+        /// whether and when the document was last applied.
         ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
@@ -1607,6 +1618,7 @@ pub mod v1 {
         ///   system-params.json: |
         ///     {
         ///       "version": 2,
+        ///       "release": "v26.46.1",
         ///       "globalParameters": {"max_connections": 1000},
         ///       "rules": [
         ///         {

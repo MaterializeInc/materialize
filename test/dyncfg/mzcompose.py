@@ -80,6 +80,28 @@ def assert_environment_wide_baseline(c: Composition) -> None:
         ), f"environment-wide {param} is {actual}, expected {expected}"
 
 
+def running_release(c: Composition) -> str:
+    """The release a version 2 document must name to be applied: the first word
+    of `mz_version()`, which appends the commit sha in parentheses."""
+    return c.sql_query("SELECT mz_version()")[0][0].split()[0]
+
+
+def file_status(c: Composition) -> str:
+    """The status `mz_parameter_frontend_file_status` reports for the latest
+    read of the config sync file, the one label whose gauge is 1."""
+    metrics = c.exec(
+        "materialized", "curl", "localhost:6878/metrics", capture=True
+    ).stdout
+    statuses = [
+        line.split('status="')[1].split('"')[0]
+        for line in metrics.splitlines()
+        if line.startswith("mz_parameter_frontend_file_status{")
+        and line.split()[-1] == "1"
+    ]
+    assert len(statuses) == 1, f"file status is not one-hot: {statuses}"
+    return statuses[0]
+
+
 def workflow_default(c: Composition) -> None:
     # Create config file in MZ_ROOT directory
     mz_root = Path(os.environ.get("MZ_ROOT", Path(__file__).parent.parent.parent))
@@ -112,6 +134,8 @@ def workflow_default(c: Composition) -> None:
                 """),
             )
             assert_environment_wide_baseline(c)
+            assert file_status(c) == "ok"
+            release = running_release(c)
 
             system_params_2: dict[str, Any] = {
                 **ENV_WIDE_PARAMS,
@@ -155,7 +179,8 @@ def workflow_default(c: Composition) -> None:
             # The same environment-wide values in the versioned format, which
             # adds rules alongside them. A rule declares the context kind its
             # clauses match, so a cluster and its replicas need one rule each even
-            # when the clauses are the same.
+            # when the clauses are the same. The document names the running
+            # release, without which it would not apply.
             scoped_clauses = [
                 {
                     "attribute": "cluster_name",
@@ -165,6 +190,7 @@ def workflow_default(c: Composition) -> None:
             ]
             system_params_3: dict[str, Any] = {
                 "version": 2,
+                "release": release,
                 "globalParameters": {
                     **ENV_WIDE_PARAMS,
                     "max_connections": 67,
@@ -274,20 +300,39 @@ def workflow_default(c: Composition) -> None:
                 },
                 "rules": broken_rules,
             }
+            # The values `system_params_3` established, which a document that
+            # does not apply leaves in place.
+            unchanged = dedent(f"""
+                > SHOW max_connections
+                67
+
+                > SELECT c.name, p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id ORDER BY c.name, p.name
+                dyncfg_scoped {CLUSTER_PARAM} true
+
+                > SELECT c.name, r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id ORDER BY c.name, r.name, p.name
+                dyncfg_scoped r2 {REPLICA_PARAM} false
+            """)
             write_config(config_file, system_params_broken)
             c.sleep(2)
-            c.testdrive(
-                input=dedent(f"""
-                    > SHOW max_connections
-                    67
+            c.testdrive(input=unchanged)
+            assert file_status(c) == "invalid"
 
-                    > SELECT c.name, p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id ORDER BY c.name, p.name
-                    dyncfg_scoped {CLUSTER_PARAM} true
-
-                    > SELECT c.name, r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id ORDER BY c.name, r.name, p.name
-                    dyncfg_scoped r2 {REPLICA_PARAM} false
-                """),
-            )
+            # A well-formed document for another release is not applied either,
+            # so neither its environment-wide value nor the absence of rules,
+            # which would prune every override, takes effect.
+            system_params_other_release: dict[str, Any] = {
+                **system_params_3,
+                "release": "v0.0.0",
+                "globalParameters": {
+                    **system_params_3["globalParameters"],
+                    "max_connections": 68,
+                },
+                "rules": [],
+            }
+            write_config(config_file, system_params_other_release)
+            c.sleep(2)
+            c.testdrive(input=unchanged)
+            assert file_status(c) == "release_mismatch"
 
             # Create-time resolution: a cluster created while a rule already
             # matches it folds the overrides into its create transaction. So that
