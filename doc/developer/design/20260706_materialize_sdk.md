@@ -185,13 +185,13 @@ this document adds.
 | R10 | Several languages with identical behavior, checked by machines | Design |
 | R11 | Sink authors can test without a live environment | Design |
 
-R4 is met in full by targets that can write the whole cut atomically, such as
-one Postgres transaction. A target with no transaction over the whole cut, such
-as turbopuffer, where only one write request is atomic, gets convergence: once
-the sink has caught up past every write any worker made, the target equals the
-cut at the committed frontier. Before that, readers can see part of a batch, and
-after a crash they can see state newer than the checkpoint (see "Appendix:
-turbopuffer sink").
+R1 and R4 are met in full by targets that can write the whole cut atomically,
+such as one Postgres transaction. A target with no transaction over the whole
+cut, such as turbopuffer, where only one write request is atomic, gets
+convergence: once the sink has caught up past every write any worker made, the
+target equals the cut at the committed frontier. Before that, readers can see
+part of a batch, and after a crash they can see state newer than the checkpoint
+(see "Appendix: turbopuffer sink").
 
 A user following the happy path cannot commit an unclosed timestamp, cannot
 get the `AS OF` arithmetic wrong, and cannot silently lose or duplicate updates
@@ -411,15 +411,16 @@ subscribe (R8).
 
 Durable consumption will use the same fetch loop, so a slow target write fills
 the client buffer, not `environmentd`. Once a number of events wait, each new
-batch is appended to the last batch waiting, up to a size per batch, so a
-target that takes minutes for one write, such as one that embeds text, gets
-fewer, larger batches instead of a full buffer. Snapshot chunks are never
-appended, and neither is anything to the batch that completes a snapshot. The
-buffer is bounded by bytes. When it is full, or the server retires the subscribe
-with `FellBehind`, the SDK will resume from the last commit with exponential
-backoff and report a metric. Each cycle restarts a dataflow, so a target that
-stays slower than the stream needs a larger buffer or a longer
-`commit_interval`.
+batch is appended to the last batch waiting, up to a size per batch, so a target
+that takes minutes for one write, such as one that embeds text, gets fewer,
+larger batches instead of a full buffer. Snapshot chunks are never appended, and
+neither is anything to the batch that completes a snapshot. The buffer is
+bounded by bytes. When it stays full for `max_consumer_wait`, the client fails
+with `ConsumerFellBehind`. When the server retires the subscribe
+(`SubscribeFellBehind`, `53200`), the client fails with `FellBehind`. After
+either, the SDK will resume from the last commit with exponential backoff and
+report a metric. Each cycle restarts a dataflow, so a target that stays slower
+than the stream needs a larger buffer or a longer `commit_interval`.
 
 The initial snapshot is one timestamp and can exceed client memory. It will
 arrive as chunks, followed by the batch that completes it and carries its
@@ -563,10 +564,12 @@ columns, and without the shard a reconnect would switch objects silently.
 A sink's type decides its delivery guarantee (see "Sink API"). A `Transactional`
 sink commits the batch and the checkpoint together, so state is exactly once. A
 `NonTransactional` sink applies the batch first and commits the checkpoint
-after, so delivery is at least once. The SDK will provide an idempotency key
-built from the `sink_id`, `mz_timestamp`, the key columns, and an ordinal within
-the timestamp. An ordinal within the batch would break deduplication, because
-batch boundaries move across a resume.
+after, so delivery is at least once. When every write it makes is safe to
+repeat, as in the turbopuffer sink, its target still converges to the cut at the
+committed frontier once the sink has caught up (see "Success Criteria"). The SDK
+will provide an idempotency key built from the `sink_id`, `mz_timestamp`, the
+key columns, and an ordinal within the timestamp. An ordinal within the batch
+would break deduplication, because batch boundaries move across a resume.
 
 When delivery fails, a policy will return one of three results:
 
@@ -729,7 +732,8 @@ It takes its retention and refresh schedule from the replacement object, though
 (`MaterializedView::apply_replacement` in `src/catalog/src/memory/objects.rs`).
 A replacement created without `RETAIN HISTORY` drops the shard to the one-second
 default. So the SDK will re-run the retention-margin check after it sees a new
-catalog id, and deploy tooling has to carry `RETAIN HISTORY` onto the
+catalog id. Until deploy tooling carries `RETAIN HISTORY` onto the replacement,
+which deferred question 3 asks about, that check can stop the sink after a
 replacement. After a successful resume, the SDK will store the new catalog id in
 the checkpoint, so later resumes compare against it.
 
@@ -823,7 +827,8 @@ itself, so the spread between `t_i` values does not arise.
 | `Transient` | no SQLSTATE (a lost connection, or a TLS or name-resolution failure), `08000`, `08001`, `08003`, `08004`, `08006`, `25P03` | reconnect through the connection factory and resume, within the retry budget, then stall |
 | `CredentialsExpired` | `28000` | one reconnect through the connection factory, then `Fatal` |
 | `Canceled` | `57014` (a cancel or a timeout) | stop |
-| `FellBehind` | `53200` | resume from the last commit with backoff, report a metric |
+| `FellBehind` | `53200`, the server retiring the subscribe with `SubscribeFellBehind` | resume from the last commit with backoff, report a metric |
+| `ConsumerFellBehind` | the client buffer staying full for `max_consumer_wait`, because the consumer or a sink call is slower than the stream | resume from the last commit with backoff, report a metric |
 | `ResultTooLarge` | `XX000` plus the "result exceeds max size" message, from `environmentd` or a replica | stop with remedy |
 | `HistoryLost` | `22000` plus the timestamp-selection message, after the index re-check | history-loss policy |
 | `ObjectDropped` | `42704` | see "Object identity" |
@@ -1034,14 +1039,16 @@ appear at once makes the new generation visible, and hides the older ones, in
 the write that completes the snapshot (see "Sink API").
 
 The generation is a counter stored in the checkpoint, raised by a conditional
-commit before each re-snapshot attempt starts, and writes after the snapshot
-carry it too. A snapshot's `AS OF` cannot serve as the generation, because a
-retry can pick the same `AS OF` and a new object after a swap can have an older
-one. With a counter, a re-snapshot that crashed and was retried never reuses a
-generation, and keys only the failed attempt wrote are swept. A target with
-transactions never continues a crashed snapshot. Every attempt takes a new
-generation. That removes keys deleted while the sink was offline, which a plain
-re-snapshot leaves behind.
+commit before each new snapshot starts, and writes after the snapshot carry it
+too. A snapshot's `AS OF` cannot serve as the generation, because a retry can
+pick the same `AS OF` and a new object after a swap can have an older one. With
+a counter, a generation never names two snapshots. A target with transactions
+never continues a crashed snapshot, so every attempt is a new snapshot under a
+new generation, and keys only a failed attempt wrote are swept. That also
+removes keys deleted while the sink was offline, which a plain re-snapshot
+leaves behind. A target without transactions may continue a crashed attempt at
+the same `AS OF`, which keeps its generation (see "Appendix: turbopuffer
+sink"). Any other retry starts a new snapshot.
 
 A target without such a transaction will re-snapshot into a new incarnation, a
 fresh namespace, keyspace, or table, and switch readers when the snapshot
@@ -1412,8 +1419,8 @@ for the same period. It tests three of the riskiest claims:
 
 - that a protocol core with no I/O carries a full SDK and a real sink with only
   a thin transport around it,
-- that tombstones and conditional writes give each turbopuffer namespace
-  exactly-once state under random kills and a stale worker,
+- that tombstones and conditional writes make each turbopuffer namespace
+  converge to the committed cut under random kills and a stale worker,
 - that the nightly end-to-end suite catches server changes that break the SDK.
 
 A Python or Node package, if it lands in the same period, also tests that the
@@ -1660,11 +1667,14 @@ October work, because the doc picks a safe default for each.
     DevEx, with review, before the sweep option ships. Should a sink that
     stores its own checkpoint read it during a long write and return `Fenced`,
     through a check the SDK provides because the text is opaque, or should the
-    SDK run those reads? The prototype's turbopuffer sink rereads its
-    checkpoint before a batch, at most every 20 seconds, and stops once a newer
-    worker has retired its snapshot's incarnation. That covers a long
-    snapshot, but not one write that runs long, nor a fenced worker outside a
-    snapshot.
+    SDK run those reads? The prototype has no sweep, so it sets no G. Its
+    turbopuffer sink rereads its checkpoint before a batch once 20 seconds have
+    passed since its last read, and stops once a newer worker has retired its
+    snapshot's incarnation. That covers a long snapshot, but not one write
+    that runs long, nor a fenced worker outside a snapshot. Because the reads
+    come only between batches, the gap between two of them also grows with
+    the length of a batch write, so the sweep needs a different mechanism to
+    bound it by a quarter of G.
 
 ## Appendix: turbopuffer sink
 
@@ -1710,9 +1720,9 @@ Before each request, the sink will net its changes to the latest change per key,
 because a batch spans timestamps and turbopuffer rejects a request that names
 one id twice. The conditions only ever let a newer timestamp win, so dropping
 the older change from a request is safe. While tombstones are kept, every write
-is then safe to repeat and ordered by timestamp. So each namespace reaches
-exactly-once state under at-least-once delivery, and a batch can be split across
-requests.
+is then safe to repeat and ordered by timestamp. So under at-least-once
+delivery, a replayed or stale write changes nothing, each namespace converges to
+the committed cut, and a batch can be split across requests.
 
 turbopuffer has no transaction around data and checkpoint, so the sink never
 re-snapshots in place. Tombstones only protect keys the namespace has seen: a
@@ -1736,13 +1746,14 @@ guarantee:
 - A fenced worker sends nothing later than G after it was fenced.
 - A checkpoint read lags by less than G.
 
-G has to exceed the retry budget, the request timeout, and the longest pause the
-deployment can see. The SDK cannot enforce the bound, because a process can
-pause between its last read of the checkpoint and a write, so the sink's docs
-will state it. A fenced worker learns of a take-over only from the checkpoint.
-So to help meet the bound, it has to read the checkpoint at least every quarter
-of G while it sends writes without a commit, such as during a snapshot or a long
-batch under throttling (deferred question 14).
+The design sets no value for G. Each deployment picks one, and it has to exceed
+the retry budget, the request timeout, and the longest pause the deployment can
+see. The SDK cannot enforce the bound, because a process can pause between its
+last read of the checkpoint and a write, so the sink's docs will state it. A
+fenced worker learns of a take-over only from the checkpoint. So to help meet
+the bound, it has to read the checkpoint at least every quarter of G while it
+sends writes without a commit, such as during a snapshot or a long batch under
+throttling (deferred question 14).
 
 Under that bound, the sweep removes a tombstone only when two things hold:
 
