@@ -387,8 +387,6 @@ def measure(config: dict, root: Path, container: str) -> dict:
                 try:
                     sample = subprocess.run(
                         [
-                            "sudo",
-                            "-n",
                             "nsenter",
                             "-t",
                             container_pid,
