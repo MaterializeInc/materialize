@@ -35,7 +35,7 @@ a replication factor above 1.
 | [Hydration](#hydration) | A replica restart, cluster resize, or DDL forced objects to rebuild from their inputs. |
 | [Ad-hoc query load](#ad-hoc-query-load) | `SELECT`s served by the cluster compete with its maintenance work. |
 | [Upstream data volume](#upstream-data-volume) | More data is arriving from sources, so there is more incremental work to do. |
-| [Memory pressure causing increased spill to disk](#memory-pressure-causing-increased-spill-to-disk) | A replica near its memory limit burns CPU on I/O rather than on your dataflows. |
+| [Memory pressure causing increased swapping](#memory-pressure-causing-increased-swapping) | A replica out of RAM burns CPU on paging rather than on your dataflows. |
 | [An undersized cluster](#an-undersized-cluster) | The cluster has no headroom left for the workload it carries. |
 
 ## First, confirm the spike window and scope
@@ -482,10 +482,10 @@ ingestion](/transform-data/freshness-troubleshooting/#check-source-ingestion).
 - [Monitor freshness](/transform-data/monitor-freshness/) so that a rising
   change rate surfaces as lag before it surfaces as saturation.
 
-## Memory pressure causing increased spill to disk
+## Memory pressure causing increased swapping
 
-A replica that is close to its memory limit spills data to disk, and the
-resulting paging registers as CPU time that isn't doing any of your work.
+A replica that runs out of RAM spills memory into swap, and the resulting
+paging registers as CPU time that isn't doing any of your work.
 
 ### Diagnosing the issue
 
@@ -513,9 +513,10 @@ WHERE c.name = '<cluster_name>';
 (1 row)
 ```
 
-`disk_percent` and `swap_percent` are `NULL` when the replica reports no
-corresponding limit, as above. A replica under memory pressure reports rising
-values in both.
+`swap_percent` reads 0 on a replica that is not swapping; `NULL`, as above,
+means the replica reported no measurement. Where disk is provided as swap,
+`disk_percent` counts swap as well. A replica under memory pressure reports
+rising values in both.
 
 ### Resolution
 

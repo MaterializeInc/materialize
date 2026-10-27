@@ -188,12 +188,17 @@ dataflow on every execution, even if the plan lists `Used Indexes`.
 A cluster near 100% CPU delays every query that runs on it:
 
 ```mzsql
-SELECT c.name AS cluster, r.name AS replica, u.process_id, u.cpu_percent, u.memory_percent
+SELECT c.name AS cluster, r.name AS replica, u.process_id,
+    u.cpu_percent, u.memory_percent, u.heap_percent
 FROM mz_internal.mz_cluster_replica_utilization AS u
 JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = u.replica_id
 JOIN mz_catalog.mz_clusters AS c ON c.id = r.cluster_id
 WHERE c.name = 'quickstart';
 ```
+
+`memory_percent` counts RAM only, so it can sit near 100% on a healthy replica
+that uses swap. `heap_percent` (RAM plus swap) shows how close the replica is to
+being OOM-killed.
 
 You can also see CPU and memory for each cluster under **Clusters** in the
 console.
