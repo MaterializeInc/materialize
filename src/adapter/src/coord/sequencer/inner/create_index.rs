@@ -66,7 +66,7 @@ impl Staged for CreateIndexStage {
         Message::CreateIndexStageReady {
             ctx,
             span,
-            stage: self,
+            stage: Box::new(self),
         }
     }
 

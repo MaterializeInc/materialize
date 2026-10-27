@@ -88,7 +88,7 @@ impl Staged for CreateMaterializedViewStage {
         Message::CreateMaterializedViewStageReady {
             ctx,
             span,
-            stage: self,
+            stage: Box::new(self),
         }
     }
 

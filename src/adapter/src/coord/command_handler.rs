@@ -475,14 +475,14 @@ impl Coordinator {
                     match self
                         .implement_subscribe(
                             &mut ctx_extra,
-                            df_desc,
+                            *df_desc,
                             dependency_ids,
                             cluster_id,
                             replica_id,
                             conn_id,
                             session_uuid,
                             read_holds,
-                            plan,
+                            *plan,
                         )
                         .await
                     {
@@ -1647,7 +1647,8 @@ impl Coordinator {
                             plan_validity,
                             original_stmt,
                             otel_ctx,
-                        },
+                        }
+                        .into(),
                     ));
                     if let Err(e) = result {
                         tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);

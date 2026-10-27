@@ -65,7 +65,7 @@ impl Staged for CreateMetricSinkStage {
         Message::CreateMetricSinkStageReady {
             ctx,
             span,
-            stage: self,
+            stage: Box::new(self),
         }
     }
 

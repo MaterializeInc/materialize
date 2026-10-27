@@ -88,17 +88,17 @@ impl Coordinator {
                 }
             }
             Message::PurifiedStatementReady(ready) => {
-                self.message_purified_statement_ready(ready)
+                self.message_purified_statement_ready(*ready)
                     .boxed_local()
                     .await
             }
             Message::CreateConnectionValidationReady(ready) => {
-                self.message_create_connection_validation_ready(ready)
+                self.message_create_connection_validation_ready(*ready)
                     .boxed_local()
                     .await
             }
             Message::AlterConnectionValidationReady(ready) => {
-                self.message_alter_connection_validation_ready(ready)
+                self.message_alter_connection_validation_ready(*ready)
                     .boxed_local()
                     .await
             }
@@ -209,28 +209,28 @@ impl Coordinator {
                     .await;
             }
             Message::CreateIndexStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
+                self.sequence_staged(ctx, span, *stage).boxed_local().await;
             }
             Message::CreateMetricSinkStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
+                self.sequence_staged(ctx, span, *stage).boxed_local().await;
             }
             Message::CreateViewStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
+                self.sequence_staged(ctx, span, *stage).boxed_local().await;
             }
             Message::CreateMaterializedViewStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
+                self.sequence_staged(ctx, span, *stage).boxed_local().await;
             }
             Message::SubscribeStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
+                self.sequence_staged(ctx, span, *stage).boxed_local().await;
             }
             Message::IntrospectionSubscribeStageReady { span, stage } => {
-                self.sequence_staged((), span, stage).boxed_local().await;
+                self.sequence_staged((), span, *stage).boxed_local().await;
             }
             Message::MetricSinkStageReady { span, stage } => {
-                self.sequence_staged((), span, stage).boxed_local().await;
+                self.sequence_staged((), span, *stage).boxed_local().await;
             }
             Message::ExplainTimestampStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
+                self.sequence_staged(ctx, span, *stage).boxed_local().await;
             }
             Message::SecretStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;

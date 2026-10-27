@@ -90,7 +90,7 @@ impl Staged for SubscribeStage {
         Message::SubscribeStageReady {
             ctx,
             span,
-            stage: self,
+            stage: Box::new(self),
         }
     }
 

@@ -565,7 +565,10 @@ impl Staged for IntrospectionSubscribeStage {
     }
 
     fn message(self, _ctx: (), span: Span) -> super::Message {
-        Message::IntrospectionSubscribeStageReady { span, stage: self }
+        Message::IntrospectionSubscribeStageReady {
+            span,
+            stage: Box::new(self),
+        }
     }
 
     fn cancel_enabled(&self) -> bool {

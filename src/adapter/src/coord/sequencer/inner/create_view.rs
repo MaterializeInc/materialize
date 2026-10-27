@@ -67,7 +67,7 @@ impl Staged for CreateViewStage {
         Message::CreateViewStageReady {
             ctx,
             span,
-            stage: self,
+            stage: Box::new(self),
         }
     }
 

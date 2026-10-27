@@ -364,9 +364,9 @@ pub enum Message {
     ControllerReady {
         controller: ControllerReadiness,
     },
-    PurifiedStatementReady(PurifiedStatementReady),
-    CreateConnectionValidationReady(CreateConnectionValidationReady),
-    AlterConnectionValidationReady(AlterConnectionValidationReady),
+    PurifiedStatementReady(Box<PurifiedStatementReady>),
+    CreateConnectionValidationReady(Box<CreateConnectionValidationReady>),
+    AlterConnectionValidationReady(Box<AlterConnectionValidationReady>),
     DeferredPlanReady {
         /// The connection whose session-startup appends completed.
         conn_id: ConnectionId,
@@ -425,35 +425,35 @@ pub enum Message {
     CreateIndexStageReady {
         ctx: ExecuteContext,
         span: Span,
-        stage: CreateIndexStage,
+        stage: Box<CreateIndexStage>,
     },
     CreateMetricSinkStageReady {
         ctx: ExecuteContext,
         span: Span,
-        stage: CreateMetricSinkStage,
+        stage: Box<CreateMetricSinkStage>,
     },
     CreateViewStageReady {
         ctx: ExecuteContext,
         span: Span,
-        stage: CreateViewStage,
+        stage: Box<CreateViewStage>,
     },
     CreateMaterializedViewStageReady {
         ctx: ExecuteContext,
         span: Span,
-        stage: CreateMaterializedViewStage,
+        stage: Box<CreateMaterializedViewStage>,
     },
     SubscribeStageReady {
         ctx: ExecuteContext,
         span: Span,
-        stage: SubscribeStage,
+        stage: Box<SubscribeStage>,
     },
     IntrospectionSubscribeStageReady {
         span: Span,
-        stage: IntrospectionSubscribeStage,
+        stage: Box<IntrospectionSubscribeStage>,
     },
     MetricSinkStageReady {
         span: Span,
-        stage: MetricSinkStage,
+        stage: Box<MetricSinkStage>,
     },
     SecretStageReady {
         ctx: ExecuteContext,
@@ -468,7 +468,7 @@ pub enum Message {
     ExplainTimestampStageReady {
         ctx: ExecuteContext,
         span: Span,
-        stage: ExplainTimestampStage,
+        stage: Box<ExplainTimestampStage>,
     },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
@@ -6184,5 +6184,19 @@ mod arrangement_sizes_pruner_tests {
     fn retraction_in_input_panics() {
         let rows = vec![(history_row(100), -1)];
         let _ = arrangement_sizes_expired_retractions(rows, 1_000, item_id());
+    }
+}
+
+#[cfg(test)]
+#[mz_ore::test]
+fn queued_messages_stay_compact() {
+    for (name, size, budget) in [
+        ("Command", std::mem::size_of::<Command>(), 576),
+        ("Message", std::mem::size_of::<Message>(), 640),
+    ] {
+        assert!(
+            size <= budget,
+            "{name} grew to {size} bytes. Keep large cold payloads boxed."
+        );
     }
 }

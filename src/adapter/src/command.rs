@@ -296,14 +296,14 @@ pub enum Command {
     },
 
     ExecuteSubscribe {
-        df_desc: mz_compute_types::dataflows::LirDataflowDescription,
+        df_desc: Box<mz_compute_types::dataflows::LirDataflowDescription>,
         dependency_ids: BTreeSet<GlobalId>,
         cluster_id: ComputeInstanceId,
         replica_id: Option<ReplicaId>,
         conn_id: ConnectionId,
         session_uuid: Uuid,
         read_holds: ReadHolds,
-        plan: plan::SubscribePlan,
+        plan: Box<plan::SubscribePlan>,
         statement_logging_id: Option<StatementLoggingId>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },

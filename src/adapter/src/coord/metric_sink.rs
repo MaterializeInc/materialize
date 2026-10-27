@@ -702,7 +702,10 @@ impl Staged for MetricSinkStage {
     }
 
     fn message(self, _ctx: (), span: Span) -> Message {
-        Message::MetricSinkStageReady { span, stage: self }
+        Message::MetricSinkStageReady {
+            span,
+            stage: Box::new(self),
+        }
     }
 
     fn cancel_enabled(&self) -> bool {

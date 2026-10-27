@@ -72,7 +72,7 @@ impl Staged for ExplainTimestampStage {
         Message::ExplainTimestampStageReady {
             ctx,
             span,
-            stage: self,
+            stage: Box::new(self),
         }
     }
 

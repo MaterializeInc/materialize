@@ -1586,14 +1586,14 @@ impl PeekClient {
 
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteSubscribe {
-                        df_desc,
+                        df_desc: Box::new(df_desc),
                         dependency_ids: subscribe_plan.from.depends_on(),
                         cluster_id: target_cluster_id,
                         replica_id: target_replica,
                         conn_id: session.conn_id().clone(),
                         session_uuid: session.uuid(),
                         read_holds,
-                        plan: subscribe_plan,
+                        plan: Box::new(subscribe_plan),
                         statement_logging_id: logging.id(),
                         tx,
                     })

@@ -813,7 +813,8 @@ impl Coordinator {
                         ),
                         otel_ctx,
                         resolved_ids: resolved_ids.clone(),
-                    },
+                    }
+                    .into(),
                 ));
                 if let Err(e) = result {
                     tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
@@ -3216,7 +3217,8 @@ impl Coordinator {
                             ),
                             otel_ctx,
                             resolved_ids,
-                        },
+                        }
+                        .into(),
                     ));
                     if let Err(e) = result {
                         tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
