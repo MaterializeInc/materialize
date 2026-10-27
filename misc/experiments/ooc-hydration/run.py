@@ -311,11 +311,13 @@ def drop_mv_workload(mz, sf, arm):
 
 
 def objects(mz, name):
-    """Return {object_id: (label, kind)} for the indexes and MVs on `name`."""
+    """Return {object_id: (label, kind)} for the user indexes and MVs on `name`."""
     out = {}
+    # Every cluster also carries system introspection indexes (`s` ids).
     for row in mz(
         f"SELECT i.id, i.name FROM mz_indexes i "
-        f"JOIN mz_clusters c ON i.cluster_id = c.id WHERE c.name = '{name}';"
+        f"JOIN mz_clusters c ON i.cluster_id = c.id "
+        f"WHERE c.name = '{name}' AND i.id LIKE 'u%';"
     ):
         oid, label = row.split("|")
         out[oid] = (label, "index")
