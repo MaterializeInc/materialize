@@ -31,9 +31,15 @@ of the next integration step, rather than completing supporting layers or
 edge-case inventories in advance. Stop preparing once that step is unblocked.
 Keep partial coverage explicit without weakening correctness or final acceptance.
 
-Controllerd is deployment-scoped process management, not a home for shared
-database duties. Fix multi-adapter ownership at the natural boundaries. Reuse
-safe collectors and existing backends rather than building a general background
+Keep cluster-controller policy in adapterd, committing desired replica changes
+through validated catalog transactions without a designated policy adapter.
+Controllerd enacts committed process inventory and initializes deployments. It
+owns neither replica-set policy nor shared database duties. Its HTTP API is an
+unauthenticated listener with access control provided externally, not a new auth
+subsystem. Catalog validation and deployment fencing still apply.
+
+Fix multi-adapter ownership at the natural boundaries. Reuse safe collectors and
+existing backends rather than building a general background
 job framework or rewriting all introspection. The abandoned async catalog-owner
 refactor remains outside scope.
 

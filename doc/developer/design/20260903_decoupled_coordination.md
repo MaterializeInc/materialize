@@ -79,7 +79,7 @@ stability across a logical replica replacement.
 Deployments may have different replica sets. For example, both can realize
 `u12`, while only the prewarming deployment creates `u13` for a hydration burst.
 This does not require a shared declaration or a corresponding replica in every
-deployment for each controller-created replica. Actual configuration, hydration,
+deployment for each policy-created replica. Actual configuration, hydration,
 burst state and reconfiguration progress are deployment-local. Shared policy
 does not let one deployment's readiness satisfy another's or end its burst.
 Clients route to their own deployment's replicas. Cross-deployment observations
@@ -455,14 +455,18 @@ Split environmentd into adapterd for SQL serving and controllerd for catalog-dri
 process management. One controllerd manages each deployment identity, not each
 distinct binary version. Within a deployment, controllerd, adapterd and clusterd
 use the same release. Old and new deployments have their own controllers,
-adapters and replicas. Controllerd uses the existing replica-set policy and
-local-process/Kubernetes backends to reconcile its deployment's committed
-inventory, with matching launch configuration and deployment-local observations.
-Policy decisions commit before they authorize provisioning. Missing observations
-do not establish readiness or justify scaling to zero.
+adapters and replicas. Controllerd uses the local-process/Kubernetes backends to
+reconcile its deployment's committed inventory with matching launch configuration.
 
-Controllerd owns deployment initialization and process management, not SQL
-coordination, maintained-dataflow installation or shared database maintenance.
+Adapterd runs the existing cluster-controller policy, including replica
+declaration realization, burst scaling, reconfiguration and ON REFRESH scheduling.
+Adapters use deployment-local observations and commit decisions with catalog
+precondition checks before provisioning is authorized. Concurrent attempts
+reobserve after conflict, without a designated policy adapter. Missing
+observations do not establish readiness or justify scaling to zero.
+
+Controllerd owns deployment initialization and process management, not replica-set
+policy, SQL coordination, maintained-dataflow installation or shared maintenance.
 Adapters discover and query replicas without lifecycle RPCs or provisioning
 privileges. Losing or restarting controllerd leaves healthy children running.
 Provisioning and recovery of failed processes may wait for its return, but
@@ -484,14 +488,16 @@ itself. Build-owned planning remains with adapters under
 [written plans](#written-plans), without a permanent planner leader.
 
 SQL supports `CREATE ADAPTER adapter_name (SIZE '<size>')`, `DROP ADAPTER` and
-`ALTER ADAPTER ... RENAME TO ...`. Creation acknowledges the catalog commit,
-not process readiness. Catalog relations list declarations, requested sizes and
-deployment-qualified endpoints, readiness and provisioning errors. Local sizes
-specify CPU and memory allocations using the backend's resource controls, with
+`ALTER ADAPTER ... RENAME TO ...`. SQL adapter management requires a superuser.
+Creation acknowledges the catalog commit, not process readiness. Catalog
+relations list declarations, requested sizes and deployment-qualified endpoints,
+readiness and provisioning errors. Local sizes specify CPU and memory allocations
+using the backend's resource controls, with
 enforcement limitations explicit. Dropping the serving adapter or the last
 declared adapter is allowed. Self-drop may disconnect the issuing session before
 acknowledgement. Zero adapters is a valid state, not a reason to reinitialize the
-environment.
+environment. With no adapters running, replica-set policy may pause while
+controllerd continues maintaining the committed process inventory.
 
 Adapter declarations have stable IDs independent of names. Rename does not change
 process identity or require a restart. Realizations are deployment-qualified.
@@ -522,10 +528,15 @@ is future work, not required for M3.
 Controllerd also exposes an administrative HTTP API to list, create and drop
 adapter declarations, including when no adapter is running. Creation accepts the
 same name and size as SQL. Listing includes deployment-qualified endpoints and
-observed status. Mutations use the same catalog operations, validation and
-authorization as SQL, respecting deployment authority. Success acknowledges the
-catalog commit, not process readiness or completed teardown. This is catalog
-administration, not a SQL proxy or a direct process-command path.
+observed status. Mutations use the same catalog operations and validation as SQL,
+respecting deployment authority. Success acknowledges the catalog commit, not
+process readiness or completed teardown. This is catalog administration, not a
+SQL proxy or a direct process-command path.
+
+The HTTP listener accepts requests without in-process authentication or caller
+authorization. Access control belongs to the external system exposing the port.
+Anyone with direct access can manage adapters. This does not bypass catalog
+validation or deployment fencing. M3 adds no controller authentication layer.
 
 ### Shared maintenance and introspection
 
@@ -824,7 +835,8 @@ Build through these slices, preserving working outcomes as the split progresses:
    environment-scoped pubsub, preserving M2 behavior.
 2. **Correct independent adapters.** Isolate executions, protection and cleanup.
    Remove shared bootstrap resets and repair conflicting introspection writers.
-   Make table writes and maintenance cooperate without a privileged adapter.
+   Make table writes, maintenance and replica-set policy cooperate without a
+   privileged adapter. Keep policy in adapterd and process enactment in controllerd.
 3. **SQL/HTTP-managed lifecycle.** Expose SQL creation, listing, rename and drop,
    plus controllerd HTTP listing, creation and drop, with resource sizes,
    endpoints and readiness through the same catalog and reconciliation path.
@@ -842,10 +854,12 @@ extra adapters. Also drop all adapters, list the empty adapter inventory through
 controllerd HTTP, create an adapter through that API, and resume SQL against the
 existing environment without reinitialization.
 
-Also demonstrate controller restart without disrupting healthy children and
-pubsub outage/recovery with adapters using remote pubsub. Preserve native warm
-handover under the split. Extend existing boundary coverage rather than creating
-a separate acceptance framework or general upgrade-version matrix.
+Exercise existing replica policy with concurrent adapters, preserving catalog
+conflict checks and deployment-local readiness. Also demonstrate controller
+restart without disrupting healthy children and pubsub outage/recovery with
+adapters using remote pubsub. Preserve native warm handover under the split.
+Extend existing boundary coverage rather than creating a separate acceptance
+framework or general upgrade-version matrix.
 
 Retain the independent-client proof: one client advances or loses protection while
 another retains an older timestamp, the compaction enforcer recovers, and an
@@ -943,7 +957,7 @@ options, not approved changes to existing SQL behavior.
 
 Settle whether MV pins should be restricted to shared replica declarations,
 including how cluster conversions affect them, before extending managed-pinning
-support. Controller-created replicas need not have counterparts across
+support. Policy-created replicas need not have counterparts across
 deployments. The milestone exclusion does not change which pins can be created
 within a single deployment or defer the core replica identity contract.
 

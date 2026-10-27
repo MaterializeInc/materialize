@@ -6,248 +6,125 @@ The [PR](https://github.com/MaterializeInc/materialize/pull/38696) provides the
 reviewer-facing summary. Replace this handoff as work advances, rather than
 appending a work log. Detailed evidence stays outside these documents.
 
-## Current work: M3
+## Current work: M3 independent adapters
 
-Implementer session: `2026-09-14-13-05-31-256`. Bookmark:
-`decoupled-coordination`, based on pinned `d9a2c5dc40`. M2 remains closed,
-including the 60s default. M3 slice 1 is incomplete. External pubsub works in
-opt-in environmentd mode, but controllerd/adapterd have not been implemented.
-
-The foundation includes standalone pubsubd, retained local supervision, replica
-launch specifications, named adapter declarations and catalog join without shared
-initialization. Runtime catalog projection publication is originator-only, and
-bootstrap snapshots are distinguishable from originating transaction rows.
-These components have focused verification, not combined M3 acceptance.
+Sole implementer: `2026-10-27-11-01-36-080`. Bookmark: `decoupled-coordination`,
+based on pinned `d9a2c5dc40`. M2 is closed, including the 60s publication default.
+The controller-managed default-adapter startup/restart demonstration passes.
+Independent adapters, SQL/HTTP lifecycle, replica-policy integration,
+zero-adapter recovery, interrupted initialization and deployment/backend
+acceptance remain open. Broad CI is not green.
 
 ## Resume here
 
-- Sole ownership restored at the user's request. Active source is verified
-  checkpoint `e15ac489` plus CLI fixture fix `f98c1a23`. Concurrent policy and
-  observation commits `1b1eaede`/`5ee3416f`, and their uncommitted extensions,
-  are NOT on this branch. Recovery bookmark `recovery/concurrent-session-20261027`
-  preserves them without publishing them. Do not resume those edits implicitly.
-- Corrected controller-managed startup/restart PASSED using CI140930 binaries
-  at `e15ac489`: evidence run `0b7e58f7823243d5aac2742e69e3bf2a`. Two controller
-  restarts retained the adapter and four replica PIDs, assigned SQL endpoint,
-  held client connection and its temporary view. SQL writes and maintained reads
-  worked with controller absent. Each restart applied changed replica-size credits.
-  New MV creation/query and table DROP succeeded afterward. Cleanup had no errors.
-  Exact witness and product identity are retained inside the run directory.
-  Local Docker works, so expired scratch SSO does not block these product tests.
-- CI140930 builds `e15ac489`. Clippy, native adapter-loss and SLT2 passed. Cargo
-  was confirmed running and is watched by task #97. The CLI fixture failure is
-  fixed locally by supplying required cluster flags, but `f98c1a23` is not published.
-  Other CI failures remain unresolved. Preserve the current CI run until terminal.
-- CI140921 pushdown.slt snapshot failure was not reproduced in four focused runs
-  using the exact CI binary and SqlLogicTest service environment. Evidence is
-  `slt2/`. This is not proof the parallel-shard failure is fixed. No expectations,
-  publication intervals or deadlines were changed. Owned local fixtures are removed.
-- Full M3 remains open: independent adapters, SQL/HTTP lifecycle, replica policy,
-  zero-adapter recovery, interrupted initialization, upgrade and backend acceptance.
-  HTTP/SQL lifecycle authorization is awaiting user input: proposed dedicated
-  internal-only controller HTTP listener and superuser-only SQL management.
+Continue the controller-managed two-adapter demonstration, then SQL/HTTP lifecycle.
+An intermediate fixture may create declarations with the existing catalog-admin
+tool, but does not replace SQL/HTTP acceptance. The first two-adapter attempt hit
+Postgres's default 100-connection limit before adding the declaration. Match the
+repository fixture's 5,000-connection setting and rerun without product tuning.
 
-- Prioritize fresh-environment controllerd initialization, launch of its default
-  adapterd through external pubsub, and restart. Fresh initialization creates no
-  replacement shards, and ordinary same-build restart needs no replacement migration.
-  Replacement-migration recovery remains an explicit open upgrade requirement,
-  not a prerequisite for this demonstration. Integrate it with the affected upgrade
-  path while preserving existing compatibility restrictions. Do not admit an
-  incomplete replacement backfill or claim upgrade support from the fresh demo.
-  Independent review found the removed wrapper was not restart-safe: its transient
-  replaced_items set disappears after migration commit, and joined WAL registration
-  can make an empty replacement shard non-MIN before seeding. Evidence remains in
-  `replacement-backfill-review.md`. Configuration reconciliation remains committed.
-- Fresh-only finite initialization is implemented in
-  `catalog/deployment_initialization.rs` and exposed by controllerd's
-  `initialize_fresh`. It refuses non-fresh handles before opening, completes table
-  infrastructure, seeds originator projections once and reconciles configuration.
-  It contains no replacement backfill or long-running worker. Formatting passes,
-  compilation is pending. Controller startup, ordinary restart and process launch
-  still need wiring together. This is not the end-to-end demonstration.
-- CI140902 is failing compilation. Exact diagnostics: test-only zip_eq needs
-  Itertools imported inside its test module, and configuration leased-reader
-  codecs require explicit type parameters. Both are corrected locally, formatted
-  but not rerun. Clippy log `/tmp/m3-ci140902-clippy.log`, doctests log
-  `/tmp/m3-ci140902-doctests.log`. The Rust builds have failed. Only Console E2E/staging remains live
-  (`01a17dc8-f57f-4b4b-89a5-2ce8fad908ac`), confirmed through Buildkite. Preserve it.
-  Scratch authentication remains expired, so exact local rerun is unavailable.
-- Review task #75 finished with the findings above. No agent is editing source.
-- Adapter launch specifications now live in
-  `src/environmentd/src/controllerd/provisioning.rs`: stable deployment-qualified
-  identity, declared CPU/memory allocation, single-process scale, listener policy
-  preserved with backend-assigned TCP addresses, and external pubsub. Tests cover
-  listener policy, resources and rename-stable arguments. This new module is
-  formatted but uncompiled. It does not yet implement controllerd startup.
-- Source snapshot `bae88fe9` contains the joined-serving, retained-TCP, launch
-  specification and metadata-freshness work. It is a draft verification snapshot,
-  not verified M3 acceptance. Scratch SSO remains expired. CI140882 finished, so
-  the next draft-PR run can verify this combined source without canceling prior
-  work. All background tasks and subagents have finished.
-- The draft contains join-only adapterd and retained direct-TCP endpoint support.
-  Aljoscha approved hint-first local allocation: try the default port, otherwise
-  discover a free one, and retain it across controller restarts. The backend uses
-  `ServicePort.requires_tcp`, atomic assignment files beside PID metadata and
-  existing process adoption. No proxy or new catalog records. Independent worker
-  implemented backend code/tests. Parent inspected the diff. Formatting passes,
-  but backend builds/tests have not run. See `controllerd-local-endpoints-decision.md`.
-- Join-only adapterd passed combined catalog/environmentd/sqllogictest all-target
-  Clippy and the admission/certification regressions. Removing the admitted-member
-  guard made its regression fail at the expected assertion, then restoration
-  passed. Matching environmentd, adapterd and clusterd product builds passed at
-  `e599a09c`. Evidence: `adapterd-positive-checks.log`,
-  `adapterd-admission-negative.log`, worker `adapterd-admission-restored.log`,
-  `adapterd-environmentd-build.log`, `adapterd-product-build.log`.
-  Public serve enforces process restrictions even for embedded callers. Joiners
-  leave shared configuration rows unchanged. No promotion task runs in adapterd.
-- Real takeover smoke has NOT passed end-to-end. Run `46105ed7` exited during
-  table-writer initialization on CatalogOutOfSync while replicas published updates.
-  Local finite metadata initialization now refreshes/retries at its natural catalog
-  boundary, with strengthened test_multi_subscriber_catalog. That fix is uncompiled.
-  Exact smoke repeat `accc2af1` successfully joined adapterd, preserved replica PIDs
-  and shared configuration, queried an existing MV and resumed WAL writes. It then
-  timed out on a newly created MV with pending_plans={User(513)}. Development
-  environmentd and adapterd use different executable build IDs for written-plan
-  namespaces. This is the leading fixture hypothesis, not yet verified against
-  actual binaries. Do not weaken the witness or namespace safety to pass it.
-  Existing --version output now includes written-plan-build for provisioner use.
-  Adapterd also accepts only --process=0, as injected by the local backend.
-  These latest CLI changes are uncompiled. Fixture: `adapterd-join-smoke.py`.
-  Both failed fixtures cleaned up successfully. Worker run directories preserve logs.
-- Next check after access returns: verify actual binary plan namespaces and the
-  strengthened catalog regression, including negative control. Build/check the
-  combined backend changes and run its new lifetime tests. Then wire controllerd
-  finite initialization and launch using the actual adapter planning namespace.
-  Do not sync a mixed in-progress snapshot. All subagents have finished.
-- Next main outcome: one controllerd-managed default adapterd with external pubsub.
-  `controllerd-extraction-map.md` identifies existing launch/backend seams and the
-  coordinator-bound managed-policy context to move. Preserve the existing replica
-  policy and deployment-local readiness. Controllerd must not contain a coordinator
-  or shared maintenance. Independent adapters, SQL/HTTP lifecycle and complete
-  backend/deployment integration remain required.
-- Finite table completion and local adoption are committed in `f2de04ad`.
-  Writable native startup initializes storage metadata and completes certified WAL
-  registration before constructing local controllers. It adopts routes/tidy and
-  uses the existing committer to complete later bootstrap WAL time without duplicate
-  registration. It recovers committed CREATE/ALTER whose originating implications
-  never ran. Legacy/read-only startup is unchanged.
-  Strict adapter all-target Clippy, formatting and two boundary regressions pass.
-  Both regressions fail for their expected bug when their respective fixes are
-  removed, then pass after restoration. Rebuilt environmentd/clusterd pass SQL
-  startup, CREATE/write/ALTER, two restarts with preserved rows and resumed writes,
-  a maintained query and DROP with external pubsub. Concurrent DROP/Forget still
-  needs multi-adapter end-to-end coverage. Evidence:
-  `finite-table-final-verified.log`, `finite-table-product-smoke.tar.gz`,
-  `finite-table-alter-recovery-negative.log`, `finite-table-wiring-review.md`.
-- Runtime registration certification is in `05a4c836`, with its writable-mode
-  guard and fresh-prefix regression in `d23adca2`. Certification fetches current
-  mappings after each oracle allocation, including cached no-op fences and retries.
-  Preserve CREATE completion, ALTER protection and write ordering. See
-  `table-registration-certification-decision.md` and
-  `finite-table-drop-fence-boundary.md`. Conflict-exhaustion halts and append
-  membership assertions remain adjacent M3 gaps, not repaired by finite startup.
-- Native current-health ownership, catalog-derived paused placement and unknown
-  fallback are implemented. Successful committers alone publish native
-  Paused/Dropped history. Completed sinks recover current running from terminal
-  Persist output without fabricated event time or historical replay. Conditional
-  Persist retirement removes predecessor status/session rows while preserving
-  successor rows. The strengthened constant-sink/session restart witness and the
-  full original Cluster 4 shard pass locally under the retained 8-CPU/16-GiB budget
-  and unchanged deadlines. The witness correction is `98df7ff1`: SQL session UUIDs
-  come from `mz_sessions` via `pg_backend_pid()`, not process-scoped `mz_session_id()`.
-  Evidence: `ci140847/session-fixture/{exact-repeat,fixed,full-fixed}.log`,
-  `retirement-eligibility/`, `retired-rows/`, `session-cleanup-ownership-review.md`.
-- CI140876 on `0324369e` finished. Its Linux Clippy failure was reproduced:
-  two assertion unwraps in the certification test. Verified repair `b9755c93` is
-  published. CI140882 finished: Clippy/Cargo tests passed, Cluster 1, SLT 4
-  and 0dt smoke failed. Adapterd/backend verification snapshot follows this repair. CI140876 also failed macOS Clippy, SLT 4 and 0dt smoke, not yet fully
-  inspected. Merge skew remains excluded. Logs: `ci140876/build.json`, `clippy.log`.
-  Prior CI140847 Testdrive 4 passes unavailable-health expectations. Cluster 4's
-  session-ID fixture is corrected and its full shard passed locally. Cluster 1's
-  MV-frontier failure and two SLT 4 status EXPLAIN mismatches remain unresolved.
-  Upgrade conversion remains excluded. Prior logs: `ci140847/README.txt`.
-- External pubsub, fresh-only shared seeding, active configuration reconciliation,
-  durable-only credential publication and execution-qualified session/subscription
-  ownership have focused verification. Combined independent-adapter concurrency,
-  promotion and retirement remain open. Native recovery/promotion, parallel and
-  retention regressions remain enabled. The cluster-thread assertion propagation
-  gap remains unresolved. Do not count checkout failures or unrerun corrections.
-- Worker `i-0788036f0778687f1` is clean on `e599a09c`, with no task left running.
-  Scratch SSO expired. Aljoscha must run `bin/scratch login`; request already sent.
-  Do not replace the worker or block all implementation on that access issue.
-  Test codegen exhausted disk and exact retry could not start. Audited inactive
-  dependency incremental caches reclaimed about 15 GiB, preserving changed-crate
-  caches, compiled products and fixtures. Tests and product builds then passed.
-  Last free space was about 9 GiB during product linking. Evidence:
-  `adapterd-inactive-cache-audit.txt`, `adapterd-inactive-cache-reclamation.log`.
-  Use combined `-p mz-catalog -p mz-adapter --lib` for focused catalog/adapter tests.
-  Local formatting: `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`.
+Keep cluster-controller policy in adapterd, including declaration realization,
+burst scaling, reconfiguration and ON REFRESH scheduling. Controllerd only enacts
+committed process inventory, alongside its initialization and administrative API
+responsibilities. Separate policy enablement from `manages_replica_processes` in
+adapter task startup and declaration reconciliation. Preserve deployment-local
+observations and catalog precondition checks under concurrent adapters, without
+a designated policy adapter. With zero adapters, policy may pause while
+controllerd maintains committed processes.
+
+The controller HTTP API is an unauthenticated port. Authentication and access
+control belong to the external system exposing it. Keep catalog validation and
+deployment fencing, but add no in-process HTTP auth machinery. SQL adapter
+management is superuser-only.
+
+The recovery bookmark `recovery/concurrent-session-20261027` is not an
+implementation baseline. Its policy/observation extraction must not be resumed
+as a controller-owned policy migration. The older extraction reports are not
+ownership guidance. Follow the current design.
+
+## Verified outcomes and open checks
+
+- CI140930 binaries at `e15ac489` passed the managed startup/restart witness in
+  `run-0b7e58f7823243d5aac2742e69e3bf2a/`. Two controller restarts preserved the
+  adapter and four replica PIDs, SQL endpoint, held connection and temporary view.
+  Writes and maintained reads continued without controllerd. Restart applied
+  changed replica-size credits. New MV creation/query and table DROP succeeded.
+- CI140930 passed Clippy, native adapter-loss, SLT2 and the active/pending-generation
+  configuration test. Cargo reported 4,326 passes and the CLI fixture failure
+  corrected in `f98c1a23`. Verify that fix in the next combined run. Refresh CI
+  status before publishing and preserve any in-flight verification.
+- CI140921's pushdown snapshot failure was not reproduced in four focused runs
+  with its exact binary and service environment. See `slt2/`. This does not close
+  the parallel-shard failure. Earlier MV-frontier, status EXPLAIN and 0dt failures
+  remain unclosed unless demonstrated by a newer run. The cluster-thread assertion
+  propagation gap also remains open. Do not weaken assertions or deadlines.
+
+## Boundaries and remaining risks
+
+Replacement builtin-table migration recovery belongs with the affected upgrade
+path. A transient replacement set can disappear after migration commit, and a
+non-MIN shard upper does not prove population. Do not admit incomplete backfill
+or infer upgrade support from the fresh-start demo. See
+`replacement-backfill-review.md`.
+
+Finite table initialization and adoption have focused and rebuilt restart
+coverage. Runtime registration certifies current mappings after oracle
+allocation, including retries. Preserve CREATE completion, ALTER protection and
+definitive write ordering. Concurrent DROP/Forget still needs multi-adapter
+coverage. Conflict-exhaustion halts and append-membership assertions remain open
+integration risks. See `finite-table-final-verified.log`,
+`table-registration-certification-decision.md` and
+`finite-table-drop-fence-boundary.md`.
+
+The [projection limitation](20260903_decoupled_coordination.md#shared-maintenance-and-introspection)
+permits originator-only publication and persistent inconsistency only for the
+specified derived projections and lifecycle history. Followers still enact
+catalog effects. A colleague owns catalog-backed conversion. Do not add a
+publication watermark or recovery protocol.
+
+Configuration relations describe the active deployment before readiness.
+Prewarming and retired deployments cannot overwrite them. Planning/provisioning
+use deployment-local configuration. Joined adapter startup does not publish
+shared configuration. Keep shared-infrastructure initialization and configuration
+reconciliation finite, without SQL coordination or shared maintenance.
+
+Shared `mz_role_auth` publishes durable credentials only. Process-local overrides
+still authenticate. Webhooks are environment-owned, without creator affinity.
+Their common advertised authority, including port, is fixed for M3. Without
+shared ingress, retain the URL placeholder and use discovered adapter HTTP
+addresses directly. No controller proxy or public-host redesign.
+
+Preserve replica-owned current health, catalog-derived paused placement and
+unknown fallback. Completed sinks retain ordinary terminal-output recovery.
+Retired-row cleanup must preserve successors. Existing focused and Cluster 4
+coverage is in `ci140847/session-fixture/`, `retired-rows/` and
+`session-cleanup-ownership-review.md`.
+
+M2 closeout evidence is at `676346d6`. Keep regular regressions enabled, not a new
+M2 campaign. Explicit-DDL admission belongs to Aljoscha's separate work. There is
+no approved M2-to-M3 or existing-environment conversion. Unsupported-version
+interoperation, managed replica-targeted MV handover and query-relative public
+replica visibility remain excluded. The deferred
+`m2-deferred-orchestratord-retirement` work is not an approved M3 solution.
+
+## Evidence and verification resources
 
 Evidence is under `~/.local/share/aj/m3-evidence/`. Completed foundation pointers
 are in `foundation-handoff-detail.md` and `pre-status-closeout-handoff.md`.
-`session-publication-boundary.md` describes session cleanup. Broad combined M3
-verification remains open. The standard SLT runner uses the ignored
+The standard SLT runner uses the ignored
 `target/debug -> ../target-xcompile/debug` alias.
 
-Scratch access improves iteration but must not stall it for extended SSO outages.
-Use local verification within available disk/memory or draft-PR CI as a fallback.
+Worker: `i-0788036f0778687f1`, m8i.4xlarge, 16 vCPUs, 64 GiB RAM, 500 GiB disk.
+Last verified expiry: 2026-10-28 19:01:27 UTC. Check status, source revision and
+live tasks before reuse, and extend expiry under the prompt's authorization.
+Scratch SSO needs renewal. Do not replace the worker or stall implementation:
+local checks within available resources and draft-PR CI are approved fallbacks.
+Keep `i-01023ce0e1db179f9` and `m2-pause-test-postgres` untouched.
 
-## Boundaries to preserve
-
-The [M3 projection limitation](20260903_decoupled_coordination.md#shared-maintenance-and-introspection)
-permits unordered originator-only publication and persistent inconsistency after
-publication failure only for those derived projections. Followers still enact
-catalog effects. A colleague owns conversion of these projections to catalog-backed
-views. Do not take over that work or add a publication watermark or recovery protocol.
-
-Configuration relations must describe the active deployment before readiness.
-Any active adapter may transactionally reconcile them, but prewarming and retired
-deployments cannot overwrite them. Internal planning/provisioning retain their
-deployment's configuration. Existing bounded bootstrap retries are approved for
-the expected small adapter population. This is separate from projection
-inconsistency and session cleanup.
-
-Shared `mz_role_auth` publishes only durable credentials. Process-local password
-overrides still authenticate. Webhooks are environment-owned without creator
-affinity. Their common advertised host, including port, is fixed across adapters
-and deployments for M3. Without public ingress, keep the existing URL placeholder
-and use discovered adapter HTTP addresses directly. Do not add a local proxy or
-controllerd forwarding. Host changes are deferred, and eventual URL/view conversion
-belongs with the colleague's work.
-
-Initialization and table adoption must remain finite, without a coordinator or
-shared maintenance in controllerd. Existing WAL registration/application can
-recover without a new initialization marker. See `table-initialization-recovery.md`
-and `initialization-join-boundary.md` in the evidence directory. Continue process
-extraction under the [M3 slices](20260903_decoupled_coordination.md#3-independent-adapters-and-process-management),
-preserving existing replica burst/reconfiguration policy rather than redesigning
-it or expanding its acceptance campaign.
-
-M2 closeout and its evidence pointers are at `676346d6`. Keep those proof scopes
-closed and regular regressions enabled, not a new M3 backlog. The explicit-DDL
-admission correction belongs to Aljoscha's separate work. Do not suppress
-structural revision checks or replay acknowledged DDL. Raise an actual M3
-dependency before pulling that work in or changing the pinned base.
-
-There is no approved M2-to-M3 conversion. Existing-environment conversion,
-unsupported-version interoperation, managed replica-targeted MV handover and
-query-relative public replica visibility remain excluded. The deferred draft at
-`m2-deferred-orchestratord-retirement` is not an approved M3 solution.
-
-## Worker
-
-Use `i-0788036f0778687f1`, m8i.4xlarge, 16 vCPUs, 64 GiB RAM and 500 GiB disk.
-Last verified expiry: 2026-10-28 19:01:27 UTC. Check status and extend expiry as
-needed under the prompt's existing authorization. The traffic investigation's
-`i-01023ce0e1db179f9` belongs to another session. Leave it untouched.
-
-Use `bin/ci-builder run stable <command>` and `bin/cargo-test` for pinned tooling
-and standard stack settings, forwarding `--lib` after `--`. Scratch logs live in
-`~/m3-evidence/` and must be copied off-worker. Metadata and comparison Postgres
-URLs are `native-metadata-url.txt` and `native-postgres-url.txt` in that directory.
-The latter supplies `POSTGRES_URL`.
-
-Iceberg and SLT fixtures are stopped, with data and evidence retained. Preserve
-useful evidence before replacing fixture state. Leave `m2-pause-test-postgres`
-untouched. `mzrepro.slice` is an aggregate 8-CPU/16-GiB workload budget, not the
-build budget or a faithful CI-host reproduction.
+Use `bin/ci-builder run stable <command>` and `bin/cargo-test`, forwarding `--lib`
+after `--`. Local formatting uses `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`. Watch disk
+headroom during codegen/linking and preserve useful evidence before cleanup.
+Worker logs live in `~/m3-evidence/` and must be copied off-worker. Its
+`native-metadata-url.txt` and `native-postgres-url.txt` supply fixture URLs.
+`mzrepro.slice` is the aggregate 8-CPU/16-GiB workload budget, not the build budget
+or a faithful CI-host reproduction.
