@@ -3695,6 +3695,7 @@ dependencies = [
  "prost-build",
  "prost-types",
  "reqwest 0.13.5",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2 0.11.1",
