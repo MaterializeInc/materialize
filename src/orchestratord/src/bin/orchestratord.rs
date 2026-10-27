@@ -464,6 +464,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
         .await?;
 
+    mz_alloc::register_metrics_into(&metrics_registry).await;
+
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
     let tls_cert = args.tls_cert;
