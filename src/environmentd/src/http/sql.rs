@@ -1867,8 +1867,7 @@ async fn execute_stmt<S: ResultSender>(
             instance_id,
             strategy,
         } => {
-            let max_result_size =
-                usize::cast_from(client.get_system_vars().await.max_result_size());
+            let max_result_size = max_result_size(client).await;
 
             let rows_stream = RecordFirstRowStream::new(
                 Box::new(rows),
@@ -1886,8 +1885,7 @@ async fn execute_stmt<S: ResultSender>(
             }
         }
         ExecuteResponse::SendingRowsImmediate { rows } => {
-            let max_result_size =
-                usize::cast_from(client.get_system_vars().await.max_result_size());
+            let max_result_size = max_result_size(client).await;
 
             let rows = futures::stream::once(futures::future::ready(PeekResponseUnary::Rows(rows)));
             let rows_stream =
@@ -1925,6 +1923,14 @@ async fn execute_stmt<S: ResultSender>(
         )
         .into(),
     })
+}
+
+/// The current `max_result_size` system variable.
+///
+/// Reads the session's cached catalog, which usually needs no coordinator round trip.
+async fn max_result_size(client: &mut SessionClient) -> usize {
+    let catalog = client.catalog_snapshot("http_max_result_size").await;
+    usize::cast_from(catalog.system_config().max_result_size())
 }
 
 /// The session parameters among `params` that clients are notified about.
