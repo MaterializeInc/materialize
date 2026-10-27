@@ -42,7 +42,6 @@ from materialize.cluster_spec_sheet_qps import (
     validate_qps_result,
 )
 from materialize.mz_env_util import print_environment_id
-from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
@@ -118,15 +117,14 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 
 @functools.cache
 def staging_version() -> str:
-    # Cached: the version cannot change within a run, and `parse_cargo` shells
-    # out to cargo, whose failure must not surface inside a region retry loop.
-    return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
+    return "v26.48.0-dev.0--pr.g4e23dbcbd4c8f966f2850208e57d04290ac738ed"
 
 
 SERVICES = [
     # Overridden below
     Mz(app_password=""),
     Materialized(
+        image="materialize/materialized:v26.48.0-dev.0--pr.g4e23dbcbd4c8f966f2850208e57d04290ac738ed",
         propagate_crashes=True,
         additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
     ),
@@ -1956,11 +1954,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             # clusters with sampling disabled in every benchmark connection.
             for disable_statement_logging in (False, True):
                 for protocol in self.options.protocols:
-                    for concurrency in (
-                        [512]
-                        if disable_statement_logging
-                        else self.options.concurrencies
-                    ):
+                    for concurrency in self.options.concurrencies:
                         self.measure(
                             runner,
                             size,
@@ -3357,7 +3351,7 @@ class EnvdCpuSweep(Scenario):
     # (So far, I haven't seen a difference between 16 and 32 in manual
     # testing in cloud. When we start seeing a difference, consider
     # extending to 64.)
-    ENVD_CPU_SCALES: list[int] = [32]
+    ENVD_CPU_SCALES: list[int] = [48]
 
     def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
         self._name = name
@@ -3398,7 +3392,7 @@ class EnvdCpuSweep(Scenario):
     def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
         assert point.envd_cpus is not None
         assert self._fixed_replica_size is not None
-        assert point.envd_cpus == 32  # Initialized directly at the measured allocation.
+        assert point.envd_cpus == 48  # Initialized directly at the measured allocation.
         # On Cloud the CPU change recreates the region, which drops the state that
         # `prepare` set up. Re-preparing is cheap, and harmless on Docker, where the
         # state survives the restart.
@@ -4274,7 +4268,7 @@ class CloudTarget(BenchTarget):
 
     def initialize(self) -> None:
         print("Soft-disabling and then enabling region using Mz ...")
-        enable_region(self, envd_cpus=32)
+        enable_region(self, envd_cpus=48)
         wait_for_envd(self)
 
         # Create new app password.
