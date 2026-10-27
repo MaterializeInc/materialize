@@ -512,6 +512,9 @@ impl Session {
     }
 
     fn retain_ddl_inspection(&mut self, inspection: DdlInspection) {
+        if !self.transaction().can_retain_ddl_inspections() {
+            return;
+        }
         let txn = self
             .transaction_mut()
             .inner_mut()
@@ -529,7 +532,7 @@ impl Session {
         param_types: Vec<Option<mz_repr::SqlScalarType>>,
         expected: mz_sql::plan::StatementDesc,
     ) {
-        if self.transaction().inner().is_none()
+        if !self.transaction().can_retain_ddl_inspections()
             || (expected.relation_desc.is_none() && expected.param_types.is_empty())
         {
             return;
@@ -1178,6 +1181,27 @@ impl TransactionStatus {
         }
     }
 
+    /// Whether inspections must be retained for a possible DDL commit.
+    ///
+    /// This includes observations made before the first DDL statement. Once the
+    /// transaction cannot enter DDL mode, retaining their statements and session
+    /// metadata would consume memory without any commit-time validation.
+    fn can_retain_ddl_inspections(&self) -> bool {
+        match self {
+            Self::Started(txn) | Self::InTransaction(txn) | Self::InTransactionImplicit(txn) => {
+                !txn.contains_explain
+                    && match txn.ops {
+                        TransactionOps::None | TransactionOps::DDL { .. } => true,
+                        TransactionOps::Peeks { .. }
+                        | TransactionOps::Writes(_)
+                        | TransactionOps::Subscribe
+                        | TransactionOps::SingleStatement { .. } => false,
+                    }
+            }
+            Self::Default | Self::Failed(_) => false,
+        }
+    }
+
     /// Records EXPLAIN execution, rejecting transactions that already contain DDL.
     pub(crate) fn record_explain(&mut self) -> Result<(), AdapterError> {
         let txn = self.inner_mut().expect("active transaction");
@@ -1187,6 +1211,7 @@ impl TransactionStatus {
         // EXPLAIN outcomes are not replayed at commit, so this transaction must
         // not subsequently enter DDL mode and rebind its writes.
         txn.contains_explain = true;
+        txn.pending_ddl_inspections.clear();
         Ok(())
     }
 
@@ -1392,15 +1417,24 @@ impl TransactionStatus {
                         {
                             return Err(AdapterError::ReadOnlyTransaction);
                         }
-                        if let TransactionOps::DDL { ops, .. } = &mut add_ops {
-                            // Pre-DDL inspections belong before every mutation, without
-                            // restricting the transaction until it actually enters DDL mode.
-                            ops.splice(
-                                0..0,
-                                pending_ddl_inspections
-                                    .drain(..)
-                                    .map(DdlInspection::into_op),
-                            );
+                        match &mut add_ops {
+                            TransactionOps::DDL { ops, .. } => {
+                                // Pre-DDL inspections belong before every mutation, without
+                                // restricting the transaction until it actually enters DDL mode.
+                                ops.splice(
+                                    0..0,
+                                    pending_ddl_inspections
+                                        .drain(..)
+                                        .map(DdlInspection::into_op),
+                                );
+                            }
+                            TransactionOps::None => {}
+                            TransactionOps::Peeks { .. }
+                            | TransactionOps::Writes(_)
+                            | TransactionOps::Subscribe
+                            | TransactionOps::SingleStatement { .. } => {
+                                pending_ddl_inspections.clear();
+                            }
                         }
                         *ops = add_ops;
                     }
@@ -1748,6 +1782,79 @@ impl From<&ExplainContext> for RequireLinearization {
                 RequireLinearization::Required
             }
             _ => RequireLinearization::NotRequired,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn ddl_inspections_are_released_when_ddl_becomes_impossible() {
+        use mz_sql::plan::{Params, StatementDesc};
+        use timely::progress::Antichain;
+
+        let statement = mz_sql_parser::parser::parse_statements("SELECT 1")
+            .expect("valid SQL")
+            .remove(0)
+            .ast;
+        let modes = [
+            TransactionOps::Peeks {
+                determination: TimestampDetermination {
+                    timestamp_context: TimestampContext::NoTimestamp,
+                    since: Antichain::new(),
+                    upper: Antichain::new(),
+                    largest_not_in_advance_of_upper: mz_repr::Timestamp::MIN,
+                    oracle_read_ts: None,
+                    session_oracle_read_ts: None,
+                    real_time_recency_ts: None,
+                    constraints: Default::default(),
+                },
+                cluster_id: mz_controller_types::ClusterId::User(1),
+                requires_linearization: RequireLinearization::NotRequired,
+            },
+            TransactionOps::Writes(vec![]),
+            TransactionOps::Subscribe,
+            TransactionOps::SingleStatement {
+                stmt: Arc::new(statement.clone()),
+                params: Params::empty(),
+            },
+        ];
+        // None exercises EXPLAIN, which leaves the operation mode unchanged.
+        for mode in modes.into_iter().map(Some).chain([None]) {
+            let mut session = Session::dummy();
+            session.start_transaction_implicit(Utc::now(), 2);
+            let command = Arc::new(crate::catalog::command::DescriptionCommand::new(
+                statement.clone(),
+                vec![],
+                session.meta(),
+                StatementDesc::new(Some(mz_repr::RelationDesc::empty())),
+            ));
+            let retained = Arc::downgrade(&command);
+            session.retain_ddl_inspection(DdlInspection::Description(command));
+            assert!(retained.upgrade().is_some(), "DDL is still possible");
+            if let Some(mode) = mode {
+                session.add_transaction_ops(mode).expect("valid transition");
+            } else {
+                session
+                    .transaction_mut()
+                    .record_explain()
+                    .expect("EXPLAIN allowed");
+            }
+            assert!(retained.upgrade().is_none(), "release earlier inspections");
+            let command = Arc::new(crate::catalog::command::DescriptionCommand::new(
+                statement.clone(),
+                vec![],
+                session.meta(),
+                StatementDesc::new(Some(mz_repr::RelationDesc::empty())),
+            ));
+            let discarded = Arc::downgrade(&command);
+            session.retain_ddl_inspection(DdlInspection::Description(command));
+            assert!(
+                discarded.upgrade().is_none(),
+                "do not retain later inspections"
+            );
         }
     }
 }
