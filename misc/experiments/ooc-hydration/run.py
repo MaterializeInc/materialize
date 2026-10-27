@@ -290,7 +290,7 @@ def create_idx_workload(mz, sf, arm):
         )
     for q in QUERIES:
         v = f"v{q.lower()}"
-        mz(f"CREATE INDEX IF NOT EXISTS {v}_{arm} IN CLUSTER {cl} ON {sch}.{v};",
+        mz(f"CREATE DEFAULT INDEX IF NOT EXISTS {v}_{arm} IN CLUSTER {cl} ON {sch}.{v};",
            search_path=sch)
 
 
