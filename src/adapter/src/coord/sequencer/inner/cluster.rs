@@ -1802,7 +1802,7 @@ impl Coordinator {
             check_reserved_names: true,
         };
         match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
+            .catalog_transact_with_ddl_transaction(ctx, vec![op])
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),
@@ -1841,9 +1841,7 @@ impl Coordinator {
         };
 
         match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_temp], |_, _| {
-                Box::pin(async {})
-            })
+            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_temp])
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Cluster)),

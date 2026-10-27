@@ -255,21 +255,11 @@ impl Coordinator {
     /// Executes a Catalog transaction with handling if the provided [`Session`]
     /// is in a SQL transaction that is executing DDL.
     #[instrument(name = "coord::catalog_transact_with_ddl_transaction")]
-    pub(crate) async fn catalog_transact_with_ddl_transaction<F>(
+    pub(crate) async fn catalog_transact_with_ddl_transaction(
         &mut self,
         ctx: &mut ExecuteContext,
         mut ops: Vec<catalog::Op>,
-        side_effect: F,
-    ) -> Result<(), AdapterError>
-    where
-        F: for<'a> FnOnce(
-                &'a mut Coordinator,
-                Option<&'a mut ExecuteContext>,
-            ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
-            + Send
-            + Sync
-            + 'static,
-    {
+    ) -> Result<(), AdapterError> {
         let start = Instant::now();
 
         let Some(Transaction {
@@ -279,13 +269,12 @@ impl Coordinator {
                     revision: txn_revision,
                     state: txn_state,
                     snapshot: txn_snapshot,
-                    side_effects: _,
                 },
             ..
         }) = ctx.session().transaction().inner()
         else {
             let result = self
-                .catalog_transact_with_side_effects(Some(ctx), ops, side_effect)
+                .catalog_transact_with_context(None, Some(ctx), ops)
                 .await;
             self.metrics
                 .catalog_transact_seconds
@@ -381,7 +370,6 @@ impl Coordinator {
             .add_ops(TransactionOps::DDL {
                 ops: combined_ops,
                 state: new_state,
-                side_effects: vec![Box::new(side_effect)],
                 revision: self.catalog().transient_revision(),
                 snapshot: Some(new_snapshot),
             });

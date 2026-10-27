@@ -629,9 +629,7 @@ impl Coordinator {
             if_not_exists_ids,
         } = self.create_source_inner(ctx.session(), plans).await?;
 
-        let transact_result = self
-            .catalog_transact_with_ddl_transaction(ctx, ops, |_, _| Box::pin(async {}))
-            .await;
+        let transact_result = self.catalog_transact_with_ddl_transaction(ctx, ops).await;
 
         // Check if any sources are webhook sources and report them as created.
         for (item_id, _name, source) in &sources {
@@ -1108,9 +1106,7 @@ impl Coordinator {
             owner_id: *ctx.session().current_role_id(),
         }];
 
-        let catalog_result = self
-            .catalog_transact_with_ddl_transaction(ctx, ops, |_, _| Box::pin(async {}))
-            .await;
+        let catalog_result = self.catalog_transact_with_ddl_transaction(ctx, ops).await;
 
         if is_webhook {
             // try_get_webhook_url will make up a URL for things that are not
@@ -2247,7 +2243,6 @@ impl Coordinator {
                     TransactionOps::DDL {
                         ops,
                         state: _,
-                        side_effects,
                         revision,
                         snapshot: _,
                     } => {
@@ -2257,19 +2252,8 @@ impl Coordinator {
                         }
                         // Commit all of our queued ops.
                         let ops = std::mem::take(ops);
-                        let side_effects = std::mem::take(side_effects);
-                        self.catalog_transact_with_side_effects(
-                            Some(ctx),
-                            ops,
-                            move |a, mut ctx| {
-                                Box::pin(async move {
-                                    for side_effect in side_effects {
-                                        side_effect(a, ctx.as_mut().map(|ctx| &mut **ctx)).await;
-                                    }
-                                })
-                            },
-                        )
-                        .await?;
+                        self.catalog_transact_with_context(None, Some(ctx), ops)
+                            .await?;
                     }
                     _ => (),
                 }
@@ -2552,7 +2536,7 @@ impl Coordinator {
             to_name: plan.to_name,
         };
         match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
+            .catalog_transact_with_ddl_transaction(ctx, vec![op])
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
@@ -2606,7 +2590,7 @@ impl Coordinator {
             check_reserved_names: true,
         };
         match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
+            .catalog_transact_with_ddl_transaction(ctx, vec![op])
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
@@ -2648,9 +2632,7 @@ impl Coordinator {
         };
 
         match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_c], |_, _| {
-                Box::pin(async {})
-            })
+            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_c])
             .await
         {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
