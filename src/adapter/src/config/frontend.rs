@@ -65,6 +65,8 @@ pub struct SystemParameterFrontend {
 pub enum SystemParameterFrontendClient {
     File {
         path: PathBuf,
+        #[derivative(Debug = "ignore")]
+        now_fn: NowFn,
     },
     LaunchDarkly {
         /// An SDK client to mediate interactions with the LaunchDarkly client.
@@ -82,7 +84,7 @@ impl Drop for SystemParameterFrontendClient {
     fn drop(&mut self) {
         let client = match self {
             SystemParameterFrontendClient::LaunchDarkly { client, ctx: _ } => client,
-            SystemParameterFrontendClient::File { path: _ } => return,
+            SystemParameterFrontendClient::File { .. } => return,
         };
         // Dropping an `ld::Client` without `close` disconnects its event
         // dispatcher thread, which logs an error and discards the analytics
@@ -104,6 +106,18 @@ impl Drop for SystemParameterFrontendClient {
 /// [`LegacyConfigFile`].
 const VERSION_KEY: &str = "version";
 
+/// The top-level key of a [`ConfigFileV2`] naming the release it targets, see
+/// [`running_release`].
+const RELEASE_KEY: &str = "release";
+
+/// The release a [`ConfigFileV2`] must name to be applied by this build: `v`
+/// followed by the build version, such as `v26.46.1`, or `v26.48.0-dev.0` for a
+/// development build. This is the first word of what `mz_version()` reports,
+/// which appends the commit sha in parentheses.
+fn running_release(build_info: &BuildInfo) -> String {
+    format!("v{}", build_info.version)
+}
+
 /// The config-sync file in the format every consumer reads, which a document
 /// opts into with `"version": 2`.
 ///
@@ -117,6 +131,9 @@ struct ConfigFileV2 {
     /// Checked by [`Self::parse`] ahead of the rest of the document.
     #[serde(rename = "version")]
     _version: IgnoredAny,
+    /// Checked by [`Self::parse`] ahead of the rest of the document.
+    #[serde(rename = "release")]
+    _release: IgnoredAny,
     /// Environment-wide values, keyed by the parameter's external name.
     #[serde(default)]
     global_parameters: BTreeMap<String, ParamValue>,
@@ -136,33 +153,75 @@ impl From<LegacyConfigFile> for ConfigFileV2 {
     fn from(legacy: LegacyConfigFile) -> Self {
         Self {
             _version: IgnoredAny,
+            _release: IgnoredAny,
             global_parameters: legacy.0,
             rules: Vec::new(),
         }
     }
 }
 
+/// Why [`ConfigFileV2::parse`] yields no information about any parameter.
+#[derive(Debug, PartialEq, Eq)]
+enum ParseError {
+    /// The document is a version 2 document for another release.
+    ReleaseMismatch {
+        /// The release the document names.
+        file: String,
+        /// The release this build is, see [`running_release`].
+        running: String,
+    },
+    /// The document is malformed, described by its first defect.
+    Invalid(String),
+}
+
 impl ConfigFileV2 {
-    /// Parses the config-sync file's top-level object in either format, or
-    /// describes the first defect.
+    /// Parses the config-sync file's top-level object in either format, for a
+    /// build that is release `running` (see [`running_release`]).
     ///
     /// An error is "no information about any parameter", which callers must keep
-    /// distinct from a valid but empty document.
-    fn parse(document: serde_json::Map<String, JsonValue>) -> Result<Self, String> {
+    /// distinct from a valid but empty document. The flat format names no
+    /// release, so it parses for any build.
+    fn parse(
+        document: serde_json::Map<String, JsonValue>,
+        running: &str,
+    ) -> Result<Self, ParseError> {
         // The format is chosen by the key's presence. Trying version 2 and
         // falling back to the flat format would read a defective version 2
         // document as a valid flat one, which prunes every scoped override.
-        match document.get(VERSION_KEY) {
-            // Checked ahead of the rest, so a document of another version is
-            // reported as that rather than as its first unknown key.
-            Some(version) if version.as_u64() != Some(2) => Err(format!(
+        let Some(version) = document.get(VERSION_KEY) else {
+            return deserialize_tracked::<LegacyConfigFile>(JsonValue::Object(document))
+                .map(Self::from)
+                .map_err(ParseError::Invalid);
+        };
+        // `version` and `release` are checked ahead of the rest, so a document
+        // of another version or release is reported as that rather than as the
+        // first key or type its schema no longer shares with this build's.
+        if version.as_u64() != Some(2) {
+            return Err(ParseError::Invalid(format!(
                 "{VERSION_KEY}: unsupported version {version}, expected 2"
-            )),
-            Some(_) => deserialize_tracked(JsonValue::Object(document)),
+            )));
+        }
+        match document.get(RELEASE_KEY) {
             None => {
-                deserialize_tracked::<LegacyConfigFile>(JsonValue::Object(document)).map(Self::from)
+                return Err(ParseError::Invalid(format!(
+                    "{RELEASE_KEY}: missing, expected the release the document targets, \
+                     such as {running:?}"
+                )));
+            }
+            Some(JsonValue::String(release)) if release != running => {
+                return Err(ParseError::ReleaseMismatch {
+                    file: release.clone(),
+                    running: running.to_string(),
+                });
+            }
+            Some(JsonValue::String(_)) => {}
+            Some(release) => {
+                return Err(ParseError::Invalid(format!(
+                    "{RELEASE_KEY}: expected a string, found {release}"
+                )));
             }
         }
+        deserialize_tracked(JsonValue::Object(document)).map_err(ParseError::Invalid)
     }
 }
 
@@ -477,6 +536,38 @@ impl ClauseOp {
     }
 }
 
+/// The outcome of the latest read of the config-sync file, as exported by the
+/// `mz_parameter_frontend_file_status` gauge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfigFileStatus {
+    /// The document parsed and is applied.
+    Ok,
+    /// The file could not be read, for example because it does not exist.
+    Unreadable,
+    /// The document is malformed.
+    Invalid,
+    /// The document is a version 2 document for another release.
+    ReleaseMismatch,
+}
+
+impl ConfigFileStatus {
+    const ALL: [Self; 4] = [
+        Self::Ok,
+        Self::Unreadable,
+        Self::Invalid,
+        Self::ReleaseMismatch,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Unreadable => "unreadable",
+            Self::Invalid => "invalid",
+            Self::ReleaseMismatch => "release_mismatch",
+        }
+    }
+}
+
 /// The frontend's cached view of the config-sync file.
 #[derive(Debug)]
 struct CachedConfigFile {
@@ -514,8 +605,11 @@ impl SystemParameterFrontend {
     /// exponential backoff with power `2s` and max duration `60s`.
     pub async fn from(sync_config: &SystemParameterSyncConfig) -> Result<Self, anyhow::Error> {
         match &sync_config.backend_config {
-            super::SystemParameterSyncClientConfig::File { path } => Ok(Self {
-                client: SystemParameterFrontendClient::File { path: path.clone() },
+            super::SystemParameterSyncClientConfig::File { path, now_fn } => Ok(Self {
+                client: SystemParameterFrontendClient::File {
+                    path: path.clone(),
+                    now_fn: now_fn.clone(),
+                },
                 key_map: sync_config.key_map.clone(),
                 env_id: sync_config.env_id.clone(),
                 build_info: sync_config.build_info,
@@ -553,7 +647,7 @@ impl SystemParameterFrontend {
         // passes read only the cache, as the create path runs them on the
         // coordinator loop.
         let file = match &self.client {
-            SystemParameterFrontendClient::File { path } => {
+            SystemParameterFrontendClient::File { path, .. } => {
                 self.refresh_config_file(path, fs::read_to_string(path), params)
             }
             SystemParameterFrontendClient::LaunchDarkly { .. } => None,
@@ -628,6 +722,9 @@ impl SystemParameterFrontend {
 
         if let Some(cached) = &*cache {
             if cached.contents.as_deref() == read.as_deref().ok() {
+                if cached.current.is_some() {
+                    self.record_file_applied();
+                }
                 return cached.current.clone();
             }
         }
@@ -642,19 +739,35 @@ impl SystemParameterFrontend {
                 None
             }
         };
-        let file = contents.as_deref().and_then(|contents| {
-            let parsed = serde_json::from_str(contents)
-                .map_err(|e| e.to_string())
-                .and_then(ConfigFileV2::parse);
-            match parsed {
-                Ok(file) => Some(Arc::new(file)),
-                Err(e) => {
-                    warn!("could not parse system parameter sync file: {e}");
-                    None
-                }
+        let (file, status) = match contents.as_deref().map(|contents| {
+            serde_json::from_str(contents)
+                .map_err(|e| ParseError::Invalid(e.to_string()))
+                .and_then(|document| {
+                    ConfigFileV2::parse(document, &running_release(self.build_info))
+                })
+        }) {
+            None => (None, ConfigFileStatus::Unreadable),
+            Some(Ok(file)) => (Some(Arc::new(file)), ConfigFileStatus::Ok),
+            Some(Err(ParseError::Invalid(e))) => {
+                warn!("could not parse system parameter sync file: {e}");
+                (None, ConfigFileStatus::Invalid)
             }
-        });
+            Some(Err(ParseError::ReleaseMismatch { file, running })) => {
+                warn!(
+                    "system parameter sync file targets release {file}, running {running}, \
+                     keeping current values"
+                );
+                (None, ConfigFileStatus::ReleaseMismatch)
+            }
+        };
+        for candidate in ConfigFileStatus::ALL {
+            self.metrics
+                .file_status
+                .with_label_values(&[candidate.label()])
+                .set(i64::from(candidate == status));
+        }
         if let Some(file) = &file {
+            self.record_file_applied();
             for diagnostic in self.scoped_rule_diagnostics(file, params) {
                 warn!("{diagnostic}");
             }
@@ -668,6 +781,16 @@ impl SystemParameterFrontend {
         });
 
         file
+    }
+
+    /// Records that a read of the config-sync file parsed, so its values are
+    /// applied.
+    fn record_file_applied(&self) {
+        if let SystemParameterFrontendClient::File { now_fn, .. } = &self.client {
+            self.metrics
+                .file_last_applied_time_seconds
+                .set(now_fn() / 1000);
+        }
     }
 
     /// The newest valid config-sync file whose environment-wide section is

@@ -31,8 +31,16 @@ const REPLICA_PARAM: &str = "enable_lgalloc";
 
 /// A file-backed frontend reading `path`.
 fn file_frontend_at(path: &Path) -> SystemParameterFrontend {
+    file_frontend_with_now(path, NowFn::from(|| 0))
+}
+
+/// A file-backed frontend reading `path`, whose clock is `now_fn`.
+fn file_frontend_with_now(path: &Path, now_fn: NowFn) -> SystemParameterFrontend {
     SystemParameterFrontend {
-        client: SystemParameterFrontendClient::File { path: path.into() },
+        client: SystemParameterFrontendClient::File {
+            path: path.into(),
+            now_fn,
+        },
         key_map: BTreeMap::new(),
         env_id: env_id(),
         build_info: &DUMMY_BUILD_INFO,
@@ -50,6 +58,13 @@ fn file_frontend() -> SystemParameterFrontend {
 /// The path a [`file_frontend`] reports in its warnings. Never opened.
 const CONFIG_PATH: &str = "/nonexistent/system-params.json";
 
+/// The release a version 2 document must name for [`DUMMY_BUILD_INFO`], which
+/// every test frontend runs as.
+const RELEASE: &str = "v0.0.0+dummy";
+
+/// A release other than [`RELEASE`].
+const OTHER_RELEASE: &str = "v26.46.1";
+
 /// The top-level object of a document the test knows to be one.
 fn object(contents: &str) -> serde_json::Map<String, JsonValue> {
     serde_json::from_str(contents).unwrap_or_else(|e| panic!("not a JSON object: {e}"))
@@ -57,12 +72,16 @@ fn object(contents: &str) -> serde_json::Map<String, JsonValue> {
 
 /// Parses a document the test knows to be valid.
 fn parse(contents: &str) -> ConfigFileV2 {
-    ConfigFileV2::parse(object(contents)).unwrap_or_else(|e| panic!("document does not parse: {e}"))
+    ConfigFileV2::parse(object(contents), RELEASE)
+        .unwrap_or_else(|e| panic!("document does not parse: {e:?}"))
 }
 
-/// The error a document the test knows to be invalid is rejected with.
+/// The defect a document the test knows to be malformed is rejected with.
 fn parse_error(contents: &str) -> String {
-    ConfigFileV2::parse(object(contents)).expect_err("document parses")
+    match ConfigFileV2::parse(object(contents), RELEASE) {
+        Err(ParseError::Invalid(e)) => e,
+        other => panic!("document is not rejected as malformed: {other:?}"),
+    }
 }
 
 /// One tick of the sync loop's handling of the file: read it, then publish
@@ -175,6 +194,7 @@ fn scoped_file(value: bool) -> String {
     format!(
         r#"{{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "rules": [{{
                 "contextKind": "cluster",
                 "clauses": [
@@ -191,6 +211,7 @@ fn single_clause_file(clause: &str) -> String {
     format!(
         r#"{{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "rules": [{{
                 "contextKind": "cluster",
                 "clauses": [{clause}],
@@ -244,6 +265,7 @@ fn test_parse_v2_document() {
     let file = parse(
         r#"{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "globalParameters": {"enable_lgalloc": false},
             "rules": [
                 {
@@ -336,10 +358,14 @@ fn test_parse_v2_document() {
 /// document is rejected rather than read as a flat parameter map.
 #[mz_ore::test]
 fn test_parse_selects_format_by_version_key() {
-    assert_eq!(parse(r#"{"version": 2}"#), ConfigFileV2::default());
+    assert_eq!(
+        parse(r#"{"version": 2, "release": "v0.0.0+dummy"}"#),
+        ConfigFileV2::default()
+    );
 
     // A flat key is not an environment-wide value in version 2.
-    let flat_key = parse_error(r#"{"version": 2, "max_connections": 1000}"#);
+    let flat_key =
+        parse_error(r#"{"version": 2, "release": "v0.0.0+dummy", "max_connections": 1000}"#);
     assert!(
         flat_key.contains("unknown field `max_connections`"),
         "{flat_key}"
@@ -347,8 +373,9 @@ fn test_parse_selects_format_by_version_key() {
 
     // Read as a flat map, this would apply `max_connections` and scope
     // nothing, pruning every existing override.
-    let broken =
-        parse_error(r#"{"version": 2, "globalParameters": {"max_connections": 1000}, "rules": 7}"#);
+    let broken = parse_error(
+        r#"{"version": 2, "release": "v0.0.0+dummy", "globalParameters": {"max_connections": 1000}, "rules": 7}"#,
+    );
     assert!(broken.starts_with("rules: invalid type"), "{broken}");
 
     // Another version is reported as such, ahead of its unknown keys.
@@ -359,6 +386,73 @@ fn test_parse_selects_format_by_version_key() {
     assert_eq!(
         parse_error(r#"{"version": "2"}"#),
         r#"version: unsupported version "2", expected 2"#
+    );
+}
+
+#[mz_ore::test]
+fn test_running_release_is_mz_version_without_sha() {
+    assert_eq!(running_release(&DUMMY_BUILD_INFO), RELEASE);
+    let mz_version = DUMMY_BUILD_INFO.human_version(None);
+    assert_eq!(mz_version.split_whitespace().next(), Some(RELEASE));
+}
+
+/// A version 2 document names the release it targets, and one for another
+/// release is reported as that, ahead of any defect its schema has here.
+#[mz_ore::test]
+fn test_parse_checks_release() {
+    let parse_release = |contents: &str| ConfigFileV2::parse(object(contents), RELEASE);
+    let mismatch = Err(ParseError::ReleaseMismatch {
+        file: OTHER_RELEASE.to_string(),
+        running: RELEASE.to_string(),
+    });
+
+    assert_eq!(
+        parse_release(r#"{"version": 2, "release": "v0.0.0+dummy"}"#),
+        Ok(ConfigFileV2::default())
+    );
+    assert_eq!(
+        parse_release(r#"{"version": 2, "release": "v26.46.1"}"#),
+        mismatch
+    );
+    // Compared exactly, so neither `mz_version()` in full nor the version
+    // without its `v` matches.
+    for release in [r#""v0.0.0+dummy (000000000)""#, r#""0.0.0+dummy""#] {
+        assert!(
+            matches!(
+                parse_release(&format!(r#"{{"version": 2, "release": {release}}}"#)),
+                Err(ParseError::ReleaseMismatch { .. })
+            ),
+            "{release} matched"
+        );
+    }
+
+    // Defects another release's schema would have here, such as a parameter
+    // section this build does not know or a type it changed, are not reported.
+    assert_eq!(
+        parse_release(r#"{"version": 2, "release": "v26.46.1", "segments": {}, "rules": 7}"#),
+        mismatch
+    );
+    // An unsupported version is reported ahead of the release.
+    assert_eq!(
+        parse_error(r#"{"version": 3, "release": "v26.46.1"}"#),
+        "version: unsupported version 3, expected 2"
+    );
+
+    // The release is mandatory in version 2, and a string.
+    assert_eq!(
+        parse_error(r#"{"version": 2, "globalParameters": {}}"#),
+        r#"release: missing, expected the release the document targets, such as "v0.0.0+dummy""#
+    );
+    assert_eq!(
+        parse_error(r#"{"version": 2, "release": 26}"#),
+        "release: expected a string, found 26"
+    );
+
+    // The flat format names no release, so `release` is a parameter name there.
+    let flat = parse(r#"{"release": "v26.46.1"}"#);
+    assert_eq!(
+        flat.global_parameters.keys().collect::<Vec<_>>(),
+        vec!["release"]
     );
 }
 
@@ -383,35 +477,36 @@ fn test_refresh_rejects_non_object_document() {
 /// starts with, and a fragment of the message.
 #[mz_ore::test]
 fn test_parse_rejects_structural_defects() {
-    let rule_with = |body: &str| format!(r#"{{"version": 2, "rules": [{body}]}}"#);
+    let rule_with =
+        |body: &str| format!(r#"{{"version": 2, "release": "v0.0.0+dummy", "rules": [{body}]}}"#);
     let cluster_name = r#""attribute": "cluster_name", "op": "in", "values": ["prod"]"#;
 
     let cases = [
         // Sections of the wrong type.
         (
-            r#"{"version": 2, "rules": {}}"#.to_string(),
+            r#"{"version": 2, "release": "v0.0.0+dummy", "rules": {}}"#.to_string(),
             "rules",
             "invalid type",
         ),
         (
-            r#"{"version": 2, "globalParameters": []}"#.to_string(),
+            r#"{"version": 2, "release": "v0.0.0+dummy", "globalParameters": []}"#.to_string(),
             "globalParameters",
             "invalid type",
         ),
         // Keys are camelCase, and segments are written inline in their rule.
         (
-            r#"{"version": 2, "global_parameters": {}}"#.to_string(),
+            r#"{"version": 2, "release": "v0.0.0+dummy", "global_parameters": {}}"#.to_string(),
             "",
             "unknown field `global_parameters`",
         ),
         (
-            r#"{"version": 2, "segments": {}}"#.to_string(),
+            r#"{"version": 2, "release": "v0.0.0+dummy", "segments": {}}"#.to_string(),
             "",
             "unknown field `segments`",
         ),
         // Rules.
         (
-            r#"{"version": 2, "rules": ["not-a-rule"]}"#.to_string(),
+            r#"{"version": 2, "release": "v0.0.0+dummy", "rules": ["not-a-rule"]}"#.to_string(),
             "rules[0]",
             "invalid type",
         ),
@@ -597,6 +692,7 @@ fn test_file_replica_rule_applied() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "rules": [{{
                 "contextKind": "replica",
                 "clauses": [
@@ -641,6 +737,7 @@ fn test_file_replica_rule_targeted_by_cluster() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "rules": [{{
                 "contextKind": "replica",
                 "clauses": [
@@ -689,6 +786,7 @@ fn test_first_matching_rule_wins() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "rules": [
                 {{
                     "contextKind": "cluster",
@@ -822,6 +920,7 @@ fn test_cluster_coherence_guard() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "rules": [
                 {{
                     "contextKind": "replica",
@@ -881,6 +980,7 @@ fn test_pattern_obeys_first_matching_rule() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "rules": [
                 {{
                     "contextKind": "cluster",
@@ -934,6 +1034,7 @@ fn test_file_rule_matching_nothing_live_ignored() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "rules": [
                 {{
                     "contextKind": "cluster",
@@ -977,6 +1078,7 @@ fn test_file_unparseable_value_dropped() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "rules": [{{
                 "contextKind": "cluster",
                 "clauses": [
@@ -1043,6 +1145,7 @@ fn test_read_failure_keeps_scoped_overrides() {
         Err(io::Error::from(io::ErrorKind::NotFound)),
         Ok("}not json{".to_string()),
         Ok(scoped_file(true).replace("cluster_name", "cluster_nmae")),
+        Ok(scoped_file(false).replace(RELEASE, OTHER_RELEASE)),
     ] {
         sync_tick(&frontend, &params, failure);
         // The reconcile is skipped wholesale on this signal, which is what
@@ -1103,6 +1206,7 @@ fn test_rules_are_published_with_their_baseline() {
     let flipped = format!(
         r#"{{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "globalParameters": {{"{CLUSTER_PARAM}": true}},
             "rules": [{{
                 "contextKind": "cluster",
@@ -1172,7 +1276,8 @@ fn test_unreadable_file_has_no_scoped_desired_state() {
         Err(io::Error::from(io::ErrorKind::NotFound)),
         Ok("}not json{".to_string()),
         Ok("[]".to_string()),
-        Ok(r#"{"version": 2, "rules": 7}"#.to_string()),
+        Ok(r#"{"version": 2, "release": "v0.0.0+dummy", "rules": 7}"#.to_string()),
+        Ok(r#"{"version": 2, "release": "v26.46.1"}"#.to_string()),
     ] {
         refresh(failure);
         assert!(!frontend.has_scoped_desired_state());
@@ -1215,17 +1320,18 @@ fn test_pull_from_file() {
     // A version 2 document supplies the same values from `globalParameters`.
     fs::write(
         &path,
-        r#"{"version": 2, "globalParameters": {"max_connections": 2000}}"#,
+        r#"{"version": 2, "release": "v0.0.0+dummy", "globalParameters": {"max_connections": 2000}}"#,
     )
     .expect("can write the test file");
     assert!(frontend.pull(&mut params));
     assert_eq!(params.get("max_connections"), "2000");
 
-    // Unparseable, structurally defective or missing, the file leaves every
-    // current value alone.
+    // Unparseable, structurally defective, for another release or missing, the
+    // file leaves every current value alone.
     for contents in [
         "}not json{",
-        r#"{"version": 2, "globalParameters": {"max_connections": 5}, "rules": 7}"#,
+        r#"{"version": 2, "release": "v0.0.0+dummy", "globalParameters": {"max_connections": 5}, "rules": 7}"#,
+        r#"{"version": 2, "release": "v26.46.1", "globalParameters": {"max_connections": 5}}"#,
     ] {
         fs::write(&path, contents).expect("can write the test file");
         assert!(!frontend.pull(&mut params));
@@ -1249,6 +1355,7 @@ fn test_diagnoses_rule_mistakes() {
     let file = parse(&format!(
         r#"{{
             "version": 2,
+            "release": "v0.0.0+dummy",
             "rules": [
                 {{"contextKind": "cluster", "clauses": [], "parameters": {{}}}},
                 {{
@@ -1284,6 +1391,65 @@ fn test_diagnoses_rule_mistakes() {
                 .to_string(),
         ]
     );
+}
+
+/// The status gauge is one-hot over the latest read's outcome, and the applied
+/// time advances on every read that parses, changed or not.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+fn test_file_status_metrics() {
+    let params = SynchronizedParameters::default();
+    let time = Arc::new(AtomicU64::new(0));
+    let time_clone = Arc::clone(&time);
+    let frontend = file_frontend_with_now(
+        Path::new(CONFIG_PATH),
+        NowFn::from(move || time_clone.load(Ordering::SeqCst)),
+    );
+    let status = || {
+        ConfigFileStatus::ALL
+            .into_iter()
+            .filter(|candidate| {
+                let gauge = frontend
+                    .metrics
+                    .file_status
+                    .with_label_values(&[candidate.label()])
+                    .get();
+                assert!(gauge == 0 || gauge == 1, "{candidate:?} is {gauge}");
+                gauge == 1
+            })
+            .collect::<Vec<_>>()
+    };
+    let last_applied = || frontend.metrics.file_last_applied_time_seconds.get();
+    let tick = |at_seconds: u64, read: io::Result<String>| {
+        time.store(at_seconds * 1000, Ordering::SeqCst);
+        sync_tick(&frontend, &params, read);
+    };
+
+    tick(10, Ok(scoped_file(true)));
+    assert_eq!(status(), vec![ConfigFileStatus::Ok]);
+    assert_eq!(last_applied(), 10);
+    tick(20, Ok(scoped_file(true)));
+    assert_eq!(last_applied(), 20, "an unchanged file is applied again");
+
+    for (failure, expected) in [
+        (
+            Err(io::Error::from(io::ErrorKind::NotFound)),
+            ConfigFileStatus::Unreadable,
+        ),
+        (Ok("}not json{".to_string()), ConfigFileStatus::Invalid),
+        (
+            Ok(scoped_file(true).replace(RELEASE, OTHER_RELEASE)),
+            ConfigFileStatus::ReleaseMismatch,
+        ),
+    ] {
+        tick(30, failure);
+        assert_eq!(status(), vec![expected]);
+        assert_eq!(last_applied(), 20, "{expected:?} counted as applied");
+    }
+
+    tick(40, Ok(scoped_file(true)));
+    assert_eq!(status(), vec![ConfigFileStatus::Ok]);
+    assert_eq!(last_applied(), 40);
 }
 
 #[mz_ore::test]

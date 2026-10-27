@@ -1870,6 +1870,25 @@ metrics:
   help: count of on_close events sent to otel
   source: src/ore/src/tracing.rs
   visibility: internal
+- name: mz_parameter_frontend_file_last_applied_time_seconds
+  help: >-
+    The last time a read of the system parameter sync file parsed and its values
+    were applied (as unix timestamp).
+  source: src/adapter/src/config.rs
+  visibility: public
+  tags:
+  - environment
+- name: mz_parameter_frontend_file_status
+  help: >-
+    The outcome of the latest read of the system parameter sync file, as 1 for its
+    status (ok, unreadable, invalid, release_mismatch) and 0 for the others. Absent
+    before the first read.
+  labels:
+  - status
+  source: src/adapter/src/config.rs
+  visibility: public
+  tags:
+  - environment
 - name: mz_parameter_frontend_last_cse_time_seconds
   help: >-
     The last known time when the LaunchDarkly client sent an event to the
