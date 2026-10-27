@@ -47,7 +47,7 @@ use mz_postgres_util::{
     sql as pg_sql,
 };
 use mz_sql::catalog::EnvironmentId;
-use mz_tls_util::make_tls;
+use mz_tls_util::make_tls_rustls;
 use openssl::pkcs12::Pkcs12;
 use rdkafka::ClientConfig;
 use rdkafka::producer::Producer;
@@ -341,7 +341,7 @@ pub(crate) struct BackgroundTask {
 async fn cancel_background_query(cancel_token: &CancelToken, url: &str, timeout: Duration) {
     let tls = match tokio_postgres::Config::from_str(url)
         .map_err(anyhow::Error::from)
-        .and_then(|config| make_tls(&config).map_err(anyhow::Error::from))
+        .and_then(|config| make_tls_rustls(&config).map_err(anyhow::Error::from))
     {
         Ok(tls) => tls,
         Err(e) => {
@@ -1166,7 +1166,7 @@ pub async fn create_state(
         .retry_async_canceling(|_| async move {
             let mut pgconfig = config.materialize_pgconfig.clone();
             pgconfig.connect_timeout(config.default_timeout);
-            let tls = make_tls(&pgconfig)?;
+            let tls = make_tls_rustls(&pgconfig)?;
             pgconfig.connect(tls).await.map_err(|e| anyhow!(e))
         })
         .await?;
