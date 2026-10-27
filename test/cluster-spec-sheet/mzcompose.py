@@ -42,7 +42,6 @@ from materialize.cluster_spec_sheet_qps import (
     validate_qps_result,
 )
 from materialize.mz_env_util import print_environment_id
-from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
@@ -118,10 +117,7 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYST
 
 @functools.cache
 def staging_version() -> str:
-    return os.environ.get(
-        "CI_QPS_BENCH_VERSION",
-        f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}",
-    )
+    return os.environ["CI_QPS_BENCH_VERSION"]
 
 
 SERVICES = [
@@ -1939,6 +1935,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             runner.run_query(
                 f"ALTER CLUSTER c SET (SIZE '{size}', REPLICATION FACTOR 1)"
             )
+            runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
             runner.run_query(
                 "CREATE VIEW qps_gen_view AS SELECT generate_series AS x FROM generate_series(1, 10)"
             )
@@ -1946,7 +1943,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 cluster = "c" if i == 0 else f"qps_{i}"
                 if i != 0:
                     runner.run_query(
-                        f"CREATE CLUSTER {cluster} SIZE '{size}', REPLICATION FACTOR 1"
+                        f"CREATE CLUSTER IF NOT EXISTS {cluster} SIZE '{size}', REPLICATION FACTOR 1"
                     )
                 runner.run_query(
                     f"CREATE INDEX qps_idx_{i} IN CLUSTER {cluster} ON qps_gen_view (x)"
@@ -3404,7 +3401,7 @@ class EnvdCpuSweep(Scenario):
     # (So far, I haven't seen a difference between 16 and 32 in manual
     # testing in cloud. When we start seeing a difference, consider
     # extending to 64.)
-    ENVD_CPU_SCALES: list[int] = [48]
+    ENVD_CPU_SCALES: list[int] = [56]
 
     def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
         self._name = name
@@ -3440,12 +3437,17 @@ class EnvdCpuSweep(Scenario):
             runner.run_query(q)
         for n in self._workload.materialize_views():
             runner.run_query(f"SELECT COUNT(*) > 0 FROM {n};")
-        self._fixed_replica_size = runner.target.replica_size_for_scale(1)
+        # Start at the measured query size; a rolling resize needs another AZ.
+        self._fixed_replica_size = (
+            "50cc"
+            if isinstance(runner.target, CloudTarget)
+            else runner.target.replica_size_for_scale(1)
+        )
 
     def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
         assert point.envd_cpus is not None
         assert self._fixed_replica_size is not None
-        assert point.envd_cpus == 48  # Initialized directly at the measured allocation.
+        assert point.envd_cpus == 56  # Initialized directly at the measured allocation.
         # On Cloud the CPU change recreates the region, which drops the state that
         # `prepare` set up. Re-preparing is cheap, and harmless on Docker, where the
         # state survives the restart.
@@ -3598,6 +3600,18 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
             "--environmentd-extra-arg=--system-parameter-default=enable_frontend_transaction_completion=true",
             "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_reuse=true",
             "--environmentd-extra-arg=--system-parameter-default=enable_prepared_query_templates=true",
+            "--environmentd-extra-arg=--orchestrator-kubernetes-service-node-selector=materialize.cloud/qps-isolation=history-transport-oct27",
+            "--environmentd-extra-arg=--orchestrator-kubernetes-service-tolerations="
+            + json.dumps(
+                [
+                    {
+                        "key": "mz-egress",
+                        "operator": "Equal",
+                        "value": "history-transport-oct27",
+                        "effect": "NoSchedule",
+                    }
+                ]
+            ),
             # Pin the image built for this PR. Production does not accept a
             # custom version.
             "--version",
@@ -4321,7 +4335,7 @@ class CloudTarget(BenchTarget):
 
     def initialize(self) -> None:
         print("Soft-disabling and then enabling region using Mz ...")
-        enable_region(self, envd_cpus=48)
+        enable_region(self, envd_cpus=56)
         wait_for_envd(self)
 
         # Create new app password.
