@@ -1302,6 +1302,57 @@ fn test_statement_logging_indexed_peek_overlaps_readiness_observation() {
 }
 
 #[mz_ore::test]
+fn test_statement_logging_cross_cluster_dependencies() {
+    let harness = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_frontend_peek_sequencing".into(), "true".into())
+        .with_system_parameter_default("enable_prepared_query_reuse".into(), "true".into())
+        .with_system_parameter_default("enable_prepared_query_templates".into(), "true".into())
+        .with_system_parameter_default("enable_statement_lifecycle_logging".into(), "true".into());
+    let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
+    for sql in [
+        "CREATE CLUSTER logging_upstream SIZE 'scale=1,workers=1'",
+        "CREATE TABLE logging_input (id int)",
+        "INSERT INTO logging_input VALUES (1)",
+        "CREATE MATERIALIZED VIEW logging_mv IN CLUSTER logging_upstream AS SELECT id FROM logging_input",
+        "CREATE DEFAULT INDEX ON logging_mv",
+    ] {
+        client.execute(sql, &[]).unwrap();
+    }
+    let sql = "SELECT id AS cross_cluster_probe FROM logging_mv WHERE id = $1";
+    let stmt = client.prepare(sql).unwrap();
+    assert_eq!(
+        client.query_one(&stmt, &[&1_i32]).unwrap().get::<_, i32>(0),
+        1
+    );
+    client
+        .execute("INSERT INTO logging_input VALUES (2)", &[])
+        .unwrap();
+    assert_eq!(
+        client.query_one(&stmt, &[&2_i32]).unwrap().get::<_, i32>(0),
+        2
+    );
+
+    let mut observer = server.connect_internal(postgres::NoTls).unwrap();
+    Retry::default().max_duration(Duration::from_secs(30)).retry(|_| {
+        let row = observer.query_one(
+            "SELECT count(DISTINCT e.id)
+             FROM mz_internal.mz_statement_execution_history e
+             JOIN mz_internal.mz_prepared_statement_history p ON e.prepared_statement_id = p.id
+             JOIN mz_internal.mz_sql_text s ON p.sql_hash = s.sql_hash
+             WHERE s.sql = $1 AND e.finished_status = 'success'
+             AND e.execution_strategy = 'fast-path'
+             AND (SELECT count(*) = 4 AND count(DISTINCT event_type) = 4
+                  FROM mz_internal.mz_statement_lifecycle_history l
+                  WHERE l.statement_id = e.id AND event_type IN
+                  ('execution-began', 'execution-finished', 'storage-dependencies-finished', 'compute-dependencies-finished'))",
+            &[&sql],
+        ).unwrap();
+        let count: i64 = row.get(0);
+        if count == 2 { Ok(()) } else { Err(count) }
+    }).expect("both executions must retain dependency milestones across compute clusters");
+}
+
+#[mz_ore::test]
 fn test_statement_logging_frontend_constant_insert_sets_cluster() {
     let harness = test_util::TestHarness::default();
     let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
