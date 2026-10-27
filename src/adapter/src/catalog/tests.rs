@@ -196,6 +196,65 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
     assert_eq!(schema.arity(), 1);
     drop(writer);
 
+    let mut infrastructure = catalog
+        .complete_table_infrastructure(
+            persist.clone(),
+            Arc::new(mz_txn_wal::metrics::Metrics::new(&registry)),
+            &oracle,
+        )
+        .await
+        .expect("finite configuration infrastructure");
+    let egress_id = catalog.resolve_builtin_table(&mz_catalog::builtin::MZ_EGRESS_IPS);
+    let egress = catalog.get_entry(&egress_id).table().expect("egress table");
+    let egress_shard = infrastructure.routes[&egress.global_id_writes()];
+    let mut reader = persist
+        .open_leased_reader(
+            egress_shard,
+            Arc::new(egress.desc.latest()),
+            Arc::new(mz_persist_types::codec_impls::UnitSchema),
+            mz_persist_client::Diagnostics::for_tests(),
+            false,
+        )
+        .await
+        .expect("configuration reader");
+    let expected = Row::pack_slice(&[
+        Datum::String("192.0.2.1"),
+        Datum::Int32(32),
+        Datum::String("192.0.2.1/32"),
+    ]);
+    let desired = vec![mz_catalog::catalog::BuiltinTableUpdate::row(
+        egress_id,
+        expected.clone(),
+        mz_repr::Diff::ONE,
+    )];
+    for snapshot in [&desired[..], &desired[..], &[][..]] {
+        catalog
+            .reconcile_deployment_configuration(&persist, &mut infrastructure, snapshot, &oracle)
+            .await
+            .expect("finite configuration reconciliation");
+        let actual = infrastructure
+            .txns
+            .read_cache()
+            .data_snapshot(egress_shard, infrastructure.completed_at)
+            .snapshot_and_fetch(&mut reader)
+            .await
+            .expect("configuration snapshot");
+        let rows: Vec<_> = actual
+            .into_iter()
+            .map(|((data, ()), _, diff)| (data.0.expect("valid configuration row"), diff))
+            .collect();
+        assert_eq!(
+            rows,
+            if snapshot.is_empty() {
+                Vec::new()
+            } else {
+                vec![(expected.clone(), 1)]
+            }
+        );
+    }
+    reader.expire().await;
+    drop(infrastructure);
+
     let mut peer = TestCatalogStateBuilder::new(persist.clone())
         .with_organization_id(organization)
         .with_default_deploy_generation()
