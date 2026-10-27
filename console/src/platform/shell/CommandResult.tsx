@@ -166,16 +166,19 @@ const CommandResult = ({
 
   const timeTaken = calculateCommandDuration(commandResultIndex, commandOutput);
   const executionTime = findExecutionTime(notices);
-
-  const timeTakenStr = timeTaken
-    ? `Returned in ${formatCommandDuration(timeTaken)}` +
-      (executionTime ? ` · ${formatExecutionTime(executionTime)}` : "")
-    : null;
-
   const { isMeasuredFromPreviousResult } = getCommandResultStartTime(
     commandOutput,
     commandResultIndex,
   );
+
+  // A later result's round trip starts after the previous result and can come
+  // out shorter than its time in Materialize, so the footer names its start.
+  const timeTakenStr = timeTaken
+    ? `Returned in ${formatCommandDuration(timeTaken)}` +
+      (isMeasuredFromPreviousResult ? " after the previous result" : "") +
+      (executionTime ? ` · ${formatExecutionTime(executionTime)}` : "")
+    : null;
+
   let roundTripHelp = ROUND_TRIP_HELP;
   if (isMeasuredFromPreviousResult) {
     roundTripHelp = executionTime

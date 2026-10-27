@@ -199,28 +199,44 @@ describe("HistoryOutput", () => {
       ).toBeVisible();
     });
 
+    // Two statements of one input. The second result arrives 4ms after the
+    // first, although Materialize spent 12ms on it.
+    const twoStatementOutput = () =>
+      commandOutput({
+        statements: [{ query: "SELECT 1" }, { query: "SELECT 2" }],
+        commandSentTimeMs: 1000,
+        commandResults: [
+          {
+            notices: [executionTimeNotice("first_row")],
+            hasRows: false,
+            commandCompletePayload: "SELECT 1",
+            endTimeMs: 1100,
+          },
+          {
+            notices: [executionTimeNotice("first_row")],
+            hasRows: false,
+            commandCompletePayload: "SELECT 1",
+            endTimeMs: 1104,
+          },
+        ],
+        commandResultsDisplayStates: [displayState, displayState],
+      });
+
+    it("says in the footer that a later result is timed from the previous result", async () => {
+      await renderHistoryOutput(twoStatementOutput());
+
+      expect(
+        screen.getByText("Returned in 100.0ms · 12.0ms in Materialize"),
+      ).toBeVisible();
+      expect(
+        screen.getByText(
+          "Returned in 4.0ms after the previous result · 12.0ms in Materialize",
+        ),
+      ).toBeVisible();
+    });
+
     it("says a later statement's round trip can be shorter than its time in Materialize", async () => {
-      await renderHistoryOutput(
-        commandOutput({
-          statements: [{ query: "SELECT 1" }, { query: "SELECT 2" }],
-          commandSentTimeMs: 1000,
-          commandResults: [
-            {
-              notices: [executionTimeNotice("first_row")],
-              hasRows: false,
-              commandCompletePayload: "SELECT 1",
-              endTimeMs: 1100,
-            },
-            {
-              notices: [executionTimeNotice("first_row")],
-              hasRows: false,
-              commandCompletePayload: "SELECT 1",
-              endTimeMs: 1104,
-            },
-          ],
-          commandResultsDisplayStates: [displayState, displayState],
-        }),
-      );
+      await renderHistoryOutput(twoStatementOutput());
 
       const [, second] = screen.getAllByRole("button", {
         name: "Timing details",
