@@ -1,0 +1,4576 @@
+{
+  "formatVersion": 1,
+  "parameters": [
+    {
+      "name": "0dt_deployment_hydration_check_interval",
+      "type": "duration",
+      "default": "10 s",
+      "description": "Interval at which to check whether clusters are caught up, when doing zero-downtime deployment.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "allow_real_time_recency",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether real time recency is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "allow_user_sessions",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to allow user roles to create new sessions. When false, only system roles will be permitted to create new sessions.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "allowed_cluster_replica_sizes",
+      "type": "identifier list",
+      "default": "",
+      "description": "The allowed sizes when creating a new cluster replica (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "arrangement_exert_proportionality",
+      "type": "unsigned integer",
+      "default": "16",
+      "description": "Value that controls how much merge effort to exert on arrangements.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "arrangement_size_history_collection_interval",
+      "type": "duration",
+      "default": "0 s",
+      "description": "Interval at which to collect and snapshot per-object arrangement sizes into mz_internal.mz_object_arrangement_size_history.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "arrangement_size_history_retention_period",
+      "type": "duration",
+      "default": "7 d",
+      "description": "How long to retain rows in mz_internal.mz_object_arrangement_size_history.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "aws_prefetch_sts_connect_timeout",
+      "type": "duration",
+      "default": "3100 ms",
+      "description": "Connect timeout for the AWS AssumeRole credentials prefetcher's STS calls.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "catalog_info_metrics_reconcile_interval",
+      "type": "duration",
+      "default": "30 s",
+      "description": "How frequently to reconcile the catalog `*_info` metrics with the catalog. A zero duration disables reconciliation.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "cluster_alter_check_ready_interval",
+      "type": "duration",
+      "default": "3 s",
+      "description": "How often to poll readiness checks for cluster alter",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_controller_tick_interval",
+      "type": "duration",
+      "default": "5 s",
+      "description": "How often the cluster controller runs a reconcile tick.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "cluster_enable_topology_spread",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether or not to add topology spread constraints among replicas in the same cluster (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_multi_process_replica_az_affinity_weight",
+      "type": "optional integer",
+      "default": "100",
+      "description": "Whether or not to add an availability zone affinity between instances of multi-process replicas. Either an affinity weight or empty (off) (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_reconfiguration_allowed_lag",
+      "type": "duration",
+      "default": "1 min",
+      "description": "Maximum allowed lag when determining whether surviving compute replicas have caught up with replicas retired by graceful reconfiguration or hydration burst.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "cluster_refresh_mv_compaction_estimate",
+      "type": "duration",
+      "default": "20 min",
+      "description": "How much time to wait for compaction after a REFRESH MV completes a refresh before turning off the refresh cluster. This is needed because Persist does compaction only after a write, but refresh MVs do writes only at their refresh times. (In the long term, we'd like to remove this configuration and instead wait exactly until compaction has settled. We'd need some new Persist API for this.)",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_security_context_enabled",
+      "type": "boolean",
+      "default": "on",
+      "description": "Enables SecurityContext for clusterd instances, restricting capabilities to improve security.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_soften_az_affinity",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether or not to turn the az-scope node affinity for replicas. Note this could violate requests from the user (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_soften_az_affinity_weight",
+      "type": "integer",
+      "default": "100",
+      "description": "The preference weight for `cluster_soften_az_affinity` (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_soften_replication_anti_affinity",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether or not to turn the node-scope anti affinity between replicas in the same cluster into a preference (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_soften_replication_anti_affinity_weight",
+      "type": "integer",
+      "default": "100",
+      "description": "The preference weight for `cluster_soften_replication_anti_affinity` (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_topology_spread_ignore_non_singular_scale",
+      "type": "boolean",
+      "default": "on",
+      "description": "If true, ignore replicas with more than 1 process when adding topology spread constraints (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_topology_spread_max_skew",
+      "type": "integer",
+      "default": "1",
+      "description": "The `maxSkew` for replica topology spread constraints (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_topology_spread_min_domains",
+      "type": "optional integer",
+      "default": "",
+      "description": "`minDomains` for replica topology spread constraints. Should be set to the number of Availability Zones (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "cluster_topology_spread_soft",
+      "type": "boolean",
+      "default": "off",
+      "description": "If true, soften the topology spread constraints for replicas (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "column_chunk_compress_min_depth",
+      "type": "unsigned integer",
+      "default": "1",
+      "description": "The youngest chunk generation whose spilled bodies are lz4-compressed in the buffer pool; younger generations store uncompressed. 0 compresses every spilled body.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "column_paged_batcher_budget_fraction",
+      "type": "double-precision floating-point number",
+      "default": "0.05",
+      "description": "Budget fraction for chunk spilling: the buffer pool multiplies it against physical RAM and the column pager's tiered policy against the announced memory limit. Total pool budget = max(ram * fraction, 128 MiB).",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "column_paged_batcher_eager_backing",
+      "type": "boolean",
+      "default": "off",
+      "description": "Eagerly compress buffer-pool chunks to compressed-but-resident on idle spill threads, so budget-driven eviction is a pure page release. Only meaningful with spill workers.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "column_paged_batcher_lz4",
+      "type": "boolean",
+      "default": "off",
+      "description": "Compress column-paged batcher chunks with lz4 on the spill path. Only meaningful when `enable_column_paged_batcher_spill = true`.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "column_paged_batcher_pool_rss_target_fraction",
+      "type": "double-precision floating-point number",
+      "default": "0.25",
+      "description": "Ceiling on the buffer pool's total RSS as a fraction of physical RAM; the headroom above the slot budget holds compressed-but-resident extents. Zero pages extents out immediately.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "column_paged_batcher_spill_worker_count",
+      "type": "unsigned integer",
+      "default": "2",
+      "description": "Buffer-pool spill threads for off-worker eviction I/O; 0 evicts inline on the caller.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "column_paged_batcher_swap_pageout",
+      "type": "boolean",
+      "default": "off",
+      "description": "Eagerly evict the column-paged batcher's lz4-compressed swap-backend spill chunks from RSS via `MADV_PAGEOUT` (they otherwise receive no madvise and are reclaimed only lazily). Only meaningful when `column_paged_batcher_lz4 = true` and the swap backend is active.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_apply_column_demands",
+      "type": "boolean",
+      "default": "on",
+      "description": "When enabled, passes applys column demands to the RelationDesc used to read out of Persist.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_correction_v2_chain_proportionality",
+      "type": "double-precision floating-point number",
+      "default": "3",
+      "description": "The size factor of subsequent chains in the correction V2 buffer.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_correction_v2_chunk_size",
+      "type": "unsigned integer",
+      "default": "2097152",
+      "description": "The byte size of the staging area in the correction V2 buffer, heap bytes of the staged updates included, which sets how much it accumulates before minting a chain (the name predates that meaning; chunk bodies themselves are fixed at the columnar ship size).",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_dataflow_max_inflight_bytes",
+      "type": "optional unsigned integer",
+      "default": "",
+      "description": "The maximum number of in-flight bytes emitted by persist_sources feeding compute dataflows in non-cc clusters.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_dataflow_max_inflight_bytes_cc",
+      "type": "optional unsigned integer",
+      "default": "",
+      "description": "The maximum number of in-flight bytes emitted by persist_sources feeding compute dataflows in cc clusters.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_flat_map_fuel",
+      "type": "unsigned integer",
+      "default": "1000000",
+      "description": "The amount of output the flat-map operator produces before yielding.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_hydration_concurrency",
+      "type": "unsigned integer",
+      "default": "4",
+      "description": "Controls how many compute dataflows may hydrate concurrently.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_index_peek_activation_budget",
+      "type": "unsigned integer",
+      "default": "8192",
+      "description": "What all index peeks together may spend in one timely worker activation, in consumed cursor positions.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_index_peek_inline_budget",
+      "type": "unsigned integer",
+      "default": "1024",
+      "description": "How far one index peek may walk on the timely worker, in consumed cursor positions, before it is offloaded.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_index_peek_permit_fraction",
+      "type": "double-precision floating-point number",
+      "default": "4",
+      "description": "How many offloaded index peek scans may run at once in one compute runtime, as a fraction of the timely workers it runs. Never below one scan.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_index_peek_yield_granularity",
+      "type": "unsigned integer",
+      "default": "10000",
+      "description": "How often an offloaded index peek scan checks for cancellation, in consumed cursor positions.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_logical_backpressure_inflight_slack",
+      "type": "duration",
+      "default": "1 s",
+      "description": "Round observed timestamps to slack.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_logical_backpressure_max_retained_capabilities",
+      "type": "optional unsigned integer",
+      "default": "43200",
+      "description": "The maximum number of capabilities retained by the logical backpressure operator.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_mv_sink_advance_persist_frontiers",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether the MV sink's write operator advances its internal persist frontiers to the as_of.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_mv_sink_shared_batch_max_bytes",
+      "type": "unsigned integer",
+      "default": "1048576",
+      "description": "The size of a worker's updates for one batch interval below which the MV sink coalesces them into a batch shared by the workers in one process. Zero disables sharing.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_peek_response_stash_batch_bytes",
+      "type": "unsigned integer",
+      "default": "1048576",
+      "description": "The size in bytes at which a peek bound for the peek response stash hands its rows to the upload, after the first batch at the stash threshold.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_peek_response_stash_batch_max_runs",
+      "type": "unsigned integer",
+      "default": "2",
+      "description": "The target number of maximum runs in the batches written to the stash.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_peek_response_stash_read_batch_size_bytes",
+      "type": "unsigned integer",
+      "default": "104857600",
+      "description": "The target size for batches of rows we read out of the peek stash.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_peek_response_stash_read_memory_budget_bytes",
+      "type": "unsigned integer",
+      "default": "67108864",
+      "description": "The memory budget for consolidating stashed peek responses in environmentd.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_peek_response_stash_threshold_bytes",
+      "type": "unsigned integer",
+      "default": "10240",
+      "description": "The threshold above which to use the peek response stash, for sending back large peek responses.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_peek_row_iteration_limit",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "The maximum number of rows a peek may iterate over on each worker when enable_compute_peek_row_iteration_limit is enabled. The count spans the peek's whole walk, rows written to the peek stash included.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_prometheus_introspection_scrape_interval",
+      "type": "duration",
+      "default": "10 s",
+      "description": "The collection interval for the Prometheus metrics introspection source. Set to zero to disable.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_replica_expiration_offset",
+      "type": "duration",
+      "default": "0 s",
+      "description": "The expiration time offset for replicas. Zero disables expiration.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_server_maintenance_interval",
+      "type": "duration",
+      "default": "10 ms",
+      "description": "The interval at which the compute server performs maintenance tasks. Zero enables maintenance on every iteration.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_subscribe_snapshot_optimization",
+      "type": "boolean",
+      "default": "on",
+      "description": "If set, skip fetching or processing the snapshot data for subscribes when possible.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "compute_temporal_bucketing_summary",
+      "type": "duration",
+      "default": "2 s",
+      "description": "The summary to apply to frontiers in temporal bucketing in compute.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "console_oidc_client_id",
+      "type": "string",
+      "default": "",
+      "description": "OIDC client ID for the web console.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "console_oidc_scopes",
+      "type": "string",
+      "default": "",
+      "description": "Space-separated OIDC scopes requested by the web console.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "consolidating_vec_growth_dampener",
+      "type": "unsigned integer",
+      "default": "1",
+      "description": "Dampener in growth rate for consolidating vector size",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "controller_past_generation_replica_cleanup_retry_interval",
+      "type": "duration",
+      "default": "5 min",
+      "description": "The interval at which to attempt to retry cleaning up replicas from past generations.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "coord_slow_message_warn_threshold",
+      "type": "duration",
+      "default": "30 s",
+      "description": "Sets the threshold at which we will error! for a coordinator message being slow.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "copy_to_s3_arrow_builder_buffer_ratio",
+      "type": "unsigned integer",
+      "default": "150",
+      "description": "The ratio (defined as a percentage) of arrow-builder size to row-group size. Must be >= 100.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "copy_to_s3_multipart_part_size_bytes",
+      "type": "unsigned integer",
+      "default": "8388608",
+      "description": "The size of each part in a multipart upload to S3.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "copy_to_s3_parquet_row_group_file_ratio",
+      "type": "unsigned integer",
+      "default": "20",
+      "description": "The ratio (defined as a percentage) of row-group size to max-file-size. Must be <= 100.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "crdb_connect_timeout",
+      "type": "duration",
+      "default": "5 s",
+      "description": "The time to connect to CockroachDB before timing out and retrying.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "crdb_keepalives_idle",
+      "type": "duration",
+      "default": "10 s",
+      "description": "The amount of idle time before a TCP keepalive packet is sent on CRDB connections.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "crdb_keepalives_interval",
+      "type": "duration",
+      "default": "5 s",
+      "description": "The time interval between TCP keepalive probes on CRDB connections.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "crdb_keepalives_retries",
+      "type": "unsigned integer",
+      "default": "5",
+      "description": "The maximum number of TCP keepalive probes that will be sent before dropping a CRDB connection.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "crdb_tcp_user_timeout",
+      "type": "duration",
+      "default": "30 s",
+      "description": "The TCP timeout for connections to CockroachDB. Specifies the amount of time that transmitted data may remain unacknowledged before the TCP connection is forcibly closed.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "default_cluster_reconfiguration_timeout",
+      "type": "duration",
+      "default": "1 d",
+      "description": "The reconfiguration deadline written when a config-shape ALTER CLUSTER omits WITH (WAIT ...).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "default_hydration_burst_linger",
+      "type": "duration",
+      "default": "0 s",
+      "description": "The burst-replica linger duration written when an AUTO SCALING STRATEGY omits LINGER DURATION.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "default_timestamp_interval",
+      "type": "duration",
+      "default": "1 s",
+      "description": "The interval at which timestamps are assigned to data from sources and tables.",
+      "scope": "environment",
+      "userVisible": false,
+      "constraint": "domain",
+      "dyncfg": false
+    },
+    {
+      "name": "disabled_metric_sinks",
+      "type": "identifier list",
+      "default": "",
+      "description": "Curated metric sinks to tear down and keep from installing, comma-separated (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "disallow_unmaterializable_functions_as_of",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Prohibits calling unmaterializable functions (except `mz_now`) in AS OF queries. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_0dt_caught_up_replica_status_check",
+      "type": "boolean",
+      "default": "on",
+      "description": "Enable checking for crash/OOM-looping replicas during 0dt caught-up checks. Emergency break-glass flag to disable this feature if needed.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_0dt_caught_up_stability_check",
+      "type": "boolean",
+      "default": "on",
+      "description": "Require clusters to stay caught-up and healthy for a stability period before being considered ready during 0dt deployments. Emergency break-glass flag: disabling reverts to treating a caught-up cluster as ready with no replica-health requirement, which differs from setting the stability period to zero (a zero period still requires all replicas to be healthy).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_0dt_deployment_panic_after_timeout",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether to panic if the maximum wait time is reached but preflight checks have not succeeded.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_0dt_deployment_sources",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to enable zero-downtime deployments for sources that support it (experimental).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_0dt_hydrate_migrated_builtin_mvs",
+      "type": "boolean",
+      "default": "on",
+      "description": "Write-enable replacement-migrated builtin materialized views while read-only during a 0dt deployment, so they hydrate before cut-over and keep gating promotion. Emergency break-glass flag: disabling excludes migrated MVs (and their dependents) from the caught-up check again, so promotion proceeds with them unhydrated. Not an exact revert: a collection with no live leader frontier must be hydrated either way. Only takes effect when the leader is new enough for the write to make progress, and is read once at startup, so changing it means setting it on the leader and restarting the new deployment.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_alter_set_cluster",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether ALTER ... SET CLUSTER syntax is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_alter_swap",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether the ALTER SWAP feature for objects is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_alter_table_add_column",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether Enable ALTER TABLE ... ADD COLUMN ... is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_any_all_null_array_semantics",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether PostgreSQL-compatible NULL semantics for `ANY`/`ALL` over a NULL array or list. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_arrangement_dictionary_compression_alpha",
+      "type": "boolean",
+      "default": "on",
+      "description": "Enable arrangement dictionary compression (alpha; not yet production-ready).",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_auto_scaling_strategy",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether `AUTO SCALING STRATEGY` cluster option is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_background_alter_cluster",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether a config-shape ALTER CLUSTER returns immediately (true) or the session blocks on a wait-shim over the durable reconfiguration record (false).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_binary_date_bin",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether the binary version of date_bin function is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_cardinality_estimates",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether join planning with cardinality estimates is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_case_literal_transform",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether Allow the optimizer to rewrite If-chains matching a single expression against literals into a CaseLiteral lookup. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_cast_elimination",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Allow the optimizer to eliminate noop casts between values of equivalent representation types. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_cluster_reconfiguration_lag_gate",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether graceful reconfiguration and hydration-burst retirement require surviving replicas to be within cluster_reconfiguration_allowed_lag of the retiring replicas, on top of being hydrated.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_cluster_schedule_refresh",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether `SCHEDULE = ON REFRESH` cluster option is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_coalesce_case_transform",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Allow the optimizer to push `COALESCE` into `CASE WHEN`. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_collection_partition_by",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether PARTITION BY is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_column_paged_batcher",
+      "type": "boolean",
+      "default": "off",
+      "description": "Use the columnar-native chunked merge batcher at arrange sites, whose chunk bodies the process buffer pool can spill. Takes precedence over enable_columnar_merge_batcher; with both false, arranges use the columnation `Col2ValBatcher` / `RowRowBuilder` path.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_column_paged_batcher_spill",
+      "type": "boolean",
+      "default": "off",
+      "description": "Allow chunk bodies to spill to the process buffer pool under memory pressure. Only meaningful for arrange sites when `enable_column_paged_batcher = true`.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_columnar_accumulable_diff",
+      "type": "boolean",
+      "default": "off",
+      "description": "Store the accumulable reduce's accumulators in a columnar arrangement diff, laid out by variant, instead of a columnation stack of fixed-width accumulator enums.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_columnar_merge_batcher",
+      "type": "boolean",
+      "default": "off",
+      "description": "Use the resident columnar merge batcher at arrange sites, instead of the columnation one. Ignored when enable_column_paged_batcher is true.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_columnation_lgalloc",
+      "type": "boolean",
+      "default": "on",
+      "description": "Enable allocating regions from lgalloc.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_compute_correction_v2",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether compute should use the new MV sink correction buffer implementation.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_compute_correction_v2_spill",
+      "type": "boolean",
+      "default": "off",
+      "description": "Allow the MV sink correction V2 buffer's chunk bodies to spill to the process buffer pool under memory pressure.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_compute_error_distinct",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether compute rendering should collapse error multiplicities to one where it arranges errors.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_compute_half_join2",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_compute_index_peek_offload",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether a fast-path index peek may move its walk off the timely worker.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_compute_logical_backpressure",
+      "type": "boolean",
+      "default": "off",
+      "description": "When enabled, compute dataflows will apply logical backpressure.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_compute_peek_response_stash",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed compute_peek_response_stash_threshold_bytes.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_compute_peek_row_iteration_limit",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether compute should stop peeks that exceed compute_peek_row_iteration_limit.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_compute_replica_expiration",
+      "type": "boolean",
+      "default": "on",
+      "description": "Main switch to disable replica expiration.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_compute_sync_mv_sink",
+      "type": "boolean",
+      "default": "off",
+      "description": "Use sync Timely operators with Tokio tasks for the MV sink.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_connection_validation_syntax",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_create_table_from_source",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Whether to allow CREATE TABLE .. FROM SOURCE syntax. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_date_bin_hopping",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether the date_bin_hopping function is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_default_connection_validation",
+      "type": "boolean",
+      "default": "on",
+      "description": "LD facing global boolean flag that allows turning default connection validation off for everyone (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_dequadratic_eqprop_map",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Skip the quadratic part of EquivalencePropagation's handling of Map. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_eager_delta_joins",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether eager delta joins is allowed (Materialize).",
+      "scope": "cluster",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_envelope_debezium_in_subscribe",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether `ENVELOPE DEBEZIUM (KEY (..))` is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_envelope_materialize",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether ENVELOPE MATERIALIZE is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_envelope_upsert_inline_errors",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether The VALUE DECODING ERRORS = INLINE option on ENVELOPE UPSERT is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_eq_classes_withholding_errors",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Use `EquivalenceClassesWithholdingErrors` instead of raw `EquivalenceClasses` during eq prop for joins. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_exclude_constraints_option",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Whether to allow the EXCLUDE CONSTRAINTS / EXCLUDE ALL CONSTRAINTS options in CREATE TABLE .. FROM SOURCE. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_explain_pushdown",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether EXPLAIN FILTER PUSHDOWN is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_expression_cache",
+      "type": "boolean",
+      "default": "on",
+      "description": "Use a cache to store optimized expressions to help speed up start times. Read at startup, so changing it takes effect on the next restart.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_expressions_in_limit_syntax",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether LIMIT <expr> syntax is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_extended_protocol_implicit_transaction",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether an implicit write transaction started by the extended query protocol spans the whole pipeline up to the client's Sync, so that the pipeline commits or rolls back atomically as in PostgreSQL (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_fast_path_plan_insights",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether Enables those plan insight notices that help with getting fast path queries. Don't turn on before #9492 is fixed! is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_fixed_correlated_cte_lowering",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether CTE-aware branch keys in HIR-to-MIR lowering, fixing references to correlated CTEs from nested correlated scopes is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_frontend_subscribes",
+      "type": "boolean",
+      "default": "on",
+      "description": "Enable sending subscribes down the new frontend-peek path.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_hydration_burst",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether the cluster controller's hydration-burst strategy may run a burst replica (break-glass; leaves graceful reconfiguration and ON REFRESH untouched).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_index_options",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether INDEX OPTIONS is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_internal_statement_logging",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether to log statements from the `mz_system` user.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_introspection_subscribes",
+      "type": "boolean",
+      "default": "on",
+      "description": "Enable installation of introspection subscribes.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_join_prioritize_arranged",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether Whether join planning should prioritize already-arranged keys over keys with more fields. is allowed (Materialize).",
+      "scope": "cluster",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_jq",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether the jq function is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_kafka_broker_matching_rules",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether MATCHING broker rules in BROKERS for Kafka PrivateLink connections is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_kafka_sink_headers",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Enable the HEADERS option for Kafka sinks is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_less_reduce_in_eqprop",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Run MSE::reduce in EquivalencePropagation only if reduce_expr changed something. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_letrec_fixpoint_analysis",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Enable Lattice-based fixpoint iteration on LetRec nodes in the Analysis framework is allowed (Materialize).",
+      "scope": "cluster",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_lgalloc",
+      "type": "boolean",
+      "default": "on",
+      "description": "Enable lgalloc.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_lgalloc_eager_reclamation",
+      "type": "boolean",
+      "default": "on",
+      "description": "Enable lgalloc's eager return behavior.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_list_length_max",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether the list_length_max function is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_list_n_layers",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether the list_n_layers function is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_list_remove",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether the list_remove function is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_load_generator_clock",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether Create a LOAD GENERATOR CLOCK is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_load_generator_counter",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether Create a LOAD GENERATOR COUNTER is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_load_generator_datums",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether Create a LOAD GENERATOR DATUMS is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_load_generator_key_value",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether Create a LOAD GENERATOR KEY VALUE is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_logical_compaction_window",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether RETAIN HISTORY is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_managed_cluster_availability_zones",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether MANAGED, AVAILABILITY ZONES syntax is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_mcp_agent",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether the MCP agent HTTP endpoint is enabled. When false, requests to /api/mcp/agent return 503 Service Unavailable.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_mcp_agent_query_tool",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether the MCP agent query tool is enabled. When false, the query tool is not advertised and calls to it are rejected. Agents can still discover and inspect data products.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_mcp_agent_read_data_product_tool",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether the MCP agent read_data_product tool is enabled. When false, the read_data_product tool is not advertised and calls to it are rejected. Agents can use the query tool to read data products.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_mcp_developer",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether the MCP developer HTTP endpoint is enabled. When false, requests to /api/mcp/developer return 503 Service Unavailable.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_mcp_developer_query_tool",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether the MCP developer query tool is enabled. When false, the query tool is not advertised and calls to it are rejected. Developers can still use query_system_catalog.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_mcp_protocol_2026_07_28",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether the MCP endpoints serve the 2026-07-28 protocol revision alongside 2025-11-25. When false, requests are served on the 2025-11-25 protocol only.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_metric_sink",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether CREATE METRIC SINK is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_multi_worker_storage_persist_sink",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether multi-worker storage persist sink is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_mz_join_core",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether compute should use `mz_join_core` rather than DD's `JoinCore::join_core` to render linear joins.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_mz_notices",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Populate the contents of `mz_internal.mz_notices` is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_network_policies",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether ENABLE NETWORK POLICIES is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_new_outer_join_lowering",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether new outer join lowering is allowed (Materialize).",
+      "scope": "cluster",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_notices_for_equals_null",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether emitting notices for `= NULL` and `<> NULL` comparisons (doesn't affect EXPLAIN) is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_notices_for_index_already_exists",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether emitting notices for IndexAlreadyExists (doesn't affect EXPLAIN) is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_notices_for_index_empty_key",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether emitting notices for indexes with an empty key (doesn't affect EXPLAIN) is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_notices_for_index_too_wide_for_literal_constraints",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether emitting notices for IndexTooWideForLiteralConstraints (doesn't affect EXPLAIN) is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_off_thread_optimization",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether use off-thread optimization in `CREATE` statements is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_password_auth",
+      "type": "boolean",
+      "default": "off",
+      "description": "Enable password authentication.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_paused_cluster_readhold_downgrade",
+      "type": "boolean",
+      "default": "on",
+      "description": "Aggressively downgrade input read holds for indexes on zero-replica clusters.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_persist_streaming_compaction",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether use the new streaming consolidate for compaction is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_persist_streaming_snapshot_and_fetch",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether use the new streaming consolidate for snapshot_and_fetch is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_primary_key_not_enforced",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether PRIMARY KEY NOT ENFORCED is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_projection_pushdown_after_relation_cse",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Run ProjectionPushdown one more time after the last RelationCSE. is allowed (Materialize).",
+      "scope": "cluster",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_public_metrics_endpoint",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether the external metrics endpoint on environmentd is enabled. When false, requests return 503.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_raise_statement",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether RAISE statement is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_rbac_checks",
+      "type": "boolean",
+      "default": "on",
+      "description": "User facing global boolean flag indicating whether to apply RBAC checks before executing statements (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_redacted_test_option",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether Enable useless option to test value redaction is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_reduce_mfp_fusion",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether fusion of MFPs in reductions is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_refresh_every_mvs",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether REFRESH EVERY and REFRESH AT materialized views is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_repeat_row",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether the repeat_row function is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_repeat_row_non_negative",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether the repeat_row_non_negative function is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_replacement_materialized_views",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Whether to enable replacement materialized views. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_replica_targeted_materialized_views",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether replica-targeted materialized views is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_s3_tables_region_check",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether to enforce that S3 Tables connections are in the same region as the environment.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_session_timelines",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether strong session serializable isolation levels is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_simplify_from_less_existence",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Allow the optimizer to collapse EXISTS/NOT EXISTS over a FROM-less correlated subquery into a plain Filter during HIR-to-MIR lowering. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_simplify_quantified_comparisons",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Allow the optimizer to simplify quantified comparisons in JOIN ON clauses into semi/anti-join EXISTS form during HIR-to-MIR lowering. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_statement_arrival_logging",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether to log incoming statements and other frontend messages at info level as they arrive at the SQL frontends, before processing. SQL text is logged with its literals redacted, as in the statement log. Use it only in emergencies, i.e. debugging active incidents.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_statement_lifecycle_logging",
+      "type": "boolean",
+      "default": "on",
+      "description": "Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_storage_shard_finalization",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to allow the storage client to finalize shards (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_time_at_time_zone",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether use of AT TIME ZONE or timezone() with time type is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_timely_zero_copy",
+      "type": "boolean",
+      "default": "off",
+      "description": "Enable the zero copy allocator (timely dataflow).",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_timely_zero_copy_lgalloc",
+      "type": "boolean",
+      "default": "off",
+      "description": "Enable backing the zero copy allocator with lgalloc (timely dataflow).",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_try_cast",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether TRY_CAST(<expr> AS <type>) syntax is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_unified_cluster",
+      "type": "boolean",
+      "default": "off",
+      "description": "Host storage objects on the compute Timely cluster instead of a separate storage cluster.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_union_cancellation_after_relation_cse",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Run UnionBranchCancellation one more time after the last RelationCSE. is allowed (Materialize).",
+      "scope": "cluster",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_unlimited_retain_history",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether Disable limits on RETAIN HISTORY (below 1s default, and 0 disables compaction). is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_upsert_chunked_stash",
+      "type": "boolean",
+      "default": "off",
+      "description": "Use the chunk batcher and chunk spine for the upsert-v2 stash and feedback arrangement, instead of the paged columnar merge batcher and ValRowSpine. Only meaningful when enable_upsert_v2 is true.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_upsert_paged_spill",
+      "type": "boolean",
+      "default": "off",
+      "description": "Allow the upsert-v2 stash to spill out of RSS, through the buffer pool (chunked stash flavor) or the column pager (paged stash flavor).",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_upsert_v2",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether to use the v2 upsert operator.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "enable_variadic_left_join_lowering",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Enable joint HIR ⇒ MIR lowering of stacks of left joins is allowed (Materialize).",
+      "scope": "cluster",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_will_distinct_propagation",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Allow the WillDistinct transform to propagate a pending distinct through Map, Filter, FlatMap, Threshold, Negate, non-negative Project, and TopK with limit 1 and offset 0. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_with_ordinality_legacy_fallback",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether When the new WITH ORDINALITY implementation can't be used with a table func, whether to fall back to the legacy implementation or error out. is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_within_timestamp_order_by_in_subscribe",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether `WITHIN TIMESTAMP ORDER BY ..` is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "enable_worker_core_affinity",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether set core affinity for replica worker threads is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "force_source_table_syntax",
+      "type": "boolean",
+      "default": "off",
+      "description": "Force use of new source model (CREATE TABLE .. FROM SOURCE) and migrate existing sources",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "group_commit_max_attempts",
+      "type": "unsigned integer",
+      "default": "100",
+      "description": "Maximum number of txns-shard write attempts before rebuilding environmentd. Values below 1 are treated as 1.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "grpc_client_connect_timeout",
+      "type": "duration",
+      "default": "5 s",
+      "description": "Timeout to apply to initial gRPC client connection establishment.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "grpc_client_http2_keep_alive_interval",
+      "type": "duration",
+      "default": "3 s",
+      "description": "Idle time to wait before sending HTTP/2 PINGs to maintain established gRPC client connections.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "grpc_client_http2_keep_alive_timeout",
+      "type": "duration",
+      "default": "1 min",
+      "description": "Time to wait for HTTP/2 pong response before terminating a gRPC client connection.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "hydration_history_collection_interval",
+      "type": "duration",
+      "default": "1 min",
+      "description": "How often to record completed object and replica hydration episodes. A zero duration prevents new collection and retention sweeps.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "hydration_history_retention_period",
+      "type": "duration",
+      "default": "30 d",
+      "description": "How long to retain rows in mz_internal.mz_object_hydration_history.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_buffered_event_resize_threshold_elements",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "In the Kafka sink operator we might need to buffer messages before emitting them. As a performance optimization we reuse the buffer allocations, but shrink it to retain at most this number of elements.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_client_id_enrichment_rules",
+      "type": "jsonb",
+      "default": "[]",
+      "description": "Rules for enriching the `client.id` property of Kafka clients with additional data.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_default_aws_privatelink_endpoint_identification_algorithm",
+      "type": "string",
+      "default": "none",
+      "description": "The value we set for the 'ssl.endpoint.identification.algorithm' option in the Kafka Connection config. default: 'none'",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_fetch_metadata_timeout",
+      "type": "duration",
+      "default": "10 s",
+      "description": "Controls the timeout when fetching kafka metadata. Defaults to 10s.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "kafka_low_watermark_check",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to check the low watermark for Kafka sources and error if the start offset/resume upper has been compacted away.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_offset_commit_refresh_interval",
+      "type": "duration",
+      "default": "10 min",
+      "description": "How often Kafka sources recommit offsets that have not changed, which must stay well below the broker's offsets.retention.minutes. Zero disables it.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_poll_max_wait",
+      "type": "duration",
+      "default": "1 s",
+      "description": "The maximum time we will wait before re-polling rdkafka to see if new partitions/data are available.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_progress_record_fetch_timeout",
+      "type": "optional duration",
+      "default": "",
+      "description": "Controls the timeout when fetching kafka progress records. Defaults to 60s or the transaction timeout, whichever one is larger.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "kafka_reconnect_backoff",
+      "type": "duration",
+      "default": "100 ms",
+      "description": "Sets reconnect.backoff.ms in librdkafka for sources and sinks.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_reconnect_backoff_max",
+      "type": "duration",
+      "default": "30 s",
+      "description": "Sets reconnect.backoff.max.ms in librdkafka for sources and sinks.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_retry_backoff",
+      "type": "duration",
+      "default": "100 ms",
+      "description": "Sets retry.backoff.ms in librdkafka for sources and sinks.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_retry_backoff_max",
+      "type": "duration",
+      "default": "1 s",
+      "description": "Sets retry.backoff.max.ms in librdkafka for sources and sinks.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_sink_batch_num_messages",
+      "type": "unsigned integer",
+      "default": "10000",
+      "description": "Sets batch.num.messages in librdkafka for Kafka sink producers.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_sink_batch_size",
+      "type": "unsigned integer",
+      "default": "1000000",
+      "description": "Sets batch.size in librdkafka for Kafka sink producers.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_sink_emit_sink_id_header",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Kafka sinks attach a `materialize-sink-id` header to every message they produce.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_sink_message_max_bytes",
+      "type": "unsigned integer",
+      "default": "1000000",
+      "description": "Sets message.max.bytes in librdkafka for Kafka sink producers.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "kafka_socket_connection_setup_timeout",
+      "type": "duration",
+      "default": "30 s",
+      "description": "Controls `socket.connection.setup.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default (30000ms). Cannot be greater than `i32::MAX` or less than 1000ms",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "kafka_socket_keepalive",
+      "type": "boolean",
+      "default": "on",
+      "description": "Enables `socket.keepalive.enable` for rdkafka client connections. Defaults to true.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "kafka_socket_timeout",
+      "type": "optional duration",
+      "default": "",
+      "description": "Controls `socket.timeout.ms` for rdkafka client connections. Defaults to the rdkafka default (60000ms) or the set transaction timeout + 100ms, whichever one is smaller. Cannot be greater than 300000ms, more than 100ms greater than `kafka_transaction_timeout`, or less than 10ms.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "kafka_transaction_timeout",
+      "type": "duration",
+      "default": "10 min",
+      "description": "Controls `transaction.timeout.ms` for rdkafka client connections. Defaults to the 10min. Cannot be greater than `i32::MAX` or less than 1000ms.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "keep_n_privatelink_status_history_entries",
+      "type": "unsigned integer",
+      "default": "5",
+      "description": "On reboot, truncate all but the last n entries per ID in the mz_aws_privatelink_connection_status_history collection (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "keep_n_sink_status_history_entries",
+      "type": "unsigned integer",
+      "default": "5",
+      "description": "On reboot, truncate all but the last n entries per ID in the sink_status_history collection (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "keep_n_source_status_history_entries",
+      "type": "unsigned integer",
+      "default": "5",
+      "description": "On reboot, truncate all but the last n entries per ID in the source_status_history collection (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "lgalloc_background_interval",
+      "type": "duration",
+      "default": "1 s",
+      "description": "Scheduling interval for lgalloc's background worker.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "lgalloc_file_growth_dampener",
+      "type": "unsigned integer",
+      "default": "2",
+      "description": "Lgalloc's file growth dampener parameter.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "lgalloc_local_buffer_bytes",
+      "type": "unsigned integer",
+      "default": "67108864",
+      "description": "Lgalloc's local buffer bytes parameter.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "lgalloc_slow_clear_bytes",
+      "type": "unsigned integer",
+      "default": "134217728",
+      "description": "Clear byte size per size class for every invocation",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "linear_join_yielding",
+      "type": "string",
+      "default": "work:1000000,time:100",
+      "description": "The yielding behavior compute rendering should apply for linear join operators. Either 'work:<amount>' or 'time:<milliseconds>' or 'work:<amount>,time:<milliseconds>'. Note that omitting one of 'work' or 'time' will entirely disable join yielding by time or work, respectively, rather than falling back to some default.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "log_filter",
+      "type": "EnvFilter",
+      "default": "info",
+      "description": "Sets the filter to apply to stderr logging.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "log_filter_defaults",
+      "type": "directive list",
+      "default": "kube_client::client::builder=off, aws_config::profile::credentials=off",
+      "description": "Sets additional default directives to apply to stderr logging. These apply to all variations of `log_filter`. Directives other than `module=off` are likely incorrect.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "max_aws_privatelink_connections",
+      "type": "unsigned integer",
+      "default": "0",
+      "description": "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_clusters",
+      "type": "unsigned integer",
+      "default": "25",
+      "description": "The maximum number of clusters in the region (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_concurrent_occ_writes",
+      "type": "unsigned integer",
+      "default": "4",
+      "description": "Maximum number of concurrent read-then-write (DELETE/UPDATE) operations using OCC. Read at startup; changes require an environmentd restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "constraint": "domain",
+      "dyncfg": false
+    },
+    {
+      "name": "max_connections",
+      "type": "unsigned integer",
+      "default": "5000",
+      "description": "The maximum number of concurrent connections (PostgreSQL).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_copy_from_row_size",
+      "type": "bytes",
+      "default": "128MB",
+      "description": "The maximum size in bytes for a single COPY FROM STDIN row (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_credit_consumption_rate",
+      "type": "numeric",
+      "default": "1024",
+      "description": "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "constraint": "domain",
+      "dyncfg": false
+    },
+    {
+      "name": "max_databases",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "The maximum number of databases in the region (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_kafka_connections",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "The maximum number of Kafka connections in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_materialized_views",
+      "type": "unsigned integer",
+      "default": "500",
+      "description": "The maximum number of materialized views in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_mysql_connections",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "The maximum number of MySQL connections in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_network_policies",
+      "type": "unsigned integer",
+      "default": "25",
+      "description": "The maximum number of network policies in the region.",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_objects_per_schema",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "The maximum number of objects in a schema (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_occ_retries",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "Maximum number of OCC retry attempts per read-then-write operation before giving up (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "max_postgres_connections",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "The maximum number of PostgreSQL connections in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_replicas_per_cluster",
+      "type": "unsigned integer",
+      "default": "5",
+      "description": "The maximum number of replicas of a single cluster (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_result_size",
+      "type": "bytes",
+      "default": "1GB",
+      "description": "The maximum size in bytes for an internal query result (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "constraint": "domain",
+      "dyncfg": false
+    },
+    {
+      "name": "max_roles",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "The maximum number of roles in the region (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_rules_per_network_policy",
+      "type": "unsigned integer",
+      "default": "25",
+      "description": "The maximum number of rules per network policies.",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_schemas_per_database",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "The maximum number of schemas in a database (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_secrets",
+      "type": "unsigned integer",
+      "default": "100",
+      "description": "The maximum number of secrets in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_sinks",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "The maximum number of sinks in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_sources",
+      "type": "unsigned integer",
+      "default": "200",
+      "description": "The maximum number of sources in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_sql_server_connections",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "The maximum number of SQL Server connections in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_tables",
+      "type": "unsigned integer",
+      "default": "200",
+      "description": "The maximum number of tables in the region, across all schemas (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "max_timestamp_interval",
+      "type": "duration",
+      "default": "1 s",
+      "description": "Maximum timestamp interval",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "mcp_max_response_size",
+      "type": "unsigned integer",
+      "default": "1000000",
+      "description": "Maximum size in bytes of MCP tool response content. Responses exceeding this limit are rejected with an error telling the agent to narrow its query.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "mcp_request_timeout",
+      "type": "duration",
+      "default": "1 min",
+      "description": "Maximum time an MCP request may run before it is aborted with a timeout error.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "memory_limiter_burst_factor",
+      "type": "double-precision floating-point number",
+      "default": "0",
+      "description": "Multiplicative burst factor to the memory limiter's limit.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "memory_limiter_interval",
+      "type": "duration",
+      "default": "10 s",
+      "description": "Interval to run the memory limiter. A zero duration disables the limiter.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "memory_limiter_usage_bias",
+      "type": "double-precision floating-point number",
+      "default": "1",
+      "description": "Multiplicative bias to the memory limiter's limit.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "metrics_retention",
+      "type": "duration",
+      "default": "30 d",
+      "description": "The time to retain cluster utilization metrics (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "min_timestamp_interval",
+      "type": "duration",
+      "default": "1 s",
+      "description": "Minimum timestamp interval",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "mysql_replication_heartbeat_interval",
+      "type": "duration",
+      "default": "30 s",
+      "description": "Replication heartbeat interval requested from the MySQL server.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "mysql_source_connect_timeout",
+      "type": "duration",
+      "default": "1 min",
+      "description": "Sets the timeout for establishing an authenticated connection to MySQL",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "mysql_source_snapshot_exact_count_max_rows",
+      "type": "unsigned integer",
+      "default": "1000000",
+      "description": "Maximum estimated table size for which MySQL snapshots compute an exact COUNT(*) for the size gauge; larger tables report the information_schema estimate.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "mysql_source_snapshot_lock_wait_timeout",
+      "type": "duration",
+      "default": "1 h",
+      "description": "Sets the `lock_wait_timeout` value to use during the snapshotting phase of MySQL sources (Materialize)",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "mysql_source_snapshot_max_execution_time",
+      "type": "duration",
+      "default": "0 s",
+      "description": "Sets the `max_execution_time` value to use during the snapshotting phase of MySQL sources (Materialize)",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "mysql_source_snapshot_parallelism",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to split MySQL snapshot reads across workers by primary-key ranges.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "mysql_source_snapshot_partition_min_rows",
+      "type": "unsigned integer",
+      "default": "50000",
+      "description": "Minimum estimated rows the MySQL snapshot partitioner attempts to split.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows",
+      "type": "unsigned integer",
+      "default": "1000",
+      "description": "Cap on MySQL snapshot PK-prefix partitioning probed prefixes per table, per billion estimated rows; when exhausted, splitting stops early with coarser partition boundaries. The per-table budget is additionally hard-capped at 5000.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "mysql_source_snapshot_wait_timeout",
+      "type": "duration",
+      "default": "2 d",
+      "description": "Sets the `wait_timeout` value to use on connections during the snapshotting phase of MySQL sources (Materialize)",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "mysql_source_tcp_keepalive",
+      "type": "duration",
+      "default": "1 min",
+      "description": "Sets the time between TCP keepalive probes when connecting to MySQL",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "mz_metrics_lgalloc_map_refresh_interval",
+      "type": "duration",
+      "default": "0 s",
+      "description": "How frequently to refresh lgalloc stats. A zero duration disables refreshing.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "mz_metrics_lgalloc_refresh_interval",
+      "type": "duration",
+      "default": "30 s",
+      "description": "How frequently to refresh lgalloc stats. A zero duration disables refreshing.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "mz_metrics_rusage_refresh_interval",
+      "type": "duration",
+      "default": "30 s",
+      "description": "How frequently to refresh rusage stats. A zero duration disables refreshing.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "mz_metrics_usage_refresh_interval",
+      "type": "duration",
+      "default": "5 s",
+      "description": "How frequently to sample process resource usage. A zero duration disables sampling.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "network_policy",
+      "type": "string",
+      "default": "default",
+      "description": "Sets the fallback network policy applied to all users without an explicit policy.",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "oidc_audience",
+      "type": "jsonb",
+      "default": "[]",
+      "description": "OIDC audience (client IDs). A JSON array of strings. When empty, audience validation is skipped.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "oidc_authentication_claim",
+      "type": "string",
+      "default": "sub",
+      "description": "OIDC authentication claim to use as username.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "oidc_group_claim",
+      "type": "string",
+      "default": "groups",
+      "description": "JWT claim path containing group memberships for role sync. Supports dot-separated paths into nested objects (e.g. customClaims.groups).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "oidc_group_role_sync_enabled",
+      "type": "boolean",
+      "default": "off",
+      "description": "Enable OIDC JWT group-to-role membership sync on login.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "oidc_group_role_sync_strict",
+      "type": "boolean",
+      "default": "off",
+      "description": "When true, reject login if OIDC group-to-role sync fails (fail-closed).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "oidc_issuer",
+      "type": "optional string",
+      "default": "",
+      "description": "OIDC issuer URL.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "opentelemetry_filter",
+      "type": "EnvFilter",
+      "default": "info",
+      "description": "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "opentelemetry_filter_defaults",
+      "type": "directive list",
+      "default": "h2=off, hyper=off",
+      "description": "Sets additional default directives to apply to OpenTelemetry-backed distributed tracing. These apply to all variations of `opentelemetry_filter`. Directives other than `module=off` are likely incorrect.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "optimizer_e2e_latency_warning_threshold",
+      "type": "duration",
+      "default": "500 ms",
+      "description": "Sets the duration that a query can take to compile; queries that take longer will trigger a warning. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "optimizer_oneshot_stats_timeout",
+      "type": "duration",
+      "default": "10 ms",
+      "description": "Sets the timeout applied to the optimizer's statistics collection from storage; applied to oneshot queries, like SELECT (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "optimizer_stats_timeout",
+      "type": "duration",
+      "default": "250 ms",
+      "description": "Sets the timeout applied to the optimizer's statistics collection from storage; applied to non-oneshot, i.e., long-lasting queries, like CREATE MATERIALIZED VIEW (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "ore_overflowing_behavior",
+      "type": "string",
+      "default": "soft_panic",
+      "description": "Overflow behavior for Overflowing types. One of 'ignore', 'panic', 'soft_panic'.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_batch_builder_max_outstanding_parts",
+      "type": "unsigned integer",
+      "default": "2",
+      "description": "The number of writes a batch builder can have outstanding before we slow down the writer.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_batch_delete_enabled",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to actually delete blobs when batch delete is called (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_batch_max_run_len",
+      "type": "unsigned integer",
+      "default": "18446744073709551615",
+      "description": "The maximum length a run can have before it will be spilled as a hollow run into the blob store.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_batch_max_runs",
+      "type": "unsigned integer",
+      "default": "1",
+      "description": "The maximum number of runs a batch builder should generate for user batches. (Compaction outputs always generate a single run.) The minimum value is 2; below this, compaction is disabled.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_batch_structured_key_lower_len",
+      "type": "unsigned integer",
+      "default": "256",
+      "description": "The maximum size in proto bytes of any structured key-lower metadata to preserve. (If we're unable to fit the lower in budget, or the budget is zero, no metadata is kept.)",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_cache_mem_limit_bytes",
+      "type": "unsigned integer",
+      "default": "134217728",
+      "description": "Capacity of in-mem blob cache in bytes (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_cache_scale_factor_bytes",
+      "type": "unsigned integer",
+      "default": "33554432",
+      "description": "Scale factor for the in-mem blob cache, in bytes, if scaling with threads (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_cache_scale_with_threads",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether or not the size of the in-mem blob cache scales with the number of threads in the current process (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_connect_timeout",
+      "type": "duration",
+      "default": "7 s",
+      "description": "Maximum time to wait for a socket connection to be made.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_hedged_get_budget_ratio",
+      "type": "double-precision floating-point number",
+      "default": "0.01",
+      "description": "Long-run bound on hedge requests as a fraction of blob gets (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_hedged_get_delay",
+      "type": "duration",
+      "default": "2 s",
+      "description": "How long a blob get may be in flight before a hedge request is fired (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_hedged_get_enabled",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to hedge slow blob gets with a second request on a separate connection pool (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_hedged_get_max_concurrent",
+      "type": "unsigned integer",
+      "default": "2",
+      "description": "Maximum concurrent hedge requests per blob handle, bounding the memory held by raced gets and the number of warm sockets (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_hedged_get_warm_interval",
+      "type": "duration",
+      "default": "20 s",
+      "description": "How often to issue liveness gets that keep the hedge connection pool warm, 0 disables warming without disabling hedging (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_http_pool",
+      "type": "string",
+      "default": "off",
+      "description": "Which S3 blob endpoints spread requests over a growing pool of HTTP clients: 'gcs' (only GCS endpoints), 'on' (every endpoint), or 'off'. Unrecognized values mean 'off'.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_http_pool_max_in_flight_per_client",
+      "type": "unsigned integer",
+      "default": "100",
+      "description": "When `persist_blob_http_pool` applies, a blob request goes to a new HTTP client once every client in the pool has this many requests in flight. 0 means 1.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_operation_attempt_timeout",
+      "type": "duration",
+      "default": "90 s",
+      "description": "Maximum time allowed for a single network call.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_operation_timeout",
+      "type": "duration",
+      "default": "3 min",
+      "description": "Maximum time allowed for a network call, including retry attempts.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_read_timeout",
+      "type": "duration",
+      "default": "10 s",
+      "description": "Maximum time to wait to read the first byte of a response, including connection time.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_blob_target_size",
+      "type": "unsigned integer",
+      "default": "134217728",
+      "description": "A target maximum size of persist blob payloads in bytes (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_catalog_force_compaction_fuel",
+      "type": "unsigned integer",
+      "default": "1024",
+      "description": "fuel to use in catalog dangerous_force_compaction task",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_catalog_force_compaction_wait",
+      "type": "duration",
+      "default": "1 min",
+      "description": "wait to use in catalog dangerous_force_compaction task",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_claim_compaction_min_version",
+      "type": "string",
+      "default": "",
+      "description": "If set to a valid version string, compact away any earlier versions if possible.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_claim_compaction_percent",
+      "type": "unsigned integer",
+      "default": "100",
+      "description": "Claim a compaction with the given percent chance, if claiming compactions is enabled. (If over 100, we'll always claim at least one; for example, if set to 365, we'll claim at least three and have a 65% chance of claiming a fourth.)",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_claim_unclaimed_compactions",
+      "type": "boolean",
+      "default": "off",
+      "description": "If an append doesn't result in a compaction request, but there is some uncompacted batch in state, compact that instead.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_compaction_check_process_flag",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether Compactor will obey the process_requests flag in PersistConfig, which allows dynamically disabling compaction. If false, all compaction requests will be processed.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_compaction_heuristic_min_inputs",
+      "type": "unsigned integer",
+      "default": "8",
+      "description": "Don't skip compaction if we have more than this many hollow batches as input.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_compaction_heuristic_min_parts",
+      "type": "unsigned integer",
+      "default": "8",
+      "description": "Don't skip compaction if we have more than this many parts as input.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_compaction_heuristic_min_updates",
+      "type": "unsigned integer",
+      "default": "1024",
+      "description": "Don't skip compaction if we have more than this many updates as input.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_compaction_memory_bound_bytes",
+      "type": "unsigned integer",
+      "default": "1073741824",
+      "description": "Attempt to limit compaction to this amount of memory.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_compaction_minimum_timeout",
+      "type": "duration",
+      "default": "90 s",
+      "description": "The minimum amount of time to allow a persist compaction request to run before timing it out (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_consensus_connection_pool_max_size",
+      "type": "unsigned integer",
+      "default": "50",
+      "description": "The maximum size the connection pool to Postgres/CRDB will grow to.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_consensus_connection_pool_max_wait",
+      "type": "duration",
+      "default": "1 min",
+      "description": "The amount of time we'll wait for a connection to become available.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_consensus_connection_pool_ttl",
+      "type": "duration",
+      "default": "5 min",
+      "description": "The minimum TTL of a Consensus connection to Postgres/CRDB before it is proactively terminated",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_consensus_connection_pool_ttl_stagger",
+      "type": "duration",
+      "default": "6 s",
+      "description": "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_enable_incremental_compaction",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to enable incremental compaction.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_encoding_compression_format",
+      "type": "string",
+      "default": "none",
+      "description": "A feature flag to enable compression of Parquet data (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_encoding_enable_dictionary",
+      "type": "boolean",
+      "default": "on",
+      "description": "A feature flag to enable dictionary encoding for Parquet data (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_expression_cache_force_compaction_fuel",
+      "type": "unsigned integer",
+      "default": "131072",
+      "description": "fuel to use in expression cache dangerous_force_compaction",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_expression_cache_force_compaction_wait",
+      "type": "duration",
+      "default": "0 s",
+      "description": "wait to use in expression cache dangerous_force_compaction",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_fast_path_limit",
+      "type": "unsigned integer",
+      "default": "25",
+      "description": "An exclusive upper bound on the number of results we may return from a Persist fast-path peek; queries that may return more results will follow the normal / slow path. Setting this to 0 disables the feature.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "persist_fast_path_order",
+      "type": "boolean",
+      "default": "on",
+      "description": "If set, send queries with a compatible literal constraint or ordering clause down the Persist fast path.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_fetch_semaphore_cost_adjustment",
+      "type": "double-precision floating-point number",
+      "default": "1.2",
+      "description": "An adjustment multiplied by encoded_size_bytes to approximate an upper bound on the size in lgalloc, which includes the decoded version.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_fetch_semaphore_permit_adjustment",
+      "type": "double-precision floating-point number",
+      "default": "1",
+      "description": "A limit on the number of outstanding persist bytes being fetched and parsed, expressed as a multiplier of the process's memory limit. This data all spills to lgalloc, so values > 1.0 are safe. Only applied to cc replicas.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_gc_blob_delete_concurrency_limit",
+      "type": "unsigned integer",
+      "default": "32",
+      "description": "Limit the number of concurrent deletes GC can perform to this threshold.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_gc_fallback_threshold_ms",
+      "type": "unsigned integer",
+      "default": "900000",
+      "description": "The number of milliseconds before a worker claims an already claimed GC.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_gc_max_versions",
+      "type": "unsigned integer",
+      "default": "128000",
+      "description": "The maximum number of versions to GC in a single GC run.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_gc_min_versions",
+      "type": "unsigned integer",
+      "default": "32",
+      "description": "The number of un-GCd versions that may exist in state before we'll trigger a GC.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_gc_use_active_gc",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether to use the new active GC tracking mechanism.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_inline_writes_single_max_bytes",
+      "type": "unsigned integer",
+      "default": "4096",
+      "description": "The (exclusive) maximum size of a write that persist will inline in metadata.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_inline_writes_total_max_bytes",
+      "type": "unsigned integer",
+      "default": "1048576",
+      "description": "The (exclusive) maximum total size of inline writes in metadata before persist will backpressure them by flushing out to s3.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_next_listen_batch_retryer_clamp",
+      "type": "duration",
+      "default": "16 s",
+      "description": "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_next_listen_batch_retryer_fixed_sleep",
+      "type": "duration",
+      "default": "1200 ms",
+      "description": "The fixed sleep when polling for new batches from a Listen or Subscribe. Skipped if zero.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_next_listen_batch_retryer_initial_backoff",
+      "type": "duration",
+      "default": "100 ms",
+      "description": "The initial backoff when polling for new batches from a Listen or Subscribe.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_next_listen_batch_retryer_multiplier",
+      "type": "unsigned integer",
+      "default": "2",
+      "description": "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_optimize_ignored_data_fetch",
+      "type": "boolean",
+      "default": "on",
+      "description": "CYA to allow opt-out of a performance optimization to skip fetching ignored data",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_part_decode_batch_rows",
+      "type": "optional unsigned integer",
+      "default": "16384",
+      "description": "Maximum number of rows of a fetched blob part that a reader decodes at once. Unset decodes the whole part at once.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_part_decode_format",
+      "type": "string",
+      "default": "arrow",
+      "description": "Format we'll use to decode a Persist Part, either 'row', 'row_with_validate', or 'arrow' (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_per_shard_metrics_enable_regex",
+      "type": "string",
+      "default": "",
+      "description": "While `persist_shard_metrics` is 'summary' or 'none', keep exporting the per-shard series whose `shard` or `name` label matches this regex (unanchored). Empty or invalid keeps none.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pg_consensus_read_committed",
+      "type": "boolean",
+      "default": "off",
+      "description": "Run consensus connections under READ COMMITTED isolation instead of SERIALIZABLE when targetting\n    PostgreSQL backends. This flag must be off when targetting CockroachDB.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pubsub_client_enabled",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to connect to the Persist PubSub service.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pubsub_client_receiver_channel_size",
+      "type": "unsigned integer",
+      "default": "25",
+      "description": "Size of channel used to buffer received messages from PubSub service.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pubsub_client_sender_channel_size",
+      "type": "unsigned integer",
+      "default": "25",
+      "description": "Size of channel used to buffer send messages to PubSub service.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pubsub_connect_attempt_timeout",
+      "type": "duration",
+      "default": "5 s",
+      "description": "Timeout per connection attempt to Persist PubSub service.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pubsub_connect_max_backoff",
+      "type": "duration",
+      "default": "1 min",
+      "description": "Maximum backoff when retrying connection establishment to Persist PubSub service.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pubsub_push_diff_enabled",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to push state diffs to Persist PubSub.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pubsub_reconnect_backoff",
+      "type": "duration",
+      "default": "5 s",
+      "description": "Backoff after an established connection to Persist PubSub service fails.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pubsub_request_timeout",
+      "type": "duration",
+      "default": "5 s",
+      "description": "Timeout per request attempt to Persist PubSub service.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pubsub_same_process_delegate_enabled",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to push state diffs to Persist PubSub on the same process.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pubsub_server_connection_channel_size",
+      "type": "unsigned integer",
+      "default": "25",
+      "description": "Size of channel used per connection to buffer broadcasted messages from PubSub server.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_pubsub_state_cache_shard_ref_channel_size",
+      "type": "unsigned integer",
+      "default": "25",
+      "description": "Size of channel used by the state cache to broadcast shard state references.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_reader_lease_duration",
+      "type": "duration",
+      "default": "15 min",
+      "description": "The time after which we'll clean up stale read leases",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_rollup_fallback_threshold_ms",
+      "type": "unsigned integer",
+      "default": "5000",
+      "description": "The number of milliseconds before a worker claims an already claimed rollup.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_rollup_threshold",
+      "type": "unsigned integer",
+      "default": "128",
+      "description": "The number of seqnos between rollups.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_rollup_use_active_rollup",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to use the new active rollup tracking mechanism.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_shard_info_metric",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether to export `mz_persist_shard_info`, which lists this process's shards by `shard` and `name` with one series each.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_shard_metrics",
+      "type": "string",
+      "default": "summary",
+      "description": "Which persist shard metrics to export: 'per_shard' (the `mz_persist_shard_*` families with one series per shard), 'summary' (their bounded `_percentile`, `_sum`, `_topk` and per-version aggregates), 'both', or 'none'. Shard counts and process-level counters are always exported.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_source_fetch_concurrency",
+      "type": "unsigned integer",
+      "default": "1",
+      "description": "Maximum number of part fetches the persist source issues concurrently per worker (1 = serial).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_source_hydration_frontier_coalesce_bytes",
+      "type": "unsigned integer",
+      "default": "0",
+      "description": "While catching up to the hydration-time upper, the persist source coalesces frontier downgrades until this many encoded bytes have been emitted (0 disables).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_state_update_lease_timeout",
+      "type": "duration",
+      "default": "1 s",
+      "description": "The amount of time for a command to wait for a previous command to finish before executing. (If zero, commands will not wait for others to complete.) Higher values reduce database contention at the cost of higher worst-case latencies for individual requests.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_state_versions_recent_live_diffs_limit",
+      "type": "unsigned integer",
+      "default": "3840",
+      "description": "Fetch this many diffs when fetching recent diffs.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_stats_audit_panic",
+      "type": "boolean",
+      "default": "on",
+      "description": "If set (as it is by default), panic on any auditing failure. If not, report an error but pass along the data as normal. This should almost certainly be paired with an audit rate of 100%, so all parts are audited, for consistency.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_stats_audit_percent",
+      "type": "unsigned integer",
+      "default": "1",
+      "description": "Percent of filtered data to opt in to correctness auditing (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_stats_budget_bytes",
+      "type": "unsigned integer",
+      "default": "1024",
+      "description": "The budget (in bytes) of how many stats to maintain per batch part.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_stats_collection_enabled",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to calculate and record statistics about the data stored in persist to be used at read time, see persist_stats_filter_enabled (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_stats_filter_enabled",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to use recorded statistics about the data stored in persist to filter at read time, see persist_stats_collection_enabled (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_stats_untrimmable_columns_equals",
+      "type": "string",
+      "default": "err,ts,receivedat,createdat,_fivetran_deleted",
+      "description": "Which columns to always retain during persist stats trimming. Any column with a name exactly equal (case-insensitive) to one of these will be kept. Comma separated list.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_stats_untrimmable_columns_prefix",
+      "type": "string",
+      "default": "last_",
+      "description": "Which columns to always retain during persist stats trimming. Any column with a name starting with (case-insensitive) one of these will be kept. Comma separated list.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_stats_untrimmable_columns_suffix",
+      "type": "string",
+      "default": "timestamp,time,_at,_tstamp",
+      "description": "Which columns to always retain during persist stats trimming. Any column with a name ending with (case-insensitive) one of these will be kept. Comma separated list.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_txns_data_shard_retryer_clamp",
+      "type": "duration",
+      "default": "16 s",
+      "description": "The backoff clamp duration when polling for new batches from a txns data shard persist_source.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_txns_data_shard_retryer_initial_backoff",
+      "type": "duration",
+      "default": "1024 ms",
+      "description": "The initial backoff when polling for new batches from a txns data shard persist_source.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_txns_data_shard_retryer_multiplier",
+      "type": "unsigned integer",
+      "default": "2",
+      "description": "The backoff multiplier when polling for new batches from a txns data shard persist_source.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_usage_state_fetch_concurrency_limit",
+      "type": "unsigned integer",
+      "default": "8",
+      "description": "Limit the concurrency in of fetching in the perioding Persist-storage-usage calculation.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_use_critical_since_catalog",
+      "type": "boolean",
+      "default": "off",
+      "description": "Use the critical since (instead of the overall since) for the Persist-backed catalog.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_use_critical_since_snapshot",
+      "type": "boolean",
+      "default": "off",
+      "description": "Use the critical since (instead of the overall since) when taking snapshots in the controller or in fast-path peeks.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_use_critical_since_source",
+      "type": "boolean",
+      "default": "off",
+      "description": "Use the critical since (instead of the overall since) in the Persist source.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_use_critical_since_txn",
+      "type": "boolean",
+      "default": "on",
+      "description": "Use the critical since (instead of the overall since) when initializing a subscribe.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_validate_part_bounds_on_read",
+      "type": "boolean",
+      "default": "off",
+      "description": "Validate the part lower <= the batch lower and the part upper <= batch upper,for the batch containing that part",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_validate_part_bounds_on_write",
+      "type": "boolean",
+      "default": "off",
+      "description": "Validate the part lower <= the batch lower and the part upper <= batch upper,for the batch being appended.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "persist_write_combine_inline_writes",
+      "type": "boolean",
+      "default": "on",
+      "description": "If set, re-encode inline writes if they don't fit into the batch metadata limits.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "pg_schema_validation_interval",
+      "type": "duration",
+      "default": "15 s",
+      "description": "Interval to re-validate the schemas of ingested tables.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "pg_source_connect_timeout",
+      "type": "duration",
+      "default": "30 s",
+      "description": "Sets the timeout applied to socket-level connection attempts for PG replication connections (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_source_replication_slot_creation_timeout",
+      "type": "duration",
+      "default": "1 min",
+      "description": "Timeout for creating a replication slot on the upstream PostgreSQL server. Applied as `lock_timeout`, which bounds the wait for in-progress upstream transactions to end. Has no effect with physical standbys.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "pg_source_snapshot_collect_strict_count",
+      "type": "boolean",
+      "default": "on",
+      "description": "Please see <https://dev.materialize.com/api/rust-private/mz_storage_types/parameters/struct.PgSourceSnapshotConfig.html#structfield.collect_strict_count>",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_source_snapshot_statement_timeout",
+      "type": "duration",
+      "default": "0 s",
+      "description": "Sets the `statement_timeout` value to use during the snapshotting phase of PG sources (Materialize)",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_source_tcp_configure_server",
+      "type": "boolean",
+      "default": "off",
+      "description": "Sets whether to apply the TCP configuration parameters on the server when connecting to PG via `mz_postgres_util` (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_source_tcp_keepalives_idle",
+      "type": "duration",
+      "default": "10 s",
+      "description": "Sets the amount of idle time before a keepalive packet is sent on the connection when connecting to PG via `mz_postgres_util` (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_source_tcp_keepalives_interval",
+      "type": "duration",
+      "default": "10 s",
+      "description": "Sets the time interval between TCP keepalive probes when connecting to PG via replication (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_source_tcp_keepalives_retries",
+      "type": "unsigned integer",
+      "default": "5",
+      "description": "Sets the maximum number of TCP keepalive probes that will be sent before dropping a connection when connecting to PG via `mz_postgres_util` (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_source_tcp_user_timeout",
+      "type": "duration",
+      "default": "40 s",
+      "description": "Sets the TCP user timeout when connecting to PG via `mz_postgres_util` (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_source_validate_timeline",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to treat a timeline switch as a definite error",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "pg_source_wal_sender_timeout",
+      "type": "optional duration",
+      "default": "",
+      "description": "Sets the `wal_sender_timeout` value to use during the replication phase of PG sources (Materialize)",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_timestamp_oracle_connection_pool_max_size",
+      "type": "unsigned integer",
+      "default": "50",
+      "description": "Maximum size of the Postgres/CRDB connection pool, used by the Postgres/CRDB timestamp oracle.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_timestamp_oracle_connection_pool_max_wait",
+      "type": "optional duration",
+      "default": "1 min",
+      "description": "The maximum time to wait when attempting to obtain a connection from the Postgres/CRDB connection pool, used by the Postgres/CRDB timestamp oracle.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_timestamp_oracle_connection_pool_ttl",
+      "type": "duration",
+      "default": "5 min",
+      "description": "The minimum TTL of a Consensus connection to Postgres/CRDB before it is proactively terminated",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_timestamp_oracle_connection_pool_ttl_stagger",
+      "type": "duration",
+      "default": "6 s",
+      "description": "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "pg_timestamp_oracle_statement_timeout",
+      "type": "duration",
+      "default": "0 s",
+      "description": "The server-side statement timeout to set on Postgres/CRDB connections used by the Postgres/CRDB timestamp oracle. A value of zero leaves the statement timeout unset.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "plan_insights_notice_fast_path_clusters_optimize_duration",
+      "type": "duration",
+      "default": "10 ms",
+      "description": "Enable plan insights fast path clusters calculation if the optimize step took less than this duration.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "postgres_fetch_slot_resume_lsn_interval",
+      "type": "duration",
+      "default": "500 ms",
+      "description": "Interval to poll `confirmed_flush_lsn` to get a resumption lsn.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "privatelink_status_update_quota_per_minute",
+      "type": "unsigned integer",
+      "default": "20",
+      "description": "Sets the per-minute quota for privatelink vpc status updates to be written to the storage-collection-backed system table. This value implies the total and burst quota per-minute.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "read_then_write_max_dependencies",
+      "type": "unsigned integer",
+      "default": "100000",
+      "description": "Maximum number of transitive dependencies validated for a read-then-write statement before it is rejected.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "replica_hydration_history_retention_period",
+      "type": "duration",
+      "default": "120 d",
+      "description": "How long to retain rows in mz_internal.mz_replica_hydration_history.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "replica_metrics_history_retention_interval",
+      "type": "duration",
+      "default": "30 d",
+      "description": "The interval of time to keep when truncating the replica metrics history.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "replica_status_history_retention_window",
+      "type": "duration",
+      "default": "30 d",
+      "description": "On reboot, truncate up all entries past the retention window in the mz_cluster_replica_status_history collection (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "scram_iterations",
+      "type": "unsigned integer",
+      "default": "600000",
+      "description": "Iterations to use when hashing passwords. Higher iterations are more secure, but take longer to validated. Please consider the security risks before reducing this below the default value.",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "sentry_filters",
+      "type": "directive list",
+      "default": "kube_client::client::builder=off, mysql_async::conn=off",
+      "description": "Sets additional default directives to apply to sentry logging. These apply on top of a default `info` directive. Directives other than `module=off` are likely incorrect.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "sql_server_cdc_cleanup_change_table",
+      "type": "boolean",
+      "default": "off",
+      "description": "When enabled we'll notify SQL Server that it can cleanup the change tables as the source makes progress and commits data.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "sql_server_cdc_cleanup_change_table_max_deletes",
+      "type": "unsigned integer",
+      "default": "1000000",
+      "description": "Maximum number of entries that can be deleted by using a single statement.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "sql_server_max_lsn_wait",
+      "type": "duration",
+      "default": "30 s",
+      "description": "Maximum amount of time we'll wait for SQL Server to report an LSN (in other words for CDC to be fully enabled)",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "sql_server_snapshot_progress_report_interval",
+      "type": "duration",
+      "default": "2 s",
+      "description": "Interval at which we'll report progress for currently running snapshots.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "sql_server_source_validate_restore_history",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to treat a restore history change as a definite error",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "ssh_check_interval",
+      "type": "duration",
+      "default": "30 s",
+      "description": "Controls the check interval for connections to SSH bastions via `mz_ssh_util`.",
+      "scope": "environment",
+      "userVisible": false,
+      "constraint": "domain",
+      "dyncfg": false
+    },
+    {
+      "name": "ssh_connect_timeout",
+      "type": "duration",
+      "default": "30 s",
+      "description": "Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "ssh_keepalives_idle",
+      "type": "duration",
+      "default": "10 s",
+      "description": "Controls the keepalive idle interval for connections to SSH bastions via `mz_ssh_util`.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "statement_logging_default_sample_rate",
+      "type": "numeric",
+      "default": "0.99",
+      "description": "The default value of `statement_logging_sample_rate` for new sessions (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "constraint": "domain",
+      "dyncfg": false
+    },
+    {
+      "name": "statement_logging_max_data_credit",
+      "type": "optional unsigned integer",
+      "default": "52428800",
+      "description": "The maximum number of bytes that can be logged for statement logging in short burts, or NULL if unlimited (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "statement_logging_max_sample_rate",
+      "type": "numeric",
+      "default": "0.99",
+      "description": "The maximum rate at which statements may be logged. If this value is less than that of `statement_logging_sample_rate`, the latter is ignored (Materialize).",
+      "scope": "environment",
+      "userVisible": true,
+      "constraint": "domain",
+      "dyncfg": false
+    },
+    {
+      "name": "statement_logging_target_data_rate",
+      "type": "optional unsigned integer",
+      "default": "2071",
+      "description": "The maximum sustained data rate of statement logging, in bytes per second, or NULL if unlimited (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "statement_logging_use_reproducible_rng",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether statement logging with reproducible RNG is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "storage_cluster_shutdown_grace_period",
+      "type": "duration",
+      "default": "10 min",
+      "description": "When dataflows observe an invariant violation it is either due to a bug or due to the cluster being shut down. This configuration defines the amount of time to wait before panicking the process, which will register the invariant violation.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_dataflow_delay_sources_past_rehydration",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether or not to delay sources producing values in some scenarios (namely, upsert) till after rehydration is finished",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_dataflow_max_inflight_bytes",
+      "type": "optional unsigned integer",
+      "default": "268435456",
+      "description": "The maximum number of in-flight bytes emitted by persist_sources feeding storage dataflows. Defaults to backpressure enabled (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "storage_dataflow_max_inflight_bytes_disk_only",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether or not `storage_dataflow_max_inflight_bytes` applies only to upsert dataflows using disks. Defaults to true (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction",
+      "type": "optional numeric",
+      "default": "0.01",
+      "description": "The fraction of the cluster replica size to be used as the maximum number of in-flight bytes emitted by persist_sources feeding storage dataflows. If not configured, the storage_dataflow_max_inflight_bytes value will be used.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "storage_dataflow_suspendable_sources",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether storage dataflows should suspend execution while downstream operators are still processing data.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_downgrade_since_during_finalization",
+      "type": "boolean",
+      "default": "on",
+      "description": "When enabled, force-downgrade the controller's since handle on the shardduring shard finalization",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_enforce_external_addresses",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether or not to enforce that external connection addresses are global (not private or local) when resolving them",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_persist_sink_description_lookahead",
+      "type": "duration",
+      "default": "0 s",
+      "description": "Determines how far past the remap upper the source persist sink will commit to a ceiling in order to group data into one batch and one description, and whether the Postgres replication stream is read while a snapshot runs. Zero disables both, leaving every timestamp writing its own batch. Other values below the tick interval are clamped to the tick interval.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_record_source_sink_namespaced_errors",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether or not to record namespaced errors in the status history tables",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "storage_rocksdb_cleanup_tries",
+      "type": "unsigned integer",
+      "default": "5",
+      "description": "How many times to try to cleanup old RocksDB DB's on disk before giving up.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_rocksdb_use_merge_operator",
+      "type": "boolean",
+      "default": "on",
+      "description": "Use the native rocksdb merge operator where possible.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_server_maintenance_interval",
+      "type": "duration",
+      "default": "10 ms",
+      "description": "The interval at which the storage server performs maintenance tasks. Zero enables maintenance on every iteration.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_shrink_upsert_unused_buffers_by_ratio",
+      "type": "unsigned integer",
+      "default": "0",
+      "description": "Configuration ratio to shrink unusef buffers in upsert by",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "storage_sink_ensure_topic_config",
+      "type": "string",
+      "default": "skip",
+      "description": "If `skip`, don't check the config of existing topics; if `check`, fetch the config and warn if it does not match the expected configs; if `alter`, attempt to change the upstream to match the expected configs.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_sink_progress_search",
+      "type": "boolean",
+      "default": "on",
+      "description": "If set, iteratively search the progress topic for a progress record with increasing lookback.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_source_decode_fuel",
+      "type": "unsigned integer",
+      "default": "100000",
+      "description": "The maximum amount of work to do in the persist_source mfp_and_decode operator before yielding.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_statistics_collection_interval",
+      "type": "duration",
+      "default": "10 s",
+      "description": "The interval to collect statistics for `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker` in clusterd. Controls the accuracy of metrics (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "storage_statistics_interval",
+      "type": "duration",
+      "default": "1 min",
+      "description": "The interval to submit statistics to `mz_source_statistics_per_worker` and `mz_sink_statistics` (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "constraint": "domain",
+      "dyncfg": false
+    },
+    {
+      "name": "storage_statistics_retention_duration",
+      "type": "duration",
+      "default": "1 d",
+      "description": "The time after which we delete per replica statistics (for sources and sinks) after there have been no updates.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_suspend_and_restart_delay",
+      "type": "duration",
+      "default": "5 s",
+      "description": "Delay interval when reconnecting to a source / sink after halt.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_upsert_max_snapshot_batch_buffering",
+      "type": "optional unsigned integer",
+      "default": "",
+      "description": "Limit snapshot buffering in upsert.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_upsert_prevent_snapshot_buffering",
+      "type": "boolean",
+      "default": "on",
+      "description": "Prevent snapshot buffering in upsert.",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "storage_use_continual_feedback_upsert",
+      "type": "boolean",
+      "default": "on",
+      "description": "Whether to use the new continual feedback upsert operator.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "subscribe_max_buffered_bytes",
+      "type": "unsigned integer",
+      "default": "134217728",
+      "description": "Maximum bytes a SUBSCRIBE may buffer in environmentd for a slow client before it is retired with an error.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "superuser_reserved_connections",
+      "type": "unsigned integer",
+      "default": "3",
+      "description": "The number of connections that are reserved for superusers (PostgreSQL).",
+      "scope": "environment",
+      "userVisible": true,
+      "dyncfg": false
+    },
+    {
+      "name": "timely_zero_copy_limit",
+      "type": "optional unsigned integer",
+      "default": "",
+      "description": "Optional limit of the zero copy allocator in allocations (timely dataflow).",
+      "scope": "replica",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "txn_wal_apply_ensure_schema_match",
+      "type": "boolean",
+      "default": "on",
+      "description": "CYA to skip updating write handle to batch schema in apply",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "unsafe_enable_incomplete_view_column_lists",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether declaring a view with fewer column names than columns is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "unsafe_enable_table_check_constraint",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether CREATE TABLE with a check constraint is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "unsafe_enable_table_foreign_key",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether CREATE TABLE with a foreign key is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "unsafe_enable_table_keys",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether CREATE TABLE with a primary key or unique constraint is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "unsafe_enable_unbounded_custom_type_resolution",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether resolving custom types without the depth and complexity limits that bound resolution work is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "unsafe_enable_unorchestrated_cluster_replicas",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether unorchestrated cluster replicas is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "unsafe_enable_unsafe_functions",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether executing potentially dangerous functions is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "unsafe_enable_unstable_dependencies",
+      "type": "boolean",
+      "default": "off",
+      "description": "Whether depending on unstable objects is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "unsafe_mock_audit_event_timestamp",
+      "type": "optional mz-timestamp",
+      "default": "",
+      "description": "Mocked timestamp to use for audit events for testing purposes",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_batch_size",
+      "type": "unsigned integer",
+      "default": "20480",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Can be changed dynamically (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_bottommost_compression_type",
+      "type": "rocksdb_compression_type",
+      "default": "lz4",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_compaction_style",
+      "type": "rocksdb_compaction_style",
+      "default": "level",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_compression_type",
+      "type": "rocksdb_compression_type",
+      "default": "lz4",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_level_compaction_dynamic_level_bytes",
+      "type": "boolean",
+      "default": "on",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_optimize_compaction_memtable_budget",
+      "type": "unsigned integer",
+      "default": "178956970",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_parallelism",
+      "type": "optional integer",
+      "default": "",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_point_lookup_block_cache_size_mb",
+      "type": "optional unsigned integer",
+      "default": "",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_retry_duration",
+      "type": "duration",
+      "default": "1 s",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_shrink_allocated_buffers_by_ratio",
+      "type": "unsigned integer",
+      "default": "0",
+      "description": "The number of times by which allocated buffers will be shrinked in upsert rocksdb.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_stats_log_interval_seconds",
+      "type": "unsigned integer",
+      "default": "600",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_stats_persist_interval_seconds",
+      "type": "unsigned integer",
+      "default": "600",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_universal_compaction_ratio",
+      "type": "integer",
+      "default": "200",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_write_buffer_manager_allow_stall",
+      "type": "boolean",
+      "default": "off",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_write_buffer_manager_cluster_memory_fraction",
+      "type": "optional numeric",
+      "default": "",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "upsert_rocksdb_write_buffer_manager_memory_bytes",
+      "type": "optional unsigned integer",
+      "default": "",
+      "description": "Tuning parameter for RocksDB as used in `UPSERT/DEBEZIUM` sources. Described in the `mz_rocksdb_types::config` module. Only takes effect on source restart (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "user_id_pool_batch_size",
+      "type": "unsigned integer",
+      "default": "512",
+      "description": "Number of user IDs to pre-allocate in a batch for DDL operations.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "user_storage_managed_collections_batch_duration",
+      "type": "duration",
+      "default": "1 s",
+      "description": "Duration which we'll wait to collect a batch of events for a webhook source.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "wallclock_global_lag_histogram_retention_interval",
+      "type": "duration",
+      "default": "30 d",
+      "description": "The interval of time to keep when truncating the wallclock lag histogram.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "wallclock_lag_histogram_period_interval",
+      "type": "duration",
+      "default": "1 d",
+      "description": "The period interval of histograms in `WallclockLagHistogram` introspection.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "wallclock_lag_history_retention_interval",
+      "type": "duration",
+      "default": "30 d",
+      "description": "The interval of time to keep when truncating the wallclock lag history.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "wallclock_lag_recording_interval",
+      "type": "duration",
+      "default": "1 min",
+      "description": "The interval at which to record `WallclockLagHistory` introspection.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "webhook_concurrent_request_limit",
+      "type": "unsigned integer",
+      "default": "500",
+      "description": "Maximum number of concurrent requests for appending to a webhook source.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "webhook_max_request_size_bytes",
+      "type": "unsigned integer",
+      "default": "5242880",
+      "description": "The maximum size in bytes of a webhook request body, measured after decompression.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "webhook_validation_memory_budget_bytes",
+      "type": "unsigned integer",
+      "default": "20971520",
+      "description": "The maximum bytes of temporary storage a webhook CHECK expression may allocate while validating one request.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "webhooks_secrets_caching_ttl_secs",
+      "type": "unsigned integer",
+      "default": "300",
+      "description": "Sets the time-to-live for values in the Webhooks secrets cache.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
+      "name": "with_0dt_caught_up_check_allowed_lag",
+      "type": "duration",
+      "default": "1 min",
+      "description": "Maximum allowed lag when determining whether collections are caught up for 0dt deployments.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "with_0dt_caught_up_check_cutoff",
+      "type": "duration",
+      "default": "2 h",
+      "description": "Collections whose write frontier is behind 'now' by more than the cutoff are ignored when doing caught-up checks for 0dt deployments.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "with_0dt_caught_up_check_stability_period",
+      "type": "duration",
+      "default": "10 min",
+      "description": "Required continuous hydration before a caught-up cluster is ready for 0dt cutover. Each non-exempt replica's period is capped at its catalog creation age when it hydrated. Missing creation evidence retains the full period.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "with_0dt_deployment_ddl_check_interval",
+      "type": "duration",
+      "default": "5 min",
+      "description": "How often to check for DDL changes during zero-downtime deployment.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    },
+    {
+      "name": "with_0dt_deployment_max_wait",
+      "type": "duration",
+      "default": "365 d",
+      "description": "How long to wait at most for clusters to be hydrated, when doing a zero-downtime deployment.",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": true
+    }
+  ]
+}

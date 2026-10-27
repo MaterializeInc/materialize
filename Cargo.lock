@@ -9172,6 +9172,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-system-parameter-catalog"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "mz-sql",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mz-test-util"
 version = "0.0.0"
 dependencies = [
