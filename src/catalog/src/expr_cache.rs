@@ -134,7 +134,7 @@ impl DurableCacheCodec for ExpressionCodec {
     }
 }
 
-/// Why [`ExpressionCache::open`] removed entries, for its reconciliation log line.
+/// Counts of the entries [`ExpressionCache::open`] removed, by reason.
 #[derive(Debug, Default)]
 struct RemovedEntries {
     unparsable_build_version: usize,

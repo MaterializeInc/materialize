@@ -747,6 +747,7 @@ pub struct CreateViewFinish {
     /// IDs of objects resolved during name resolution.
     resolved_ids: ResolvedIds,
     optimized_expr: OptimizedMirRelationExpr,
+    optimizer_features: OptimizerFeatures,
 }
 
 #[derive(Debug)]

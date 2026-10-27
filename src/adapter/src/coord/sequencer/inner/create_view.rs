@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use maplit::btreemap;
 use mz_catalog::memory::error::ErrorKind;
@@ -301,6 +301,7 @@ impl Coordinator {
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&explain_ctx);
+        let optimizer_features = optimizer_config.features.clone();
 
         // Build an optimizer for this VIEW.
         let mut optimizer =
@@ -339,6 +340,7 @@ impl Coordinator {
                                     plan,
                                     optimized_expr,
                                     resolved_ids,
+                                    optimizer_features,
                                 })
                             }
                         }
@@ -398,10 +400,25 @@ impl Coordinator {
                 },
             optimized_expr,
             resolved_ids,
+            optimizer_features,
             ..
         }: CreateViewFinish,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
         let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
+
+        // Populate the durable expression cache before the catalog transaction and await the write.
+        if !temporary {
+            self.catalog()
+                .cache_local_expression(global_id, optimized_expr.clone(), optimizer_features)
+                .await;
+        }
+        // Invalidate the entries of the views that `CREATE OR REPLACE` drops, as `DROP` does.
+        // The new view has fresh ids, so its entry stays.
+        let replaced_global_ids: BTreeSet<_> = drop_ids
+            .iter()
+            .flat_map(|id| self.catalog().get_entry(id).global_ids())
+            .collect();
+
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -431,7 +448,16 @@ impl Coordinator {
         ];
 
         match self.catalog_transact(Some(session), ops).await {
-            Ok(()) => Ok(StageResult::Response(ExecuteResponse::CreatedView)),
+            Ok(()) => {
+                if !replaced_global_ids.is_empty() {
+                    let _fut = self.catalog().update_expression_cache(
+                        Vec::new(),
+                        Vec::new(),
+                        replaced_global_ids,
+                    );
+                }
+                Ok(StageResult::Response(ExecuteResponse::CreatedView))
+            }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
