@@ -42,7 +42,8 @@ struct Parameter {
     /// The type name the registry reports.
     #[serde(rename = "type")]
     type_name: String,
-    /// The compiled-in default, as `Value::format` renders it.
+    /// The compiled-in default, in a form that parses back to the same value,
+    /// see `defaults_round_trip_through_parse`.
     default: String,
     description: String,
     /// One of `environment`, `cluster`, `replica`.
@@ -123,6 +124,8 @@ fn main() -> Result<(), anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
+    use mz_sql::session::vars::VarInput;
+
     use super::*;
 
     fn parameters() -> Vec<serde_json::Value> {
@@ -160,6 +163,30 @@ mod tests {
         for name in expected {
             find(&params, name);
         }
+    }
+
+    #[test]
+    fn defaults_round_trip_through_parse() {
+        let vars = SystemVars::new();
+        let mut failures = Vec::new();
+        for param in parameters() {
+            let name = param["name"].as_str().unwrap();
+            let default = param["default"].as_str().unwrap();
+            let definition = vars.definition(name).unwrap();
+            match definition.parse(VarInput::Flat(default)) {
+                Ok(parsed) if parsed.format() == default => {}
+                Ok(parsed) => failures.push(format!(
+                    "{name}: {default:?} parses to {:?}",
+                    parsed.format()
+                )),
+                Err(e) => failures.push(format!("{name}: {default:?} does not parse: {e}")),
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "defaults that do not round-trip:\n{}",
+            failures.join("\n")
+        );
     }
 
     #[test]
