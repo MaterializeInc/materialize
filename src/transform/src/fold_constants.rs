@@ -16,9 +16,10 @@ use std::iter;
 
 use mz_expr::visit::Visit;
 use mz_expr::{
-    AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
+    AggregateExpr, ColumnOrder, Eval, EvalError, MirRelationExpr, MirScalarExpr, RowComparator,
+    TableFunc, UnaryFunc,
 };
-use mz_repr::{Datum, Diff, Row, RowArena, SqlRelationType};
+use mz_repr::{Datum, Diff, ReprRelationType, Row, RowArena};
 
 use crate::{TransformCtx, TransformError, any};
 
@@ -72,7 +73,7 @@ impl FoldConstants {
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
-        relation_type: &mut SqlRelationType,
+        relation_type: &mut ReprRelationType,
     ) -> Result<(), TransformError> {
         match relation {
             MirRelationExpr::Constant { .. } => { /* handled after match */ }
@@ -89,11 +90,9 @@ impl FoldConstants {
                 expected_group_size: _,
             } => {
                 // Guard against evaluating an expression that may contain
-                // unmaterializable functions.
-                if group_key.iter().any(|e| e.contains_unmaterializable())
-                    || aggregates
-                        .iter()
-                        .any(|a| a.expr.contains_unmaterializable())
+                // unfoldable functions.
+                if group_key.iter().any(|e| e.contains_unfoldable())
+                    || aggregates.iter().any(|a| a.expr.contains_unfoldable())
                 {
                     return Ok(());
                 }
@@ -167,8 +166,8 @@ impl FoldConstants {
             }
             MirRelationExpr::Map { input, scalars } => {
                 // Guard against evaluating expression that may contain
-                // unmaterializable functions.
-                if scalars.iter().any(|e| e.contains_unmaterializable()) {
+                // unfoldable functions.
+                if scalars.iter().any(|e| e.contains_unfoldable()) {
                     return Ok(());
                 }
 
@@ -212,8 +211,8 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::FlatMap { input, func, exprs } => {
-                // Guard against evaluating expression that may contain unmaterializable functions.
-                if exprs.iter().any(|e| e.contains_unmaterializable()) {
+                // Guard against evaluating expression that may contain unfoldable functions.
+                if exprs.iter().any(|e| e.contains_unfoldable()) {
                     return Ok(());
                 }
 
@@ -241,8 +240,8 @@ impl FoldConstants {
             }
             MirRelationExpr::Filter { input, predicates } => {
                 // Guard against evaluating expression that may contain
-                // unmaterializable function calls.
-                if predicates.iter().any(|e| e.contains_unmaterializable()) {
+                // unfoldable function calls.
+                if predicates.iter().any(|e| e.contains_unfoldable()) {
                     return Ok(());
                 }
 
@@ -302,10 +301,10 @@ impl FoldConstants {
                     .iter()
                     .all(|i| matches!(i.as_const(), Some((Ok(_), ..))))
                 {
-                    // Guard against evaluating expression that may contain unmaterializable functions.
+                    // Guard against evaluating expression that may contain unfoldable functions.
                     if equivalences
                         .iter()
-                        .any(|equiv| equiv.iter().any(|e| e.contains_unmaterializable()))
+                        .any(|equiv| equiv.iter().any(|e| e.contains_unfoldable()))
                     {
                         return Ok(());
                     }
@@ -477,10 +476,12 @@ impl FoldConstants {
                 Ok(val) => val,
                 Err(e) => return Some(Err(e)),
             };
+            // Store the value once alongside its multiplicity rather than
+            // expanding it into `diff` copies. The count-aware aggregate
+            // `eval` consumes the multiplicity directly, so this avoids
+            // materializing a number of rows proportional to the diff.
             let entry = groups.entry(key).or_insert_with(Vec::new);
-            for _ in 0..diff.into_inner() {
-                entry.push(val.clone());
-            }
+            entry.push((val, *diff));
         }
 
         // For each group, apply the aggregate function to the rows
@@ -497,15 +498,20 @@ impl FoldConstants {
                     row_buf.packer().extend(key.into_iter().chain(
                         aggregates.iter().enumerate().map(|(i, agg)| {
                             if agg.distinct {
+                                // Distinct collapses to one copy per value, so
+                                // each distinct datum gets a unit multiplicity.
                                 agg.func.eval(
                                     vals.iter()
-                                        .map(|val| val[i].unpack_first())
-                                        .collect::<BTreeSet<_>>(),
+                                        .map(|(val, _diff)| val[i].unpack_first())
+                                        .collect::<BTreeSet<_>>()
+                                        .into_iter()
+                                        .map(|datum| (datum, Diff::ONE)),
                                     &temp_storage,
                                 )
                             } else {
                                 agg.func.eval(
-                                    vals.iter().map(|val| val[i].unpack_first()),
+                                    vals.iter()
+                                        .map(|(val, diff)| (val[i].unpack_first(), *diff)),
                                     &temp_storage,
                                 )
                             }
@@ -526,12 +532,10 @@ impl FoldConstants {
         rows: &'a mut [(Row, Diff)],
     ) {
         // helper functions for comparing elements by order_key and group_key
-        let mut lhs_datum_vec = mz_repr::DatumVec::new();
-        let mut rhs_datum_vec = mz_repr::DatumVec::new();
+        let comparator = RowComparator::new(order_key);
+
         let mut cmp_order_key = |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
-            let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
-            let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
-            mz_expr::compare_columns(order_key, lhs_datums, rhs_datums, || lhs.cmp(rhs))
+            comparator.compare_rows(&lhs.0, &rhs.0, || lhs.cmp(rhs))
         };
         let mut cmp_group_key = {
             let group_key = group_key
@@ -545,12 +549,9 @@ impl FoldConstants {
                     nulls_last: false,
                 })
                 .collect::<Vec<ColumnOrder>>();
-            let mut lhs_datum_vec = mz_repr::DatumVec::new();
-            let mut rhs_datum_vec = mz_repr::DatumVec::new();
+            let comparator = RowComparator::new(group_key);
             move |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
-                let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
-                let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
-                mz_expr::compare_columns(&group_key, lhs_datums, rhs_datums, || Ordering::Equal)
+                comparator.compare_rows(&lhs.0, &rhs.0, || Ordering::Equal)
             }
         };
 
@@ -562,7 +563,7 @@ impl FoldConstants {
             rows.sort_by(&mut cmp_group_key);
         };
 
-        let mut same_group_key =
+        let same_group_key =
             |lhs: &(Row, Diff), rhs: &(Row, Diff)| cmp_group_key(lhs, rhs) == Ordering::Equal;
 
         let mut cursor = 0;

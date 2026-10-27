@@ -13,46 +13,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! A chunked columnar container based on the columnation library. It stores the local
-//! portion in region-allocated data, too, which is different to the `TimelyStack` type.
+//! Container builder wrapper that carries a byte counter for fuel-based yielding.
 
 use std::cell::Cell;
 
-use differential_dataflow::containers::{Columnation, TimelyStack};
 use timely::container::{ContainerBuilder, PushInto};
 
-/// A Stacked container builder that keep track of container memory usage.
+/// A [`ContainerBuilder`] wrapper carrying a byte counter that
+/// [`AsyncOutputHandle::give_fueled`][gf] increments when emitting items. The
+/// wrapper itself does no accounting; it exists so `give_fueled` can find a
+/// counter associated with the output handle. The caller supplies the size of
+/// each pushed item, which lets the source choose whatever estimate is
+/// cheapest for its data without needing the container to introspect items.
+///
+/// [gf]: crate::builder_async::AsyncOutputHandle::give_fueled
 #[derive(Default)]
-pub struct AccountedStackBuilder<CB> {
+pub struct FueledBuilder<CB> {
     pub bytes: Cell<usize>,
     pub builder: CB,
 }
 
-impl<T, CB> ContainerBuilder for AccountedStackBuilder<CB>
-where
-    T: Clone + Columnation + 'static,
-    CB: ContainerBuilder<Container = TimelyStack<T>>,
-{
-    type Container = TimelyStack<T>;
+impl<CB: ContainerBuilder> ContainerBuilder for FueledBuilder<CB> {
+    type Container = CB::Container;
 
     fn extract(&mut self) -> Option<&mut Self::Container> {
-        let container = self.builder.extract()?;
-        let mut new_bytes = 0;
-        container.heap_size(|_, cap| new_bytes += cap);
-        self.bytes.set(self.bytes.get() + new_bytes);
-        Some(container)
+        self.builder.extract()
     }
 
     fn finish(&mut self) -> Option<&mut Self::Container> {
-        let container = self.builder.finish()?;
-        let mut new_bytes = 0;
-        container.heap_size(|_, cap| new_bytes += cap);
-        self.bytes.set(self.bytes.get() + new_bytes);
-        Some(container)
+        self.builder.finish()
     }
 }
 
-impl<T, CB: PushInto<T>> PushInto<T> for AccountedStackBuilder<CB> {
+impl<T, CB: PushInto<T>> PushInto<T> for FueledBuilder<CB> {
     #[inline]
     fn push_into(&mut self, item: T) {
         self.builder.push_into(item);

@@ -1,0 +1,16 @@
+- name: "syntax"
+  code: |
+    date_bin_hopping ( <hop>, <width>, <source> [, <origin>] )
+  syntax_elements:
+    - name: "`<hop>`"
+      description: |
+        An [`interval`](/sql/types/interval/) value defining the width of bins. Cannot contain any years or months, but can exceed 30 days. Must be between 1 and 9,223,372,036 seconds.
+    - name: "`<width>`"
+      description: |
+        An [`interval`](/sql/types/interval/) value. Produces an "oldest" bin at the equivalent to `date_bin(hop, source + hop - width)`. Cannot contain any years or months, but can exceed 30 days. Must be between 1 and 9,223,372,036 seconds.
+    - name: "`<source>`"
+      description: |
+        A [`timestamp`](/sql/types/timestamp/) or [`timestamp with time zone`](/sql/types/timestamp/) value. Determines this value's bins; produces a "newest" bin at the equivalent to `date_bin(hop, source)`.
+    - name: "`<origin>`"
+      description: |
+        Optional. Must be the same type as `<source>`. Align bins to this value. If not provided, defaults to the Unix epoch. Cannot be more than 2^63 nanoseconds apart from `<source>`.

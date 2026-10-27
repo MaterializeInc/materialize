@@ -614,3 +614,162 @@ DataRow {"fields":["1"]}
 DataRow {"fields":["2"]}
 CommandComplete {"tag":"SELECT 2"}
 ReadyForQuery {"status":"I"}
+
+# Regression test for SQL-373: a constant peek must not let a COPY (a write)
+# sneak into a read-only transaction. The constant SELECT turns the
+# transaction's ops into a constant Peeks. The COPY used to be wrongly
+# accepted, switching the transaction into a write transaction, and a later
+# write then tripped an assertion and panicked. The COPY must be rejected.
+send
+Query {"query": "BEGIN READ ONLY; SELECT 1"}
+----
+
+until ignore=RowDescription
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"T"}
+
+# The COPY is a write and must be rejected with a read-only error (25006),
+# moving the explicit transaction into the failed state.
+send
+Query {"query": "COPY t FROM STDIN"}
+CopyData "1\n"
+CopyDone
+----
+
+until err_field_typs=CM
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text"]}
+ErrorResponse {"fields":[{"typ":"C","value":"25006"},{"typ":"M","value":"transaction in read-only mode"}]}
+ReadyForQuery {"status":"E"}
+
+send
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+# Regression test for SQL-470: the statements between two Syncs are one
+# implicit transaction, so a failure anywhere before the Sync rolls back the
+# writes of every statement in the pipeline. Verified against PostgreSQL 17.
+send
+Query {"query": "CREATE TABLE pipeline_t (a INT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "INSERT INTO pipeline_t VALUES (1)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (2)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (3)"}
+Bind
+Execute
+Parse {"query": "SELECT 1/(SELECT 0)"}
+Bind
+Execute
+Sync
+Query {"query": "SELECT count(*) FROM pipeline_t"}
+----
+
+until err_field_typs=M ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# The failing statement can be a write itself. An INSERT whose values fail to
+# evaluate rolls back the writes staged before it, and every statement after
+# the error is skipped until the Sync, so the last INSERT never runs either.
+send
+Parse {"query": "INSERT INTO pipeline_t VALUES (4)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (5)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (1/(SELECT 0))"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (6)"}
+Bind
+Execute
+Sync
+Query {"query": "SELECT count(*) FROM pipeline_t"}
+----
+
+until err_field_typs=M ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# A pipeline that reaches its Sync commits all of its writes together.
+send
+Parse {"query": "INSERT INTO pipeline_t VALUES (1)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (2)"}
+Bind
+Execute
+Sync
+Query {"query": "SELECT a FROM pipeline_t ORDER BY a"}
+----
+
+until ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ReadyForQuery {"status":"I"}
+DataRow {"fields":["1"]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 2"}
+ReadyForQuery {"status":"I"}

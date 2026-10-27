@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "src/adapter",
+    "src/adapter-dyncfgs",
     "src/adapter-types",
     "src/alloc",
     "src/alloc-default",
@@ -9,12 +10,14 @@ members = [
     "src/auth",
     "src/authenticator",
     "src/avro",
+    "src/aws-glue-schema-registry",
     "src/aws-secrets-controller",
     "src/aws-util",
     "src/balancerd",
     "src/build-info",
     "src/build-tools",
     "src/catalog",
+    "src/catalog-decode",
     "src/catalog-debug",
     "src/catalog-protos",
     "src/ccsr",
@@ -23,7 +26,9 @@ members = [
     "src/cloud-resources",
     "src/cluster",
     "src/cluster-client",
+    "src/cluster-controller",
     "src/clusterd",
+    "src/clusterd-test-driver",
     "src/compute",
     "src/compute-client",
     "src/compute-types",
@@ -39,7 +44,6 @@ members = [
     "src/expr-derive",
     "src/expr-derive-impl",
     "src/expr-parser",
-    "src/expr-test-util",
     "src/fivetran-destination",
     "src/frontegg-auth",
     "src/frontegg-client",
@@ -48,17 +52,16 @@ members = [
     "src/interchange",
     "src/kafka-util",
     "src/license-keys",
-    "src/lowertest",
-    "src/lowertest-derive",
-    "src/lsp-server",
-    "src/materialized",
     "src/materialized",
     "src/metabase",
     "src/metrics",
+    "src/metrics-catalog",
     "src/mysql-util",
     "src/mz",
     "src/mz-debug",
+    "src/mz-deploy",
     "src/npm",
+    "src/oidc-mock",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
     "src/orchestrator-process",
@@ -83,18 +86,23 @@ members = [
     "src/postgres-util",
     "src/prof",
     "src/prof-http",
+    "src/prometheus-protobuf",
     "src/proto",
     "src/regexp",
     "src/repr",
-    "src/repr-test-util",
     "src/rocksdb",
     "src/rocksdb-types",
+    "src/row-spine",
     "src/s3-datagen",
     "src/secrets",
+    "src/secrets-cli",
+    "src/secrets-loader",
     "src/segment",
     "src/server-core",
     "src/service",
+    "src/source-schema-change",
     "src/sql",
+    "src/sql-anonymize",
     "src/sql-lexer",
     "src/sql-parser",
     "src/sql-pretty",
@@ -114,7 +122,6 @@ members = [
     "src/transform",
     "src/txn-wal",
     "src/walkabout",
-    "src/workspace-hack",
     "test/metabase/smoketest",
     "test/test-util",
 ]
@@ -127,6 +134,7 @@ members = [
 # from the workspace's default members.
 default-members = [
     "src/adapter",
+    "src/adapter-dyncfgs",
     "src/adapter-types",
     "src/alloc",
     "src/arrow-util",
@@ -134,12 +142,14 @@ default-members = [
     "src/auth",
     "src/authenticator",
     "src/avro",
+    "src/aws-glue-schema-registry",
     "src/aws-secrets-controller",
     "src/aws-util",
     "src/balancerd",
     "src/build-info",
     "src/build-tools",
     "src/catalog",
+    "src/catalog-decode",
     "src/catalog-debug",
     "src/catalog-protos",
     "src/ccsr",
@@ -148,7 +158,9 @@ default-members = [
     "src/cloud-resources",
     "src/cluster",
     "src/cluster-client",
+    "src/cluster-controller",
     "src/clusterd",
+    "src/clusterd-test-driver",
     "src/compute",
     "src/compute-client",
     "src/compute-types",
@@ -164,7 +176,6 @@ default-members = [
     "src/expr-derive",
     "src/expr-derive-impl",
     "src/expr-parser",
-    "src/expr-test-util",
     "src/frontegg-auth",
     "src/frontegg-client",
     "src/frontegg-mock",
@@ -172,16 +183,16 @@ default-members = [
     "src/interchange",
     "src/kafka-util",
     "src/license-keys",
-    "src/lowertest",
-    "src/lowertest-derive",
-    "src/lsp-server",
     "src/materialized",
     "src/metabase",
     "src/metrics",
+    "src/metrics-catalog",
     "src/mysql-util",
     "src/mz",
     "src/mz-debug",
+    "src/mz-deploy",
     "src/npm",
+    "src/oidc-mock",
     "src/orchestrator",
     "src/orchestrator-kubernetes",
     "src/orchestrator-process",
@@ -206,18 +217,23 @@ default-members = [
     "src/postgres-util",
     "src/prof",
     "src/prof-http",
+    "src/prometheus-protobuf",
     "src/proto",
     "src/regexp",
     "src/repr",
-    "src/repr-test-util",
     "src/rocksdb",
     "src/rocksdb-types",
+    "src/row-spine",
     "src/s3-datagen",
     "src/secrets",
+    "src/secrets-cli",
+    "src/secrets-loader",
     "src/segment",
     "src/server-core",
     "src/service",
+    "src/source-schema-change",
     "src/sql",
+    "src/sql-anonymize",
     "src/sql-lexer",
     "src/sql-parser",
     "src/sql-pretty",
@@ -237,7 +253,6 @@ default-members = [
     "src/transform",
     "src/txn-wal",
     "src/walkabout",
-    "src/workspace-hack",
     "test/metabase/smoketest",
     "test/test-util",
 ]
@@ -248,17 +263,338 @@ exclude = [
     "misc/wasm/*",
     # Ignore any Rust dependencies that python packages might pull in.
     "misc/python/venv/*",
+    # The `src/*/fuzz` cargo-fuzz crates need no entry here: each sets
+    # `package.workspace = "../../../test/cargo-fuzz"`, attaching it to the fuzz
+    # workspace, and a crate nested under a workspace member is never
+    # auto-included in the root workspace. They build on a nightly toolchain
+    # (libFuzzer) via `cargo +nightly fuzz run ...` or `ci/test/cargo-fuzz.sh`.
 ]
 
-# Use Cargo's new feature resolver, which can handle target-specific features.
-# Explicit opt-in is required even with the 2021 edition because we use a
-# virtual workspace.
-# See: https://blog.rust-lang.org/2021/03/25/Rust-1.51.0.html#cargos-new-feature-resolver
-resolver = "2"
+# Use Cargo's new feature resolver, which can handle target-specific features,
+# and checks rust-version compatibility.
+resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.89.0"
+rust-version = "1.98.1"
+
+[workspace.dependencies]
+ahash = { version = "0.8.12", default-features = false }
+aho-corasick = "1.1.4"
+allocation-counter = "0"
+annotate-snippets = "0.12.15"
+anyhow = "1.0.102"
+array-concat = "0.5.5"
+arrayvec = "0.7.6"
+arrow = { version = "58", default-features = false }
+arrow-ipc = "58"
+askama = { version = "0.16.1", default-features = false, features = ["config", "derive", "serde_json", "std"] }
+assert_cmd = "2.2.2"
+async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
+async-stream = "0.3.6"
+async-trait = "0.1.89"
+aws-config = { version = "1.12.0", default-features = false, features = ["sso"] }
+aws-credential-types = { version = "1.3.0", features = ["hardcoded-credentials"] }
+aws-lc-rs = "1"
+aws-sdk-glue = { version = "1.171.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-kms = { version = "1.122.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-s3 = { version = "1.150.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-secretsmanager = { version = "1.119.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-sts = { version = "1.118.0", default-features = false, features = ["rt-tokio"] }
+aws-sigv4 = "1.6.0"
+aws-smithy-http-client = { version = "1.4.2", default-features = false, features = ["rustls-aws-lc"] }
+aws-smithy-mocks = "0.3.0"
+aws-smithy-runtime-api = "1.18.0"
+aws-smithy-types = { version = "1.8.1", features = ["byte-stream-poll-next"] }
+aws-types = "1.6.0"
+axum = { version = "0.8.9", features = ["ws"] }
+axum-extra = { version = "0.12.5", features = ["typed-header"] }
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+azure_core = { version = "1.1.0", default-features = false, features = ["hmac_rust", "reqwest", "tokio"] }
+azure_identity = { version = "1.0.0", default-features = false, features = ["tokio"] }
+azure_storage_blob = { version = "1.1.0", default-features = false, features = ["tokio"] }
+backtrace = "0.3.76"
+base64 = "0.23.1"
+bincode = "1.3.3"
+bitflags = "2.13.2"
+buildid = "1.0.4"
+bytefmt = "0.1.7"
+bytemuck = { version = "1.23.1", features = ["extern_crate_alloc", "latest_stable_rust"] }
+byteorder = "1.5"
+bytes = "1.12.1"
+bytesize = "2.7.0"
+cc = "1.5.1"
+cfg-if = "1.0.4"
+chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
+chrono-tz = { version = "0.10.4", features = ["case-insensitive", "serde"] }
+clap = { version = "4.6.1", features = ["derive"] }
+clap_complete = "4.6.2"
+columnar = "0.13.0"
+columnation = "0.1.2"
+compact_bytes = "0.2.1"
+compile-time-run = "0.2.12"
+console-subscriber = "0.5.0"
+core_affinity = "0.8.3"
+crc32fast = "1.5.0"
+criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
+crossbeam = "0.8.4"
+crossbeam-channel = "0.5.15"
+crossterm = { version = "0.29.0", default-features = false }
+csv = "1.4.0"
+csv-async = { version = "1.3.1", features = ["tokio"] }
+csv-core = "0.1.13"
+ctor = "1.0.10"
+custom-labels = "0.4.6"
+darling = "0.24.1"
+data-encoding = "2.3.2"
+datadriven = "0.9.0"
+deadpool = { version = "0.13.1", default-features = false, features = ["managed"] }
+deadpool-postgres = "0.14.2"
+dec = "0.4.9"
+derivative = "2.2.0"
+differential-dataflow = "0.25.0"
+differential-dogs3 = "0.25.0"
+digest = "0.11.3"
+dirs = "7.0.0"
+duckdb = { version = "1.10506.1", default-features = false }
+dynfmt = { version = "0.2.0", features = ["curly"] }
+either = "1.18.0"
+encoding = "0.2.0"
+enum-iterator = "2.1.0"
+enum-kinds = "0.5.1"
+fail = { version = "0.5.1", features = ["failpoints"] }
+fallible-iterator = "0.2.0"
+fancy-regex = "0.19.2"
+flate2 = "1.1.9"
+frontegg = { version = "0.9.0", default-features = false }
+futures = "0.3.32"
+futures-core = "0.3.32"
+futures-task = "0.3.32"
+futures-util = "0.3.32"
+gcp_auth = { version = "0.12.6", default-features = false, features = ["aws-lc-rs"] }
+glob = "0.3.3"
+globset = "0.4.18"
+google-cloud-gax = "1.4.0"
+google-cloud-storage = "1.20.0"
+governor = "0.10.1"
+half = "2"
+headers = "0.4.1"
+hex = "0.4.3"
+hex-literal = "1.1.0"
+hibitset = "0.6.4"
+hickory-resolver = "0.26.1"
+hmac = "0.13.0"
+http = "1.5.0"
+http-body-util = "0.1.3"
+httparse = "1.8.0"
+humantime = "2.4.0"
+hyper = { version = "1.11.1", features = ["http1", "server"] }
+hyper-openssl = { version = "0.10.2", features = ["client-legacy", "tokio"] }
+# Backs the LaunchDarkly HTTPS transport, see `mz_dyncfg_launchdarkly::https_transport`.
+hyper-rustls = { version = "0.27", default-features = false, features = ["aws-lc-rs", "native-tokio", "http1", "http2", "tls12"] }
+hyper-tls = "0.6.0"
+hyper-util = "0.1.20"
+iceberg = "0.10.1"
+iceberg-catalog-rest = "0.10.1"
+iceberg-storage-opendal = { version = "0.10.1", default-features = false, features = ["opendal-s3", "opendal-gcs", "opendal-azdls"] }
+imbl = { version = "7.0.0", features = ["serde"] }
+include_dir = "0.7.4"
+indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
+indicatif = "0.18.4"
+insta = { version = "1.47.2", features = ["json", "serde"] }
+ipnet = "2.12.0"
+itertools = "0.15.0"
+jaq-core = "3.1.1"
+jaq-json = "2.0.3"
+jaq-std = "3.0.3"
+jemalloc_pprof = "0.9.0"
+jsonwebtoken = { version = "11.1.0", features = ["aws_lc_rs"] }
+junit-report = "0.9.1"
+k8s-controller = "0.14.1"
+k8s-openapi = { version = "0.28.0", features = ["schemars", "v1_34"] }
+kube = { version = "4.2.0", default-features = false, features = ["aws-lc-rs", "client", "derive", "runtime", "rustls-tls"] }
+# Only the `hyper` feature on both LaunchDarkly crates. `hyper-rustls-native-roots`
+# would enable the transport crate's `hyper-rustls` dependency, which it
+# hardcodes to the `ring` provider.
+# `mz_dyncfg_launchdarkly::https_transport` injects an aws-lc-rs connector.
+launchdarkly-server-sdk = { version = "3.3.0", default-features = false, features = ["hyper", "crypto-aws-lc-rs"] }
+launchdarkly-sdk-transport = { version = "0.1.4", default-features = false, features = ["hyper"] }
+lgalloc = "0.6.0"
+libc = "0.2.186"
+lru = "0.18.5"
+lz4_flex = { version = "0.14.0", default-features = false, features = ["frame", "std"] }
+maplit = "1.0.2"
+mappings = "0.7.2"
+md-5 = "0.11.0"
+mime = "0.3.16"
+murmur2 = "0.1.0"
+mysql_async = { version = "0.37.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
+mysql_common = { version = "0.37.3", default-features = false, features = ["chrono"] }
+# Held back: 0.2.16+ bumps `security-framework` to 3.x, `core-foundation` to
+# 0.10, and `openssl-probe` to 0.2, which duplicates with our direct deps in
+# the `mz` CLI and with `system-configuration` (used by `hyper-util`).
+native-tls = { version = "=0.2.18", features = ["alpn"] }
+nix = { version = "0.31.3", features = ["fs", "signal"] }
+num = "0.4.3"
+num-traits = "0.2.15"
+num_cpus = "1.17.0"
+num_enum = "0.7.6"
+open = "5.3.5"
+openssh = { version = "0.11.6", default-features = false, features = ["native-mux"] }
+openssh-mux-client = "0.17.9"
+openssl = { version = "0.10.80", features = ["vendored"] }
+openssl-probe = "0.2.1"
+openssl-sys = { version = "0.9.108", features = ["vendored"] }
+opentelemetry = { version = "0.33.0", features = ["trace"] }
+opentelemetry-otlp = { version = "0.33.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.33.0", features = ["experimental_trace_batch_span_processor_with_async_runtime", "rt-tokio"] }
+ordered-float = { version = "5.1.0", features = ["serde"] }
+os_info = "3.11.0"
+owo-colors = "4.3.0"
+parquet = { version = "58", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
+paste = "1.0.15"
+pem = "4.0.0"
+phf = { version = "0.14.0", features = ["uncased"] }
+phf_codegen = "0.14.0"
+pin-project = "1.1.13"
+postgres = "0.19.12"
+postgres-openssl = "0.5.2"
+postgres-protocol = "0.6.12"
+postgres-replication = "0.6.7"
+postgres-types = { version = "0.2.11", features = ["with-chrono-0_4", "with-uuid-1"] }
+postgres_array = "0.11.0"
+pprof = "0.15.0"
+pprof_util = "0.8.2"
+predicates = "3.1.4"
+pretty = "0.12.5"
+prettyplease = "0.3"
+proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
+prometheus = { version = "0.14.0", default-features = false, features = ["protobuf"] }
+protobuf = { version = "3.7.2", default-features = false }
+proptest = { version = "1.11.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.9.0", features = ["boxed_union"] }
+prost = { version = "0.14.3", features = ["no-recursion-limit"] }
+prost-build = "0.14.3"
+prost-reflect = { version = "0.16.3", features = ["serde"] }
+prost-types = "0.14.3"
+protobuf-native = "0.3.3"
+protobuf-src = "2.1.1"
+proxy-header = "0.1.2"
+qcell = "0.5"
+quote = "1.0.45"
+rand = "0.10.3"
+rand-8 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
+rayon = "1.12.0"
+rdkafka = { version = "0.29.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
+rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
+regex = "1.12.3"
+regex-syntax = "0.8.10"
+reqsign-core = "3.3.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "charset", "cookies", "http2", "json", "query", "rustls", "stream", "system-proxy"] }
+# The iceberg fork's public API (`with_client`, `OAuth2TokenProvider`) takes
+# reqwest 0.12 types, so the iceberg connection code in mz-storage-types uses
+# this alias.
+reqwest-0-12 = { package = "reqwest", version = "0.12.28", default-features = false, features = ["charset", "http2", "json", "native-tls-vendored"] }
+reqwest-middleware = { version = "0.5.2", features = ["json"] }
+reqwest-retry = "0.9.1"
+rlimit = "0.11.0"
+rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
+ropey = "1.6.1"
+rustls = "0.23.46"
+rustls-platform-verifier = "0.7.0"
+rpassword = "7.5.1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+ryu = "1.0.23"
+schemars = { version = "1.2.1", features = ["uuid1"] }
+scopeguard = "1.2.0"
+seahash = "4.1.0"
+security-framework = "3.7.0"
+segment = { version = "0.2.6", default-features = false, features = ["native-tls-vendored"] }
+semver = "1.0.28"
+sentry = { version = "0.49.1", default-features = false, features = ["backtrace", "contexts", "debug-images", "reqwest", "rustls"] }
+sentry-panic = "0.49.1"
+sentry-tracing = "0.49.1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde-aux = "4.7.0"
+serde-reflection = "0.6.0"
+serde-saphyr = { version = "2.0.0", default-features = false, features = ["serialize"] }
+serde_bytes = "0.11.19"
+serde_json = { version = "1.0.150", features = ["raw_value"] }
+serde_plain = "1.0.2"
+serde_repr = "0.1.20"
+serde_urlencoded = "0.7.1"
+sha1 = "0.11.0"
+sha2 = "0.11.0"
+shell-words = "1.1.1"
+similar = "3.2.0"
+similar-asserts = "2.0"
+smallvec = "1.15.1"
+snap = "1.1.1"
+socket2 = "0.6.3"
+sqlparser = "0.63.0"
+ssh-key = "0.6.7"
+stacker = "0.1.24"
+static_assertions = "1.1"
+strsim = "0.11.1"
+subtle = "2.6.1"
+supports-color = "3.0.2"
+syn = { version = "3.0.5", features = ["extra-traits", "full", "parsing", "printing"] }
+sysctl = "0.7.1"
+sysinfo = "0.39.6"
+tabled = "0.22.0"
+tar = "0.4.46"
+tempfile = "3.27.0"
+termcolor = "1.4.1"
+thiserror = "2.0.18"
+tiberius = { version = "0.12", default-features = false, features = ["chrono", "native-tls", "sql-browser-tokio", "tds73"] }
+tikv-jemalloc-ctl = { version = "0.7", features = ["stats", "use_std"] }
+tikv-jemallocator = { version = "0.7", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
+time = "0.3.17"
+timely = "0.31.0"
+tokio = { version = "1.52.3", features = ["full", "test-util"] }
+tokio-metrics = "0.5.0"
+tokio-native-tls = "0.3.1"
+tokio-openssl = "0.6.5"
+tokio-postgres = "0.7.15"
+tokio-stream = "0.1.18"
+tokio-test = "0.4.6"
+tokio-util = "0.7.18"
+toml = "1.1.6"
+toml_edit = { version = "0.25.15", features = ["serde"] }
+tonic = { version = "0.14.6", features = ["gzip", "transport"] }
+tonic-prost = "0.14.6"
+tonic-prost-build = "0.14.6"
+tower = { version = "0.5.3", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
+tower-http = { version = "0.7.1", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
+tower-lsp = { version = "0.20.0", features = ["proposed"] }
+tower-sessions = "0.15.0"
+tower-sessions-memory-store = "0.14.0"
+tracing = "0.1.44"
+tracing-capture = "0.1.0"
+tracing-core = "0.1.35"
+tracing-opentelemetry = "0.34.0"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json", "tracing-log"] }
+# Held back: must match the `tungstenite` that `axum`'s `ws` feature pulls in
+# via `tokio-tungstenite`, else the two versions coexist in the dependency
+# graph. `axum` 0.8.9 is on `tokio-tungstenite` 0.29, which pins this to 0.29.
+# 0.30 additionally moves to `sha1` 0.11, duplicating the whole RustCrypto
+# hashing stack.
+tungstenite = "0.30.0"
+turmoil = "0.7.2"
+uncased = "0.9.10"
+unicode-normalization = "0.1.25"
+unicode-width = "0.2.2"
+url = "2.5.8"
+urlencoding = "2.1.3"
+utoipa = "6.0.0"
+uuid = "1.19.0"
+version-compare = "0.2.1"
+walkdir = "2.5.0"
+which = "8"
+x509-cert = { version = "0.3.0", default-features = false }
+yansi = "1.0.1"
+zeroize = { version = "1.8.2", features = ["derive", "serde"] }
+zip = { version = "9.1.2", default-features = false, features = ["deflate-flate2"] }
 
 [profile.dev]
 split-debuginfo = "unpacked"
@@ -296,8 +632,23 @@ lto = "thin"
 # docker containers.
 debug = 2
 
+# Optimized-for-size profile for mz-deploy. The workspace release profile
+# targets environmentd/clusterd which need debug info for core dump analysis.
+# mz-deploy is a CLI tool distributed via
+# Homebrew, so we optimize for binary size instead:
+#
+#   - debug = false:      no debug info (saves ~16MB vs debug = 2)
+#   - lto = "fat":        full cross-crate dead code elimination
+#   - codegen-units = 1:  better inlining/DCE at cost of compile time
+[profile.release-mz-deploy]
+inherits = "release"
+debug = false
+lto = "fat"
+codegen-units = 1
+
 [profile.optimized]
 inherits = "release"
+split-debuginfo = "unpacked"
 lto = "off"
 debug = 1
 incremental = true
@@ -323,15 +674,14 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 
+# Upstream chrono-tz is unmaintained and stops at tzdata 2025b. The fork's
+# `mz_changes` branch carries current IANA data only, no code changes. To bump
+# tzdata, update the fork, then follow the bump ceremony documented in
+# src/environmentd/tests/testdata/timezones/regenerate.sh.
+chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "1463cc380e9a2d842b9ed12cbe5952f983dc2b4a" }
+
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
-
-# Waiting on https://github.com/MaterializeInc/tracing/pull/1 to be submitted
-# upstream.
-tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opentelemetry.git" }
-
-# Waiting for resolution of https://github.com/launchdarkly/rust-server-sdk/issues/116
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "23666d095c39adc53a151969c1aa1e1ec484f3e6" }
 
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
@@ -348,16 +698,13 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
-# All changes should go to the `mz_changes` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "3e77059b20d3" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "3e77059b20d3" }
-
-# Custom duckdb crate to support mz needs
-# All changes should go to the `mz_changes` branch.
-# The main change is allowing the TLS implementation to be selected via features.
-# Hopefully we can upstream these changes eventually.
-# Additionally we keep the apache crates updated to latest versions.
-duckdb = { git = "https://github.com/MaterializeInc/duckdb-rs.git", rev = "752c7efe2582" }
+# All changes should go to the `mz_v0.10.x` branch.
+# NOTE: The `[workspace.dependencies]` version requirement above must stay
+# semver-compatible with this revision's crate version, otherwise Cargo drops
+# these patches into `[[patch.unused]]` and silently builds against crates.io.
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
 
 
 # BEGIN LINT CONFIG
@@ -365,7 +712,11 @@ duckdb = { git = "https://github.com/MaterializeInc/duckdb-rs.git", rev = "752c7
 [workspace.lints.rust]
 unknown_lints = "allow"
 non_local_definitions = "allow"
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(stamped, coverage, nightly_doc_features, release, tokio_unstable)'] }
+trivial_numeric_casts = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
+unused_import_braces = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(stamped, coverage, nightly_doc_features, release, tokio_unstable, kani)'] }
 
 [workspace.lints.rustdoc]
 
@@ -437,4 +788,14 @@ mod_module_files = "warn"
 needless_pass_by_ref_mut = "warn"
 borrow_interior_mutable_const = "warn"
 or_fun_call = "warn"
+let_unit_value = "warn"
+match_wild_err_arm = "warn"
+match_wildcard_for_single_variants = "warn"
+debug_assert_with_mut_call = "warn"
+if_same_then_else = "warn"
+unused_result_ok = "warn"
+collection_is_never_read = "warn"
+redundant_guards = "warn"
+precedence_bits = "warn"
+significant_drop_in_scrutinee = "warn"
 # END LINT CONFIG

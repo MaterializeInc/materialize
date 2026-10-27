@@ -23,7 +23,7 @@ public      test_view1   SELECT␠1;
 public      test_view2   SELECT␠2;
 
 query I
-SELECT COUNT(*) FROM pg_catalog.pg_matviews WHERE matviewowner IS NOT NULL
+SELECT COUNT(*) FROM pg_catalog.pg_matviews WHERE schemaname = 'public' AND matviewowner IS NOT NULL
 ----
 2
 

@@ -10,17 +10,17 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-deadpool-postgres = "0.10.3"
+anyhow.workspace = true
+deadpool.workspace = true
+deadpool-postgres.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async", "bytes"] }
 mz-tls-util = { path = "../tls-util" }
-prometheus = { version = "0.14.0", default-features = false }
-tokio = { version = "1.48.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
-tracing = "0.1.43"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+prometheus.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 
 [features]
-default = ["workspace-hack"]
+default = []

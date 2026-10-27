@@ -45,8 +45,8 @@ MATERIALIZED VIEW mv_fusable_mfp_accumulable;
 ----
 materialize.public.mv_fusable_mfp_accumulable:
   Reduce::Accumulable
-    simple_aggrs[0]=(0, 0, sum(#1{b}))
-    simple_aggrs[1]=(1, 1, count(#1{b}))
+    simple_aggrs[0]=(0, sum(#1{b}))
+    simple_aggrs[1]=(1, count(#1{b}))
     key_plan
       project=(#0)
     val_plan
@@ -88,8 +88,8 @@ materialize.public.mv_complex_mfp_accumulable:
     map=((#1 + 1))
     input_key=#0
     Reduce::Accumulable
-      simple_aggrs[0]=(0, 0, sum(#1{b}))
-      simple_aggrs[1]=(1, 1, count(#1{b}))
+      simple_aggrs[0]=(0, sum(#1{b}))
+      simple_aggrs[1]=(1, count(#1{b}))
       key_plan
         project=(#0)
       val_plan

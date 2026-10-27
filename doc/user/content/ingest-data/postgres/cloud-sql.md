@@ -21,7 +21,7 @@ to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
 
 ## Before you begin
 
-{{% postgres-direct/before-you-begin %}}
+{{% include-from-yaml data="ingest_postgres" name="before-you-begin" %}}
 
 ## A. Configure Google Cloud SQL
 
@@ -35,7 +35,7 @@ documentation](https://cloud.google.com/sql/docs/postgres/replication/configure-
 
 ### 2. Create a publication and a replication user
 
-{{% postgres-direct/create-a-publication-other %}}
+{{% include-from-yaml data="ingest_postgres" name="create-a-publication-other" %}}
 
 ## B. (Optional) Configure network security
 
@@ -65,7 +65,7 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [Materialize console's SQL Shell](/console/),
+1. In the [Materialize console's SQL Shell](/developer-tools/console/),
    or your preferred SQL client connected to Materialize, find the static egress
    IP addresses for the Materialize region you are running in:
 
@@ -98,7 +98,7 @@ network to allow traffic from the bastion host.
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
     1. In the [Materialize console's SQL
-       Shell](/console/), or your preferred SQL client
+       Shell](/developer-tools/console/), or your preferred SQL client
        connected to Materialize, get the static egress IP addresses for the
        Materialize region you are running in:
 
@@ -120,8 +120,7 @@ bastion host.
 
 {{< tab "Self-Managed">}}
 
-{{% include-md
-file="shared-content/self-managed/configure-network-security-intro.md" %}}
+{{% include-headless "/headless/self-managed-deployments/configure-network-security-intro" %}}
 
 {{< tabs >}}
 
@@ -173,7 +172,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
-{{% postgres-direct/create-a-cluster %}}
+{{% include-from-yaml data="ingest_postgres" name="create-a-cluster" %}}
 
 ### 2. Create a connection
 
@@ -240,17 +239,21 @@ your networking configuration.
 
 ### 4. Monitor the ingestion status
 
-{{% postgres-direct/check-the-ingestion-status %}}
+{{% include-from-yaml data="ingest_postgres" name="check-the-ingestion-status" %}}
 
 ### 5. Right-size the cluster
 
-{{% postgres-direct/right-size-the-cluster %}}
+{{% include-from-yaml data="ingest_postgres" name="right-size-the-cluster" %}}
 
 ## D. Explore your data
 
-{{% postgres-direct/next-steps %}}
+{{% include-from-yaml data="ingest_postgres" name="next-steps" %}}
 
 ## Considerations
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}

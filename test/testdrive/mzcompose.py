@@ -14,7 +14,6 @@ retried until it produces the desired result.
 """
 
 import glob
-import os
 
 from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import (
@@ -33,19 +32,34 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
+    Kafka(
+        environment_extra=[
+            # kafka-time-offset.td ingests messages with timestamps in 2099 to
+            # exercise relative offsets; Kafka 4.x otherwise rejects those as
+            # InvalidTimestamp under the default broker validation.
+            "KAFKA_LOG_MESSAGE_TIMESTAMP_AFTER_MAX_MS=9223372036854775807",
+            "KAFKA_LOG_MESSAGE_TIMESTAMP_BEFORE_MAX_MS=9223372036854775807",
+        ],
+    ),
     SchemaRegistry(),
-    Redpanda(),
+    Redpanda(
+        # See the Kafka comment above; `kafka-time-offset.td` also runs against
+        # Redpanda (in `--redpanda` mode) and needs the same relaxation.
+        extra_cluster_settings={
+            "log_message_timestamp_after_max_ms": "9223372036854",
+        },
+    ),
     Postgres(),
     MySql(),
     Azurite(),
     Mz(app_password=""),
-    Minio(setup_materialize=True, additional_directories=["copytos3"]),
-    Materialized(external_blob_store=True, sanity_restart=False),
+    Minio(setup_materialize=True, additional_directories=["copytos3", "copyfroms3"]),
+    Materialized(
+        external_blob_store=True,
+        sanity_restart=False,
+    ),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_blob_store=True),
 ]
@@ -76,7 +90,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--default-size",
         type=int,
-        default=Materialized.Size.DEFAULT_SIZE,
+        default=Materialized.Size.default(),
         help="Use SIZE 'scale=N,workers=N' for replicas and SIZE 'scale=N,workers=1' for sources",
     )
     parser.add_argument(
@@ -117,7 +131,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=["*.td"],
         help="run against the specified files",
     )
-    (args, passthrough_args) = parser.parse_known_args()
+    args, passthrough_args = parser.parse_known_args()
 
     dependencies = [
         "fivetran-destination",
@@ -129,7 +143,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["kafka", "schema-registry"]
 
     additional_system_parameter_defaults = {"default_cluster_replication_factor": "1"}
     for val in args.system_param or []:
@@ -243,7 +257,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 file,
             )
             # Uploading successful junit files wastes time and contains no useful information
-            os.remove(MZ_ROOT / "test" / "testdrive" / junit_report)
+            if not args.rewrite_results:
+                (MZ_ROOT / "test" / "testdrive" / junit_report).unlink(missing_ok=True)
 
         files = buildkite.shard_list(
             sorted(

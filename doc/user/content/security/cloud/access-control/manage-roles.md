@@ -19,12 +19,18 @@ objects** through privileges granted to database roles.
 
 {{< annotation type="Disambiguation" >}}
 
-{{< include-md file="shared-content/rbac-cloud/rbac-intro-disambiguation.md" >}}
+{{% include-headless "/headless/rbac-cloud/rbac-intro-disambiguation-cloud" %}}
 
 The focus of this page is on managing database roles. For information on
 organization roles, see [Users and service
 accounts](/security/cloud/users-service-accounts/).
 {{< /annotation >}}
+
+{{< tip >}}
+Instead of granting role membership by hand, you can [sync groups from your
+identity provider](/security/cloud/users-service-accounts/sync-idp-groups/) to
+manage database role membership from your IdP.
+{{</ tip >}}
 
 ## Required privileges for managing roles
 
@@ -37,31 +43,21 @@ various objects).
 
 {{</ note >}}
 
-| Role management operations          | Required privileges      |
-| ----------------------------------- | ------------------------ |
-| To create/revoke/grant roles        | {{< include-md
-file="shared-content/sql-command-privileges/create-role.md" >}} {{< warning >}}
-{{< include-md file="shared-content/rbac-cloud/createrole-consideration.md" >}}
-{{</ warning >}} |
-| To view privileges for a role       | None                      |
-| To grant/revoke role privileges     | {{< include-md
-file="shared-content/sql-command-privileges/grant-privilege.md" >}}|
-| To alter default privileges         | {{< include-md
-file="shared-content/sql-command-privileges/alter-default-privileges.md" >}} |
+{{% yaml-table data="examples/rbac-cloud/manage_roles_required_privileges" %}}
 
 See also [Appendix: Privileges by
 command](/security/appendix/appendix-command-privileges/)
 
 ## Create a role
 
-{{< include-md file="shared-content/rbac-cloud/db-roles.md" >}}
+{{% include-headless "/headless/rbac-cloud/db-roles" %}}
 
 To create a new role manually, use the [`CREATE ROLE`](/sql/create-role/)
 statement.
 
 {{< annotation type="Privilege(s) required to run the command" >}}
 
-{{< include-md file="shared-content/sql-command-privileges/create-role.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-role" %}}
 
 {{</ annotation>}}
 
@@ -71,7 +67,7 @@ CREATE ROLE <role_name> [WITH INHERIT];
 ```
 
 {{< tip >}}
-{{< include-md file="shared-content/rbac-cloud/role-name-restrictions.md" >}}
+{{% include-headless "/headless/rbac-cloud/role-name-restrictions" %}}
 {{</ tip >}}
 
 For example, the following creates:
@@ -97,12 +93,12 @@ example="create-role-serving-index-manager" >}}
 In Materialize, a role is created with inheritance support. With inheritance,
 when a role is granted to another role (i.e., the target role), the target role
 inherits privileges (not role attributes and parameters) through the other role.
-{{< include-md file="shared-content/rbac-cloud/db-roles-public-membership.md" >}}
+{{% include-headless "/headless/rbac-cloud/db-roles-public-membership" %}}
 
-{{% include-md file="shared-content/rbac-cloud/db-roles-managing-privileges.md" %}}
+{{% include-headless "/headless/rbac-cloud/db-roles-managing-privileges" %}}
 
 {{< annotation type="Disambiguation" >}}
-{{% include-md file="shared-content/rbac-cloud/grant-vs-alter-default-privilege.md"
+{{% include-headless "/headless/rbac-cloud/grant-vs-alter-default-privilege"
 %}}
 {{</ annotation >}}
 
@@ -153,7 +149,7 @@ SHOW PRIVILEGES FOR <role>;
 ```
 
 {{< note >}}
-{{< include-md file="shared-content/rbac-cloud/db-roles-public-membership.md" >}}
+{{% include-headless "/headless/rbac-cloud/db-roles-public-membership" %}}
 {{</ note >}}
 
 For example:
@@ -216,8 +212,8 @@ a role, use the [`GRANT PRIVILEGE`](/sql/grant-privilege/) statement (see
 
 {{< annotation type="Privilege(s) required to run the command" >}}
 
-{{< include-md file="shared-content/sql-command-privileges/grant-privilege.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/grant-privilege"
+%}}
 
 To override the **object ownership** requirements to grant privileges, run as an
 Organization admin.
@@ -228,13 +224,13 @@ Organization admin.
 GRANT <PRIVILEGE> ON <OBJECT_TYPE> <object_name> TO <role>;
 ```
 
-{{< include-md file="shared-content/rbac-cloud/use-resusable-roles.md" >}}
+{{% include-headless "/headless/rbac-cloud/use-resusable-roles" %}}
 
 For example, the following grants privileges to the manually created functional
 roles.
 
 {{< note >}}
-{{< include-md file="shared-content/rbac-cloud/privileges-related-objects.md" >}}
+{{% include-headless "/headless/rbac-cloud/privileges-related-objects" %}}
 {{</ note >}}
 
 {{< tabs >}}
@@ -271,7 +267,7 @@ Once a role is created, you can modify its privileges either:
 
 {{< tip >}}
 
-{{< include-md file="shared-content/rbac-cloud/use-resusable-roles.md" >}}
+{{% include-headless "/headless/rbac-cloud/use-resusable-roles" %}}
 
 {{</ tip >}}
 
@@ -281,8 +277,7 @@ statement (see [`GRANT ROLE`](/sql/grant-role/) for full syntax):
 
 {{< annotation type="Privilege(s) required to run the command" >}}
 
-{{< include-md file="shared-content/sql-command-privileges/grant-role.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/grant-role" %}}
 
 Organization admin has the required privileges on the system.
 {{</ annotation>}}
@@ -368,8 +363,8 @@ To remove privileges from a role, use the [`REVOKE <privilege>`](/sql/revoke-pri
 
 {{< annotation type="Privilege(s) required to run the command" >}}
 
-{{< include-md file="shared-content/sql-command-privileges/revoke-privilege.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/revoke-privilege"
+%}}
 
 {{</ annotation>}}
 
@@ -383,8 +378,7 @@ To revoke a role from another role, use the [`REVOKE <role>`](/sql/revoke-role/)
 
 {{< annotation type="Privilege(s) required to run the command" >}}
 
-{{< include-md file="shared-content/sql-command-privileges/revoke-role.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/revoke-role" %}}
 
 {{</ annotation>}}
 
@@ -399,7 +393,7 @@ REVOKE data_reader FROM sales_report_app;
 ```
 
 {{< important >}}
-{{< include-md file="shared-content/rbac-cloud/revoke-roles-consideration.md" >}}
+{{% include-headless "/headless/rbac-cloud/revoke-roles-consideration" %}}
 {{</ important >}}
 
 ## Manage future privileges for a role
@@ -419,10 +413,10 @@ Default privileges can be specified for a given object type and scoped to:
 - all future objects of that type created by specific roles (or by all roles
   `PUBLIC`).
 
-{{< include-md file="shared-content/rbac-cloud/default-privilege-clarification.md" >}}
+{{% include-headless "/headless/rbac-cloud/default-privilege-clarification" %}}
 
 {{< annotation type="Disambiguation" >}}
-{{% include-md file="shared-content/rbac-cloud/grant-vs-alter-default-privilege.md"
+{{% include-headless "/headless/rbac-cloud/grant-vs-alter-default-privilege"
 %}}
 
 {{</ annotation >}}
@@ -485,9 +479,7 @@ DEFAULT PRIVILEGES`](/sql/alter-default-privileges) for the full syntax):
 
 {{< annotation type="Privilege(s) required to run the command" >}}
 
-{{< include-md
-file="shared-content/sql-command-privileges/alter-default-privileges.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/alter-default-privileges" %}}
 
 {{</ annotation>}}
 
@@ -593,8 +585,8 @@ command:
 
 {{< annotation type="Privilege(s) required to run the command" >}}
 
-{{< include-md file="shared-content/sql-command-privileges/drop-role.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/drop-role"
+%}}
 
 {{</ annotation>}}
 
@@ -642,8 +634,7 @@ TO](/sql/#rbac) commands:
 
 {{< annotation type="Privilege(s) required to run the command" >}}
 
-{{< include-md file="shared-content/sql-command-privileges/alter-owner.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/alter-owner" %}}
 
 {{</ annotation>}}
 
@@ -673,4 +664,4 @@ example="view-privileges-for-previous-owner" %}}
 
 - [Access control best practices](/security/cloud/access-control/#best-practices)
 - [Manage privileges with
-  Terraform](/manage/terraform/manage-rbac/)
+  Terraform](/developer-tools/terraform/manage-rbac/)

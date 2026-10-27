@@ -24,7 +24,6 @@ from materialize.docker import image_registry
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
@@ -59,10 +58,10 @@ from materialize.scalability.result.scalability_result import BenchmarkResult
 from materialize.scalability.schema.schema import Schema, TransactionIsolation
 from materialize.scalability.workload.workload import Workload
 from materialize.scalability.workload.workload_markers import WorkloadMarker
-from materialize.scalability.workload.workloads.connection_workloads import *  # noqa: F401 F403
-from materialize.scalability.workload.workloads.ddl_workloads import *  # noqa: F401 F403
-from materialize.scalability.workload.workloads.dml_dql_workloads import *  # noqa: F401 F403
-from materialize.scalability.workload.workloads.self_test_workloads import *  # noqa: F401 F403
+from materialize.scalability.workload.workloads.connection_workloads import *  # noqa: F403
+from materialize.scalability.workload.workloads.ddl_workloads import *  # noqa: F403
+from materialize.scalability.workload.workloads.dml_dql_workloads import *  # noqa: F403
+from materialize.scalability.workload.workloads.self_test_workloads import *  # noqa: F403
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
@@ -79,13 +78,10 @@ from materialize.version_list import (
 )
 
 SERVICES = [
-    Cockroach(setup_materialize=True, in_memory=True),
     Materialized(
         image=f"{image_registry()}/materialized:latest",
         sanity_restart=False,
         additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
-        external_metadata_store=True,
-        metadata_store="cockroach",
     ),
     Postgres(),
     Balancerd(),
@@ -93,7 +89,7 @@ SERVICES = [
 ]
 
 DEFAULT_REGRESSION_THRESHOLD = 0.2
-SCALABILITY_FRAMEWORK_VERSION = "1.5.0"
+SCALABILITY_FRAMEWORK_VERSION = "1.6.0"
 
 INCLUDE_ZERO_IN_Y_AXIS = True
 
@@ -213,7 +209,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     baseline_endpoint, other_endpoints = get_baseline_and_other_endpoints(
         c, args, regression_against_target
     )
-    workload_classes = get_workload_classes(args)
+    workload_classes = buildkite.shard_list(
+        get_workload_classes(args), lambda cls: cls.__name__
+    )
 
     print(f"Targets: {args.target}")
     print(f"Checking regression against: {regression_against_target}")
@@ -310,13 +308,20 @@ def get_baseline_and_other_endpoints(
     use_balancerd = args.use_balancerd
     baseline_endpoint: Endpoint | None = None
     other_endpoints: list[Endpoint] = []
-    for i, specified_target in enumerate(args.target):
+    # --materialize-url is appended once per remote target, so index it by the
+    # number of remote targets seen so far rather than the overall target
+    # position (which is wrong as soon as targets are mixed, e.g. HEAD + remote).
+    remote_target_index = 0
+    for specified_target in args.target:
         endpoint: Endpoint | None = None
 
         if specified_target == TARGET_MATERIALIZE_LOCAL:
             endpoint = MaterializeLocal()
         elif specified_target == TARGET_MATERIALIZE_REMOTE:
-            endpoint = MaterializeRemote(materialize_url=args.materialize_url[i])
+            endpoint = MaterializeRemote(
+                materialize_url=args.materialize_url[remote_target_index]
+            )
+            remote_target_index += 1
         elif specified_target == TARGET_POSTGRES:
             endpoint = PostgresContainer(composition=c)
         elif specified_target == TARGET_HEAD:
@@ -332,6 +337,21 @@ def get_baseline_and_other_endpoints(
                 resolved_target = resolve_ancestor_image_tag(
                     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS
                 )
+
+                if resolved_target is None:
+                    # No comparable ancestor image exists. The common case is
+                    # an accepted regression that landed on main and demands a
+                    # baseline newer than any published release (see
+                    # ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS); only
+                    # release images share HEAD's build profile, so there is
+                    # nothing fair to measure against until that release ships.
+                    # Drop the target and keep benchmarking the remaining ones,
+                    # so the measurements still reach test analytics.
+                    print(
+                        f"Skipping target {specified_target}: no ancestor image could be resolved"
+                    )
+                    continue
+
             endpoint = MaterializeContainer(
                 composition=c,
                 specified_target=specified_target,
@@ -379,7 +399,7 @@ def report_regression_result(
     outcome: ComparisonOutcome,
 ) -> None:
     if baseline_endpoint is None:
-        print("No regression detection because '--regression-against' param is not set")
+        print("No regression detection because there is no baseline endpoint")
         return
 
     baseline_desc = endpoint_name_to_description(baseline_endpoint.try_load_version())
@@ -405,7 +425,7 @@ def report_assessment(regression_assessment: RegressionAssessment):
     print("+++ Assessment of regressions")
 
     if not regression_assessment.has_comparison_target():
-        print("No comparison was performed because not baseline was specified")
+        print("No comparison was performed because there is no baseline endpoint")
         return
 
     assert regression_assessment.baseline_endpoint is not None
@@ -448,7 +468,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         results_by_endpoint,
     ) in result.get_df_total_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 6))
-        (subfigure) = fig.subfigures(1, 1)
+        subfigure = fig.subfigures(1, 1)
         plot_tps_per_connections(
             workload_name,
             subfigure,
@@ -467,7 +487,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         results_by_endpoint,
     ) in result.get_df_details_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 10))
-        (subfigure) = fig.subfigures(1, 1)
+        subfigure = fig.subfigures(1, 1)
         plot_duration_by_connections_for_workload(
             workload_name,
             subfigure,
@@ -483,7 +503,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         plt.close()
 
         fig = plt.figure(layout="constrained", figsize=(16, 10))
-        (subfigure) = fig.subfigures(1, 1)
+        subfigure = fig.subfigures(1, 1)
         plot_duration_by_endpoints_for_workload(
             workload_name,
             subfigure,

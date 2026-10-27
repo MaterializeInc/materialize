@@ -26,10 +26,10 @@
 use std::collections::BTreeMap;
 use std::str::{FromStr, from_utf8};
 
+use aws_lc_rs::digest;
 use serde_json::from_slice;
-use sha2::Sha256;
 
-use crate::decode::{AvroRead, decode};
+use crate::decode::{AvroRead, bound_block_object_count, decode};
 use crate::error::{DecodeError, Error as AvroError};
 use crate::schema::{
     FullName, NamedSchemaPiece, ParseSchemaError, RecordField, ResolvedDefaultValueField,
@@ -195,8 +195,8 @@ impl<R: AvroRead> Reader<R> {
         let header = Header::from_reader(&mut inner)?;
 
         let writer_schema = &header.writer_schema;
-        let resolved_schema = if reader_schema.fingerprint::<Sha256>().bytes
-            != writer_schema.fingerprint::<Sha256>().bytes
+        let resolved_schema = if reader_schema.fingerprint(&digest::SHA256).bytes
+            != writer_schema.fingerprint(&digest::SHA256).bytes
         {
             Some(resolve_schemas(writer_schema, reader_schema)?)
         } else {
@@ -259,6 +259,16 @@ impl<R: AvroRead> Reader<R> {
         }
 
         self.inner.read_exact(&mut self.buf[..n])?;
+        // Cut the buffer down to exactly this block's payload. The resize above
+        // only ever grows, so a block shorter than a previous one would otherwise
+        // leave that block's tail visible past its own payload, and everything
+        // downstream reads the buffer by its length: `read_next` slices
+        // `self.buf[self.buf_idx..]`, and `Codec::decompress` hands the whole
+        // buffer to the decompressor. A block whose declared object count outruns
+        // its own bytes would then decode stale bytes as values instead of hitting
+        // the end of the block. `truncate` keeps the allocation, so the buffer is
+        // still reused across blocks.
+        self.buf.truncate(n);
         self.buf_idx = 0;
         Ok(())
     }
@@ -267,9 +277,15 @@ impl<R: AvroRead> Reader<R> {
         assert!(self.is_empty(), "Expected self to be empty!");
         match util::read_long(&mut self.inner) {
             Ok(block_len) => {
-                self.messages_remaining = block_len as usize;
-                let block_bytes = util::read_long(&mut self.inner)?;
-                self.fill_buf(block_bytes as usize)?;
+                // The object count is read straight from the wire; cap it like
+                // every other wire-read length (and reject negatives, which wrap
+                // to a huge `usize`). Otherwise a crafted block with a huge count
+                // and a zero-byte schema (e.g. `null`) makes the reader spin
+                // decoding billions of empty values. Found by the reader_decode
+                // cargo-fuzz target.
+                self.messages_remaining = util::safe_len(block_len as usize)?;
+                let block_bytes = util::safe_len(util::read_long(&mut self.inner)? as usize)?;
+                self.fill_buf(block_bytes)?;
                 let mut marker = [0u8; 16];
                 self.inner.read_exact(&mut marker)?;
 
@@ -288,6 +304,18 @@ impl<R: AvroRead> Reader<R> {
                 // We can address this by using some "limited read" type to decode directly
                 // into the buffer. But this is fine, for now.
                 self.header.codec.decompress(&mut self.buf)?;
+
+                // `safe_len` above bounds the object count only by
+                // `MAX_ALLOCATION_BYTES`, which says nothing about the block that
+                // is supposed to contain those objects: a zero-width schema
+                // encodes every object to no bytes, so a handful of wire bytes can
+                // claim hundreds of millions of them and the reader will decode
+                // every one. Bound it against the payload now that the payload is
+                // known, which is only here, since the declared byte size is the
+                // *compressed* size.
+                let count = self.messages_remaining;
+                let payload_len = self.buf.len();
+                bound_block_object_count(self.schema().top_node(), count, payload_len)?;
 
                 Ok(())
             }
@@ -497,7 +525,7 @@ impl<'a> SchemaResolver<'a> {
                 } else {
                     return Err(SchemaResolutionError::new(format!(
                         "Fixed schema {:?}: sizes don't match ({}, {}) for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wsz,
                         rsz,
                         self.get_current_human_readable_path(),
@@ -520,7 +548,7 @@ impl<'a> SchemaResolver<'a> {
                 if wp != rp {
                     return Err(SchemaResolutionError::new(format!(
                         "Decimal schema {:?}: precisions don't match: {}, {} for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wp,
                         rp,
                         self.get_current_human_readable_path(),
@@ -530,7 +558,7 @@ impl<'a> SchemaResolver<'a> {
                 if wscale != rscale {
                     return Err(SchemaResolutionError::new(format!(
                         "Decimal schema {:?}: sizes don't match: {}, {} for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wscale,
                         rscale,
                         self.get_current_human_readable_path(),
@@ -540,7 +568,7 @@ impl<'a> SchemaResolver<'a> {
                 if wsz != rsz {
                     return Err(SchemaResolutionError::new(format!(
                         "Decimal schema {:?}: sizes don't match: {:?}, {:?} for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wsz,
                         rsz,
                         self.get_current_human_readable_path(),
@@ -635,7 +663,7 @@ impl<'a> SchemaResolver<'a> {
                     .iter()
                     .map(|w_variant| {
                         let (r_idx, r_variant) =
-                            r_inner.match_(w_variant, &w2r).ok_or_else(|| {
+                            r_inner.match_promote_writer(w_variant, &w2r).ok_or_else(|| {
                                 SchemaResolutionError::new(format!(
                                     "Failed to match writer union variant `{}` against any variant in the reader for field `{}`",
                                     w_variant.get_human_name(writer.root),
@@ -666,7 +694,7 @@ impl<'a> SchemaResolver<'a> {
                     .iter()
                     .position(|v| v == &SchemaPieceOrNamed::Piece(SchemaPiece::Null));
                 let (index, r_inner) = r_inner
-                    .match_ref(other, &self.writer_to_reader_names)
+                    .match_ref_promote_writer(other, &self.writer_to_reader_names)
                     .ok_or_else(|| {
                         SchemaResolutionError::new(
                             format!("No matching schema in reader union for writer type `{}` for field `{}`",
@@ -684,11 +712,15 @@ impl<'a> SchemaResolver<'a> {
             // Writer is union; reader is concrete
             (SchemaPieceRefOrNamed::Piece(SchemaPiece::Union(w_inner)), other) => {
                 let (index, w_inner) = w_inner
-                    .match_ref(other, &self.reader_to_writer_names)
+                    .match_ref_promote_reader(other, &self.reader_to_writer_names)
                     .ok_or_else(|| {
+                        // `other` is the reader's concrete node (the second element
+                        // of the match), so its name must be looked up in the
+                        // reader's schema. Using `writer.root` here indexed the
+                        // writer's (possibly empty) `named` table out of bounds.
                         SchemaResolutionError::new(
                             format!("No matching schema in writer union for reader type `{}` for field `{}`",
-                                    other.get_human_name(writer.root),
+                                    other.get_human_name(reader.root),
                                     self.get_current_human_readable_path()))
                     })?;
                 let inner = Box::new(self.resolve(writer.step(w_inner), reader.step_ref(other))?);
@@ -873,9 +905,18 @@ impl<'a> SchemaResolver<'a> {
                             match self.resolve_named(writer.root, reader.root, w_index, r_index) {
                                 Ok(piece) => piece,
                                 Err(e) => {
-                                    // clean up the placeholder values that were added above.
-                                    self.named.pop();
-                                    self.reader_to_resolved_names.remove(&r_index);
+                                    // Roll back to the state before this node. We must remove not
+                                    // only this node's placeholder but also any nested named nodes
+                                    // resolved while resolving it: they live at indices
+                                    // `>= resolved_idx` and are unreachable now that this resolution
+                                    // failed. A plain `pop()` removed only the last one, orphaning a
+                                    // `None` placeholder (which a later `Option::unwrap` panics on)
+                                    // whenever a nested node had been pushed. Union resolution stores
+                                    // rather than propagates this error, so the orphan would survive.
+                                    self.named.truncate(resolved_idx);
+                                    self.reader_to_resolved_names
+                                        .retain(|_, v| *v < resolved_idx);
+                                    self.indices.retain(|_, v| *v < resolved_idx);
                                     return Err(e);
                                 }
                             };
@@ -920,7 +961,7 @@ impl<'a> SchemaResolver<'a> {
 /// In case a reader `Schema` is provided, schema resolution will also be performed.
 ///
 /// **NOTE** This function has a quite small niche of usage and does NOT take care of reading the
-/// header and consecutive data blocks; use [`Reader`](struct.Reader.html) if you don't know what
+/// header and consecutive data blocks; use [`Reader`] if you don't know what
 /// you are doing, instead.
 pub fn from_avro_datum<R: AvroRead>(schema: &Schema, reader: &mut R) -> Result<Value, AvroError> {
     let value = decode(schema.top_node(), reader)?;
@@ -937,6 +978,133 @@ mod tests {
     use crate::types::{Record, ToAvro};
 
     use super::*;
+
+    /// Assemble an object-container file: header (writer schema, `null` codec,
+    /// sync marker) followed by `blocks`. Each block is given as `(declared
+    /// count, declared byte size, payload)` so a test can lie about the framing
+    /// the way a corrupt or hostile file does.
+    fn ocf(schema_json: &str, blocks: &[(i64, i64, &[u8])]) -> Vec<u8> {
+        fn blob(bytes: &[u8], out: &mut Vec<u8>) {
+            util::zig_i64(bytes.len() as i64, out);
+            out.extend_from_slice(bytes);
+        }
+
+        let marker = [7u8; 16];
+        let mut out = b"Obj\x01".to_vec();
+        util::zig_i64(2, &mut out); // metadata map: one block of two entries
+        blob(b"avro.schema", &mut out);
+        blob(schema_json.as_bytes(), &mut out);
+        blob(b"avro.codec", &mut out);
+        blob(b"null", &mut out);
+        util::zig_i64(0, &mut out); // end of metadata map
+        out.extend_from_slice(&marker);
+        for (count, size, payload) in blocks {
+            util::zig_i64(*count, &mut out);
+            util::zig_i64(*size, &mut out);
+            out.extend_from_slice(payload);
+            out.extend_from_slice(&marker);
+        }
+        out
+    }
+
+    /// A record of only `null` fields: valid, and encodes to zero bytes.
+    const ZERO_WIDTH_SCHEMA: &str =
+        r#"{"type":"record","name":"R","fields":[{"name":"g","type":"null"}]}"#;
+
+    #[mz_ore::test]
+    fn reader_does_not_decode_a_previous_blocks_bytes() {
+        // One buffer is reused across blocks, so a block shorter than its
+        // predecessor must not leave that predecessor's tail readable. Block 2
+        // here declares two objects but carries only one, and its payload is
+        // shorter than block 1's, whose bytes are arranged so that what lands
+        // past block 2's payload would decode as a perfectly good `"x"`. The
+        // second decode has to run out of input instead.
+        //
+        // The block bound does not catch this: `string` has a one-byte floor and
+        // the block claims 2 objects in 3 bytes.
+        let long = &[0x0a, b'A', b'B', 0x02, b'x', b'C'][..]; // one 5-char string
+        let short = &[0x04, b'a', b'b'][..]; // one 2-char string
+        let file = ocf(
+            r#""string""#,
+            &[(1, long.len() as i64, long), (2, short.len() as i64, short)],
+        );
+
+        let items: Vec<_> = Reader::new(&file[..]).expect("OCF header parses").collect();
+        assert_eq!(items.len(), 3, "expected two values then an error");
+        assert_eq!(
+            items[1].as_ref().expect("block 2's real value decodes"),
+            &Value::String("ab".into())
+        );
+        assert_err!(&items[2]);
+    }
+
+    #[mz_ore::test]
+    fn reader_rejects_zero_width_block_count_within_allocation_budget() {
+        // `safe_len` accepts any count up to `MAX_ALLOCATION_BYTES`, and a
+        // zero-width object consumes no input, so nothing but the block bound
+        // stops a 0-byte payload from claiming 100M objects and being believed.
+        // Regression for a reader_decode cargo-fuzz timeout.
+        let file = ocf(ZERO_WIDTH_SCHEMA, &[(100_000_000, 0, &[])]);
+        let err = Reader::new(&file[..])
+            .expect("OCF header parses")
+            .find_map(|item| item.err())
+            .expect("the oversized count must be rejected");
+        assert!(
+            err.to_string().contains("exceeds limit"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn reader_accepts_honest_zero_width_block() {
+        // The bound above must not reject a real zero-width block: the whole
+        // point of the node weighting is that a byte count cannot judge one.
+        let file = ocf(ZERO_WIDTH_SCHEMA, &[(3, 0, &[])]);
+        let values: Vec<Value> = Reader::new(&file[..])
+            .expect("OCF header parses")
+            .collect::<Result<_, _>>()
+            .expect("an honest zero-width block must decode");
+        assert_eq!(values.len(), 3);
+    }
+
+    #[mz_ore::test]
+    fn reader_rejects_block_count_exceeding_payload() {
+        // A `string` occupies at least its one-byte length varint, so 100 of them
+        // cannot fit in three bytes however the payload is arranged.
+        let payload = &[0x04, b'a', b'b'][..];
+        let file = ocf(r#""string""#, &[(100, payload.len() as i64, payload)]);
+        let err = Reader::new(&file[..])
+            .expect("OCF header parses")
+            .find_map(|item| item.err())
+            .expect("a count larger than the payload must be rejected");
+        assert!(
+            err.to_string().contains("exceeds block payload"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn reader_rejects_huge_block_object_count() {
+        // A crafted object-container block with a huge object count and a
+        // zero-byte (`null`) schema must be rejected, not spin decoding billions
+        // of empty values. Regression for the reader_decode cargo-fuzz timeout.
+        let bytes: &[u8] = &[
+            0x4f, 0x62, 0x6a, 0x01, 0x04, 0x16, 0x61, 0x76, 0x72, 0x6f, 0x2e, 0x73, 0x63, 0x68,
+            0x65, 0x6d, 0x61, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x22,
+            0x6e, 0x75, 0x6c, 0x6c, 0x22, 0x20, 0x00, 0x00, 0x00, 0x64, 0x64, 0x64, 0x64, 0x64,
+            0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0xbf, 0x00, 0x26,
+            0x35, 0x33, 0x39, 0x33, 0x34, 0x38, 0x33, 0xcd, 0x45, 0x38, 0x56, 0xb1, 0x00, 0x00,
+            0x64, 0x64, 0x7a, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64,
+            0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64,
+        ];
+        let reader = Reader::new(bytes).expect("OCF header parses");
+        // Iteration must terminate with an error (the oversized count is
+        // rejected), not hang.
+        assert!(
+            reader.into_iter().any(|item| item.is_err()),
+            "expected a decode error from the oversized block count"
+        );
+    }
 
     static SCHEMA: &str = r#"
             {

@@ -15,79 +15,62 @@ use std::fmt::Debug;
 use std::fmt::Write;
 use std::sync::Arc;
 
-use differential_dataflow::lattice::Lattice;
-use futures::future::BoxFuture;
+use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_persist_client::ShardId;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_types::Codec64;
-use mz_repr::{GlobalId, TimestampManipulation};
+use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+use mz_persist_types::codec_impls::UnitSchema;
+use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::client::{TableData, Update};
+use mz_storage_client::controller::TableRegistration;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{InvalidUpper, TxnsCodecRow};
 use mz_storage_types::sources::SourceData;
 use mz_txn_wal::txns::{Tidy, TxnsHandle};
-use timely::order::TotalOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use tracing::{Instrument, Span, debug, info_span};
 
-use crate::{PersistEpoch, StorageError};
+use crate::StorageError;
 
 mod read_only_table_worker;
 
 #[derive(Debug, Clone)]
-pub struct PersistTableWriteWorker<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
-    inner: Arc<PersistTableWriteWorkerInner<T>>,
+pub struct PersistTableWriteWorker {
+    inner: Arc<PersistTableWriteWorkerInner>,
 }
 
 /// Commands for [PersistTableWriteWorker].
 #[derive(Debug)]
-enum PersistTableWriteCmd<T: Timestamp + Lattice + Codec64> {
+enum PersistTableWriteCmd {
     Register(
-        T,
-        Vec<(GlobalId, WriteHandle<SourceData, (), T, StorageDiff>)>,
-        tokio::sync::oneshot::Sender<()>,
+        Timestamp,
+        Vec<TableRegistration>,
+        tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     ),
-    Update {
-        /// Existing collection for the table.
-        existing_collection: GlobalId,
-        /// New collection we'll emit writes to.
-        new_collection: GlobalId,
-        /// Timestamp to forget the original handle at.
-        forget_ts: T,
-        /// Timestamp to register the new handle at.
-        register_ts: T,
-        /// New write handle to register.
-        handle: WriteHandle<SourceData, (), T, StorageDiff>,
-        /// Notifies us when the handle has been updated.
-        tx: oneshot::Sender<()>,
-    },
     DropHandles {
-        forget_ts: T,
+        forget_ts: Timestamp,
         /// Tables that we want to drop our handle for.
         ids: Vec<GlobalId>,
         /// Notifies us when all resources have been cleaned up.
-        tx: oneshot::Sender<()>,
+        tx: oneshot::Sender<Result<(), StorageError>>,
     },
     Append {
-        write_ts: T,
-        advance_to: T,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
         updates: Vec<(GlobalId, Vec<TableData>)>,
-        tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     },
     Shutdown,
 }
 
-impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
+impl PersistTableWriteCmd {
     fn name(&self) -> &'static str {
         match self {
             PersistTableWriteCmd::Register(_, _, _) => "PersistTableWriteCmd::Register",
-            PersistTableWriteCmd::Update { .. } => "PersistTableWriteCmd::Update",
             PersistTableWriteCmd::DropHandles { .. } => "PersistTableWriteCmd::DropHandle",
             PersistTableWriteCmd::Append { .. } => "PersistTableWriteCmd::Append",
             PersistTableWriteCmd::Shutdown => "PersistTableWriteCmd::Shutdown",
@@ -95,13 +78,52 @@ impl<T: Timestamp + Lattice + Codec64> PersistTableWriteCmd<T> {
     }
 }
 
-async fn append_work<T2: Timestamp + TotalOrder + Lattice + Codec64 + Sync>(
-    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T2, StorageDiff>>,
+/// Opens fresh table write handles concurrently.
+///
+/// Registration consumes handles even on conflict, so retries cannot reuse them.
+async fn open_table_write_handles(
+    persist_client: &PersistClient,
+    tables: Vec<TableRegistration>,
+) -> Vec<(
+    GlobalId,
+    WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+)> {
+    futures::stream::iter(tables)
+        .map(|table| async move {
+            let mut write = persist_client
+                .open_writer(
+                    table.data_shard,
+                    Arc::new(table.relation_desc),
+                    Arc::new(UnitSchema),
+                    Diagnostics {
+                        shard_name: table.id.to_string(),
+                        handle_purpose: format!("table write worker data for {}", table.id),
+                    },
+                )
+                .await
+                .expect("invalid persist usage");
+            // Fetch the most recent upper: a freshly opened handle may otherwise report an upper
+            // behind the shard's since.
+            write.fetch_recent_upper().await;
+            (table.id, write)
+        })
+        .buffer_unordered(50)
+        .collect()
+        .await
+}
+
+async fn append_work(
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     mut commands: BTreeMap<
         GlobalId,
-        (tracing::Span, Vec<Update<T2>>, Antichain<T2>, Antichain<T2>),
+        (
+            tracing::Span,
+            Vec<Update>,
+            Antichain<Timestamp>,
+            Antichain<Timestamp>,
+        ),
     >,
-) -> Result<(), Vec<(GlobalId, Antichain<T2>)>> {
+) -> Result<(), Vec<(GlobalId, Antichain<Timestamp>)>> {
     let futs = FuturesUnordered::new();
 
     // We cannot iterate through the updates and then set off a persist call
@@ -129,7 +151,7 @@ async fn append_work<T2: Timestamp + TotalOrder + Lattice + Codec64 + Sync>(
                     .expect("cannot append updates")
                     .or_else(|upper_mismatch| Err((*id, upper_mismatch.current)))?;
 
-                Ok::<_, (GlobalId, Antichain<T2>)>((*id, new_upper))
+                Ok::<_, (GlobalId, Antichain<Timestamp>)>((*id, new_upper))
             })
         }
     }
@@ -148,7 +170,7 @@ async fn append_work<T2: Timestamp + TotalOrder + Lattice + Codec64 + Sync>(
     }
 }
 
-impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWriteWorker<T> {
+impl PersistTableWriteWorker {
     /// Create a new read-only table worker that continually bumps the upper of
     /// it's tables. It is expected that we only register migrated builtin
     /// tables, that cannot yet be registered in the txns system in read-only
@@ -158,13 +180,14 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     /// upper and continually bump the upper of registered tables to follow the
     /// upper of the txns shard.
     pub(crate) fn new_read_only_mode(
-        txns_handle: WriteHandle<SourceData, (), T, StorageDiff>,
+        txns_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        persist_client: PersistClient,
     ) -> Self {
         let (tx, rx) =
-            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
+            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd)>();
         mz_ore::task::spawn(
             || "PersistTableWriteWorker",
-            read_only_table_worker::read_only_mode_table_worker(rx, txns_handle),
+            read_only_table_worker::read_only_mode_table_worker(rx, txns_handle, persist_client),
         );
         Self {
             inner: Arc::new(PersistTableWriteWorkerInner::new(tx)),
@@ -172,13 +195,15 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
     }
 
     pub(crate) fn new_txns(
-        txns: TxnsHandle<SourceData, (), T, StorageDiff, PersistEpoch, TxnsCodecRow>,
+        txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
+        persist_client: PersistClient,
     ) -> Self {
         let (tx, rx) =
-            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd<T>)>();
+            tokio::sync::mpsc::unbounded_channel::<(tracing::Span, PersistTableWriteCmd)>();
         mz_ore::task::spawn(|| "PersistTableWriteWorker", async move {
             let mut worker = TxnsTableWorker {
                 txns,
+                persist_client,
                 write_handles: BTreeMap::new(),
                 tidy: Tidy::default(),
             };
@@ -191,125 +216,100 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> PersistTableWrite
 
     pub(crate) fn register(
         &self,
-        register_ts: T,
-        ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, StorageDiff>)>,
-    ) -> tokio::sync::oneshot::Receiver<()> {
+        register_ts: Timestamp,
+        tables: Vec<TableRegistration>,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
         // We expect this to be awaited, so keep the span connected.
         let span = info_span!("PersistTableWriteCmd::Register");
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let cmd = PersistTableWriteCmd::Register(register_ts, ids_handles, tx);
+        let cmd = PersistTableWriteCmd::Register(register_ts, tables, tx);
         self.inner.send_with_span(span, cmd);
-        rx
-    }
-
-    /// Update the existing write handle associated with `id` to `write_handle`.
-    ///
-    /// Note that this should only be called when updating a write handle; to
-    /// initially associate an `id` to a write handle, use [`Self::register`].
-    ///
-    /// # Panics
-    /// - If `id` is not currently associated with any write handle.
-    #[allow(dead_code)]
-    pub(crate) fn update(
-        &self,
-        existing_collection: GlobalId,
-        new_collection: GlobalId,
-        forget_ts: T,
-        register_ts: T,
-        handle: WriteHandle<SourceData, (), T, StorageDiff>,
-    ) -> oneshot::Receiver<()> {
-        let (tx, rx) = oneshot::channel();
-        self.send(PersistTableWriteCmd::Update {
-            existing_collection,
-            new_collection,
-            forget_ts,
-            register_ts,
-            handle,
-            tx,
-        });
         rx
     }
 
     pub(crate) fn append(
         &self,
-        write_ts: T,
-        advance_to: T,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
         updates: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError<T>>> {
+    ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        if updates.is_empty() {
-            tx.send(Ok(()))
-                .expect("rx has not been dropped at this point");
-            rx
-        } else {
-            self.send(PersistTableWriteCmd::Append {
-                write_ts,
-                advance_to,
-                updates,
-                tx,
-            });
-            rx
-        }
+        // Always send the append command to the txn-wal layer, even for empty
+        // updates. The txn-wal commit advances the logical upper of ALL
+        // registered data shards, which is needed for periodic group commits
+        // that have no actual data writes.
+        self.send(PersistTableWriteCmd::Append {
+            write_ts,
+            advance_to,
+            updates,
+            tx,
+        });
+        rx
     }
 
-    /// Drops the handles associated with `ids` from this worker.
-    ///
-    /// Note that this does not perform any other cleanup, such as finalizing
-    /// the handle's shard.
-    pub(crate) fn drop_handles(&self, ids: Vec<GlobalId>, forget_ts: T) -> BoxFuture<'static, ()> {
-        let (tx, rx) = oneshot::channel();
-        self.send(PersistTableWriteCmd::DropHandles { forget_ts, ids, tx });
-        Box::pin(rx.map(|_| ()))
-    }
-
-    fn send(&self, cmd: PersistTableWriteCmd<T>) {
+    fn send(&self, cmd: PersistTableWriteCmd) {
         self.inner.send(cmd);
     }
 }
 
-struct TxnsTableWorker<T: Timestamp + Lattice + TotalOrder + Codec64> {
-    txns: TxnsHandle<SourceData, (), T, StorageDiff, PersistEpoch, TxnsCodecRow>,
+/// A [`TableWriteHandle`](mz_storage_client::controller::TableWriteHandle) backed by the table
+/// worker.
+#[derive(Debug, Clone)]
+pub(crate) struct TableWriteWorkerHandle(pub(crate) PersistTableWriteWorker);
+
+impl mz_storage_client::controller::TableWriteHandle for TableWriteWorkerHandle {
+    fn append(
+        &self,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
+    ) -> oneshot::Receiver<Result<(), StorageError>> {
+        self.0.append(write_ts, advance_to, commands)
+    }
+
+    fn register(
+        &self,
+        register_ts: Timestamp,
+        tables: Vec<TableRegistration>,
+    ) -> oneshot::Receiver<Result<(), StorageError>> {
+        self.0.register(register_ts, tables)
+    }
+
+    fn forget(
+        &self,
+        forget_ts: Timestamp,
+        ids: Vec<GlobalId>,
+    ) -> oneshot::Receiver<Result<(), StorageError>> {
+        let (tx, rx) = oneshot::channel();
+        self.0
+            .send(PersistTableWriteCmd::DropHandles { forget_ts, ids, tx });
+        rx
+    }
+}
+
+struct TxnsTableWorker {
+    txns: TxnsHandle<SourceData, (), Timestamp, StorageDiff, TxnsCodecRow>,
+    persist_client: PersistClient,
     write_handles: BTreeMap<GlobalId, ShardId>,
     tidy: Tidy,
 }
 
-impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T> {
+impl TxnsTableWorker {
     async fn run(
         &mut self,
-        mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd<T>)>,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd)>,
     ) {
         while let Some((span, command)) = rx.recv().await {
             match command {
-                PersistTableWriteCmd::Register(register_ts, ids_handles, tx) => {
-                    self.register(register_ts, ids_handles)
-                        .instrument(span)
-                        .await;
+                PersistTableWriteCmd::Register(register_ts, tables, tx) => {
+                    let res = self.register(register_ts, tables).instrument(span).await;
                     // We don't care if our waiter has gone away.
-                    let _ = tx.send(());
-                }
-                PersistTableWriteCmd::Update {
-                    existing_collection,
-                    new_collection,
-                    forget_ts,
-                    register_ts,
-                    handle,
-                    tx,
-                } => {
-                    async {
-                        self.drop_handles(vec![existing_collection], forget_ts)
-                            .await;
-                        self.register(register_ts, vec![(new_collection, handle)])
-                            .await;
-                    }
-                    .instrument(span)
-                    .await;
-                    // We don't care if our waiter has gone away.
-                    let _ = tx.send(());
+                    let _ = tx.send(res);
                 }
                 PersistTableWriteCmd::DropHandles { forget_ts, ids, tx } => {
-                    self.drop_handles(ids, forget_ts).instrument(span).await;
+                    let res = self.drop_handles(ids, forget_ts).instrument(span).await;
                     // We don't care if our waiter has gone away.
-                    let _ = tx.send(());
+                    let _ = tx.send(res);
                 }
                 PersistTableWriteCmd::Append {
                     write_ts,
@@ -333,9 +333,10 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
 
     async fn register(
         &mut self,
-        register_ts: T,
-        mut ids_handles: Vec<(GlobalId, WriteHandle<SourceData, (), T, StorageDiff>)>,
-    ) {
+        register_ts: Timestamp,
+        tables: Vec<TableRegistration>,
+    ) -> Result<(), StorageError> {
+        let mut ids_handles = open_table_write_handles(&self.persist_client, tables).await;
         // As tables evolve (e.g. columns are added) we treat the older versions as
         // "views" on the later versions. While it's not required, it's easier to reason
         // about table registration if we do it in GlobalId order.
@@ -356,51 +357,89 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         // Registering also advances the logical upper of all shards in the txns set.
         let new_ids = ids_handles.iter().map(|(id, _)| *id).collect_vec();
         let handles = ids_handles.into_iter().map(|(_, handle)| handle);
-        let res = self.txns.register(register_ts.clone(), handles).await;
+        let res = self.txns.register(register_ts, handles).await;
         match res {
             Ok(tidy) => {
                 self.tidy.merge(tidy);
+                Ok(())
             }
             Err(current) => {
-                panic!(
-                    "cannot register {:?} at {:?} because txns is at {:?}",
-                    new_ids, register_ts, current
+                // Registration consumed the handles. Roll back the IDs so a fresh retry can
+                // register them.
+                debug!(
+                    "register at {:?} conflicted with txns upper {:?}, rolling back {:?}",
+                    register_ts, current, new_ids
                 );
+                for id in &new_ids {
+                    self.write_handles.remove(id);
+                }
+                Err(StorageError::InvalidUppers(
+                    new_ids
+                        .into_iter()
+                        .map(|id| InvalidUpper {
+                            id,
+                            current_upper: Antichain::from_elem(current),
+                        })
+                        .collect(),
+                ))
             }
         }
     }
 
-    async fn drop_handles(&mut self, ids: Vec<GlobalId>, forget_ts: T) {
+    async fn drop_handles(
+        &mut self,
+        ids: Vec<GlobalId>,
+        forget_ts: Timestamp,
+    ) -> Result<(), StorageError> {
         tracing::info!(?ids, "drop tables");
-        let data_ids = ids
+        let removed = ids
             .iter()
             // n.b. this should only remove the handle from the persist
             // worker and not take any additional action such as closing
             // the shard it's connected to because dataflows might still
             // be using it.
-            .filter_map(|id| self.write_handles.remove(id))
+            .filter_map(|id| self.write_handles.remove(id).map(|shard| (*id, shard)))
+            .collect::<Vec<_>>();
+        let data_ids = removed
+            .iter()
+            .map(|(_, shard)| *shard)
             .collect::<BTreeSet<_>>();
         if !data_ids.is_empty() {
-            match self.txns.forget(forget_ts.clone(), data_ids.clone()).await {
+            match self.txns.forget(forget_ts, data_ids.clone()).await {
                 Ok(tidy) => {
                     self.tidy.merge(tidy);
+                    Ok(())
                 }
                 Err(current) => {
-                    panic!(
-                        "cannot forget {:?} at {:?} because txns is at {:?}",
-                        ids, forget_ts, current
+                    // Restore local bookkeeping before the caller retries.
+                    debug!(
+                        "forget at {:?} conflicted with txns upper {:?}, restoring {:?}",
+                        forget_ts, current, ids
                     );
+                    for (id, shard) in removed {
+                        self.write_handles.insert(id, shard);
+                    }
+                    Err(StorageError::InvalidUppers(
+                        ids.into_iter()
+                            .map(|id| InvalidUpper {
+                                id,
+                                current_upper: Antichain::from_elem(current),
+                            })
+                            .collect(),
+                    ))
                 }
             }
+        } else {
+            Ok(())
         }
     }
 
     async fn append(
         &mut self,
-        write_ts: T,
-        advance_to: T,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
         updates: Vec<(GlobalId, Vec<TableData>)>,
-        tx: tokio::sync::oneshot::Sender<Result<(), StorageError<T>>>,
+        tx: tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     ) {
         debug!(
             "tables append timestamp={:?} advance_to={:?} len={} ids={:?}{}",
@@ -462,7 +501,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
         }
         // Sneak in any txns shard tidying from previous commits.
         txn.tidy(std::mem::take(&mut self.tidy));
-        let txn_res = txn.commit_at(&mut self.txns, write_ts.clone()).await;
+        let txn_res = txn.commit_at(&mut self.txns, write_ts).await;
         let response = match txn_res {
             Ok(apply) => {
                 // TODO: Do the applying in a background task. This will be a
@@ -490,7 +529,7 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
                         .copied()
                         .map(|id| InvalidUpper {
                             id,
-                            current_upper: Antichain::from_elem(current.clone()),
+                            current_upper: Antichain::from_elem(current),
                         })
                         .collect(),
                 ))
@@ -510,37 +549,31 @@ impl<T: Timestamp + Lattice + Codec64 + TimestampManipulation> TxnsTableWorker<T
 /// #[derive(Clone)] <-- do not do this.
 ///
 #[derive(Debug)]
-struct PersistTableWriteWorkerInner<T: Timestamp + Lattice + Codec64 + TimestampManipulation> {
+struct PersistTableWriteWorkerInner {
     /// Sending side of a channel that we can use to send commands.
-    tx: UnboundedSender<(tracing::Span, PersistTableWriteCmd<T>)>,
+    tx: UnboundedSender<(tracing::Span, PersistTableWriteCmd)>,
 }
 
-impl<T> Drop for PersistTableWriteWorkerInner<T>
-where
-    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
-{
+impl Drop for PersistTableWriteWorkerInner {
     fn drop(&mut self) {
         self.send(PersistTableWriteCmd::Shutdown);
         // TODO: Can't easily block on shutdown occurring.
     }
 }
 
-impl<T> PersistTableWriteWorkerInner<T>
-where
-    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
-{
-    fn new(tx: UnboundedSender<(tracing::Span, PersistTableWriteCmd<T>)>) -> Self {
+impl PersistTableWriteWorkerInner {
+    fn new(tx: UnboundedSender<(tracing::Span, PersistTableWriteCmd)>) -> Self {
         PersistTableWriteWorkerInner { tx }
     }
 
-    fn send(&self, cmd: PersistTableWriteCmd<T>) {
+    fn send(&self, cmd: PersistTableWriteCmd) {
         let span =
             info_span!(parent: None, "PersistTableWriteWorkerInner::send", otel.name = cmd.name());
         OpenTelemetryContext::obtain().attach_as_parent_to(&span);
         self.send_with_span(span, cmd)
     }
 
-    fn send_with_span(&self, span: Span, cmd: PersistTableWriteCmd<T>) {
+    fn send_with_span(&self, span: Span, cmd: PersistTableWriteCmd) {
         match self.tx.send((span, cmd)) {
             Ok(()) => (), // All good!
             Err(e) => {

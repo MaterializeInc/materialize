@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
@@ -18,6 +20,9 @@ use std::process::ExitCode;
 
 use chrono::Utc;
 use clap::ArgAction;
+use mz_adapter_types::dyncfgs::{
+    ENABLE_BACKGROUND_ALTER_CLUSTER, ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE,
+};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
@@ -32,13 +37,13 @@ use walkdir::WalkDir;
 /// Runs sqllogictest scripts to verify database engine correctness.
 #[derive(clap::Parser)]
 struct Args {
-    /// Increase verbosity.
-    ///
-    /// If specified once, print summary for each source file.
-    /// If specified twice, also show descriptions of each error.
-    /// If specified thrice, also print each query before it is executed.
-    #[clap(short = 'v', long = "verbose", action = ArgAction::Count)]
-    verbosity: u8,
+    /// By default, prints summary for each source file and shows descriptions of each error.
+    /// If specified, also print each query before it is executed.
+    #[clap(short = 'v', long = "verbose", action = ArgAction::SetTrue, conflicts_with = "quiet")]
+    verbose: bool,
+    /// Suppress summary output unless a file has failures.
+    #[clap(short = 'q', long = "quiet", action = ArgAction::SetTrue, conflicts_with = "verbose")]
+    quiet: bool,
     /// Don't exit with a failing code if not all queries are successful.
     #[clap(long)]
     no_fail: bool,
@@ -105,7 +110,7 @@ struct Args {
         long,
         env = "LOG_FILTER",
         value_name = "FILTER",
-        default_value = "warn"
+        default_value = "mz_adapter::catalog::open=error,mz_persist_client::internal::gc=error,mz_persist_client::rpc=error,warn"
     )]
     pub log_filter: CloneableEnvFilter,
 }
@@ -113,6 +118,14 @@ struct Args {
 #[tokio::main]
 async fn main() -> ExitCode {
     mz_ore::panic::install_enhanced_handler();
+
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let args: Args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_"),
@@ -167,10 +180,22 @@ async fn main() -> ExitCode {
         }
     }
 
+    // Pin background ALTER CLUSTER on for the suite so a config-shape
+    // `ALTER CLUSTER` returns immediately rather than blocking on the
+    // wait-shim. This is a dyncfg (set by name), and a caller-provided value
+    // wins.
+    system_parameter_defaults
+        .entry(ENABLE_BACKGROUND_ALTER_CLUSTER.name().to_string())
+        .or_insert_with(|| "true".to_string());
+    system_parameter_defaults
+        .entry(ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string())
+        .or_insert_with(|| "true".to_string());
+
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
         stderr: &OutputStream::new(io::stderr(), args.timestamps),
-        verbosity: args.verbosity,
+        verbose: args.verbose,
+        quiet: args.quiet,
         postgres_url: args.postgres_url.clone(),
         prefix: args.prefix.clone(),
         no_fail: args.no_fail,
@@ -230,7 +255,7 @@ async fn main() -> ExitCode {
                     let start_time = Instant::now();
                     match runner::run_file(&mut runner, entry.path()).await {
                         Ok(o) => {
-                            if o.any_failed() || config.verbosity >= 1 {
+                            if o.any_failed() || !config.quiet {
                                 writeln!(
                                     config.stdout,
                                     "{}",

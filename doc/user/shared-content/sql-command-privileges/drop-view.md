@@ -1,2 +1,0 @@
-- Ownership of the dropped view.
-- `USAGE` privileges on the containing schema.

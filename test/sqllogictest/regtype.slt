@@ -88,7 +88,7 @@ NULL
 
 # Regression for materialize issue 9194
 # This shouldn't be an error but seems to be impacted by
-# some evaluation order issue akin to database-issues#4972
+# some evaluation order issue akin to SQL-795
 # TODO: this has an optimization bug.
 query error
 select 'date'::regtype::oid::text::regtype
@@ -119,6 +119,31 @@ SELECT NULL::regtype::text
 ----
 NULL
 
+# OID 0 is the absent reference, rendered as `-` like PostgreSQL's `regtypeout`.
+# A nonzero OID that names no type keeps its digits.
+query T
+SELECT 0::regtype::text
+----
+-
+
+query T
+SELECT 99999::regtype::text
+----
+99999
+
+# `-` round trips on input too. Spelled from a literal because feeding a
+# cast-derived value into the string to reg* cast hits the evaluation order
+# problem behind the cases commented out above.
+query T
+SELECT '-'::regtype::text
+----
+-
+
+query T
+SELECT '-'::regtype::oid
+----
+0
+
 # ensure that all existing types can be cast to their respective names
 statement OK
 select oid, oid::regtype::text from (select oid from mz_catalog.mz_types)
@@ -142,12 +167,12 @@ CREATE TYPE d.public.t AS LIST (ELEMENT TYPE = int4);
 query T
 SELECT 't'::regtype::oid::int
 ----
-20197
+20203
 
 query T
 SELECT 's.t'::regtype::oid::int
 ----
-20198
+20204
 
 query T
 SELECT 't'::regtype = 's.t'::regtype
@@ -201,7 +226,7 @@ SELECT '1082'::regtype::text;
 ----
 date
 
-query error db error: ERROR: more than one function named "date"
+query error more than one function named "date"
 SELECT 'date'::regproc::text;
 
 query T
@@ -221,3 +246,18 @@ query T
 SELECT 'array_length'::regtype::text;
 ----
 array_length
+
+# Regression test for SQL-270: the `regtype`->text cast is implemented as a
+# subquery. It works in contexts that allow subqueries (e.g. a plain SELECT)...
+statement ok
+CREATE TABLE regtype_returning (a regtype)
+
+query T
+SELECT concat(a) FROM (VALUES ('date'::regtype)) AS v (a)
+----
+date
+
+# ...but a RETURNING clause does not allow subqueries, so the same cast must
+# produce a graceful planning error there instead of panicking environmentd.
+query error pg_catalog.concat does not support casting from regtype to text
+INSERT INTO regtype_returning VALUES ('date'::regtype) RETURNING concat(a)

@@ -10,7 +10,8 @@
 //! An interactive cluster server.
 
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::Thread;
 
 use anyhow::{Error, anyhow};
@@ -18,18 +19,18 @@ use async_trait::async_trait;
 use differential_dataflow::trace::ExertionLogic;
 use futures::future;
 use mz_cluster_client::client::{TimelyConfig, TryIntoProtocolNonce};
+use mz_ore::metric;
+use mz_ore::metrics::{ComputedUIntGauge, MetricsRegistry};
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::LocalClient;
 use timely::WorkerConfig;
-use timely::communication::Allocate;
-use timely::communication::allocator::GenericBuilder;
 use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
 use timely::worker::Worker as TimelyWorker;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, info_span};
 use uuid::Uuid;
 
 use crate::communication::initialize_networking;
@@ -52,9 +53,9 @@ where
 pub struct TimelyContainer<C: ClusterSpec> {
     /// Channels over which to send endpoints for wiring up a new Client
     client_txs: Vec<
-        crossbeam_channel::Sender<(
+        mpsc::UnboundedSender<(
             Uuid,
-            crossbeam_channel::Receiver<C::Command>,
+            mpsc::UnboundedReceiver<C::Command>,
             mpsc::UnboundedSender<C::Response>,
         )>,
     >,
@@ -63,12 +64,123 @@ pub struct TimelyContainer<C: ClusterSpec> {
 }
 
 impl<C: ClusterSpec> TimelyContainer<C> {
-    fn worker_threads(&self) -> Vec<Thread> {
+    /// The threads of the Timely workers in this process.
+    pub fn worker_threads(&self) -> Vec<Thread> {
         self.worker_guards
             .guards()
             .iter()
             .map(|h| h.thread().clone())
             .collect()
+    }
+}
+
+/// A client to a secondary ("guest") command stream served by workers of
+/// an existing Timely cluster. Like [`ClusterClient`], but the per-worker client channels are
+/// provided externally instead of coming from a [`TimelyContainer`] built for this command type.
+pub struct GuestClusterClient<Cmd, Resp>
+where
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    /// Per-worker channels over which to send endpoints for wiring up a new client.
+    client_txs: Arc<
+        Vec<
+            mpsc::UnboundedSender<(
+                Uuid,
+                mpsc::UnboundedReceiver<Cmd>,
+                mpsc::UnboundedSender<Resp>,
+            )>,
+        >,
+    >,
+    /// The worker threads, for unparking on send.
+    worker_threads: Vec<Thread>,
+    /// The actual client to talk to the cluster.
+    inner: Option<PartitionedClient<Cmd, Resp>>,
+}
+
+impl<Cmd, Resp> GuestClusterClient<Cmd, Resp>
+where
+    Cmd: fmt::Debug + Send + TryIntoProtocolNonce,
+    Resp: fmt::Debug + Send,
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    /// Create a new `GuestClusterClient`.
+    pub fn new(
+        client_txs: Arc<
+            Vec<
+                mpsc::UnboundedSender<(
+                    Uuid,
+                    mpsc::UnboundedReceiver<Cmd>,
+                    mpsc::UnboundedSender<Resp>,
+                )>,
+            >,
+        >,
+        worker_threads: Vec<Thread>,
+    ) -> Self {
+        Self {
+            client_txs,
+            worker_threads,
+            inner: None,
+        }
+    }
+
+    fn connect(&mut self, nonce: Uuid) {
+        let mut command_txs = Vec::new();
+        let mut response_rxs = Vec::new();
+        for client_tx in self.client_txs.iter() {
+            let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+
+            client_tx
+                .send((nonce, cmd_rx, resp_tx))
+                .expect("worker not dropped");
+
+            command_txs.push(cmd_tx);
+            response_rxs.push(resp_rx);
+        }
+
+        self.inner = Some(LocalClient::new_partitioned(
+            response_rxs,
+            command_txs,
+            self.worker_threads.clone(),
+        ));
+    }
+}
+
+impl<Cmd, Resp> fmt::Debug for GuestClusterClient<Cmd, Resp>
+where
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GuestClusterClient").finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl<Cmd, Resp> GenericClient<Cmd, Resp> for GuestClusterClient<Cmd, Resp>
+where
+    Cmd: fmt::Debug + Send + TryIntoProtocolNonce,
+    Resp: fmt::Debug + Send,
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    async fn send(&mut self, cmd: Cmd) -> Result<(), Error> {
+        match cmd.try_into_protocol_nonce() {
+            Ok(nonce) => {
+                self.connect(nonce);
+                Ok(())
+            }
+            Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
+        }
+    }
+
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe, see [`ClusterClient::recv`].
+    async fn recv(&mut self) -> Result<Option<Resp>, Error> {
+        if let Some(client) = self.inner.as_mut() {
+            client.recv().await
+        } else {
+            future::pending().await
+        }
     }
 }
 
@@ -92,7 +204,7 @@ where
         let mut command_txs = Vec::new();
         let mut response_rxs = Vec::new();
         for client_tx in &timely.client_txs {
-            let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+            let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
             let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
             client_tx
@@ -166,13 +278,16 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The cluster response type.
     type Response: fmt::Debug + Send;
 
+    /// The name of this cluster ("compute" or "storage").
+    const NAME: &str;
+
     /// Run the given Timely worker.
-    fn run_worker<A: Allocate + 'static>(
+    fn run_worker(
         &self,
-        timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        timely_worker: &mut TimelyWorker,
+        client_rx: mpsc::UnboundedReceiver<(
             Uuid,
-            crossbeam_channel::Receiver<Self::Command>,
+            mpsc::UnboundedReceiver<Self::Command>,
             mpsc::UnboundedSender<Self::Response>,
         )>,
     );
@@ -185,7 +300,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     ) -> Result<TimelyContainer<Self>, Error> {
         info!("Building timely container with config {config:?}");
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-            .map(|_| crossbeam_channel::unbounded())
+            .map(|_| mpsc::unbounded_channel())
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
@@ -201,26 +316,14 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             }
         };
 
-        let (builders, other) = if config.enable_zero_copy {
-            use timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder;
-            initialize_networking::<ProcessBuilder>(
-                config.workers,
-                config.process,
-                config.addresses.clone(),
-                refill,
-                GenericBuilder::ZeroCopyBinary,
-            )
-            .await?
-        } else {
-            initialize_networking::<timely::communication::allocator::Process>(
-                config.workers,
-                config.process,
-                config.addresses.clone(),
-                refill,
-                GenericBuilder::ZeroCopy,
-            )
-            .await?
-        };
+        let (builders, other) = initialize_networking(
+            config.workers,
+            config.process,
+            config.addresses.clone(),
+            refill,
+            config.enable_zero_copy,
+        )
+        .await?;
 
         let mut worker_config = WorkerConfig::default();
 
@@ -236,6 +339,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             // largest to the smallest layer.
 
             let arc: ExertionLogic = Arc::new(move |layers| {
+                EXERT_POLICY_CALLS.fetch_add(1, Ordering::Relaxed);
                 let mut prop = config.arrangement_exert_proportionality;
 
                 // Layers are ordered from largest to smallest.
@@ -249,12 +353,14 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
                 for (_idx, count, len) in layers {
                     if count > 1 {
                         // Found an in-progress merge that we should continue.
+                        EXERT_POLICY_MERGE_GRANTS.fetch_add(1, Ordering::Relaxed);
                         return merge_effort;
                     }
 
                     if !first && prop > 0 && len > 0 {
                         // Found a non-empty batch within `arrangement_exert_proportionality` of
                         // the largest one.
+                        EXERT_POLICY_CONSOLIDATION_GRANTS.fetch_add(1, Ordering::Relaxed);
                         return merge_effort;
                     }
 
@@ -269,9 +375,19 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
 
         let spec = self.clone();
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
-            let timely_worker_index = timely_worker.index();
+            let worker_idx = timely_worker.index();
+
+            // Per worker tracing span, lets us identify Timely clusters and workers in the logs.
+            let span = info_span!("timely", name = Self::NAME, worker_id = worker_idx);
+            let _span_guard = span.enter();
+
+            // Every Timely instance in this process names its threads `timely:work-N`, restarting
+            // the index at 0, so storage and compute worker threads collide under the same OS
+            // thread name. Rename to disambiguate them for profilers and `top -H`.
+            mz_ore::process::set_current_thread_name(&format!("{}:{worker_idx}", Self::NAME));
+
             let _tokio_guard = tokio_executor.enter();
-            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
+            let client_rx = client_rxs.lock().unwrap()[worker_idx % config.workers]
                 .take()
                 .unwrap();
             spec.run_worker(timely_worker, client_rx);
@@ -283,6 +399,39 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             worker_guards,
         })
     }
+}
+
+// Evaluations of the exertion policy installed above, process-wide across
+// every timely runtime and trace implementation. A spine evaluates the policy
+// both when exerted and after each insert, so evaluations and grants count
+// decisions, not applications of effort. With
+// `arrangement_exert_proportionality` at zero no policy is installed and the
+// counts stay zero.
+static EXERT_POLICY_CALLS: AtomicU64 = AtomicU64::new(0);
+static EXERT_POLICY_MERGE_GRANTS: AtomicU64 = AtomicU64::new(0);
+static EXERT_POLICY_CONSOLIDATION_GRANTS: AtomicU64 = AtomicU64::new(0);
+
+/// Register gauges for the arrangement exertion policy's decisions.
+///
+/// The counters are process-wide, so only the first call registers them, and
+/// they cover every timely runtime in the process, not only the caller's.
+pub fn register_exert_policy_metrics(registry: &MetricsRegistry) {
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| {
+        let _: ComputedUIntGauge = registry.register_computed_gauge(
+            metric!(name: "mz_arrangement_exert_policy_calls_total", help: "Arrangement exertion policy evaluations."),
+            || EXERT_POLICY_CALLS.load(Ordering::Relaxed),
+        );
+        for (reason, grants) in [
+            ("active_merge", &EXERT_POLICY_MERGE_GRANTS),
+            ("consolidation", &EXERT_POLICY_CONSOLIDATION_GRANTS),
+        ] {
+            let _: ComputedUIntGauge = registry.register_computed_gauge(
+                metric!(name: "mz_arrangement_exert_policy_grants_total", help: "Arrangement exertion policy evaluations that returned effort, by reason.", const_labels: {"reason" => reason}),
+                move || grants.load(Ordering::Relaxed),
+            );
+        }
+    });
 }
 
 mod alloc {
@@ -331,6 +480,13 @@ mod alloc {
         capacity: usize,
     }
 
+    // SAFETY: `LgallocHandle` exclusively owns its allocation (either an
+    // lgalloc handle or a leaked `Vec`), and the `NonNull<u8>` is just a pointer
+    // into that owned memory. Transferring the handle transfers ownership, so it
+    // is safe to send across threads. Required because timely's `BytesRefill`
+    // produces `Box<dyn DerefMut<Target=[u8]> + Send>`.
+    unsafe impl Send for LgallocHandle {}
+
     impl std::ops::Deref for LgallocHandle {
         type Target = [u8];
         #[inline(always)]
@@ -358,5 +514,28 @@ mod alloc {
             self.pointer = std::ptr::NonNull::dangling();
             self.capacity = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod exert_policy_metrics_tests {
+    use super::*;
+
+    /// Registration is guarded process-wide, so under a test runner that
+    /// shares the process another test may have registered first, into its
+    /// own registry. Either way a second call must not panic, and this
+    /// registry holds both families or neither.
+    #[mz_ore::test]
+    fn registering_twice_does_not_panic() {
+        let registry = MetricsRegistry::new();
+        register_exert_policy_metrics(&registry);
+        register_exert_policy_metrics(&registry);
+        let names: Vec<_> = registry
+            .gather()
+            .into_iter()
+            .map(|family| family.name().to_string())
+            .filter(|name| name.starts_with("mz_arrangement_exert_policy"))
+            .collect();
+        assert!(matches!(names.len(), 0 | 2), "{names:?}");
     }
 }

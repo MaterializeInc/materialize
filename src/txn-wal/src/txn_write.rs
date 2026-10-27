@@ -23,7 +23,7 @@ use mz_ore::instrument;
 use mz_persist_client::ShardId;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_types::txn::{TxnsCodec, TxnsEntry};
-use mz_persist_types::{Codec, Codec64, Opaque, StepForward};
+use mz_persist_types::{Codec, Codec64, StepForward};
 use prost::Message;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
@@ -116,13 +116,12 @@ where
     ///
     /// Panics if any involved data shards were not registered before commit ts.
     #[instrument(level = "debug", fields(ts = ?commit_ts))]
-    pub async fn commit_at<O, C>(
+    pub async fn commit_at<C>(
         &mut self,
-        handle: &mut TxnsHandle<K, V, T, D, O, C>,
+        handle: &mut TxnsHandle<K, V, T, D, C>,
         commit_ts: T,
     ) -> Result<TxnApply<T>, T>
     where
-        O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
         let op = &Arc::clone(&handle.metrics).commit;
@@ -373,13 +372,12 @@ pub struct TxnApply<T> {
 
 impl<T> TxnApply<T> {
     /// Applies the txn, unblocking reads at timestamp it was committed at.
-    pub async fn apply<K, V, D, O, C>(self, handle: &mut TxnsHandle<K, V, T, D, O, C>) -> Tidy
+    pub async fn apply<K, V, D, C>(self, handle: &mut TxnsHandle<K, V, T, D, C>) -> Tidy
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
         D: Debug + Monoid + Ord + Codec64 + Send + Sync,
-        O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
         debug!("txn apply {:?}", self.commit_ts);

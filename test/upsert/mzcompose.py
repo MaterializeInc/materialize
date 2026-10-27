@@ -14,7 +14,6 @@
 Test Kafka Upsert sources using Testdrive.
 """
 
-import os
 from textwrap import dedent
 
 from materialize import MZ_ROOT, ci_util
@@ -30,12 +29,15 @@ from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 materialized_environment_extra = ["MZ_PERSIST_COMPACTION_DISABLED=false"]
+additional_system_parameter_defaults = {
+    "storage_dataflow_delay_sources_past_rehydration": "true",
+    "unsafe_enable_unorchestrated_cluster_replicas": "true",
+    "memory_limiter_interval": "0",
+}
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Mz(app_password=""),
@@ -43,11 +45,7 @@ SERVICES = [
         options=[
             "--orchestrator-process-scratch-directory=/scratch",
         ],
-        additional_system_parameter_defaults={
-            "unsafe_enable_unorchestrated_cluster_replicas": "true",
-            "storage_dataflow_delay_sources_past_rehydration": "true",
-            "memory_limiter_interval": "0",
-        },
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
         environment_extra=materialized_environment_extra,
         default_replication_factor=2,
         support_external_clusterd=True,
@@ -104,7 +102,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    dependencies = ["materialized", "zookeeper", "kafka", "schema-registry"]
+    dependencies = ["materialized", "kafka", "schema-registry"]
 
     testdrive = Testdrive(
         forward_buildkite_shard=True,
@@ -151,7 +149,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
                 file,
             )
             # Uploading successful junit files wastes time and contains no useful information
-            os.remove(MZ_ROOT / "test" / "upsert" / junit_report)
+            (MZ_ROOT / "test" / "upsert" / junit_report).unlink(missing_ok=True)
 
         c.test_parts(args.files, process)
         c.sanity_restart_mz()
@@ -162,7 +160,6 @@ def workflow_rehydration(c: Composition) -> None:
 
     dependencies = [
         "materialized",
-        "zookeeper",
         "kafka",
         "schema-registry",
         "clusterd1",
@@ -258,6 +255,33 @@ def workflow_rehydration(c: Composition) -> None:
                 workers=4,
             ),
         ),
+        (
+            "using upsert v2",
+            Materialized(
+                options=[
+                    "--orchestrator-process-scratch-directory=/scratch",
+                ],
+                additional_system_parameter_defaults={
+                    "storage_statistics_collection_interval": "1000",
+                    "storage_statistics_interval": "2000",
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": "1",
+                    "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
+                    "storage_dataflow_max_inflight_bytes_disk_only": "false",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
+                    # Enable upsert v2
+                    "enable_upsert_v2": "true",
+                },
+                environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
+                support_external_clusterd=True,
+            ),
+            Clusterd(
+                name="clusterd1",
+                workers=4,
+            ),
+        ),
     ]:
         with c.override(
             mz,
@@ -305,7 +329,7 @@ def workflow_failpoint(c: Composition) -> None:
 def run_one_failpoint(c: Composition, failpoint: str, error_message: str) -> None:
     print(f">>> Running failpoint test for failpoint {failpoint}")
 
-    dependencies = ["zookeeper", "kafka", "materialized"]
+    dependencies = ["kafka", "materialized"]
     c.kill("clusterd1")
     c.up(*dependencies)
     c.run_testdrive_files("failpoint/00-reset.td")
@@ -345,7 +369,6 @@ def workflow_incident_49(c: Composition) -> None:
 
     dependencies = [
         "materialized",
-        "zookeeper",
         "kafka",
         "schema-registry",
     ]
@@ -366,6 +389,17 @@ def workflow_incident_49(c: Composition) -> None:
             Materialized(
                 additional_system_parameter_defaults={
                     "storage_dataflow_delay_sources_past_rehydration": "true",
+                },
+                environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
+            ),
+        ),
+        (
+            "with upsert v2 enabled",
+            Materialized(
+                additional_system_parameter_defaults={
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
+                    "enable_upsert_v2": "true",
                 },
                 environment_extra=materialized_environment_extra,
                 default_replication_factor=2,
@@ -396,7 +430,6 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
     c.down(destroy_volumes=True)
     dependencies = [
         "materialized",
-        "zookeeper",
         "kafka",
         "schema-registry",
     ]
@@ -404,7 +437,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
 
     # Returns rockdb's cluster level and source level paths for a given source table name
     def rocksdb_path(source_tbl_name: str) -> tuple[str, str]:
-        (source_id, cluster_id, replica_id) = c.sql_query(
+        source_id, cluster_id, replica_id = c.sql_query(
             f"""select t.id, s.cluster_id, c.id
             from
             mz_sources s,
@@ -441,8 +474,8 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             c.up(Service("testdrive", idle=True))
             c.exec("testdrive", f"rocksdb-cleanup/{testdrive_file}")
 
-            (_, kept_source_path) = rocksdb_path("kept_upsert_tbl")
-            (dropped_cluster_path, dropped_source_path) = rocksdb_path(
+            _, kept_source_path = rocksdb_path("kept_upsert_tbl")
+            dropped_cluster_path, dropped_source_path = rocksdb_path(
                 "dropped_upsert_tbl"
             )
 
@@ -458,15 +491,11 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             else:
                 assert num_files(dropped_source_path) == 0
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
             $ nop
 
             # this is to reset testdrive
-            """
-            )
-        )
+            """))
 
 
 # This should not be run on ci and is not added to workflow_default above!
@@ -507,14 +536,10 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.rm("testdrive")
         c.up(Service("testdrive", idle=True))
         c.exec("testdrive", "load-test/setup.td")
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
                 "AAA":"START MARKER"
-                """
-            )
-        )
+                """))
         for number in range(updates_count):
             c.exec(
                 "testdrive",
@@ -523,23 +548,15 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "load-test/insert.td",
             )
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
                 "ZZZ":"END MARKER"
-                """
-            )
-        )
+                """))
 
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 > select * from v1;
                 {repeat + 2}
-                """
-            )
-        )
+                """))
 
         scenarios = [
             (
@@ -578,6 +595,13 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "upsert_rocksdb_write_buffer_manager_memory_bytes": f"{5 * 1024 * 1024}",
                     "upsert_rocksdb_write_buffer_manager_allow_stall": "true",
                 },
+                "with upsert v2 enabled",
+                {
+                    # Force backpressure to be enabled.
+                    "storage_dataflow_max_inflight_bytes": f"{backpressure_bytes}",
+                    "storage_dataflow_max_inflight_bytes_disk_only": "true",
+                    "enable_upsert_v2": "true",
+                },
             ),
         ]
         last_latency = None
@@ -596,9 +620,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 c.kill("materialized", "clusterd1")
                 print(f"Running rehydration for scenario {scenario_name}")
                 c.up("materialized", "clusterd1")
-                c.testdrive(
-                    dedent(
-                        f"""
+                c.testdrive(dedent(f"""
                 > select sum(records_indexed)
                   from mz_internal.mz_source_statistics st
                   join mz_sources s on s.id = st.id
@@ -610,18 +632,14 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                   join mz_sources s on s.id = st.id
                   where name = 's1';
                 true
-                """
-                    )
-                )
+                """))
                 # ensure we wait till the stat is updated
                 rehydration_latency = last_latency
                 while rehydration_latency == last_latency:
-                    rehydration_latency = c.sql_query(
-                        """select max(rehydration_latency)
+                    rehydration_latency = c.sql_query("""select max(rehydration_latency)
                         from mz_internal.mz_source_statistics st
                         join mz_sources s on s.id = st.id
-                        where name = 's1';"""
-                    )[0]
+                        where name = 's1';""")[0]
                 last_latency = rehydration_latency
                 print(f"Scenario {scenario_name} took {rehydration_latency} ms")
 
@@ -630,90 +648,107 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
     """
     The goal is to test a large scale Kafka upsert instance and to make sure that we can successfully ingest data from it quickly.
     """
-    dependencies = ["materialized", "zookeeper", "kafka", "schema-registry"]
-    c.up(*dependencies)
-    with c.override(
-        Testdrive(no_reset=True, consistent_seed=True),
-        Materialized(
-            # Too slow
-            sanity_restart=False,
-            options=[
-                "--orchestrator-process-scratch-directory=/scratch",
-            ],
-            additional_system_parameter_defaults={
-                "unsafe_enable_unorchestrated_cluster_replicas": "true",
-                "storage_dataflow_delay_sources_past_rehydration": "true",
-                "memory_limiter_interval": "0",
-            },
-            environment_extra=materialized_environment_extra,
-            default_replication_factor=2,
-            support_external_clusterd=True,
+    dependencies = ["materialized", "kafka", "schema-registry"]
+    scenarios = [
+        (
+            "with upsert v2 enabled",
+            Materialized(
+                # Too slow
+                sanity_restart=False,
+                options=[
+                    "--orchestrator-process-scratch-directory=/scratch",
+                ],
+                additional_system_parameter_defaults={
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
+                    "memory_limiter_interval": "0",
+                    "enable_upsert_v2": "true",
+                },
+                environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
+                support_external_clusterd=True,
+            ),
         ),
-    ):
-        c.rm("testdrive")
-        c.up(Service("testdrive", idle=True))
+        (
+            "default",
+            Materialized(
+                # Too slow
+                sanity_restart=False,
+                options=[
+                    "--orchestrator-process-scratch-directory=/scratch",
+                ],
+                additional_system_parameter_defaults={
+                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                    "storage_dataflow_delay_sources_past_rehydration": "true",
+                    "memory_limiter_interval": "0",
+                },
+                environment_extra=materialized_environment_extra,
+                default_replication_factor=2,
+                support_external_clusterd=True,
+            ),
+        ),
+    ]
 
-        c.testdrive(
-            dedent(
-                """
-            $ kafka-create-topic topic=topic1
+    for variant, materialized in scenarios:
+        print(f"Running large scale test for variant {variant}")
+        with c.override(
+            Testdrive(no_reset=True, consistent_seed=True),
+            materialized,
+        ):
+            c.rm("testdrive")
+            c.down(destroy_volumes=True)
+            c.up(Service("testdrive", idle=True))
+            c.up(*dependencies)
 
-            > CREATE CONNECTION IF NOT EXISTS kafka_conn
-              FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
-            """
-            )
-        )
+            c.testdrive(dedent("""
+                $ kafka-create-topic topic=topic1
 
-        def make_inserts(c: Composition, start: int, batch_num: int):
+                > CREATE CONNECTION IF NOT EXISTS kafka_conn
+                  FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
+                """))
+
+            def make_inserts(c: Composition, start: int, batch_num: int):
+                c.testdrive(
+                    args=["--no-reset"],
+                    input=dedent(f"""
+                        $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=: repeat={batch_num}
+                        "${{kafka-ingest.iteration}}":"{'x'*1_000_000}"
+                        """),
+                )
+
+            num_rows = 100_000  # out of disk with 200_000 rows
+            batch_size = 1_000
+            for i in range(0, num_rows, batch_size):
+                batch_num = min(batch_size, num_rows - i)
+                make_inserts(c, i, batch_num)
+
             c.testdrive(
                 args=["--no-reset"],
-                input=dedent(
-                    f"""
-                    $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=: repeat={batch_num}
-                    "${{kafka-ingest.iteration}}":"{'x'*1_000_000}"
-                    """
-                ),
+                input=dedent(f"""
+                    > CREATE SOURCE s1
+                      FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${{testdrive.seed}}');
+
+                    > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-topic1-${{testdrive.seed}}")
+                      KEY FORMAT TEXT VALUE FORMAT TEXT
+                      ENVELOPE UPSERT;
+
+                    > SELECT COUNT(*) FROM s1_tbl;
+                    {batch_size}
+                    """),
             )
 
-        num_rows = 100_000  # out of disk with 200_000 rows
-        batch_size = 1_000
-        for i in range(0, num_rows, batch_size):
-            batch_num = min(batch_size, num_rows - i)
-            make_inserts(c, i, batch_num)
+            c.testdrive(
+                args=["--no-reset"],
+                input=dedent(f"""
+                    $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
+                    "{batch_size + 1}":"{'x'*1_000_000}"
+                    """),
+            )
 
-        c.testdrive(
-            args=["--no-reset"],
-            input=dedent(
-                f"""
-                > CREATE SOURCE s1
-                  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${{testdrive.seed}}');
-
-                > CREATE TABLE s1_tbl FROM SOURCE s1 (REFERENCE "testdrive-topic1-${{testdrive.seed}}")
-                  KEY FORMAT TEXT VALUE FORMAT TEXT
-                  ENVELOPE UPSERT;
-
-                > SELECT COUNT(*) FROM s1_tbl;
-                {batch_size}
-                """
-            ),
-        )
-
-        c.testdrive(
-            args=["--no-reset"],
-            input=dedent(
-                f"""
-                $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
-                "{batch_size + 1}":"{'x'*1_000_000}"
-                """
-            ),
-        )
-
-        c.testdrive(
-            args=["--no-reset"],
-            input=dedent(
-                f"""
-                > SELECT COUNT(*) FROM s1_tbl;
-                {batch_size + 1}
-                """
-            ),
-        )
+            c.testdrive(
+                args=["--no-reset"],
+                input=dedent(f"""
+                    > SELECT COUNT(*) FROM s1_tbl;
+                    {batch_size + 1}
+                    """),
+            )

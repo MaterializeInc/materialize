@@ -287,16 +287,15 @@ sudo systemctl start confluent-schema-registry
                 "MZ_CB_GIT_REV": rev,
                 "MZ_CB_S3_ROOT": ns.s3_root,
             },
-            delete_after=datetime.datetime.utcnow() + datetime.timedelta(days=1),
+            delete_after=datetime.datetime.now(datetime.UTC)
+            + datetime.timedelta(days=1),
             git_rev=rev,
         )
 
     print("Launched instances:")
     print_instances(launched, format="table")  # todo
-    print(
-        f"""Launched cloud bench with ID {bench_id}.
-To wait for results, run: bin/cloudbench check {bench_id}"""
-    )
+    print(f"""Launched cloud bench with ID {bench_id}.
+To wait for results, run: bin/cloudbench check {bench_id}""")
 
 
 if __name__ == "__main__":

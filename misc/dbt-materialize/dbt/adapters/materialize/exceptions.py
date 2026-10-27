@@ -15,6 +15,7 @@
 
 from typing import Any
 
+from dbt_common.dataclass_schema import ValidationError
 from dbt_common.exceptions import CompilationError
 
 
@@ -33,11 +34,36 @@ class RefreshIntervalConfigNotDictError(CompilationError):
 
 
 class RefreshIntervalConfigError(CompilationError):
-    def __init__(self, exc: TypeError):
+    def __init__(self, exc: ValidationError):
         self.exc = exc
         super().__init__(msg=self.get_message())
 
     def get_message(self) -> str:
         validator_msg = self.validator_error_message(self.exc)
         msg = f"Could not parse refresh interval config: {validator_msg}"
+        return msg
+
+
+class IndexConfigError(CompilationError):
+    def __init__(self, exc: ValidationError):
+        self.exc = exc
+        super().__init__(msg=self.get_message())
+
+    def get_message(self) -> str:
+        validator_msg = self.validator_error_message(self.exc)
+        msg = f"Could not parse index config: {validator_msg}"
+        return msg
+
+
+class PartitionByConfigError(CompilationError):
+    def __init__(self, raw_partition_by: Any):
+        self.raw_partition_by = raw_partition_by
+        super().__init__(msg=self.get_message())
+
+    def get_message(self) -> str:
+        msg = (
+            f"Invalid partition_by config:\n"
+            f"  Got: {self.raw_partition_by!r}\n"
+            f"  Expected a list of column names (e.g. ['col_a', 'col_b'])"
+        )
         return msg

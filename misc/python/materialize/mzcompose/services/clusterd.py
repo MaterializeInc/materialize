@@ -15,6 +15,12 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 
+# Arrangement merge effort (`arrangement_exert_proportionality`) for the compute
+# and storage timely clusters. Kept as named constants so other launchers (e.g.
+# the clusterd-test-driver local runner) reuse the same defaults.
+DEFAULT_COMPUTE_EXERT_PROPORTIONALITY = 16
+DEFAULT_STORAGE_EXERT_PROPORTIONALITY = 1337
+
 
 class Clusterd(Service):
     def __init__(
@@ -33,6 +39,14 @@ class Clusterd(Service):
         workers: int = 1,
         process_names: list[str] = [],
         mz_service: str = "materialized",
+        # The mzbuild image to run when `image` is unset. The default runs
+        # clusterd from the unified `materialized` binary. `clusterd` runs the
+        # standalone binary that production deploys.
+        mzbuild: str = "materialized",
+        # Matches the CI default of the `enable_unified_cluster` system
+        # parameter, so unorchestrated clusterds run the same topology as
+        # controller-provisioned replicas. Old images ignore the env var.
+        unified_cluster: bool = True,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -41,9 +55,19 @@ class Clusterd(Service):
             "CLUSTERD_USE_CTP=true",
             "MZ_SOFT_ASSERTIONS=1",
             "MZ_EAT_MY_DATA=1",
+            "LD_PRELOAD=libeatmydata.so",
+            # Defaults that were previously set by the clusterd entrypoint.sh.
+            "CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100",
+            "CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101",
+            "CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878",
+            "CLUSTERD_SECRETS_READER=local-file",
+            "CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets",
             f"CLUSTERD_PERSIST_PUBSUB_URL=http://{mz_service}:6879",
             *environment_extra,
         ]
+
+        if unified_cluster:
+            environment += ["CLUSTERD_UNIFIED_CLUSTER=true"]
 
         if not environment_id:
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
@@ -52,8 +76,12 @@ class Clusterd(Service):
 
         process_names = process_names if process_names else [name]
         process_index = process_names.index(name)
-        compute_timely_config = timely_config(process_names, 2102, workers, 16)
-        storage_timely_config = timely_config(process_names, 2103, workers, 1337)
+        compute_timely_config = timely_config(
+            process_names, 2102, workers, DEFAULT_COMPUTE_EXERT_PROPORTIONALITY
+        )
+        storage_timely_config = timely_config(
+            process_names, 2103, workers, DEFAULT_STORAGE_EXERT_PROPORTIONALITY
+        )
 
         environment += [
             f"CLUSTERD_PROCESS={process_index}",
@@ -61,14 +89,19 @@ class Clusterd(Service):
             f"CLUSTERD_STORAGE_TIMELY_CONFIG={storage_timely_config}",
         ]
 
-        options = [f"--scratch-directory={scratch_directory}", *options]
+        options = ["clusterd", f"--scratch-directory={scratch_directory}", *options]
 
         config: ServiceConfig = {}
 
         if image:
             config["image"] = image
         else:
-            config["mzbuild"] = "clusterd"
+            config["mzbuild"] = mzbuild
+
+        # Override the materialized entrypoint so that `clusterd` is invoked
+        # via the command rather than via the entrypoint. This keeps
+        # `c.exec()` working (it prepends the entrypoint to exec commands).
+        config["entrypoint"] = ["tini", "--"]
 
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the

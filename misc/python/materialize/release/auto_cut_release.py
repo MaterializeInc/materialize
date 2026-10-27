@@ -14,7 +14,7 @@ import sys
 
 from materialize import MZ_ROOT, git, spawn
 from materialize.mz_version import MzVersion
-from materialize.release.util import doc_file_path
+from materialize.release.util import PUSH_BRANCH_HELP, doc_file_path, push_to_main
 
 
 def main():
@@ -22,6 +22,7 @@ def main():
     parser.add_argument("release_version")
     parser.add_argument("next_version")
     parser.add_argument("next_date")
+    parser.add_argument("--push-branch", help=PUSH_BRANCH_HELP)
     args = parser.parse_args()
 
     remote = git.get_remote()
@@ -64,24 +65,21 @@ def main():
         print(f"Creating {args.next_version}.md in the docs...")
         next_version_doc_file = doc_file_path(args.next_version)
         if not next_version_doc_file.exists():
-            next_version_doc_file.write_text(
-                f"""---
+            next_version_doc_file.write_text(f"""---
 title: Materialize {args.next_version}
 date: {args.next_date}
 released: false
 patch: 0
 rc: 1
 publish_helm_chart: true
-_build:
+build:
   render: never
 ---
-"""
-            )
+""")
             git.add_file(str(next_version_doc_file))
             git.commit_all_changed(f"release: create doc file for {args.next_version}")
 
-        print(f"Pushing to {remote}...")
-        spawn.runv(["git", "push", remote, "main"])
+        push_to_main(remote, args.push_branch)
     else:
         print(
             f"Next version ({next_version}) is greater than or equal to current main version ({current_version}); nothing to bump"

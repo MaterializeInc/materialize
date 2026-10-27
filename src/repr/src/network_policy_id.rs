@@ -11,8 +11,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{Error, anyhow};
-use columnation::{Columnation, CopyRegion};
-use mz_lowertest::MzReflect;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +20,6 @@ const USER_CHAR: char = 'u';
 
 /// The identifier for a network policy.
 #[derive(
-    Arbitrary,
     Clone,
     Copy,
     Debug,
@@ -31,9 +29,9 @@ const USER_CHAR: char = 'u';
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect,
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum NetworkPolicyId {
     System(u64),
     User(u64),
@@ -87,10 +85,6 @@ impl fmt::Display for NetworkPolicyId {
             Self::User(id) => write!(f, "{USER_CHAR}{id}"),
         }
     }
-}
-
-impl Columnation for NetworkPolicyId {
-    type InnerRegion = CopyRegion<NetworkPolicyId>;
 }
 
 #[mz_ore::test]

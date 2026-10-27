@@ -1,0 +1,26 @@
+# Fuzz crate for mz-pgtz: parse untrusted time-zone strings. `Timezone::parse`
+# is a hand-written tokenizer + offset builder over arbitrary user input (the
+# `AT TIME ZONE` / `SET timezone` value), so any panic is an availability bug.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-pgtz-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-pgtz = { path = ".." }
+
+[[bin]]
+name = "timezone_parse"
+path = "fuzz_targets/timezone_parse.rs"
+test = false
+doc = false
+bench = false

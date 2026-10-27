@@ -15,9 +15,18 @@
 
 //! String utilities.
 
+#[cfg(feature = "assert-no-tracing")]
 use crate::assert::soft_assertions_enabled;
 use std::fmt::{self, Debug, Formatter, Write};
 use std::ops::Deref;
+
+// Without the soft-assertion machinery available, treat soft assertions as
+// disabled so that `redact` always redacts. Callers that need the
+// debug-mode behavior opt into the `assert-no-tracing` feature.
+#[cfg(not(feature = "assert-no-tracing"))]
+fn soft_assertions_enabled() -> bool {
+    false
+}
 
 /// Extension methods for [`str`].
 pub trait StrExt {
@@ -460,7 +469,7 @@ impl<A: Debug> Debug for Redacting<A> {
         } else {
             f.write_char('<')?;
             let mut write = RedactingWriter(f);
-            write!(&mut write, "{:?}", &self.value)?;
+            write!(&mut write, "{:?}", self.value)?;
             f.write_char('>')
         }
     }
@@ -497,12 +506,9 @@ mod tests {
 
         assert_eq!(
             r#"<"XXXX_XXXXXX">"#,
-            format!("{:?}", &redact(&"TEST_STRING"))
+            format!("{:?}", redact(&"TEST_STRING"))
         );
-        assert_eq!(
-            r#""TEST_STRING""#,
-            format!("{:#?}", &redact(&"TEST_STRING"))
-        );
-        assert_eq!("<#.###>", format!("{:?}", &redact(&1.234f32)));
+        assert_eq!(r#""TEST_STRING""#, format!("{:#?}", redact(&"TEST_STRING")));
+        assert_eq!("<#.###>", format!("{:?}", redact(&1.234f32)));
     }
 }

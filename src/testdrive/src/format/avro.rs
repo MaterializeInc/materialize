@@ -256,6 +256,16 @@ pub fn from_confluent_bytes(schema: &Schema, mut bytes: &[u8]) -> Result<Value, 
     Ok(datum)
 }
 
+/// Strip the AWS Glue wire-format header and decode the Avro payload with
+/// `schema`. The 16-byte schema-version UUID in the header identifies the writer
+/// schema; callers that need it should extract it separately via
+/// [`mz_interchange::glue::extract_avro_header`].
+pub fn from_glue_bytes(schema: &Schema, bytes: &[u8]) -> Result<Value, anyhow::Error> {
+    let (_schema_version_id, mut payload) = mz_interchange::glue::extract_avro_header(bytes)?;
+    let datum = from_avro_datum(schema, &mut payload).context("decoding avro datum")?;
+    Ok(datum)
+}
+
 /// A struct to enhance the debug output of various Avro types.
 ///
 /// Testdrive scripts, for example, specify timestamps in micros, but debug

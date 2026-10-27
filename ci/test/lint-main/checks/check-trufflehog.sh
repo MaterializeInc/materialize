@@ -23,7 +23,7 @@ if ! trufflehog --version >/dev/null 2>/dev/null; then
   exit 1
 fi
 
-git ls-files | grep -Ev '^(misc/shlib/shlib\.bash|test/lang/js/yarn\.lock|test/0dt/mzcompose.py)$' | xargs trufflehog --no-fail --no-update --no-verification --json filesystem | trufflehog_jq_filter_files > trufflehog.log
+git ls-files | grep -Ev '^(misc/shlib/shlib\.bash|test/lang/js/yarn\.lock|test/0dt/mzcompose.py|console/yarn\.lock)$' | xargs trufflehog --no-fail --no-update --no-verification --json filesystem | trufflehog_jq_filter_files > trufflehog.log
 
 try test ! -s trufflehog.log
 

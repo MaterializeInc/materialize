@@ -9,14 +9,75 @@
 
 //! Implementation-specific metrics for persist blobs and consensus
 
-use std::sync::Arc;
 use std::time::Instant;
 
-use mz_dyncfg::ConfigSet;
-use mz_ore::lgbytes::{LgBytesMetrics, LgBytesOpMetrics};
+use mz_aws_util::HttpPoolMetrics;
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
-use prometheus::IntCounterVec;
+use mz_ore::metrics::{ComputedUIntGauge, Counter, IntCounter, MetricsRegistry};
+use mz_ore::stats::histogram_seconds_buckets;
+use prometheus::{Gauge, Histogram, IntCounterVec, IntGauge};
+
+/// Metrics for [crate::hedge::HedgedBlob].
+#[derive(Debug, Clone)]
+pub struct BlobHedgeMetrics {
+    pub(crate) fired: IntCounter,
+    pub(crate) won: IntCounter,
+    pub(crate) won_seconds: Histogram,
+    pub(crate) skipped_budget: IntCounter,
+    pub(crate) skipped_concurrency: IntCounter,
+    pub(crate) skipped_unavailable: IntCounter,
+    pub(crate) errors: IntCounter,
+    pub(crate) warm_errors: IntCounter,
+    pub(crate) armed: IntGauge,
+    pub(crate) rtt_latency: Gauge,
+}
+
+impl BlobHedgeMetrics {
+    /// Returns a new [BlobHedgeMetrics] instance connected to the given
+    /// registry.
+    pub fn new(registry: &MetricsRegistry) -> Self {
+        let skipped: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_blob_hedges_skipped",
+            help: "hedge requests not fired for a get that exceeded the hedge delay, by reason",
+            var_labels: ["reason"],
+        ));
+        BlobHedgeMetrics {
+            fired: registry.register(metric!(
+                name: "mz_persist_blob_hedges_fired",
+                help: "blob gets that fired a hedge request",
+            )),
+            won: registry.register(metric!(
+                name: "mz_persist_blob_hedges_won",
+                help: "blob gets where the hedge request won the race",
+            )),
+            won_seconds: registry.register(metric!(
+                name: "mz_persist_blob_hedge_won_seconds",
+                help: "end-to-end latency of blob gets won by the hedge request",
+                buckets: histogram_seconds_buckets(0.000_500, 32.0),
+            )),
+            skipped_budget: skipped.with_label_values(&["budget"]),
+            skipped_concurrency: skipped.with_label_values(&["concurrency"]),
+            skipped_unavailable: skipped.with_label_values(&["unavailable"]),
+            errors: registry.register(metric!(
+                name: "mz_persist_blob_hedge_errors",
+                help: "hedge requests (the hedge leg only, not the primary) that completed with an error",
+            )),
+            warm_errors: registry.register(metric!(
+                name: "mz_persist_blob_hedge_warm_errors",
+                help: "warm-path liveness gets on the hedge sibling that failed or timed out",
+            )),
+            armed: registry.register(metric!(
+                name: "mz_persist_blob_hedge_armed",
+                help: "1 once this process has opened a hedge sibling and can hedge when enabled",
+            )),
+            rtt_latency: registry.register(metric!(
+                name: "mz_persist_blob_hedge_rtt_latency",
+                help: "roundtrip-time of the most recent successful warm-path liveness gets on the hedge sibling",
+            )),
+        }
+    }
+}
 
 /// Metrics specific to S3Blob's internal workings.
 #[derive(Debug, Clone)]
@@ -35,11 +96,7 @@ pub struct S3BlobMetrics {
     pub(crate) delete_object: IntCounter,
     pub(crate) list_objects: IntCounter,
     pub(crate) error_counts: IntCounterVec,
-
-    /// Metrics for all usages of LgBytes. Exposed as public for convenience in
-    /// persist boot, we'll have to pull this out and do the plumbing
-    /// differently if mz gains a non-persist user of LgBytes.
-    pub lgbytes: LgBytesMetrics,
+    http_pool: HttpPoolMetrics,
 }
 
 impl S3BlobMetrics {
@@ -82,7 +139,70 @@ impl S3BlobMetrics {
             delete_object: operations.with_label_values(&["delete_object"]),
             list_objects: operations.with_label_values(&["list_objects"]),
             error_counts: errors,
-            lgbytes: LgBytesMetrics::new(registry),
+            http_pool: Self::http_pool_metrics(registry),
+        }
+    }
+
+    fn http_pool_metrics(registry: &MetricsRegistry) -> HttpPoolMetrics {
+        let http_pool = HttpPoolMetrics::new(registry.register(metric!(
+            name: "mz_persist_s3_http_pool_requests",
+            help: "number of requests (including retries but excluding hedged gets) sent through the pool of HTTP clients",
+        )));
+        let register = |opts, get: fn(&HttpPoolMetrics) -> usize| {
+            let http_pool = http_pool.clone();
+            // The registry keeps the computed gauge, so its handle can be dropped.
+            let _: ComputedUIntGauge =
+                registry.register_computed_gauge(opts, move || u64::cast_from(get(&http_pool)));
+        };
+        register(
+            metric!(
+                name: "mz_persist_s3_http_pool_clients",
+                help: "number of HTTP clients in the pool, whether or not requests use the pool",
+            ),
+            HttpPoolMetrics::clients,
+        );
+        register(
+            metric!(
+                name: "mz_persist_s3_http_pool_clients_in_use",
+                help: "number of HTTP clients in the pool with at least one request in flight",
+            ),
+            HttpPoolMetrics::clients_in_use,
+        );
+        register(
+            metric!(
+                name: "mz_persist_s3_http_pool_in_flight",
+                help: "number of requests in flight through the pool of HTTP clients",
+            ),
+            HttpPoolMetrics::in_flight,
+        );
+        register(
+            metric!(
+                name: "mz_persist_s3_http_pool_client_in_flight_min",
+                help: "fewest requests in flight on one HTTP client in the pool",
+            ),
+            |http_pool| http_pool.client_in_flight_range().0,
+        );
+        register(
+            metric!(
+                name: "mz_persist_s3_http_pool_client_in_flight_max",
+                help: "most requests in flight on one HTTP client in the pool",
+            ),
+            |http_pool| http_pool.client_in_flight_range().1,
+        );
+        http_pool
+    }
+
+    /// The metrics for the pool of HTTP clients.
+    pub fn http_pool(&self) -> HttpPoolMetrics {
+        self.http_pool.clone()
+    }
+
+    /// A clone whose pool of HTTP clients doesn't count toward the
+    /// `mz_persist_s3_http_pool_*` metrics.
+    pub fn without_http_pool_metrics(&self) -> Self {
+        S3BlobMetrics {
+            http_pool: HttpPoolMetrics::unreported(),
+            ..self.clone()
         }
     }
 }
@@ -252,29 +372,16 @@ impl ParquetColumnMetrics {
 /// Metrics for `ColumnarRecords`.
 #[derive(Debug)]
 pub struct ColumnarMetrics {
-    pub(crate) lgbytes_arrow: LgBytesOpMetrics,
     pub(crate) parquet: ParquetMetrics,
     pub(crate) arrow: ArrowMetrics,
-    // TODO: Having these two here isn't quite the right thing to do, but it
-    // saves a LOT of plumbing.
-    pub(crate) cfg: Arc<ConfigSet>,
-    pub(crate) is_cc_active: bool,
 }
 
 impl ColumnarMetrics {
     /// Returns a new [ColumnarMetrics].
-    pub fn new(
-        registry: &MetricsRegistry,
-        lgbytes: &LgBytesMetrics,
-        cfg: Arc<ConfigSet>,
-        is_cc_active: bool,
-    ) -> Self {
+    pub fn new(registry: &MetricsRegistry) -> Self {
         ColumnarMetrics {
             parquet: ParquetMetrics::new(registry),
             arrow: ArrowMetrics::new(registry),
-            lgbytes_arrow: lgbytes.persist_arrow.clone(),
-            cfg,
-            is_cc_active,
         }
     }
 
@@ -292,10 +399,6 @@ impl ColumnarMetrics {
     ///
     /// Exposed for testing.
     pub fn disconnected() -> Self {
-        let registry = MetricsRegistry::new();
-        let lgbytes = LgBytesMetrics::new(&registry);
-        let cfg = crate::cfg::all_dyn_configs(ConfigSet::default());
-
-        Self::new(&registry, &lgbytes, Arc::new(cfg), false)
+        Self::new(&MetricsRegistry::new())
     }
 }

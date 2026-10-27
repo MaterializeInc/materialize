@@ -31,6 +31,7 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{IdentError, UnresolvedItemName};
 use mz_sql_parser::parser::{ParserError, ParserStatementError};
 use mz_sql_server_util::SqlServerError;
+use mz_storage_types::connections::InvalidAwsPrivatelinkServiceName;
 use mz_storage_types::sources::ExternalReferenceResolutionError;
 
 use crate::catalog::{
@@ -42,8 +43,8 @@ use crate::plan::plan_utils::JoinSide;
 use crate::plan::scope::ScopeItem;
 use crate::plan::typeconv::CastContext;
 use crate::pure::error::{
-    CsrPurificationError, IcebergSinkPurificationError, KafkaSinkPurificationError,
-    KafkaSourcePurificationError, LoadGeneratorSourcePurificationError,
+    CsrPurificationError, GluePurificationError, IcebergSinkPurificationError,
+    KafkaSinkPurificationError, KafkaSourcePurificationError, LoadGeneratorSourcePurificationError,
     MySqlSourcePurificationError, PgSourcePurificationError, SqlServerSourcePurificationError,
 };
 use crate::session::vars::VarError;
@@ -54,6 +55,10 @@ pub enum PlanError {
     Unsupported {
         feature: String,
         discussion_no: Option<usize>,
+    },
+    /// A burst `HYDRATION SIZE` equal to the cluster `SIZE` (a no-op burst).
+    HydrationSizeEqualsClusterSize {
+        size: String,
     },
     /// This feature is not supported, and will likely never be supported.
     NeverSupported {
@@ -115,6 +120,10 @@ pub enum PlanError {
         desired_key: Vec<String>,
         valid_keys: Vec<Vec<String>>,
     },
+    IcebergSinkUnsupportedKeyType {
+        column: String,
+        column_type: String,
+    },
     InvalidWmrRecursionLimit(String),
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
@@ -140,6 +149,15 @@ pub enum PlanError {
         from: String,
         to: String,
     },
+    /// Range type with an element type that is not supported (e.g. float, uint).
+    UnsupportedRangeElementType {
+        element_type_name: String,
+    },
+    /// The cast exists, but `TRY_CAST` cannot turn its failures into NULL.
+    TryCastUnsupported {
+        from: String,
+        to: String,
+    },
     InvalidTable {
         name: String,
     },
@@ -149,11 +167,11 @@ pub enum PlanError {
     },
     InvalidSinkFrom {
         name: String,
-        item_type: CatalogItemType,
+        item_type: String,
     },
     InvalidDependency {
         name: String,
-        item_type: CatalogItemType,
+        item_type: String,
     },
     MangedReplicaName(String),
     ParserStatement(ParserStatementError),
@@ -225,6 +243,7 @@ pub enum PlanError {
         name: String,
         supported_azs: BTreeSet<String>,
     },
+    InvalidPrivatelinkServiceName(InvalidAwsPrivatelinkServiceName),
     DuplicatePrivatelinkAvailabilityZone {
         duplicate_azs: BTreeSet<String>,
     },
@@ -238,6 +257,9 @@ pub enum PlanError {
     },
     InvalidKeysInSubscribeEnvelopeUpsert,
     InvalidKeysInSubscribeEnvelopeDebezium,
+    DuplicateKeyColumnInSubscribeEnvelope {
+        column_name: String,
+    },
     InvalidPartitionByEnvelopeDebezium {
         column_name: String,
     },
@@ -265,21 +287,13 @@ pub enum PlanError {
     IcebergSinkPurification(IcebergSinkPurificationError),
     LoadGeneratorSourcePurification(LoadGeneratorSourcePurificationError),
     CsrPurification(CsrPurificationError),
+    GluePurification(GluePurificationError),
     MySqlSourcePurification(MySqlSourcePurificationError),
     SqlServerSourcePurificationError(SqlServerSourcePurificationError),
     UseTablesForSources(String),
     MissingName(CatalogItemType),
     InvalidRefreshAt,
     InvalidRefreshEveryAlignedTo,
-    CreateReplicaFailStorageObjects {
-        /// The current number of replicas on the cluster
-        current_replica_count: usize,
-        /// THe number of internal replicas on the cluster
-        internal_replica_count: usize,
-        /// The number of replicas that executing this command would have
-        /// created
-        hypothetical_replica_count: usize,
-    },
     MismatchedObjectType {
         name: PartialItemName,
         is_type: ObjectType,
@@ -298,10 +312,12 @@ pub enum PlanError {
     UntilReadyTimeoutRequired,
     SubsourceResolutionError(ExternalReferenceResolutionError),
     Replan(String),
+    Internal(String),
     NetworkPolicyLockoutError,
     NetworkPolicyInUse,
     /// Expected a constant expression that evaluates without an error to a non-null value.
     ConstantExpressionSimplificationFailed(String),
+    InvalidLimit(String),
     InvalidOffset(String),
     /// The named cursor does not exist.
     UnknownCursor(String),
@@ -330,6 +346,11 @@ impl PlanError {
 
     pub fn detail(&self) -> Option<String> {
         match self {
+            Self::HydrationSizeEqualsClusterSize { .. } => Some(
+                "A burst replica at the same size as the steady replicas would not \
+                 accelerate hydration."
+                    .into(),
+            ),
             Self::NeverSupported { details, .. } => details.clone(),
             Self::FetchingCsrSchemaFailed { cause, .. } => Some(cause.to_string_with_causes()),
             Self::PostgresConnectionErr { cause } => Some(cause.to_string_with_causes()),
@@ -368,21 +389,9 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.detail(),
             Self::LoadGeneratorSourcePurification(e) => e.detail(),
             Self::CsrPurification(e) => e.detail(),
+            Self::GluePurification(e) => e.detail(),
             Self::KafkaSinkPurification(e) => e.detail(),
             Self::IcebergSinkPurification(e) => e.detail(),
-            Self::CreateReplicaFailStorageObjects { current_replica_count: current, internal_replica_count: internal, hypothetical_replica_count: target } => {
-                Some(format!(
-                    "Currently have {} replica{}{}; command would result in {}",
-                    current,
-                    if *current != 1 { "s" } else { "" },
-                    if *internal > 0 {
-                        format!(" ({} internal)", internal)
-                    } else {
-                        "".to_string()
-                    },
-                    target
-                ))
-            },
             Self::SubsourceNameConflict {
                 name: _,
                 upstream_references,
@@ -420,6 +429,9 @@ impl PlanError {
             Self::ShowCreateViewOnMaterializedView(_) => {
                 Some("Use SHOW CREATE MATERIALIZED VIEW to show a materialized view.".into())
             }
+            Self::TryCastUnsupported { .. } => {
+                Some("Use CAST, which supports this cast but reports an error when it fails.".into())
+            }
             Self::ExplainViewOnMaterializedView(_) => {
                 Some("Use EXPLAIN [...] MATERIALIZED VIEW to explain a materialized view.".into())
             }
@@ -455,6 +467,7 @@ impl PlanError {
                 let supported_azs_str = supported_azs.iter().join("\n  ");
                 Some(format!("Did you supply an availability zone name instead of an ID? Known availability zone IDs:\n  {}", supported_azs_str))
             }
+            Self::InvalidPrivatelinkServiceName(err) => Some(err.hint()),
             Self::DuplicatePrivatelinkAvailabilityZone { duplicate_azs, ..} => {
                 let duplicate_azs  = duplicate_azs.iter().join("\n  ");
                 Some(format!("Duplicated availability zones:\n  {}", duplicate_azs))
@@ -465,11 +478,17 @@ impl PlanError {
             Self::InvalidKeysInSubscribeEnvelopeDebezium => {
                 Some("All keys must be columns on the underlying relation.".into())
             }
+            Self::DuplicateKeyColumnInSubscribeEnvelope { .. } => {
+                Some("Each KEY column must be listed at most once.".into())
+            }
             Self::InvalidOrderByInSubscribeWithinTimestampOrderBy => {
                 Some("All order bys must be output columns.".into())
             }
             Self::UpsertSinkWithInvalidKey { .. } | Self::UpsertSinkWithoutKey => {
                 Some("See: https://materialize.com/s/sink-key-selection".into())
+            }
+            Self::IcebergSinkUnsupportedKeyType { .. } => {
+                Some("Iceberg equality delete keys must be primitive, non-floating-point columns.".into())
             }
             Self::Catalog(e) => e.hint(),
             Self::VarError(e) => e.hint(),
@@ -479,6 +498,7 @@ impl PlanError {
             Self::KafkaSourcePurification(e) => e.hint(),
             Self::LoadGeneratorSourcePurification(e) => e.hint(),
             Self::CsrPurification(e) => e.hint(),
+            Self::GluePurification(e) => e.hint(),
             Self::KafkaSinkPurification(e) => e.hint(),
             Self::UnknownColumn { table, similar, .. } => {
                 let suffix = "Make sure to surround case sensitive names in double quotes.";
@@ -527,6 +547,9 @@ impl fmt::Display for PlanError {
                     write!(f, ", see https://github.com/MaterializeInc/materialize/discussions/{} for more details", discussion_no)?;
                 }
                 Ok(())
+            }
+            Self::HydrationSizeEqualsClusterSize { size } => {
+                write!(f, "HYDRATION SIZE must differ from the cluster SIZE ('{size}')")
             }
             Self::NeverSupported { feature, documentation_link: documentation_path,.. } => {
                 write!(f, "{feature} is not supported",)?;
@@ -623,6 +646,9 @@ impl fmt::Display for PlanError {
             Self::UpsertSinkWithInvalidKey { .. } => {
                 write!(f, "upsert key could not be validated as unique")
             }
+            Self::IcebergSinkUnsupportedKeyType { column, column_type } => {
+                write!(f, "column {column} has type {column_type} which cannot be used as an Iceberg equality delete key")
+            }
             Self::InvalidWmrRecursionLimit(msg) => write!(f, "Invalid WITH MUTUALLY RECURSIVE recursion limit. {}", msg),
             Self::InvalidNumericMaxScale(e) => e.fmt(f),
             Self::InvalidCharLength(e) => e.fmt(f),
@@ -642,6 +668,12 @@ impl fmt::Display for PlanError {
             Self::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
             }
+            Self::TryCastUnsupported { from, to } => {
+                write!(
+                    f,
+                    "TRY_CAST cannot fall back to NULL for the cast from {from} to {to}"
+                )
+            }
             Self::InvalidCast { name, ccx, from, to } =>{
                 write!(
                     f,
@@ -653,6 +685,9 @@ impl fmt::Display for PlanError {
                     },
                 )
             }
+            Self::UnsupportedRangeElementType { element_type_name } => {
+                write!(f, "range type over {} is not supported", element_type_name)
+            }
             Self::InvalidTable { name } => {
                 write!(f, "invalid table definition for {}", name.quoted())
             },
@@ -660,11 +695,10 @@ impl fmt::Display for PlanError {
                 write!(f, "invalid version {} for {}", version.quoted(), name.quoted())
             },
             Self::InvalidSinkFrom { name, item_type } => {
-                write!(f, "{name} is a {item_type}, which cannot be exported as a sink")
+                write!(f, "{item_type} {name} cannot be exported as a sink")
             },
             Self::InvalidDependency { name, item_type } => {
-                let a = if *item_type == CatalogItemType::Index { "an" } else { "a" };
-                write!(f, "{name} is {a} {item_type}, which cannot be depended upon")
+                write!(f, "{item_type} {name} cannot be depended upon")
             },
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)
@@ -745,6 +779,7 @@ impl fmt::Display for PlanError {
                 })
             },
             Self::InvalidPrivatelinkAvailabilityZone { name, ..} => write!(f, "invalid AWS PrivateLink availability zone {}", name.quoted()),
+            Self::InvalidPrivatelinkServiceName(err) => err.fmt(f),
             Self::DuplicatePrivatelinkAvailabilityZone {..} =>   write!(f, "connection cannot contain duplicate availability zones"),
             Self::InvalidSchemaName => write!(f, "no valid schema selected"),
             Self::ItemAlreadyExists { name, item_type } => write!(f, "{item_type} {} already exists", name.quoted()),
@@ -754,6 +789,13 @@ impl fmt::Display for PlanError {
             }
             Self::InvalidKeysInSubscribeEnvelopeDebezium => {
                 write!(f, "invalid keys in SUBSCRIBE ENVELOPE DEBEZIUM (KEY (..))")
+            }
+            Self::DuplicateKeyColumnInSubscribeEnvelope { column_name } => {
+                write!(
+                    f,
+                    "column {} appears more than once in SUBSCRIBE ENVELOPE KEY clause",
+                    column_name.quoted(),
+                )
             }
             Self::InvalidPartitionByEnvelopeDebezium { column_name } => {
                 write!(
@@ -795,6 +837,7 @@ impl fmt::Display for PlanError {
             Self::KafkaSinkPurification(e) => write!(f, "KAFKA sink validation: {}", e),
             Self::IcebergSinkPurification(e) => write!(f, "ICEBERG sink validation: {}", e),
             Self::CsrPurification(e) => write!(f, "CONFLUENT SCHEMA REGISTRY validation: {}", e),
+            Self::GluePurification(e) => write!(f, "AWS GLUE SCHEMA REGISTRY validation: {}", e),
             Self::MySqlSourcePurification(e) => write!(f, "MYSQL source validation: {}", e),
             Self::SqlServerSourcePurificationError(e) => write!(f, "SQL SERVER source validation: {}", e),
             Self::UseTablesForSources(command) => write!(f, "{command} not supported; use CREATE TABLE .. FROM SOURCE instead"),
@@ -812,9 +855,6 @@ impl fmt::Display for PlanError {
                 write!(f, "REFRESH EVERY ... ALIGNED TO argument must be an expression that can be simplified \
                            and/or cast to a constant whose type is mz_timestamp")
             }
-            Self::CreateReplicaFailStorageObjects {..} => {
-                write!(f, "cannot create more than one replica of a cluster containing sources or sinks")
-            },
             Self::MismatchedObjectType {
                 name,
                 is_type,
@@ -848,20 +888,33 @@ impl fmt::Display for PlanError {
             },
             Self::SubsourceResolutionError(e) => write!(f, "{}", e),
             Self::Replan(msg) => write!(f, "internal error while replanning, please contact support: {msg}"),
+            Self::Internal(msg) => write!(f, "internal error: {msg}"),
             Self::NetworkPolicyLockoutError => write!(f, "policy would block current session IP"),
             Self::NetworkPolicyInUse => write!(f, "network policy is currently in use"),
             Self::UntilReadyTimeoutRequired => {
                 write!(f, "TIMEOUT=<duration> option is required for ALTER CLUSTER ... WITH (WAIT UNTIL READY ( ... ))")
             },
             Self::ConstantExpressionSimplificationFailed(e) => write!(f, "{}", e),
+            Self::InvalidLimit(e) => write!(f, "Invalid LIMIT clause: {}", e),
             Self::InvalidOffset(e) => write!(f, "Invalid OFFSET clause: {}", e),
             Self::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())
             }
-            Self::CopyFromTargetTableDropped { target_name: name } => write!(f, "COPY FROM's target table {} was dropped", name.quoted()),
-            Self::InvalidAsOfUpTo => write!(f, "AS OF or UP TO should be castable to a (non-null) mz_timestamp value"),
-            Self::InvalidReplacement { item_type, item_name, replacement_type, replacement_name } => {
-                write!(f, "cannot replace {item_type} {item_name} with {replacement_type} {replacement_name}")
+            Self::CopyFromTargetTableDropped { target_name: name } => {
+                write!(f, "COPY FROM's target table {} was dropped", name.quoted())
+            }
+            Self::InvalidAsOfUpTo => write!(
+                f,
+                "AS OF or UP TO should be castable to a (non-null) mz_timestamp value",
+            ),
+            Self::InvalidReplacement {
+                item_type, item_name, replacement_type, replacement_name,
+            } => {
+                write!(
+                    f,
+                    "cannot replace {item_type} {item_name} \
+                     with {replacement_type} {replacement_name}",
+                )
             }
         }
     }
@@ -993,6 +1046,12 @@ impl From<KafkaSinkPurificationError> for PlanError {
 impl From<IcebergSinkPurificationError> for PlanError {
     fn from(e: IcebergSinkPurificationError) -> Self {
         PlanError::IcebergSinkPurification(e)
+    }
+}
+
+impl From<GluePurificationError> for PlanError {
+    fn from(e: GluePurificationError) -> Self {
+        PlanError::GluePurification(e)
     }
 }
 

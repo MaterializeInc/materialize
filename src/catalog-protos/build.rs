@@ -64,7 +64,7 @@ fn main() -> anyhow::Result<()> {
                 .to_str()
                 .expect("UTF-8")
                 .to_string();
-            let hash = format!("{:x}", hasher.finalize());
+            let hash = hex::encode(hasher.finalize());
 
             (name, hash)
         })

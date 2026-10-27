@@ -22,14 +22,13 @@ Syntax element | Description
 ---------------|------------
 `<config>`     | The configuration parameter's name.
 
-{{% configuration-parameters %}}
+{{% include-headless "/headless/configuration-parameters" %}}
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/alter-system-reset.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-system-reset" %}}
 
 ## Related pages
 

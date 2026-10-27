@@ -14,6 +14,7 @@ purpose of exercising fencing.
 
 import argparse
 import random
+import threading
 import time
 from concurrent import futures
 from dataclasses import dataclass
@@ -23,8 +24,8 @@ from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 
 
 class Operation(Enum):
@@ -113,7 +114,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def execute_operation(
-    args: tuple[Composition, Workload, Operation, int]
+    args: tuple[Composition, Workload, Operation, int],
 ) -> SuccessfulCommit | None:
     c, workload, operation, id = args
 
@@ -159,6 +160,13 @@ def execute_operation(
                 return None
             elif "Connection refused" in str_e:
                 # Container died before the SQL connection was established
+                return None
+            elif "Connection reset by peer" in str_e:
+                # Fenced container: the port is still published but environmentd
+                # has already exited, so the connection is accepted and reset.
+                return None
+            elif "Connection timed out" in str_e:
+                # Fenced container that stopped responding mid-connect.
                 return None
             else:
                 raise RuntimeError(f"unexpected exception: {e}")
@@ -246,7 +254,7 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
         # Confirm that the first Mz has properly given up the ghost
         mz_first_log = c.invoke("logs", "mz_first", capture=True)
         assert (
-            "unable to confirm leadership" in mz_first_log.stdout
+            "unable to advance catalog upper" in mz_first_log.stdout
             or "unexpected fence epoch" in mz_first_log.stdout
             or "fenced by new catalog upper" in mz_first_log.stdout
             or "fenced by envd" in mz_first_log.stdout
@@ -258,14 +266,12 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
             if commit is None:
                 continue
             for target in ["table", "view"]:
-                cursor.execute(
-                    f"""
+                cursor.execute(f"""
                     SELECT id, COUNT(*) AS transaction_size
                     FROM {target}{commit.table_id}
                     WHERE id = {commit.row_id}
                     GROUP BY id
-                    """.encode()
-                )
+                    """.encode())
                 result = cursor.fetchall()
                 assert len(result) == 1
                 assert (
@@ -276,3 +282,210 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
                 ), f"Unexpected result {result}; commit: {commit}; target {target}"
 
         print("Verification complete.")
+
+
+# Connections driving increments.
+READ_THEN_WRITE_CONCURRENCY = 16
+
+# The statement never reached a server, or a server refused it, so it wrote
+# nothing. Keeping these apart from the indeterminate ones below matters: a
+# fenced instance produces plenty, and each one widens the band the counter is
+# checked against.
+NOT_APPLIED = [
+    # Targeted a container that is not up, or one that died before the
+    # connection was established, or one that stopped responding mid-connect.
+    "running docker compose failed",
+    "Connection refused",
+    "Connection timed out",
+    "canceling statement due to statement timeout",
+    # How the OCC path reports sustained contention.
+    "read-then-write exceeded maximum retry attempts under contention",
+]
+
+# The connection went away with the statement in flight, so the increment may or
+# may not be durable. A fenced container still publishes its port, so the
+# connection is accepted and reset.
+INDETERMINATE = [
+    "server closed the connection unexpectedly",
+    "Connection reset by peer",
+]
+
+
+class Increment(Enum):
+    ACKED = 0
+    REJECTED = 1
+    UNKNOWN = 2
+
+
+def increment_counter(args: tuple[Composition, str, bool]) -> Increment:
+    """Increments the shared counter by one through a read-then-write.
+
+    `slow` stretches the read phase, so that the operation can straddle the
+    moment the second instance comes up. The sleep takes its duration from the
+    `delay` column rather than from a literal, so that it is not folded away at
+    plan time and instead runs while the selection is read.
+    """
+    c, mz_service, slow = args
+    sleep = " AND mz_unsafe.mz_sleep(delay) IS NULL" if slow else ""
+    try:
+        c.sql_cursor(service=mz_service).execute(
+            f"UPDATE counter SET v = v + 1 WHERE k = 1{sleep}".encode()
+        )
+    except Exception as e:
+        if any(msg in str(e) for msg in NOT_APPLIED):
+            return Increment.REJECTED
+        if any(msg in str(e) for msg in INDETERMINATE):
+            return Increment.UNKNOWN
+        raise RuntimeError(f"unexpected exception: {e}")
+    return Increment.ACKED
+
+
+def workflow_read_then_write(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Tests concurrent read-then-writes across two fencing instances."""
+    parser.add_argument(
+        "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
+    )
+    args = parser.parse_args()
+    c.silent = True
+
+    def assert_occ_writes(service: str) -> None:
+        metrics = c.exec(
+            service, "curl", "--silent", "localhost:6878/metrics", capture=True
+        ).stdout
+        assert any(
+            line.startswith(
+                'mz_occ_read_then_write_retry_count_count{caller="session"} '
+            )
+            and float(line.split()[1]) > 0
+            for line in metrics.splitlines()
+        ), f"'{service}' sequenced no read-then-write through OCC"
+
+    c.down(destroy_volumes=True)
+    c.up(c.metadata_store())
+
+    with c.override(
+        *[
+            Materialized(
+                name=mz_name,
+                external_metadata_store=True,
+                external_blob_store=True,
+                blob_store_is_azure=args.azurite,
+                sanity_restart=False,
+                support_external_clusterd=True,
+            )
+            for mz_name in ["mz_first", "mz_second"]
+        ]
+    ):
+        c.up("mz_first")
+
+        # Idempotent, because a retried connection re-runs the whole batch after
+        # the statements it already applied. `mz_sleep` blocks the timely worker
+        # it runs on, so `delay` stays short enough that the slow increments do
+        # not starve the replica.
+        c.sql(
+            """
+            CREATE TABLE IF NOT EXISTS counter (k int, v bigint, delay double precision);
+            DELETE FROM counter;
+            INSERT INTO counter VALUES (1, 0, 0.5);
+            """,
+            service="mz_first",
+        )
+
+        assert (
+            increment_counter((c, "mz_first", False)) == Increment.ACKED
+        ), "baseline increment on 'mz_first' did not commit"
+        assert_occ_writes("mz_first")
+
+        print("--- Driving increments across both instances")
+        stop = threading.Event()
+
+        def drive(worker: int) -> list[tuple[str, Increment, float, float]]:
+            # Worker 0 keeps a slow read-then-write in flight on 'mz_first' for
+            # the whole run, so that 'mz_second' comes up while an operation
+            # there sits between its read and its write. The workers aimed at
+            # 'mz_second' start before it can serve and take their rejections
+            # until it can.
+            mz_service = "mz_first" if worker % 2 == 0 else "mz_second"
+            op = (c, mz_service, worker == 0)
+            outcomes = []
+            while not stop.is_set():
+                issued = time.time()
+                outcomes.append(
+                    (mz_service, increment_counter(op), issued, time.time())
+                )
+            return outcomes
+
+        with futures.ThreadPoolExecutor(READ_THEN_WRITE_CONCURRENCY) as executor:
+            drivers = [
+                executor.submit(drive, worker)
+                for worker in range(READ_THEN_WRITE_CONCURRENCY)
+            ]
+            try:
+                time.sleep(2)
+                c.up("mz_second")
+                # The fence lands while 'mz_second' opens the catalog, well
+                # before it reports healthy, so keep driving past that point to
+                # cover the handover from both sides.
+                time.sleep(15)
+            finally:
+                stop.set()
+            outcomes = [outcome for driver in drivers for outcome in driver.result()]
+
+        # The baseline increment on 'mz_first' counts too.
+        acked = 1 + sum(
+            1 for _, outcome, _, _ in outcomes if outcome == Increment.ACKED
+        )
+        unknown = sum(
+            1 for _, outcome, _, _ in outcomes if outcome == Increment.UNKNOWN
+        )
+        print(f"acked: {acked}, unknown: {unknown}")
+
+        # Without a commit from each side the run exercised one instance only.
+        acks = {
+            mz_service: [
+                (issued, at)
+                for service, outcome, issued, at in outcomes
+                if service == mz_service and outcome == Increment.ACKED
+            ]
+            for mz_service in ["mz_first", "mz_second"]
+        }
+        for mz_service, times in acks.items():
+            assert times, f"'{mz_service}' committed no increment"
+
+        # Comparing when 'mz_first' last *issued* a statement that went on to
+        # commit against when 'mz_second' first committed keeps a slow response
+        # from reading as an overlap: a statement issued after the other instance
+        # had already committed cannot have committed before it.
+        gap = min(at for _, at in acks["mz_second"]) - max(
+            issued for issued, _ in acks["mz_first"]
+        )
+        print(f"'mz_first' stopped committing {gap:.1f}s before 'mz_second' started")
+        assert gap > 0, (
+            f"'mz_first' committed a statement it issued {-gap:.1f}s after "
+            f"'mz_second' had committed, so both instances were live at once"
+        )
+
+        print("--- Verifying the counter")
+        cursor = c.sql_cursor(service="mz_second")
+
+        # A negative copy of the stale value has no rendering, so a broken
+        # multiplicity surfaces here as a missing row, an extra row, or a
+        # retraction error.
+        cursor.execute("SELECT v FROM counter WHERE k = 1")
+        rows = cursor.fetchall()
+        assert len(rows) == 1, f"counter holds {rows}, expected exactly one row"
+
+        # An acked increment is durable, one whose connection died may or may not
+        # be. Anything below `acked` is a lost update.
+        v = rows[0][0]
+        assert (
+            acked <= v <= acked + unknown
+        ), f"counter is {v}, expected between {acked} and {acked + unknown}"
+        assert_occ_writes("mz_second")
+
+        # Checked last so that a lost update is reported as such rather than as a
+        # missing fence.
+        log = c.invoke("logs", "mz_first", capture=True).stdout
+        assert (
+            "unable to advance catalog upper" in log or "fenced by envd" in log
+        ), "'mz_first' was never fenced, so the two instances never overlapped"

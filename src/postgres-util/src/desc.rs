@@ -11,13 +11,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::bail;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::types::Oid;
 use tracing::warn;
+
+use crate::schema_change::{KeyRef, SchemaChange, SchemaChangeError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_postgres_util.desc.rs"));
 
@@ -59,57 +60,83 @@ impl PostgresTableDesc {
     /// Currently this means that the values are equal except for the following
     /// exceptions:
     /// - `self`'s columns are a compatible prefix of `other`'s columns.
-    ///   Compatibility is defined as returning `true` for
-    ///   `PostgresColumnDesc::is_compatible`.
+    ///   Compatibility is defined by `PostgresColumnDesc::get_incompatible_schema_change`.
     /// - `self`'s keys are all present in `other`
+    ///
+    /// On incompatibility, the error describes the first mismatch found and
+    /// how to recover from it. The error becomes the permanent, user-visible
+    /// error for the stalled table, so it must stand on its own.
     pub fn determine_compatibility(
         &self,
         other: &PostgresTableDesc,
         allow_type_to_change_by_col_num: &BTreeSet<u16>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), SchemaChangeError> {
         if self == other {
             return Ok(());
         }
 
-        let PostgresTableDesc {
-            oid: other_oid,
-            namespace: other_namespace,
-            name: other_name,
-            columns: other_cols,
-            keys: other_keys,
-        } = other;
-
-        let other_cols_by_name = BTreeMap::from_iter(other_cols.iter().map(|c| (&c.name, c)));
-        let columns_compatible =
-            self.columns
-                .iter()
-                .all(|info| match other_cols_by_name.get(&info.name) {
-                    Some(other_info) => {
-                        let allow_type_change =
-                            allow_type_to_change_by_col_num.contains(&info.col_num);
-                        info.is_compatible(other_info, allow_type_change)
-                    }
-                    None => false,
-                });
-
-        if columns_compatible
-            && &self.name == other_name
-            && &self.oid == other_oid
-            && &self.namespace == other_namespace
-            // Our keys are all still present in exactly the same shape.
-            && self.keys.difference(other_keys).next().is_none()
-        {
-            Ok(())
-        } else {
+        if self.oid != other.oid {
             warn!(
-                "Error validating table in publication. Expected: {:?} Actual: {:?}",
-                &self, other
+                "table {}.{} changed oid from {} to {} during schema verification",
+                self.namespace, self.name, self.oid, other.oid
             );
-            bail!(
-                "source table {} with oid {} has been altered",
-                self.name,
-                self.oid
-            )
+            return Err(self.build_schema_change_error(SchemaChange::TableDropped));
+        }
+
+        if self.namespace != other.namespace || self.name != other.name {
+            return Err(self.build_schema_change_error(SchemaChange::TableRenamed));
+        }
+
+        let other_cols_by_name = BTreeMap::from_iter(other.columns.iter().map(|c| (&c.name, c)));
+        for column in &self.columns {
+            let allow_type_change = allow_type_to_change_by_col_num.contains(&column.col_num);
+            let other_column = other_cols_by_name.get(&column.name).copied();
+            if let Some(change) =
+                column.get_incompatible_schema_change(other_column, allow_type_change)
+            {
+                return Err(self.build_schema_change_error(change));
+            }
+        }
+
+        if let Some(key) = self.keys.difference(&other.keys).next() {
+            return Err(self.build_schema_change_error(self.key_change(key, other)));
+        }
+
+        Ok(())
+    }
+
+    fn build_schema_change_error(&self, change: SchemaChange) -> SchemaChangeError {
+        SchemaChangeError {
+            namespace: self.namespace.clone(),
+            name: self.name.clone(),
+            oid: self.oid,
+            change,
+        }
+    }
+
+    fn key_change(&self, key: &PostgresKeyDesc, other: &PostgresTableDesc) -> SchemaChange {
+        let key_ref = KeyRef {
+            name: key.name.clone(),
+            is_primary: key.is_primary,
+            columns: key
+                .cols
+                .iter()
+                .map(|attnum| {
+                    self.columns
+                        .iter()
+                        .find(|c| c.col_num == *attnum)
+                        .map_or_else(|| format!("attnum {}", attnum), |c| c.name.clone())
+                })
+                .collect(),
+        };
+        let still_exists = other
+            .keys
+            .iter()
+            .any(|k| k.oid == key.oid || k.name == key.name);
+        if still_exists {
+            SchemaChange::KeyAltered { key: key_ref }
+        } else {
+            SchemaChange::KeyDropped { key: key_ref }
         }
     }
 }
@@ -145,7 +172,17 @@ impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
 }
 
 /// Describes a column in a [`PostgresTableDesc`].
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
 pub struct PostgresColumnDesc {
     /// The name of the column.
     pub name: String,
@@ -167,16 +204,34 @@ impl PostgresColumnDesc {
     /// Note that this function somewhat unnecessarily errors if the names
     /// differ; this is negotiable but we want users to understand the fixedness
     /// of names in our schemas.
-    fn is_compatible(&self, other: &PostgresColumnDesc, allow_type_change: bool) -> bool {
-        self.name == other.name
-            && self.col_num == other.col_num
-            && (self.type_oid == other.type_oid || allow_type_change)
-            && (self.type_mod == other.type_mod || allow_type_change)
-            // Columns are compatible if:
-            // - self is nullable; introducing a not null constraint doesn't
-            //   change this column's behavior.
-            // - self and other are both not nullable
-            && (self.nullable || self.nullable == other.nullable)
+    fn get_incompatible_schema_change(
+        &self,
+        other: Option<&PostgresColumnDesc>,
+        allow_type_change: bool,
+    ) -> Option<SchemaChange> {
+        let column = self.name.clone();
+        let Some(other) = other else {
+            return Some(SchemaChange::ColumnDropped { column });
+        };
+        if self.name != other.name {
+            return Some(SchemaChange::ColumnDropped { column });
+        }
+        if self.col_num != other.col_num {
+            return Some(SchemaChange::ColumnMoved { column });
+        }
+        if !allow_type_change
+            && (self.type_oid != other.type_oid || self.type_mod != other.type_mod)
+        {
+            return Some(SchemaChange::ColumnTypeChanged { column });
+        }
+        // Columns are compatible if:
+        // - self is nullable; introducing a not null constraint doesn't
+        //   change this column's behavior.
+        // - self and other are both not nullable
+        if !self.nullable && other.nullable {
+            return Some(SchemaChange::NotNullDropped { column });
+        }
+        None
     }
 }
 
@@ -192,14 +247,16 @@ impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
     }
 
     fn from_proto(proto: ProtoPostgresColumnDesc) -> Result<Self, TryFromProtoError> {
+        let col_num_u32: u32 = proto
+            .col_num
+            .into_rust_if_some("ProtoPostgresColumnDesc::col_num")?;
+        // `col_num` is `u16` on the Rust side. Reject u32 values that don't fit
+        // instead of panicking. This is reachable from untrusted proto bytes.
+        let col_num = u16::try_from(col_num_u32)
+            .map_err(|e| TryFromProtoError::InvalidFieldError(e.to_string()))?;
         Ok(PostgresColumnDesc {
             name: proto.name,
-            col_num: {
-                let v: u32 = proto
-                    .col_num
-                    .into_rust_if_some("ProtoPostgresColumnDesc::col_num")?;
-                u16::try_from(v).expect("u16 must roundtrip")
-            },
+            col_num,
             type_oid: proto.type_oid,
             type_mod: proto.type_mod,
             nullable: proto.nullable,
@@ -208,7 +265,17 @@ impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
 }
 
 /// Describes a key in a [`PostgresTableDesc`].
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord,
+    Arbitrary
+)]
 pub struct PostgresKeyDesc {
     /// This key is derived from the `pg_constraint` with this OID.
     pub oid: Oid,
@@ -237,14 +304,20 @@ impl RustType<ProtoPostgresKeyDesc> for PostgresKeyDesc {
     }
 
     fn from_proto(proto: ProtoPostgresKeyDesc) -> Result<Self, TryFromProtoError> {
+        // `cols` is `Vec<u16>` on the Rust side but `Vec<u32>` on the wire;
+        // a u32 value above 65535 used to panic via `.expect`, which is
+        // reachable from untrusted proto bytes.
+        let cols = proto
+            .cols
+            .into_iter()
+            .map(|c| {
+                u16::try_from(c).map_err(|e| TryFromProtoError::InvalidFieldError(e.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(PostgresKeyDesc {
             oid: proto.oid,
             name: proto.name,
-            cols: proto
-                .cols
-                .into_iter()
-                .map(|c| c.try_into().expect("values roundtrip"))
-                .collect(),
+            cols,
             is_primary: proto.is_primary,
             nulls_not_distinct: proto.nulls_not_distinct,
         })

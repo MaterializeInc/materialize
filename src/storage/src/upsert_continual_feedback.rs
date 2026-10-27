@@ -25,9 +25,9 @@ use mz_timely_util::builder_async::{
 };
 use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, CapabilitySet};
-use timely::dataflow::{Scope, Stream};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -99,11 +99,12 @@ use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
 /// we might be ingesting updates from a partial emission (see above). In either
 /// case, our input might not be consolidated and `consolidate_chunk` is able to
 /// handle that.
-pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+pub fn upsert_inner<'scope, T, FromTime, F, Fut, US>(
+    input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
-    resume_upper: Antichain<G::Timestamp>,
-    persist_input: VecCollection<G, Result<Row, DataflowError>, Diff>,
+    resume_upper: Antichain<T>,
+    persist_ok: VecCollection<'scope, T, Row, Diff>,
+    persist_err: VecCollection<'scope, T, DataflowError, Diff>,
     mut persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -112,36 +113,21 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
 ) -> (
-    VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
-    Stream<G, Infallible>,
+    VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
 where
-    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
+    T: Timestamp + Refines<mz_repr::Timestamp> + TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<G::Timestamp, FromTime>,
-    FromTime: Debug + timely::ExchangeData + Ord + Sync,
+    US: UpsertStateBackend<T, FromTime>,
+    FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
-    // We only care about UpsertValueError since this is the only error that we can retract
-    let persist_input = persist_input.flat_map(move |result| {
-        let value = match result {
-            Ok(ok) => Ok(ok),
-            Err(DataflowError::EnvelopeError(err)) => match *err {
-                EnvelopeError::Upsert(err) => Err(Box::new(err)),
-                _ => return None,
-            },
-            Err(_) => return None,
-        };
-        let value_ref = match value {
-            Ok(ref row) => Ok(row),
-            Err(ref err) => Err(&**err),
-        };
-        Some((UpsertKey::from_value(value_ref, &key_indices), value))
-    });
+    let persist_input = crate::upsert::key_persist_feedback(persist_ok, persist_err, key_indices);
     let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     // An output that just reports progress of the snapshot consolidation process upstream to the
@@ -151,13 +137,13 @@ where
 
     let (mut health_output, health_stream) = builder.new_output();
     let mut input = builder.new_input_for(
-        &input.inner,
+        input.inner,
         Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
         &output_handle,
     );
 
     let mut persist_input = builder.new_disconnected_input(
-        &persist_input.inner,
+        persist_input.inner,
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
     );
 
@@ -168,7 +154,7 @@ where
         drop(output_cap);
         let mut snapshot_cap = CapabilitySet::from_elem(snapshot_cap);
 
-        let mut state = UpsertState::<_, G::Timestamp, FromTime>::new(
+        let mut state = UpsertState::<_, T, FromTime>::new(
             state_fn().await,
             upsert_shared_metrics,
             &upsert_metrics,
@@ -182,17 +168,20 @@ where
         // source.
         let mut hydrating = true;
 
-        // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
-        // and have a consistent iteration order.
-        let mut commands_state: indexmap::IndexMap<_, upsert_types::UpsertValueAndSize<G::Timestamp, FromTime>> =
-            indexmap::IndexMap::new();
+        // A re-usable buffer of changes, per key. This is an `IndexMap`
+        // because it has to be `drain`-able and have a consistent iteration
+        // order.
+        let mut commands_state: indexmap::IndexMap<
+            _,
+            upsert_types::UpsertValueAndSize<T, FromTime>,
+        > = indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
         // For stashing source input while it's not eligible for processing.
         let mut stash = vec![];
         // A capability suitable for emitting any updates based on stash. No capability is held
         // when the stash is empty.
-        let mut stash_cap: Option<Capability<G::Timestamp>> = None;
+        let mut stash_cap: Option<Capability<T>> = None;
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
         let mut partial_drain_time = None;
 
@@ -214,13 +203,12 @@ where
         // this is true. But with concurrent instances it can happen that an
         // operator that is faster than us makes it so updates get written to
         // persist. And we would then be ingesting them.
-        let mut largest_seen_persist_ts: Option<G::Timestamp> = None;
+        let mut largest_seen_persist_ts: Option<T> = None;
 
         // A buffer for our output.
         let mut output_updates = vec![];
 
         let mut error_emitter = (&mut health_output, &health_cap);
-
 
         loop {
             tokio::select! {
@@ -236,10 +224,17 @@ where
                                     updates=%data.len(),
                                     "received persist data");
 
-                                persist_stash.extend(data.into_iter().map(|((key, value), ts, diff)| {
-                                    largest_seen_persist_ts = std::cmp::max(largest_seen_persist_ts.clone(), Some(ts.clone()));
-                                    (key, value, ts, diff)
-                                }));
+                                persist_stash.extend(data.into_iter().map(
+                                    |((key, value), ts, diff)| {
+                                        largest_seen_persist_ts =
+                                            std::cmp::max(
+                                                largest_seen_persist_ts
+                                                    .clone(),
+                                                Some(ts.clone()),
+                                            );
+                                        (key, value, ts, diff)
+                                    },
+                                ));
                             }
                             AsyncEvent::Progress(upper) => {
                                 tracing::trace!(
@@ -265,6 +260,41 @@ where
                         ?persist_upper,
                         "ingesting persist snapshot chunk");
 
+                    // Log any (key, ts) pairs in this batch that have a suspicious
+                    // net diff, to help diagnose how diff_sum corruption enters the
+                    // system.
+                    //
+                    // Consolidating by key alone is too noisy during hydration,
+                    // because a single batch can legitimately contain multiple
+                    // timestamps for the same key. The suspicious shape for this
+                    // bug is multiple net updates for the same key at one logical
+                    // timestamp.
+                    {
+                        let mut key_ts_diffs: Vec<(
+                            (UpsertKey, T),
+                            mz_repr::Diff
+                        )> = persist_stash
+                            .iter()
+                            .map(|(key, _val, ts, diff)| ((*key, ts.clone()), *diff))
+                            .collect();
+                        differential_dataflow::consolidation::consolidate(&mut key_ts_diffs);
+                        for ((key, ts), net_diff) in &key_ts_diffs {
+                            if net_diff.into_inner() > 1 || net_diff.into_inner() < -1 {
+                                tracing::warn!(
+                                    worker_id = %source_config.worker_id,
+                                    source_id = %source_config.id,
+                                    ?key,
+                                    ?ts,
+                                    net_diff = net_diff.into_inner(),
+                                    %hydrating,
+                                    ?persist_upper,
+                                    "persist feedback batch has (key, ts) with suspicious net diff \
+                                    (expected -1, 0, or 1 after per-(key, ts) consolidation)"
+                                );
+                            }
+                        }
+                    }
+
                     let persist_stash_iter = persist_stash
                         .drain(..)
                         .map(|(key, val, _ts, diff)| (key, val, diff));
@@ -281,7 +311,7 @@ where
                             // Make sure our persist source can shut down.
                             persist_token.take();
                             snapshot_cap.downgrade(&[]);
-                            UpsertErrorEmitter::<G>::emit(
+                            UpsertErrorEmitter::<T>::emit(
                                 &mut error_emitter,
                                 "Failed to rehydrate state".to_string(),
                                 e,
@@ -358,7 +388,10 @@ where
                                     };
                                 }
 
-                                if prevent_snapshot_buffering && input_upper.as_option() == Some(&event_time) {
+                                if prevent_snapshot_buffering
+                                    && input_upper.as_option()
+                                        == Some(&event_time)
+                                {
                                     tracing::debug!(
                                         worker_id = %source_config.worker_id,
                                         source_id = %source_config.id,
@@ -433,7 +466,9 @@ where
             // when the source-input frontier advances or when the persist
             // frontier advances.
             if !stash.is_empty() {
-                let cap = stash_cap.as_mut().expect("missing capability for non-empty stash");
+                let cap = stash_cap
+                    .as_mut()
+                    .expect("missing capability for non-empty stash");
 
                 tracing::trace!(
                     worker_id = %source_config.worker_id,
@@ -442,12 +477,15 @@ where
                     ?stash,
                     "stashed updates");
 
-                let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
+                let mut min_remaining_time = drain_staged_input::<_, _, _, _>(
                     &mut stash,
                     &mut commands_state,
                     &mut output_updates,
                     &mut multi_get_scratch,
-                    DrainStyle::ToUpper{input_upper: &input_upper, persist_upper: &persist_upper},
+                    DrainStyle::ToUpper {
+                        input_upper: &input_upper,
+                        persist_upper: &persist_upper,
+                    },
                     &mut error_emitter,
                     &mut state,
                     &source_config,
@@ -465,13 +503,14 @@ where
                 }
 
                 if !stash.is_empty() {
-                    let min_remaining_time = min_remaining_time.take().expect("we still have updates left");
+                    let min_remaining_time = min_remaining_time
+                        .take()
+                        .expect("we still have updates left");
                     cap.downgrade(&min_remaining_time);
                 } else {
                     stash_cap = None;
                 }
             }
-
 
             if input_upper.is_empty() {
                 tracing::debug!(
@@ -491,7 +530,9 @@ where
             // the collection always accumulates correctly for all keys.
             if let Some(partial_drain_time) = &partial_drain_time {
                 if !stash.is_empty() {
-                    let cap = stash_cap.as_mut().expect("missing capability for non-empty stash");
+                    let cap = stash_cap
+                        .as_mut()
+                        .expect("missing capability for non-empty stash");
 
                     tracing::trace!(
                         worker_id = %source_config.worker_id,
@@ -500,14 +541,14 @@ where
                         ?stash,
                         "stashed updates");
 
-                    let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
+                    let mut min_remaining_time = drain_staged_input::<_, _, _, _>(
                         &mut stash,
                         &mut commands_state,
                         &mut output_updates,
                         &mut multi_get_scratch,
-                        DrainStyle::AtTime{
+                        DrainStyle::AtTime {
                             time: partial_drain_time.clone(),
-                            persist_upper: &persist_upper
+                            persist_upper: &persist_upper,
                         },
                         &mut error_emitter,
                         &mut state,
@@ -526,7 +567,9 @@ where
                     }
 
                     if !stash.is_empty() {
-                        let min_remaining_time = min_remaining_time.take().expect("we still have updates left");
+                        let min_remaining_time = min_remaining_time
+                            .take()
+                            .expect("we still have updates left");
                         cap.downgrade(&min_remaining_time);
                     } else {
                         stash_cap = None;
@@ -601,7 +644,7 @@ enum DrainStyle<'a, T> {
 /// It is *not* safe to call this function more than once with the same `persist_upper` and a
 /// `ToUpper` drain style. Doing so causes all calls except the first one to base their work on
 /// stale state, since in this drain style no modifications to the state are made.
-async fn drain_staged_input<S, G, T, FromTime, E>(
+async fn drain_staged_input<S, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
     commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<T, FromTime>>,
     output_updates: &mut Vec<(UpsertValue, T, Diff)>,
@@ -613,10 +656,9 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
 ) -> Option<T>
 where
     S: UpsertStateBackend<T, FromTime>,
-    G: Scope,
-    T: TotalOrder + timely::ExchangeData + Debug + Ord + Sync,
-    FromTime: timely::ExchangeData + Ord + Sync,
-    E: UpsertErrorEmitter<G>,
+    T: Timestamp + TotalOrder + timely::ExchangeData + Clone + Debug + Ord + Sync,
+    FromTime: timely::ExchangeData + Clone + Ord + Sync,
+    E: UpsertErrorEmitter<T>,
 {
     let mut min_remaining_time = Antichain::new();
 
@@ -747,7 +789,7 @@ where
         let existing_state_cell = &mut command_state.get_mut().value;
 
         if let Some(cs) = existing_state_cell.as_mut() {
-            cs.ensure_decoded(bincode_opts, source_config.id);
+            cs.ensure_decoded(bincode_opts, source_config.id, Some(&key));
         }
 
         // Skip this command if its order key is below the one in the upsert state.
@@ -871,7 +913,7 @@ where
                 }
             }
         }
-        style => {
+        style @ DrainStyle::ToUpper { .. } => {
             tracing::trace!(
                 worker_id = %source_config.worker_id,
                 source_id = %source_config.id,
@@ -884,6 +926,9 @@ where
 
 #[cfg(test)]
 mod test {
+    //! No test drives errors through the persist feedback, so every harness below closes
+    //! the error input by dropping its handle.
+
     use std::sync::mpsc;
 
     use mz_ore::metrics::MetricsRegistry;
@@ -921,6 +966,7 @@ mod test {
                     scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
                         let (input_handle, input) = scope.new_input();
                         let (persist_handle, persist_input) = scope.new_input();
+                        let (_persist_err_handle, persist_err_input) = scope.new_input();
                         let upsert_config = UpsertConfig {
                             shrink_upsert_unused_buffers_by_ratio: 0,
                         };
@@ -960,10 +1006,11 @@ mod test {
                         };
 
                         let (output, _, _, button) = upsert_inner(
-                            &input.as_collection(),
+                            input.as_collection(),
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
                             persist_input.as_collection(),
+                            persist_err_input.as_collection(),
                             None,
                             upsert_metrics,
                             source_config,
@@ -1007,7 +1054,7 @@ mod test {
 
             // We assume this worker succesfully CAAs the update to the shard so we send it back
             // through the persist_input
-            persist_handle.send((Ok(value1), new_ts(0), Diff::ONE));
+            persist_handle.send((value1, new_ts(0), Diff::ONE));
             persist_handle.advance_to(new_ts(1));
             worker.step();
 
@@ -1075,6 +1122,7 @@ mod test {
                     scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
                         let (input_handle, input) = scope.new_input();
                         let (persist_handle, persist_input) = scope.new_input();
+                        let (_persist_err_handle, persist_err_input) = scope.new_input();
                         let upsert_config = UpsertConfig {
                             shrink_upsert_unused_buffers_by_ratio: 0,
                         };
@@ -1155,10 +1203,11 @@ mod test {
                         };
 
                         let (output, _, _, button) = upsert_inner(
-                            &input.as_collection(),
+                            input.as_collection(),
                             vec![0],
                             Antichain::from_elem(Timestamp::minimum()),
                             persist_input.as_collection(),
+                            persist_err_input.as_collection(),
                             None,
                             upsert_metrics,
                             source_config,
@@ -1169,12 +1218,8 @@ mod test {
                         );
                         std::mem::forget(button);
 
-                        (
-                            input_handle,
-                            persist_handle,
-                            output.inner.probe(),
-                            output.inner.capture(),
-                        )
+                        let (probe, stream) = output.inner.probe();
+                        (input_handle, persist_handle, probe, stream.capture())
                     })
                 });
 
@@ -1203,7 +1248,7 @@ mod test {
                 worker.step_or_park(None);
             }
             // Feedback the produced output..
-            persist_handle.send((Ok(value1.clone()), mz_ts(0), Diff::ONE));
+            persist_handle.send((value1.clone(), mz_ts(0), Diff::ONE));
             persist_handle.advance_to(mz_ts(1));
             // ..and send the next upsert command that deletes the key.
             input_handle.send(msg2);
@@ -1213,7 +1258,7 @@ mod test {
             }
 
             // Feedback the produced output..
-            persist_handle.send((Ok(value1), mz_ts(1), Diff::MINUS_ONE));
+            persist_handle.send((value1, mz_ts(1), Diff::MINUS_ONE));
             persist_handle.advance_to(mz_ts(2));
             // ..and send the next *out of order* upsert command that deletes the key. Here msg4
             // happens at offset 4 and the operator should rememeber that.
@@ -1251,6 +1296,180 @@ mod test {
             (Ok(value1), mz_ts(1), Diff::MINUS_ONE),
         ];
         assert_eq!(actual_output, expected_output);
+
+        while let Ok(handle) = rx.recv() {
+            handle.join().expect("threads completed successfully");
+        }
+    }
+
+    /// v1 counterpart of v2's `lagging_replacement_below_upper_strands_data`,
+    /// under the IDENTICAL setup: the external writer has advanced the feedback
+    /// `persist_upper` to T = 10 with no operator output, and the lagging
+    /// replacement then produces source data at ts BELOW that upper (5 and 7).
+    ///
+    /// v1's drain classifies any `ts` in the past of `persist_upper` as not
+    /// relevant (`relevant = persist_upper.less_equal(ts)`) and DROPS it — the
+    /// downstream persist_sink would filter it anyway since the shard upper is
+    /// already further ahead. So v1 strands nothing and its output frontier
+    /// advances cleanly past persist_upper (here to the input upper, 11),
+    /// unlike v2, which without its drop-fix pins below.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn lagging_replacement_below_upper_is_dropped() {
+        let mz_ts = |ts| (MzTimestamp::new(ts), Subtime::minimum());
+        let (tx, rx) = mpsc::channel::<std::thread::JoinHandle<()>>();
+
+        let rocksdb_dir = tempfile::tempdir().unwrap();
+        let (frontier, capture) = timely::execute_directly(move |worker| {
+            let tx = tx.clone();
+            let (mut input, mut persist, probe, capture) =
+                worker.dataflow::<MzTimestamp, _, _>(|scope| {
+                    scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let (_persist_err_handle, persist_err_input) = scope.new_input();
+                        let upsert_config = UpsertConfig {
+                            shrink_upsert_unused_buffers_by_ratio: 0,
+                        };
+                        let source_id = GlobalId::User(0);
+                        let metrics_registry = MetricsRegistry::new();
+                        let upsert_metrics_defs =
+                            UpsertMetricDefs::register_with(&metrics_registry);
+                        let upsert_metrics =
+                            UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
+                        let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
+                        let rocksdb_instance_metrics =
+                            Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&metrics_registry);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let source_statistics_defs =
+                            SourceStatisticsMetricDefs::register_with(&metrics_registry);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &source_statistics_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
+
+                        let source_config = SourceExportCreationConfig {
+                            id: GlobalId::User(0),
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
+
+                        let rocksdb_init_fn = move || async move {
+                            let merge_operator = Some((
+                                "upsert_state_snapshot_merge_v1".to_string(),
+                                |a: &[u8],
+                                 b: ValueIterator<
+                                    BincodeOpts,
+                                    StateValue<(MzTimestamp, Subtime), u64>,
+                                >| {
+                                    consolidating_merge_function::<(MzTimestamp, Subtime), u64>(
+                                        a.into(),
+                                        b,
+                                    )
+                                },
+                            ));
+                            let rocksdb_cleanup_tries = 5;
+                            let tuning = RocksDBConfig::new(Default::default(), None);
+                            let mut rocksdb_inst = mz_rocksdb::RocksDBInstance::new(
+                                rocksdb_dir.path(),
+                                mz_rocksdb::InstanceOptions::new(
+                                    Env::mem_env().unwrap(),
+                                    rocksdb_cleanup_tries,
+                                    merge_operator,
+                                    upsert_bincode_opts(),
+                                ),
+                                tuning,
+                                rocksdb_shared_metrics,
+                                rocksdb_instance_metrics,
+                            )
+                            .unwrap();
+
+                            let handle = rocksdb_inst.take_core_loop_handle().expect("join handle");
+                            tx.send(handle).expect("sent joinhandle");
+                            crate::upsert::rocksdb::RocksDB::new(rocksdb_inst)
+                        };
+
+                        let (output, _, _, button) = upsert_inner(
+                            input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(Timestamp::minimum()),
+                            persist_input.as_collection(),
+                            persist_err_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                            rocksdb_init_fn,
+                            upsert_config,
+                            true,
+                            None,
+                        );
+                        std::mem::forget(button);
+
+                        let (probe, stream) = output.inner.probe();
+                        (input_handle, persist_handle, probe, stream.capture())
+                    })
+                });
+
+            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(0)])));
+            let key1 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(1)])));
+            let value0 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(1)]);
+            let value1 = Row::pack_slice(&[Datum::Int64(1), Datum::Int64(2)]);
+
+            // External writer has advanced the feedback persist_upper to T = 10
+            // WITHOUT the operator emitting anything itself.
+            persist.advance_to(mz_ts(10));
+            for _ in 0..20 {
+                worker.step();
+            }
+
+            // Lagging replacement produces source data at ts BELOW the current
+            // persist_upper (5 and 7 while persist_upper = 10).
+            input.send(((key0, Some(Ok(value0)), 1), mz_ts(5), Diff::ONE));
+            input.send(((key1, Some(Ok(value1)), 2), mz_ts(7), Diff::ONE));
+            input.advance_to(mz_ts(11));
+            for _ in 0..20 {
+                worker.step();
+            }
+
+            (probe.with_frontier(|f| f.to_vec()), capture)
+        });
+
+        let mut emitted: Vec<_> = capture
+            .extract()
+            .into_iter()
+            .flat_map(|(_cap, c)| c)
+            .collect();
+        differential_dataflow::consolidation::consolidate_updates(&mut emitted);
+
+        // v1 drops the below-upper data and lets its output frontier advance
+        // freely (here to the input upper, 11): nothing is stranded, and the
+        // frontier is never pinned below the shard upper (10).
+        assert!(emitted.is_empty(), "v1 emitted {emitted:?}");
+        assert_eq!(
+            frontier,
+            vec![mz_ts(11)],
+            "v1 output frontier should advance to the input upper, not pin below \
+             persist_upper as v2 does"
+        );
+        assert!(
+            frontier[0] >= mz_ts(10),
+            "v1 output frontier {frontier:?} should reach at least persist_upper (10)"
+        );
 
         while let Ok(handle) = rx.recv() {
             handle.join().expect("threads completed successfully");

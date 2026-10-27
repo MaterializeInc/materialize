@@ -23,14 +23,13 @@ Syntax element | Description
 `<value>`               | The value to assign to the configuration parameter.
 **DEFAULT**             | Reset the configuration parameter's default value. Equivalent to [`ALTER SYSTEM RESET`](../alter-system-reset).
 
-{{% configuration-parameters %}}
+{{% include-headless "/headless/configuration-parameters" %}}
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/alter-system-set.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-system-set" %}}
 
 ## Related pages
 

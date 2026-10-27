@@ -15,26 +15,30 @@ usual clusterd included in the materialized container).
 import json
 import random
 import re
+import socket
+import struct
 import time
 from collections.abc import Callable
 from copy import copy
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
-from threading import Thread
+from threading import Event, Thread
 
 import psycopg
 import requests
 import websocket
-from psycopg import Cursor
+from psycopg import Cursor, sql
 from psycopg.errors import (
     DatabaseError,
+    DivisionByZero,
     InternalError_,
     OperationalError,
     QueryCanceled,
 )
 
 from materialize import buildkite, ui
+from materialize.mzcompose import cluster_replica_size_map, sanitizer_enabled
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -46,19 +50,14 @@ from materialize.mzcompose.services.localstack import Localstack
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import (
-    CockroachOrPostgresMetadata,
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Localstack(),
@@ -78,7 +77,6 @@ SERVICES = [
         },
         support_external_clusterd=True,
     ),
-    CockroachOrPostgresMetadata(),
     Postgres(),
     Redpanda(),
     Toxiproxy(),
@@ -116,6 +114,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if (args.slow_only and name not in slow_tests) or (
             not args.slow_only and name in slow_tests
         ):
+            return
+
+        # The profiling endpoints this exercises are backed by jemalloc, which
+        # sanitizer builds drop, so there is nothing to fetch there.
+        if name == "test-profile-fetch" and sanitizer_enabled():
+            ui.warn(f"Skipping {name} under a sanitizer: build has no jemalloc")
             return
 
         with c.test_case(name):
@@ -159,7 +163,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
             process_names=["clusterd3", "clusterd4"],
         ),
     ):
-        c.up("zookeeper", "kafka", "schema-registry", "localstack")
+        c.up("kafka", "schema-registry", "localstack")
         c.up("materialized")
 
         # Create a cluster and verify that tests pass.
@@ -226,23 +230,19 @@ def workflow_test_github_3553(c: Composition) -> None:
 
     c.up("materialized")
 
-    c.sql(
-        """
+    c.sql("""
         CREATE TABLE IF NOT EXISTS log_table (f1 TEXT);
         CREATE TABLE IF NOT EXISTS panic_table (f1 TEXT);
         INSERT INTO panic_table VALUES ('forced panic');
-        """
-    )
+        """)
 
     start_time = time.time()
     try:
-        c.sql(
-            """
+        c.sql("""
             SET statement_timeout = '1 s';
             -- Crash loop the cluster.
             INSERT INTO log_table SELECT mz_unsafe.mz_panic(f1) FROM panic_table;
-            """
-        )
+            """)
     except QueryCanceled as e:
         # Ensure we received the correct error message
         assert "statement timeout" in str(e)
@@ -254,6 +254,12 @@ def workflow_test_github_3553(c: Composition) -> None:
 
     # Ensure we can select from tables after cancellation.
     c.sql("SELECT * FROM log_table;")
+
+
+# How many dataflows `test_github_4443` tolerates as not yet compacted out of a
+# command history. Compaction is asynchronous, so a sample can catch dataflows
+# the history has already dropped but not yet collapsed.
+MAX_LINGERING_DATAFLOWS = 5
 
 
 def workflow_test_github_4443(c: Composition) -> None:
@@ -327,8 +333,7 @@ def workflow_test_github_4443(c: Composition) -> None:
         )
 
         # Set up a cluster with an indexed table and an unindexed one.
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
                 STORAGE ADDRESSES ['clusterd1:2103'],
@@ -348,8 +353,7 @@ def workflow_test_github_4443(c: Composition) -> None:
             -- Wait for the cluster to be ready.
             SELECT * FROM t;
             SELECT * FROM t2;
-            """
-        )
+            """)
 
         # Wait a bit to let the metrics refresh.
         time.sleep(2)
@@ -357,30 +361,46 @@ def workflow_test_github_4443(c: Composition) -> None:
         # Obtain initial history size and dataflow count.
         # Dataflow count can plausibly be more than 1, if compaction is delayed.
         (
-            controller_command_count,
+            initial_controller_command_count,
             controller_dataflow_count,
-            replica_command_count,
+            initial_replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
-        assert controller_command_count > 0, "controller history cannot be empty"
+
+        # Curated metric sinks install one dataflow per definition on every replica,
+        # so they add to the aggregate history dataflow counts above. That metric
+        # carries no per-dataflow label to filter on, so subtract the live count of
+        # curated sink dataflows rather than hardcoding it, keeping the bounds
+        # correct as the CURATED set grows. Read the count off cluster1's own
+        # replica, the one whose history the metrics above describe.
+        with c.sql_cursor() as cursor:
+            cursor.execute(b"SET cluster = cluster1")
+            cursor.execute(
+                b"SELECT count(*) FROM mz_introspection.mz_dataflows"
+                b" WHERE name LIKE '%metric-sink-%'"
+            )
+            metric_sink_dataflows = int(cursor.fetchall()[0][0])
+
+        assert (
+            initial_controller_command_count > 0
+        ), "controller history cannot be empty"
         assert (
             controller_dataflow_count > 0
         ), "at least one dataflow expected in controller history"
         assert (
-            controller_dataflow_count < 5
+            controller_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), "more dataflows than expected in controller history"
-        assert replica_command_count > 0, "replica history cannot be empty"
+        assert initial_replica_command_count > 0, "replica history cannot be empty"
         assert (
             replica_dataflow_count > 0
         ), "at least one dataflow expected in replica history"
         assert (
-            replica_dataflow_count < 5
+            replica_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), "more dataflows than expected in replica history"
 
         # execute 400 fast- and slow-path peeks
         for _ in range(20):
-            c.sql(
-                """
+            c.sql("""
                 SELECT * FROM t;
                 SELECT * FROM t2;
                 SELECT * FROM t;
@@ -401,8 +421,7 @@ def workflow_test_github_4443(c: Composition) -> None:
                 SELECT * FROM t2;
                 SELECT * FROM t;
                 SELECT * FROM t2;
-                """
-            )
+                """)
 
         # Wait a bit to let the metrics refresh.
         time.sleep(2)
@@ -415,23 +434,41 @@ def workflow_test_github_4443(c: Composition) -> None:
             replica_command_count,
             replica_dataflow_count,
         ) = find_command_history_metrics(c)
+        # `ComputeCommandHistory` compacts only once the command count exceeds twice the count
+        # left by the previous compaction, so a healthy history oscillates between the compacted
+        # size and twice it. Both samples are drawn at an unknown point of that cycle, so the
+        # second can legitimately be twice the first. On top of that sits an allowance for the
+        # lingering dataflows the bounds below tolerate, each of which holds a `CreateDataflow`,
+        # a `Schedule`, and an `AllowCompaction` command. Bounding the second sample that way
+        # still catches a history that grows per peek, which is what this test is about: 400
+        # peeks that fail to retire land orders of magnitude above it. A fixed bound would
+        # instead need retuning whenever the object count installed at boot changes.
+        lingering_dataflow_commands = 3 * MAX_LINGERING_DATAFLOWS
         assert (
-            controller_command_count < 100
-        ), f"controller history grew more than expected after peeks, got {controller_command_count}"
+            controller_command_count
+            <= 2 * initial_controller_command_count + lingering_dataflow_commands
+        ), (
+            "controller history grew more than expected after peeks, got"
+            f" {controller_command_count}, started at {initial_controller_command_count}"
+        )
         assert (
             controller_dataflow_count > 0
         ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
         assert (
-            controller_dataflow_count < 5
+            controller_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
-            replica_command_count < 100
-        ), f"replica history grew more than expected after peeks, got {replica_command_count}"
+            replica_command_count
+            <= 2 * initial_replica_command_count + lingering_dataflow_commands
+        ), (
+            "replica history grew more than expected after peeks, got"
+            f" {replica_command_count}, started at {initial_replica_command_count}"
+        )
         assert (
             replica_dataflow_count > 0
         ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
         assert (
-            replica_dataflow_count < 5
+            replica_dataflow_count - metric_sink_dataflows <= MAX_LINGERING_DATAFLOWS
         ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 
@@ -451,8 +488,7 @@ def workflow_test_github_4444(c: Composition) -> None:
     )
 
     # Set up a dataflow on clusterd.
-    c.sql(
-        """
+    c.sql("""
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
             STORAGECTL ADDRESSES ['clusterd1:2100'],
             STORAGE ADDRESSES ['clusterd1:2103'],
@@ -465,8 +501,7 @@ def workflow_test_github_4444(c: Composition) -> None:
         CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
         -- wait for the dataflow to be ready
         SELECT * FROM mv;
-        """
-    )
+        """)
 
     # Restart environmentd to trigger a reconciliation on clusterd.
     c.kill("materialized")
@@ -509,8 +544,7 @@ def workflow_test_github_4545(c: Composition) -> None:
         user="mz_system",
     )
 
-    c.sql(
-        """
+    c.sql("""
         CREATE CLUSTER cluster1 REPLICAS (
             logging_on (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -537,8 +571,7 @@ def workflow_test_github_4545(c: Composition) -> None:
         -- verify that the other replica has not crashed and still responds
         SET cluster_replica = logging_off;
         SELECT * FROM mz_tables, mz_sources;
-        """
-    )
+        """)
 
 
 def workflow_test_github_4587(c: Composition) -> None:
@@ -560,8 +593,7 @@ def workflow_test_github_4587(c: Composition) -> None:
             user="mz_system",
         )
 
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (
                 logging_on (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -571,44 +603,33 @@ def workflow_test_github_4587(c: Composition) -> None:
                     WORKERS 2
                 )
             );
-            """
-        )
+            """)
 
         # verify that we can query the introspection source
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
             > SET cluster = cluster1;
             > SELECT 1 FROM mz_introspection.mz_compute_frontiers_per_worker LIMIT 1;
             1
-                """
-            )
-        )
+                """))
 
         # Restart environmentd to trigger a reconciliation on clusterd.
         c.kill("materialized")
         c.up("materialized")
 
         # verify again that we can query the introspection source
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
             > SET cluster = cluster1;
             > SELECT 1 FROM mz_introspection.mz_compute_frontiers_per_worker LIMIT 1;
             1
-                """
-            )
-        )
+                """))
 
-        c.sql(
-            """
+        c.sql("""
             SET cluster = cluster1;
             -- now let's give it another go with user-defined objects
             CREATE TABLE t (a int);
             CREATE DEFAULT INDEX ON t;
             INSERT INTO t VALUES (42);
-            """
-        )
+            """)
 
         cursor = c.sql_cursor()
         cursor.execute("SET cluster = cluster1;")
@@ -623,17 +644,13 @@ def workflow_test_github_4587(c: Composition) -> None:
         # Verify yet again that we can query the introspection source and now the table.
         # The subscribe should have been dropped during reconciliation, so we expect to not find a
         # frontier entry for it.
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
             > SET cluster = cluster1;
             > SELECT 1 FROM mz_introspection.mz_compute_frontiers_per_worker LIMIT 1;
             1
             > SELECT * FROM t;
             42
-                """
-            )
-        )
+                """))
 
 
 def workflow_test_github_4433(c: Composition) -> None:
@@ -669,8 +686,7 @@ def workflow_test_github_4433(c: Composition) -> None:
         )
 
         # set up a test cluster and run a testdrive regression script
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -693,19 +709,14 @@ def workflow_test_github_4433(c: Composition) -> None:
             -- aggregates introduced in PR materialize#17918.
             CREATE MATERIALIZED VIEW sum_and_max AS
             SELECT SUM(data), MAX(data) FROM data OPTIONS (AGGREGATE INPUT GROUP SIZE = 1);
-            """
-        )
-        c.testdrive(
-            dedent(
-                """
+            """)
+        c.testdrive(dedent("""
             > SET cluster = cluster1;
 
             # Run a query that would generate a panic before the fix.
             ! SELECT * FROM sum_and_max;
             contains:Non-positive accumulation in ReduceMinsMaxes
-            """
-            )
-        )
+            """))
 
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd1", capture=True)
@@ -733,8 +744,7 @@ def workflow_test_github_4966(c: Composition) -> None:
         )
 
         # set up a test cluster and run a testdrive regression script
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -744,12 +754,9 @@ def workflow_test_github_4966(c: Composition) -> None:
                     WORKERS 2
                 )
             );
-            """
-        )
+            """)
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
             $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER SYSTEM SET enable_repeat_row  = true;
 
@@ -775,9 +782,7 @@ def workflow_test_github_4966(c: Composition) -> None:
 
             > SELECT SUM(data) FROM data;
             1
-            """
-            )
-        )
+            """))
 
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd1", capture=True)
@@ -815,8 +820,7 @@ def workflow_test_github_5087(c: Composition) -> None:
         )
 
         # set up a test cluster and run a testdrive regression script
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -847,11 +851,8 @@ def workflow_test_github_5087(c: Composition) -> None:
                   ) AS base (data2, data4, data8, diff),
                   repeat_row(diff)
               );
-            """
-        )
-        c.testdrive(
-            dedent(
-                """
+            """)
+        c.testdrive(dedent("""
             > SET cluster = cluster1;
 
             # Run a queries that would generate panics before the fix.
@@ -928,9 +929,7 @@ def workflow_test_github_5087(c: Composition) -> None:
             # This causes a panic starting with v0.140.0, but not before.
             >[version<14000] SELECT SUM(data8) FROM data;
             18446744073709551617
-            """
-            )
-        )
+            """))
 
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd1", capture=True)
@@ -974,8 +973,7 @@ def workflow_test_github_5086(c: Composition) -> None:
         )
 
         # set up a test cluster and run a testdrive regression script
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -997,11 +995,8 @@ def workflow_test_github_5086(c: Composition) -> None:
             SELECT MAX(data) FROM data;
             CREATE MATERIALIZED VIEW max_group_by_data AS
             SELECT data, MAX(data) FROM data GROUP BY data;
-            """
-        )
-        c.testdrive(
-            dedent(
-                """
+            """)
+        c.testdrive(dedent("""
             > SET cluster = cluster1;
 
             # The query below would return a null previously, but now fails cleanly.
@@ -1020,9 +1015,7 @@ def workflow_test_github_5086(c: Composition) -> None:
             > SELECT * FROM max_group_by_data;
             1 1
             2 2
-            """
-            )
-        )
+            """))
 
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd1", capture=True)
@@ -1066,8 +1059,7 @@ def workflow_test_github_5831(c: Composition) -> None:
         )
 
         # set up a test cluster and run a testdrive regression script
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -1091,11 +1083,8 @@ def workflow_test_github_5831(c: Composition) -> None:
             INSERT INTO base VALUES (4, -1), (4, -2);
             INSERT INTO base VALUES (5, 5), (5, 6);
             INSERT INTO base VALUES (5, -5), (5, -6);
-            """
-        )
-        c.testdrive(
-            dedent(
-                """
+            """)
+        c.testdrive(dedent("""
             > SET cluster = cluster1;
 
             # Computing min/max with a monotonic one-shot SELECT requires
@@ -1129,9 +1118,7 @@ def workflow_test_github_5831(c: Composition) -> None:
             > FETCH ALL cur;
             1 2
             > COMMIT;
-            """
-            )
-        )
+            """))
 
 
 def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
@@ -1172,8 +1159,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
         )
 
         # set up a test cluster and run a testdrive regression script
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (
                 r1 (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -1197,11 +1183,8 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
             INSERT INTO base VALUES (4, -1), (4, -2);
             INSERT INTO base VALUES (5, 5), (5, 6);
             INSERT INTO base VALUES (5, -5), (5, -6);
-            """
-        )
-        c.testdrive(
-            dedent(
-                """
+            """)
+        c.testdrive(dedent("""
             > SET cluster = cluster1;
 
             # Check TopK as an enforcer
@@ -1240,9 +1223,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
             > FETCH ALL cur;
             2 2
             > COMMIT;
-            """
-            )
-        )
+            """))
 
 
 def workflow_test_github_7645(c: Composition) -> None:
@@ -1257,15 +1238,13 @@ def workflow_test_github_7645(c: Composition) -> None:
 
         c.run_testdrive_files("github-7645/01-create-source.td")
 
-        latency = c.sql_query(
-            """
+        latency = c.sql_query("""
             SELECT
                 (u.rehydration_latency)::text
             FROM mz_sources s
             JOIN mz_internal.mz_source_statistics u ON s.id = u.id
             WHERE s.name IN ('count')
-            """
-        )[0][0]
+            """)[0][0]
 
         c.kill("materialized")
         c.up("materialized")
@@ -1276,12 +1255,164 @@ def workflow_test_github_7645(c: Composition) -> None:
         )
 
 
+def workflow_test_notice_drop_restart(c: Composition) -> None:
+    """
+    Test optimizer notice cleanup on DROP ... CASCADE and across an envd
+    restart.
+
+    This exercises the code path that moves dataflow plans and optimizer
+    notice bookkeeping onto catalog objects and drops them during
+    `apply_updates`:
+
+    1. Create a duplicate index that triggers an
+       "An identical index already exists" optimizer notice.
+    2. Verify the notice is visible in `mz_internal.mz_optimizer_notices`
+       and `mz_internal.mz_notices`.
+    3. Restart envd; verify the notice is re-generated on bootstrap
+       (optimizer notices are not persisted, but they are recomputed
+       when dataflow plans are rebuilt at startup).
+    4. `DROP SCHEMA ... CASCADE` (so the index with the notice is
+       dropped indirectly via cascade).
+    5. Verify the notice was retracted from the builtin table.
+    """
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_mz_notices TO true",
+            port=6877,
+            user="mz_system",
+        )
+        c.sql(
+            "ALTER SYSTEM SET enable_rbac_checks TO false",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql("""
+            CREATE SCHEMA notice_drop_restart;
+            SET SCHEMA = notice_drop_restart;
+            CREATE TABLE t (a int, b int);
+            CREATE INDEX t_idx1 ON t(a + 7);
+            CREATE INDEX t_idx2 ON t(a + 7);
+            """)
+
+        def notice_count() -> int:
+            rows = c.sql_query("""
+                SELECT count(*)
+                FROM mz_internal.mz_optimizer_notices
+                WHERE notice_type = 'An identical index already exists'
+                """)
+            return int(rows[0][0])
+
+        assert notice_count() == 1, "expected the duplicate-index notice"
+
+        # Also check via the join-based view.
+        rows = c.sql_query("""
+            SELECT count(*)
+            FROM mz_internal.mz_notices n
+            JOIN mz_catalog.mz_indexes idx ON (n.object_id = idx.id)
+            WHERE idx.name = 't_idx2'
+            """)
+        assert int(rows[0][0]) == 1, "expected notice joined to t_idx2"
+
+        # Restart envd. Optimizer notices are not persisted, but they
+        # are regenerated when dataflow plans are rebuilt during
+        # bootstrap, so the count should still be 1 after the restart.
+        c.kill("materialized")
+        c.up("materialized")
+
+        assert (
+            notice_count() == 1
+        ), "expected the duplicate-index notice to be regenerated after restart"
+
+        # Drop the schema with CASCADE: the index with the notice is
+        # dropped indirectly. The notice should be retracted.
+        c.sql("DROP SCHEMA notice_drop_restart CASCADE")
+
+        assert (
+            notice_count() == 0
+        ), "expected the notice to be retracted after DROP SCHEMA ... CASCADE"
+
+
+def workflow_test_billed_as_size_removed(c: Composition) -> None:
+    """
+    A replica whose BILLED AS size later disappears from the replica size
+    map must still be droppable, and other cluster DDL must keep working
+    (SQL-658). The size map is process configuration, so the removal is a
+    restart with a smaller map. Soft assertions are off for the restarted
+    process: the tolerant credit lookup soft-panics on the stale size by
+    design, and the production behavior is what is under test.
+    """
+    c.up("materialized")
+
+    c.sql(
+        """
+        CREATE CLUSTER billed_as_test SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        CREATE CLUSTER REPLICA billed_as_test.unbilled
+            SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'scale=2,workers=4';
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    sizes = cluster_replica_size_map()
+    del sizes["scale=2,workers=4"]
+    with c.override(
+        Materialized(
+            propagate_crashes=False,
+            external_metadata_store=True,
+            additional_system_parameter_defaults={
+                "unsafe_enable_unsafe_functions": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+            },
+            support_external_clusterd=True,
+            cluster_replica_size=sizes,
+            soft_assertions=False,
+        )
+    ):
+        c.kill("materialized")
+        c.up("materialized")
+
+        rows = c.sql_query("""
+            SELECT r.name, r.size
+            FROM mz_cluster_replicas r
+            JOIN mz_clusters cl ON r.cluster_id = cl.id
+            WHERE cl.name = 'billed_as_test'
+            """)
+        assert len(rows) == 1 and tuple(rows[0]) == (
+            "unbilled",
+            "scale=1,workers=1",
+        ), rows
+
+        # Every cluster DDL sums the credit rate of all existing replicas,
+        # including the one with the stale billing size.
+        c.sql(
+            """
+            CREATE CLUSTER billed_as_other SIZE 'scale=1,workers=1';
+            DROP CLUSTER REPLICA billed_as_test.unbilled;
+            CREATE CLUSTER REPLICA billed_as_test.unbilled2 SIZE 'scale=1,workers=1', INTERNAL;
+            DROP CLUSTER billed_as_other;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        rows = c.sql_query("""
+            SELECT r.name
+            FROM mz_cluster_replicas r
+            JOIN mz_clusters cl ON r.cluster_id = cl.id
+            WHERE cl.name = 'billed_as_test'
+            """)
+        assert [tuple(r) for r in rows] == [("unbilled2",)], rows
+
+
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
     with c.override(
         Testdrive(default_timeout="30s", no_reset=True, consistent_seed=True),
     ):
-        c.up("materialized", "zookeeper", "kafka", "schema-registry")
+        c.up("materialized", "kafka", "schema-registry")
 
         c.run_testdrive_files("upsert/01-create-sources.td")
         # Sleep to make sure the errors have made it to persist.
@@ -1316,7 +1447,6 @@ def workflow_test_remote_storage(c: Composition) -> None:
             "materialized",
             "clusterd1",
             "clusterd2",
-            "zookeeper",
             "kafka",
             "schema-registry",
         )
@@ -1395,6 +1525,91 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
             c.run_testdrive_files("pg-snapshot-resumption/05-verify-data.td")
 
 
+def workflow_pg_snapshot_freshness(c: Composition) -> None:
+    """Test that already hydrated tables of a PostgreSQL source keep ingesting
+    CDC while a newly added table's snapshot runs, and that a table added
+    alongside completes its own snapshot without waiting. The new table's
+    snapshot is held with the pg_snapshot_pause failpoint."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
+
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="clusterd1", workers=4)
+        ):
+            c.up("clusterd1")
+            c.run_testdrive_files("pg-snapshot-freshness/03-verify.td")
+
+
+def workflow_pg_snapshot_freshness_release(c: Composition) -> None:
+    """Test that a table whose snapshot is held while CDC streams into it
+    converges once the hold lifts within the same dataflow incarnation. What
+    commits is the snapshot plus the updates the persist sink staged behind
+    the held frontier, not a re-run snapshot. The hold is timed with the
+    pg_snapshot_pause failpoint, long enough for the staging assertions of the
+    shared add-tables phase to run against a frontier that is still held."""
+
+    with c.override(
+        # The release waits out the hold, and after it the shard upper waits
+        # for the frontier to pass the ceiling the sink committed ahead of it.
+        Testdrive(no_reset=True, default_timeout="120s"),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused:30000)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
+        c.run_testdrive_files("pg-snapshot-freshness/04-release.td")
+
+
+def workflow_pg_seal_on_replay(c: Composition) -> None:
+    """Test that a PostgreSQL table whose incompatible schema change is found
+    while the replication slot replays changes the table already committed is
+    sealed with its error. A held snapshot of another table keeps the slot
+    behind the committed changes across a restart."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        # The validation that runs when the stream starts precedes the schema
+        # change, and no other one runs before the restart.
+        c.sql(
+            "ALTER SYSTEM SET pg_schema_validation_interval = '1h'",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
+        c.run_testdrive_files("pg-seal-on-replay/01-alter-schema.td")
+
+        c.kill("clusterd1")
+        c.up("clusterd1")
+        c.run_testdrive_files("pg-seal-on-replay/02-verify.td")
+
+
 def workflow_sink_failure(c: Composition) -> None:
     """Test specific sink failure scenarios"""
 
@@ -1407,7 +1622,7 @@ def workflow_sink_failure(c: Composition) -> None:
             workers=4,
         ),
     ):
-        c.up("materialized", "zookeeper", "kafka", "schema-registry", "clusterd1")
+        c.up("materialized", "kafka", "schema-registry", "clusterd1")
 
         c.run_testdrive_files("sink-failure/01-configure-sinks.td")
         c.run_testdrive_files("sink-failure/02-ensure-sink-down.td")
@@ -1447,6 +1662,45 @@ def workflow_test_bootstrap_vars(c: Composition) -> None:
         c.run_testdrive_files("resources/bootstrapped-system-vars.td")
 
 
+def workflow_test_replica_availability_zone_catalog(c: Composition) -> None:
+    """Regression test for the public mz_cluster_replicas.availability_zone
+    catalog column.
+
+    That column is a BuiltinMaterializedView that reaches into the durable
+    ClusterReplica JSON. The durable Managed location stores an
+    `availability_zones` list, and the column surfaces it as a comma-separated
+    string: the provisioned AVAILABILITY ZONES pool for a managed cluster, the
+    single AVAILABILITY ZONE pin for an unmanaged one. A wrong JSON key silently
+    NULLs the column for every replica.
+    test/sqllogictest/singlereplica_mz_cluster_replicas.slt cannot catch this:
+    its environment has no availability zones configured, so any user-specified
+    AVAILABILITY ZONE is rejected and the column never goes non-NULL there. Boot
+    environmentd with a configured availability-zone pool so the pin is
+    accepted."""
+
+    materialized = Materialized(
+        options=[
+            "--availability-zone=us-east-1a",
+            "--availability-zone=us-east-1b",
+            "--availability-zone=us-east-1c",
+        ],
+        additional_system_parameter_defaults={
+            "enable_managed_cluster_availability_zones": "true",
+        },
+    )
+
+    with c.override(materialized, Testdrive()):
+        c.up("materialized")
+        c.run_testdrive_files("resources/replica-availability-zone.td")
+        c.kill("materialized")
+
+    # Restart and re-assert: the column is recomputed from durable state on
+    # boot, exercising the rebuild-from-durable concretization path too.
+    with c.override(materialized, Testdrive(no_reset=True)):
+        c.up("materialized")
+        c.run_testdrive_files("resources/replica-availability-zone-after-restart.td")
+
+
 def workflow_test_system_table_indexes(c: Composition) -> None:
     """Test system table indexes."""
 
@@ -1455,9 +1709,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         Materialized(),
     ):
         c.up("materialized", Service("testdrive", idle=True))
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
         $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
         SET CLUSTER TO DEFAULT;
         DROP VIEW IF EXISTS v_mz_views;
@@ -1476,9 +1728,7 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
 
         > SELECT id FROM mz_indexes WHERE id like 'u%';
         u2
-    """
-            )
-        )
+    """))
         c.kill("materialized")
 
     with c.override(
@@ -1486,14 +1736,49 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         Materialized(),
     ):
         c.up("materialized", Service("testdrive", idle=True))
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
         > SELECT id FROM mz_indexes WHERE id like 'u%';
         u2
-    """
-            )
-        )
+    """))
+
+
+def workflow_test_timestamp_interval_catalog_persistence(c: Composition) -> None:
+    """Test that a source with a timestamp interval that falls outside the
+    current system bounds can still be loaded from the catalog on restart."""
+
+    with c.override(
+        Testdrive(),
+        Materialized(),
+    ):
+        c.up("materialized", Service("testdrive", idle=True))
+        c.testdrive(input=dedent("""
+        $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+        ALTER SYSTEM SET min_timestamp_interval = '500ms';
+        ALTER SYSTEM SET max_timestamp_interval = '2s';
+
+        > CREATE SOURCE counter_750ms
+          IN CLUSTER quickstart
+          FROM LOAD GENERATOR COUNTER WITH (TIMESTAMP INTERVAL '750ms')
+
+        > SELECT name FROM mz_sources WHERE name = 'counter_750ms'
+        counter_750ms
+
+        $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
+        ALTER SYSTEM SET min_timestamp_interval = '1s';
+    """))
+        c.kill("materialized")
+
+    # Restart materialized. The source has a 750ms timestamp interval but the
+    # minimum is now 1s. Materialize should still boot successfully.
+    with c.override(
+        Testdrive(no_reset=True),
+        Materialized(),
+    ):
+        c.up("materialized", Service("testdrive", idle=True))
+        c.testdrive(input=dedent("""
+        > SELECT name FROM mz_sources WHERE name = 'counter_750ms'
+        counter_750ms
+    """))
 
 
 def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
@@ -1510,8 +1795,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
         user="mz_system",
     )
 
-    c.sql(
-        """
+    c.sql("""
         CREATE CLUSTER cluster1 REPLICAS (
             replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -1529,8 +1813,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
             )
         );
         CREATE TABLE t (a int);
-        """
-    )
+        """)
 
     def drop_replica_with_delay() -> None:
         time.sleep(2)
@@ -1540,15 +1823,13 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
     dropper.start()
 
     try:
-        c.sql(
-            """
+        c.sql("""
             SET cluster = cluster1;
             SET cluster_replica = replica1;
             BEGIN;
             DECLARE c CURSOR FOR SUBSCRIBE t;
             FETCH c WITH (timeout = '5s');
-            """
-        )
+            """)
     except InternalError_ as e:
         assert (
             e.diag.message_primary
@@ -1602,8 +1883,7 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
         user="mz_system",
     )
 
-    c.sql(
-        """
+    c.sql("""
         CREATE CLUSTER cluster1 REPLICAS (
             replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -1621,8 +1901,7 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
             )
         );
         CREATE TABLE t (a int);
-        """
-    )
+        """)
 
     def drop_replica_with_delay() -> None:
         time.sleep(2)
@@ -1632,13 +1911,11 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
     dropper.start()
 
     try:
-        c.sql(
-            """
+        c.sql("""
             SET cluster = cluster1;
             SET cluster_replica = replica1;
             SELECT * FROM t AS OF 18446744073709551615;
-            """
-        )
+            """)
     except InternalError_ as e:
         assert (
             e.diag.message_primary
@@ -1657,13 +1934,11 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
     killer.start()
 
     try:
-        c.sql(
-            """
+        c.sql("""
             SET cluster = cluster1;
             SET cluster_replica = replica2;
             SELECT * FROM t AS OF 18446744073709551615;
-            """
-        )
+            """)
     except InternalError_ as e:
         assert (
             e.diag.message_primary
@@ -1721,8 +1996,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         c.sql("SELECT * FROM mz_views JOIN mz_indexes USING (id)")
 
         # Set up a cluster and a number of dataflows that can be reconciled.
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
                 STORAGE ADDRESSES ['clusterd1:2103'],
@@ -1780,8 +2054,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
             -- index on REFRESH materialized view
             CREATE DEFAULT INDEX ON rmv1;
-            """
-        )
+            """)
 
         # Replace the `mz_catalog_server` replica with an unorchestrated one so we
         # can test reconciliation of system indexes too.
@@ -1810,13 +2083,11 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         c.up("materialized")
 
         # Perform queries to ensure reconciliation has finished.
-        c.sql(
-            """
+        c.sql("""
             SET cluster = cluster1;
             SELECT * FROM v1; -- cluster1
             SHOW INDEXES;     -- mz_catalog_server
-            """
-        )
+            """)
 
         reused, replaced = fetch_reconciliation_metrics("clusterd1")
         assert reused == 15 and replaced == 0, f"{reused=}, {replaced=}"
@@ -1868,8 +2139,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
             return reused, replaced
 
         # Set up a cluster and a number of dataflows that can be reconciled.
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
                 STORAGE ADDRESSES ['clusterd1:2103'],
@@ -1892,8 +2162,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
             CREATE INDEX idx3 ON v3 (d);
 
             SELECT * FROM v3;
-            """
-        )
+            """)
 
         # Drop the index on the base table. This will change the plan of `mv1` the
         # next time it is replanned, which should cause reconciliation to replace
@@ -1905,12 +2174,10 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
         c.up("materialized")
 
         # Perform queries to ensure reconciliation has finished.
-        c.sql(
-            """
+        c.sql("""
             SET cluster = cluster1;
             SELECT * FROM v3;
-            """
-        )
+            """)
 
         reused, replaced = fetch_reconciliation_metrics("clusterd1")
         assert reused == 0 and replaced == 4, f"{reused=}, {replaced=}"
@@ -1935,8 +2202,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     )
 
     # Set up a cluster and a number of dataflows that can be reconciled.
-    c.sql(
-        """
+    c.sql("""
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
             STORAGECTL ADDRESSES ['clusterd1:2100'],
             STORAGE ADDRESSES ['clusterd1:2103'],
@@ -1960,8 +2226,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
 
         -- materialized view on index
         CREATE MATERIALIZED VIEW mv2 AS SELECT a + 1 FROM t1;
-        """
-    )
+        """)
 
     # Set up a subscribe dataflow that will be dropped during reconciliation.
     cursor = c.sql_cursor()
@@ -1972,12 +2237,10 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     cursor.execute("FETCH 1 c")
 
     # Perform a query to ensure dataflows have been installed.
-    c.sql(
-        """
+    c.sql("""
         SET cluster = cluster1;
         SELECT * FROM t1, v, mv1, mv2;
-        """
-    )
+        """)
 
     # We don't have much control over compute reconciliation from here. We
     # drop a dataflow and immediately kill environmentd, in hopes of maybe
@@ -1989,18 +2252,18 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     c.up("materialized")
 
     # Perform a query to ensure reconciliation has finished.
-    c.sql(
-        """
+    c.sql("""
         SET cluster = cluster1;
         SELECT * FROM v;
-        """
-    )
+        """)
 
     # Verify the absence of logged errors.
     for service in ("materialized", "clusterd1"):
         p = c.invoke("logs", service, capture=True)
         for line in p.stdout.splitlines():
-            assert " ERROR " not in line, f"found ERROR in service {service}: {line}"
+            assert (
+                " ERROR " not in line or "repr type error" in line
+            ), f"found non-repr-type ERROR in service {service}: {line}"
 
 
 def workflow_test_drop_during_reconciliation(c: Composition) -> None:
@@ -2042,23 +2305,18 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
         # Set up toxi-proxies for clusterd GRPC endpoints.
         toxi_url = "http://toxiproxy:8474/proxies"
         for port in (2100, 2101):
-            c.testdrive(
-                dedent(
-                    f"""
+            c.testdrive(dedent(f"""
                     $ http-request method=POST url={toxi_url} content-type=application/json
                     {{
                       "name": "clusterd_{port}",
                       "listen": "0.0.0.0:{port}",
                       "upstream": "clusterd1:{port}"
                     }}
-                    """
-                )
-            )
+                    """))
 
         # Set up a cluster with storage and compute objects that can be dropped
         # during reconciliation.
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['toxiproxy:2100'],
                 STORAGE ADDRESSES ['clusterd1:2103'],
@@ -2072,22 +2330,17 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
             CREATE TABLE s_tbl FROM SOURCE s;
             CREATE DEFAULT INDEX on s_tbl;
             CREATE MATERIALIZED VIEW mv AS SELECT * FROM s_tbl;
-            """
-        )
+            """)
 
         # Wait for objects to be installed on the cluster.
         c.sql("SELECT * FROM mv")
 
         # Sever the connection between envd and clusterd.
         for port in (2100, 2101):
-            c.testdrive(
-                dedent(
-                    f"""
+            c.testdrive(dedent(f"""
                     $ http-request method=POST url={toxi_url}/clusterd_{port} content-type=application/json
                     {{"enabled": false}}
-                    """
-                )
-            )
+                    """))
 
         # Drop all objects installed on the cluster.
         c.sql("DROP SOURCE s CASCADE")
@@ -2095,26 +2348,18 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
         # Restore the connection between envd and clusterd, causing a
         # reconciliation.
         for port in (2100, 2101):
-            c.testdrive(
-                dedent(
-                    f"""
+            c.testdrive(dedent(f"""
                     $ http-request method=POST url={toxi_url}/clusterd_{port} content-type=application/json
                     {{"enabled": true}}
-                    """
-                )
-            )
+                    """))
 
         # Confirm the cluster is still healthy and the compute objects have
         # been dropped. We can't verify the dropping of storage objects due to
         # the lack of introspection for storage dataflows.
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > SET cluster = cluster1;
                 > SELECT * FROM mz_introspection.mz_compute_exports WHERE export_id LIKE 'u%';
-                """
-            )
-        )
+                """))
 
 
 def workflow_test_mz_subscriptions(c: Composition) -> None:
@@ -2131,8 +2376,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         user="mz_system",
     )
 
-    c.sql(
-        """
+    c.sql("""
         CREATE CLUSTER cluster1 REPLICAS (r (
             STORAGECTL ADDRESSES ['clusterd1:2100'],
             STORAGE ADDRESSES ['clusterd1:2103'],
@@ -2147,8 +2391,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         INSERT INTO t1 VALUES (1);
         INSERT INTO t2 VALUES (1);
         INSERT INTO t3 VALUES (1);
-        """
-    )
+        """)
 
     def start_subscribe(table: str, cluster: str) -> Cursor:
         """Start a subscribe on the given table and cluster."""
@@ -2171,8 +2414,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
         allocated is an implementation detail and might change in the
         future.
         """
-        output = c.sql_query(
-            """
+        output = c.sql_query("""
             SELECT r.name, c.name, t.name
             FROM mz_internal.mz_subscriptions s
               JOIN mz_internal.mz_sessions e ON (e.id = s.session_id)
@@ -2180,8 +2422,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
               JOIN mz_clusters c ON (c.id = s.cluster_id)
               JOIN mz_tables t ON (t.id = s.referenced_object_ids[1])
             ORDER BY s.created_at
-            """
-        )
+            """)
         assert output == expected, f"expected: {expected}, got: {output}"
 
     subscribe1 = start_subscribe("t1", "quickstart")
@@ -2229,8 +2470,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
     )
 
     # Set up a dataflow on clusterd.
-    c.sql(
-        """
+    c.sql("""
         CREATE CLUSTER cluster1 REPLICAS (replica1 (
             STORAGECTL ADDRESSES ['clusterd1:2100'],
             STORAGE ADDRESSES ['clusterd1:2103'],
@@ -2239,8 +2479,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
             WORKERS 2
         ));
         SET cluster = cluster1;
-        """
-    )
+        """)
 
     def extract_since_ts(output: str) -> int:
         j = json.loads(output)
@@ -2301,9 +2540,7 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
             Service("testdrive", idle=True),
         )
 
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true
 
@@ -2345,14 +2582,12 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
                   "type": "timeout",
                   "attributes": {"timeout": 0}
                 }
-            """
-            )
-        )
+            """))
         # Should detect broken connection after a few seconds.
         time.sleep(10)
         envd = c.invoke("logs", "materialized", capture=True)
         print(envd.stdout)
-        assert "replica task failed: timed out" in envd.stdout
+        assert "replica task failed: recv error: timed out" in envd.stdout
 
 
 class Metrics:
@@ -2467,8 +2702,18 @@ class Metrics:
         assert len(values) == 1
         return values[0]
 
+    def get_result_rows_first_to_last_byte_seconds_count(
+        self, statement_type: str
+    ) -> float:
+        metrics = self.with_name("mz_result_rows_first_to_last_byte_seconds_count")
+        values = [
+            v for k, v in metrics.items() if f'statement_type="{statement_type}"' in k
+        ]
+        assert len(values) == 1
+        return values[0]
+
     def get_last_command_received(self, server_name: str) -> float:
-        metrics = self.with_name("mz_grpc_server_last_command_received")
+        metrics = self.with_name("mz_cluster_server_last_command_received")
         values = [v for k, v in metrics.items() if server_name in k]
         assert len(values) == 1
         return values[0]
@@ -2512,8 +2757,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         before_connection_time = time.time()
 
         # Set up a cluster with a couple dataflows.
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
                 STORAGE ADDRESSES ['clusterd1:2103'],
@@ -2531,8 +2775,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 
             SELECT * FROM t;
             SELECT * FROM mv;
-            """
-        )
+            """)
 
         # Can take a few seconds, don't request the metrics too quickly
         time.sleep(2)
@@ -2591,6 +2834,19 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 
         assert metrics.get_last_command_received("compute") >= before_connection_time
 
+        # The metric must stay fresh on a healthy but idle connection, kept current by CTP
+        # keepalives even when no commands are flowing. Otherwise the
+        # `clusterd-not-receiving-commands` alert false-positives on healthy clusters (CLU-103).
+        idle_seconds = 10
+        time.sleep(idle_seconds)
+        metrics = fetch_metrics()
+        for server in ("compute", "storage"):
+            staleness = time.time() - metrics.get_last_command_received(server)
+            assert staleness < idle_seconds, (
+                f"{server} last_command_received is stale ({staleness:.1f}s old) on an idle "
+                "but healthy connection; keepalives should keep it fresh"
+            )
+
         count = metrics.get_compute_collection_count("log", "0")
         assert count == 0, "unexpected number of unhydrated log collections"
         count = metrics.get_compute_collection_count("log", "1")
@@ -2601,12 +2857,10 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         assert count == 2, "unexpected number of hydrated user collections"
 
         # Check that collection metrics update when collections are dropped.
-        c.sql(
-            """
+        c.sql("""
             DROP INDEX idx;
             DROP MATERIALIZED VIEW mv;
-            """
-        )
+            """)
 
         time.sleep(2)
         metrics = fetch_metrics()
@@ -2629,8 +2883,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
         return Metrics(resp).for_instance("u2")
 
     # Set up a cluster with a couple dataflows.
-    c.sql(
-        """
+    c.sql("""
         CREATE CLUSTER test MANAGED, SIZE 'scale=1,workers=1';
         SET cluster = test;
 
@@ -2642,8 +2895,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
         SELECT * FROM t;
         SELECT * FROM mv;
-        """
-    )
+        """)
 
     index_id = c.sql_query("SELECT id FROM mz_indexes WHERE name = 'idx'")[0][0]
     mv_id = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")[0][0]
@@ -2706,7 +2958,9 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert send_count > 10, f"got {send_count}"
     recv_count = metrics.get_value("mz_compute_controller_response_recv_count")
     assert recv_count > 10, f"got {recv_count}"
-    assert send_count - recv_count < 10, f"got {send_count}, {recv_count}"
+    # recv within 50% of send: channel invariant gives recv <= send, and we
+    # want the controller to have drained at least half of what was sent.
+    assert recv_count >= send_count / 2, f"got {send_count}, {recv_count}"
     count = metrics.get_value("mz_compute_controller_hydration_queue_size")
     assert count == 0, f"got {count}"
 
@@ -2759,30 +3013,76 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     assert count, f"got {count}"
 
     # Drop the dataflows.
-    c.sql(
-        """
+    c.sql("""
         DROP INDEX idx;
         DROP MATERIALIZED VIEW mv;
-        """
-    )
+        """)
 
     # Wait for the controller to asynchronously drop the dataflows and update
     # metrics. We can inspect the controller's view of things in
     # `mz_frontiers`, which is updated at the same time as these metrics are.
-    c.testdrive(
-        input=dedent(
-            """
+    c.testdrive(input=dedent("""
             > SELECT *
               FROM mz_internal.mz_frontiers
               WHERE object_id LIKE 'u%'
-            """
-        )
-    )
+            """))
 
     # Check that the per-collection metrics have been cleaned up.
     metrics = fetch_metrics()
     assert metrics.get_wallclock_lag_count(index_id) is None
     assert metrics.get_wallclock_lag_count(mv_id) is None
+
+
+def workflow_test_response_count_survives_replica_replacement(
+    c: Composition,
+) -> None:
+    """Test that response_{send,recv}_count metrics survive replica drops."""
+
+    c.up("materialized")
+
+    def fetch_metrics() -> Metrics:
+        resp = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        return Metrics(resp).for_instance("u2")
+
+    c.sql("""
+        CREATE CLUSTER test MANAGED, SIZE 'scale=1,workers=1';
+        SET cluster = test;
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 10);
+        CREATE INDEX idx ON t (a);
+        SELECT * FROM t;
+        """)
+    time.sleep(2)
+
+    metrics = fetch_metrics()
+    send_before = metrics.get_value("mz_compute_controller_response_send_count")
+    recv_before = metrics.get_value("mz_compute_controller_response_recv_count")
+    assert send_before > 0, f"got {send_before}"
+    assert recv_before > 0, f"got {recv_before}"
+
+    c.sql("ALTER CLUSTER test SET (SIZE 'scale=1,workers=2')")
+    time.sleep(2)
+
+    metrics = fetch_metrics()
+    assert len(metrics.with_name("mz_compute_controller_response_send_count")) > 0
+    assert len(metrics.with_name("mz_compute_controller_response_recv_count")) > 0
+
+    c.sql("""
+        SET cluster = test;
+        INSERT INTO t SELECT generate_series(11, 20);
+        SELECT * FROM t;
+        """)
+    time.sleep(2)
+
+    metrics = fetch_metrics()
+    send_after = metrics.get_value("mz_compute_controller_response_send_count")
+    recv_after = metrics.get_value("mz_compute_controller_response_recv_count")
+    assert send_after > send_before, f"got {send_before} -> {send_after}"
+    assert recv_after > recv_before, f"got {recv_before} -> {recv_after}"
+
+    c.sql("DROP CLUSTER test CASCADE")
 
 
 def workflow_test_storage_controller_metrics(c: Composition) -> None:
@@ -2802,9 +3102,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
         return Metrics(resp)
 
     # Set up a cluster with a couple storage objects.
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER SYSTEM SET enable_alter_table_add_column = true
 
@@ -2840,9 +3138,7 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
             true
             > SELECT count(*) > 0 FROM src_tbl
             true
-            """
-        )
-    )
+            """))
 
     table1_id = c.sql_query("SELECT id FROM mz_tables WHERE name = 't'")[0][0]
     table2_id = c.sql_query("SELECT id FROM mz_tables WHERE name = 't_alter'")[0][0]
@@ -2927,15 +3223,13 @@ def workflow_test_storage_controller_metrics(c: Composition) -> None:
     assert count, f"got {count}"
 
     # Drop the storage objects.
-    c.sql(
-        """
+    c.sql("""
         DROP sink snk;
         DROP SOURCE src CASCADE;
         DROP MATERIALIZED VIEW mv;
         DROP TABLE t;
         DROP TABLE t_alter;
-        """
-    )
+        """)
 
     # Wait a bit to let the controller refresh its metrics.
     time.sleep(2)
@@ -2964,8 +3258,7 @@ def workflow_test_optimizer_metrics(c: Composition) -> None:
         return Metrics(resp)
 
     # Run optimizations for different object types.
-    c.sql(
-        """
+    c.sql("""
         CREATE TABLE t (a int);
 
         -- view
@@ -2980,8 +3273,7 @@ def workflow_test_optimizer_metrics(c: Composition) -> None:
         SELECT count(*) FROM t JOIN v ON (true);
         -- subscribe
         SUBSCRIBE (SELECT 1);
-        """
-    )
+        """)
 
     # Check that expected metrics exist and have sensible values.
     metrics = fetch_metrics()
@@ -3015,8 +3307,7 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
     ):
         c.up("materialized", Service("testdrive", idle=True))
 
-        c.sql(
-            """
+        c.sql("""
             CREATE TABLE t (a int);
             INSERT INTO t VALUES (7);
 
@@ -3025,8 +3316,7 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
             CREATE INDEX i ON t (a);
 
             SELECT * FROM t;
-            """
-        )
+            """)
         metrics = fetch_metrics()
 
         # `c.sql` above uses the Simple Query protocol.
@@ -3034,14 +3324,10 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         assert 0 < time < 10, f"got {time}"
 
         # Testdrive uses the Extended Query protocol.
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
                 > SELECT * FROM t;
                 7
-                """
-            )
-        )
+                """))
         metrics = fetch_metrics()
 
         time = metrics.get_pgwire_message_processing_seconds("parse")
@@ -3058,43 +3344,33 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         assert 0 < rrftlbs_select_1 < 10, f"got {time}"
 
         # We run a SELECT (as a Simple Query), and then expect the metric to have increased.
-        c.sql(
-            """
+        c.sql("""
             SELECT * FROM t;
-            """
-        )
+            """)
         metrics = fetch_metrics()
         rrftlbs_select_2 = metrics.get_result_rows_first_to_last_byte_seconds("select")
         assert rrftlbs_select_2 > rrftlbs_select_1, f"got {rrftlbs_select_2}"
 
         # We run a SELECT (as an Extended Query via Testdrive), and then expect the metric to have increased.
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
                 > SELECT * FROM t;
                 7
-                """
-            )
-        )
+                """))
         metrics = fetch_metrics()
         rrftlbs_select_3 = metrics.get_result_rows_first_to_last_byte_seconds("select")
         assert rrftlbs_select_3 > rrftlbs_select_2, f"got {rrftlbs_select_3}"
 
-        c.sql(
-            """
+        c.sql("""
             INSERT INTO t VALUES (8);
-            """
-        )
+            """)
 
         # Declare a cursor and fetch 1 row. The SELECT will have 2 result rows in total, so the metric should _not_
         # change after fetching just 1 row.
-        c.sql(
-            """
+        c.sql("""
             BEGIN;
             DECLARE c1 CURSOR FOR (SELECT * FROM t);
             FETCH 1 c1;
-            """
-        )
+            """)
         metrics = fetch_metrics()
         rrftlbs_select_4 = metrics.get_result_rows_first_to_last_byte_seconds("select")
         assert (
@@ -3103,14 +3379,12 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
 
         # Still no change after one more FETCH, because we need to read _past_ the last row.
         # (This is a separate session.)
-        c.sql(
-            """
+        c.sql("""
             BEGIN;
             DECLARE c2 CURSOR FOR (SELECT * FROM t);
             FETCH 1 c2;
             FETCH 1 c2;
-            """
-        )
+            """)
         metrics = fetch_metrics()
         rrftlbs_select_5 = metrics.get_result_rows_first_to_last_byte_seconds("select")
         assert (
@@ -3118,15 +3392,13 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         ), f"got {rrftlbs_select_5} vs. {rrftlbs_select_4}"
 
         # Now it should change, because we consume all the rows, and then try to consume one more, so the cursor ends.
-        c.sql(
-            """
+        c.sql("""
             BEGIN;
             DECLARE c3 CURSOR FOR (SELECT * FROM t);
             FETCH 1 c3;
             FETCH 1 c3;
             FETCH 1 c3;
-            """
-        )
+            """)
         metrics = fetch_metrics()
         rrftlbs_select_6 = metrics.get_result_rows_first_to_last_byte_seconds("select")
         assert (
@@ -3134,18 +3406,38 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         ), f"got {rrftlbs_select_6} vs. {rrftlbs_select_5}"
 
         # FETCH ALL
-        c.sql(
-            """
+        c.sql("""
             BEGIN;
             DECLARE c4 CURSOR FOR (SELECT * FROM t);
             FETCH ALL c4;
-            """
-        )
+            """)
         metrics = fetch_metrics()
         rrftlbs_select_7 = metrics.get_result_rows_first_to_last_byte_seconds("select")
         assert (
             rrftlbs_select_7 > rrftlbs_select_6
         ), f"got {rrftlbs_select_7} vs. {rrftlbs_select_6}"
+
+        # Regression: extra FETCHes on an already-exhausted cursor must NOT re-observe the metric.
+        # Before the fix, each extra FETCH would record an additional observation with an
+        # ever-growing duration (wall-clock time since the original first row).
+        count_before = metrics.get_result_rows_first_to_last_byte_seconds_count(
+            "select"
+        )
+        c.sql("""
+            BEGIN;
+            DECLARE c4b CURSOR FOR (SELECT * FROM t);
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            FETCH 1 c4b;
+            """)
+        metrics = fetch_metrics()
+        count_after = metrics.get_result_rows_first_to_last_byte_seconds_count("select")
+        assert count_after == count_before + 1, (
+            f"extra FETCHes on exhausted cursor should add exactly 1 observation, "
+            f"got {count_after - count_before}"
+        )
 
         # SUBSCRIBE should show up if it's on a constant collection.
         # We need two FETCHes, because the first one won't observe that there are no more rows, due to
@@ -3184,6 +3476,35 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
             rrftlbs_subscribe_2 > rrftlbs_subscribe_1
         ), f"got {rrftlbs_subscribe_2} vs. {rrftlbs_subscribe_1}"
 
+        # Regression: a third FETCH ALL on a constant SUBSCRIBE that's already exhausted
+        # should not re-observe the metric.
+        subscribe_count_before = (
+            metrics.get_result_rows_first_to_last_byte_seconds_count("subscribe")
+        )
+        c.sql(
+            """
+            BEGIN;
+            DECLARE c6b CURSOR FOR SUBSCRIBE (SELECT * FROM v1);
+            FETCH ALL c6b;
+            FETCH ALL c6b;
+            FETCH ALL c6b;
+            """,
+            reuse_connection=False,
+        )
+        metrics = fetch_metrics()
+        subscribe_count_after = (
+            metrics.get_result_rows_first_to_last_byte_seconds_count("subscribe")
+        )
+        assert subscribe_count_after == subscribe_count_before + 1, (
+            f"extra FETCH ALL on exhausted SUBSCRIBE should add exactly 1 observation, "
+            f"got {subscribe_count_after - subscribe_count_before}"
+        )
+
+        # Re-capture baseline after c6b added an observation to the histogram sum.
+        rrftlbs_subscribe_2 = metrics.get_result_rows_first_to_last_byte_seconds(
+            "subscribe"
+        )
+
         # Shouldn't increase for a non-const SUBSCRIBE, because there is no last row, ever.
         c.sql(
             """
@@ -3200,7 +3521,7 @@ def workflow_test_pgwire_metrics(c: Composition) -> None:
         )
         assert (
             rrftlbs_subscribe_3 == rrftlbs_subscribe_2
-        ), f"got {rrftlbs_subscribe_3} vs. {rrftlbs_subscribe_3}"
+        ), f"got {rrftlbs_subscribe_3} vs. {rrftlbs_subscribe_2}"
 
 
 def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
@@ -3240,8 +3561,8 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
         raise AssertionError(f"since not found in explain: {explain}")
 
     def validate_since(since: int, name: str) -> None:
-        now = datetime.now()
-        dt = datetime.fromtimestamp(since / 1000.0)
+        now = datetime.now(UTC)
+        dt = datetime.fromtimestamp(since / 1000.0, UTC)
         diff = now - dt
 
         # This env was just created, so the since should be recent.
@@ -3296,13 +3617,11 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
     c.up("materialized")
 
     # Create a cluster and wait for it to come up.
-    c.sql(
-        """
+    c.sql("""
         CREATE CLUSTER test SIZE 'scale=1,workers=1';
         SET cluster = test;
         SELECT * FROM mz_introspection.mz_dataflow_operators;
-        """
-    )
+        """)
 
     # Find the internal-http port of the test cluster.
     cluster_id = c.sql_query("SELECT id FROM mz_clusters WHERE name = 'test'")[0][0]
@@ -3374,6 +3693,148 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
     check_workload_class(None)
 
 
+def workflow_test_cluster_http_proxy(c: Composition) -> None:
+    """
+    Test that the HTTP proxy in environmentd correctly forwards requests to clusterd.
+
+    This test verifies that metrics fetched through the environmentd HTTP proxy
+    match metrics fetched directly from clusterd's internal HTTP endpoint.
+    """
+
+    c.up("materialized")
+
+    # Create a managed cluster and wait for it to come up.
+    c.sql("""
+        CREATE CLUSTER test SIZE 'scale=1,workers=1';
+        SET cluster = test;
+        SELECT * FROM mz_introspection.mz_dataflow_operators;
+        """)
+
+    # Get cluster_id and replica_id from SQL.
+    cluster_id = c.sql_query("SELECT id FROM mz_clusters WHERE name = 'test'")[0][0]
+    replica_id = c.sql_query(
+        f"SELECT id FROM mz_cluster_replicas WHERE cluster_id = '{cluster_id}'"
+    )[0][0]
+
+    # Find the internal-http port of the test cluster from logs.
+    logs = c.invoke("logs", "materialized", capture=True).stdout
+    clusterd_port = find_proxy_port(logs, cluster_id, "internal-http")
+    assert (
+        clusterd_port is not None
+    ), f"Could not find internal-http port for {cluster_id}"
+
+    # Wait a bit to let the replica fully start.
+    time.sleep(2)
+
+    # Fetch metrics directly from clusterd.
+    direct_metrics = c.exec(
+        "materialized", "curl", f"localhost:{clusterd_port}/metrics", capture=True
+    ).stdout
+
+    # Fetch metrics through the environmentd HTTP proxy.
+    # The proxy is accessible on port 6878 (internal HTTP) at:
+    # /api/cluster/{cluster_id}/replica/{replica_id}/process/{process}/*path
+    proxy_url = f"localhost:6878/api/cluster/{cluster_id}/replica/{replica_id}/process/0/metrics"
+    proxy_metrics = c.exec("materialized", "curl", proxy_url, capture=True).stdout
+
+    # Verify that both return metrics data (non-empty).
+    assert len(direct_metrics) > 0, "Direct metrics fetch returned empty response"
+    assert len(proxy_metrics) > 0, "Proxy metrics fetch returned empty response"
+
+    # Parse metrics into dictionaries for comparison.
+    def parse_metrics(text: str) -> dict[str, str]:
+        """Parse Prometheus metrics text into a dict of metric_name -> full_line."""
+        result = {}
+        for line in text.splitlines():
+            if line and not line.startswith("#"):
+                # Extract metric name (everything before the first space or {)
+                name = line.split("{")[0].split(" ")[0]
+                result[name] = line
+        return result
+
+    direct_parsed = parse_metrics(direct_metrics)
+    proxy_parsed = parse_metrics(proxy_metrics)
+
+    # Verify that we got a reasonable number of metrics.
+    assert len(direct_parsed) > 10, f"Too few direct metrics: {len(direct_parsed)}"
+    assert len(proxy_parsed) > 10, f"Too few proxy metrics: {len(proxy_parsed)}"
+
+    # Verify that key metrics are present in both.
+    # We don't check for overall equality as we're not guaranteed to capture
+    # the exact same snapshot of metrics through both methods.
+    key_metrics = [
+        "mz_compute_replica_history_command_count",
+        "mz_arrangement_maintenance_seconds_total",
+    ]
+    for metric in key_metrics:
+        assert metric in direct_parsed, f"Missing metric {metric} in direct fetch"
+        assert metric in proxy_parsed, f"Missing metric {metric} in proxy fetch"
+
+
+def workflow_test_clusters_page(c: Composition) -> None:
+    """
+    Test that the /clusters page displays expected replica information.
+
+    This test verifies that the clusters overview page correctly shows
+    cluster and replica names, IDs, and process links.
+    """
+
+    c.up("materialized")
+
+    # Create a managed cluster with a custom replica name.
+    c.sql("""
+        CREATE CLUSTER test_cluster REPLICAS (test_replica (SIZE 'scale=1,workers=1'));
+        SET cluster = test_cluster;
+        SELECT * FROM mz_introspection.mz_dataflow_operators;
+        """)
+
+    # Get cluster_id and replica_id from SQL.
+    cluster_id = c.sql_query("SELECT id FROM mz_clusters WHERE name = 'test_cluster'")[
+        0
+    ][0]
+    replica_id = c.sql_query(
+        f"SELECT id FROM mz_cluster_replicas WHERE cluster_id = '{cluster_id}'"
+    )[0][0]
+
+    # Wait a bit to let the replica fully start and register with the locator.
+    time.sleep(2)
+
+    # Fetch the clusters page.
+    clusters_page = c.exec(
+        "materialized", "curl", "localhost:6878/clusters", capture=True
+    ).stdout
+
+    # Verify that the page contains expected content.
+    assert "Cluster Replicas" in clusters_page, "Page title not found"
+    assert "test_cluster" in clusters_page, "Cluster name not found in page"
+    assert "test_replica" in clusters_page, "Replica name not found in page"
+    assert cluster_id in clusters_page, f"Cluster ID {cluster_id} not found in page"
+    assert replica_id in clusters_page, f"Replica ID {replica_id} not found in page"
+
+    # Verify process links are present (the replica has scale=1, so process 0).
+    expected_link = f"/api/cluster/{cluster_id}/replica/{replica_id}/process/0/"
+    assert expected_link in clusters_page, f"Process link {expected_link} not found"
+
+    # Verify the process link is clickable (check for href attribute).
+    assert f'href="{expected_link}"' in clusters_page, "Process link not clickable"
+
+    # Verify that following the process link returns content (not 404).
+    process_root_url = f"localhost:6878{expected_link}"
+    process_root_page = c.exec(
+        "materialized",
+        "curl",
+        "-s",
+        "-w",
+        "%{http_code}",
+        process_root_url,
+        capture=True,
+    ).stdout
+    # The response should end with 200 status code.
+    assert process_root_page.endswith(
+        "200"
+    ), f"Process root URL returned non-200: {process_root_page[-20:]}"
+
+
 def workflow_test_concurrent_connections(c: Composition) -> None:
     """
     Run many concurrent connections, measure their p50 and p99 latency, make
@@ -3429,6 +3890,100 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
         assert (
             p99 < p99_limit
         ), f"p99 is {p99:.2f}s, should be less than {p99_limit:.2f}s"
+
+
+def workflow_test_connection_limit_tracks_committed_vars(c: Composition) -> None:
+    """
+    Assert that the connection limit enforced when a connection is established
+    tracks the committed values of `max_connections` and
+    `superuser_reserved_connections`.
+
+    Both are mirrored into the connection counter by `SystemVars` callbacks that
+    the catalog fires once per committed transaction that changed a system var,
+    so this covers every catalog op that can change them (`ALTER SYSTEM SET`,
+    `RESET` and `RESET ALL`), plus a rejected `ALTER SYSTEM SET`, which must
+    leave both the committed value and the enforced limit alone.
+    """
+    c.up("materialized")
+
+    def alter_system(statement: str) -> None:
+        # Internal users are exempt from the connection limit, so this keeps
+        # working while the limit is exhausted.
+        c.sql(statement, port=6877, user="mz_system")
+
+    def assert_committed(name: str, expected: str) -> None:
+        actual = c.sql_query(f"SHOW {name}", port=6877, user="mz_system")[0][0]
+        assert actual == expected, f"{name} is {actual}, expected {expected}"
+
+    def assert_connection_allowed() -> None:
+        with c.sql_connection(reuse_connection=False) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                assert cur.fetchone() == (1,)
+
+    def assert_connection_refused() -> None:
+        try:
+            conn = c.sql_connection(reuse_connection=False)
+        except OperationalError as e:
+            assert "creating connection would violate max_connections limit" in str(
+                e
+            ), f"Unexpected error: {e}"
+        else:
+            conn.close()
+            raise AssertionError("connecting succeeded, expected it to be refused")
+
+    alter_system("ALTER SYSTEM SET superuser_reserved_connections = 0")
+    alter_system("ALTER SYSTEM SET max_connections = 100")
+
+    # Held open for the rest of the test so that a limit of 1 is exhausted.
+    held_connection = c.sql_connection(reuse_connection=False)
+
+    try:
+        # Op::UpdateSystemConfiguration.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_committed("max_connections", "1")
+        assert_connection_refused()
+
+        # A mirror stuck on the previous value would keep refusing here.
+        alter_system("ALTER SYSTEM SET max_connections = 100")
+        assert_connection_allowed()
+
+        # Op::ResetSystemConfiguration.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_connection_refused()
+        alter_system("ALTER SYSTEM RESET max_connections")
+        assert_connection_allowed()
+
+        # Op::ResetAllSystemConfiguration.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_connection_refused()
+        alter_system("ALTER SYSTEM RESET ALL")
+        assert_connection_allowed()
+
+        # The same callback mirrors `superuser_reserved_connections`, so
+        # reserving every connection leaves none for a non-superuser.
+        alter_system("ALTER SYSTEM SET max_connections = 100")
+        alter_system("ALTER SYSTEM SET superuser_reserved_connections = 100")
+        assert_connection_refused()
+        alter_system("ALTER SYSTEM SET superuser_reserved_connections = 0")
+        assert_connection_allowed()
+
+        # A rejected `ALTER SYSTEM SET` commits nothing, so neither the
+        # committed value nor the enforced limit may move.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_connection_refused()
+        try:
+            alter_system("ALTER SYSTEM SET max_connections = 'not-a-number'")
+        except DatabaseError as e:
+            assert 'parameter "max_connections" requires' in str(
+                e
+            ), f"Unexpected error: {e}"
+        else:
+            raise AssertionError("ALTER SYSTEM succeeded, expected it to be rejected")
+        assert_committed("max_connections", "1")
+        assert_connection_refused()
+    finally:
+        held_connection.close()
 
 
 def workflow_test_profile_fetch(c: Composition) -> None:
@@ -3489,6 +4044,16 @@ def workflow_test_profile_fetch(c: Composition) -> None:
         make_ok_check(
             "mz_fg_version: 1\\nSampling time (s): 1\\nSampling frequency (Hz): 1\\n"
         ),
+    )
+
+    # Regression test for CLU-109: a sampling frequency of zero used to reach
+    # pprof's `Timer::new`, which computes `1_000_000 / hz` and panicked with a
+    # division by zero, crashing the whole process. It must now be rejected with
+    # a clean error response instead. Parameter validation catches it at the
+    # request boundary and returns a 400.
+    test_post(
+        {"action": "time_fg", "time_secs": "1", "hz": "0"},
+        make_check(400, "`hz` must be greater than zero"),
     )
 
     # Deactivate memory profiling.
@@ -3566,9 +4131,7 @@ def workflow_test_incident_70(c: Composition) -> None:
 
         mz_view_create_statements_sql = "\n".join(mz_view_create_statements)
 
-        c.sql(
-            dedent(
-                f"""
+        c.sql(dedent(f"""
                 CREATE SOURCE gen FROM LOAD GENERATOR TPCH (SCALE FACTOR {data_scale_factor});
 
                 CREATE TABLE customer FROM SOURCE gen (REFERENCE customer);
@@ -3581,11 +4144,9 @@ def workflow_test_incident_70(c: Composition) -> None:
                 CREATE TABLE supplier FROM SOURCE gen (REFERENCE supplier);
 
                 {mz_view_create_statements_sql}
-                """
-            )
-        )
+                """))
 
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         end_time = start_time + timedelta(seconds=600)
 
         def worker(c: Composition, worker_index: int) -> None:
@@ -3594,7 +4155,7 @@ def workflow_test_incident_70(c: Composition) -> None:
             print(f"Thread {worker_index} got a cursor")
 
             iteration = 1
-            while datetime.now() < end_time:
+            while datetime.now(UTC) < end_time:
                 if iteration % 20 == 0:
                     print(f"Thread {worker_index}, iteration {iteration}")
                 cursor.execute("SELECT * FROM mv_lineitem_count_1;")
@@ -3658,8 +4219,7 @@ def workflow_test_github_7000(c: Composition, parser: WorkflowArgumentParser) ->
 
         # Create an MV reading from an index. Make sure it doesn't produce its
         # snapshot by installing it in a cluster without replicas.
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER test SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
             SET cluster = test;
 
@@ -3668,28 +4228,82 @@ def workflow_test_github_7000(c: Composition, parser: WorkflowArgumentParser) ->
 
             CREATE DEFAULT INDEX ON t;
             CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
-            """
-        )
+            """)
 
         # Verify that the MV's upper is zero, which is what caused the bug.
         # This ensures that the test doesn't break in the future because we
         # start initializing frontiers differently.
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
                 > SELECT write_frontier
                   FROM mz_internal.mz_frontiers
                   JOIN mz_materialized_views ON (object_id = id)
                   WHERE name = 'mv'
                 0
-                """
-            )
-        )
+                """))
 
         # Trigger an environment bootstrap, and see if envd comes up without
         # panicking.
         c.kill("materialized")
         c.up("materialized")
+
+
+def _char_param_survives(host: str, port: int) -> bool:
+    """Whether environmentd survives an untyped binary ``"char"`` param
+    whose byte is >= 0x80 (SQL-371 regression).
+
+    The param stays untyped (0 OIDs in Parse) so the server infers
+    ``PgLegacyChar`` from the query's cast. Binary format avoids the
+    text-param UTF-8 decode that would reject the byte first. This
+    routes an invalid UTF-8 byte through statement-logging's param
+    serialization, which used to panic and abort the process.
+
+    Returns False if the connection drops before ReadyForQuery, True
+    otherwise.
+    """
+
+    def frame(tag: bytes, body: bytes) -> bytes:
+        return tag + struct.pack(">I", len(body) + 4) + body
+
+    def drain_to_ready(s: socket.socket) -> bool:
+        buf = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                # Connection dropped: server aborted.
+                return False
+            buf += chunk
+            while len(buf) >= 5:
+                end = struct.unpack(">I", buf[1:5])[0] + 1
+                if len(buf) < end:
+                    break
+                ready = buf[0:1] == b"Z"  # ReadyForQuery
+                buf = buf[end:]
+                if ready:
+                    return True
+
+    with socket.create_connection((host, port), timeout=30) as s:
+        # Startup; the `materialize` user has no password in mzcompose.
+        s.sendall(
+            frame(
+                b"",
+                struct.pack(">I", 196608)
+                + b"user\x00materialize\x00database\x00materialize\x00\x00",
+            )
+        )
+        assert drain_to_ready(s), "startup failed"
+        s.sendall(
+            frame(b"P", b'\x00SELECT $1::"char"\x00' + struct.pack(">H", 0))
+            + frame(
+                b"B",
+                b"\x00\x00"
+                + struct.pack(">HHHi", 1, 1, 1, 1)
+                + b"\xff"
+                + struct.pack(">H", 0),
+            )
+            + frame(b"E", b"\x00" + struct.pack(">I", 0))
+            + frame(b"S", b"")
+        )
+        return drain_to_ready(s)
 
 
 def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -3711,6 +4325,16 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
         )
 
         c.run_testdrive_files("statement-logging/statement-logging.td")
+
+        # SQL-371: a `"char"` binary param with byte >= 0x80 must not
+        # abort environmentd via statement logging. Sampling is forced
+        # to 100% above, so this deterministically exercises the path.
+        assert _char_param_survives(
+            "127.0.0.1", c.port("materialized", 6875)
+        ), "environmentd aborted on non-UTF-8 char param"
+        assert (
+            c.sql_query("SELECT 1", reuse_connection=False)[0][0] == 1
+        ), "environmentd unreachable after char-param test"
 
 
 def workflow_blue_green_deployment(
@@ -3769,8 +4393,13 @@ def workflow_blue_green_deployment(
             except DatabaseError as e:
                 # Expected
                 msg = str(e)
-                if ("cached plan must not change result type" in msg) or (
-                    "subscribe has been terminated because underlying relation" in msg
+                if (
+                    ("cached plan must not change result type" in msg)
+                    or ("query could not complete because relation" in msg)
+                    # The blue/green cleanup can DROP the relation this subscribe
+                    # is bound to while a FETCH is in flight, which surfaces as a
+                    # ConcurrentDependencyDrop rather than the peek-path error above.
+                    or ("was dropped" in msg)
                 ):
                     continue
                 raise e
@@ -3830,38 +4459,118 @@ def workflow_test_subscribe_hydration_status(
     cursor.execute("FETCH 1 c")
 
     # Verify that the subscribe dataflow eventually shows as hydrated.
-    c.testdrive(
-        input=dedent(
-            """
+    c.testdrive(input=dedent("""
             > SET cluster = mz_catalog_server
             > SELECT DISTINCT h.time_ns IS NOT NULL
               FROM mz_internal.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
               JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
-              JOIN mz_tables t ON (t.id = sroi.id)
+              JOIN mz_materialized_views t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
             true
-            """
-        )
-    )
+            """))
 
     # Cancel the subscribe.
     cursor.execute("ROLLBACK")
 
     # Verify that the subscribe's hydration status is removed.
-    c.testdrive(
-        input=dedent(
-            """
+    c.testdrive(input=dedent("""
             > SET cluster = mz_catalog_server
             > SELECT DISTINCT h.time_ns IS NOT NULL
               FROM mz_internal.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
               JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
-              JOIN mz_tables t ON (t.id = sroi.id)
+              JOIN mz_materialized_views t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
-            """
-        )
+            """))
+
+
+def workflow_test_hydration_timestamps(c: Composition) -> None:
+    """
+    Test that compute hydration timestamps are stamped by the replica.
+
+    They must therefore survive an environmentd restart, which does not disturb
+    the replica, and reset on a replica restart, which rebuilds the dataflows
+    they describe.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "clusterd1")
+
+    c.sql(
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
     )
+
+    c.sql("""
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 2
+        ));
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        CREATE INDEX idx ON t (a);
+        """)
+
+    def collect_timestamps() -> list[tuple]:
+        """Return one `(worker_id, installed_at, started_at, hydrated_at)` row per worker.
+
+        Retries until every worker reports a complete set of timestamps, since
+        dataflows take an unknown time to hydrate and the introspection
+        relations are updated asynchronously.
+        """
+        deadline = time.time() + 120
+        while True:
+            with c.sql_cursor() as cursor:
+                cursor.execute("SET cluster = cluster1")
+                cursor.execute("""
+                    SELECT h.worker_id, h.installed_at, h.started_at, h.hydrated_at
+                    FROM mz_introspection.mz_compute_hydration_times_per_worker h
+                    JOIN mz_indexes i ON (i.id = h.export_id)
+                    WHERE i.name = 'idx'
+                    ORDER BY h.worker_id
+                    """)
+                rows = [tuple(row) for row in cursor.fetchall()]
+            if len(rows) == 2 and all(all(v is not None for v in row) for row in rows):
+                return rows
+            assert time.time() < deadline, f"idx did not hydrate, last saw: {rows}"
+            time.sleep(1)
+
+    before = collect_timestamps()
+    for worker_id, installed_at, started_at, hydrated_at in before:
+        assert (
+            installed_at <= started_at <= hydrated_at
+        ), f"worker {worker_id} timestamps out of order: {installed_at}, {started_at}, {hydrated_at}"
+
+    # An environmentd restart triggers a reconciliation on clusterd, which
+    # retains the dataflow, so the timestamps describe the same episode and must
+    # not change.
+    c.kill("materialized")
+    c.up("materialized")
+
+    after_environmentd_restart = collect_timestamps()
+    assert before == after_environmentd_restart, (
+        "hydration timestamps changed across an environmentd restart: "
+        f"{before} vs {after_environmentd_restart}"
+    )
+
+    # A replica restart rebuilds the dataflow, which is a new hydration episode,
+    # so every timestamp must be fresh.
+    c.kill("clusterd1")
+    c.up("clusterd1")
+
+    after_replica_restart = collect_timestamps()
+    for (_, before_installed, _, _), (worker_id, after_installed, _, _) in zip(
+        before, after_replica_restart
+    ):
+        assert after_installed > before_installed, (
+            f"worker {worker_id} kept its installed_at across a replica restart: "
+            f"{before_installed} vs {after_installed}"
+        )
 
 
 def workflow_cluster_drop_concurrent(
@@ -3913,11 +4622,757 @@ def workflow_cluster_drop_concurrent(
                 except InternalError_ as e:
                     assert 'query could not complete because relation "materialize.public.counter_tbl" was dropped' in str(
                         e
-                    ) or 'subscribe has been terminated because underlying relation "materialize.public.counter_tbl" was dropped' in str(
+                    ) or 'query could not complete because relation "materialize.public.counter_tbl" was dropped' in str(
                         e
                     )
             for thread in threads:
                 assert not thread.is_alive(), f"Thread {thread.name} is still running"
+
+
+def workflow_test_drop_cluster_during_peeks(c: Composition) -> None:
+    """Race peeks against DROP/CREATE of their target cluster; environmentd
+    must not panic in `set_statement_execution_cluster`."""
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.sql("CREATE CLUSTER victim SIZE 'scale=1,workers=1'")
+
+        stop = [False]
+
+        def peek_loop() -> None:
+            while not stop[0]:
+                try:
+                    with c.sql_cursor() as cur:
+                        cur.execute("SET auto_route_catalog_queries = false")
+                        cur.execute("SET cluster = victim")
+                        while not stop[0]:
+                            cur.execute("SELECT 1")
+                            cur.fetchone()
+                except DatabaseError:
+                    pass
+
+        def churn_loop() -> None:
+            while not stop[0]:
+                try:
+                    with c.sql_cursor() as cur:
+                        cur.execute("DROP CLUSTER IF EXISTS victim CASCADE")
+                        cur.execute("CREATE CLUSTER victim SIZE 'scale=1,workers=1'")
+                except DatabaseError:
+                    pass
+
+        threads = [
+            PropagatingThread(target=peek_loop, name=f"peek-{i}") for i in range(8)
+        ] + [PropagatingThread(target=churn_loop, name="churn")]
+        for t in threads:
+            t.start()
+        try:
+            time.sleep(30)
+        finally:
+            stop[0] = True
+            for t in threads:
+                t.join(timeout=10)
+
+        with c.sql_cursor() as cur:
+            cur.execute("SELECT 1")
+            assert cur.fetchone() == (1,)
+
+
+def workflow_test_drop_cluster_during_registered_peeks(c: Composition) -> None:
+    """Race registered *slow-path* peeks against DROP/CREATE of their target
+    cluster; environmentd must survive and every statement must be ended
+    exactly once.
+
+    A bare scan of a table with no usable index becomes a `standard` slow-path
+    peek (`ExecuteSlowPathPeek`) registered with the coordinator; a constant
+    query like `SELECT 1` (exercised by `workflow_test_drop_cluster_during_peeks`)
+    is handled inline and never registered. When a concurrent `DROP CLUSTER`
+    makes the peek fail, the frontend owns the error end of statement logging
+    and the coordinator must defuse its own guard instead of emitting
+    `Aborted`. Two ends for one statement historically panicked and aborted
+    environmentd; today the duplicate is dropped at the sink with the warning
+    we assert on below.
+
+    The fast-path variant of this race has a sub-millisecond window that brute
+    force can't hit;
+    `workflow_test_drop_cluster_during_registered_peeks_fast_path` covers it
+    deterministically. Here we hammer several clusters in parallel, each
+    churned by its own thread to get the DROP rate past the CREATE-CLUSTER
+    provisioning bottleneck, with many peekers each.
+    """
+
+    num_clusters = 4
+    peekers_per_cluster = 8
+    duration_s = 60
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.sql("CREATE TABLE t (a int); INSERT INTO t SELECT generate_series(1, 10);")
+        for i in range(num_clusters):
+            c.sql(f"CREATE CLUSTER victim{i} SIZE 'scale=1,workers=1'")
+
+        stop = [False]
+
+        def make_peek_loop(cluster: str) -> Callable[[], None]:
+            def peek_loop() -> None:
+                while not stop[0]:
+                    try:
+                        with c.sql_cursor() as cur:
+                            cur.execute("SET auto_route_catalog_queries = false")
+                            # `.encode()`: psycopg types `execute`'s query as
+                            # `LiteralString`; an f-string with a runtime value is
+                            # a plain `str`, and passing `bytes` sidesteps that.
+                            cur.execute(f"SET cluster = {cluster}".encode())
+                            while not stop[0]:
+                                # Bare table scan, no usable index: a
+                                # registered slow-path peek (see docstring).
+                                cur.execute("SELECT * FROM t")
+                                cur.fetchall()
+                    except Exception:
+                        # Chaos thread; failures are the point. Catch broadly:
+                        # a downed environmentd raises UIError, not
+                        # DatabaseError. The real signal is asserted below.
+                        time.sleep(0.05)
+
+            return peek_loop
+
+        def make_churn_loop(cluster: str) -> Callable[[], None]:
+            def churn_loop() -> None:
+                while not stop[0]:
+                    try:
+                        with c.sql_cursor() as cur:
+                            cur.execute(
+                                f"DROP CLUSTER IF EXISTS {cluster} CASCADE".encode()
+                            )
+                            cur.execute(
+                                f"CREATE CLUSTER {cluster} SIZE 'scale=1,workers=1'".encode()
+                            )
+                    except Exception:
+                        # Chaos thread; failures are the point. Catch broadly:
+                        # a downed environmentd raises UIError, not
+                        # DatabaseError. The real signal is asserted below.
+                        time.sleep(0.05)
+
+            return churn_loop
+
+        threads = []
+        for i in range(num_clusters):
+            cluster = f"victim{i}"
+            threads.append(
+                PropagatingThread(target=make_churn_loop(cluster), name=f"churn-{i}")
+            )
+            for j in range(peekers_per_cluster):
+                threads.append(
+                    PropagatingThread(
+                        target=make_peek_loop(cluster), name=f"peek-{i}-{j}"
+                    )
+                )
+        for t in threads:
+            t.start()
+
+        try:
+            time.sleep(duration_s)
+        finally:
+            stop[0] = True
+            for t in threads:
+                t.join(timeout=30)
+
+        # A panic on the coordinator thread aborts the entire environmentd
+        # process (src/ore/src/panic.rs); with no restart policy the container
+        # stays down and this fresh connection raises.
+        with c.sql_cursor() as cur:
+            cur.execute("SELECT 1")
+            assert cur.fetchone() == (1,)
+
+        # All the raced statements must have been ended exactly once. A
+        # duplicate end is dropped at the sink, so environmentd survives it,
+        # but it means the end-of-execution ownership handoff regressed.
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert (
+            "duplicate end_statement_execution" not in logs.stdout
+        ), "statement execution was ended twice; end-of-execution ownership handoff regressed"
+
+
+def workflow_test_drop_cluster_during_registered_peeks_fast_path(
+    c: Composition,
+) -> None:
+    """Deterministically exercise the *fast-path* variant of the registered-peek
+    teardown race (slow-path variant:
+    `workflow_test_drop_cluster_during_registered_peeks`).
+
+    A `PeekExisting` fast-path peek registers with the coordinator and only
+    *then* issues `client.peek()`; registration hands ownership of
+    end-of-execution logging to the coordinator. If a `DROP CLUSTER` lands in
+    that window, the teardown retires the pending peek and logs its end,
+    `client.peek()` fails, and the frontend's `UnregisterFrontendPeek` must be
+    a no-op. Historically the frontend ended the statement itself here, and
+    the double end panicked and aborted environmentd.
+
+    The window is a sub-millisecond cross-thread gap, so we make it
+    deterministic with the `peek_after_register_before_issue` failpoint: pause
+    a peek right after it registers, drop its cluster while it's parked, then
+    resume so `client.peek()` fails. Assert that environmentd survives and
+    that no duplicate end was logged.
+    """
+
+    failpoint = "peek_after_register_before_issue"
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.sql("CREATE TABLE t (a int); INSERT INTO t SELECT generate_series(1, 10);")
+        c.sql("CREATE CLUSTER victim SIZE 'scale=1,workers=1'")
+        # The index makes `SELECT * FROM t` on `victim` a `PeekExisting` fast path
+        # (without it the bare scan would be a `standard` slow-path dataflow).
+        c.sql("CREATE INDEX victim_idx IN CLUSTER victim ON t (a)")
+
+        peeker_ready = Event()
+        failpoint_armed = Event()
+        peek_outcome: list[str] = []
+
+        def peeker() -> None:
+            try:
+                with c.sql_cursor() as cur:
+                    cur.execute("SET auto_route_catalog_queries = false")
+                    cur.execute("SET cluster = victim")
+                    # We connect and configure *before* the failpoint is armed so
+                    # that connection-setup peeks aren't caught by it.
+                    peeker_ready.set()
+                    failpoint_armed.wait()
+                    # `PeekExisting` fast path: this registers with the
+                    # coordinator and then parks at the failpoint before issuing
+                    # `client.peek()`. It fails once `victim` is dropped.
+                    cur.execute("SELECT * FROM t")
+                    cur.fetchall()
+                    peek_outcome.append("ok")
+            except Exception as e:
+                peek_outcome.append(f"error: {e}")
+
+        peek_thread = PropagatingThread(target=peeker, name="peeker")
+        peek_thread.start()
+
+        # Drive the race from a single control connection opened *before* the
+        # failpoint is armed, so its own connection-setup peeks don't park and
+        # deadlock it against the very failpoint it must turn off.
+        with c.sql_cursor() as control:
+            assert peeker_ready.wait(timeout=30), "peeker failed to connect"
+            # Arm: every fast-path peek now parks right after registering.
+            control.execute(f"SET failpoints = '{failpoint}=pause'")
+            failpoint_armed.set()
+            # Give the peeker time to issue its SELECT and park. It stays parked
+            # until we turn the failpoint off, so this only has to outlast plan +
+            # `RegisterFrontendPeek`, not race a narrow window.
+            time.sleep(5)
+            # Drop the cluster while the peek is parked: the coordinator retires
+            # the pending peek and logs its end of execution.
+            control.execute("DROP CLUSTER victim CASCADE")
+            # Resume the peek: `client.peek()` now fails (cluster gone) and the
+            # frontend asks the coordinator to retire the already-retired peek,
+            # which must be a no-op.
+            control.execute(f"SET failpoints = '{failpoint}=off'")
+
+        peek_thread.join(timeout=30)
+
+        # The parked peek must actually have failed on the dropped cluster;
+        # otherwise the race didn't happen and the test is silently vacuous.
+        assert peek_outcome, "peeker thread did not finish"
+        assert peek_outcome[0].startswith(
+            "error"
+        ), f"expected the peek to fail on the dropped cluster, got: {peek_outcome[0]}"
+
+        # A panic on the coordinator thread aborts the entire environmentd
+        # process (src/ore/src/panic.rs); with no restart policy the container
+        # stays down and this fresh connection raises.
+        with c.sql_cursor() as cur:
+            cur.execute("SELECT 1")
+            assert cur.fetchone() == (1,)
+
+        # The race must have been single-ended: the teardown logged the only
+        # end. A duplicate would be dropped at the sink, so environmentd
+        # survives it, but it means the ownership handoff regressed.
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert (
+            "duplicate end_statement_execution" not in logs.stdout
+        ), "statement execution was ended twice; end-of-execution ownership handoff regressed"
+
+
+def workflow_test_drop_index_during_subscribe_sequencing(c: Composition) -> None:
+    """Deterministically exercise a dependency drop racing a SUBSCRIBE (SQL-456).
+
+    The frontend subscribe sequencing runs on the session task: it optimizes
+    the plan (binding the indexes to read through) and acquires read holds,
+    then dispatches `Command::ExecuteSubscribe` to the coordinator. A `DROP
+    INDEX` that lands in this window removes the index's compute collection
+    (read holds hold back compaction, not drops), so shipping the subscribe
+    dataflow fails with `CollectionMissing`. Historically the coordinator
+    treated dataflow creation as infallible and panicked, aborting
+    environmentd; it must instead return a "was dropped" error to the client.
+
+    The window is a sub-millisecond cross-thread gap, so we make it
+    deterministic with the `subscribe_before_dispatch` failpoint: pause a
+    subscribe right after sequencing, drop the index it reads through while
+    it's parked, then resume so the dataflow ships against the dropped index.
+    Assert that the client gets a clean error, that environmentd survives, and
+    that no duplicate statement-logging end was logged.
+    """
+
+    failpoint = "subscribe_before_dispatch"
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        c.sql("CREATE TABLE t (a int); INSERT INTO t SELECT generate_series(1, 10);")
+        # The subscribe reads through this index, so its dataflow imports it.
+        c.sql("CREATE DEFAULT INDEX t_idx ON t")
+
+        subscriber_ready = Event()
+        failpoint_armed = Event()
+        subscribe_outcome: list[str] = []
+
+        def subscriber() -> None:
+            try:
+                with c.sql_cursor() as cur:
+                    # We connect *before* the failpoint is armed. The failpoint
+                    # only parks subscribes, but keeping the same structure as
+                    # the registered-peek tests makes the ordering obvious.
+                    subscriber_ready.set()
+                    failpoint_armed.wait()
+                    cur.execute("BEGIN")
+                    cur.execute("DECLARE sub CURSOR FOR SUBSCRIBE (SELECT * FROM t)")
+                    # The FETCH executes the subscribe: it sequences on the
+                    # session task and parks at the failpoint before
+                    # dispatching to the coordinator. It fails once t_idx is
+                    # dropped.
+                    cur.execute("FETCH ALL sub WITH (timeout = '30s')")
+                    cur.fetchall()
+                    subscribe_outcome.append("ok")
+            except Exception as e:
+                subscribe_outcome.append(f"error: {e}")
+
+        subscribe_thread = PropagatingThread(target=subscriber, name="subscriber")
+        subscribe_thread.start()
+
+        with c.sql_cursor() as control:
+            assert subscriber_ready.wait(timeout=30), "subscriber failed to connect"
+            # Arm: every subscribe now parks right after sequencing.
+            control.execute(f"SET failpoints = '{failpoint}=pause'")
+            failpoint_armed.set()
+            # Give the subscriber time to sequence its SUBSCRIBE and park. It
+            # stays parked until we turn the failpoint off, so this only has to
+            # outlast planning and optimization, not race a narrow window.
+            time.sleep(5)
+            # Drop the index while the subscribe is parked: the coordinator
+            # removes the index's compute collection.
+            control.execute("DROP INDEX t_idx")
+            # Resume the subscribe: shipping its dataflow now fails on the
+            # missing index collection, which must surface as an error on the
+            # subscribing session, not a coordinator panic.
+            control.execute(f"SET failpoints = '{failpoint}=off'")
+
+        subscribe_thread.join(timeout=30)
+
+        # The parked subscribe must actually have failed on the dropped index;
+        # otherwise the race didn't happen and the test is silently vacuous.
+        assert subscribe_outcome, "subscriber thread did not finish"
+        assert subscribe_outcome[0].startswith("error") and "was dropped" in (
+            subscribe_outcome[0]
+        ), f"expected the subscribe to fail on the dropped index, got: {subscribe_outcome[0]}"
+
+        # A panic on the coordinator thread aborts the entire environmentd
+        # process (src/ore/src/panic.rs); with no restart policy the container
+        # stays down and this fresh connection raises.
+        with c.sql_cursor() as cur:
+            cur.execute("SELECT 1")
+            assert cur.fetchone() == (1,)
+
+        # Statement logging must have ended the failed subscribe exactly once
+        # (the frontend logs the error end; the coordinator defuses its guard).
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert (
+            "duplicate end_statement_execution" not in logs.stdout
+        ), "statement execution was ended twice; end-of-execution ownership handoff regressed"
+
+
+def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
+    """A read-then-write that reports zero rows must not retire before the write
+    that emptied its selection is readable through the timestamp oracle.
+
+    The OCC path linearizes only its initial `as_of`, and its internal subscribe
+    follows Persist visibility, which runs ahead of the oracle: the group
+    committer appends before it applies the write timestamp. A DELETE or UPDATE
+    can therefore consolidate its selection to empty against state no
+    oracle-timestamped read can reach yet, report zero rows through
+    `NoRowsMatched`, and return. A strict-serializable read issued after that
+    response then still sees the row the response said was not there, and no
+    serial order explains that history.
+
+    The `group_commit_before_apply_write` failpoint holds the winning writer
+    inside that window, the same one a second `environmentd` process opens on
+    its own with no ordering against local Persist visibility.
+
+    The winner is a blind INSERT into a second table rather than a write to the
+    target, because a blind write takes its timestamp from the oracle before it
+    parks. Its `W` is therefore below the target the UPDATE picks, so the UPDATE
+    folds the winner's effect into an empty payload and reaches its zero-row answer
+    without submitting anything, while the oracle still cannot serve reads at `W`.
+
+    A winner that took a timestamped write, an OCC `DELETE` on the target for
+    instance, does not witness this. `commit_timestamped` only peeks the oracle, so
+    a parked one leaves the write timestamp untouched, the UPDATE picks `W` itself,
+    and its submission queues behind the parked winner on the group committer. The
+    refusal then cannot come back until the winner has applied `W`, so the answer
+    is only ever reached after the oracle already covers it and the assertion below
+    holds whether or not the zero-row path linearizes at all.
+
+    NOTE: The premise relies on the UPDATE's frontier reaching `W + 1` even though
+    the winner wrote a different table, which holds because a txns-shard append
+    advances the readable upper of every registered table. If that ever stops
+    holding, the UPDATE waits for its frontier rather than for the oracle, and an
+    attempt passes without witnessing anything.
+    """
+
+    # Every txns-shard write parks here while armed, including the keepalives
+    # that advance table uppers, so this has to be a bounded `sleep` and not a
+    # `pause`: a keepalive would take the `pause` first and the winning INSERT
+    # would never get to append. The window has to outlast a peek, one subscribe
+    # dataflow installation, and the UPDATE's own wait for the oracle.
+    failpoint = "group_commit_before_apply_write"
+    arm = f"SET failpoints = '{failpoint}=sleep(10000)'"
+    disarm = f"SET failpoints = '{failpoint}=off'"
+
+    def occ_writes() -> tuple[int, int]:
+        """Session read-then-writes sequenced through OCC, and how many of their
+        write attempts lost the race for their write timestamp."""
+        metric = "mz_occ_read_then_write_retry_count"
+        metrics = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        values = {}
+        for suffix in ["count", "sum"]:
+            prefix = f'{metric}_{suffix}{{caller="session"}} '
+            values[suffix] = next(
+                (
+                    int(float(line.split()[1]))
+                    for line in metrics.splitlines()
+                    if line.startswith(prefix)
+                ),
+                0,
+            )
+        return values["count"], values["sum"]
+
+    def guard_rows(cur: Cursor, key: int) -> int:
+        """Rows of `guard` for `key`, which is what the UPDATE's selection reads."""
+        cur.execute(f"SELECT count(*) FROM guard WHERE g = {key}".encode())
+        row = cur.fetchone()
+        assert row is not None
+        return int(row[0])
+
+    with c.override(Materialized()):
+        c.up("materialized")
+        c.sql("CREATE TABLE t (k int, v int)")
+        # A row here empties the UPDATE's selection. Keyed per attempt, so an
+        # attempt never starts from a selection an earlier one already emptied.
+        c.sql("CREATE TABLE guard (g int)")
+
+        sequenced = occ_writes()[0]
+        c.sql("UPDATE t SET v = v + 1 WHERE k = 0")
+        assert occ_writes()[0] > sequenced, "empty UPDATE did not reach OCC"
+
+        # Connections are opened before the failpoint is armed: starting a session
+        # appends to `mz_sessions`, which parks like any other write.
+        with (
+            c.sql_cursor() as control,
+            c.sql_cursor() as probe,
+            c.sql_cursor() as winner_cur,
+            c.sql_cursor() as session,
+        ):
+            # A serializable read may pick a timestamp past the oracle's read
+            # timestamp, so it sees the winner's append while a strict-serializable
+            # read cannot.
+            probe.execute("SET transaction_isolation = 'serializable'")
+
+            # An attempt only says something while the window is open. The
+            # failpoint's `sleep` can expire first, and then the guard row is
+            # readable through the oracle and the UPDATE reports zero rows for the
+            # ordinary reason. The witness below tells the two apart, and an
+            # attempt that lost the window is retried with a fresh key.
+            for attempt in range(1, 4):
+                key = attempt
+                c.sql(f"INSERT INTO t VALUES ({key}, 1)")
+                armed = Event()
+
+                def guard_winner(key: int = key) -> None:
+                    armed.wait()
+                    # Takes its timestamp from the oracle, lands its append, then
+                    # parks before applying that timestamp to the oracle.
+                    winner_cur.execute(f"INSERT INTO guard VALUES ({key})".encode())
+
+                winner = PropagatingThread(target=guard_winner, name="winner")
+                winner.start()
+                control.execute(arm)
+                armed.set()
+
+                # The winner's append is visible in Persist from here on ...
+                deadline = time.time() + 120
+                while guard_rows(probe, key) == 0:
+                    assert (
+                        time.time() < deadline
+                    ), "the winning INSERT never became visible in Persist"
+                    time.sleep(0.1)
+                # ... and the oracle cannot serve reads at it yet, which is what
+                # puts us inside the window. This witness says nothing about the
+                # UPDATE, so it stays valid once the zero-row path waits.
+                before = guard_rows(session, key)
+
+                conflicts = occ_writes()[1]
+                started = time.time()
+                session.execute(
+                    f"UPDATE t SET v = v + 1 WHERE k = {key} "
+                    f"AND NOT EXISTS (SELECT 1 FROM guard WHERE g = {key})".encode()
+                )
+                matched = session.rowcount
+                elapsed = time.time() - started
+                after = guard_rows(session, key)
+                conflicts = occ_writes()[1] - conflicts
+
+                control.execute(disarm)
+                # `off` does not interrupt a `sleep` under way, so this waits out
+                # the rest of the window.
+                winner.join(timeout=120)
+                assert not winner.is_alive(), "the winning INSERT never finished"
+
+                print(
+                    f"attempt {attempt}: UPDATE matched {matched} row(s) in "
+                    f"{elapsed:.1f}s with {conflicts} write conflict(s); "
+                    f"strict-serializable reads saw {before} guard row(s) before it "
+                    f"and {after} after"
+                )
+                assert matched == 0, (
+                    f"the UPDATE matched {matched} row(s) with the guard row already "
+                    "visible, so it never took the zero-row path"
+                )
+                if before > 0:
+                    # The guard row was already readable through the oracle, so
+                    # the zero-row answer needed no linearization and this attempt
+                    # witnesses nothing.
+                    continue
+
+                assert conflicts == 0, (
+                    f"the UPDATE lost {conflicts} write conflict(s), so it submitted "
+                    "a write and its answer came back only after the parked winner "
+                    "applied, which leaves the assertion below with nothing to witness"
+                )
+
+                # Without the linearization the UPDATE returns while the oracle is
+                # still below the guard row's timestamp, so this read lands below it
+                # too and reports 0: a statement that answered "no rows" from state
+                # the following read cannot see.
+                assert after == 1, (
+                    "the UPDATE reported zero rows matched from state the oracle had "
+                    "not applied yet, and a strict-serializable read after it saw "
+                    f"{after} guard row(s): the zero-row response was not linearized "
+                    "against the write that emptied the selection"
+                )
+                break
+            else:
+                raise AssertionError(
+                    "no attempt ran its UPDATE while the winning INSERT was "
+                    "visible in Persist but not yet through the oracle, so the "
+                    "window was never observed"
+                )
+
+
+def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
+    """A read-then-write whose selection reads persisted state must commit as
+    its own transaction, including when its subscribe ends on its own.
+
+    The OCC path stages a mutation's diffs only when the selection reads
+    nothing, because only then is the statement one that may belong to a
+    transaction. A selection that reads persisted state commits inside the OCC
+    loop and ends the implicit transaction it opened instead of spanning the
+    rest of an extended-protocol pipeline, so a later failure there cannot undo
+    it.
+
+    Which of the two happens is decided twice, and the answers differ. Before
+    the dataflow runs it is `depends_on()` on the selection. Once it runs it is
+    whether the subscribe closed on its own, which it also does for a sealed
+    persisted input: a `REFRESH AT` materialized view past its last refresh has
+    an empty write frontier, so the sink's output frontier reaches the empty
+    antichain. An `INSERT ... SELECT` over such a view reads persisted state and
+    still takes the closed-channel exit. Only the syntactic answer may decide
+    transaction membership, or whether a statement's rows survive would turn on
+    an input passing its last refresh rather than on the statement.
+    """
+
+    def rows_surviving(write: str) -> int:
+        """Rows left in `dst` once `write` has succeeded and the pipeline behind
+        it has failed. Leaves `dst` empty again.
+
+        `write` is sent as one extended-protocol pipeline with a failing
+        statement behind it and no `Sync` between them. A pipeline is an
+        implicit transaction, so rows going missing here is exactly `write`
+        having joined that transaction instead of committing on its own.
+        """
+        with c.sql_connection() as conn:
+            try:
+                # psycopg pipelines the extended protocol only, and syncs when
+                # the block ends. Autocommit keeps a `BEGIN` off the front,
+                # which the OCC path would refuse outright.
+                with conn.cursor() as cur, conn.pipeline():
+                    cur.execute(write.encode())
+                    cur.execute(b"SELECT 1 / 0")
+            except DivisionByZero:
+                pass
+            else:
+                raise AssertionError(f"the statement behind {write!r} succeeded")
+        rows = c.sql_query("SELECT count(*) FROM dst")[0][0]
+        c.sql("DELETE FROM dst")
+        return rows
+
+    with c.override(Materialized()):
+        c.up("materialized")
+        c.sql(dedent("""
+                CREATE TABLE src (a int);
+                INSERT INTO src VALUES (1), (2), (3);
+                CREATE TABLE dst (a int);
+                CREATE MATERIALIZED VIEW sealed WITH (REFRESH AT CREATION) AS
+                    SELECT a FROM src;
+                """))
+
+        # An empty write frontier is what closes the subscribe, and it surfaces
+        # as a NULL `write_frontier`. Hydration alone is not enough, so wait for
+        # the seal rather than for the first successful read.
+        sealed = """SELECT f.write_frontier IS NULL
+                    FROM mz_internal.mz_frontiers f
+                    JOIN mz_materialized_views m ON (m.id = f.object_id)
+                    WHERE m.name = 'sealed'"""
+        deadline = time.time() + 120
+        while c.sql_query(sealed) != [(True,)]:
+            assert (
+                time.time() < deadline
+            ), "the REFRESH AT CREATION materialized view never sealed"
+            time.sleep(0.1)
+
+        # Control: the same pipeline over `src`, whose subscribe never ends on
+        # its own. It pins the harness, since rows lost here would mean the
+        # pipeline was never an open transaction to begin with.
+        write = "INSERT INTO dst SELECT a FROM src"
+        rows = rows_surviving(write)
+        assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
+
+        metrics = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        assert any(
+            line.startswith(
+                'mz_occ_read_then_write_retry_count_count{caller="session"} '
+            )
+            and float(line.split()[1]) > 0
+            for line in metrics.splitlines()
+        ), "persisted-input writes did not reach OCC"
+
+        write = "INSERT INTO dst SELECT a FROM sealed"
+        rows = rows_surviving(write)
+        assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
+
+
+def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
+    """A panic during optimization fails the statement and leaves environmentd
+    running, on every sequencing path and at every optimization stage the
+    path reaches.
+
+    Each path is meant to run the optimizer through `catch_unwind_optimize`,
+    which turns a panic into an internal error. A path that calls the
+    optimizer directly lets the panic reach the panic hook, which aborts the
+    process; the OCC read-then-write path did that (SQL-686). The
+    `optimize_mir_local`, `optimize_dataflow` and `finalize_dataflow`
+    failpoints sit at the start of the three stages, so a path with two
+    wrapped calls gets both of them exercised.
+    """
+    LOCAL = "optimize_mir_local"
+    GLOBAL = "optimize_dataflow"
+    LIR = "finalize_dataflow"
+    # Statements are expected to fail, so nothing they would create exists
+    # for the next round.
+    cases = [
+        ("SELECT * FROM t", [LOCAL, GLOBAL, LIR]),
+        ("SUBSCRIBE (SELECT * FROM t)", [LOCAL, GLOBAL, LIR]),
+        ("CREATE VIEW v2 AS SELECT * FROM t", [LOCAL]),
+        ("CREATE MATERIALIZED VIEW mv AS SELECT * FROM t", [LOCAL, GLOBAL, LIR]),
+        ("CREATE INDEX i ON t (a)", [GLOBAL, LIR]),
+        ("DELETE FROM t WHERE a IN (SELECT a FROM v)", [LOCAL, GLOBAL, LIR]),
+    ]
+
+    def check() -> None:
+        with c.sql_cursor() as cur:
+            # A SUBSCRIBE that unexpectedly succeeds would otherwise wait for
+            # rows forever.
+            cur.execute("SET statement_timeout = '30s'")
+            for statement, failpoints in cases:
+                for failpoint in failpoints:
+                    cur.execute(
+                        f"SET failpoints = '{failpoint}=panic(forced optimizer panic)'".encode()
+                    )
+                    try:
+                        cur.execute(statement.encode())
+                    except DatabaseError as e:
+                        assert "unexpected panic during query optimization" in str(e), (
+                            statement,
+                            failpoint,
+                            e,
+                        )
+                    else:
+                        raise AssertionError(
+                            f"{statement!r} succeeded with {failpoint} set to panic"
+                        )
+                    finally:
+                        cur.execute(f"SET failpoints = '{failpoint}=off'".encode())
+            # The statements failed on their own; the process they ran in did not.
+            cur.execute("SELECT count(*) FROM t")
+            assert cur.fetchall() == [(1,)]
+
+    with c.override(Materialized()):
+        c.up("materialized")
+        c.sql(dedent("""
+                DROP TABLE IF EXISTS t CASCADE;
+                CREATE TABLE t (a int);
+                INSERT INTO t VALUES (1);
+                CREATE VIEW v AS SELECT a FROM t;
+                """))
+        check()
 
 
 def workflow_test_refresh_mv_warmup(
@@ -3943,9 +5398,7 @@ def workflow_test_refresh_mv_warmup(
     ):
         c.up("materialized", Service("testdrive", idle=True))
 
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
                 > CREATE CLUSTER cluster12 SIZE 'scale=1,workers=1';
                 > SET cluster = cluster12;
 
@@ -3976,17 +5429,13 @@ def workflow_test_refresh_mv_warmup(
                 100
 
                 > INSERT INTO t2 VALUES (1000);
-                """
-            )
-        )
+                """))
 
         # Restart environmentd
         c.kill("materialized")
         c.up("materialized")
 
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
                 ## 1. We shouldn't have a dataflow for mv1.
                 > SELECT * FROM mz_introspection.mz_dataflows WHERE name = 'mv1';
                 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="500ms"
@@ -4013,9 +5462,7 @@ def workflow_test_refresh_mv_warmup(
                 > INSERT INTO t2 VALUES (10000);
                 > SELECT * FROM mv2;
                 100
-                """
-            )
-        )
+                """))
 
 
 def check_read_frontiers_not_stuck(c: Composition, object_names: list[str]):
@@ -4088,9 +5535,7 @@ def workflow_test_refresh_mv_restart(
     """
 
     def check_introspection():
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
                 # Wait for introspection objects to be populated.
                 > SELECT count(*) > 0 FROM mz_catalog.mz_materialized_views;
                 true
@@ -4100,20 +5545,23 @@ def workflow_test_refresh_mv_restart(
                 true
 
                 # Check that no MV is missing from any of the introspection objects.
-                # Note that only REFRESH MVs show up in `mz_materialized_view_refreshes`, which is ok, because we are
-                # creating only REFRESH MVs in these tests.
                 > SELECT *
+                  FROM mz_materialized_views as mv
+                  FULL OUTER JOIN mz_internal.mz_materialized_view_refresh_strategies mvrs ON (mv.id = mvrs.materialized_view_id)
+                  WHERE mv.id IS NULL OR mvrs.materialized_view_id IS NULL;
+
+                # Note that only REFRESH MVs show up in `mz_materialized_view_refreshes`.
+                > WITH refresh_mvs AS (
+                    SELECT materialized_view_id
+                    FROM mz_internal.mz_materialized_view_refresh_strategies
+                    WHERE type != 'on-commit'
+                  )
+                  SELECT *
                   FROM
-                    mz_catalog.mz_materialized_views mv
-                    FULL OUTER JOIN mz_internal.mz_materialized_view_refreshes mvr ON (mv.id = mvr.materialized_view_id)
-                    FULL OUTER JOIN mz_internal.mz_materialized_view_refresh_strategies mvrs ON (mv.id = mvrs.materialized_view_id)
-                  WHERE
-                    mv.id IS NULL OR
-                    mvr.materialized_view_id IS NULL OR
-                    mvrs.materialized_view_id IS NULL;
-                """
-            )
-        )
+                    refresh_mvs rmv
+                    FULL OUTER JOIN mz_internal.mz_materialized_view_refreshes mvr ON (rmv.materialized_view_id = mvr.materialized_view_id)
+                  WHERE rmv.materialized_view_id IS NULL OR mvr.materialized_view_id IS NULL;
+                """))
 
     with c.override(
         Materialized(
@@ -4127,8 +5575,7 @@ def workflow_test_refresh_mv_restart(
     ):
         # We'll issue the same SQL commands in 1. and 2. (the only difference is we make the restart slow with a sleep),
         # so save the SQL commands in `before_restart` and `after_restart`.
-        before_restart = dedent(
-            """
+        before_restart = dedent("""
             > CREATE TABLE t (x int);
             > INSERT INTO t VALUES (100);
 
@@ -4212,11 +5659,9 @@ def workflow_test_refresh_mv_restart(
             > INSERT INTO t VALUES (1000);
 
             > ALTER CLUSTER cluster_b SET (REPLICATION FACTOR 0);
-            """
-        )
+            """)
 
-        after_restart = dedent(
-            """
+        after_restart = dedent("""
             > ALTER CLUSTER cluster_b SET (REPLICATION FACTOR 2);
 
             > SET TRANSACTION_ISOLATION TO 'STRICT SERIALIZABLE';
@@ -4298,8 +5743,7 @@ def workflow_test_refresh_mv_restart(
             100
             101
             1001
-            """
-        )
+            """)
 
         c.up("materialized", Service("testdrive", idle=True))
 
@@ -4333,9 +5777,7 @@ def workflow_test_refresh_mv_restart(
         c.up("materialized", Service("testdrive", idle=True))
 
         # 3.
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
                 > CREATE TABLE t (x int);
                 > INSERT INTO t VALUES (100);
 
@@ -4378,17 +5820,13 @@ def workflow_test_refresh_mv_restart(
                 > CREATE DEFAULT INDEX IN CLUSTER serving_indexed ON mv_3h;
 
                 > INSERT INTO t VALUES (1000);
-                """
-            )
-        )
+                """))
 
         check_introspection()
         c.kill("materialized")
         c.up("materialized")
         check_introspection()
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
                 > ALTER CLUSTER cluster_defgh SET (REPLICATION FACTOR 2);
 
                 > CREATE CLUSTER serving SIZE 'scale=1,workers=1';
@@ -4472,23 +5910,17 @@ def workflow_test_refresh_mv_restart(
 
                 > SELECT * FROM mv_3h;
                 41100
-                """
-            )
-        )
+                """))
         check_read_frontiers_not_stuck(c, ["t"])
         check_introspection()
 
         # Drop some MVs and check that this is reflected in the introspection objects.
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
                 > DROP MATERIALIZED VIEW mv_3h;
                 > DROP MATERIALIZED VIEW mv_3d;
                 > SELECT * FROM mz_catalog.mz_materialized_views
                   WHERE name = 'mv_3h' OR name = 'mv_3d';
-                """
-            )
-        )
+                """))
         check_introspection()
 
 
@@ -4513,8 +5945,7 @@ def workflow_test_github_8734(c: Composition) -> None:
 
         # Create a REFRESH MV and wait for it to refresh once, then take down
         # its cluster.
-        c.sql(
-            """
+        c.sql("""
             CREATE TABLE t (a int);
 
             CREATE CLUSTER test SIZE 'scale=1,workers=1';
@@ -4525,8 +5956,7 @@ def workflow_test_github_8734(c: Composition) -> None:
             SELECT * FROM mv;
 
             ALTER CLUSTER test SET (REPLICATION FACTOR 0);
-            """
-        )
+            """)
 
         check_read_frontiers_not_stuck(c, ["t"])
 
@@ -4557,9 +5987,7 @@ def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) ->
     ):
 
         def check_frontiers_advance():
-            c.testdrive(
-                dedent(
-                    r"""
+            c.testdrive(dedent(r"""
                 $ set-regex match=0|\d{13,20} replacement=<TIMESTAMP>
 
                 -- Run the frontier query once to make `tokio-postgres` collect type information.
@@ -4586,9 +6014,7 @@ def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) ->
                 <TIMESTAMP> -1 <TIMESTAMP>
 
                 > ROLLBACK
-                """
-                )
-            )
+                """))
 
         c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
@@ -4666,8 +6092,8 @@ def workflow_test_http_race_condition(
         thread.join()
 
     cleanup_seconds = 120 if ui.env_is_truthy("CI_COVERAGE_ENABLED") else 30
-    stopping_time = datetime.now() + timedelta(seconds=cleanup_seconds)
-    while datetime.now() < stopping_time:
+    stopping_time = datetime.now(UTC) + timedelta(seconds=cleanup_seconds)
+    while datetime.now(UTC) < stopping_time:
         result = c.sql_query(
             "SELECT * FROM mz_internal.mz_sessions WHERE connection_id <> pg_backend_pid()"
         )
@@ -4678,6 +6104,77 @@ def workflow_test_http_race_condition(
         )
     else:
         raise RuntimeError(f"Sessions did not clean up after {cleanup_seconds}s")
+
+
+def workflow_test_cmv_replica_alter_race(c: Composition) -> None:
+    """Regression test for SQL-304.
+
+    Concurrently creating a `REPLICA`-targeted materialized view and
+    `ALTER CLUSTER ... SET (REPLICATION FACTOR ...)` used to panic
+    environmentd when the targeted replica was dropped between
+    planning and the catalog transaction.
+    """
+    with c.override(
+        Materialized(
+            propagate_crashes=False,
+            sanity_restart=False,
+            additional_system_parameter_defaults={
+                "enable_replica_targeted_materialized_views": "true",
+            },
+        ),
+    ):
+        c.up("materialized")
+        c.sql(
+            "CREATE CLUSTER race_target "
+            "(SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)"
+        )
+
+        ctes = ", ".join(
+            f"s{i} AS (SELECT generate_series AS x FROM generate_series(1, 50))"
+            for i in range(6)
+        )
+        joins = " ".join(
+            f"JOIN s{i} ON s0.x % {i + 2} = s{i}.x % {i + 2}" for i in range(1, 6)
+        )
+        heavy = (
+            f"WITH {ctes} "
+            f"SELECT s0.x, COUNT(*), "
+            f"SUM(s0.x + s1.x + s2.x + s3.x + s4.x + s5.x) "
+            f"FROM s0 {joins} GROUP BY s0.x"
+        )
+
+        deadline = time.monotonic() + 30
+
+        def mv_worker(idx: int) -> None:
+            i = 0
+            while time.monotonic() < deadline:
+                try:
+                    c.sql(
+                        f"CREATE MATERIALIZED VIEW mv_{idx}_{i} "
+                        f"IN CLUSTER race_target REPLICA r2 AS {heavy}"
+                    )
+                except DatabaseError:
+                    # Concurrent drop of the target replica surfaces as a
+                    # `ChangedPlan` error after the fix. The point of the
+                    # test is that environmentd does not panic.
+                    pass
+                i += 1
+
+        def flipper() -> None:
+            while time.monotonic() < deadline:
+                for rf in (1, 2):
+                    c.sql(f"ALTER CLUSTER race_target SET (REPLICATION FACTOR {rf})")
+
+        threads = [PropagatingThread(target=mv_worker, args=(i,)) for i in range(8)] + [
+            PropagatingThread(target=flipper)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # If environmentd had panicked, this would raise.
+        c.sql("SELECT 1")
 
 
 def workflow_test_read_frontier_advancement(
@@ -4730,7 +6227,7 @@ def workflow_test_read_frontier_advancement(
         except DatabaseError as exc:
             assert (
                 exc.diag.message_primary
-                == 'subscribe has been terminated because underlying relation "materialize.public.mv2" was dropped'
+                == 'query could not complete because relation "materialize.public.mv2" was dropped'
             )
 
     subscribe_thread = Thread(target=subscribe)
@@ -4741,13 +6238,11 @@ def workflow_test_read_frontier_advancement(
 
     # Check that read frontiers advance.
     def collect_read_frontiers() -> dict[str, int]:
-        output = c.sql_query(
-            """
+        output = c.sql_query("""
             SELECT object_id, read_frontier
             FROM mz_internal.mz_frontiers
             WHERE object_id LIKE 'u%'
-            """
-        )
+            """)
         frontiers = {}
         for row in output:
             name, frontier = row
@@ -4788,19 +6283,17 @@ def workflow_test_adhoc_system_indexes(
         user="mz_system",
     )
 
-    output = c.sql_query(
-        """
+    output = c.sql_query("""
         SELECT i.id, o.name, c.name
         FROM mz_indexes i
         JOIN mz_objects o ON (i.on_id = o.id)
         JOIN mz_clusters c ON (i.cluster_id = c.id)
         WHERE i.name = 'mz_test_idx1'
-        """
-    )
+        """)
     assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
-    output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 9")
+    output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 8")
     assert "mz_test_idx1" in output[0][0], output
-    output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 9")
+    output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 8")
     assert len(output) > 0
 
     # The system user should be able to create a new index on an unstable
@@ -4810,29 +6303,31 @@ def workflow_test_adhoc_system_indexes(
         """
         ALTER SYSTEM SET unsafe_enable_unstable_dependencies = on;
         SET cluster = mz_catalog_server;
-        CREATE INDEX mz_test_idx2 ON mz_internal.mz_hydration_statuses (hydrated);
+        CREATE INDEX mz_test_idx2 ON mz_internal.mz_compute_hydration_statuses (hydrated);
         ALTER SYSTEM SET unsafe_enable_unstable_dependencies = off;
         """,
         port=6877,
         user="mz_system",
     )
 
-    output = c.sql_query(
-        """
+    output = c.sql_query("""
         SELECT i.id, o.name, c.name
         FROM mz_indexes i
         JOIN mz_objects o ON (i.on_id = o.id)
         JOIN mz_clusters c ON (i.cluster_id = c.id)
         WHERE i.name = 'mz_test_idx2'
-        """
-    )
-    assert output[0] == ("u2", "mz_hydration_statuses", "mz_catalog_server"), output
+        """)
+    assert output[0] == (
+        "u2",
+        "mz_compute_hydration_statuses",
+        "mz_catalog_server",
+    ), output
     output = c.sql_query(
-        "EXPLAIN SELECT * FROM mz_internal.mz_hydration_statuses WHERE hydrated"
+        "EXPLAIN SELECT * FROM mz_internal.mz_compute_hydration_statuses WHERE hydrated"
     )
     assert "mz_test_idx2" in output[0][0]
     output = c.sql_query(
-        "SELECT * FROM mz_internal.mz_hydration_statuses WHERE hydrated"
+        "SELECT * FROM mz_internal.mz_compute_hydration_statuses WHERE hydrated"
     )
     assert len(output) > 0
 
@@ -4841,18 +6336,20 @@ def workflow_test_adhoc_system_indexes(
     c.kill("materialized")
     c.up("materialized")
 
-    output = c.sql_query(
-        """
+    output = c.sql_query("""
         SELECT i.id, o.name, c.name
         FROM mz_indexes i
         JOIN mz_objects o ON (i.on_id = o.id)
         JOIN mz_clusters c ON (i.cluster_id = c.id)
         WHERE i.name LIKE 'mz_test_idx%'
         ORDER BY id
-        """
-    )
+        """)
     assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
-    assert output[1] == ("u2", "mz_hydration_statuses", "mz_catalog_server"), output
+    assert output[1] == (
+        "u2",
+        "mz_compute_hydration_statuses",
+        "mz_catalog_server",
+    ), output
 
     # Make sure the new indexes can be dropped again.
     c.sql(
@@ -4864,16 +6361,14 @@ def workflow_test_adhoc_system_indexes(
         user="mz_system",
     )
 
-    output = c.sql_query(
-        """
+    output = c.sql_query("""
         SELECT i.id, o.name, c.name
         FROM mz_indexes i
         JOIN mz_objects o ON (i.on_id = o.id)
         JOIN mz_clusters c ON (i.cluster_id = c.id)
         WHERE i.name LIKE 'mz_test_idx%'
         ORDER BY id
-        """
-    )
+        """)
     assert not output, output
 
 
@@ -4894,9 +6389,7 @@ def workflow_test_mz_introspection_cluster_compat(
         c.up("materialized", Service("testdrive", idle=True))
 
         # Setting variables through `SET <variable>`.
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > SHOW cluster
                 quickstart
 
@@ -4918,43 +6411,29 @@ def workflow_test_mz_introspection_cluster_compat(
                 > RESET auto_route_introspection_queries
                 > SHOW auto_route_catalog_queries
                 on
-                """
-            )
-        )
+                """))
 
         # Setting variables through `ALTER ROLE`.
-        c.sql(
-            """
+        c.sql("""
             ALTER ROLE materialize SET cluster = mz_introspection;
             ALTER ROLE materialize SET auto_route_introspection_queries = off;
-            """
-        )
-        c.testdrive(
-            dedent(
-                """
+            """)
+        c.testdrive(dedent("""
                 > SHOW cluster
                 mz_catalog_server
                 > SHOW auto_route_catalog_queries
                 off
-                """
-            )
-        )
-        c.sql(
-            """
+                """))
+        c.sql("""
             ALTER ROLE materialize RESET cluster;
             ALTER ROLE materialize RESET auto_route_introspection_queries;
-            """
-        )
-        c.testdrive(
-            dedent(
-                """
+            """)
+        c.testdrive(dedent("""
                 > SHOW cluster
                 quickstart
                 > SHOW auto_route_catalog_queries
                 on
-                """
-            )
-        )
+                """))
 
         # Setting variables through the connection string.
         port = c.default_port("materialized")
@@ -4997,8 +6476,7 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
         c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
         # Set up an unorchestrated replica with a couple dataflows.
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER test REPLICAS (
                 test (
                     STORAGECTL ADDRESSES ['clusterd1:2100'],
@@ -5013,16 +6491,13 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
             CREATE TABLE t (a int);
             CREATE INDEX idx ON t (a);
             CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
-            """
-        )
+            """)
 
         output = c.sql_query("SELECT id FROM mz_cluster_replicas WHERE name = 'test'")
         replica_id = output[0][0]
 
         # Wait for the dataflows to be reported as hydrated.
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 > SELECT o.name, h.time_ns IS NOT NULL
                   FROM mz_internal.mz_compute_hydration_times h
                   JOIN mz_objects o ON o.id = h.object_id
@@ -5031,17 +6506,13 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
                       h.object_id LIKE 'u%'
                 idx true
                 mv  true
-                """
-            )
-        )
+                """))
 
-        output = c.sql_query(
-            f"""
+        output = c.sql_query(f"""
             SELECT sum(time_ns)
             FROM mz_internal.mz_compute_hydration_times
             WHERE replica_id = '{replica_id}'
-            """
-        )
+            """)
         previous_times = output[0][0]
 
         # Kill the replica, wait for a bit for envd to notice, then restart it.
@@ -5049,9 +6520,7 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
         time.sleep(5)
 
         # Verify that the hydration times are still queryable.
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 > SELECT o.name, h.time_ns IS NOT NULL
                   FROM mz_internal.mz_compute_hydration_times h
                   JOIN mz_objects o ON o.id = h.object_id
@@ -5060,23 +6529,132 @@ def workflow_test_unified_introspection_during_replica_disconnect(c: Composition
                       h.object_id LIKE 'u%'
                 idx true
                 mv  true
-                """
-            )
-        )
+                """))
 
         # Restart the replica, wait for it to report a new set of hydration times.
         c.up("clusterd1")
 
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 > SELECT sum(time_ns) != {previous_times}
                   FROM mz_internal.mz_compute_hydration_times
                   WHERE replica_id = '{replica_id}'
                 true
-                """
-            )
+                """))
+
+
+def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
+    c.up("materialized")
+    c.sql(
+        """
+        ALTER SYSTEM SET enable_background_alter_cluster = true;
+        ALTER SYSTEM SET enable_cluster_reconfiguration_lag_gate = true;
+        ALTER SYSTEM SET cluster_reconfiguration_allowed_lag = '0s';
+        ALTER SYSTEM SET cluster_controller_tick_interval = '100ms';
+        SET failpoints = 'cluster_controller_hold_readiness=return';
+        """,
+        user="mz_system",
+        port=6877,
+    )
+    c.sql("""
+        CREATE CLUSTER lag_gate SIZE 'scale=1,workers=1';
+        CREATE TABLE lag_gate_table (a int);
+        CREATE DEFAULT INDEX IN CLUSTER lag_gate ON lag_gate_table;
+        INSERT INTO lag_gate_table VALUES (1);
+        ALTER CLUSTER lag_gate SET (SIZE = 'scale=1,workers=2');
+        """)
+
+    def wait_for(query: str) -> None:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if c.sql_query(query) == [(True,)]:
+                return
+            time.sleep(0.1)
+        raise AssertionError(f"condition did not become true: {query}")
+
+    replicas = """
+        SELECT r.id FROM mz_cluster_replicas r
+        JOIN mz_clusters c ON c.id = r.cluster_id
+        WHERE c.name = 'lag_gate'
+    """
+    wait_for(f"SELECT count(*) = 2 FROM ({replicas})")
+    outgoing, target = sorted(
+        (row[0] for row in c.sql_query(replicas)), key=lambda id: int(id[1:])
+    )
+    index_id = c.sql_query("""
+        SELECT i.id FROM mz_indexes i JOIN mz_tables t ON i.on_id = t.id
+        WHERE t.name = 'lag_gate_table'
+        """)[0][0]
+    wait_for(f"""
+        SELECT count(*) = 2 AND bool_and(hydrated)
+        FROM mz_internal.mz_compute_hydration_statuses
+        WHERE object_id = '{index_id}' AND replica_id IN ('{outgoing}', '{target}')
+        """)
+
+    # The process orchestrator records each worker process in its service's
+    # run directory. Stop only the replacement after real hydration, leaving
+    # its connection and the outgoing replica running.
+    pid_files = c.exec(
+        "materialized",
+        "find",
+        "/tmp",
+        "-path",
+        f"*/cluster-*-replica-{target}-gen-*/0.pid",
+        capture=True,
+    ).stdout.splitlines()
+    assert len(pid_files) == 1, pid_files
+    pid = c.exec(
+        "materialized", "head", "-n", "1", pid_files[0], capture=True
+    ).stdout.strip()
+    assert pid.isdigit(), pid
+    c.exec("materialized", "kill", "-STOP", pid)
+    try:
+        c.sql("INSERT INTO lag_gate_table VALUES (2)")
+        wait_for(f"""
+            SELECT old.write_frontier > new.write_frontier
+            FROM mz_catalog.mz_cluster_replica_frontiers old
+            JOIN mz_catalog.mz_cluster_replica_frontiers new USING (object_id)
+            WHERE old.object_id = '{index_id}'
+              AND old.replica_id = '{outgoing}' AND new.replica_id = '{target}'
+            """)
+        c.sql(
+            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            user="mz_system",
+            port=6877,
         )
+        # Observe an actual failed readiness probe before asserting retention.
+        # Merely sleeping and checking the catalog could pass without a probe.
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            assert len(c.sql_query(replicas)) == 2, "cut over to a lagging replacement"
+            logs = c.invoke("logs", "materialized", capture=True).stdout
+            if any(
+                "collections are not ready" in line
+                and re.search(
+                    rf"lagging_ticks=\{{[^}}]*User\({index_id[1:]}\): [1-9][0-9]*", line
+                )
+                for line in logs.splitlines()
+            ):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("no lagging replacement readiness probe observed")
+        assert len(c.sql_query(replicas)) == 2
+        assert c.sql_query("SELECT size FROM mz_clusters WHERE name = 'lag_gate'") == [
+            ("scale=1,workers=1",)
+        ]
+    finally:
+        c.exec("materialized", "kill", "-CONT", pid)
+        c.sql(
+            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            user="mz_system",
+            port=6877,
+        )
+
+    wait_for("""
+        SELECT size = 'scale=1,workers=2' FROM mz_clusters WHERE name = 'lag_gate'
+        """)
+    wait_for(f"SELECT count(*) = 1 FROM ({replicas})")
+    assert c.sql_query(replicas) == [(target,)]
 
 
 def workflow_test_zero_downtime_reconfigure(
@@ -5091,21 +6669,18 @@ def workflow_test_zero_downtime_reconfigure(
         c.up(
             "materialized",
             "clusterd1",
-            "zookeeper",
             "kafka",
             "schema-registry",
             Service("testdrive", idle=True),
         )
         c.testdrive(
-            dedent(
-                """
+            dedent("""
             $ kafka-create-topic topic=graceful-reconfig
 
             $ kafka-ingest topic=graceful-reconfig format=bytes key-format=bytes key-terminator=: repeat=1000
             key${kafka-ingest.iteration}:value${kafka-ingest.iteration}
 
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
             CREATE CLUSTER cluster1 ( SIZE = 'scale=1,workers=1');
             GRANT ALL ON CLUSTER cluster1 TO materialize;
 
@@ -5131,106 +6706,294 @@ def workflow_test_zero_downtime_reconfigure(
               KEY FORMAT TEXT
               VALUE FORMAT TEXT
               ENVELOPE UPSERT
-            """
-            ),
+            """),
         )
-        replicas = c.sql_query(
-            """
+        # Drive the controller tick down so the reconfiguration converges quickly.
+        c.sql(
+            "ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'",
+            port=6877,
+            user="mz_system",
+        )
+
+        # No reconfiguration in flight yet: exactly the one managed replica.
+        replicas = c.sql_query("""
             SELECT mz_cluster_replicas.name
             FROM mz_cluster_replicas, mz_clusters WHERE
             mz_cluster_replicas.cluster_id = mz_clusters.id AND mz_clusters.name='cluster1';
-            """
-        )
+            """)
         assert replicas == [
             ("r1",)
         ], f"Cluster should only have one replica prior to alter, found {replicas}"
 
-        replicas = c.sql_query(
-            """
-            SELECT cr.name
-            FROM mz_internal.mz_pending_cluster_replicas ur
-            INNER join mz_cluster_replicas cr ON cr.id=ur.id
-            INNER join mz_clusters c ON c.id=cr.cluster_id
-            WHERE c.name = 'cluster1';
-            """
-        )
-        assert (
-            len(replicas) == 0
-        ), f"Cluster should only have no pending replica prior to alter, found {replicas}"
-
-        def zero_downtime_alter():
-            try:
-                c.sql(
-                    """
-                    ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '10s')
-                    """,
-                    port=6877,
-                    user="mz_system",
-                )
-            except OperationalError:
-                # We expect the network to drop during this
-                pass
-
-        # Run a reconfigure
-        thread = Thread(target=zero_downtime_alter)
-        thread.start()
-        time.sleep(3)
-
-        # Validate that there is a pending replica
-        replicas = c.sql_query(
-            """
-            SELECT mz_cluster_replicas.name
-            FROM mz_cluster_replicas, mz_clusters WHERE
-            mz_cluster_replicas.cluster_id = mz_clusters.id AND mz_clusters.name='cluster1';
-            """
-        )
-        assert replicas == [("r1",), ("r1-pending",)], replicas
-        replicas = c.sql_query(
-            """
-            SELECT cr.name
-            FROM mz_internal.mz_pending_cluster_replicas ur
-            INNER join mz_cluster_replicas cr ON cr.id=ur.id
-            INNER join mz_clusters c ON c.id=cr.cluster_id
-            WHERE c.name = 'cluster1';
-            """
-        )
-        assert (
-            len(replicas) == 1
-        ), "pending replica should be in mz_pending_cluster_replicas"
-
-        # Restart environmentd
-        c.kill("materialized")
-        c.up("materialized")
-
-        # Ensure there is no pending replica
-        replicas = c.sql_query(
-            """
-            SELECT mz_cluster_replicas.name
-            FROM mz_cluster_replicas, mz_clusters
-            WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
-            AND mz_clusters.name='cluster1';
-            """
-        )
-        assert replicas == [
-            ("r1",)
-        ], f"Expected one non pending replica, found {replicas}"
-
-        # Ensure the cluster config did not change
-        assert (
-            c.sql_query(
-                """
-            SELECT size FROM mz_clusters WHERE name='cluster1';
-            """
-            )
-            == [("scale=1,workers=1",)]
-        )
+        # Kick off a graceful reconfiguration. With the controller owning the
+        # replica set and background ALTER on, this writes a durable
+        # reconfiguration record and returns immediately; the controller brings up
+        # a fresh target replica alongside r1, re-hydrates it, then cuts the
+        # realized size over and drops r1. Explicit ON TIMEOUT COMMIT ensures the
+        # reconfiguration commits even if its deadline passes during the restart
+        # below.
         c.sql(
             """
-            ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
+            ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '10s', ON TIMEOUT 'COMMIT'))
             """,
             port=6877,
             user="mz_system",
         )
+
+        # Wait until the reconfiguration is in flight (the controller has brought
+        # up the target replica alongside r1) so the restart interrupts it.
+        for _ in range(60):
+            replicas = c.sql_query("""
+                SELECT mz_cluster_replicas.name
+                FROM mz_cluster_replicas, mz_clusters
+                WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
+                AND mz_clusters.name='cluster1';
+                """)
+            if len(replicas) >= 2:
+                break
+            time.sleep(0.5)
+
+        # The controller never creates a legacy "-pending" replica.
+        pending = c.sql_query("""
+            SELECT cr.name
+            FROM mz_internal.mz_pending_cluster_replicas ur
+            INNER join mz_cluster_replicas cr ON cr.id=ur.id
+            INNER join mz_clusters c ON c.id=cr.cluster_id
+            WHERE c.name = 'cluster1';
+            """)
+        assert (
+            len(pending) == 0
+        ), f"controller reconfiguration must not use pending replicas, found {pending}"
+
+        # Restart environmentd while the reconfiguration may still be in flight.
+        c.kill("materialized")
+        c.up("materialized")
+
+        # The reconfiguration record is durable, so the controller resumes and
+        # completes it across the restart: the realized size cuts over and the
+        # cluster settles back to a single managed replica at the new size.
+        size = None
+        for _ in range(120):
+            size = c.sql_query("SELECT size FROM mz_clusters WHERE name='cluster1';")
+            if size == [("scale=1,workers=2",)]:
+                break
+            time.sleep(1)
+        assert size == [
+            ("scale=1,workers=2",)
+        ], f"reconfiguration did not complete across the restart, size is {size}"
+
+        replicas = c.sql_query("""
+            SELECT mz_cluster_replicas.size
+            FROM mz_cluster_replicas, mz_clusters
+            WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
+            AND mz_clusters.name='cluster1';
+            """)
+        assert replicas == [
+            ("scale=1,workers=2",)
+        ], f"Expected one replica at the new size, found {replicas}"
+
+        # The source's data survived the zero-downtime reconfiguration.
+        c.testdrive(dedent("""
+            > SELECT count(*) FROM kafka_tbl
+            1000
+            """))
+
+
+def workflow_test_pending_replica_audit_events(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Regression test: a cluster reconfiguration interrupted by an environmentd
+    restart must not orphan a replica in mz_audit_events. The controller's
+    reconfiguration record is durable, so on restart the controller resumes and
+    completes the reconfiguration; every cluster-replica "create" must still end
+    up matched by a "drop" (unless the replica still exists), with no leftover
+    legacy "-pending" replica.
+    """
+    c.up("materialized")
+
+    # Drive the controller tick down so the (empty) cluster's reconfiguration
+    # converges quickly.
+    c.sql(
+        """
+        ALTER SYSTEM SET cluster_controller_tick_interval = '5ms';
+        CREATE CLUSTER test_audit (SIZE = 'scale=1,workers=1');
+        GRANT ALL ON CLUSTER test_audit TO materialize;
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    # Kick off a background graceful reconfiguration. With the controller owning
+    # the replica set and background ALTER on, this writes a durable
+    # reconfiguration record and returns immediately; the controller brings up a
+    # fresh target replica, cuts the size over, and drops the old one. `WAIT FOR`
+    # uses the safe rollback action with a long deadline, and the in-flight
+    # reconfiguration finalizes once the (empty) target hydrates.
+    c.sql(
+        """
+        ALTER CLUSTER test_audit SET (SIZE = 'scale=1,workers=2') WITH (WAIT FOR '300s')
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    # The controller never creates a legacy "-pending" replica.
+    pending = c.sql_query("""
+        SELECT cr.name
+        FROM mz_internal.mz_pending_cluster_replicas pr
+        JOIN mz_cluster_replicas cr ON cr.id = pr.id
+        JOIN mz_clusters c ON c.id = cr.cluster_id
+        WHERE c.name = 'test_audit';
+        """)
+    assert (
+        len(pending) == 0
+    ), f"controller reconfiguration must not use pending replicas, found {pending}"
+
+    # Kill envd while the reconfiguration may still be in flight, then restart.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # The controller resumes the durable reconfiguration and completes it: the
+    # cluster settles on a single managed replica at the new size.
+    replicas = None
+    for _ in range(120):
+        replicas = c.sql_query("""
+            SELECT cr.size FROM mz_cluster_replicas cr
+            JOIN mz_clusters c ON c.id = cr.cluster_id
+            WHERE c.name = 'test_audit';
+            """)
+        if replicas == [("scale=1,workers=2",)]:
+            break
+        time.sleep(1)
+    assert replicas == [
+        ("scale=1,workers=2",)
+    ], f"reconfiguration did not complete across the restart, found {replicas}"
+
+    # No leftover pending replica.
+    pending = c.sql_query("""
+        SELECT cr.name
+        FROM mz_internal.mz_pending_cluster_replicas pr
+        JOIN mz_cluster_replicas cr ON cr.id = pr.id
+        JOIN mz_clusters c ON c.id = cr.cluster_id
+        WHERE c.name = 'test_audit';
+        """)
+    assert (
+        len(pending) == 0
+    ), f"Expected no pending replica after restart, found {pending}"
+
+    # Verify that every 'create' of a cluster-replica in
+    # mz_audit_events has a matching 'drop' (or the replica still
+    # exists).  We check specifically for cluster 'test_audit'.
+    unmatched = c.sql_query("""
+        SELECT details::json->>'replica_name'
+        FROM mz_audit_events
+        WHERE object_type = 'cluster-replica'
+          AND event_type = 'create'
+          AND details::json->>'cluster_name' = 'test_audit'
+          AND details::json->>'replica_name' NOT IN (
+              SELECT cr.name FROM mz_cluster_replicas cr
+              JOIN mz_clusters c ON c.id = cr.cluster_id
+              WHERE c.name = 'test_audit'
+          )
+          AND details::json->>'replica_name' NOT IN (
+              SELECT details::json->>'replica_name'
+              FROM mz_audit_events
+              WHERE object_type = 'cluster-replica'
+                AND event_type = 'drop'
+                AND details::json->>'cluster_name' = 'test_audit'
+          );
+        """)
+    assert unmatched == [], f"Found create events without matching drop: {unmatched}"
+
+    # Clean up.
+    c.sql(
+        """
+        DROP CLUSTER test_audit CASCADE;
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+
+def workflow_test_system_cluster_audit_events(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that system cluster and replica create events appear in
+    mz_audit_events after a fresh startup.
+    """
+    c.up("materialized")
+
+    # Verify that create events exist for the builtin system clusters.
+    system_cluster_creates = c.sql_query("""
+        SELECT event_type, object_type, details->>'name'
+        FROM mz_audit_events
+        WHERE event_type = 'create'
+          AND object_type = 'cluster'
+          AND details->>'id' LIKE 's%'
+        ORDER BY details->>'name';
+        """)
+    system_cluster_names = [row[2] for row in system_cluster_creates]
+    for expected in [
+        "mz_analytics",
+        "mz_catalog_server",
+        "mz_probe",
+        "mz_support",
+        "mz_system",
+    ]:
+        assert (
+            expected in system_cluster_names
+        ), f"Expected create audit event for system cluster '{expected}', found: {system_cluster_names}"
+
+    # Verify that create events exist for the builtin system cluster replicas.
+    system_replica_creates = c.sql_query("""
+        SELECT event_type, object_type, details->>'cluster_name'
+        FROM mz_audit_events
+        WHERE event_type = 'create'
+          AND object_type = 'cluster-replica'
+          AND details->>'cluster_id' LIKE 's%'
+        ORDER BY details->>'cluster_name';
+        """)
+    system_replica_cluster_names = [row[2] for row in system_replica_creates]
+    for expected in ["mz_catalog_server", "mz_probe", "mz_system"]:
+        assert (
+            expected in system_replica_cluster_names
+        ), f"Expected create audit event for replica on '{expected}', found: {system_replica_cluster_names}"
+
+    # Record counts before restart.
+    cluster_count_before = len(system_cluster_creates)
+    replica_count_before = len(system_replica_creates)
+
+    # Restart and verify no new events are emitted when nothing changed.
+    c.kill("materialized")
+    c.up("materialized")
+
+    system_cluster_creates_after = c.sql_query("""
+        SELECT event_type, object_type, details->>'name'
+        FROM mz_audit_events
+        WHERE event_type = 'create'
+          AND object_type = 'cluster'
+          AND details->>'id' LIKE 's%'
+        ORDER BY details->>'name';
+        """)
+    assert len(system_cluster_creates_after) == cluster_count_before, (
+        f"Expected {cluster_count_before} system cluster create events after restart, "
+        f"got {len(system_cluster_creates_after)}"
+    )
+
+    system_replica_creates_after = c.sql_query("""
+        SELECT event_type, object_type, details->>'cluster_name'
+        FROM mz_audit_events
+        WHERE event_type = 'create'
+          AND object_type = 'cluster-replica'
+          AND details->>'cluster_id' LIKE 's%'
+        ORDER BY details->>'cluster_name';
+        """)
+    assert len(system_replica_creates_after) == replica_count_before, (
+        f"Expected {replica_count_before} system replica create events after restart, "
+        f"got {len(system_replica_creates_after)}"
+    )
 
 
 def workflow_crash_on_replica_expiration_mv(
@@ -5362,7 +7125,7 @@ def workflow_crash_on_replica_expiration_index(
             (expected_expiration_timestamp_sec - offset)
             < expiration_timestamp_sec
             < (expected_expiration_timestamp_sec + offset)
-        ), f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec)}]}]"
+        ), f"expiration_timestamp: expected={expected_expiration_timestamp_sec}[{datetime.fromtimestamp(expected_expiration_timestamp_sec, UTC)}], got={expiration_timestamp_sec}[{[{datetime.fromtimestamp(expiration_timestamp_sec, UTC)}]}]"
 
         expiration_remaining = metrics.get_value(
             "mz_dataflow_replica_expiration_remaining_seconds"
@@ -5386,9 +7149,7 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
     ):
 
         c.up("materialized", "clusterd1", Service("testdrive", idle=True))
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
             ALTER SYSTEM SET compute_replica_expiration_offset = '50s';
@@ -5428,9 +7189,7 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
             > SELECT records FROM mz_introspection.mz_dataflow_arrangement_sizes
               WHERE name LIKE '%events_view_primary_idx';
             2000
-            """
-            )
-        )
+            """))
 
 
 def workflow_test_constant_sink(c: Composition) -> None:
@@ -5442,15 +7201,12 @@ def workflow_test_constant_sink(c: Composition) -> None:
     with c.override(Testdrive(no_reset=True)):
         c.up(
             "materialized",
-            "zookeeper",
             "kafka",
             "schema-registry",
             Service("testdrive", idle=True),
         )
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > CREATE CLUSTER test SIZE 'scale=1,workers=1';
 
                 > CREATE MATERIALIZED VIEW const IN CLUSTER test AS SELECT 1
@@ -5479,16 +7235,12 @@ def workflow_test_constant_sink(c: Composition) -> None:
                   FROM mz_internal.mz_sink_statuses
                   WHERE name = 'snk'
                 running
-                """
-            )
-        )
+                """))
 
         c.kill("materialized")
         c.up("materialized")
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > SELECT write_frontier
                   FROM mz_internal.mz_frontiers
                   JOIN mz_sinks ON id = object_id
@@ -5499,9 +7251,7 @@ def workflow_test_constant_sink(c: Composition) -> None:
                   FROM mz_internal.mz_sink_statuses
                   WHERE name = 'snk'
                 running
-                """
-            )
-        )
+                """))
 
 
 def workflow_test_memory_limiter(c: Composition) -> None:
@@ -5535,8 +7285,7 @@ def workflow_test_memory_limiter(c: Composition) -> None:
             For our workload we use a large MV, which we obtain by performing a cross
             join. We make sure that the rows are large, so they consume some memory.
             """
-            c.sql(
-                """
+            c.sql("""
                 DROP CLUSTER IF EXISTS test CASCADE;
                 CREATE CLUSTER test REPLICAS (
                     r1 (
@@ -5554,8 +7303,7 @@ def workflow_test_memory_limiter(c: Composition) -> None:
                     SELECT generate_series, repeat('a', 100) FROM generate_series(1, 1000);
                 CREATE MATERIALIZED VIEW mv IN CLUSTER test AS
                     SELECT t1.i i1, t1.x x1, t2.i i2, t2.x x2 FROM t t1, t t2;
-                """
-            )
+                """)
 
         # Test 1: The MV should be able to hydrate with a memory limit of 2 GiB.
         c.sql(
@@ -5619,9 +7367,32 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
 
     c.up("materialized")
 
-    # Create a pause-able cluster, with indexes with different kinds of inputs.
+    # The controller reconciles the replica set asynchronously; drive the tick
+    # down so pause/unpause converge quickly.
     c.sql(
-        """
+        "ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'",
+        port=6877,
+        user="mz_system",
+    )
+
+    def wait_for_replica_count(expected: int) -> None:
+        for _ in range(120):
+            count = int(
+                c.sql_query(
+                    "SELECT count(*) FROM mz_cluster_replicas cr "
+                    "JOIN mz_clusters c ON c.id = cr.cluster_id "
+                    "WHERE c.name = 'test'"
+                )[0][0]
+            )
+            if count == expected:
+                return
+            time.sleep(0.5)
+        raise AssertionError(
+            f"cluster 'test' did not converge to {expected} replica(s)"
+        )
+
+    # Create a pause-able cluster, with indexes with different kinds of inputs.
+    c.sql("""
         CREATE CLUSTER test SIZE 'scale=1,workers=1';
         SET cluster = test;
 
@@ -5639,27 +7410,29 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
         SELECT a FROM t;
         SELECT a + 1 FROM t;
         SELECT a FROM mv;
-        """
-    )
+        """)
 
     # Sanity check.
     check_read_frontiers_not_stuck(c, ["idx1", "idx2", "idx3"])
 
-    # Pause the cluster; read frontiers should still advance.
+    # Pause the cluster; read frontiers should still advance. The controller drops
+    # the replica asynchronously, so wait for the pause to take effect first.
     c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 0)")
+    wait_for_replica_count(0)
     check_read_frontiers_not_stuck(c, ["idx1", "idx2", "idx3"])
 
-    # Unpause the cluster; indexes should still be queryable.
-    c.sql(
-        """
-        ALTER CLUSTER test SET (REPLICATION FACTOR 1);
+    # Unpause the cluster; indexes should still be queryable. The controller
+    # recreates the replica asynchronously, so wait for it before issuing index
+    # peeks, which require a replica.
+    c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 1)")
+    wait_for_replica_count(1)
+    c.sql("""
         SET cluster = test;
 
         SELECT a FROM t;
         SELECT a + 1 FROM t;
         SELECT a FROM mv;
-        """
-    )
+        """)
 
 
 def workflow_test_swap_heap_limiting(c: Composition) -> None:
@@ -5701,8 +7474,7 @@ def workflow_test_swap_heap_limiting(c: Composition) -> None:
     ):
         c.up("materialized")
 
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER swap_nolimit SIZE 'swap,nolimit';
             CREATE CLUSTER swap_limit SIZE 'swap,limit';
             CREATE CLUSTER noswap SIZE 'noswap';
@@ -5712,8 +7484,7 @@ def workflow_test_swap_heap_limiting(c: Composition) -> None:
             SET CLUSTER = swap_nolimit; SELECT * FROM t;
             SET CLUSTER = swap_limit; SELECT * FROM t;
             SET CLUSTER = noswap; SELECT * FROM t;
-            """
-        )
+            """)
 
         def get_heap_limit(cluster: str) -> int | None:
             # Find the internal-http port of the given cluster.
@@ -5768,9 +7539,7 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
         )
 
         # Wait for dataflows to hydrate.
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
             > SELECT DISTINCT o.name, r.name, hydrated
               FROM mz_internal.mz_compute_operator_hydration_statuses h
               JOIN mz_objects o ON (h.object_id = o.id)
@@ -5778,18 +7547,14 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
               WHERE o.id LIKE 'u%';
             idx replica1 true
             mv  replica1 true
-            """
-            )
-        )
+            """))
 
         # Restart envd to force a reconciliation on clusterd1.
         c.kill("materialized")
         c.up("materialized")
 
         # Verify that the operators still show up as hydrated.
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
             > SELECT DISTINCT o.name, r.name, hydrated
               FROM mz_internal.mz_compute_operator_hydration_statuses h
               JOIN mz_objects o ON (h.object_id = o.id)
@@ -5797,71 +7562,67 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
               WHERE o.id LIKE 'u%';
             idx replica1 true
             mv  replica1 true
-            """
-            )
-        )
+            """))
 
 
 def workflow_test_sql_cluster_disk(c: Composition) -> None:
     """
     Test that `mz_clusters.disk` and `mz_cluster_replicas.disk` have expected
-    values.
+    values, including when a referenced size is later marked `disabled`.
     """
+
+    sizes = {
+        "swap,zero": {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "1",
+            "memory_limit": "1G",
+            "disk_limit": "0",
+            "swap_enabled": True,
+        },
+        "swap,nonzero": {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "1",
+            "memory_limit": "1G",
+            "disk_limit": "1G",
+            "swap_enabled": True,
+        },
+        "noswap,zero": {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "1",
+            "memory_limit": "1G",
+            "disk_limit": "0",
+            "swap_enabled": False,
+        },
+        "noswap,nonzero": {
+            "workers": 1,
+            "scale": 1,
+            "credits_per_hour": "1",
+            "memory_limit": "1G",
+            "disk_limit": "1G",
+            "swap_enabled": False,
+        },
+    }
 
     with c.override(
         Materialized(
-            cluster_replica_size={
-                "swap,zero": {
-                    "workers": 1,
-                    "scale": 1,
-                    "credits_per_hour": "1",
-                    "memory_limit": "1G",
-                    "disk_limit": "0",
-                    "swap_enabled": True,
-                },
-                "swap,nonzero": {
-                    "workers": 1,
-                    "scale": 1,
-                    "credits_per_hour": "1",
-                    "memory_limit": "1G",
-                    "disk_limit": "1G",
-                    "swap_enabled": True,
-                },
-                "noswap,zero": {
-                    "workers": 1,
-                    "scale": 1,
-                    "credits_per_hour": "1",
-                    "memory_limit": "1G",
-                    "disk_limit": "0",
-                    "swap_enabled": False,
-                },
-                "noswap,nonzero": {
-                    "workers": 1,
-                    "scale": 1,
-                    "credits_per_hour": "1",
-                    "memory_limit": "1G",
-                    "disk_limit": "1G",
-                    "swap_enabled": False,
-                },
-            },
+            cluster_replica_size=sizes,
             bootstrap_replica_size="swap,zero",
         ),
         Testdrive(no_reset=True),
     ):
         c.up("materialized")
 
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER swap_zero SIZE 'swap,zero';
             CREATE CLUSTER swap_nonzero SIZE 'swap,nonzero';
             CREATE CLUSTER noswap_zero SIZE 'noswap,zero';
             CREATE CLUSTER noswap_nonzero SIZE 'noswap,nonzero';
-            """
-        )
+            """)
 
-        c.testdrive(
-            input=dedent(
-                """
+        c.testdrive(input=dedent("""
                 > SELECT name, disk FROM mz_clusters WHERE name LIKE '%swap%'
                 swap_zero      false
                 swap_nonzero   false
@@ -5876,9 +7637,48 @@ def workflow_test_sql_cluster_disk(c: Composition) -> None:
                 swap_nonzero   false
                 noswap_zero    false
                 noswap_nonzero true
-                """
-            )
-        )
+                """))
+
+    # Restart with `noswap,nonzero` flipped to `disabled: True`. The catalog
+    # writes every size to `mz_cluster_replica_size_internal`, including
+    # disabled ones, so `disk` for the existing `noswap_nonzero` cluster and
+    # its replica should still resolve to `true`. The public
+    # `mz_cluster_replica_sizes` table drops the disabled row, which the
+    # final assertion checks.
+    c.kill("materialized")
+    sizes_with_disabled = dict(sizes)
+    sizes_with_disabled["noswap,nonzero"] = {
+        **sizes["noswap,nonzero"],
+        "disabled": True,
+    }
+    with c.override(
+        Materialized(
+            cluster_replica_size=sizes_with_disabled,
+            bootstrap_replica_size="swap,zero",
+        ),
+        Testdrive(no_reset=True),
+    ):
+        c.up("materialized")
+
+        c.testdrive(input=dedent("""
+                > SELECT name, disk FROM mz_clusters WHERE name LIKE '%swap%'
+                swap_zero      false
+                swap_nonzero   false
+                noswap_zero    false
+                noswap_nonzero true
+
+                > SELECT c.name, r.disk
+                  FROM mz_cluster_replicas r
+                  JOIN mz_clusters c ON c.id = r.cluster_id
+                  WHERE c.name LIKE '%swap%'
+                swap_zero      false
+                swap_nonzero   false
+                noswap_zero    false
+                noswap_nonzero true
+
+                > SELECT 'noswap,nonzero' IN (SELECT size FROM mz_cluster_replica_sizes)
+                false
+                """))
 
 
 def workflow_websocket_connection(c: Composition) -> None:
@@ -5946,9 +7746,7 @@ def workflow_alter_sink_hang(c: Composition) -> None:
             Service("testdrive", idle=True),
         )
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > CREATE CLUSTER test SIZE 'scale=1,workers=1'
                 > SET cluster = test
 
@@ -5962,22 +7760,18 @@ def workflow_alter_sink_hang(c: Composition) -> None:
                     INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk-${testdrive.seed}')
                     FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                     ENVELOPE DEBEZIUM
-                """
-            )
-        )
+                """))
 
         c.sql("INSERT INTO t1 VALUES (1)")
 
         c.kill("kafka")
 
-        c.sql(
-            """
+        c.sql("""
             INSERT INTO t1 VALUES (2);
 
             CREATE TABLE t2 (a int);
             INSERT INTO t2 VALUES (3);
-            """
-        )
+            """)
 
         def alter_sink():
             c.sql("ALTER SINK snk SET FROM t2")
@@ -5989,18 +7783,14 @@ def workflow_alter_sink_hang(c: Composition) -> None:
         time.sleep(1)
 
         # Verify that DDL still works while the ALTER SINK is hanging.
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > CREATE CLUSTER test2 SIZE 'scale=1,workers=1'
                 > SET cluster = test2
 
                 > SELECT * FROM t1
                 1
                 2
-                """
-            )
-        )
+                """))
 
         # Cleanup: unblock the ALTER SINK and wait for it to complete.
         c.up("kafka")
@@ -6023,9 +7813,7 @@ def workflow_test_slow_seqno_hold(c: Composition):
     )
 
     # Create a postgres source and wait until it's caught up.
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
             > CREATE SECRET pgpass AS 'postgres'
             > CREATE CONNECTION pg TO POSTGRES (
                 HOST postgres,
@@ -6048,6 +7836,7 @@ def workflow_test_slow_seqno_hold(c: Composition):
             INSERT INTO source1 VALUES (1, NULL);
             ALTER TABLE source1 REPLICA IDENTITY FULL;
             INSERT INTO source1 VALUES (2, NULL);
+            ANALYZE source1;
 
             > CREATE SOURCE "pg_source"
               FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
@@ -6055,55 +7844,84 @@ def workflow_test_slow_seqno_hold(c: Composition):
 
             > SELECT count(*) FROM source1_tbl;
             2
-            """
-        )
-    )
+            """))
 
-    # Down the postgres database, stalling out the source.
+    # Install a durable reader on the source's shard via a background SUBSCRIBE.
+    # A one-shot SELECT is a poor fit: if its read timestamp lands at or below
+    # the (soon to be frozen) upper it completes immediately, leaving no
+    # observable reader, and if it blocks it races replica hydration. Either way
+    # the reader shows up only intermittently. A SUBSCRIBE cursor keeps its
+    # reader installed for as long as the transaction is open, so the reader is
+    # reliably present for the whole test. We start it while the upstream is
+    # still healthy, so the initial FETCH returns and the reader is guaranteed
+    # installed before we stall the source below.
+    subscribe = c.sql_cursor()
+    # This transaction intentionally sits idle while the test polls via separate
+    # sessions, so disable the idle-in-transaction timeout for this connection.
+    subscribe.execute("SET idle_in_transaction_session_timeout TO 0")
+    subscribe.execute("BEGIN")
+    subscribe.execute("DECLARE c CURSOR FOR SUBSCRIBE source1_tbl")
+    subscribe.execute("FETCH 1 c")
+
+    # Down the postgres database, stalling out the source so its frontier stops
+    # advancing.
     c.stop("postgres")
-
-    # Start a long-running select in the background, which should be unable to make progress.
-    def select_from_postgres():
-        c.sql("SELECT count(*) FROM source1_tbl")
-
-    background_select = Thread(target=select_from_postgres)
-    background_select.start()
 
     try:
         [(gid,)] = c.sql_query("SELECT id FROM mz_tables where name = 'source1_tbl'")
 
-        def get_reader_seqno():
+        def get_leased_readers():
             [(state_json,)] = c.sql_query(
                 f"INSPECT SHARD '{gid}'", port=6877, user="mz_system"
             )
-            leased_readers = state_json["leased_readers"]
-            if not leased_readers:
-                return None, None
-            assert len(leased_readers) == 1
-            id, value = leased_readers.popitem()
-            return id, value["seqno"]
+            return state_json["leased_readers"]
 
-        # Show that the seqno is making progress - grab an initial value and then one higher value.
-        reader_id = None
-        initial_seqno = None
-        while initial_seqno is None:
-            reader_id, initial_seqno = get_reader_seqno()
+        # Poll `get_leased_readers` on a deadline, returning the first non-None
+        # value `predicate` produces. We use a bounded deadline (well below the
+        # CI step timeout) so that a regression fails this test quickly with a
+        # useful diagnostic, instead of silently hanging the whole `cluster
+        # --slow-only` step until the global timeout fires (which previously
+        # burned ~30 minutes per occurrence, e.g. nightly build 16706).
+        def poll_until(predicate, timeout, description):
+            deadline = time.time() + timeout
+            last = None
+            while time.time() < deadline:
+                last = get_leased_readers()
+                result = predicate(last)
+                if result is not None:
+                    return result
+                time.sleep(1)
+            raise AssertionError(
+                f"timed out after {timeout}s waiting for {description}; "
+                f"last observed leased_readers={last}"
+            )
 
-        print(
-            f"{reader_id} has initial seqno {initial_seqno}. Waiting for progress, which may take a minute..."
+        # Even though the upstream frontier is stuck, a leased reader should
+        # periodically downgrade (advance) its seqno hold, so persist state can
+        # still be collected. Record each reader's first observed seqno and wait
+        # until some reader advances past it. Tracking per reader id keeps us
+        # robust to the source exposing extra, transient readers as it restarts
+        # while its upstream is down.
+        first_seqno: dict[str, int] = {}
+
+        def some_reader_advanced(leased_readers):
+            advanced = None
+            for reader_id, value in leased_readers.items():
+                seqno = value["seqno"]
+                if seqno > first_seqno.setdefault(reader_id, seqno):
+                    advanced = reader_id
+            return advanced
+
+        poll_until(
+            some_reader_advanced,
+            timeout=300,
+            description="a leased reader to advance its seqno on the stalled shard",
         )
-        while True:
-            id, seqno = get_reader_seqno()
-            assert id == reader_id
-            assert seqno is not None
-            if seqno > initial_seqno:
-                break
-            time.sleep(1)
 
-    # Cleanup: unblock the select and wait for it to complete.
+    # Cleanup: drop the subscribe and bring postgres back up.
     finally:
+        subscribe.execute("ROLLBACK")
         c.up("postgres")
-        background_select.join()
 
 
 def workflow_github_9961(c: Composition):
@@ -6119,8 +7937,7 @@ def workflow_github_9961(c: Composition):
     ):
         c.up("materialized", "clusterd1")
 
-        c.sql(
-            """
+        c.sql("""
             CREATE CLUSTER test REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd1:2100'],
                 STORAGE ADDRESSES ['clusterd1:2103'],
@@ -6132,19 +7949,16 @@ def workflow_github_9961(c: Composition):
 
             CREATE TABLE t (a int);
             CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
-            """
-        )
+            """)
 
         # Wait until the MV's frontiers are equal.
         for _ in range(3):
-            output = c.sql_query(
-                """
+            output = c.sql_query("""
                 SELECT f.read_frontier = f.write_frontier
                 FROM mz_internal.mz_frontiers f
                 JOIN mz_materialized_views mv ON mv.id = f.object_id
                 WHERE mv.name = 'mv'
-                """
-            )
+                """)
             if output and output[0][0]:
                 break
             time.sleep(1)
@@ -6152,4 +7966,857 @@ def workflow_github_9961(c: Composition):
             raise RuntimeError("MV frontiers didn't become equal")
 
         # database-issues#9961 causes this command to crash envd.
-        c.sql("CREATE MATERIALIZED VIEW rpl REPLACING mv AS SELECT * FROM t")
+        c.sql("CREATE REPLACEMENT MATERIALIZED VIEW rpl FOR mv AS SELECT * FROM t")
+
+
+def workflow_github_10018(c: Composition):
+    """Regression test for database-issues#10018."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # Set up an MV that depends on an item with a higher catalog ID.
+    c.sql("""
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv1 AS SELECT a FROM t;
+        CREATE MATERIALIZED VIEW mv2 AS SELECT a FROM t;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv1 AS SELECT a FROM mv2;
+        ALTER MATERIALIZED VIEW mv1 APPLY REPLACEMENT rp;
+        """)
+
+    result = c.sql_query("SHOW CREATE MATERIALIZED VIEW mv1")
+    assert "mv2" in result[0][1], result
+
+    # Restart envd. This used to panic due to incorrect item ordering during bootstrap.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Verify the system is functional after restart.
+    c.sql("INSERT INTO t VALUES (1)")
+    result = c.sql_query("SELECT * FROM mv1")
+    assert result[0][0] == 1, result
+
+
+def workflow_test_mv_apply_replacement_wait(c: Composition) -> None:
+    """
+    Test that ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT waits for the target
+    MV's write frontier to advance beyond the replacement's write frontier
+    before committing.
+    """
+
+    c.up("materialized")
+
+    c.sql("""
+        CREATE CLUSTER stalled SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        CREATE CLUSTER running SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
+
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1);
+
+        CREATE MATERIALIZED VIEW mv1 IN CLUSTER stalled AS SELECT a FROM t;
+        CREATE MATERIALIZED VIEW mv2 IN CLUSTER running AS SELECT a + 1 AS a FROM t;
+        """)
+
+    # Wait for the since of mv2 to be greater than the upper of mv1.
+    for _ in range(10):
+        time.sleep(1)
+        mv1_rows = c.sql_query("""
+            SELECT write_frontier
+            FROM mz_internal.mz_frontiers
+            JOIN mz_materialized_views ON id = object_id
+            WHERE name = 'mv1'
+            """)
+        mv2_rows = c.sql_query("""
+            SELECT read_frontier
+            FROM mz_internal.mz_frontiers
+            JOIN mz_materialized_views ON id = object_id
+            WHERE name = 'mv2'
+            """)
+        if not mv1_rows or not mv2_rows:
+            continue
+        if int(mv2_rows[0][0]) > int(mv1_rows[0][0]):
+            break
+    else:
+        raise RuntimeError("mv2's since didn't advance beyond mv1's upper")
+
+    # Create a replacement. It's as-of will be derived from mv2's since.
+    c.sql("""
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv1
+        IN CLUSTER running
+        AS SELECT a FROM mv2
+        """)
+
+    # Applying the replacement should now block.
+
+    def apply_replacement():
+        c.sql("ALTER MATERIALIZED VIEW mv1 APPLY REPLACEMENT rp")
+
+    thread = Thread(target=apply_replacement)
+    thread.start()
+
+    time.sleep(3)
+    assert thread.is_alive(), "APPLY REPLACEMENT should block"
+
+    # Allowing mv1 to make progress should unblock the APPLY REPLACEMENT.
+
+    c.sql("ALTER CLUSTER stalled SET (REPLICATION FACTOR 1)")
+
+    thread.join(timeout=10)
+    assert not thread.is_alive(), "APPLY REPLACEMENT should have completed"
+
+
+def workflow_github_10086(c: Composition) -> None:
+    """
+    Regression test for database-issues#10086, in which dropping a replacement
+    MV incorrectly seals the target shard after an envd restart.
+    """
+
+    c.up("materialized")
+
+    # Create a materialized view and a replacement.
+    c.sql("""
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM t;
+        SELECT * FROM mv;
+        """)
+
+    # Drop the replacement without applying it.
+    c.sql("DROP MATERIALIZED VIEW rp")
+
+    # Let frontier information propagate.
+    time.sleep(2)
+
+    # Verify that the write frontier of `mv` is not empty.
+    upper_empty = c.sql_query("""
+        SELECT write_frontier IS NULL
+        FROM mz_internal.mz_frontiers
+        JOIN mz_materialized_views ON id = object_id
+        WHERE name = 'mv'
+        """)[0][0]
+    assert not upper_empty
+
+    # Restart Materialize.
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.sql("SELECT * FROM mv")
+
+    # Let frontier information propagate.
+    time.sleep(2)
+
+    # Verify that the write frontier of `mv` is not empty.
+    upper_empty = c.sql_query("""
+        SELECT write_frontier IS NULL
+        FROM mz_internal.mz_frontiers
+        JOIN mz_materialized_views ON id = object_id
+        WHERE name = 'mv'
+        """)[0][0]
+    assert not upper_empty
+
+
+def workflow_github_11322(c: Composition) -> None:
+    """
+    Regression test for database-issues#11322, in which dropping a
+    replacement MV leaks a `collection_metadata` entry.
+    """
+
+    def storage_collection_metadata() -> dict[str, str]:
+        port = c.port("materialized", 6878)
+        resp = requests.get(f"http://localhost:{port}/api/catalog/dump")
+        resp.raise_for_status()
+        return resp.json()["storage_metadata"]["collection_metadata"]
+
+    c.up("materialized")
+
+    # Create a materialized view and a replacement.
+    c.sql("""
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM t;
+        SELECT * FROM mv;
+        """)
+
+    [(mv_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")
+    [(rp_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp'")
+
+    collection_metadata = storage_collection_metadata()
+    mv_shard = collection_metadata[mv_id]
+    rp_shard = collection_metadata[rp_id]
+    assert mv_shard == rp_shard
+
+    # Drop the replacement without applying it.
+    c.sql("DROP MATERIALIZED VIEW rp")
+
+    # Verify replacement's collection metadata has been removed.
+    collection_metadata = storage_collection_metadata()
+    assert collection_metadata[mv_id] == mv_shard
+    assert rp_id not in collection_metadata
+
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Verify replacement's collection metadata has been removed durably.
+    collection_metadata = storage_collection_metadata()
+    assert collection_metadata[mv_id] == mv_shard
+    assert rp_id not in collection_metadata
+
+
+def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
+    """Dropping a replacement MV after restart must preserve the target shard."""
+
+    def storage_metadata() -> dict:
+        port = c.port("materialized", 6878)
+        resp = requests.get(f"http://localhost:{port}/api/catalog/dump")
+        resp.raise_for_status()
+        return resp.json()["storage_metadata"]
+
+    def storage_collection_states() -> dict[str, str]:
+        port = c.port("materialized", 6878)
+        resp = requests.get(f"http://localhost:{port}/api/coordinator/dump")
+        resp.raise_for_status()
+        return resp.json()["controller"]["storage_collections"]["collections"]
+
+    def debug_global_id(global_id: str) -> str:
+        assert global_id.startswith("u"), global_id
+        return f"User({global_id[1:]})"
+
+    def data_shard(collection_state: str) -> str:
+        match = re.search(r"data_shard: ShardId\(([^)]+)\)", collection_state)
+        assert match is not None, collection_state
+        return f"s{match.group(1)}"
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.sql("""
+        CREATE CLUSTER stalled SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv IN CLUSTER stalled AS SELECT * FROM t;
+        CREATE MATERIALIZED VIEW plain_mv IN CLUSTER stalled AS SELECT * FROM t;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp1 FOR mv
+            IN CLUSTER stalled AS SELECT * FROM t;
+        """)
+
+    [(mv_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")
+    [(plain_mv_id,)] = c.sql_query(
+        "SELECT id FROM mz_materialized_views WHERE name = 'plain_mv'"
+    )
+    [(rp1_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp1'")
+
+    c.sql("""
+        ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp1;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv
+            IN CLUSTER stalled AS SELECT * FROM t;
+        ALTER CLUSTER stalled SET (REPLICATION FACTOR 0);
+        """)
+    [(rp2_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp2'")
+
+    # Without a replica, no dataflow holds a persist read lease after restart.
+    # Such a lease would delay finalization beyond the runtime of this test.
+    c.kill("materialized")
+    c.up("materialized")
+
+    collection_states = storage_collection_states()
+    mv_state = collection_states[mv_id]
+    rp1_state = collection_states[rp1_id]
+    rp2_state = collection_states[rp2_id]
+    plain_mv_state = collection_states[plain_mv_id]
+    mv_shard = data_shard(mv_state)
+    plain_mv_shard = data_shard(plain_mv_state)
+
+    assert data_shard(rp1_state) == mv_shard
+    assert data_shard(rp2_state) == mv_shard
+    assert "primary: None" in mv_state, mv_state
+    assert f"primary: Some({debug_global_id(mv_id)})" in rp1_state, rp1_state
+    assert f"primary: Some({debug_global_id(rp1_id)})" in rp2_state, rp2_state
+    assert "primary: None" in plain_mv_state, plain_mv_state
+    for collection_state in (mv_state, rp1_state, rp2_state, plain_mv_state):
+        assert "read_policy: LagWriteFrontier" in collection_state, collection_state
+
+    # Drop the staged replacement without applying it.
+    c.sql("DROP MATERIALIZED VIEW rp2")
+
+    # The finalization record is removed by the next catalog transaction after
+    # finalization completes, so inspect it immediately after the drop.
+    unfinalized = storage_metadata()["unfinalized_shards"]
+    assert mv_shard not in unfinalized, (
+        f"dropping the replacement marked the target's shard {mv_shard} for"
+        f" finalization. Unfinalized shards: {unfinalized}"
+    )
+
+    # A plain MV still owns its shard after bootstrap, so dropping it must
+    # enqueue that shard for finalization.
+    c.sql("DROP MATERIALIZED VIEW plain_mv")
+    unfinalized = storage_metadata()["unfinalized_shards"]
+    assert plain_mv_shard in unfinalized, (
+        f"dropping a plain MV did not mark its shard {plain_mv_shard} for"
+        f" finalization. Unfinalized shards: {unfinalized}"
+    )
+
+    c.sql(
+        "CREATE REPLACEMENT MATERIALIZED VIEW rp3 FOR mv"
+        " IN CLUSTER stalled AS SELECT * FROM t"
+    )
+
+    # The target's shard must not have been sealed.
+    upper_empty = c.sql_query("""
+        SELECT write_frontier IS NULL
+        FROM mz_internal.mz_frontiers
+        JOIN mz_materialized_views ON id = object_id
+        WHERE name = 'mv'
+        """)[0][0]
+    assert not upper_empty, "the target MV's shard was sealed, its data is lost"
+
+
+def workflow_test_github_10102(c: Composition) -> None:
+    """
+    Regression test for database-issues#10102:
+
+        Dropping a materialized view that has (a) a subscribe reading from it
+        and (b) has been replaced after the subscribe was started, causes envd
+        to panic with "missing relation name".
+    """
+
+    c.up("materialized")
+
+    c.sql("""
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        """)
+
+    # Start a subscribe on the materialized view.
+    def subscribe():
+        cursor = c.sql_cursor()
+        cursor.execute("BEGIN")
+        cursor.execute("DECLARE c CURSOR FOR SUBSCRIBE mv")
+        try:
+            cursor.execute("FETCH ALL c WITH (timeout = '30s')")
+        except DatabaseError as exc:
+            assert (
+                exc.diag.message_primary
+                == 'query could not complete because relation "materialize.public.mv" was dropped'
+            ), exc
+
+    subscribe_thread = Thread(target=subscribe)
+    subscribe_thread.start()
+
+    # Wait for the subscribe to start.
+    time.sleep(2)
+
+    # Replace and drop the materialized view. This should not panic.
+    c.sql("""
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM t;
+        ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp;
+        DROP MATERIALIZED VIEW mv;
+        """)
+
+    subscribe_thread.join(timeout=10)
+    assert not subscribe_thread.is_alive(), "subscribe should have terminated"
+
+
+def workflow_test_optimizer_feature_override_after_restart(c: Composition) -> None:
+    """
+    Test that verifies that optimizer feature overrides survive envd restarts.
+    """
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_eager_delta_joins": "false",
+            },
+        ),
+    ):
+        c.up("materialized")
+
+        c.sql(
+            """
+            CREATE CLUSTER test (SIZE 'scale=1,workers=1')
+                FEATURES (ENABLE EAGER DELTA JOINS = true);
+            GRANT ALL ON CLUSTER test TO materialize;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql("""
+            SET cluster = test;
+
+            CREATE TABLE t1 (x int, y int);
+            CREATE TABLE t2 (x int, y int);
+            CREATE TABLE t3 (x int, y int);
+            CREATE MATERIALIZED VIEW mv2 IN CLUSTER test AS
+                SELECT t1.y as f1, t2.y as f2, t3.y as f3
+                FROM t1, t2, t3
+                WHERE t1.x = t2.x AND t2.y = t3.y;
+            """)
+
+        plan1 = c.sql_query("EXPLAIN MATERIALIZED VIEW mv2")[0][0]
+
+        c.kill("materialized")
+        c.up("materialized")
+
+        plan2 = c.sql_query("EXPLAIN MATERIALIZED VIEW mv2")[0][0]
+
+        assert plan1 == plan2, f"before={plan1}\nafter={plan2}"
+
+
+def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
+    """
+    Test that expression cache entries created during DDL are reused on
+    environmentd restart.
+    """
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_eager_delta_joins": "false",
+            },
+            environment_extra=[
+                "MZ_STARTUP_LOG_FILTER=mz_adapter::coord=debug,info",
+            ],
+        ),
+    ):
+        c.up("materialized")
+
+        # Create a cluster with an optimizer feature override, to test that
+        # the expression cache correctly stores per-cluster features.
+        c.sql(
+            """
+            CREATE CLUSTER test_cache (SIZE 'scale=1,workers=1')
+            FEATURES (ENABLE EAGER DELTA JOINS = true);
+            GRANT ALL ON CLUSTER test_cache TO materialize;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql("""
+            SET cluster = test_cache;
+
+            CREATE TABLE t (a int);
+            CREATE DEFAULT INDEX ON t;
+            CREATE MATERIALIZED VIEW mv AS SELECT a + 1 AS b FROM t;
+
+            SELECT * FROM t;
+            SELECT * FROM mv;
+            """)
+
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Wait for the dataflows to be ready after restart.
+        c.sql("""
+            SET cluster = test_cache;
+            SELECT * FROM t;
+            SELECT * FROM mv;
+            """)
+
+        logs = c.invoke("logs", "materialized", capture=True).stdout
+
+        # We expect cache hits for the user index and the materialized view.
+        cache_hits = [
+            line
+            for line in logs.splitlines()
+            if re.search(r"global expression cache hit for User\(\d+\)", line)
+        ]
+        assert len(cache_hits) == 2, cache_hits
+
+
+def workflow_test_github_11219(c: Composition) -> None:
+    """Regression test for database-issues#11219."""
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_alter_table_add_column": "true",
+            },
+        ),
+    ):
+        c.up("materialized")
+
+        c.sql("""
+            CREATE TABLE t1 (a int);
+            CREATE INDEX idx1 ON t1 (a);
+            CREATE MATERIALIZED VIEW mv1 AS SELECT a FROM t1;
+            ALTER TABLE t1 ADD COLUMN b int;
+
+            CREATE TABLE t2 (a int);
+            CREATE MATERIALIZED VIEW mv2 AS SELECT a FROM t2;
+            CREATE INDEX idx2 ON mv2 (a);
+            CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv2 AS SELECT a FROM t2;
+            ALTER MATERIALIZED VIEW mv2 APPLY REPLACEMENT rp;
+            """)
+
+        # Restart environmentd.
+        # Before the fix, bootstrap would panic with "collection missing".
+        c.kill("materialized")
+        c.up("materialized")
+
+        c.sql_query("SELECT a FROM t1")
+        c.sql_query("SELECT a FROM mv2")
+
+
+def workflow_test_item_parsing_expression_cache(c: Composition) -> None:
+    """
+    Test that the expression cache is hit during item parsing.
+
+    When creating a view, when applying the catalog implications, we parse the
+    view SQL. We rely on finding a compatible plan in the expression cache,
+    since otherwise we'd need to invoke the optimizer on the coordinator
+    thread.
+    """
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "log_filter": "mz_adapter::catalog::state=debug,info",
+            },
+        ),
+    ):
+        c.up("materialized")
+
+        c.sql("CREATE VIEW v AS SELECT 1")
+
+        logs = c.invoke("logs", "materialized", capture=True)
+        assert (
+            "local expression cache hit for User(" in logs.stdout
+        ), "expression cache was not hit during view application"
+
+
+def workflow_test_prometheus_metrics(c: Composition) -> None:
+    """Test that mz_cluster_prometheus_metrics reports metrics."""
+
+    with c.override(
+        Testdrive(no_reset=True, default_timeout="60s"),
+    ):
+        c.up("materialized")
+
+        c.sql("""
+            CREATE CLUSTER cluster1 SIZE 'scale=2,workers=2';
+            """)
+
+        # Create a materialized view to generate compute activity.
+        c.sql("""
+            SET cluster = cluster1;
+            CREATE TABLE t (a int);
+            CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM t;
+            """)
+
+        c.testdrive(dedent("""
+                > SET cluster = cluster1
+
+                > SELECT count(*) > 0
+                  FROM mz_introspection.mz_cluster_prometheus_metrics
+                true
+
+                > SELECT DISTINCT metric_type
+                  FROM mz_introspection.mz_cluster_prometheus_metrics
+                  WHERE metric_type IN ('counter', 'gauge')
+                counter
+                gauge
+
+                > SELECT DISTINCT process_id
+                  FROM mz_introspection.mz_cluster_prometheus_metrics
+                  ORDER BY process_id
+                0
+                1
+                """))
+
+        # Disable scraping by setting the interval to 0s.
+        c.sql(
+            """
+            ALTER SYSTEM SET compute_prometheus_introspection_scrape_interval = '0s';
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        c.testdrive(dedent("""
+                > SET cluster = cluster1
+
+                > SELECT count(*) = 0
+                  FROM mz_introspection.mz_cluster_prometheus_metrics
+                true
+                """))
+
+
+def workflow_test_resource_usage(c: Composition) -> None:
+    """Test that mz_cluster_replica_resource_usage reports observations per replica process."""
+
+    c.up("materialized")
+
+    # Sample fast, so the test does not have to wait out the default interval.
+    c.sql(
+        "ALTER SYSTEM SET mz_metrics_usage_refresh_interval = '1s';",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql("CREATE CLUSTER cluster1 SIZE 'scale=2,workers=2';")
+
+    def observations() -> dict[tuple[int, str, str], int]:
+        with c.sql_cursor() as cursor:
+            cursor.execute(b"SET cluster = cluster1")
+            # `process_id` and `value` are `uint8`, which psycopg has no adapter for and hands
+            # back as strings. Cast so the comparisons below are numeric, not lexicographic.
+            cursor.execute(b"""
+                SELECT process_id::int8, source, metric, value::int8
+                FROM mz_introspection.mz_cluster_replica_resource_usage
+                """)
+            return {(r[0], r[1], r[2]): r[3] for r in cursor.fetchall()}
+
+    # Both processes must report, and every process must report the same set of metrics: the two
+    # run the same binary in the same environment, so a metric readable on one and not the other
+    # means a reader failed rather than that the source is unavailable.
+    for _ in range(60):
+        before = observations()
+        processes = {process_id for process_id, _, _ in before}
+        per_process = {
+            process_id: {(s, m) for p, s, m in before if p == process_id}
+            for process_id in processes
+        }
+        if processes == {0, 1} and len(set(map(frozenset, per_process.values()))) == 1:
+            break
+        time.sleep(1)
+    else:
+        assert False, f"resource usage not reported for both processes: {before}"
+
+    # `rusage` and `proc_status` are available on any Linux replica, so their absence is a bug
+    # rather than an unsupported configuration. cgroup metrics are deliberately not asserted:
+    # `memory.peak` and `memory.swap.peak` depend on the kernel version.
+    metrics = {(source, metric) for _, source, metric in before}
+    for required in [("rusage", "max_rss"), ("proc_status", "vm_rss")]:
+        assert required in metrics, f"{required} missing from {sorted(metrics)}"
+
+    # Every reported value must be a plain number. Nothing is allowed to surface as a sentinel.
+    for key, value in before.items():
+        assert value >= 0, f"{key} reported {value}"
+
+    # Do some work to push usage up. Peaks must not go backwards, whether or not this particular
+    # workload moves them.
+    c.sql("""
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 500000);
+        CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM t;
+        """)
+    with c.sql_cursor() as cursor:
+        cursor.execute(b"SET cluster = cluster1")
+        cursor.execute(b"SELECT * FROM mv")
+        cursor.fetchall()
+
+    # Give the sampler a few intervals to observe the new usage.
+    time.sleep(5)
+
+    after = observations()
+
+    # Peaks are monotonic, whether the kernel maintains them or the sampler folds them. Current
+    # values are free to fall, so they are deliberately not checked here.
+    peaks = [key for key in before if key[2].endswith("peak") or key[2] == "max_rss"]
+    assert peaks, f"no peak metrics reported: {sorted(before)}"
+    for key in peaks:
+        assert key in after, f"{key} stopped being reported"
+        assert (
+            after[key] >= before[key]
+        ), f"{key} peak fell from {before[key]} to {after[key]}"
+
+
+def workflow_test_metrics_null_label(c: Composition) -> None:
+    """SQL-198: `/metrics/mz_usage` must not abort environmentd when a
+    Prometheus label column is SQL NULL. An unorchestrated cluster replica has
+    `mz_cluster_replicas.size = NULL`, which used to reach an `.expect("must be
+    string")` in the label-values assembly."""
+    c.up("materialized")
+
+    # The default `Materialized()` in this composition already enables
+    # unorchestrated cluster replicas.
+    c.sql(
+        """CREATE CLUSTER sql198_unmgd REPLICAS (
+               r1 (STORAGECTL ADDRESSES ['s:1234'],
+                   COMPUTECTL ADDRESSES ['c:1234']))""",
+        port=6877,
+        user="mz_system",
+    )
+
+    try:
+        result = c.exec(
+            "materialized",
+            "curl",
+            "-sf",
+            "http://localhost:6878/metrics/mz_usage",
+            capture=True,
+        )
+        assert (
+            result.returncode == 0
+        ), f"metrics endpoint failed (rc={result.returncode})"
+        assert len(result.stdout) > 0, "metrics response was empty"
+
+        # Server is still alive.
+        assert c.sql_query("SELECT 1", reuse_connection=False)[0][0] == 1
+    finally:
+        c.sql("DROP CLUSTER sql198_unmgd CASCADE", port=6877, user="mz_system")
+
+
+def workflow_test_controller_oracle_stall(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """SQL-569: the cluster controller's timestamp-oracle reads must not grow
+    with the number of `ON REFRESH` clusters.
+
+    The controller gathers refresh-window inputs per scheduled cluster and then
+    performs one shared oracle read for the whole reconciliation-phase batch, so
+    a tick costs a bounded number of oracle round trips no matter how many
+    clusters are scheduled. This counts the oracle's own `read_ts` operations
+    over an idle window, first with `N` scheduled clusters and then with `2N`,
+    and requires the count not to scale with the cluster count.
+
+    The measurement counts operations rather than timing an unrelated cluster's
+    reconciliation under injected oracle latency. Reconciliation latency is the
+    per-tick oracle cost multiplied by however many controller ticks that
+    convergence happens to span, and no test controls the second factor, so a
+    latency measurement carries noise the size of the effect.
+    """
+    parser.add_argument("--scheduled-clusters", type=int, default=4)
+    parser.add_argument("--observation-seconds", type=float, default=10.0)
+    parser.add_argument("--tick-interval-ms", type=int, default=100)
+    args = parser.parse_args()
+    if args.scheduled_clusters < 1:
+        parser.error("--scheduled-clusters must be at least 1")
+    if args.observation_seconds < 1:
+        parser.error("--observation-seconds must be at least 1")
+
+    c.up("materialized")
+    c.sql(
+        "ALTER SYSTEM SET cluster_controller_tick_interval = "
+        f"'{args.tick_interval_ms}ms'",
+        port=6877,
+        user="mz_system",
+    )
+    mz = c.sql_cursor()
+
+    def oracle_read_ops() -> int:
+        """The oracle's `read_ts` operation count.
+
+        One operation is one round trip to the oracle's backing store. The
+        batching oracle coalesces only concurrent callers, and a controller that
+        awaited one read per scheduled cluster would await them serially, so the
+        per-cluster reads a batch replaces are individually counted here.
+        """
+        metric = 'mz_ts_oracle_started_count{op="read_ts"}'
+        result = c.exec(
+            "materialized",
+            "curl",
+            "-sf",
+            "http://localhost:6878/metrics",
+            capture=True,
+        )
+        assert (
+            result.returncode == 0
+        ), f"metrics endpoint failed (rc={result.returncode})"
+        for line in result.stdout.splitlines():
+            if line.startswith(metric):
+                return int(float(line.split()[-1]))
+        raise AssertionError(f"{metric} is not reported")
+
+    def reads_per_second() -> float:
+        """Oracle reads per second over an otherwise idle observation window.
+
+        The window must stay free of SQL, which would contribute reads of its
+        own, so the counter is scraped over HTTP rather than queried.
+        """
+        before = oracle_read_ops()
+        before_at = time.monotonic()
+        time.sleep(args.observation_seconds)
+        after = oracle_read_ops()
+        after_at = time.monotonic()
+        return (after - before) / (after_at - before_at)
+
+    def create_scheduled_clusters(first: int, count: int) -> None:
+        for i in range(first, first + count):
+            cluster_name = sql.Identifier(f"cc_sched{i}")
+            mz.execute(
+                sql.SQL(
+                    "CREATE CLUSTER {} (SIZE 'scale=1,workers=1', "
+                    "SCHEDULE = ON REFRESH "
+                    "(HYDRATION TIME ESTIMATE = '60 seconds'))"
+                ).format(cluster_name)
+            )
+            mz.execute(
+                sql.SQL(
+                    "CREATE MATERIALIZED VIEW {} IN CLUSTER {} "
+                    "WITH (REFRESH = EVERY '1 second') AS "
+                    "SELECT count(*) FROM cc_sched_t"
+                ).format(sql.Identifier(f"cc_sched{i}_mv"), cluster_name)
+            )
+
+    def await_scheduled_replicas(expected: int) -> None:
+        start = time.monotonic()
+        while True:
+            mz.execute(
+                "SELECT count(DISTINCT c.id), count(*) "
+                "FROM mz_clusters c JOIN mz_cluster_replicas r "
+                "ON r.cluster_id = c.id "
+                "WHERE c.name LIKE 'cc\\_sched%' ESCAPE '\\'"
+            )
+            cluster_count, replica_count = mz.fetchall()[0]
+            if cluster_count == expected and replica_count == expected:
+                return
+            if time.monotonic() - start >= 120:
+                mz.execute(
+                    "SELECT c.name, count(r.id) "
+                    "FROM mz_clusters c LEFT JOIN mz_cluster_replicas r "
+                    "ON r.cluster_id = c.id "
+                    "WHERE c.name LIKE 'cc\\_sched%' ESCAPE '\\' "
+                    "GROUP BY c.name ORDER BY c.name"
+                )
+                replica_counts = mz.fetchall()
+                raise AssertionError(
+                    "scheduled cluster replica counts after 120s: "
+                    f"{replica_counts}. Expected exactly {expected} cc_sched "
+                    "clusters with exactly one replica each"
+                )
+            time.sleep(0.05)
+
+    mz.execute("CREATE TABLE cc_sched_t (x int)")
+
+    # The controller reads the oracle only for a refresh-window batch, so with no
+    # scheduled cluster this window carries whatever else in the system reads the
+    # oracle while idle. It is the baseline both measurements subtract.
+    idle_rps = reads_per_second()
+
+    create_scheduled_clusters(0, args.scheduled_clusters)
+    await_scheduled_replicas(args.scheduled_clusters)
+    single_rps = reads_per_second()
+
+    create_scheduled_clusters(args.scheduled_clusters, args.scheduled_clusters)
+    await_scheduled_replicas(2 * args.scheduled_clusters)
+    double_rps = reads_per_second()
+
+    single_excess = single_rps - idle_rps
+    double_excess = double_rps - idle_rps
+    print("oracle read_ts operations per second while idle:")
+    print(f"  0 scheduled clusters : {idle_rps:.1f}")
+    print(f"  {args.scheduled_clusters} scheduled clusters : {single_rps:.1f}")
+    print(f"  {2 * args.scheduled_clusters} scheduled clusters : {double_rps:.1f}")
+
+    # A tick reads the oracle once per refresh-window batch, so a reconciling
+    # scheduled cluster contributes on the order of one read per tick. The floor
+    # sits far below that because it only has to establish that the batch path
+    # runs at all: the tick interval is a floor on the cadence, not a promise,
+    # and a busy machine ticks slower than the configured interval.
+    minimum_excess = 0.25 * 1000 / args.tick_interval_ms
+    assert single_excess >= minimum_excess, (
+        f"{args.scheduled_clusters} scheduled clusters added only "
+        f"{single_excess:.1f} oracle reads per second over the idle baseline, "
+        f"expected at least {minimum_excess:.1f}. The controller may not be "
+        "reconciling them, which would leave this test measuring nothing"
+    )
+    growth = double_excess / single_excess
+    ceiling = 1.5
+    print(f"  growth from doubling the cluster count : {growth:.2f}x")
+    assert growth < ceiling, (
+        f"doubling the scheduled cluster count from {args.scheduled_clusters} to "
+        f"{2 * args.scheduled_clusters} multiplied the controller's oracle reads "
+        f"by {growth:.2f}x (ceiling {ceiling}x), so the reads did not stay "
+        "bounded per reconciliation phase"
+    )

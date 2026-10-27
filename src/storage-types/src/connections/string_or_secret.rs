@@ -12,15 +12,32 @@ use std::sync::Arc;
 use mz_ore::future::InTask;
 use mz_repr::CatalogItemId;
 use mz_secrets::SecretsReader;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::connections::SecretsReaderExt;
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+/// A value given either inline or by reference to a secret.
+///
+/// `Debug` never prints an inline value. The type carries usernames and
+/// certificates as well as OAuth credentials and session tokens, and connection
+/// structs are dumped wholesale into logs, so the inline string is hidden for
+/// every field.
+#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum StringOrSecret {
     String(String),
     Secret(CatalogItemId),
+}
+
+impl std::fmt::Debug for StringOrSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StringOrSecret::String(_) => f.write_str("String(<redacted>)"),
+            StringOrSecret::Secret(id) => f.debug_tuple("Secret").field(id).finish(),
+        }
+    }
 }
 
 impl StringOrSecret {
@@ -57,5 +74,20 @@ impl StringOrSecret {
 impl<V: std::fmt::Display> From<V> for StringOrSecret {
     fn from(v: V) -> StringOrSecret {
         StringOrSecret::String(format!("{}", v))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn debug_redacts_inline_string() {
+        let inline = StringOrSecret::String("hunter2".into());
+        assert_eq!(format!("{inline:?}"), "String(<redacted>)");
+        assert_eq!(format!("{inline:#?}"), "String(<redacted>)");
+
+        let secret = StringOrSecret::Secret(CatalogItemId::User(7));
+        assert_eq!(format!("{secret:?}"), "Secret(User(7))");
     }
 }

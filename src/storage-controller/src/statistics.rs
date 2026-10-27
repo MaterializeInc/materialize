@@ -16,19 +16,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use differential_dataflow::consolidation;
-use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_cluster_client::ReplicaId;
-use mz_ore::now::EpochMillis;
-use mz_persist_types::Codec64;
-use mz_repr::{Diff, TimestampManipulation};
+use mz_repr::Diff;
 use mz_repr::{GlobalId, Row};
 use mz_storage_client::statistics::{
     ControllerSourceStatistics, ExpirableStats, ZeroInitializedStats,
 };
 use mz_storage_client::statistics::{PackableStats, WebhookStatistics};
 use timely::progress::ChangeBatch;
-use timely::progress::Timestamp;
 use tokio::sync::oneshot;
 use tokio::sync::watch::Receiver;
 
@@ -52,9 +48,9 @@ impl<Stats> AsStats<Stats> for BTreeMap<(GlobalId, Option<ReplicaId>), Stats> {
 
 /// Spawns a task that continually (at an interval) writes statistics from storaged's
 /// that are consolidated in shared memory in the controller.
-pub(super) fn spawn_statistics_scraper<StatsWrapper, Stats, T>(
+pub(super) fn spawn_statistics_scraper<StatsWrapper, Stats>(
     statistics_collection_id: GlobalId,
-    collection_mgmt: CollectionManager<T>,
+    collection_mgmt: CollectionManager,
     shared_stats: Arc<Mutex<StatsWrapper>>,
     previous_values: Vec<Row>,
     initial_interval: Duration,
@@ -65,7 +61,6 @@ pub(super) fn spawn_statistics_scraper<StatsWrapper, Stats, T>(
 where
     StatsWrapper: AsStats<Stats> + Debug + Send + 'static,
     Stats: PackableStats + ExpirableStats + ZeroInitializedStats + Clone + Debug + Send + 'static,
-    T: Timestamp + Lattice + Codec64 + From<EpochMillis> + TimestampManipulation,
 {
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
@@ -162,8 +157,14 @@ where
                     // out to the collection.
                     if !correction.is_empty() {
                         current_metrics.extend(correction.iter().cloned());
-                        collection_mgmt
-                            .differential_append(statistics_collection_id, correction.into_iter().map(|(r, d)| (r, d.into())).collect());
+                        let updates = correction
+                            .into_iter()
+                            .map(|(r, d)| (r, d.into()))
+                            .collect();
+                        collection_mgmt.differential_append(
+                            statistics_collection_id,
+                            updates,
+                        );
                     }
                 }
             }

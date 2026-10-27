@@ -34,7 +34,7 @@ REVOKE data_scientist FROM joe, mike;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/revoke-role.md" >}}
+{{% include-headless "/headless/sql-command-privileges/revoke-role" %}}
 
 ## Useful views
 

@@ -28,6 +28,56 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name in (
+        "MySqlInitialLoad",
+        "MySqlInitialLoadMultiWorkerSampled",
+        "MySqlInitialLoadMultiWorkerSingleTable",
+    ):
+        # PR#38094 (storage: Fast approximate snapshot partitioning) increased
+        # snapshot wallclock: integer primary keys are no longer partitioned,
+        # so MySqlInitialLoad reads serially, and approximate key probing is
+        # slower than the exact OFFSET sampler on small datasets (~30% on
+        # MySqlInitialLoadMultiWorkerSampled).
+        min_ancestor_mz_version_per_commit[
+            "de8eac0d1683ffd788dfba6edaa88aef7f0f1740"
+        ] = MzVersion.parse_mz("v26.39.0")
+
+    if scenario_class_name == "FastPathFilterNoIndex":
+        # PR#38151 (Sql-150: Temporary objects to the catalog) increased wallclock by ~10%
+        min_ancestor_mz_version_per_commit[
+            "f3b4f3f1becf6f56690360874e8aec111c38630d"
+        ] = MzVersion.parse_mz("v26.39.0")
+
+    if scenario_class_name in ("ManySmallUpdates", "Update"):
+        # PR#37923 (adapter: sequence read-then-write from the session task with OCC) increases wallclock for writes, and clusterd memory for ManySmallUpdates
+        min_ancestor_mz_version_per_commit[
+            "4f0805a4d8d8e398f2fdfe10d5bdbe70b16924a4"
+        ] = MzVersion.parse_mz("v26.39.0")
+
+    if scenario_class_name == "ParallelDataflows":
+        # PR#32095 (Dictionary compressed arrangements) increased wallclock by ~10%
+        min_ancestor_mz_version_per_commit[
+            "90644c483749ce746da002f69dbd8bd2835ef9d0"
+        ] = MzVersion.parse_mz("v26.29.0")
+
+    if scenario_class_name == "Retraction":
+        # PR#36386 (timely-util: switch Column::Align to Vec<u64>) increases clusterd memory
+        min_ancestor_mz_version_per_commit[
+            "2571dcdc4b9a41359b5ee70054bb06423aab7c27"
+        ] = MzVersion.parse_mz("v26.24.0")
+
+    if scenario_class_name == "CrossJoin":
+        # PR#35328 (compute: move MV sink persist I/O off Timely thread) increases clusterd memory
+        min_ancestor_mz_version_per_commit[
+            "4d8deb2de7b6a0fb8d7c9e5b0a682416bef1e5c2"
+        ] = MzVersion.parse_mz("v26.23.0")
+
+    if scenario_class_name in ("OrderBy", "FastPathFilterNoIndex"):
+        # PR#34930 (Bump differential, timely and related) increases latency
+        min_ancestor_mz_version_per_commit[
+            "c20c82119261bab23c865bdfd1841348aa0acca3"
+        ] = MzVersion.parse_mz("v26.12.0")
+
     if scenario_class_name == "SwapSchema":
         # PR#29673 (adapter: derive implications from catalog changes) increases latency
         min_ancestor_mz_version_per_commit[
@@ -218,6 +268,8 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#37923 (adapter: sequence read-then-write from the session task with OCC) reduces write throughput
+    "4f0805a4d8d8e398f2fdfe10d5bdbe70b16924a4": MzVersion.parse_mz("v26.39.0"),
     # PR#31309 ([adapter] don't block on builtin table write in Session creation) increases latency for inserts
     "e8c42c65afb7acd55eb7e530a92c89a9165f2e33": MzVersion.parse_mz("v0.133.0"),
     # PR#30238 (adapter: Remove the global write lock) introduces regressions against v0.123.0

@@ -1,0 +1,420 @@
+# The `#[sqlfunc]` macro
+
+The `#[sqlfunc]` attribute macro generates boilerplate for SQL scalar functions.
+From a plain Rust function it creates a trait implementation (`EagerUnaryFunc`, `EagerBinaryFunc`, or `EagerVariadicFunc`), a `FuncName` implementation, and, unless the function takes a `&self` receiver, the struct itself.
+It also creates a `Display` implementation unless `skip_display` suppresses it.
+
+The macro lives in `src/expr-derive-impl/`, with its entry point in `sqlfunc.rs`.
+The traits it implements are defined in `src/expr/src/scalar/func/{unary,binary,variadic}.rs`.
+
+## Quick start
+
+Annotate a function with `#[sqlfunc]`:
+
+```rust
+#[sqlfunc]
+fn negate_int32(a: i32) -> i32 {
+    -a
+}
+```
+
+This generates:
+
+* A struct `NegateInt32` (camel-cased from the function name).
+* An `EagerUnaryFunc` implementation that calls the function.
+* A `Display` implementation that prints `"negate_int32"`.
+* The original function, unchanged.
+
+## Arity detection
+
+The macro determines function arity from parameter count and types, after excluding `&self` receivers and trailing `&RowArena` parameters:
+
+| Effective params | Dispatches to |
+|---|---|
+| 0 | Error: nullary functions are not supported. |
+| 1 | `EagerUnaryFunc` |
+| 2 | `EagerBinaryFunc` |
+| 3+ | `EagerVariadicFunc` |
+
+Every arity accepts a `&self` receiver and a trailing `&RowArena`.
+
+**Exception:** If any parameter uses `Variadic<T>` or `OptionalArg<T>`, the function is always treated as variadic, regardless of parameter count.
+
+## Modifiers
+
+Pass modifiers as key-value pairs in the attribute:
+
+```rust
+#[sqlfunc(sqlname = "+", is_monotone = (true, true), is_infix_op = true)]
+fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    // ...
+}
+```
+
+### `sqlname`
+
+The SQL-visible name of the function.
+
+* **Type:** string literal or macro expression
+* **Default:** the Rust function name (via `stringify!`)
+* **Applies to:** all arities
+
+The generated `Display` impl is the only reader, so `skip_display = true` rejects `sqlname`.
+
+### `propagates_nulls`
+
+Whether a NULL input produces a NULL output, skipping the function body entirely.
+When true, the evaluation layer short-circuits on NULL inputs and returns NULL without calling the function.
+This also affects the output column type: if `propagates_nulls` is true and any input column is nullable, the output column is marked nullable.
+
+* **Type:** boolean expression
+* **Default:** `!Input::nullable()`, inferred from the input type.
+  If the input type accepts `Option` or `Datum` (which can represent NULL), it is nullable, so `propagates_nulls` defaults to `false`.
+  If the input type is a non-nullable type like `&str` or `i32`, nulls are propagated (the function never sees them).
+* **Applies to:** binary, variadic
+* **Not available for:** unary (inferred only, cannot be overridden)
+
+### `introduces_nulls`
+
+Whether the function can produce NULL from non-NULL inputs.
+The optimizer uses this to reason about column nullability.
+
+* **Type:** boolean expression
+* **Default:** `Output::nullable()`, inferred from the output type.
+  A function returning `Option<T>` or `Datum` introduces nulls.
+  A function returning `String` or `i32` does not.
+* **Applies to:** all arities
+* **Note:** set it where the return type overstates it. A function returning `Datum` or `Option<T>` that yields NULL only for NULL inputs declares `introduces_nulls = false`.
+
+### `could_error`
+
+Whether the function can produce an error at runtime.
+The optimizer uses this to avoid certain rewrites that might change error behavior.
+
+* **Type:** boolean expression
+* **Default:** `Output::fallible()`, inferred from the output type.
+  A function returning `Result<T, EvalError>` is fallible.
+  A function returning `T` directly is not.
+* **Applies to:** all arities
+
+### `is_monotone`
+
+Whether the function is monotone (non-strict; either non-decreasing or non-increasing).
+Monotone functions map ranges to ranges: given a range of possible inputs, the range of possible outputs can be determined by mapping the endpoints.
+
+* **Type:** boolean expression for unary and variadic; `(bool, bool)` tuple for binary (one per argument)
+* **Default:** `false` for unary and variadic; `(false, false)` for binary
+* **Applies to:** all arities
+
+### `is_infinity_monotone`
+
+Whether `is_monotone`'s endpoint-sampling guarantee still holds when an operand may be infinite, such as a floating-point `inf`.
+Multiplication and division set it to `false`, because `0 * inf` and `inf / inf` produce results that the range endpoints do not bound.
+
+* **Type:** boolean expression
+* **Default:** `true`
+* **Applies to:** binary only
+
+### `preserves_uniqueness`
+
+Whether the function is injective: if `f(x) = f(y)` then `x = y`.
+
+* **Type:** boolean expression
+* **Default:** `false`
+* **Applies to:** unary only
+
+### `inverse`
+
+The inverse function, if it exists.
+
+* **Type:** expression convertible into `crate::UnaryFunc`, for example `inverse = NegFloat64`
+* **Default:** `None`
+* **Applies to:** unary only
+
+### `is_eliminable_cast`
+
+Whether the function is a cast that does no work and only changes the tracked type.
+Lowering drops such casts when `enable_cast_elimination` is on.
+
+* **Type:** boolean expression
+* **Default:** `false`
+* **Applies to:** unary only
+
+### `negate`
+
+The logical negation of a comparison function.
+For example, `<` negates to `>=`.
+
+* **Type:** expression convertible into `crate::BinaryFunc`, for example `negate = NotEq`
+* **Default:** `None`
+* **Applies to:** binary only
+
+### `is_infix_op`
+
+Whether the function is an infix operator (e.g., `+`, `=`, `AND`).
+Affects how the function is displayed in EXPLAIN output.
+
+* **Type:** boolean expression
+* **Default:** `false`
+* **Applies to:** binary, variadic
+
+### `is_associative`
+
+Whether the function is associative: `f(a, f(b, c)) = f(f(a, b), c)`.
+
+* **Type:** boolean expression
+* **Default:** `false`
+* **Applies to:** variadic only
+
+### `output_type`
+
+An explicit type path for computing the output column type.
+When set, the output column type and the `introduces_nulls` default come from this type instead of the return type.
+
+* **Type:** type path (e.g., `i16`, `String`)
+* **Default:** inferred from return type via `Self::Output::as_column_type()`
+* **Applies to:** all arities
+* **Cannot be combined with:** `output_type_expr`
+
+### `output_type_expr`
+
+An expression that computes the output column type when the expression is typed.
+It can read `self` and the input column types, bound as `input_type` for unary functions and as `input_types` for binary and variadic ones.
+Use this for functions whose output type depends on input types or struct fields (e.g., `ArrayCreate` where the element type is stored on the struct).
+The macro applies the nullability rules in [Null handling](#null-handling) on top of the expression's result.
+
+* **Type:** expression evaluating to `SqlColumnType`
+* **Default:** none
+* **Applies to:** all arities
+* **Cannot be combined with:** `output_type`
+
+### `test`
+
+Generate a snapshot test for the macro expansion.
+
+* **Type:** `bool`
+* **Default:** `false`
+* **Applies to:** all arities
+
+The test is emitted next to the function, so its snapshot lands in the `snapshots/` directory beside the calling source file, for example `src/expr/src/scalar/func/snapshots/`.
+Update it with `cargo insta accept` after running `cargo test -p mz-expr`.
+The macro's own expansion tests live in `src/expr-derive-impl/src/test.rs`, with snapshots in `src/expr-derive-impl/src/snapshots/`.
+
+### `skip_display`
+
+Suppresses the generated `Display` impl.
+Use this when the displayed name depends on the struct's own state, so the call site keeps a hand-written `Display` impl.
+`RangeCreate` is an example: it picks between `int4range`, `int8range`, `daterange`, `numrange`, `tsrange`, and `tstzrange` based on its `elem_type` field.
+Setting it to `true` rejects `sqlname`, whose only reader is the suppressed impl, and requires a `&self` receiver, since a unit struct has no state to display.
+
+* **Type:** `bool`
+* **Default:** `false`
+* **Applies to:** all arities
+
+Which modifiers apply to which arity is declared in `src/expr-derive-impl/src/shape.rs`, one table per arity.
+A modifier absent from an arity's table is rejected with an error naming both the modifier and the arity.
+
+## Generic type parameters
+
+A function can be generic over the element type of a container, for example `fn range_lower<'a, T>(a: Range<T>) -> Option<T>`.
+The generated trait impl replaces each type parameter with `Datum<'a>`, because the parameters are not in scope there.
+Without `output_type` or `output_type_expr`, the macro derives the output column type from where the first type parameter of the output appears among the inputs, through `mz_repr::SqlContainerType`:
+
+* Output `T` from an input container: the container's element type.
+* Output `T` from an input `T`: that input's type.
+* Output container from an input container: the input's element type, wrapped in the output container.
+
+Any other combination needs an explicit `output_type_expr`.
+The derived type is nullable when the return type is an `Option`, which also sets the `introduces_nulls` default.
+For binary and variadic functions, the derived expression soft-asserts that every input carrying the parameter agrees on its SQL type.
+
+## Generated items
+
+### Struct name
+
+The struct name defaults to the camel-cased function name, and the first positional argument to the `sqlfunc` macro overrides it.
+With a `&self` receiver the macro does not define the struct, so the name must match the one defined externally:
+
+```rust
+#[sqlfunc(
+    ArrayFill,
+    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)"
+)]
+fn array_fill<'a>(
+    &self,
+    fill: Datum<'a>,
+    dims: Option<Array<'a>>,
+    lower_bounds: OptionalArg<Option<Array<'a>>>,
+    temp_storage: &'a RowArena,
+) -> Result<Array<'a>, EvalError> {
+    // ...
+}
+```
+
+Without `&self`, the macro defines the struct under that name:
+
+```rust
+#[sqlfunc(Replace)]
+fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
+    // ...
+}
+```
+
+### `&self` receiver
+
+When a `&self` receiver is present, the macro assumes the struct is defined externally and generates:
+
+* A method `impl StructName { fn ... }` containing the function body.
+* The `Eager*Func` trait implementation for the function's arity, delegating to the method.
+* A `Display` implementation, unless `skip_display` suppresses it.
+
+Without `&self`, the macro generates the struct itself (with standard derives) in addition to the trait and display implementations.
+
+### `&RowArena`
+
+A trailing `&RowArena` parameter gives the function access to temporary storage for allocating return values that borrow from the arena.
+It is excluded from arity detection and from the generated `Input` type.
+
+## Variadic functions
+
+### `Variadic<T>` and `OptionalArg<T>`
+
+These wrapper types affect both arity detection and null handling.
+
+`Variadic<T>` consumes all remaining arguments from the iterator.
+It wraps a `Vec<T>` and is used for functions with a truly variable number of arguments:
+
+```rust
+#[sqlfunc(is_associative = true)]
+fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
+    // strs is a Vec<Option<&str>>, one entry per SQL argument
+}
+```
+
+`OptionalArg<T>` consumes one argument if present, or produces `None` if the iterator is exhausted.
+It wraps an `Option<T>` and is used for functions with optional trailing arguments:
+
+```rust
+#[sqlfunc(sqlname = "lpad")]
+fn pad_leading(string: &str, raw_len: i32, pad: OptionalArg<&str>) -> Result<String, EvalError> {
+    let pad = pad.unwrap_or(" ");
+    // ...
+}
+```
+
+Both are defined in `src/repr/src/scalar.rs`.
+
+### Input type
+
+For variadic functions, the generated `Input` type depends on parameter count:
+
+* **Single parameter:** the bare type (e.g., `Variadic<Option<&'a str>>`).
+* **Multiple parameters:** a tuple (e.g., `(&'a str, &'a str, &'a str)`).
+
+## Null handling
+
+The interplay between `propagates_nulls`, `introduces_nulls`, and input/output types determines the nullability of the output column.
+
+The generated output-type method (`output_sql_type` for unary and binary functions, `output_type` for variadic ones) computes the output `SqlColumnType` as:
+
+```
+output.nullable = output.nullable
+    || non_nullable_input_is_nullable
+    || (propagates_nulls && any_input_nullable)
+```
+
+Where:
+* `output.nullable` is the nullability of the column type that `output_type`, `output_type_expr`, or the return type gives.
+* `non_nullable_input_is_nullable` is true if a nullable input column lands in a parameter position whose Rust type cannot represent NULL. Such a position makes the evaluation layer short-circuit to NULL, so the output is nullable no matter what `propagates_nulls` says. Unary functions have no such term. Their `propagates_nulls` cannot be overridden, so it is always `!Input::nullable()`, which already covers a non-nullable input. The NOTE on `Shape::nullability` in `src/expr-derive-impl/src/shape.rs` owns this argument.
+* `propagates_nulls` indicates whether NULL passes through.
+* `any_input_nullable` is true if any input column is nullable.
+
+The evaluation layer (`LazyUnaryFunc`, `LazyBinaryFunc`, `LazyVariadicFunc`) handles the actual null short-circuiting at runtime through the `InputDatumType::try_from_result`/`try_from_iter` methods.
+If the input type does not accept NULL (is non-nullable), the evaluation layer returns NULL directly without calling the function.
+
+## Examples
+
+### Unary: type cast with inverse
+
+```rust
+#[sqlfunc(
+    sqlname = "uint2_to_real",
+    preserves_uniqueness = true,
+    inverse = super::CastFloat32ToUint16,
+    is_monotone = true
+)]
+fn cast_uint16_to_float32(a: u16) -> f32 {
+    f32::from(a)
+}
+```
+
+### Binary: arithmetic operator
+
+```rust
+#[sqlfunc(
+    is_monotone = (true, true),
+    output_type = i16,
+    is_infix_op = true,
+    sqlname = "+",
+    propagates_nulls = true,
+)]
+fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    a.unwrap_int16()
+        .checked_add(b.unwrap_int16())
+        .ok_or(EvalError::NumericFieldOverflow)
+        .map(Datum::from)
+}
+```
+
+### Variadic: fixed parameters
+
+```rust
+#[sqlfunc(sqlname = "datediff")]
+fn date_diff_date(unit_str: &str, a: Date, b: Date) -> Result<i64, EvalError> {
+    // Three fixed parameters make it variadic, with tuple input (&str, Date, Date).
+}
+```
+
+### Variadic: dynamic argument count
+
+```rust
+#[sqlfunc(is_associative = true)]
+fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
+    // A Variadic<T> parameter makes it variadic regardless of parameter count.
+}
+```
+
+### Variadic: with `&self` and dynamic output type
+
+```rust
+#[sqlfunc(
+    ArrayCreate,
+    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)"
+)]
+fn array_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> Array<'a> {
+    // &self: struct defined externally with an elem_type field
+    // output_type_expr: output type depends on runtime struct fields
+}
+```
+
+## Shapes the macro does not cover
+
+Two shapes stay hand-written by design.
+
+* Functions generic over an `Eval` implementor, which hold sub-expressions in a `Box<E>`
+  or a `Box<[E]>` and evaluate them per element. The macro would need to emit an
+  implementation generic over a struct type parameter with a trait bound, which is a
+  different mechanism from the type-parameter erasure it applies. The
+  `impl<E: Eval> LazyUnaryFunc` blocks under `src/expr/src/scalar/func/impls/` are these.
+* Functions that do not evaluate every operand. The macro emits `Eager*`
+  implementations, which evaluate all arguments before dispatch. The
+  `LazyVariadicFunc` implementations `And`, `Or`, `Coalesce`, `Greatest`, `Least`,
+  `ErrorIfNull`, and `CaseLiteral` are these.
+
+Those two shapes account for every hand-written implementation under
+`src/expr/src/scalar/func/`. Everything else is generated from a `#[sqlfunc]`
+annotation, so a new function belongs under the macro unless it falls into one of the
+two categories above. Two properties of the macro make that reach as far as it does: a
+function that allocates its result gets a `RowArena` from `Eager*Func::call`, and a
+function that would check NULL in its body gets that check from a non-nullable parameter
+type, `ExcludeNull<Datum<'a>>` where the body needs a raw `Datum`.

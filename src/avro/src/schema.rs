@@ -32,7 +32,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-use digest::Digest;
+use aws_lc_rs::digest;
 use itertools::Itertools;
 use mz_ore::assert_none;
 use regex::Regex;
@@ -642,7 +642,7 @@ impl Name {
                 _ => out.push('_'),
             }
         }
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             Name::is_valid(&out),
             "make_valid({name}) produced invalid name: {out}"
         );
@@ -813,6 +813,11 @@ impl UnionSchema {
         &self.schemas
     }
 
+    /// Returns a mutable slice to all variants of this schema.
+    pub fn variants_mut(&mut self) -> &mut [SchemaPieceOrNamed] {
+        &mut self.schemas
+    }
+
     /// Returns true if the first variant of this `UnionSchema` is `Null`.
     pub fn is_nullable(&self) -> bool {
         !self.schemas.is_empty() && self.schemas[0] == SchemaPieceOrNamed::Piece(SchemaPiece::Null)
@@ -846,6 +851,89 @@ impl UnionSchema {
     ) -> Option<(usize, &SchemaPieceOrNamed)> {
         self.match_ref(other.as_ref(), names_map)
     }
+
+    /// Like [`UnionSchema::match_`], but additionally honors Avro numeric
+    /// promotion. Here `self` is the *reader* union and `writer` is a writer
+    /// variant being resolved against it.
+    pub fn match_promote_writer(
+        &self,
+        writer: &SchemaPieceOrNamed,
+        names_map: &BTreeMap<usize, usize>,
+    ) -> Option<(usize, &SchemaPieceOrNamed)> {
+        self.match_ref_promote_writer(writer.as_ref(), names_map)
+    }
+
+    /// Like [`UnionSchema::match_ref`], but additionally honors Avro numeric
+    /// promotion. `self` is the *reader* union and `writer` is a concrete
+    /// writer piece. An exact match (by kind for anonymous pieces, by name for
+    /// named ones) is preferred; otherwise the first reader variant in
+    /// declaration order that `writer` can be promoted into is returned. See
+    /// `can_promote`.
+    pub fn match_ref_promote_writer(
+        &self,
+        writer: SchemaPieceRefOrNamed,
+        names_map: &BTreeMap<usize, usize>,
+    ) -> Option<(usize, &SchemaPieceOrNamed)> {
+        if let Some(hit) = self.match_ref(writer, names_map) {
+            return Some(hit);
+        }
+        let SchemaPieceRefOrNamed::Piece(wp) = writer else {
+            return None;
+        };
+        self.schemas
+            .iter()
+            .enumerate()
+            .find_map(|(idx, variant)| match variant {
+                SchemaPieceOrNamed::Piece(rp) if can_promote(wp, rp) => Some((idx, variant)),
+                _ => None,
+            })
+    }
+
+    /// Like [`UnionSchema::match_ref`], but additionally honors Avro numeric
+    /// promotion. `self` is the *writer* union and `reader` is a concrete
+    /// reader piece. An exact match is preferred; otherwise the first writer
+    /// variant in declaration order that can be promoted into `reader` is
+    /// returned. See `can_promote`.
+    pub fn match_ref_promote_reader(
+        &self,
+        reader: SchemaPieceRefOrNamed,
+        names_map: &BTreeMap<usize, usize>,
+    ) -> Option<(usize, &SchemaPieceOrNamed)> {
+        if let Some(hit) = self.match_ref(reader, names_map) {
+            return Some(hit);
+        }
+        let SchemaPieceRefOrNamed::Piece(rp) = reader else {
+            return None;
+        };
+        self.schemas
+            .iter()
+            .enumerate()
+            .find_map(|(idx, variant)| match variant {
+                SchemaPieceOrNamed::Piece(wp) if can_promote(wp, rp) => Some((idx, variant)),
+                _ => None,
+            })
+    }
+}
+
+/// Returns `true` if a value written with primitive schema `writer` can be read
+/// as primitive `reader` under Avro's numeric promotion rules: `int` →
+/// `long`/`float`/`double`, `long` → `float`/`double`, and `float` → `double`.
+///
+/// These are exactly the promotions performed during schema resolution in
+/// `reader.rs` (`ResolveIntLong`, `ResolveIntDouble`, ...). The two must be
+/// kept in sync: only return `true` here for a pair that resolution can
+/// actually decode, otherwise a union variant would match but fail to resolve.
+fn can_promote(writer: &SchemaPiece, reader: &SchemaPiece) -> bool {
+    use SchemaPiece::*;
+    matches!(
+        (writer, reader),
+        (Int, Long)
+            | (Int, Float)
+            | (Int, Double)
+            | (Long, Float)
+            | (Long, Double)
+            | (Float, Double)
+    )
 }
 
 // No need to compare variant_index, it is derivative of schemas.
@@ -859,12 +947,19 @@ impl PartialEq for UnionSchema {
 struct SchemaParser {
     named: Vec<Option<NamedSchemaPiece>>,
     indices: BTreeMap<FullName, usize>,
+    depth: usize,
 }
+
+/// Cap on nested-type depth while parsing an Avro schema JSON. The parser
+/// recurses through `parse_inner` for every nested `record`/`array`/`map`/
+/// `union` so an untrusted schema like `{"type":{"type":{"type":...}}}`
+/// can otherwise overflow the stack.
+const MAX_SCHEMA_DEPTH: usize = 128;
 
 impl SchemaParser {
     fn parse(mut self, value: &Value) -> Result<Schema, AvroError> {
         let top = self.parse_inner("", value)?;
-        let SchemaParser { named, indices } = self;
+        let SchemaParser { named, indices, .. } = self;
         Ok(Schema {
             named: named.into_iter().map(|o| o.unwrap()).collect(),
             indices,
@@ -873,6 +968,24 @@ impl SchemaParser {
     }
 
     fn parse_inner(
+        &mut self,
+        default_namespace: &str,
+        value: &Value,
+    ) -> Result<SchemaPieceOrNamed, AvroError> {
+        self.depth += 1;
+        if self.depth > MAX_SCHEMA_DEPTH {
+            self.depth -= 1;
+            return Err(ParseSchemaError::new(format!(
+                "schema nesting depth exceeds limit {MAX_SCHEMA_DEPTH}"
+            ))
+            .into());
+        }
+        let result = self.parse_inner_impl(default_namespace, value);
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_inner_impl(
         &mut self,
         default_namespace: &str,
         value: &Value,
@@ -1339,7 +1452,7 @@ impl SchemaParser {
         if let Some("decimal") = logical_type {
             match Self::parse_decimal(complex) {
                 Ok((precision, scale)) => {
-                    let max = ((2_usize.pow((8 * size - 1) as u32) - 1) as f64).log10() as usize;
+                    let max = ((8 * size - 1) as f64 * 2_f64.log10()).floor() as usize;
                     if precision > max {
                         warn!(
                             "Decimal precision {} requires more than {} bytes of space, parsing as fixed",
@@ -1370,11 +1483,112 @@ impl Schema {
     /// Create a `Schema` from a `serde_json::Value` representing a JSON Avro
     /// schema.
     pub fn parse(value: &Value) -> Result<Self, AvroError> {
+        Self::parse_with_references(value, &[])
+    }
+
+    /// Parse an JSON Avro schema with referenced named types.
+    ///
+    /// This is used when parsing a schema that references types defined in other
+    /// schemas (Confluent Schema Registry schema references). Referenced schemas
+    /// should be provided in dependency order (dependencies first).
+    ///
+    /// # Arguments
+    ///
+    /// * `primary` - The primary schema JSON value to parse
+    /// * `reference_schemas` - Schemas whose named types should be available during parsing
+    pub fn parse_with_references(
+        primary: &Value,
+        reference_schemas: &[Schema],
+    ) -> Result<Self, AvroError> {
+        // Collect and remap named types from all referenced schemas
+        let (named, indices) = Self::collect_named_types(reference_schemas);
+
+        // Create parser with pre-populated named types
         let p = SchemaParser {
-            named: vec![],
-            indices: Default::default(),
+            named: named.into_iter().map(Some).collect(),
+            indices,
+            depth: 0,
         };
-        p.parse(value)
+        p.parse(primary)
+    }
+
+    /// Collect all named types from a list of schemas, remapping indices as needed.
+    ///
+    /// When combining named types from multiple schemas, each schema's internal
+    /// indices need to be remapped to account for duplicates and new positions.
+    fn collect_named_types(
+        schemas: &[Schema],
+    ) -> (Vec<NamedSchemaPiece>, BTreeMap<FullName, usize>) {
+        let mut combined_named: Vec<NamedSchemaPiece> = Vec::new();
+        let mut combined_indices: BTreeMap<FullName, usize> = BTreeMap::new();
+
+        for schema in schemas {
+            // First pass: Build the index_map from this schema's indices to combined indices.
+            // For types that already exist: map to existing combined index
+            // For new types: map to their future position in combined_named
+            let mut index_map: Vec<usize> = Vec::with_capacity(schema.named.len());
+            let mut new_type_offset = combined_named.len();
+
+            for named_piece in &schema.named {
+                if let Some(&existing_idx) = combined_indices.get(&named_piece.name) {
+                    // Type already exists, use existing index
+                    index_map.push(existing_idx);
+                } else {
+                    // New type, assign next available index
+                    index_map.push(new_type_offset);
+                    new_type_offset += 1;
+                }
+            }
+
+            // Second pass: Add new types with proper remapping
+            for named_piece in &schema.named {
+                if combined_indices.contains_key(&named_piece.name) {
+                    continue;
+                }
+
+                let mut remapped = named_piece.clone();
+                Self::remap_indices_in_piece_with_map(&mut remapped.piece, &index_map);
+
+                let new_idx = combined_named.len();
+                combined_indices.insert(remapped.name.clone(), new_idx);
+                combined_named.push(remapped);
+            }
+        }
+
+        (combined_named, combined_indices)
+    }
+
+    /// Recursively remap Named indices in a SchemaPiece using an index map.
+    fn remap_indices_in_piece_with_map(piece: &mut SchemaPiece, index_map: &[usize]) {
+        match piece {
+            SchemaPiece::Array(inner) => Self::remap_indices_with_map(inner, index_map),
+            SchemaPiece::Map(inner) => Self::remap_indices_with_map(inner, index_map),
+            SchemaPiece::Union(union) => {
+                for variant in union.variants_mut() {
+                    Self::remap_indices_with_map(variant, index_map);
+                }
+            }
+            SchemaPiece::Record { fields, .. } => {
+                for field in fields {
+                    Self::remap_indices_with_map(&mut field.schema, index_map);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Remap a single SchemaPieceOrNamed using an index map.
+    fn remap_indices_with_map(item: &mut SchemaPieceOrNamed, index_map: &[usize]) {
+        match item {
+            SchemaPieceOrNamed::Named(idx) => {
+                if let Some(&new_idx) = index_map.get(*idx) {
+                    *idx = new_idx;
+                }
+            }
+            SchemaPieceOrNamed::Piece(piece) => {
+                Self::remap_indices_in_piece_with_map(piece, index_map)
+            }
+        }
     }
 
     /// Converts `self` into its [Parsing Canonical Form].
@@ -1390,11 +1604,10 @@ impl Schema {
     ///
     /// [Parsing Canonical Form]:
     /// https://avro.apache.org/docs/++version++/specification#parsing-canonical-form-for-schemas
-    pub fn fingerprint<D: Digest>(&self) -> SchemaFingerprint {
-        let mut d = D::new();
-        d.update(self.canonical_form());
+    pub fn fingerprint(&self, algorithm: &'static digest::Algorithm) -> SchemaFingerprint {
+        let hash = digest::digest(algorithm, self.canonical_form().as_bytes());
         SchemaFingerprint {
-            bytes: d.finalize().to_vec(),
+            bytes: hash.as_ref().to_vec(),
         }
     }
 
@@ -2290,6 +2503,49 @@ mod tests {
 
     use super::*;
 
+    /// Wrap `"int"` in `n` layers of `{"type":"array","items":…}`.
+    fn nest_arrays(n: usize) -> Value {
+        let mut value = Value::String("int".to_string());
+        for _ in 0..n {
+            let mut layer = Map::new();
+            layer.insert("type".to_string(), Value::String("array".to_string()));
+            layer.insert("items".to_string(), value);
+            value = Value::Object(layer);
+        }
+        value
+    }
+
+    #[mz_ore::test]
+    fn parse_rejects_nesting_past_the_depth_limit() {
+        // `MAX_SCHEMA_DEPTH` counts `parse_inner` levels, and the innermost leaf
+        // costs a level without being a JSON container, so `n` wrappers reach
+        // depth `n + 1`.
+        assert_ok!(Schema::parse(&nest_arrays(MAX_SCHEMA_DEPTH - 1)));
+        let err = Schema::parse(&nest_arrays(MAX_SCHEMA_DEPTH))
+            .expect_err("nesting past the limit must be rejected");
+        assert!(
+            err.to_string()
+                .contains(&format!("nesting depth exceeds limit {MAX_SCHEMA_DEPTH}")),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn from_str_cannot_reach_the_depth_limit() {
+        // Why the test above builds a `Value` rather than parsing text: `from_str`
+        // runs serde_json first, whose own recursion limit is also 128
+        // containers, so it rejects the schema one level before the guard could
+        // fire. A depth-guard test written against text would be asserting
+        // serde_json's error, not ours. If this ever fails, the guard became
+        // reachable from text and deserves a test there too.
+        let text = serde_json::to_string(&nest_arrays(MAX_SCHEMA_DEPTH)).unwrap();
+        let err = Schema::from_str(&text).expect_err("serde_json must reject this depth");
+        assert!(
+            err.to_string().contains("recursion limit exceeded"),
+            "unexpected error: {err}"
+        );
+    }
+
     fn check_schema(schema: &str, expected: SchemaPiece) {
         let schema = Schema::from_str(schema).unwrap();
         assert_eq!(&expected, schema.top_node().inner);
@@ -2550,6 +2806,61 @@ mod tests {
             crate::types::Value::Record(vec![("f1".to_string(), crate::types::Value::Int(1))]);
         assert_eq!(reader_value, expected);
         assert!(reader.is_empty()); // all bytes should have been consumed
+    }
+
+    /// Union variant matching decides on its own which numeric promotions are
+    /// legal, separately from the schema resolver that actually decodes a
+    /// writer value into a reader type. The two must agree: if matching accepts
+    /// a promotion the resolver rejects, a union variant can match but then
+    /// fail to decode at read time. This test pins that agreement over the
+    /// primitive types so they cannot drift apart.
+    #[mz_ore::test]
+    fn test_union_promotion_agrees_with_resolution() {
+        // Resolving two bare primitives drives exactly the resolution path that
+        // union matching consults, so it is the right oracle.
+        fn resolves(writer: &str, reader: &str) -> bool {
+            let writer = Schema::from_str(&format!("\"{writer}\"")).unwrap();
+            let reader = Schema::from_str(&format!("\"{reader}\"")).unwrap();
+            resolve_schemas(&writer, &reader).is_ok()
+        }
+        fn promotes(writer: &str, reader: &str) -> bool {
+            can_promote(
+                &Schema::parse_primitive(writer).unwrap(),
+                &Schema::parse_primitive(reader).unwrap(),
+            )
+        }
+
+        // The dangerous direction, over every primitive pair: any promotion
+        // matching accepts must actually be decodable by resolution.
+        let primitives = [
+            "null", "boolean", "int", "long", "float", "double", "bytes", "string",
+        ];
+        for w in primitives {
+            for r in primitives {
+                if promotes(w, r) {
+                    assert!(
+                        resolves(w, r),
+                        "{w} -> {r} is accepted for matching but cannot be resolved",
+                    );
+                }
+            }
+        }
+
+        // Over the numeric kinds, for distinct kinds the two must agree
+        // exactly. (Identical kinds resolve trivially but are not promotions,
+        // so matching reports false for them; exclude `w == r`.)
+        let numeric = ["int", "long", "float", "double"];
+        for w in numeric {
+            for r in numeric {
+                if w != r {
+                    assert_eq!(
+                        promotes(w, r),
+                        resolves(w, r),
+                        "matching and resolution disagree on {w} -> {r}",
+                    );
+                }
+            }
+        }
     }
 
     #[mz_ore::test]
@@ -2971,8 +3282,6 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_schema_fingerprint() {
-        use sha2::Sha256;
-
         let raw_schema = r#"
         {
             "type": "record",
@@ -2986,9 +3295,13 @@ mod tests {
         let expected_canonical = r#"{"name":"test","type":"record","fields":[{"name":"a","type":"long"},{"name":"b","type":"string"}]}"#;
         let schema = Schema::from_str(raw_schema).unwrap();
         assert_eq!(&schema.canonical_form(), expected_canonical);
-        let expected_fingerprint = format!("{:02x}", Sha256::digest(expected_canonical));
+        let expected_fingerprint = digest::digest(&digest::SHA256, expected_canonical.as_bytes())
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         assert_eq!(
-            format!("{}", schema.fingerprint::<Sha256>()),
+            format!("{}", schema.fingerprint(&digest::SHA256)),
             expected_fingerprint
         );
 
@@ -3012,9 +3325,13 @@ mod tests {
         let expected_canonical = r#"{"name":"ns.r1","type":"record","fields":[{"name":"f1","type":{"name":"ns.r2","type":"fixed","size":1}}]}"#;
         let schema = Schema::from_str(raw_schema).unwrap();
         assert_eq!(&schema.canonical_form(), expected_canonical);
-        let expected_fingerprint = format!("{:02x}", Sha256::digest(expected_canonical));
+        let expected_fingerprint = digest::digest(&digest::SHA256, expected_canonical.as_bytes())
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         assert_eq!(
-            format!("{}", schema.fingerprint::<Sha256>()),
+            format!("{}", schema.fingerprint(&digest::SHA256)),
             expected_fingerprint
         );
     }
@@ -3032,6 +3349,256 @@ mod tests {
         ] {
             let actual = Name::make_valid(input);
             assert_eq!(expected, actual, "Name::make_valid({input})")
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_with_simple_reference() {
+        // Schema A defines a User record
+        let ref_schema_json = r#"{
+            "type": "record",
+            "name": "User",
+            "namespace": "com.example",
+            "fields": [{"name": "id", "type": "int"}]
+        }"#;
+
+        // Schema B references User
+        let primary_json = r#"{
+            "type": "record",
+            "name": "Event",
+            "namespace": "com.example",
+            "fields": [{"name": "user", "type": "com.example.User"}]
+        }"#;
+
+        let ref_schema = Schema::from_str(ref_schema_json).unwrap();
+        let primary_value: Value = serde_json::from_str(primary_json).unwrap();
+
+        let schema = Schema::parse_with_references(&primary_value, &[ref_schema]).unwrap();
+
+        // Verify both Event and User types are in the schema
+        let user_name = FullName {
+            name: "User".to_string(),
+            namespace: "com.example".to_string(),
+        };
+        let event_name = FullName {
+            name: "Event".to_string(),
+            namespace: "com.example".to_string(),
+        };
+
+        assert!(
+            schema.indices.contains_key(&user_name),
+            "User type should be in schema indices"
+        );
+        assert!(
+            schema.indices.contains_key(&event_name),
+            "Event type should be in schema indices"
+        );
+
+        // Verify Event's user field references User
+        if let SchemaPieceOrNamed::Named(event_idx) = &schema.top {
+            let event_piece = &schema.named[*event_idx].piece;
+            if let SchemaPiece::Record { fields, .. } = event_piece {
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].name, "user");
+                // The user field should reference the User type (Named)
+                assert!(matches!(fields[0].schema, SchemaPieceOrNamed::Named(_)));
+            } else {
+                panic!("Expected Event to be a record");
+            }
+        } else {
+            panic!("Expected top to be Named");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_with_nested_references() {
+        // Schema A defines Address
+        let schema_a = r#"{
+            "type": "record",
+            "name": "Address",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "street", "type": "string"},
+                {"name": "city", "type": "string"}
+            ]
+        }"#;
+
+        // Schema B defines User with Address field (references A)
+        let schema_b = r#"{
+            "type": "record",
+            "name": "User",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "id", "type": "int"},
+                {"name": "address", "type": "com.example.Address"}
+            ]
+        }"#;
+
+        // Schema C defines Event with User field (references B, transitively A)
+        let schema_c = r#"{
+            "type": "record",
+            "name": "Event",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "user", "type": "com.example.User"},
+                {"name": "timestamp", "type": "long"}
+            ]
+        }"#;
+
+        // Parse A first
+        let ref_schema_a = Schema::from_str(schema_a).unwrap();
+
+        // Parse B with reference to A
+        let schema_b_value: Value = serde_json::from_str(schema_b).unwrap();
+        let ref_schema_b =
+            Schema::parse_with_references(&schema_b_value, std::slice::from_ref(&ref_schema_a))
+                .unwrap();
+
+        // Parse C with references to A and B (in dependency order)
+        let schema_c_value: Value = serde_json::from_str(schema_c).unwrap();
+        let final_schema =
+            Schema::parse_with_references(&schema_c_value, &[ref_schema_a, ref_schema_b]).unwrap();
+
+        // Verify all three types are in the schema
+        for name in ["Address", "User", "Event"] {
+            let full_name = FullName {
+                name: name.to_string(),
+                namespace: "com.example".to_string(),
+            };
+            assert!(
+                final_schema.indices.contains_key(&full_name),
+                "{} type should be in schema indices",
+                name
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_with_multiple_types_in_reference() {
+        // Schema A defines both Address and PhoneNumber
+        let ref_schema_json = r#"{
+            "type": "record",
+            "name": "ContactInfo",
+            "namespace": "com.example",
+            "fields": [
+                {
+                    "name": "address",
+                    "type": {
+                        "type": "record",
+                        "name": "Address",
+                        "fields": [{"name": "street", "type": "string"}]
+                    }
+                },
+                {
+                    "name": "phone",
+                    "type": {
+                        "type": "record",
+                        "name": "PhoneNumber",
+                        "fields": [{"name": "number", "type": "string"}]
+                    }
+                }
+            ]
+        }"#;
+
+        // Schema B references both Address and PhoneNumber
+        let primary_json = r#"{
+            "type": "record",
+            "name": "User",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "id", "type": "int"},
+                {"name": "home", "type": "com.example.Address"},
+                {"name": "mobile", "type": "com.example.PhoneNumber"}
+            ]
+        }"#;
+
+        let ref_schema = Schema::from_str(ref_schema_json).unwrap();
+        let primary_value: Value = serde_json::from_str(primary_json).unwrap();
+
+        let schema = Schema::parse_with_references(&primary_value, &[ref_schema]).unwrap();
+
+        // Verify all types are in the schema
+        for name in ["Address", "PhoneNumber", "ContactInfo", "User"] {
+            let full_name = FullName {
+                name: name.to_string(),
+                namespace: "com.example".to_string(),
+            };
+            assert!(
+                schema.indices.contains_key(&full_name),
+                "{} type should be in schema indices",
+                name
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_parse_with_no_references() {
+        // When no references are provided, it should behave like regular parse
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Simple",
+            "fields": [{"name": "id", "type": "int"}]
+        }"#;
+
+        let value: Value = serde_json::from_str(schema_json).unwrap();
+
+        let schema_with_refs = Schema::parse_with_references(&value, &[]).unwrap();
+        let schema_normal = Schema::parse(&value).unwrap();
+
+        // Both should produce equivalent schemas
+        assert_eq!(schema_with_refs.named.len(), schema_normal.named.len());
+        assert_eq!(schema_with_refs.indices.len(), schema_normal.indices.len());
+    }
+
+    #[mz_ore::test]
+    fn test_parse_with_reference_in_array() {
+        // Schema A defines an Item record
+        let ref_schema_json = r#"{
+            "type": "record",
+            "name": "Item",
+            "namespace": "com.example",
+            "fields": [{"name": "name", "type": "string"}]
+        }"#;
+
+        // Schema B has an array of Items
+        let primary_json = r#"{
+            "type": "record",
+            "name": "Order",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "items", "type": {"type": "array", "items": "com.example.Item"}}
+            ]
+        }"#;
+
+        let ref_schema = Schema::from_str(ref_schema_json).unwrap();
+        let primary_value: Value = serde_json::from_str(primary_json).unwrap();
+
+        let schema = Schema::parse_with_references(&primary_value, &[ref_schema]).unwrap();
+
+        // Verify both types exist
+        let item_name = FullName {
+            name: "Item".to_string(),
+            namespace: "com.example".to_string(),
+        };
+        assert!(schema.indices.contains_key(&item_name));
+
+        // Verify the array items type is a Named reference
+        if let SchemaPieceOrNamed::Named(order_idx) = &schema.top {
+            let order_piece = &schema.named[*order_idx].piece;
+            if let SchemaPiece::Record { fields, .. } = order_piece {
+                if let SchemaPieceOrNamed::Piece(SchemaPiece::Array(inner)) = &fields[0].schema {
+                    assert!(
+                        matches!(inner.as_ref(), SchemaPieceOrNamed::Named(_)),
+                        "Array items should be a Named reference to Item"
+                    );
+                } else {
+                    panic!("Expected items field to be an array");
+                }
+            } else {
+                panic!("Expected Order to be a record");
+            }
+        } else {
+            panic!("Expected top to be Named");
         }
     }
 }

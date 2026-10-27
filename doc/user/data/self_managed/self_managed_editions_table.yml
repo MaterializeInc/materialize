@@ -9,11 +9,11 @@ rows:
   - "Feature": "**Maximum Usage Limits (Disk)**"
     "Enterprise Edition": None
     "Community Edition": 48 GiB
-  - "Feature": "**[Support](/support/)**"
+  - "Feature": "**[Support](https://materialize.com/support/)**"
     "Enterprise Edition": |
       [Per terms of your license](https://materialize.com/self-managed/enterprise-license/)
     "Community Edition": |
-      [Community slack or messenger app](/support/)
+      [Community slack or support chat](https://materialize.com/support/)
   - "Feature": "**License**"
     "Enterprise Edition": |
       [Enterprise License - Contact Us](https://materialize.com/self-managed/enterprise-license/)

@@ -1121,7 +1121,7 @@ Explained Query:
             ReadStorage materialize.public.t1 // { arity: 1 }
   Return // { arity: 2 }
     Filter (#0{sum} > 0) // { arity: 2 }
-      Reduce aggregates=[sum((#1{f1} + #0{f1})), sum((#0{f1} + 0))] // { arity: 2 }
+      Reduce aggregates=[sum((#1{f1} + #0{f1})), sum(#0{f1})] // { arity: 2 }
         Union // { arity: 2 }
           Get l0 // { arity: 2 }
           Project (#0{f1}, #2) // { arity: 2 }

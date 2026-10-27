@@ -26,6 +26,7 @@ use mz_sql_parser::ident;
 
 use crate::names::{Aug, PartialItemName, ResolvedDataType, ResolvedItemName};
 use crate::plan::{PlanError, StatementContext};
+use crate::session::vars::ENABLE_ANY_ALL_NULL_ARRAY_SEMANTICS;
 use crate::{ORDINALITY_COL_NAME, normalize};
 
 pub(crate) fn transform<N>(scx: &StatementContext, node: &mut N) -> Result<(), PlanError>
@@ -231,15 +232,63 @@ impl<'a> FuncRewriter<'a> {
                 .dangerous_resolve_name(vec![MZ_UNSAFE_SCHEMA, "mz_avg_promotion"]),
         );
         let expr_squared = expr.clone().multiply(expr.clone());
-        let sum_squares = self.plan_agg(
-            self.scx
-                .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
-            expr_squared,
-            vec![],
-            filter.clone(),
-            distinct,
-            over.clone(),
-        );
+        let sum_squares = if distinct {
+            // With DISTINCT, all three component aggregates must deduplicate
+            // on the values of x, not on the values of their own inputs.
+            // sum(DISTINCT x) and count(DISTINCT x) do so naturally, but
+            // sum(DISTINCT x²) deduplicates on x², wrongly collapsing values
+            // that differ only in sign, e.g. -2 and 2. Squaring is injective
+            // on the non-negative values and, separately, on the negative
+            // values, so summing the two sign classes independently makes
+            // deduplication on x² agree with deduplication on x:
+            //
+            //     sum(DISTINCT CASE WHEN x >= 0 THEN x² END)
+            //       + sum(DISTINCT CASE WHEN x < 0 THEN x² END)
+            //
+            // Either sum is NULL when its sign class is empty, so the two are
+            // combined with COALESCE(..., 0). When there are no input rows at
+            // all this yields 0 instead of NULL, but the overall result is
+            // still NULL then because sum(DISTINCT x) below is NULL.
+            let case_squared = |condition| Expr::Case {
+                operand: None,
+                conditions: vec![condition],
+                results: vec![expr_squared.clone()],
+                else_result: None,
+            };
+            let sum_squares_nonneg = self.plan_agg(
+                self.scx
+                    .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
+                case_squared(expr.clone().gt_eq(Expr::number("0"))),
+                vec![],
+                filter.clone(),
+                distinct,
+                over.clone(),
+            );
+            let sum_squares_neg = self.plan_agg(
+                self.scx
+                    .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
+                case_squared(expr.clone().lt(Expr::number("0"))),
+                vec![],
+                filter.clone(),
+                distinct,
+                over.clone(),
+            );
+            let coalesce_zero = |sum| Expr::HomogenizingFunction {
+                function: HomogenizingFunction::Coalesce,
+                exprs: vec![sum, Expr::number("0")],
+            };
+            coalesce_zero(sum_squares_nonneg).binop(Op::bare("+"), coalesce_zero(sum_squares_neg))
+        } else {
+            self.plan_agg(
+                self.scx
+                    .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
+                expr_squared,
+                vec![],
+                filter.clone(),
+                distinct,
+                over.clone(),
+            )
+        };
         let sum = self.plan_agg(
             self.scx
                 .dangerous_resolve_name(vec![PG_CATALOG_SCHEMA, "sum"]),
@@ -672,11 +721,34 @@ impl<'a> Desugarer<'a> {
 
         // `$expr = ALL ($array_expr)`
         // =>
-        // `$expr = ALL (SELECT elem FROM unnest($array_expr) _ (elem))`
+        // `CASE WHEN $array_expr IS NULL THEN NULL
+        //       ELSE $expr = ALL (SELECT elem FROM unnest($array_expr) _ (elem)) END`
         //
         // and analogously for other operators and ANY.
+        //
+        // The `IS NULL` guard is required because a NULL array is distinct from
+        // an empty array. PG yields NULL for the former but the empty-set answer
+        // (false for ANY, true for ALL) for the latter, whereas `unnest` maps
+        // both to zero rows and so cannot tell them apart.
+        //
+        // The guard is gated because it costs plan quality in value context over a
+        // non-constant array. Several `ANY`/`ALL` operands in one clause used to be
+        // lowered together over a shared `distinct_inner`, but HIR lowering defers a
+        // subquery that sits under an `If`, so each guarded operand now lowers on its
+        // own and duplicates the `unnest`. In filter context, and whenever the array
+        // is constant, the guard folds away and plans are unchanged.
         if let Expr::AnyExpr { left, op, right } | Expr::AllExpr { left, op, right } = expr {
             let binding = ident!("elem");
+
+            // Cloned here because `right` is consumed into the `unnest` call below.
+            let array_is_null = self
+                .scx
+                .is_feature_flag_enabled(&ENABLE_ANY_ALL_NULL_ARRAY_SEMANTICS)
+                .then(|| Expr::IsExpr {
+                    expr: Box::new((**right).clone()),
+                    construct: IsExprConstruct::Null,
+                    negated: false,
+                });
 
             let subquery = Query::select(
                 Select::default()
@@ -710,7 +782,7 @@ impl<'a> Desugarer<'a> {
 
             let op = op.clone();
 
-            *expr = match expr {
+            let any_all = match expr {
                 Expr::AnyExpr { .. } => Expr::AnySubquery {
                     left,
                     op,
@@ -722,6 +794,16 @@ impl<'a> Desugarer<'a> {
                     right: Box::new(subquery),
                 },
                 _ => unreachable!(),
+            };
+
+            *expr = match array_is_null {
+                Some(array_is_null) => Expr::Case {
+                    operand: None,
+                    conditions: vec![array_is_null],
+                    results: vec![Expr::null()],
+                    else_result: Some(Box::new(any_all)),
+                },
+                None => any_all,
             };
         }
 

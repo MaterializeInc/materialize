@@ -1,0 +1,57 @@
+<!-- build a dict of type names -->
+{{ $types := dict }}
+{{ range $.Site.Data.self_managed.materialize_crd_descriptions_v1alpha1 }}
+{{ $types = merge $types (dict (index . 0) true) }}
+{{ end }}
+
+{{ range $.Site.Data.self_managed.materialize_crd_descriptions_v1alpha1 }}
+#### {{ index . 0 }}
+<table>
+<thead>
+<tr>
+<th>Field Name</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+{{- range (index . 1) }}
+  {{- if not .deprecated }}
+<tr>
+<td><code>{{ .name }}</code></td>
+<td>{{ if .required }}✅{{ end }}</td>
+<td>
+<!-- Type -->
+  {{- $matches := findRESubmatch `(Array<|Map<String, )*([^>]+)(>*)` .type 1 -}}
+  {{- $captures := index $matches 0 -}}
+
+  {{- $typePrefix := index $captures 1 -}}
+  {{- $baseType := index $captures 2 -}}
+  {{- $typeSuffix := index $captures 3 -}}
+<em><strong>
+  {{- $typePrefix -}}
+  {{- if (index $types $baseType) -}}
+    <a href='#{{ replace $baseType "." "" | urlize}}'>
+  {{- end -}}
+  {{ $baseType }}
+  {{- if (index $types $baseType) -}}
+    </a>
+  {{- end -}}
+  {{- $typeSuffix -}}
+</strong></em>
+
+<!-- Description -->
+<p>{{- .description | markdownify -}}</p>
+
+<!-- Default value -->
+  {{- if .default -}}
+<p><strong>Default:</strong> <code>{{ .default }}</code></p>
+  {{- end -}}
+
+</td>
+</tr>
+  {{- end }}
+{{- end }}
+</tbody>
+</table>
+{{ end }}

@@ -10,7 +10,6 @@
 //! Code to render the ingestion dataflow of a [`SqlServerSourceConnection`].
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -29,14 +28,15 @@ use mz_storage_types::sources::{
 };
 use mz_timely_util::builder_async::PressOnDropButton;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::{Concat, Map, ToStream};
-use timely::dataflow::{Scope, Stream as TimelyStream};
-use timely::progress::Antichain;
+use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::{Scope, StreamVec};
+use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
-use crate::source::types::{Probe, SourceMessage, SourceRender, StackedCollection};
+use crate::source::types::{Probe, ResumeUppers, SourceMessage, SourceRender, StackedCollection};
 
 mod progress;
 mod replication;
@@ -56,6 +56,20 @@ struct SourceOutputInfo {
     partition_index: u64,
     /// The basis for the resumption LSN when snapshotting.
     initial_lsn: Lsn,
+}
+
+impl SourceOutputInfo {
+    /// The [`Lsn`] this output resumes reading from, or the provided fallback [`Lsn`].
+    ///
+    /// Panics if `resume_upper` is empty, which would mean the output has no
+    /// resumption point at all.
+    fn resume_lsn_or(&self, fallback: Lsn) -> Lsn {
+        match self.resume_upper.as_option() {
+            Some(lsn) if *lsn != Lsn::minimum() => *lsn,
+            Some(_) => fallback,
+            None => panic!("resume_upper has at least one value"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -95,6 +109,7 @@ impl From<DefiniteError> for DataflowError {
         let msg = val.to_string().into();
         DataflowError::SourceError(Box::new(SourceError {
             error: SourceErrorDetails::Other(msg),
+            hint: None,
         }))
     }
 }
@@ -104,18 +119,17 @@ impl SourceRender for SqlServerSourceConnection {
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::SqlServer;
 
-    fn render<G: Scope<Timestamp = Self::Time>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: Scope<'scope, Lsn>,
         config: &RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
+        resume_uppers: impl futures::Stream<Item = ResumeUppers<Lsn>> + 'static,
         _start_signal: impl Future<Output = ()> + 'static,
     ) -> (
         // Timely Collection for each Source Export defined in the provided `config`.
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        TimelyStream<G, Infallible>,
-        TimelyStream<G, HealthStatusMessage>,
-        Option<TimelyStream<G, Probe<Self::Time>>>,
+        BTreeMap<GlobalId, StackedCollection<'scope, Lsn, Result<SourceMessage, DataflowError>>>,
+        StreamVec<'scope, Lsn, HealthStatusMessage>,
+        StreamVec<'scope, Lsn, Probe<Lsn>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.
@@ -161,7 +175,7 @@ impl SourceRender for SqlServerSourceConnection {
             .metrics
             .get_sql_server_source_metrics(config.id, config.worker_id);
 
-        let (repl_updates, uppers, repl_errs, repl_token) = replication::render(
+        let (repl_updates, repl_errs, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             source_outputs.clone(),
@@ -183,11 +197,11 @@ impl SourceRender for SqlServerSourceConnection {
             .inner
             .partition::<CapacityContainerBuilder<_>, _, _>(
                 partition_count,
-                move |((partition_idx, data), time, diff): &(
+                move |((partition_idx, data), time, diff): (
                     (u64, Result<SourceMessage, DataflowError>),
                     Lsn,
                     Diff,
-                )| { (*partition_idx, (data.clone(), time.clone(), diff.clone())) },
+                )| { (partition_idx, (data, time, diff)) },
             );
         let mut data_collections = BTreeMap::new();
         for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
@@ -206,7 +220,7 @@ impl SourceRender for SqlServerSourceConnection {
             .collect::<Vec<_>>()
             .to_stream(scope);
 
-        let health_errs = repl_errs.concat(&progress_errs).map(move |err| {
+        let health_errs = repl_errs.concat(progress_errs).map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string, None);
@@ -220,13 +234,12 @@ impl SourceRender for SqlServerSourceConnection {
                 update,
             }
         });
-        let health = health_init.concat(&health_errs);
+        let health = health_init.concat(health_errs);
 
         (
             data_collections,
-            uppers,
             health,
-            Some(progress_probes),
+            progress_probes,
             vec![repl_token, progress_token],
         )
     }

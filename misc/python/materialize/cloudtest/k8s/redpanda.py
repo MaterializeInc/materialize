@@ -11,10 +11,12 @@ from kubernetes.client import (
     V1Container,
     V1Deployment,
     V1DeploymentSpec,
+    V1HTTPGetAction,
     V1LabelSelector,
     V1ObjectMeta,
     V1PodSpec,
     V1PodTemplateSpec,
+    V1Probe,
     V1Service,
     V1ServicePort,
     V1ServiceSpec,
@@ -25,6 +27,8 @@ from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.mzcompose.services.redpanda import REDPANDA_VERSION
+
+REDPANDA_ADMIN_PORT = 9644
 
 
 class RedpandaDeployment(K8sDeployment):
@@ -56,9 +60,22 @@ class RedpandaDeployment(K8sDeployment):
                 # Only require 4KB per topic partition rather than 4MiB.
                 "--set",
                 "redpanda.topic_memory_per_partition=4096",
+                # `testdrive/kafka-time-offset.td` ingests records with
+                # timestamps in 2099; Redpanda v23+ otherwise rejects them
+                # under the 1-hour `log_message_timestamp_after_max_ms`
+                # default. Same relaxation as `mzcompose.services.redpanda`.
+                "--set",
+                "redpanda.log_message_timestamp_after_max_ms=9223372036854",
                 "--advertise-kafka-addr",
                 f"redpanda.{namespace}:9092",
             ],
+            readiness_probe=V1Probe(
+                http_get=V1HTTPGetAction(
+                    path="/v1/status/ready", port=REDPANDA_ADMIN_PORT
+                ),
+                period_seconds=1,
+                failure_threshold=120,
+            ),
         )
 
         node_selector = None

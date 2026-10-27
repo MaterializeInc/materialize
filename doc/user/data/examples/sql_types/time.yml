@@ -1,0 +1,7 @@
+- name: "syntax"
+  code: |
+    TIME '<time_str>'
+  syntax_elements:
+    - name: "`'<time_str>'`"
+      description: |
+        A string representing a time of day in `H:M:S.NS` format.

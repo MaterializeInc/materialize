@@ -444,6 +444,104 @@ With
       Get l1 // { arity: 1 }
       Get materialize.public.y // { arity: 1 }
   cte l4 =
+    CrossJoin // { arity: 3 }
+      Distinct project=[#0, #1] // { arity: 2 }
+        Get l3 // { arity: 2 }
+      Get materialize.public.x // { arity: 1 }
+  cte l5 =
+    Distinct project=[#0] // { arity: 1 }
+      Get l4 // { arity: 3 }
+  cte l6 =
+    Project (#0, #2) // { arity: 2 }
+      Join on=(#0 = #1) // { arity: 3 }
+        Get l5 // { arity: 1 }
+        Union // { arity: 2 }
+          Get l2 // { arity: 2 }
+          CrossJoin // { arity: 2 }
+            Project (#0) // { arity: 1 }
+              Join on=(#0 = #1) // { arity: 2 }
+                Union // { arity: 1 }
+                  Negate // { arity: 1 }
+                    Distinct project=[#0] // { arity: 1 }
+                      Get l2 // { arity: 2 }
+                  Distinct project=[#0] // { arity: 1 }
+                    Get l1 // { arity: 1 }
+                Get l1 // { arity: 1 }
+            Constant // { arity: 1 }
+              - (null)
+  cte l7 =
+    Union // { arity: 2 }
+      Get l6 // { arity: 2 }
+      Project (#0, #2) // { arity: 2 }
+        FlatMap guard_subquery_size(#1) // { arity: 3 }
+          Reduce group_by=[#0] aggregates=[count(*)] // { arity: 2 }
+            Get l6 // { arity: 2 }
+Return // { arity: 3 }
+  Project (#0, #2, #3) // { arity: 3 }
+    Join on=(#0 = #1) // { arity: 4 }
+      Get l0 // { arity: 1 }
+      Project (#0, #1, #4) // { arity: 3 }
+        Join on=(#0 = #2 AND #1 = #3) // { arity: 5 }
+          Get l3 // { arity: 2 }
+          Project (#0, #1, #3) // { arity: 3 }
+            Map (#1{a}) // { arity: 4 }
+              Project (#0..=#2) // { arity: 3 }
+                Filter (#3 > 0) // { arity: 4 }
+                  Project (#0..=#2, #4) // { arity: 4 }
+                    Join on=(#0 = #3) // { arity: 5 }
+                      Get l4 // { arity: 3 }
+                      Union // { arity: 2 }
+                        Get l7 // { arity: 2 }
+                        CrossJoin // { arity: 2 }
+                          Project (#0) // { arity: 1 }
+                            Join on=(#0 = #1) // { arity: 2 }
+                              Union // { arity: 1 }
+                                Negate // { arity: 1 }
+                                  Distinct project=[#0] // { arity: 1 }
+                                    Get l7 // { arity: 2 }
+                                Distinct project=[#0] // { arity: 1 }
+                                  Get l5 // { arity: 1 }
+                              Get l5 // { arity: 1 }
+                          Constant // { arity: 1 }
+                            - (null)
+
+Target cluster: quickstart
+
+EOF
+
+# The same query with `enable_fixed_correlated_cte_lowering = false`, i.e.,
+# the plan that turning the flag off reverts to. The branch key of the nested
+# LATERAL scope misses the CTE's outer column `x.a` (the CTE reference sits
+# inside a scalar subquery, which the old CTE discovery does not descend
+# into), so the CTE lookup join in l4 reconciles on `y.a` instead of `x.a`,
+# producing wrong correlations (SQL-349).
+query T multiline
+EXPLAIN DECORRELATED PLAN WITH(arity, enable fixed correlated cte lowering = false) FOR
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) AS (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT * FROM y INNER JOIN LATERAL(SELECT y.a FROM x WHERE (SELECT m FROM a) > 0) ON true);
+----
+With
+  cte l0 =
+    CrossJoin // { arity: 1 }
+      Constant // { arity: 0 }
+        - ()
+      Get materialize.public.x // { arity: 1 }
+  cte l1 =
+    Distinct project=[#0] // { arity: 1 }
+      Get l0 // { arity: 1 }
+  cte l2 =
+    Reduce group_by=[#0] aggregates=[max(#1{a})] // { arity: 2 }
+      Filter (#1{a} < #0{a}) // { arity: 2 }
+        CrossJoin // { arity: 2 }
+          Get l1 // { arity: 1 }
+          Get materialize.public.y // { arity: 1 }
+  cte l3 =
+    CrossJoin // { arity: 2 }
+      Get l1 // { arity: 1 }
+      Get materialize.public.y // { arity: 1 }
+  cte l4 =
     CrossJoin // { arity: 2 }
       Distinct project=[#1] // { arity: 1 }
         Get l3 // { arity: 2 }
@@ -509,6 +607,48 @@ Target cluster: quickstart
 
 EOF
 
+# Regression tests for SQL-349: references to a correlated CTE from a nested
+# correlated scope. Expected results verified against PostgreSQL.
+
+# The CTE reference sits inside a scalar subquery of a nested LATERAL scope,
+# so the CTE discovery in `branch()` must descend into scalar subqueries for
+# the branch key to retain the CTE's outer column `x.a`.
+query III rowsort
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) AS (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT * FROM y INNER JOIN LATERAL(SELECT y.a FROM x WHERE (SELECT m FROM a) > 0) ON true);
+----
+3  2  2
+3  2  2
+3  2  2
+3  3  3
+3  3  3
+3  3  3
+3  4  4
+3  4  4
+3  4  4
+
+# The scalar subquery references both the CTE and the level-1 column `y.a`,
+# which sorts before the CTE's outer column `x.a` in `BTreeSet<ColumnRef>`
+# order (level ascending). The branch key must nevertheless keep `x.a` at its
+# prefix.
+query II rowsort
+SELECT *
+FROM x,
+     LATERAL(WITH a(m) AS (SELECT max(y.a) FROM y WHERE y.a < x.a)
+             SELECT (SELECT m + 0*y.a FROM a) FROM y);
+----
+1  NULL
+1  NULL
+1  NULL
+2  NULL
+2  NULL
+2  NULL
+3  2
+3  2
+3  2
+
 # Check that CTEs are annotated with their names
 query T multiline
 EXPLAIN RAW PLAN FOR
@@ -531,11 +671,11 @@ Project (#1)
       Get materialize.public.y
     cte [l2 as x] =
       Get l1
-    cte [l8 as subquery-8] =
+    cte [l10 as subquery-10] =
       With
         cte [l3 as c] =
           Get materialize.public.y
-        cte [l5 as subquery-5] =
+        cte [l7 as subquery-7] =
           With
             cte [l4 as d] =
               Get l3
@@ -543,26 +683,26 @@ Project (#1)
             Reduce aggregates=[max(#0{d})]
               Get l4
       Return
-        Filter (select(Get l5) > 1)
+        Filter (select(Get l7) > 1)
           Get l3
   Return
-    Map (select(Get l8))
+    Map (select(Get l10))
       With
-        cte [l3 as e] =
+        cte [l5 as e] =
           Get l1
-        cte [l7 as subquery-7] =
+        cte [l9 as subquery-9] =
           Reduce aggregates=[max(#0{x})]
             Get l2
-        cte [l6 as subquery-6] =
+        cte [l8 as subquery-8] =
           With
-            cte [l4 as f] =
-              Get l3
+            cte [l6 as f] =
+              Get l5
           Return
             Reduce aggregates=[min(#0{f})]
-              Get l4
+              Get l6
       Return
-        Filter (select(Get l6) < select(Get l7))
-          Get l3
+        Filter (select(Get l8) < select(Get l9))
+          Get l5
 
 Target cluster: quickstart
 

@@ -1,0 +1,5 @@
+---
+headless: true
+---
+- Ownership of the dropped source.
+- `USAGE` privileges on the containing schema.

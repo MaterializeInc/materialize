@@ -41,6 +41,17 @@ contains:column referenced in KEY does not exist: f2
   ENVELOPE DEBEZIUM
 contains:LEGACY IDs option is not supported
 
+! CREATE SINK zero_interval_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM v1
+  INTO KAFKA CONNECTION kafka_conn (
+    TOPIC 'testdrive-kafka-sink-zero-interval-${testdrive.seed}',
+    TOPIC METADATA REFRESH INTERVAL '0s'
+  )
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+contains:TOPIC METADATA REFRESH INTERVAL must be at least 1 second
+
 #
 # Sink dependencies
 #
@@ -58,13 +69,27 @@ contains:LEGACY IDs option is not supported
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:s1 is a sink, which cannot be exported as a sink
+contains:sink s1 cannot be exported as a sink
+
+# mv reads a table, because a view over a constant seals right away, and a
+# sealed view can't be replaced.
+> CREATE TABLE t_rp (f1 int)
+> CREATE MATERIALIZED VIEW mv AS SELECT * FROM t_rp
+> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM t_rp
+
+! CREATE SINK s2
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM rp
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+contains:replacement materialized view rp cannot be exported as a sink
 
 ! CREATE VIEW v2 AS SELECT * FROM s1
-contains:materialize.public.s1 is a sink, which cannot be depended upon
+contains:sink materialize.public.s1 cannot be depended upon
 
 ! SELECT * FROM s1
-contains:materialize.public.s1 is a sink, which cannot be depended upon
+contains:sink materialize.public.s1 cannot be depended upon
 
 > DROP SINK s1
 

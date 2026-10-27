@@ -47,14 +47,21 @@ pub async fn sync_file_to_configset(
     };
 
     // Do initial sync
-    if let Err(err) = tokio::time::timeout(config_sync_timeout, async {
+    match tokio::time::timeout(config_sync_timeout, async {
         synced.sync()?;
         Ok::<_, anyhow::Error>(())
     })
     .await
     {
-        tracing::warn!("error while initializing file-backed config set: {}", err);
-        return Err(err.into());
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            tracing::warn!("error while initializing file-backed config set: {}", err);
+            return Err(err);
+        }
+        Err(err) => {
+            tracing::warn!("timeout while initializing file-backed config set: {}", err);
+            return Err(err.into());
+        }
     }
 
     // Start background sync task if interval is specified
@@ -104,6 +111,11 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
     pub fn sync(&self) -> Result<(), anyhow::Error> {
         let file_contents = fs::read_to_string(&self.config_file)
             .with_context(|| format!("failed to read config file: {:?}", self.config_file))?;
+
+        // Treat an empty file as an empty config (no overrides).
+        if file_contents.trim().is_empty() {
+            return Ok(());
+        }
 
         let values: BTreeMap<String, JsonValue> = serde_json::from_str(&file_contents)
             .with_context(|| format!("failed to parse config file: {:?}", self.config_file))?;
@@ -164,6 +176,10 @@ fn json_to_config_val(json: &JsonValue, template: &ConfigVal) -> Result<ConfigVa
             v.as_f64().ok_or_else(|| anyhow::anyhow!("not an f64"))?,
         )),
         (ConfigVal::String(_), JsonValue::String(v)) => Ok(ConfigVal::String(v.clone())),
+        (ConfigVal::OptString(_), JsonValue::Null) => Ok(ConfigVal::OptString(None)),
+        (ConfigVal::OptString(_), JsonValue::String(v)) => {
+            Ok(ConfigVal::OptString(Some(v.clone())))
+        }
         (ConfigVal::Duration(_), JsonValue::String(v)) => {
             Ok(ConfigVal::Duration(humantime::parse_duration(v)?))
         }
@@ -175,7 +191,7 @@ fn json_to_config_val(json: &JsonValue, template: &ConfigVal) -> Result<ConfigVa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_dyncfg::Config;
+    use mz_dyncfg::{Config, ParameterScope};
     use std::io::Write;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -183,9 +199,18 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     async fn test_file_sync() {
         let mut config_file = tempfile::NamedTempFile::new().unwrap();
-        const BOOL_CONFIG: Config<bool> = Config::new("test_bool", true, "A test boolean config");
-        const STRING_CONFIG: Config<&str> =
-            Config::new("test_string", "default", "A test string config");
+        const BOOL_CONFIG: Config<bool> = Config::new(
+            "test_bool",
+            true,
+            "A test boolean config",
+            ParameterScope::Environment,
+        );
+        const STRING_CONFIG: Config<&str> = Config::new(
+            "test_string",
+            "default",
+            "A test string config",
+            ParameterScope::Environment,
+        );
         let set = ConfigSet::default().add(&BOOL_CONFIG).add(&STRING_CONFIG);
 
         // Start sync with empty file (should create it)
@@ -227,5 +252,47 @@ mod tests {
         assert!(updates_received.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(BOOL_CONFIG.get(&set), false);
         assert_eq!(STRING_CONFIG.get(&set), "modified");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_file_sync_opt_string() {
+        const OPT_STRING_CONFIG: Config<Option<&str>> = Config::new(
+            "test_opt_string",
+            None,
+            "A test optional string config",
+            ParameterScope::Environment,
+        );
+        let set = ConfigSet::default().add(&OPT_STRING_CONFIG);
+
+        let mut config_file = tempfile::NamedTempFile::new().unwrap();
+        config_file
+            .write_all(b"{\"test_opt_string\": \"hello\"}")
+            .unwrap();
+        sync_file_to_configset(
+            set.clone(),
+            &config_file,
+            Duration::from_secs(1),
+            None,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(OPT_STRING_CONFIG.get(&set), Some("hello".to_string()));
+
+        // null clears the value back to None
+        let mut config_file = tempfile::NamedTempFile::new().unwrap();
+        config_file
+            .write_all(b"{\"test_opt_string\": null}")
+            .unwrap();
+        sync_file_to_configset(
+            set.clone(),
+            &config_file,
+            Duration::from_secs(1),
+            None,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(OPT_STRING_CONFIG.get(&set), None);
     }
 }

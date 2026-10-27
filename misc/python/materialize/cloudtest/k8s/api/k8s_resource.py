@@ -108,5 +108,11 @@ class K8sResource:
         self,
         condition: str,
         resource: str,
+        timeout_secs: int = 300,
     ) -> None:
-        wait(condition=condition, resource=resource, namespace=self.selected_namespace)
+        wait(
+            condition=condition,
+            resource=resource,
+            namespace=self.selected_namespace,
+            timeout_secs=timeout_secs,
+        )

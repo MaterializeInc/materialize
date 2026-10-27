@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import re
 from random import Random
 from textwrap import dedent
 from typing import Any
@@ -15,6 +14,7 @@ from typing import Any
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
 from materialize.mz_version import MzVersion
+from materialize.mzcompose import sanitizer_enabled
 
 
 class PgCdcBase:
@@ -33,9 +33,7 @@ class PgCdcBase:
         super().__init__(**kwargs)  # forward unused args to Check
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 CREATE USER postgres1{self.suffix} WITH SUPERUSER PASSWORD 'postgres';
                 ALTER USER postgres1{self.suffix} WITH replication;
@@ -47,6 +45,7 @@ class PgCdcBase:
                 ALTER TABLE postgres_source_table{self.suffix} REPLICA IDENTITY FULL;
 
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'A', i, REPEAT('A', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
+                ANALYZE postgres_source_table{self.suffix};
 
                 CREATE PUBLICATION postgres_source{self.suffix} FOR ALL TABLES;
 
@@ -57,9 +56,7 @@ class PgCdcBase:
                   DATABASE postgres,
                   USER postgres1{self.suffix},
                   PASSWORD SECRET pgpass1{self.suffix}
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -95,6 +92,7 @@ class PgCdcBase:
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'D', i, REPEAT('D', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
+                ANALYZE postgres_source_table{self.suffix};
 
                 > CREATE SOURCE postgres_source2{self.suffix}
                   FROM POSTGRES CONNECTION pg2{self.suffix}
@@ -130,6 +128,7 @@ class PgCdcBase:
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'F', i, REPEAT('F', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
+                ANALYZE postgres_source_table{self.suffix};
 
                 > CREATE SECRET pgpass3{self.suffix} AS 'postgres';
 
@@ -148,6 +147,10 @@ class PgCdcBase:
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'G', i, REPEAT('G', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
 
+                # Test for alter source upgrade compatibility for SS-187. This is the closest we can get to mutating
+                # source details which is what was being expanded to solve SS-187.
+                > ALTER SOURCE postgres_source1{self.suffix} SET  (RETAIN HISTORY = FOR '1d');
+                > ALTER SOURCE postgres_source1{self.suffix} RESET (RETAIN HISTORY);
 
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'H', i, REPEAT('X', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
@@ -168,8 +171,7 @@ class PgCdcBase:
         ]
 
     def validate(self) -> Testdrive:
-        sql = dedent(
-            f"""
+        sql = dedent(f"""
             $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             GRANT SELECT ON postgres_source_tableA{self.suffix} TO materialize
             GRANT SELECT ON postgres_source_tableB{self.suffix} TO materialize
@@ -259,8 +261,7 @@ class PgCdcBase:
               - materialize.public.postgres_source_tablea{self.suffix}_primary_idx (*** full scan ***)
 
             Target cluster: quickstart
-            """
-        )
+            """)
 
         return Testdrive(sql)
 
@@ -279,10 +280,22 @@ class PgCdcNoWait(PgCdcBase, Check):
 
 @externally_idempotent(False)
 class PgCdcMzNow(Check):
+    # A row sits in the temporal filter's view for WINDOW_SECS after its
+    # timestamp, and the assertions below only count rows younger than
+    # SLACK_SECS. Retrying recovers from neither deadline: a row that takes
+    # longer than WINDOW_SECS to arrive never enters the view at all, and one
+    # that ages past SLACK_SECS stops counting towards the assertion. A
+    # sanitized binary ingests slowly enough to hit both.
+    WINDOW_SECS = 600 if sanitizer_enabled() else 60
+    # SLACK_SECS sits just above WINDOW_SECS rather than scaling with it: the
+    # "no rows older than SLACK_SECS" assertion is what proves the filter
+    # retracts, and it only proves it for rows that should already have left the
+    # view. The margin absorbs the lag between `mz_now()` and wall clock, which
+    # decides how long after WINDOW_SECS a row is actually retracted.
+    SLACK_SECS = WINDOW_SECS + 120
+
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 CREATE USER postgres2 WITH SUPERUSER PASSWORD 'postgres';
                 ALTER USER postgres2 WITH replication;
@@ -298,6 +311,7 @@ class PgCdcMzNow(Check):
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'C1');
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'D1');
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'E1');
+                ANALYZE postgres_mz_now_table;
 
                 CREATE PUBLICATION postgres_mz_now_publication FOR ALL TABLES;
 
@@ -314,13 +328,11 @@ class PgCdcMzNow(Check):
                   (PUBLICATION 'postgres_mz_now_publication');
                 > CREATE TABLE postgres_mz_now_table FROM SOURCE postgres_mz_now_source (REFERENCE postgres_mz_now_table);
 
-                # Return all rows fresher than 60 seconds
+                # Return all rows fresher than WINDOW_SECS
                 > CREATE MATERIALIZED VIEW postgres_mz_now_view AS
                   SELECT * FROM postgres_mz_now_table
-                  WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '60' SECOND) * 1000)
-                """
-            )
-        )
+                  WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '{self.WINDOW_SECS}' SECOND) * 1000)
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -350,9 +362,7 @@ class PgCdcMzNow(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent(f"""
                 > SELECT COUNT(*) FROM postgres_mz_now_table;
                 13
 
@@ -365,24 +375,115 @@ class PgCdcMzNow(Check):
                 DELETE FROM postgres_mz_now_table WHERE f2 = 'B3';
                 UPDATE postgres_mz_now_table SET f1 = NOW() WHERE f2 = 'E1'
 
-                # Expect some rows newer than 180 seconds in view
+                # Expect some rows newer than SLACK_SECS in view
                 > SELECT COUNT(*) >= 6 FROM postgres_mz_now_view
-                  WHERE f1 > NOW() - INTERVAL '180' SECOND;
+                  WHERE f1 > NOW() - INTERVAL '{self.SLACK_SECS}' SECOND;
                 true
 
-                # Expect no rows older than 180 seconds in view
+                # Expect no rows older than SLACK_SECS in view
                 > SELECT COUNT(*) FROM postgres_mz_now_view
-                  WHERE f1 < NOW() - INTERVAL '180' SECOND;
+                  WHERE f1 < NOW() - INTERVAL '{self.SLACK_SECS}' SECOND;
                 0
 
                 # Rollback the last INSERTs so that validate() can be called multiple times
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B3');
                 DELETE FROM postgres_mz_now_table WHERE f2 LIKE '%4%';
+                """))
+
+
+@externally_idempotent(False)
+class PgCdcOidRetraction(Check):
+    """Regression guard for the text->oid cast stability across upgrades.
+
+    An upstream `oid` value above `i32::MAX` (here `4294967295`) is inserted
+    while the source may still run an older release, whose storage cast rejects
+    it as a per-row `CastError` persisted in the `err` collection. The row is
+    then deleted after the upgrade. Because Postgres replication re-casts the
+    old tuple on delete, the delete must reproduce the *same* error so the `+1`
+    error is cleanly retracted. If the storage cast were widened to accept the
+    full `u32` range, the delete would instead emit an `ok` value at diff `-1`,
+    leaving the error stuck (SELECT stays poisoned) and adding a phantom `-1`.
+    The final SELECT below fails in that case and passes once the storage cast
+    is stable across versions.
+
+    Exports created on releases with `cast_oid_full_range` in their statement
+    details use the full-range cast from the start, so the insert ingests as a
+    value and the delete retracts it symmetrically. In no-upgrade scenarios
+    this check therefore passes trivially. The asymmetry it guards against
+    only threatens exports whose details predate the flag, which must stay on
+    the legacy `i32`-range cast.
+    """
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                CREATE USER oid_retraction_user WITH SUPERUSER PASSWORD 'postgres';
+                ALTER USER oid_retraction_user WITH replication;
+                DROP PUBLICATION IF EXISTS oid_retraction_publication;
+                DROP TABLE IF EXISTS oid_retraction_table;
+
+                CREATE TABLE oid_retraction_table (id INT PRIMARY KEY, o OID);
+                # REPLICA IDENTITY FULL so the delete carries the full old tuple,
+                # including the oid column that gets re-cast on retraction.
+                ALTER TABLE oid_retraction_table REPLICA IDENTITY FULL;
+
+                # id=1 casts on every release; id=2 holds an oid above i32::MAX,
+                # which older releases reject as "invalid input syntax for type oid".
+                INSERT INTO oid_retraction_table VALUES (1, 42);
+                INSERT INTO oid_retraction_table VALUES (2, 4294967295);
+                ANALYZE oid_retraction_table;
+
+                CREATE PUBLICATION oid_retraction_publication FOR TABLE oid_retraction_table;
+
+                > CREATE SECRET oid_retraction_pass AS 'postgres';
+
+                > CREATE CONNECTION oid_retraction_conn FOR POSTGRES
+                  HOST 'postgres',
+                  DATABASE postgres,
+                  USER oid_retraction_user,
+                  PASSWORD SECRET oid_retraction_pass
+
+                > CREATE SOURCE oid_retraction_source
+                  FROM POSTGRES CONNECTION oid_retraction_conn
+                  (PUBLICATION 'oid_retraction_publication');
+
+                > CREATE TABLE oid_retraction_table FROM SOURCE oid_retraction_source (REFERENCE oid_retraction_table);
+
+                # The above-i32::MAX row errors per-row on releases with the
+                # legacy i32-only cast. That is a data error in the `err`
+                # collection: the source keeps running and replication
+                # continues, but the health operator reports the table export
+                # itself as stalled. Releases whose exports carry
+                # `cast_oid_full_range` ingest the row and report running, so
+                # accept both states for the table export.
+                > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'oid_retraction_source';
+                running
+
+                > SELECT status IN ('running', 'stalled') FROM mz_internal.mz_source_statuses WHERE name = 'oid_retraction_table' AND type = 'table';
+                true
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
                 """
-            )
-        )
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO oid_retraction_table VALUES (3, 7);
+                """,
+                # Runs on the upgraded binary under the upgrade scenarios. The
+                # delete re-casts the old tuple of the above-i32::MAX row.
+                """
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                DELETE FROM oid_retraction_table WHERE id = 2;
+                """,
+            ]
+        ]
 
-
-def remove_target_cluster_from_explain(sql: str) -> str:
-    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > SELECT id, o FROM oid_retraction_table ORDER BY id;
+                1 42
+                3 7
+                """))

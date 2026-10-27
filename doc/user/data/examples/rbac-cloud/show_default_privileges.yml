@@ -16,8 +16,8 @@
     `"blue.berry@example.com"` are the default privileges it has as a member of
     the `PUBLIC` role.
 
-    {{< include-md
-    file="shared-content/rbac-cloud/show-default-privileges-new-roles.md" >}}
+    {{% include-headless
+    "/headless/rbac-cloud/show-default-privileges-new-roles" %}}
 
 - name: "for-service-account"
   description: |
@@ -35,8 +35,8 @@
     The example results show that the default privileges for `sales_report_app`
     are the default privileges it has as a member of the `PUBLIC` role.
 
-    {{< include-md
-    file="shared-content/rbac-cloud/show-default-privileges-new-roles.md" >}}
+    {{% include-headless
+    "/headless/rbac-cloud/show-default-privileges-new-roles" %}}
 
 - name: "for-view-manager"
   description: |
@@ -52,8 +52,8 @@
     The example results show that the default privileges for `view_manager` are
     the default privileges it has as a member of the `PUBLIC` role.
 
-    {{< include-md
-    file="shared-content/rbac-cloud/show-default-privileges-new-roles.md" >}}
+    {{% include-headless
+    "/headless/rbac-cloud/show-default-privileges-new-roles" %}}
 
 - name: "for-serving-index-manager"
   description: |
@@ -70,8 +70,8 @@
     `serving_index_manager` are the default privileges it has as a member of
     the `PUBLIC` role.
 
-    {{< include-md
-    file="shared-content/rbac-cloud/show-default-privileges-new-roles.md" >}}
+    {{% include-headless
+    "/headless/rbac-cloud/show-default-privileges-new-roles" %}}
 
 - name: "for-data-reader"
   description: |
@@ -87,5 +87,5 @@
     The example results show that the default privileges for `data_reader` are
     the default privileges it has as a member of the `PUBLIC` role.
 
-    {{< include-md
-    file="shared-content/rbac-cloud/show-default-privileges-new-roles.md" >}}
+    {{% include-headless
+    "/headless/rbac-cloud/show-default-privileges-new-roles" %}}

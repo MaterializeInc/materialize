@@ -33,6 +33,7 @@ class SchemaRegistry(Service):
             # Under Docker, Kafka can be really slow, which means the default
             # Kafka connection timeout of 500ms is much too slow.
             "SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS=10000",
+            "SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR=1",
             f"SCHEMA_REGISTRY_HOST_NAME={name}",
             f"SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS={bootstrap_servers}",
             *environment_extra,
@@ -42,23 +43,27 @@ class SchemaRegistry(Service):
             "ports": [port],
             "networks": {"default": {"aliases": aliases}},
             "environment": environment,
+            "command": [
+                "/bin/bash",
+                "-c",
+                ". /etc/confluent/docker/bash-config"
+                " && . /etc/confluent/docker/mesos-setup.sh"
+                " && . /etc/confluent/docker/apply-mesos-overrides"
+                " && /etc/confluent/docker/configure"
+                " && exec /etc/confluent/docker/launch",
+            ],
             "depends_on": {
-                **{host: {"condition": "service_healthy"} for host, _ in kafka_servers},
+                **{host: {"condition": "service_started"} for host, _ in kafka_servers},
                 **{s: {"condition": "service_started"} for s in depends_on_extra},
             },
             "healthcheck": {
+                # cp-schema-registry 8.x dropped `curl`, so use bash's built-in
+                # /dev/tcp to probe the REST port without any extra
+                # dependencies. This is a liveness check only, it does not
+                # exercise HTTP authentication.
                 "test": [
-                    "CMD",
-                    "curl",
-                    # We provide credentials in case the schema registry is
-                    # configured to require HTTP authentication, as there's
-                    # no health check endpoint that's excluded from
-                    # authentication requirements. The credentials are
-                    # safely ignored if the schema registry is not
-                    # configured to require them.
-                    "-fu",
-                    "materialize:sekurity",
-                    "localhost:8081",
+                    "CMD-SHELL",
+                    "bash -c 'exec 3<>/dev/tcp/localhost/8081'",
                 ],
                 "interval": "1s",
                 "start_period": "120s",

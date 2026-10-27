@@ -36,7 +36,8 @@ For more details and troubleshooting, check the
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+{{% include-from-yaml data="examples/alter_cluster"
+name="configure-cluster" %}}
 
 ## Refresh rate
 

@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use azure_core::StatusCode;
+use azure_core::http::StatusCode;
 use bytes::Bytes;
 use futures_util::Stream;
 use mz_ore::bytes::SegmentedBytes;
@@ -43,7 +43,17 @@ use crate::error::Error;
 /// mutating requests up to and including that one are reflected in the read
 /// state.
 #[derive(
-    Arbitrary, Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize,
+    Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize
 )]
 pub struct SeqNo(pub u64);
 
@@ -74,6 +84,11 @@ impl std::str::FromStr for SeqNo {
 }
 
 impl SeqNo {
+    /// Returns the previous SeqNo in the sequence, if there is one.
+    pub fn previous(self) -> Option<SeqNo> {
+        Some(SeqNo(self.0.checked_sub(1)?))
+    }
+
     /// Returns the next SeqNo in the sequence.
     pub fn next(self) -> SeqNo {
         SeqNo(self.0 + 1)
@@ -82,6 +97,11 @@ impl SeqNo {
     /// A minimum value suitable as a default.
     pub fn minimum() -> Self {
         SeqNo(0)
+    }
+
+    /// A maximum value.
+    pub fn maximum() -> Self {
+        SeqNo(u64::MAX)
     }
 }
 
@@ -115,12 +135,26 @@ impl std::error::Error for Determinate {
     }
 }
 
+impl From<anyhow::Error> for Determinate {
+    fn from(inner: anyhow::Error) -> Self {
+        Self::new(inner)
+    }
+}
+
 impl Determinate {
     /// Return a new Determinate wrapping the given error.
     ///
     /// Exposed for testing via [crate::unreliable].
     pub fn new(inner: anyhow::Error) -> Self {
         Determinate { inner }
+    }
+
+    /// Adds context to the wrapped error. Mirrors [`anyhow::Error::context`].
+    pub fn context<C>(self, context: C) -> Self
+    where
+        C: fmt::Display + Send + Sync + 'static,
+    {
+        Determinate::new(self.inner.context(context))
     }
 }
 
@@ -137,6 +171,14 @@ impl Indeterminate {
     /// Exposed for testing.
     pub fn new(inner: anyhow::Error) -> Self {
         Indeterminate { inner }
+    }
+
+    /// Adds context to the wrapped error. Mirrors [`anyhow::Error::context`].
+    pub fn context<C>(self, context: C) -> Self
+    where
+        C: fmt::Display + Send + Sync + 'static,
+    {
+        Indeterminate::new(self.inner.context(context))
     }
 }
 
@@ -190,6 +232,22 @@ impl ExternalError {
     pub fn is_timeout(&self) -> bool {
         // Gross...
         self.to_string().contains("timeout")
+    }
+
+    /// Adds context to the underlying error, preserving the determinate vs
+    /// indeterminate classification. Mirrors [`anyhow::Error::context`].
+    ///
+    /// Callers use this to record which resource an operation was acting on
+    /// (e.g. the blob key being fetched) so the error names it everywhere it is
+    /// displayed.
+    pub fn context<C>(self, context: C) -> Self
+    where
+        C: fmt::Display + Send + Sync + 'static,
+    {
+        match self {
+            ExternalError::Determinate(e) => ExternalError::Determinate(e.context(context)),
+            ExternalError::Indeterminate(e) => ExternalError::Indeterminate(e.context(context)),
+        }
     }
 }
 
@@ -289,15 +347,11 @@ impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
 
 impl From<azure_core::Error> for ExternalError {
     fn from(value: azure_core::Error) -> Self {
-        let definitely_determinate = if let Some(http) = value.as_http_error() {
-            match http.status() {
-                // There are many other status codes that _ought_ to be determinate, according to
-                // the HTTP spec, but this includes only codes that we've observed in practice for now.
-                StatusCode::TooManyRequests => true,
-                _ => false,
-            }
-        } else {
-            false
+        let definitely_determinate = match value.http_status() {
+            // There are many other status codes that _ought_ to be determinate, according to
+            // the HTTP spec, but this includes only codes that we've observed in practice for now.
+            Some(StatusCode::TooManyRequests) => true,
+            _ => false,
         };
         if definitely_determinate {
             ExternalError::Determinate(Determinate {
@@ -393,20 +447,13 @@ pub trait Consensus: std::fmt::Debug + Send + Sync {
     /// one exists at this location.
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError>;
 
-    /// Update the [VersionedData] stored at this location to `new`, iff the
-    /// current sequence number is exactly `expected` and `new`'s sequence
-    /// number > the current sequence number.
-    ///
-    /// It is invalid to call this function with a `new` and `expected` such
-    /// that `new`'s sequence number is <= `expected`. It is invalid to call
+    /// Add the [VersionedData] to the log for the given key. If the sequence number is 0, the log
+    /// must be empty; otherwise, it must be one greater than the previous sequence number.
+    /// It is invalid to call
     /// this function with a sequence number outside of the range `[0, i64::MAX]`.
-    ///
-    /// This data is initialized to None, and the first call to compare_and_set
-    /// needs to happen with None as the expected value to set the state.
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError>;
 
@@ -425,10 +472,10 @@ pub trait Consensus: std::fmt::Debug + Send + Sync {
     /// Deletes all historical versions of the data stored at `key` that are <
     /// `seqno`, iff `seqno` <= the current sequence number.
     ///
-    /// Returns the number of versions deleted on success. Returns an error if
+    /// Returns the number of versions deleted or `None` on success. Returns an error if
     /// `seqno` is greater than the current sequence number, or if there is no
     /// data at this key.
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError>;
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError>;
 }
 
 #[async_trait]
@@ -455,15 +502,13 @@ impl<A: Consensus + 'static> Consensus for Tasked<A> {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
         mz_ore::task::spawn(
             || "persist::task::cas",
-            async move { backing.compare_and_set(&key, expected, new).await }
-                .instrument(Span::current()),
+            async move { backing.compare_and_set(&key, new).await }.instrument(Span::current()),
         )
         .await
     }
@@ -483,7 +528,7 @@ impl<A: Consensus + 'static> Consensus for Tasked<A> {
         .await
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
         mz_ore::task::spawn(
@@ -625,7 +670,7 @@ pub mod tests {
 
     use anyhow::anyhow;
     use futures_util::TryStreamExt;
-    use mz_ore::assert_err;
+    use mz_ore::{assert_err, assert_ok};
     use uuid::Uuid;
 
     use crate::location::Blob;
@@ -851,22 +896,20 @@ pub mod tests {
         // Cannot truncate data from a key that doesn't have any data
         assert_err!(consensus.truncate(&key, SeqNo(0)).await);
 
-        let state = VersionedData {
-            seqno: SeqNo(5),
+        let state_at = |v| VersionedData {
+            seqno: SeqNo(v),
             data: Bytes::from("abc"),
         };
 
-        // Incorrectly setting the data with a non-None expected should fail.
+        // Incorrectly setting the data with a non-initial seqno should fail.
         assert_eq!(
-            consensus
-                .compare_and_set(&key, Some(SeqNo(0)), state.clone())
-                .await,
+            consensus.compare_and_set(&key, state_at(1)).await,
             Ok(CaSResult::ExpectationMismatch),
         );
 
         // Correctly updating the state with the correct expected value should succeed.
         assert_eq!(
-            consensus.compare_and_set(&key, None, state.clone()).await,
+            consensus.compare_and_set(&key, state_at(0)).await,
             Ok(CaSResult::Committed),
         );
 
@@ -875,154 +918,104 @@ pub mod tests {
         assert_eq!(keys, vec![key.to_owned()]);
 
         // We can observe the a recent value on successful update.
-        assert_eq!(consensus.head(&key).await, Ok(Some(state.clone())));
+        assert_eq!(consensus.head(&key).await, Ok(Some(state_at(0))));
 
         // Can scan a key that has data with a lower bound sequence number < head.
         assert_eq!(
             consensus.scan(&key, SeqNo(0), SCAN_ALL).await,
-            Ok(vec![state.clone()])
+            Ok(vec![state_at(0)])
         );
 
         // Can scan a key that has data with a lower bound sequence number == head.
         assert_eq!(
-            consensus.scan(&key, SeqNo(5), SCAN_ALL).await,
-            Ok(vec![state.clone()])
+            consensus.scan(&key, SeqNo(0), SCAN_ALL).await,
+            Ok(vec![state_at(0)])
         );
 
         // Can scan a key that has data with a lower bound sequence number >
         // head.
-        assert_eq!(consensus.scan(&key, SeqNo(6), SCAN_ALL).await, Ok(vec![]));
+        assert_eq!(consensus.scan(&key, SeqNo(1), SCAN_ALL).await, Ok(vec![]));
 
         // Can truncate data with an upper bound <= head, even if there is no data in the
         // range [0, upper).
-        assert_eq!(consensus.truncate(&key, SeqNo(0)).await, Ok(0));
-        assert_eq!(consensus.truncate(&key, SeqNo(5)).await, Ok(0));
+        assert_ok!(consensus.truncate(&key, SeqNo(0)).await);
 
         // Cannot truncate data with an upper bound > head.
-        assert_err!(consensus.truncate(&key, SeqNo(6)).await);
+        assert_err!(consensus.truncate(&key, SeqNo(1)).await);
 
-        let new_state = VersionedData {
-            seqno: SeqNo(10),
+        let new_state_at = |v| VersionedData {
+            seqno: SeqNo(v),
             data: Bytes::from("def"),
         };
 
         // Trying to update without the correct expected seqno fails, (even if expected > current)
         assert_eq!(
-            consensus
-                .compare_and_set(&key, Some(SeqNo(7)), new_state.clone())
-                .await,
+            consensus.compare_and_set(&key, new_state_at(3)).await,
             Ok(CaSResult::ExpectationMismatch),
         );
 
         // Trying to update without the correct expected seqno fails, (even if expected < current)
         assert_eq!(
-            consensus
-                .compare_and_set(&key, Some(SeqNo(3)), new_state.clone())
-                .await,
+            consensus.compare_and_set(&key, new_state_at(0)).await,
             Ok(CaSResult::ExpectationMismatch),
-        );
-
-        let invalid_constant_seqno = VersionedData {
-            seqno: SeqNo(5),
-            data: Bytes::from("invalid"),
-        };
-
-        // Trying to set the data to a sequence number == current fails even if
-        // expected is correct.
-        assert_eq!(
-            consensus
-                .compare_and_set(&key, Some(state.seqno), invalid_constant_seqno)
-                .await,
-            Err(ExternalError::from(anyhow!(
-                "new seqno must be strictly greater than expected. Got new: SeqNo(5) expected: SeqNo(5)"
-            )))
-        );
-
-        let invalid_regressing_seqno = VersionedData {
-            seqno: SeqNo(3),
-            data: Bytes::from("invalid"),
-        };
-
-        // Trying to set the data to a sequence number < current fails even if
-        // expected is correct.
-        assert_eq!(
-            consensus
-                .compare_and_set(&key, Some(state.seqno), invalid_regressing_seqno)
-                .await,
-            Err(ExternalError::from(anyhow!(
-                "new seqno must be strictly greater than expected. Got new: SeqNo(3) expected: SeqNo(5)"
-            )))
         );
 
         // Can correctly update to a new state if we provide the right expected seqno
         assert_eq!(
-            consensus
-                .compare_and_set(&key, Some(state.seqno), new_state.clone())
-                .await,
+            consensus.compare_and_set(&key, new_state_at(1)).await,
             Ok(CaSResult::Committed),
         );
 
         // We can observe the a recent value on successful update.
-        assert_eq!(consensus.head(&key).await, Ok(Some(new_state.clone())));
+        assert_eq!(consensus.head(&key).await, Ok(Some(new_state_at(1))));
 
         // We can observe both states in the correct order with scan if pass
         // in a suitable lower bound.
         assert_eq!(
-            consensus.scan(&key, SeqNo(5), SCAN_ALL).await,
-            Ok(vec![state.clone(), new_state.clone()])
+            consensus.scan(&key, SeqNo(0), SCAN_ALL).await,
+            Ok(vec![state_at(0), new_state_at(1)])
         );
 
         // We can observe only the most recent state if the lower bound is higher
         // than the previous insertion's sequence number.
         assert_eq!(
-            consensus.scan(&key, SeqNo(6), SCAN_ALL).await,
-            Ok(vec![new_state.clone()])
-        );
-
-        // We can still observe the most recent insert as long as the provided
-        // lower bound == most recent 's sequence number.
-        assert_eq!(
-            consensus.scan(&key, SeqNo(10), SCAN_ALL).await,
-            Ok(vec![new_state.clone()])
+            consensus.scan(&key, SeqNo(1), SCAN_ALL).await,
+            Ok(vec![new_state_at(1)])
         );
 
         // We can scan if the provided lower bound > head's sequence number.
-        assert_eq!(consensus.scan(&key, SeqNo(11), SCAN_ALL).await, Ok(vec![]));
+        assert_eq!(consensus.scan(&key, SeqNo(2), SCAN_ALL).await, Ok(vec![]));
 
         // We can scan with limits that don't cover all states
         assert_eq!(
             consensus.scan(&key, SeqNo::minimum(), 1).await,
-            Ok(vec![state.clone()])
-        );
-        assert_eq!(
-            consensus.scan(&key, SeqNo(5), 1).await,
-            Ok(vec![state.clone()])
+            Ok(vec![state_at(0)])
         );
 
         // We can scan with limits to cover exactly the number of states
         assert_eq!(
             consensus.scan(&key, SeqNo::minimum(), 2).await,
-            Ok(vec![state.clone(), new_state.clone()])
+            Ok(vec![state_at(0), new_state_at(1)])
         );
 
         // We can scan with a limit larger than the number of states
         assert_eq!(
-            consensus.scan(&key, SeqNo(4), 100).await,
-            Ok(vec![state.clone(), new_state.clone()])
+            consensus.scan(&key, SeqNo(0), 100).await,
+            Ok(vec![state_at(0), new_state_at(1)])
         );
 
         // Can remove the previous write with the appropriate truncation.
-        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(1));
+        assert_ok!(consensus.truncate(&key, SeqNo(1)).await);
 
         // Verify that the old write is indeed deleted.
         assert_eq!(
             consensus.scan(&key, SeqNo(0), SCAN_ALL).await,
-            Ok(vec![new_state.clone()])
+            Ok(vec![new_state_at(1)])
         );
 
         // Truncate is idempotent and can be repeated. The return value
         // indicates we didn't do any work though.
-        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(0));
+        assert_ok!(consensus.truncate(&key, SeqNo(1)).await);
 
         // Make sure entries under different keys don't clash.
         let other_key = Uuid::new_v4().to_string();
@@ -1030,21 +1023,19 @@ pub mod tests {
         assert_eq!(consensus.head(&other_key).await, Ok(None));
 
         let state = VersionedData {
-            seqno: SeqNo(1),
+            seqno: SeqNo(0),
             data: Bytes::from("einszweidrei"),
         };
 
         assert_eq!(
-            consensus
-                .compare_and_set(&other_key, None, state.clone())
-                .await,
+            consensus.compare_and_set(&other_key, state.clone()).await,
             Ok(CaSResult::Committed),
         );
 
         assert_eq!(consensus.head(&other_key).await, Ok(Some(state.clone())));
 
         // State for the first key is still as expected.
-        assert_eq!(consensus.head(&key).await, Ok(Some(new_state.clone())));
+        assert_eq!(consensus.head(&key).await, Ok(Some(new_state_at(1))));
 
         // Trying to update from a stale version of current doesn't work.
         let invalid_jump_forward = VersionedData {
@@ -1052,86 +1043,37 @@ pub mod tests {
             data: Bytes::from("invalid"),
         };
         assert_eq!(
-            consensus
-                .compare_and_set(&key, Some(state.seqno), invalid_jump_forward)
-                .await,
+            consensus.compare_and_set(&key, invalid_jump_forward).await,
             Ok(CaSResult::ExpectationMismatch),
         );
 
         // Writing a large (~10 KiB) amount of data works fine.
         let large_state = VersionedData {
-            seqno: SeqNo(11),
+            seqno: SeqNo(2),
             data: std::iter::repeat(b'a').take(10240).collect(),
         };
         assert_eq!(
-            consensus
-                .compare_and_set(&key, Some(new_state.seqno), large_state)
-                .await,
+            consensus.compare_and_set(&key, large_state).await,
             Ok(CaSResult::Committed),
         );
 
         // Truncate can delete more than one version at a time.
-        let v12 = VersionedData {
-            seqno: SeqNo(12),
+        let v3 = VersionedData {
+            seqno: SeqNo(3),
             data: Bytes::new(),
         };
         assert_eq!(
-            consensus.compare_and_set(&key, Some(SeqNo(11)), v12).await,
+            consensus.compare_and_set(&key, v3).await,
             Ok(CaSResult::Committed),
         );
-        assert_eq!(consensus.truncate(&key, SeqNo(12)).await, Ok(2));
+        assert_ok!(consensus.truncate(&key, SeqNo(3)).await);
 
-        // Sequence numbers used within Consensus have to be within [0, i64::MAX].
-
+        // The shard now has head seqno 3 with seqnos 0..=2 truncated away. A re-initialization
+        // (compare_and_set with an initial seqno, i.e. expected=None) must be rejected rather than
+        // resurrecting seqno 0 in the gap below the live head.
         assert_eq!(
-            consensus
-                .compare_and_set(
-                    &Uuid::new_v4().to_string(),
-                    None,
-                    VersionedData {
-                        seqno: SeqNo(0),
-                        data: Bytes::new(),
-                    }
-                )
-                .await,
-            Ok(CaSResult::Committed),
-        );
-        assert_eq!(
-            consensus
-                .compare_and_set(
-                    &Uuid::new_v4().to_string(),
-                    None,
-                    VersionedData {
-                        seqno: SeqNo(i64::MAX.try_into().expect("i64::MAX fits in u64")),
-                        data: Bytes::new(),
-                    }
-                )
-                .await,
-            Ok(CaSResult::Committed),
-        );
-        assert_err!(
-            consensus
-                .compare_and_set(
-                    &Uuid::new_v4().to_string(),
-                    None,
-                    VersionedData {
-                        seqno: SeqNo(1 << 63),
-                        data: Bytes::new(),
-                    }
-                )
-                .await
-        );
-        assert_err!(
-            consensus
-                .compare_and_set(
-                    &Uuid::new_v4().to_string(),
-                    None,
-                    VersionedData {
-                        seqno: SeqNo(u64::MAX),
-                        data: Bytes::new(),
-                    }
-                )
-                .await
+            consensus.compare_and_set(&key, state_at(0)).await,
+            Ok(CaSResult::ExpectationMismatch),
         );
 
         Ok(())

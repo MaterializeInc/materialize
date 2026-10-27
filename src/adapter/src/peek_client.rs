@@ -8,54 +8,73 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use differential_dataflow::consolidation::consolidate;
-use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing};
+use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
+use mz_compute_client::controller::instance_client::InstanceClient;
+use mz_compute_client::controller::instance_client::{AcquireReadHoldsError, InstanceShutDown};
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
+use mz_ore::soft_panic_or_log;
 use mz_persist_client::PersistClient;
+use mz_repr::GlobalId;
 use mz_repr::Timestamp;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::{RelationDesc, Row};
+use mz_sql::ast::{Raw, Statement};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_sql::plan::Params;
+use mz_sql::session::hint::ApplicationNameHint;
+use mz_sql::session::metadata::SessionMetadata;
+use mz_sql_parser::ast::{CopyRelation, CopyStatement, SubscribeStatement};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
 use prometheus::Histogram;
+use qcell::QCell;
+use thiserror::Error;
 use timely::progress::Antichain;
-use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::command::{CatalogSnapshot, Command};
-use crate::coord::Coordinator;
+use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
+use crate::coord::appends::GroupCommitNotifier;
 use crate::coord::peek::FastPathPlan;
-use crate::statement_logging::WatchSetCreation;
+use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::coord::{Coordinator, ExecuteContextExtra, ExecuteContextGuard, Message};
+use crate::metrics::Metrics;
+use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
-    FrontendStatementLoggingEvent, PreparedStatementEvent, StatementLoggingFrontend,
-    StatementLoggingId,
+    FrontendStatementLoggingEvent, PreparedStatementEvent, PreparedStatementLoggingInfo,
+    StatementLoggingFrontend, StatementLoggingId, WatchSetCreation,
 };
-use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
+use crate::{
+    AdapterError, AdapterNotice, Client, CollectionIdBundle, ReadHolds, metrics, statement_logging,
+};
 
 /// Storage collections trait alias we need to consult for since/frontiers.
-pub type StorageCollectionsHandle = Arc<
-    dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = Timestamp>
-        + Send
-        + Sync,
->;
+pub type StorageCollectionsHandle =
+    Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
 
 /// Clients needed for peek sequencing in the Adapter Frontend.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PeekClient {
-    coordinator_client: Client,
+    coordinator_client: CoordinatorClient,
+    /// Cache of the latest catalog snapshot. Serves
+    /// [`PeekClient::catalog_snapshot`] without a Coordinator round-trip
+    /// while the catalog's transient revision is unchanged.
+    ///
+    /// Holds a `Weak` so that an idle session does not keep a superseded
+    /// catalog version alive.
+    catalog_cache: Weak<Catalog>,
     /// Channels to talk to each compute Instance task directly. Lazily populated.
     /// Note that these are never cleaned up. In theory, this could lead to a very slow memory leak
     /// if a long-running user session keeps peeking on clusters that are being created and dropped
     /// in a hot loop. Hopefully this won't occur any time soon.
-    compute_instances:
-        BTreeMap<ComputeInstanceId, mz_compute_client::controller::instance::Client<Timestamp>>,
+    compute_instances: BTreeMap<ComputeInstanceId, InstanceClient>,
     /// Handle to storage collections for reading frontiers and policies.
     pub storage_collections: StorageCollectionsHandle,
     /// A generator for transient `GlobalId`s, shared with Coordinator.
@@ -66,20 +85,87 @@ pub struct PeekClient {
     persist_client: PersistClient,
     /// Statement logging state for frontend peek sequencing.
     pub statement_logging_frontend: StatementLoggingFrontend,
+    /// Semaphore for limiting concurrent OCC (optimistic concurrency control) write operations.
+    pub occ_write_semaphore: Arc<Semaphore>,
+    /// Requests a group commit. Used to advance the write timeline when we
+    /// need the oracle to move but have nothing to write ourselves.
+    pub(crate) group_commit_notifier: GroupCommitNotifier,
+    /// Whether the coordinator is in read-only mode. Mutations must be rejected.
+    pub read_only: bool,
+}
+
+/// A command sender that does not make background work keep the coordinator alive.
+#[derive(Debug, Clone)]
+pub(crate) enum CoordinatorClient {
+    Session(Client),
+    Background {
+        tx: tokio::sync::mpsc::UnboundedSender<Message>,
+        metrics: Metrics,
+    },
+}
+
+impl CoordinatorClient {
+    /// Sends a command, dropping it if the coordinator is gone.
+    ///
+    /// A session cannot outrun the coordinator: it holds a `Client`, and the
+    /// coordinator's loop only exits once every client is dropped, so a failed
+    /// send there is a real bug. Background work holds no client on purpose, so
+    /// losing the race with shutdown is normal and must not crash the process.
+    /// Dropping the command closes its response channel, which the caller handles
+    /// as an error.
+    pub(crate) fn send(&self, command: Command) {
+        if self.try_send(command) {
+            return;
+        }
+        match self {
+            CoordinatorClient::Session(_) => panic!("coordinator unexpectedly gone"),
+            CoordinatorClient::Background { .. } => {
+                tracing::debug!("dropping background command, coordinator is gone")
+            }
+        }
+    }
+
+    pub(crate) fn try_send(&self, command: Command) -> bool {
+        match self {
+            CoordinatorClient::Session(client) => client.try_send(command),
+            CoordinatorClient::Background { tx, .. } => tx
+                .send(Message::Command(
+                    mz_ore::tracing::OpenTelemetryContext::obtain(),
+                    command,
+                ))
+                .is_ok(),
+        }
+    }
+
+    pub(crate) fn metrics(&self) -> &Metrics {
+        match self {
+            CoordinatorClient::Session(client) => client.metrics(),
+            CoordinatorClient::Background { metrics, .. } => metrics,
+        }
+    }
 }
 
 impl PeekClient {
     /// Creates a PeekClient.
-    pub fn new(
-        coordinator_client: Client,
+    ///
+    /// `catalog` seeds the catalog snapshot cache, so that the session's
+    /// first statements don't need a `Command::CatalogSnapshot` round-trip.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        coordinator_client: CoordinatorClient,
+        catalog: &Arc<Catalog>,
         storage_collections: StorageCollectionsHandle,
         transient_id_gen: Arc<TransientIdGen>,
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
         statement_logging_frontend: StatementLoggingFrontend,
+        occ_write_semaphore: Arc<Semaphore>,
+        group_commit_notifier: GroupCommitNotifier,
+        read_only: bool,
     ) -> Self {
         Self {
             coordinator_client,
+            catalog_cache: Arc::downgrade(catalog),
             compute_instances: Default::default(), // lazily populated
             storage_collections,
             transient_id_gen,
@@ -87,20 +173,24 @@ impl PeekClient {
             statement_logging_frontend,
             oracles: Default::default(), // lazily populated
             persist_client,
+            occ_write_semaphore,
+            group_commit_notifier,
+            read_only,
         }
     }
 
     pub async fn ensure_compute_instance_client(
         &mut self,
         compute_instance: ComputeInstanceId,
-    ) -> Result<mz_compute_client::controller::instance::Client<Timestamp>, InstanceMissing> {
+    ) -> Result<InstanceClient, CollectionLookupError> {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
                 .call_coordinator(|tx| Command::GetComputeInstanceClient {
                     instance_id: compute_instance,
                     tx,
                 })
-                .await?;
+                .await
+                .map_err(|_| CollectionLookupError::InstanceShutDown)??;
             self.compute_instances.insert(compute_instance, client);
         }
         Ok(self
@@ -120,35 +210,112 @@ impl PeekClient {
                     timeline: timeline.clone(),
                     tx,
                 })
-                .await?;
+                .await??;
             self.oracles.insert(timeline.clone(), oracle);
         }
         Ok(self.oracles.get_mut(&timeline).expect("ensured above"))
     }
 
-    /// Fetch a snapshot of the catalog for use in frontend peek sequencing.
-    /// Records the time taken in the adapter metrics, labeled by `context`.
-    pub async fn catalog_snapshot(&self, context: &str) -> Arc<Catalog> {
+    /// Fetch a snapshot of the catalog.
+    ///
+    /// Serves from the session-side cache when the catalog's transient
+    /// revision is unchanged since the cached snapshot was taken (see
+    /// [`Catalog::transient_revision_is_current`]). An unchanged revision
+    /// means the cached snapshot is identical to what a fresh fetch would
+    /// return. Otherwise falls back to a `Command::CatalogSnapshot`
+    /// round-trip and re-populates the cache.
+    ///
+    /// Cache misses record the round-trip time in the adapter metrics,
+    /// labeled by `context`. Hits and misses are counted in
+    /// `catalog_snapshot_cache`.
+    pub async fn catalog_snapshot(&mut self, context: &str) -> Arc<Catalog> {
+        // NOTE: The upgrade can fail even when the revision is unchanged: any
+        // in-place mutation of the Coordinator's catalog (including
+        // revision-preserving ones) moves it to a new allocation, and the
+        // cached allocation is freed once its last user drops. We then fall
+        // through to a refetch.
+        let cached = self
+            .catalog_cache
+            .upgrade()
+            .filter(|catalog| catalog.transient_revision_is_current());
+        if let Some(catalog) = cached {
+            self.coordinator_client
+                .metrics()
+                .catalog_snapshot_cache
+                .with_label_values(&[context, "hit"])
+                .inc();
+            return catalog;
+        }
+
+        // The cache is empty, stale, or its allocation is gone: do the
+        // round-trip.
         let start = std::time::Instant::now();
+        // Session clients keep the coordinator loop alive. A dropped response
+        // here therefore indicates an internal lifecycle bug, unlike a
+        // background compute lookup racing coordinator shutdown.
         let CatalogSnapshot { catalog } = self
             .call_coordinator(|tx| Command::CatalogSnapshot { tx })
-            .await;
-        self.coordinator_client
-            .metrics()
+            .await
+            .expect("coordinator unexpectedly dropped catalog snapshot response");
+        let metrics = self.coordinator_client.metrics();
+        metrics
             .catalog_snapshot_seconds
             .with_label_values(&[context])
             .observe(start.elapsed().as_secs_f64());
+        metrics
+            .catalog_snapshot_cache
+            .with_label_values(&[context, "miss"])
+            .inc();
+        self.catalog_cache = Arc::downgrade(&catalog);
         catalog
     }
 
-    pub(crate) async fn call_coordinator<T, F>(&self, f: F) -> T
+    /// Calls the coordinator and returns an error if it drops the response.
+    pub(crate) async fn call_coordinator<T, F>(&self, f: F) -> Result<T, AdapterError>
     where
         F: FnOnce(oneshot::Sender<T>) -> Command,
     {
         let (tx, rx) = oneshot::channel();
         self.coordinator_client.send(f(tx));
-        rx.await
-            .expect("if the coordinator is still alive, it shouldn't have dropped our call")
+        Ok(rx.await?)
+    }
+
+    /// Adds the `emit_timestamp_notice` notice to `session`: the explanation of
+    /// `determination`, the timestamp of a statement that reads `id_bundle`.
+    ///
+    /// Skips the notice if a collection in `id_bundle` was dropped since the
+    /// timestamp was determined: the statement does not depend on the notice,
+    /// so it goes on without it.
+    pub(crate) async fn add_timestamp_notice(
+        &self,
+        session: &Session,
+        cluster_id: ComputeInstanceId,
+        id_bundle: CollectionIdBundle,
+        determination: TimestampDetermination,
+    ) -> Result<(), AdapterError> {
+        // Test-only synchronization point: parks the statement before the
+        // coordinator looks up the frontiers of `id_bundle`, so a test can drop
+        // one of its collections in between.
+        fail::fail_point!("timestamp_notice_before_dispatch");
+        let request = self.call_coordinator(|tx| Command::ExplainTimestamp {
+            conn_id: session.conn_id().clone(),
+            session_wall_time: session.pcx().wall_time,
+            cluster_id,
+            id_bundle,
+            determination,
+            tx,
+        });
+        match request.await? {
+            Ok(explanation) => session.add_notice(AdapterNotice::QueryTimestamp { explanation }),
+            Err(AdapterError::ConcurrentDependencyDrop { .. }) => {}
+            Err(e) => return Err(e),
+        }
+        Ok(())
+    }
+
+    /// The client for sending commands to the coordinator.
+    pub(crate) fn coordinator_client(&self) -> &CoordinatorClient {
+        &self.coordinator_client
     }
 
     /// Acquire read holds on the given compute/storage collections, and
@@ -166,7 +333,7 @@ impl PeekClient {
     pub async fn acquire_read_holds_and_least_valid_write(
         &mut self,
         id_bundle: &CollectionIdBundle,
-    ) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionLookupError> {
+    ) -> Result<(ReadHolds, Antichain<Timestamp>), CollectionLookupError> {
         let mut read_holds = ReadHolds::new();
         let mut upper = Antichain::new();
 
@@ -221,7 +388,13 @@ impl PeekClient {
     /// Note: `input_read_holds` has holds for all inputs. For fast-path peeks, this includes the
     /// peek target. For slow-path peeks (to be implemented later), we'll need to additionally call
     /// into the Controller to acquire a hold on the peek target after we create the dataflow.
-    pub async fn implement_fast_path_peek_plan(
+    ///
+    /// For a constant peek the logging slot stays armed and the caller logs the
+    /// end from the returned result. For a `PeekExisting`/`PeekPersist` peek,
+    /// successful registration with the coordinator hands ownership of the end
+    /// to the coordinator and the slot is defused here. That holds even when the
+    /// subsequent `client.peek()` fails to issue.
+    pub(crate) async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
         timestamp: Timestamp,
@@ -232,12 +405,13 @@ impl PeekClient {
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         row_set_finishing_seconds: Histogram,
-        input_read_holds: ReadHolds<Timestamp>,
+        input_read_holds: ReadHolds,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
         conn_id: mz_adapter_types::connection::ConnectionId,
         depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
         watch_set: Option<WatchSetCreation>,
+        logging: &mut ExecutionLogging,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
@@ -335,7 +509,7 @@ impl PeekClient {
                     strategy,
                 )
             }
-            _ => {
+            FastPathPlan::Constant(..) => {
                 // FastPathPlan::Constant handled above.
                 unreachable!()
             }
@@ -352,7 +526,12 @@ impl PeekClient {
         let client = self
             .ensure_compute_instance_client(compute_instance)
             .await
-            .map_err(AdapterError::concurrent_dependency_drop_from_instance_missing)?;
+            .map_err(|error| {
+                AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
+                    error,
+                    compute_instance,
+                )
+            })?;
 
         // Register coordinator tracking of this peek. This has to complete before issuing the peek.
         //
@@ -367,7 +546,20 @@ impl PeekClient {
             watch_set,
             tx,
         })
-        .await?;
+        .await??;
+
+        // The peek is registered: the coordinator's `pending_peeks` entry now
+        // owns end-of-execution logging. It logs the end on peek completion,
+        // cancellation, concurrent teardown (e.g. a DROP CLUSTER), or the
+        // unregistration below. We defuse the guard so the frontend doesn't
+        // also log the end.
+        logging.defuse();
+
+        // Test-only synchronization point: parks a peek between registration
+        // and issue, so a test can land a concurrent DROP CLUSTER in this
+        // window. Used by
+        // workflow_test_drop_cluster_during_registered_peeks_fast_path.
+        fail::fail_point!("peek_after_register_before_issue");
 
         let finishing_for_instance = finishing.clone();
         let peek_result = client
@@ -386,14 +578,25 @@ impl PeekClient {
             .await;
 
         if let Err(err) = peek_result {
-            // Clean up the registered peek since the peek failed to issue.
-            // The frontend will handle statement logging for the error.
-            self.call_coordinator(|tx| Command::UnregisterFrontendPeek { uuid, tx })
-                .await;
-            return Err(AdapterError::concurrent_dependency_drop_from_peek_error(
+            let err = AdapterError::concurrent_dependency_drop_from_instance_peek_error(
                 err,
                 compute_instance,
-            ));
+            );
+            // The peek failed to issue, so no peek response will ever arrive.
+            // The coordinator owns end-of-execution logging (see above), so we
+            // ask it to unregister the peek and retire it with this error. If
+            // a concurrent teardown already retired the peek, the end is
+            // already logged and the unregistration is a no-op.
+            let _ = self
+                .call_coordinator(|tx| Command::UnregisterFrontendPeek {
+                    uuid,
+                    reason: statement_logging::StatementEndedExecutionReason::Errored {
+                        error: err.to_string(),
+                    },
+                    tx,
+                })
+                .await;
+            return Err(err);
         }
 
         let peek_response_stream = Coordinator::create_peek_response_stream(
@@ -414,7 +617,39 @@ impl PeekClient {
         })
     }
 
-    // Statement logging helper methods
+    /// Begins a new statement execution log entry, sampling permitting.
+    ///
+    /// Only [`ExecutionLogging::take_over`] may call this: an entry that exists
+    /// without the session task owning its end would stay unfinished forever.
+    fn begin_statement_logging(
+        &self,
+        session: &mut Session,
+        params: &Params,
+        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        catalog: &Catalog,
+        lifecycle_timestamps: Option<LifecycleTimestamps>,
+    ) -> StatementLoggingGuard {
+        let result = self.statement_logging_frontend.begin_statement_execution(
+            session,
+            params,
+            logging,
+            catalog.system_config(),
+            lifecycle_timestamps,
+        );
+
+        let id = result.map(
+            |(logging_id, began_execution, mseh_update, prepared_statement)| {
+                self.log_began_execution(began_execution, mseh_update, prepared_statement);
+                logging_id
+            },
+        );
+
+        StatementLoggingGuard {
+            id,
+            coordinator_client: self.coordinator_client.clone(),
+            now: self.statement_logging_frontend.now.clone(),
+        }
+    }
 
     /// Log the beginning of statement execution.
     pub(crate) fn log_began_execution(
@@ -438,10 +673,15 @@ impl PeekClient {
         &self,
         id: StatementLoggingId,
         cluster_id: mz_controller_types::ClusterId,
+        cluster_name: String,
     ) {
         self.coordinator_client
             .send(Command::FrontendStatementLogging(
-                FrontendStatementLoggingEvent::SetCluster { id, cluster_id },
+                FrontendStatementLoggingEvent::SetCluster {
+                    id,
+                    cluster_id,
+                    cluster_name,
+                },
             ));
     }
 
@@ -480,22 +720,348 @@ impl PeekClient {
                 FrontendStatementLoggingEvent::Lifecycle { id, event, when },
             ));
     }
+}
 
-    /// Log the end of statement execution.
-    pub(crate) fn log_ended_execution(
-        &self,
-        id: StatementLoggingId,
-        reason: statement_logging::StatementEndedExecutionReason,
-    ) {
-        let ended_at = (self.statement_logging_frontend.now)();
+/// RAII guard owning a frontend statement-logging lifecycle.
+///
+/// Unless logging responsibility is handed off via
+/// [`defuse`](StatementLoggingGuard::defuse), the guard ensures that every
+/// statement for which `BeganExecution` was logged also receives a
+/// corresponding `EndedExecution`, even on early-return, panic, or mid-flight
+/// drop of the enclosing future: if the guard is dropped without being defused,
+/// it emits `StatementEndedExecutionReason::Aborted`.
+///
+/// When the guard is `defuse`d, some other component (e.g. the coordinator, for
+/// streaming peek / subscribe responses) takes over and logs `EndedExecution`
+/// itself.
+///
+/// For non-sampled statements the guard still exists but carries no id, and
+/// retirement / drop are no-ops.
+#[must_use = "StatementLoggingGuard must be explicitly retired or handed off; \
+              otherwise `Drop` will log the statement as Aborted"]
+struct StatementLoggingGuard {
+    /// `None` if the statement was not sampled for logging.
+    id: Option<StatementLoggingId>,
+    coordinator_client: CoordinatorClient,
+    now: mz_ore::now::NowFn,
+}
+
+impl StatementLoggingGuard {
+    /// Arms a guard for the obligation the coordinator armed for `outer`, the
+    /// statement whose execution the one we are about to run serves.
+    fn adopt(outer: ExecuteContextGuard, peek_client: &PeekClient) -> Self {
+        Self {
+            id: outer.defuse().retire(),
+            coordinator_client: peek_client.coordinator_client.clone(),
+            now: peek_client.statement_logging_frontend.now.clone(),
+        }
+    }
+
+    /// Returns the logging id, if this statement is being logged.
+    fn id(&self) -> Option<StatementLoggingId> {
+        self.id
+    }
+
+    /// Retires the guard with an explicit end-execution reason.
+    /// A no-op if the guard was defused or the statement is not sampled.
+    fn retire(mut self, reason: statement_logging::StatementEndedExecutionReason) {
+        self.emit(reason);
+    }
+
+    /// Turns the obligation back into its transferable form, disarming this
+    /// guard.
+    fn release(mut self) -> ExecuteContextExtra {
+        ExecuteContextExtra::new(self.id.take())
+    }
+
+    /// Hands off logging responsibility without emitting an end-execution
+    /// event. Call this at the point where another component takes over
+    /// end-of-execution logging. Afterwards the guard is inert.
+    fn defuse(&mut self) {
+        self.id = None;
+    }
+
+    fn emit(&mut self, reason: statement_logging::StatementEndedExecutionReason) {
+        let Some(id) = self.id.take() else {
+            return;
+        };
+        let ended_at = (self.now)();
         let record = statement_logging::StatementEndedExecutionRecord {
             id: id.0,
             reason,
             ended_at,
         };
-        self.coordinator_client
-            .send(Command::FrontendStatementLogging(
+        // A guard can outlive the coordinator during shutdown. Failing to send
+        // costs us one end event, panicking in `Drop` would cost the whole
+        // connection.
+        let _ = self
+            .coordinator_client
+            .try_send(Command::FrontendStatementLogging(
                 FrontendStatementLoggingEvent::EndedExecution(record),
             ));
+    }
+}
+
+impl Drop for StatementLoggingGuard {
+    fn drop(&mut self) {
+        // `emit` is a no-op if the guard was already retired or defused (i.e.
+        // `id` is `None`).
+        self.emit(statement_logging::StatementEndedExecutionReason::Aborted);
+    }
+}
+
+/// The session task's slot for the end-of-execution obligation of the statement
+/// it is running. One slot is held for the whole `SessionClient::execute` call
+/// and there is exactly one retirement site.
+///
+/// An empty slot means no log entry exists for this execution, so a fallback to
+/// the coordinator lets it begin its own. An occupied slot means the session
+/// task owes an end event: [`Self::retire`] pays it, [`Self::release`] transfers
+/// it to the coordinator. [`Self::id`] returning `None` covers both "not
+/// sampled" and "the end is logged elsewhere", which want identical treatment
+/// everywhere.
+pub(crate) struct ExecutionLogging {
+    guard: Option<StatementLoggingGuard>,
+    /// Whether the coordinator must not run this statement, because the session
+    /// task has already counted it in the metrics `Coordinator::handle_execute`
+    /// maintains. Handing it over afterwards would count it twice.
+    coordinator_must_not_run: bool,
+}
+
+/// Which statement the session task is taking the log entry over for.
+pub(crate) enum TakeOver {
+    /// The statement that will run here, so the coordinator must not run it.
+    StatementToRun,
+    /// A SQL `EXECUTE` that unrolls into an inner statement, for a session task
+    /// that will go on to run that inner statement.
+    ///
+    /// The entry stays armed, so a failure to unroll is recorded against the
+    /// `EXECUTE`. Only the `EXECUTE` itself is counted here. The inner
+    /// statement is a statement in its own right and is counted wherever it
+    /// ends up running, exactly as the coordinator does when it re-dispatches a
+    /// `Plan::Execute`, which is why the slot stays releasable.
+    UnrolledExecute,
+}
+
+impl ExecutionLogging {
+    /// Adopts the end-of-execution obligation of an outer statement (a FETCH or
+    /// an EXECUTE running its inner statement), or starts out empty when there
+    /// is no outer statement.
+    pub(crate) fn adopt(outer: Option<ExecuteContextGuard>, peek_client: &PeekClient) -> Self {
+        Self {
+            guard: outer.map(|outer| StatementLoggingGuard::adopt(outer, peek_client)),
+            coordinator_must_not_run: false,
+        }
+    }
+
+    /// Returns the logging id, if an end event is owed and the statement is
+    /// being logged.
+    pub(crate) fn id(&self) -> Option<StatementLoggingId> {
+        self.guard.as_ref().and_then(|guard| guard.id())
+    }
+
+    /// Records that the session task, not the coordinator, is executing `stmt`.
+    /// Bumps the counters `Coordinator::handle_execute` would have bumped and
+    /// makes sure a log entry exists, inheriting the adopted one if there is
+    /// one. `stmt` is `None` for an empty portal, which is logged but not
+    /// counted.
+    ///
+    /// For [`TakeOver::StatementToRun`], every exit after this call must produce
+    /// an outcome for the statement: the coordinator will not see it.
+    pub(crate) fn take_over(
+        &mut self,
+        peek_client: &PeekClient,
+        session: &mut Session,
+        stmt: Option<&Statement<Raw>>,
+        params: &Params,
+        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        catalog: &Catalog,
+        lifecycle_timestamps: Option<LifecycleTimestamps>,
+        taking_over: TakeOver,
+    ) -> Option<StatementLoggingId> {
+        self.begin_or_inherit(
+            peek_client,
+            session,
+            params,
+            logging,
+            catalog,
+            lifecycle_timestamps,
+        );
+        count_statement(session, stmt);
+        if matches!(taking_over, TakeOver::StatementToRun) {
+            self.coordinator_must_not_run = true;
+        }
+        self.id()
+    }
+
+    /// Makes sure a log entry exists for this execution, keeping an adopted one
+    /// if there is one.
+    fn begin_or_inherit(
+        &mut self,
+        peek_client: &PeekClient,
+        session: &mut Session,
+        params: &Params,
+        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        catalog: &Catalog,
+        lifecycle_timestamps: Option<LifecycleTimestamps>,
+    ) {
+        if self.guard.is_none() {
+            self.guard = Some(peek_client.begin_statement_logging(
+                session,
+                params,
+                logging,
+                catalog,
+                lifecycle_timestamps,
+            ));
+        }
+    }
+
+    /// Hands the obligation to the coordinator, which retires it once the
+    /// statement it dispatches finishes. `None` tells the coordinator to begin
+    /// its own entry, `Some` with no id inside tells it that an entry already
+    /// exists or that sampling declined.
+    #[must_use]
+    pub(crate) fn release(&mut self) -> Option<ExecuteContextExtra> {
+        if self.coordinator_must_not_run {
+            soft_panic_or_log!(
+                "statement handed to the coordinator after the session task took it over: \
+                 its per-statement metrics are counted twice"
+            );
+        }
+        self.guard.take().map(|guard| guard.release())
+    }
+
+    /// Emits the end event for `result`, if we still owe one.
+    pub(crate) fn retire(self, result: &Result<ExecuteResponse, AdapterError>) {
+        let Some(guard) = self.guard else {
+            return;
+        };
+        // A defused or released slot owes no end event. Bail before mapping
+        // `result` to an end reason, which soft-panics for the responses whose
+        // end is logged elsewhere.
+        if guard.id().is_none() {
+            return;
+        }
+        guard.retire(end_reason(result));
+    }
+
+    /// Leaves the slot inert, for dispatch sites that hand the end of execution
+    /// to the coordinator or the protocol layer (registered peeks, subscribes).
+    pub(crate) fn defuse(&mut self) {
+        if let Some(guard) = self.guard.as_mut() {
+            guard.defuse();
+        }
+    }
+}
+
+/// Maps an execution outcome to the reason to record for it.
+///
+/// The responses whose end is logged elsewhere are filtered out first: their
+/// `StatementEndedExecutionReason` conversion panics, and this runs for every
+/// statement the session task executes, so that panic would take down the
+/// connection.
+fn end_reason(
+    result: &Result<ExecuteResponse, AdapterError>,
+) -> statement_logging::StatementEndedExecutionReason {
+    if let Ok(response) = result {
+        if terminates_elsewhere(response) {
+            soft_panic_or_log!(
+                "frontend-sequenced statement still owed an end event while returning {:?}",
+                crate::command::ExecuteResponseKind::from(response)
+            );
+            return statement_logging::StatementEndedExecutionReason::Aborted;
+        }
+    }
+    result.into()
+}
+
+/// Bumps the per-statement counters `Coordinator::handle_execute` maintains.
+///
+/// `stmt` is `None` for an empty portal, which is logged but not counted. The
+/// coordinator skips it the same way, and matching that is the point of this
+/// function.
+fn count_statement(session: &Session, stmt: Option<&Statement<Raw>>) {
+    let Some(stmt) = stmt else {
+        return;
+    };
+    let session_type = metrics::session_type_label_value(session.user());
+    session
+        .metrics()
+        .query_total(&[session_type, metrics::statement_type_label_value(stmt)])
+        .inc();
+    if let Statement::Subscribe(SubscribeStatement { output, .. })
+    | Statement::Copy(CopyStatement {
+        relation: CopyRelation::Subscribe(SubscribeStatement { output, .. }),
+        ..
+    }) = stmt
+    {
+        session
+            .metrics()
+            .subscribe_outputs(&[session_type, metrics::subscribe_output_label_value(output)])
+            .inc();
+    }
+    let application_name = ApplicationNameHint::from_str(session.application_name());
+    if let Some(labels) = metrics::as_of_query_label_values(session_type, application_name, stmt) {
+        session.metrics().as_of_queries(&labels).inc();
+    }
+}
+
+/// Whether someone else logs the end of execution for `response`: the
+/// coordinator for a registered peek, the protocol layer for a subscribe, a
+/// FETCH or a COPY FROM. The dispatch sites that produce these defuse the slot,
+/// so an armed slot alongside one of them means a dispatch site did not.
+fn terminates_elsewhere(response: &ExecuteResponse) -> bool {
+    match response {
+        ExecuteResponse::SendingRowsStreaming { .. }
+        | ExecuteResponse::Subscribing { .. }
+        | ExecuteResponse::Fetch { .. }
+        | ExecuteResponse::CopyFrom { .. } => true,
+        // COPY TO STDOUT of an immediate result terminates here. Anything else
+        // it can wrap does not.
+        ExecuteResponse::CopyTo { resp, .. } => {
+            !matches!(**resp, ExecuteResponse::SendingRowsImmediate { .. })
+        }
+        _ => false,
+    }
+}
+
+/// Errors arising during collection lookup in peek client operations.
+#[derive(Error, Debug)]
+pub enum CollectionLookupError {
+    /// The specified compute instance does not exist.
+    #[error("instance does not exist: {0}")]
+    InstanceMissing(ComputeInstanceId),
+    /// The specified compute instance has shut down.
+    #[error("the instance has shut down")]
+    InstanceShutDown,
+    /// The compute collection does not exist.
+    #[error("collection does not exist: {0}")]
+    CollectionMissing(GlobalId),
+}
+
+impl From<InstanceMissing> for CollectionLookupError {
+    fn from(error: InstanceMissing) -> Self {
+        Self::InstanceMissing(error.0)
+    }
+}
+
+impl From<InstanceShutDown> for CollectionLookupError {
+    fn from(_error: InstanceShutDown) -> Self {
+        Self::InstanceShutDown
+    }
+}
+
+impl From<CollectionMissing> for CollectionLookupError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
+    }
+}
+
+impl From<AcquireReadHoldsError> for CollectionLookupError {
+    fn from(error: AcquireReadHoldsError) -> Self {
+        match error {
+            AcquireReadHoldsError::CollectionMissing(id) => Self::CollectionMissing(id),
+            AcquireReadHoldsError::InstanceShutDown => Self::InstanceShutDown,
+        }
     }
 }

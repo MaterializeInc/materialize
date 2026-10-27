@@ -7,8 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-> SHOW CREATE TABLE alter_table_t1;
+>[version<2600700] SHOW CREATE TABLE alter_table_t1;
 materialize.public.alter_table_t1 "CREATE TABLE materialize.public.alter_table_t1 (a pg_catalog.int4, b pg_catalog.text VERSION ADDED 1, c pg_catalog.int8 VERSION ADDED 2);"
+
+>[version>=2600700] SHOW CREATE TABLE alter_table_t1;
+materialize.public.alter_table_t1 "CREATE TABLE\n    materialize.public.alter_table_t1\n        (a pg_catalog.int4, b pg_catalog.text VERSION ADDED 1, c pg_catalog.int8 VERSION ADDED 2);"
 
 > SELECT * FROM alter_table_t1 ORDER BY a DESC;
 <null> <null> <null>

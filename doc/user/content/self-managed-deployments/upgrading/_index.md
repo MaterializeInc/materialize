@@ -5,6 +5,7 @@ disable_list: true
 menu:
   main:
     parent: "sm-deployments"
+    name: "Upgrade"
     weight: 30
     identifier: "upgrading"
 ---
@@ -24,9 +25,7 @@ name="upgrade-major-version-restriction" >}}
 {{< /note >}}
 
 
-## Upgrading
-
-### Upgrade guides
+## Upgrade guides
 
 The following upgrade guides are available as examples:
 
@@ -36,10 +35,7 @@ name="upgrade-landing-guides-helm" %}}
 {{% include-from-yaml data="self_managed/upgrades"
 name="upgrade-landing-guides-unified" %}}
 
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-landing-guides-legacy" %}}
-
-### Upgrading the Helm Chart and Materialize Operator
+## Upgrading the Helm Chart and Materialize Operator
 
 {{< important >}}
 
@@ -48,7 +44,7 @@ Operator first.
 
 {{</ important >}}
 
-#### Update the Helm Chart repository
+### Update the Helm Chart repository
 
 To update your Materialize Helm Chart repository:
 
@@ -62,7 +58,7 @@ View the available chart versions:
 helm search repo materialize/materialize-operator --versions
 ```
 
-#### Upgrade your Materialize Operator
+### Upgrade your Materialize Operator
 
 The Materialize Kubernetes Operator is deployed via Helm and can be updated
 through standard `helm upgrade` command:
@@ -93,119 +89,37 @@ helm upgrade -n materialize my-demo materialize/operator \
   --version {{< self-managed/versions/get-latest-version >}}
 ```
 
-### Upgrading Materialize Instances
+## Upgrading Materialize Instances
 
-**After** you have upgraded your Materialize Operator, upgrade your Materialize
-instance(s) to the **APP Version** of the Operator. To find the version of your
-currently deployed Materialize Operator:
+After upgrading the operator, upgrade each Materialize instance to the
+operator's **App Version** by updating its `environmentdImageRef`. For
+step-by-step instructions, use the [upgrade guide](#upgrade-guides) for your
+environment (Kind, AWS, Azure, or GCP). This section explains how instance
+rollouts work.
 
-```shell
-helm list -n materialize
-```
+## Rollout configuration
 
-You will use the returned **App Version** for the updated `environmentdImageRef`
-value. Specifically, for your Materialize instance(s), set
-`environmentdImageRef` value to use the new version:
+Materialize supports two CRD API versions: `v1alpha1` and `v1` (available
+starting in v26.30). The Helm chart defaults to `v1alpha1`. The Terraform
+modules default to `v1` starting in v4.0.0.
 
-```
-spec:
-  environmentdImageRef: docker.io/materialize/environmentd:<app_version>
-```
+How you trigger a rollout depends on the CRD API version of your instances.
 
-To minimize unexpected downtime and avoid connection drops at critical
-periods for your application, the upgrade process involves two steps:
+{{< tip >}}
+To migrate a `v1alpha1` instance to `v1`, see
+[Adopting the v1 CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/).
+{{< /tip >}}
 
-- First, stage the changes (update the `environmentdImageRef` with the new
-  version) to the Materialize custom resource. The Operator watches for changes
-  but does not automatically roll out the changes.
+{{< tabs >}}
+{{< tab "v1alpha1" >}}
 
-- Second, roll out the changes by specifying a new UUID for `requestRollout`.
-
-#### Stage the Materialize instance version change
-
-To stage the Materialize instances version upgrade, update the
-`environmentdImageRef` field in the Materialize custom resource spec to the
-compatible version of your currently deployed Materialize Operator.
-
-To stage, but **not** rollout, the Materialize instance version upgrade, you can
-use the `kubectl patch` command; for example, if the **App Version** is {{< self-managed/versions/get-latest-version >}}:
-
-```shell
-kubectl patch materialize <instance-name> \
-  -n <materialize-instance-namespace> \
-  --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\"}}"
-```
+Specify a new `UUID` value for `requestRollout` to roll out changes to the
+Materialize instance.
 
 {{< note >}}
-Until you specify a new `requestRollout`, the Operator watches for updates but
-does not roll out the changes.
-{{< /note >}}
-
-
-#### Applying the changes via `requestRollout`
-
-To apply chang Materialize instance upgrade, you must update the `requestRollout` field in the Materialize custom resource spec to a new UUID.
-Be sure to consult the [Rollout Configurations](#rollout-configuration) to ensure you've selected the correct rollout behavior.
-```shell
-# Then trigger the rollout with a new UUID
-kubectl patch materialize <instance-name> \
-  -n <materialize-instance-namespace> \
-  --type='merge' \
-  -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
-```
-
-#### Staging and applying in a single command
-
-Although separating the staging and rollout of the changes into two steps can
-minimize unexpected downtime and avoid connection drops at critical periods, you
-can, if preferred, combine both operations in a single command
-
-```shell
-kubectl patch materialize <instance-name> \
-  -n materialize-environment \
-  --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\", \"requestRollout\": \"$(uuidgen)\"}}"
-```
-
-##### Using YAML Definition
-
-Alternatively, you can update your Materialize custom resource definition directly:
-
-```yaml
-apiVersion: materialize.cloud/v1alpha1
-kind: Materialize
-metadata:
-  name: 12345678-1234-1234-1234-123456789012
-  namespace: materialize-environment
-spec:
-  environmentdImageRef: materialize/environmentd:{{< self-managed/versions/get-latest-version >}} # Update version as needed
-  requestRollout: 22222222-2222-2222-2222-222222222222    # Use a new UUID
-  forceRollout: 33333333-3333-3333-3333-333333333333      # Optional: for forced rollouts
-  inPlaceRollout: false                                   # In Place rollout is deprecated and ignored. Please use rolloutStrategy
-  rolloutStrategy: WaitUntilReady                         # The mechanism to use when rolling out the new version. Can be WaitUntilReady or ImmediatelyPromoteCausingDowntime
-  backendSecretName: materialize-backend
-```
-
-Apply the updated definition:
-
-```shell
-kubectl apply -f materialize.yaml
-```
-
-### Rollout Configuration
-
-#### `requestRollout`
-
-Specify a new `UUID` value for the `requestRollout` to roll out the changes to
-the Materialize instance.
-
-{{< note >}}
-
-`requestRollout` without the `forcedRollout` field only rolls out if changes
-exist to the Materialize instance. To roll out even if there are no changes to
-the instance, use with `forcedRollouts`.
-
+`requestRollout` without the `forceRollout` field only rolls out if changes exist
+to the Materialize instance. To roll out even if there are no changes to the
+instance, use it with `forceRollout`.
 {{< /note >}}
 
 ```shell
@@ -215,31 +129,114 @@ kubectl patch materialize <instance-name> \
   --type='merge' \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
 ```
-### `requestRollout` with `forcedRollouts`
 
-Specify a new `UUID` value for `forcedRollout` to roll out even when there are
-no changes to the instance. Use `forcedRollout` with `requestRollout`.
+To force a rollout even when there are no other changes, set a new `forceRollout`
+UUID alongside `requestRollout`:
 
 ```shell
 kubectl patch materialize <instance-name> \
-  -n materialize-environment \
+  -n <materialize-instance-namespace> \
   --type='merge' \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\", \"forceRollout\": \"$(uuidgen)\"}}"
 ```
 
-#### Rollout strategies
+{{< /tab >}}
+{{< tab "v1" >}}
 
-The behavior of the new version rollout follows your `rolloutStrategy` setting:
+With v1, updating the spec automatically triggers a rollout and there is no
+`requestRollout` field. For details on the underlying mechanism, see [How it
+works](/self-managed-deployments/upgrading/adopting-the-v1-crd/#how-the-switchover-works).
 
-| `rolloutStrategy` | Description                        |
-| ----------------- | -----------------------------------|
-| `WaitUntilReady`  | *Default*. New instances are created and all dataflows are determined to be ready before cutover and terminating the old version, temporarily requiring twice the resources during the transition. |
-| `ImmediatelyPromoteCausingDowntime`| Tears down the prior version before creating and promoting the new version. This causes downtime equal to the duration it takes for dataflows to hydrate, but does not require additional resources. |
-| `inPlaceRollout`| *Deprecated*.  The setting is ignored. |
+To trigger a rollout even when there are no other changes to the instance,
+specify a new `UUID` value for `forceRollout`. That is:
 
-## Verifying the Upgrade
+- Set it in your manifest:
 
-After initiating the rollout, you can monitor the status field of the Materialize custom resource to check on the upgrade.
+  ```yaml
+  spec:
+    forceRollout: <new-uuid>  # e.g. the output of `uuidgen`
+  ```
+
+- Then reapply.
+
+  ```shell
+  kubectl apply -f materialize.yaml
+  ```
+
+{{< /tab >}}
+{{< /tabs >}}
+
+## Rollout strategies
+
+Rollout strategies control how Materialize transitions from the current
+generation to a new generation during an upgrade. The behavior follows your
+`rolloutStrategy` setting.
+
+### *WaitUntilReady* — ***Default***
+
+`WaitUntilReady` creates a new generation of pods and automatically promotes them
+as soon as they catch up to the old generation and become `ReadyToPromote`.
+Because both generations run simultaneously until the promotion, this strategy
+temporarily doubles the required resources to run Materialize.
+
+{{< note >}}
+While the new generation waits to become `ReadyToPromote`, it runs in a
+read-only, un-promoted state and holds back compaction. To prevent it from
+sitting in this state indefinitely (which can cause incident-inducing load when
+it is eventually promoted), the rollout is bounded by the `rolloutRequestTimeout`
+field in the Materialize spec, which defaults to `24h`.
+
+If the new generation does not become `ReadyToPromote` within
+`rolloutRequestTimeout`, the operator cancels the rollout: the new generation is
+torn down and the previously-active generation continues serving. You can then
+trigger a new rollout (in v1, set a new `forceRollout`; in v1alpha1, set a new
+`requestRollout`).
+{{< /note >}}
+
+### *ImmediatelyPromoteCausingDowntime*
+
+{{< warning >}} Using the `ImmediatelyPromoteCausingDowntime` rollout flag will cause downtime. {{< /warning >}}
+
+`ImmediatelyPromoteCausingDowntime` tears down the prior generation and
+immediately promotes the new generation without waiting for it to hydrate. This
+causes downtime until the new generation has hydrated. However, it does not
+require additional resources.
+
+### *ManuallyPromote*
+
+`ManuallyPromote` allows you to choose when to promote the new generation. This
+means you can time the promotion for periods when load is low, minimizing the
+impact of potential downtime for any clients connected to Materialize. This
+strategy temporarily doubles the required resources to run Materialize.
+
+To minimize downtime, wait until the new generation has fully hydrated and caught
+up to the prior generation before promoting. To check hydration status, inspect
+the `UpToDate` condition in the Materialize resource status. When hydration
+completes, the condition will be `ReadyToPromote`.
+
+To promote, update the `forcePromote` field to match the current rollout
+identifier (in v1, the `status.requestedRolloutHash`; in v1alpha1, the
+`requestRollout` UUID in the spec). If you need to promote before hydration
+completes, you can set `forcePromote` immediately, but clients may experience
+downtime.
+
+{{< warning >}} Leaving a new generation unpromoted for over 6 hours may cause downtime. {{< /warning >}}
+
+**Do not leave new generations unpromoted indefinitely**. They should either be
+promoted or canceled. New generations open a read hold on the metadata database
+that prevents compaction. This hold is only released when the generation is
+promoted or canceled. If left open too long, promoting or canceling can trigger a
+spike in deletion load on the metadata database, potentially causing downtime. It
+is not recommended to leave generations unpromoted for over 6 hours.
+
+### *inPlaceRollout* — ***Deprecated*** (v1alpha1 only)
+
+The setting is ignored.
+
+## Verifying the upgrade
+
+After initiating the rollout, you can monitor the status field of the Materialize
+custom resource to check on the upgrade.
 
 ```shell
 # Watch the status of your Materialize environment
@@ -249,21 +246,63 @@ kubectl get materialize -n materialize-environment -w
 kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ```
 
-## Version Specific Upgrade Notes
+## Cancelling the upgrade
 
-### Upgrading to `v26.1` and later versions
+You may want to cancel an in-progress rollout if the upgrade has failed (for
+example, new pods are not healthy). Before cancelling, verify that the upgrade has
+not already completed by checking that the deploy generation (found via
+`status.activeGeneration`) is still the one from before the upgrade. Once an
+upgrade has already happened, you cannot revert using this method.
 
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.1.md" >}}
+{{< tabs >}}
+{{< tab "v1alpha1" >}}
 
-### Upgrading to `v26.0`
+To cancel an in-progress rollout and revert to the last completed rollout state,
+revert both `requestRollout` and `environmentdImageRef` back to the values from
+the last completed rollout. Reverting `environmentdImageRef` alongside
+`requestRollout` keeps the spec aligned with what is actually running, so a later
+rollout doesn't accidentally pick up the previously attempted upgrade image.
 
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.0.md" >}}
+First, retrieve the last completed rollout request ID and the matching
+environmentd image ref from your Materialize CR:
 
-### Upgrading between minor versions less than `v26`
- - Prior to `v26`, you must upgrade at most one minor version at a time. For
-   example, upgrading from `v25.1.5` to `v25.2.16` is permitted.
+```shell
+kubectl get materialize <instance-name> -n materialize-environment \
+  -o jsonpath='{.status.lastCompletedRolloutRequest} {.status.lastCompletedRolloutEnvironmentdImageRef}'
+```
+
+Then set both fields back to these values in a single patch:
+
+```shell
+kubectl patch materialize <instance-name> \
+  -n materialize-environment \
+  --type='merge' \
+  -p "{\"spec\": {\"requestRollout\": \"<lastCompletedRolloutRequest-value>\", \"environmentdImageRef\": \"<lastCompletedRolloutEnvironmentdImageRef-value>\"}}"
+```
+
+{{< /tab >}}
+{{< tab "v1" >}}
+
+To cancel an in-progress rollout and revert to the last completed rollout state,
+reapply the Materialize resource with the spec it had before the rollout (notably
+the previous `environmentdImageRef`). Because v1 derives the rollout from the
+spec hash, restoring the previous spec produces the previous hash and returns the
+instance to the last completed state.
+
+```shell
+kubectl apply -f previous_materialize_configuration.yaml
+```
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ## See also
+
+- [Version-specific upgrade
+  notes](/self-managed-deployments/upgrading/version-notes/)
+
+- [Adopting the v1
+  CRD](/self-managed-deployments/upgrading/adopting-the-v1-crd/)
 
 - [Materialize Operator
   Configuration](/self-managed-deployments/operator-configuration/)

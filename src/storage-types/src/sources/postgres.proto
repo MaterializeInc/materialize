@@ -19,6 +19,7 @@ message ProtoPostgresSourcePublicationDetails {
   string slot = 2;
   optional uint64 timeline_id = 3;
   string database = 4;
+  optional bool is_physical_replica = 5;
 }
 
 // NOTE: this message is encoded and stored as part of source export
@@ -27,4 +28,11 @@ message ProtoPostgresSourcePublicationDetails {
 // compatible
 message ProtoPostgresSourceExportStatementDetails {
   mz_postgres_util.desc.ProtoPostgresTableDesc table = 1;
+  // Whether the text-to-oid cast for this export accepts the full u32 range.
+  // Absent (false) for exports created before the oid cast was widened, which
+  // must keep the legacy i32-range cast forever.
+  bool cast_oid_full_range = 2;
+  // An upper bound on the upstream WAL position whose schema `table`
+  // describes. Absent for exports created before this field existed.
+  optional uint64 initial_lsn = 3;
 }

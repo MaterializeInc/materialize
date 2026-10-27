@@ -13,13 +13,11 @@ from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, disabled, externally_idempotent
 
 
-@disabled("due to database-issues#9223")
+@disabled("due to https://linear.app/materializeinc/issue/SS-296")
 @externally_idempotent(False)
 class SourceErrors(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 # In order to avoid conflicts, user must be unique
                 CREATE USER source_errors_user1 WITH SUPERUSER PASSWORD 'postgres';
@@ -64,9 +62,7 @@ class SourceErrors(Check):
 
                 > SELECT COUNT(*) FROM source_errors_tableB;
                 2
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [

@@ -7,10 +7,11 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::net::ToSocketAddrs;
+
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::Duration;
 use std::{env, fs};
@@ -21,28 +22,38 @@ use aws_credential_types::provider::ProvideCredentials;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
-use mz_adapter::catalog::{Catalog, ConnCatalog};
+use mz_adapter::catalog::{Catalog, ConnCatalog, DebugAwsContext};
 use mz_adapter::session::Session;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
-use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
+use mz_ccsr::SubjectVersion;
+use mz_kafka_util::client::{
+    MzClientContext, create_new_client_config_simple, create_with_context,
+};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
+use mz_ore::secure::Zeroizing;
 use mz_ore::task;
 use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistClient, PersistLocation};
+use mz_postgres_util::{
+    Sql, batch_execute as pg_batch_execute, query as pg_query, query_one as pg_query_one,
+    sql as pg_sql,
+};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
+use openssl::pkcs12::Pkcs12;
 use rdkafka::ClientConfig;
 use rdkafka::producer::Producer;
 use regex::{Captures, Regex};
 use semver::Version;
+use tokio_postgres::CancelToken;
 use tokio_postgres::error::{DbError, SqlState};
 use tracing::info;
 use url::Url;
@@ -59,6 +70,7 @@ pub mod consistency;
 mod duckdb;
 mod file;
 mod fivetran;
+mod glue;
 mod http;
 mod kafka;
 mod mysql;
@@ -78,6 +90,10 @@ mod sql_server;
 mod version_check;
 mod webhook;
 
+pub(crate) async fn verify_kafka_topics_exhausted(state: &State) -> Result<(), anyhow::Error> {
+    kafka::verify_topics_exhausted(state).await
+}
+
 /// User-settable configuration parameters.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -88,7 +104,7 @@ pub struct Config {
     /// variable named `arg.KEY`.
     pub arg_vars: BTreeMap<String, String>,
     /// A random number to distinguish each run of a testdrive script.
-    pub seed: Option<u32>,
+    pub seed: Option<String>,
     /// Whether to reset Materialize state before executing each script and
     /// to clean up AWS state after each script.
     pub reset: bool,
@@ -113,6 +129,8 @@ pub struct Config {
     pub backoff_factor: f64,
     /// Should we skip coordinator and catalog consistency checks.
     pub consistency_checks: consistency::Level,
+    /// How long a single consistency check may take before the test file fails.
+    pub consistency_check_timeout: Duration,
     /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
     /// test file).
     pub check_statement_logging: bool,
@@ -206,6 +224,16 @@ pub struct MaterializeState {
     pgclient: tokio_postgres::Client,
     environment_id: EnvironmentId,
     bootstrap_args: BootstrapArgs,
+    // The AWS environment context, queried once from the running environmentd at
+    // startup, the same way environment_id is. The builtin AWS connection views
+    // fold these values into their optimized expressions, so the catalog copy
+    // opened for the consistency check must resolve them the same way. Queried
+    // at startup rather than at check time because a check-time query runs after
+    // arbitrary test state and is less reliable, while startup runs against a
+    // clean session on the currently connected version.
+    aws_account_id: Option<String>,
+    aws_external_id_prefix: Option<String>,
+    aws_connection_role_arn: Option<String>,
 }
 
 pub struct State {
@@ -215,7 +243,7 @@ pub struct State {
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
     cmd_vars: BTreeMap<String, String>,
-    seed: u32,
+    seed: String,
     temp_path: PathBuf,
     _tempfile: Option<tempfile::TempDir>,
     default_timeout: Duration,
@@ -224,6 +252,7 @@ pub struct State {
     initial_backoff: Duration,
     backoff_factor: f64,
     consistency_checks: consistency::Level,
+    consistency_check_timeout: Duration,
     check_statement_logging: bool,
     consistency_checks_adhoc_skip: bool,
     regex: Option<Regex>,
@@ -250,6 +279,8 @@ pub struct State {
     kafka_default_partitions: usize,
     kafka_producer: rdkafka::producer::FutureProducer<MzClientContext>,
     kafka_topics: BTreeMap<String, usize>,
+    /// Topics whose final `kafka-verify-data` must consume the complete topic.
+    kafka_verify_topics: BTreeSet<String>,
 
     // === AWS state. ===
     aws_account: String,
@@ -260,6 +291,9 @@ pub struct State {
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
     sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
+    /// Tasks spawned by `postgres-execute background=true`. Joined at the end
+    /// of the file so their failures fail the test.
+    background_tasks: Vec<BackgroundTask>,
 
     // === Fivetran state. ===
     fivetran_destination_url: String,
@@ -281,25 +315,57 @@ pub struct Rewrite {
     pub end: usize,
 }
 
+/// A query spawned by `postgres-execute background=true`, retained so it can be
+/// joined at the end of the file.
+///
+/// Aborting `handle` stops the Rust task from awaiting the query's response,
+/// but it does not stop the query on the server. The tokio-postgres connection
+/// driver waits for every pending response before it closes the connection, so
+/// dropping the client leaves the SQL running until Materialize replies. To
+/// actually stop a query that overran its deadline we send an out-of-band
+/// cancel request through `cancel_token`, the same mechanism psql uses for
+/// Ctrl-C, before aborting the task.
+pub(crate) struct BackgroundTask {
+    desc: String,
+    handle: task::JoinHandle<Result<(), anyhow::Error>>,
+    cancel_token: CancelToken,
+    /// Connection URL, used to rebuild the TLS connector that the cancel
+    /// request opens its own connection with.
+    url: String,
+}
+
+/// Best-effort cancellation of the in-progress query on the connection
+/// `cancel_token` was derived from. Opens a fresh connection to send the cancel
+/// request. Cancellation is inherently racy and the caller aborts the task
+/// regardless, so failures are logged rather than propagated.
+async fn cancel_background_query(cancel_token: &CancelToken, url: &str, timeout: Duration) {
+    let tls = match tokio_postgres::Config::from_str(url)
+        .map_err(anyhow::Error::from)
+        .and_then(|config| make_tls(&config).map_err(anyhow::Error::from))
+    {
+        Ok(tls) => tls,
+        Err(e) => {
+            tracing::warn!("could not build TLS connector to cancel background query: {e}");
+            return;
+        }
+    };
+    match tokio::time::timeout(timeout, cancel_token.cancel_query(tls)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!("cancel request for background query failed: {e}"),
+        Err(_) => tracing::warn!("cancel request for background query timed out"),
+    }
+}
+
 impl State {
     pub async fn initialize_cmd_vars(&mut self) -> Result<(), anyhow::Error> {
         self.cmd_vars
             .insert("testdrive.kafka-addr".into(), self.kafka_addr.clone());
         self.cmd_vars.insert(
-            "testdrive.kafka-addr-resolved".into(),
-            self.kafka_addr
-                .to_socket_addrs()
-                .ok()
-                .and_then(|mut addrs| addrs.next())
-                .map(|addr| addr.to_string())
-                .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
-        );
-        self.cmd_vars.insert(
             "testdrive.schema-registry-url".into(),
             self.schema_registry_url.to_string(),
         );
         self.cmd_vars
-            .insert("testdrive.seed".into(), self.seed.to_string());
+            .insert("testdrive.seed".into(), self.seed.clone());
         self.cmd_vars.insert(
             "testdrive.temp-dir".into(),
             self.temp_path.display().to_string(),
@@ -415,6 +481,11 @@ impl State {
                 &self.persist_clients,
             )
             .await?;
+            let aws_context = DebugAwsContext {
+                aws_account_id: self.materialize.aws_account_id.clone(),
+                aws_external_id_prefix: self.materialize.aws_external_id_prefix.clone(),
+                aws_connection_role_arn: self.materialize.aws_connection_role_arn.clone(),
+            };
             let catalog = Catalog::open_debug_read_only_persist_catalog_config(
                 persist_client,
                 SYSTEM_TIME.clone(),
@@ -423,6 +494,7 @@ impl State {
                 build_info,
                 bootstrap_args,
                 enable_expression_cache_override,
+                Some(aws_context),
             )
             .await?;
             let res = f(catalog.for_session(&Session::dummy()));
@@ -447,6 +519,41 @@ impl State {
         std::mem::replace(&mut self.consistency_checks_adhoc_skip, false)
     }
 
+    /// Joins all tasks spawned by `postgres-execute background=true`,
+    /// returning one error per task that failed or did not complete within the
+    /// default timeout. Must be called before the end of the file so that
+    /// background failures fail the test.
+    pub(crate) async fn join_background_tasks(&mut self) -> Vec<anyhow::Error> {
+        let mut errors = Vec::new();
+        for BackgroundTask {
+            desc,
+            mut handle,
+            cancel_token,
+            url,
+        } in self.background_tasks.drain(..)
+        {
+            // Poll the handle by reference so it survives a timeout. Dropping a
+            // `JoinHandle` only detaches the task, it does not stop it, and a
+            // detached background query would keep running SQL against the same
+            // Materialize instance while later files execute.
+            match tokio::time::timeout(self.default_timeout, &mut handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => errors.push(e.context(format!("background query failed: {desc}"))),
+                Err(_) => {
+                    // Aborting `handle` alone leaves the query running on the
+                    // server. Cancel it first so it cannot overlap consistency
+                    // checks or later files, then abort and reap the task.
+                    cancel_background_query(&cancel_token, &url, self.default_timeout).await;
+                    handle.abort_and_wait().await;
+                    errors.push(anyhow!(
+                        "background query did not complete before the end of the file: {desc}"
+                    ));
+                }
+            }
+        }
+        errors
+    }
+
     pub async fn reset_materialize(&self) -> Result<(), anyhow::Error> {
         let (inner_client, _) = postgres_client(
             &format!(
@@ -457,22 +564,23 @@ impl State {
         )
         .await?;
 
-        let version = inner_client
-            .query_one("SELECT mz_version_num()", &[])
+        let version = pg_query_one(&inner_client, pg_sql!("SELECT mz_version_num()"), &[])
             .await
             .context("getting version of materialize")
             .map(|row| row.get::<_, i32>(0))?;
 
-        let semver = inner_client
-            .query_one("SELECT right(split_part(mz_version(), ' ', 1), -1)", &[])
-            .await
-            .context("getting semver of materialize")
-            .map(|row| row.get::<_, String>(0))?
-            .parse::<semver::Version>()
-            .context("parsing semver of materialize")?;
+        let semver = pg_query_one(
+            &inner_client,
+            pg_sql!("SELECT right(split_part(mz_version(), ' ', 1), -1)"),
+            &[],
+        )
+        .await
+        .context("getting semver of materialize")
+        .map(|row| row.get::<_, String>(0))?
+        .parse::<semver::Version>()
+        .context("parsing semver of materialize")?;
 
-        inner_client
-            .batch_execute("ALTER SYSTEM RESET ALL")
+        pg_batch_execute(&inner_client, pg_sql!("ALTER SYSTEM RESET ALL"))
             .await
             .context("resetting materialize state: ALTER SYSTEM RESET ALL")?;
 
@@ -484,10 +592,15 @@ impl State {
             } else {
                 "enable_unsafe_functions"
             };
-            let res = inner_client
-                .batch_execute(&format!("ALTER SYSTEM SET {enable_unsafe_functions} = on"))
-                .await
-                .context("enabling dangerous functions");
+            let res = pg_batch_execute(
+                &inner_client,
+                pg_sql!(
+                    "ALTER SYSTEM SET {} = on",
+                    Sql::ident(enable_unsafe_functions)
+                ),
+            )
+            .await
+            .context("enabling dangerous functions");
             if let Err(e) = res {
                 match e.root_cause().downcast_ref::<DbError>() {
                     Some(e) if *e.code() == SqlState::CANT_CHANGE_RUNTIME_PARAM => {
@@ -501,8 +614,7 @@ impl State {
             }
         }
 
-        for row in inner_client
-            .query("SHOW DATABASES", &[])
+        for row in pg_query(&inner_client, pg_sql!("SHOW DATABASES"), &[])
             .await
             .context("resetting materialize state: SHOW DATABASES")?
         {
@@ -510,15 +622,14 @@ impl State {
             if db_name.starts_with("testdrive_no_reset_") {
                 continue;
             }
-            let query = format!(
-                "DROP DATABASE {}",
-                postgres_protocol::escape::escape_identifier(&db_name)
-            );
-            sql::print_query(&query, None);
-            inner_client.batch_execute(&query).await.context(format!(
-                "resetting materialize state: DROP DATABASE {}",
-                db_name,
-            ))?;
+            let drop_database = pg_sql!("DROP DATABASE {}", Sql::ident(&db_name));
+            sql::print_query(drop_database.as_str(), None);
+            pg_batch_execute(&inner_client, drop_database)
+                .await
+                .context(format!(
+                    "resetting materialize state: DROP DATABASE {}",
+                    db_name,
+                ))?;
         }
 
         // Get all user clusters not running any objects owned by users
@@ -550,8 +661,7 @@ impl State {
                 AND
             owner_id LIKE 'u%';";
 
-        let inactive_clusters = inner_client
-            .query(inactive_user_clusters, &[])
+        let inactive_clusters = pg_query(&inner_client, Sql::new(inactive_user_clusters), &[])
             .await
             .context("resetting materialize state: inactive_user_clusters")?;
 
@@ -564,87 +674,98 @@ impl State {
             if cluster_name.starts_with("testdrive_no_reset_") {
                 continue;
             }
-            let query = format!(
-                "DROP CLUSTER {}",
-                postgres_protocol::escape::escape_identifier(&cluster_name)
-            );
-            sql::print_query(&query, None);
-            inner_client.batch_execute(&query).await.context(format!(
-                "resetting materialize state: DROP CLUSTER {}",
-                cluster_name,
-            ))?;
+            let drop_cluster = pg_sql!("DROP CLUSTER {}", Sql::ident(&cluster_name));
+            sql::print_query(drop_cluster.as_str(), None);
+            pg_batch_execute(&inner_client, drop_cluster)
+                .await
+                .context(format!(
+                    "resetting materialize state: DROP CLUSTER {}",
+                    cluster_name,
+                ))?;
         }
 
-        inner_client
-            .batch_execute("CREATE DATABASE materialize")
+        pg_batch_execute(&inner_client, pg_sql!("CREATE DATABASE materialize"))
             .await
             .context("resetting materialize state: CREATE DATABASE materialize")?;
 
         // Attempt to remove all users but the current user. Old versions of
         // Materialize did not support roles, so this degrades gracefully if
         // mz_roles does not exist.
-        if let Ok(rows) = inner_client.query("SELECT name FROM mz_roles", &[]).await {
+        if let Ok(rows) = pg_query(&inner_client, pg_sql!("SELECT name FROM mz_roles"), &[]).await {
             for row in rows {
                 let role_name: String = row.get(0);
                 if role_name == self.materialize.user || role_name.starts_with("mz_") {
                     continue;
                 }
-                let query = format!(
-                    "DROP ROLE {}",
-                    postgres_protocol::escape::escape_identifier(&role_name)
-                );
-                sql::print_query(&query, None);
-                inner_client.batch_execute(&query).await.context(format!(
-                    "resetting materialize state: DROP ROLE {}",
-                    role_name,
-                ))?;
+                let drop_role = pg_sql!("DROP ROLE {}", Sql::ident(&role_name));
+                sql::print_query(drop_role.as_str(), None);
+                pg_batch_execute(&inner_client, drop_role)
+                    .await
+                    .context(format!(
+                        "resetting materialize state: DROP ROLE {}",
+                        role_name,
+                    ))?;
             }
         }
 
         // Alter materialize user with all system privileges.
-        inner_client
-            .batch_execute(&format!(
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!(
                 "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
-                self.materialize.user
-            ))
-            .await?;
+                Sql::ident(&self.materialize.user)
+            ),
+        )
+        .await?;
 
         // Grant initial privileges.
-        inner_client
-            .batch_execute("GRANT USAGE ON DATABASE materialize TO PUBLIC")
-            .await?;
-        inner_client
-            .batch_execute(&format!(
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!("GRANT USAGE ON DATABASE materialize TO PUBLIC"),
+        )
+        .await?;
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!(
                 "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
-                self.materialize.user
-            ))
-            .await?;
-        inner_client
-            .batch_execute(&format!(
+                Sql::ident(&self.materialize.user)
+            ),
+        )
+        .await?;
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!(
                 "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
-                self.materialize.user
-            ))
-            .await?;
+                Sql::ident(&self.materialize.user)
+            ),
+        )
+        .await?;
 
         let cluster = match version {
             ..=8199 => "default",
             8200.. => "quickstart",
         };
-        inner_client
-            .batch_execute(&format!("GRANT USAGE ON CLUSTER {cluster} TO PUBLIC"))
-            .await?;
-        inner_client
-            .batch_execute(&format!(
-                "GRANT ALL PRIVILEGES ON CLUSTER {cluster} TO {}",
-                self.materialize.user
-            ))
-            .await?;
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!("GRANT USAGE ON CLUSTER {} TO PUBLIC", Sql::ident(cluster)),
+        )
+        .await?;
+        pg_batch_execute(
+            &inner_client,
+            pg_sql!(
+                "GRANT ALL PRIVILEGES ON CLUSTER {} TO {}",
+                Sql::ident(cluster),
+                Sql::ident(&self.materialize.user)
+            ),
+        )
+        .await?;
 
         Ok(())
     }
 
     /// Delete Kafka topics + CCSR subjects that were created in this run
     pub async fn reset_kafka(&self) -> Result<(), anyhow::Error> {
+        use rdkafka::types::RDKafkaErrorCode;
         let mut errors: Vec<anyhow::Error> = Vec::new();
 
         let metadata = self.kafka_producer.client().fetch_metadata(
@@ -680,10 +801,7 @@ impl State {
                     }
                     for (res, topic) in res.iter().zip_eq(testdrive_topics.iter()) {
                         match res {
-                            Ok(_)
-                            | Err((_, rdkafka::types::RDKafkaErrorCode::UnknownTopicOrPartition)) => {
-                                ()
-                            }
+                            Ok(_) | Err((_, RDKafkaErrorCode::UnknownTopicOrPartition)) => (),
                             Err((_, err)) => {
                                 errors.push(anyhow!("unable to delete {}: {}", topic, err));
                             }
@@ -696,30 +814,9 @@ impl State {
             };
         }
 
-        match self
-            .ccsr_client
-            .list_subjects()
-            .await
-            .context("listing schema registry subjects")
-        {
-            Ok(subjects) => {
-                let testdrive_subjects: Vec<_> = subjects
-                    .iter()
-                    .filter(|s| s.starts_with("testdrive-"))
-                    .collect();
+        let schema_registry_errors = self.reset_schema_registry().await;
 
-                for subject in testdrive_subjects {
-                    match self.ccsr_client.delete_subject(subject).await {
-                        Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
-                        Err(e) => errors.push(e.into()),
-                    }
-                }
-            }
-            Err(e) => {
-                errors.push(e);
-            }
-        }
-
+        errors.extend(schema_registry_errors);
         if errors.is_empty() {
             Ok(())
         } else {
@@ -732,6 +829,84 @@ impl State {
                     .join("\n")
             );
         }
+    }
+
+    #[allow(clippy::disallowed_types)]
+    async fn reset_schema_registry(&self) -> Vec<anyhow::Error> {
+        use std::collections::HashMap;
+
+        let mut errors = Vec::new();
+        match self
+            .ccsr_client
+            .list_subjects()
+            .await
+            .context("listing schema registry subjects")
+        {
+            Ok(subjects) => {
+                let testdrive_subjects: Vec<_> = subjects
+                    .into_iter()
+                    .filter(|s| s.starts_with("testdrive-"))
+                    .collect();
+
+                // Build the dependency graphs: subject -> list of subjects it references
+                let mut graphs: HashMap<SubjectVersion, Vec<SubjectVersion>> = HashMap::new();
+
+                for subject in &testdrive_subjects {
+                    match self.ccsr_client.get_subject_with_references(subject).await {
+                        Ok((subj, refs)) => {
+                            // Filter to only testdrive subjects
+                            let refs: Vec<_> = refs
+                                .into_iter()
+                                .filter(|r| r.subject.starts_with("testdrive-"))
+                                .collect();
+                            graphs.insert(
+                                SubjectVersion {
+                                    subject: subj.name,
+                                    version: subj.version,
+                                },
+                                refs,
+                            );
+                        }
+                        Err(mz_ccsr::GetBySubjectError::SubjectNotFound) => {
+                            // Subject was already deleted, skip it
+                        }
+                        Err(e) => {
+                            errors.push(anyhow::anyhow!(
+                                "failed to get references for subject {}: {}",
+                                subject,
+                                e
+                            ));
+                        }
+                    }
+                }
+
+                // Get topological ordering (0 = root/no dependencies, higher = more dependents)
+                // We need to delete in reverse order (highest first = subjects that depend on others)
+                let subjects_to_delete: Vec<_> = match mz_ccsr::topological_sort(&graphs) {
+                    Ok(ordered) => {
+                        let mut subjects: Vec<_> = ordered.into_iter().collect();
+                        subjects.sort_by(|a, b| a.1.cmp(&b.1));
+                        subjects.into_iter().map(|(s, _)| s.clone()).collect()
+                    }
+                    Err(_) => {
+                        tracing::info!("Cycle detected, attempting to delete anyway");
+                        // Cycle detected or other error - fall back to deleting in any order
+                        graphs.into_keys().collect()
+                    }
+                };
+
+                for subject in subjects_to_delete {
+                    match self.ccsr_client.delete_subject(&subject.subject).await {
+                        Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
+                        Err(e) => errors.push(e.into()),
+                    }
+                }
+            }
+            Err(e) => {
+                errors.push(e);
+            }
+        }
+        errors
     }
 }
 
@@ -811,6 +986,10 @@ impl Run for PosCommand {
                     }
                     "file-append" => file::run_append(builtin, state).await,
                     "file-delete" => file::run_delete(builtin, state).await,
+                    "glue-create-schema" => glue::run_create_schema(builtin, state).await,
+                    "glue-verify-compatibility" => {
+                        glue::run_verify_compatibility(builtin, state).await
+                    }
                     "http-request" => http::run_request(builtin, state).await,
                     "kafka-add-partitions" => kafka::run_add_partitions(builtin, state).await,
                     "kafka-create-topic" => kafka::run_create_topic(builtin, state).await,
@@ -835,6 +1014,10 @@ impl Run for PosCommand {
                     "s3-verify-keys" => s3::run_verify_keys(builtin, state).await,
                     "s3-file-upload" => s3::run_upload(builtin, state).await,
                     "s3-set-presigned-url" => s3::run_set_presigned_url(builtin, state).await,
+                    "s3-upload-parquet-types" => s3::run_upload_parquet_types(builtin, state).await,
+                    "s3-upload-parquet-unsorted-map" => {
+                        s3::run_upload_parquet_unsorted_map(builtin, state).await
+                    }
                     "schema-registry-publish" => schema_registry::run_publish(builtin, state).await,
                     "schema-registry-verify" => schema_registry::run_verify(builtin, state).await,
                     "schema-registry-wait" => schema_registry::run_wait(builtin, state).await,
@@ -894,6 +1077,14 @@ impl Run for PosCommand {
                     }
                     SqlExpectedError::Timeout => SqlExpectedError::Timeout,
                 };
+                sql.expected_detail = match sql.expected_detail {
+                    Some(s) => Some(subst(&s, &state.cmd_vars)?),
+                    None => None,
+                };
+                sql.expected_hint = match sql.expected_hint {
+                    Some(s) => Some(subst(&s, &state.cmd_vars)?),
+                    None => None,
+                };
                 sql::run_fail_sql(sql, state).await
             }
         };
@@ -947,7 +1138,10 @@ fn substitute_vars(
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), anyhow::Error>>), anyhow::Error> {
-    let seed = config.seed.unwrap_or_else(rand::random);
+    let seed = config
+        .seed
+        .clone()
+        .unwrap_or_else(|| format!("{:010}", rand::random::<u32>()));
 
     let (_tempfile, temp_path) = match &config.temp_dir {
         Some(temp_dir) => {
@@ -989,9 +1183,9 @@ pub async fn create_state(
         let mut ccsr_config = mz_ccsr::ClientConfig::new(schema_registry_url.clone());
 
         if let Some(cert_path) = &config.cert_path {
-            let cert = fs::read(cert_path).context("reading cert")?;
-            let pass = config.cert_password.as_deref().unwrap_or("").to_owned();
-            let ident = mz_ccsr::tls::Identity::from_pkcs12_der(cert, pass)
+            let keystore = Zeroizing::new(fs::read(cert_path).context("reading cert")?);
+            let pass = config.cert_password.as_deref().unwrap_or("");
+            let ident = identity_from_pkcs12_der(&keystore, pass)
                 .context("reading keystore file as pkcs12")?;
             ccsr_config = ccsr_config.identity(ident);
         }
@@ -1025,15 +1219,15 @@ pub async fn create_state(
             kafka_config.set(key, value);
         }
 
-        let admin: AdminClient<_> = kafka_config
-            .create_with_context(MzClientContext::default())
+        let admin: AdminClient<_> = create_with_context(&kafka_config, MzClientContext::default())
             .with_context(|| format!("opening Kafka connection: {}", config.kafka_addr))?;
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(config.default_timeout));
 
-        let producer: FutureProducer<_> = kafka_config
-            .create_with_context(MzClientContext::default())
-            .with_context(|| format!("opening Kafka producer connection: {}", config.kafka_addr))?;
+        let producer: FutureProducer<_> =
+            create_with_context(&kafka_config, MzClientContext::default()).with_context(|| {
+                format!("opening Kafka producer connection: {}", config.kafka_addr)
+            })?;
 
         let topics = BTreeMap::new();
 
@@ -1062,6 +1256,7 @@ pub async fn create_state(
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
         consistency_checks: config.consistency_checks,
+        consistency_check_timeout: config.consistency_check_timeout,
         check_statement_logging: config.check_statement_logging,
         consistency_checks_adhoc_skip: false,
         regex: None,
@@ -1093,6 +1288,7 @@ pub async fn create_state(
         kafka_default_partitions: config.kafka_default_partitions,
         kafka_producer,
         kafka_topics,
+        kafka_verify_topics: BTreeSet::new(),
 
         // === AWS state. ===
         aws_account: config.aws_account.clone(),
@@ -1103,6 +1299,7 @@ pub async fn create_state(
         mysql_clients: BTreeMap::new(),
         postgres_clients: BTreeMap::new(),
         sql_server_clients: BTreeMap::new(),
+        background_tasks: Vec::new(),
 
         // === Fivetran state. ===
         fivetran_destination_url: config.fivetran_destination_url.clone(),
@@ -1116,6 +1313,28 @@ pub async fn create_state(
     Ok((state, pgconn_task))
 }
 
+/// Converts a PKCS #12 keystore into a schema registry client identity.
+///
+/// The same keystore is handed to librdkafka, which reads PKCS #12 natively,
+/// while the schema registry client's rustls backend only accepts PEM.
+fn identity_from_pkcs12_der(der: &[u8], pass: &str) -> anyhow::Result<mz_ccsr::tls::Identity> {
+    let parsed = Pkcs12::from_der(der)?.parse2(pass)?;
+    let key = Zeroizing::new(
+        parsed
+            .pkey
+            .context("keystore has no private key")?
+            .private_key_to_pem_pkcs8()?,
+    );
+    let mut chain = parsed
+        .cert
+        .context("keystore has no certificate")?
+        .to_pem()?;
+    for ca in parsed.ca.into_iter().flatten() {
+        chain.extend(ca.to_pem()?);
+    }
+    Ok(mz_ccsr::tls::Identity::from_pem(&key, &chain)?)
+}
+
 async fn create_materialize_state(
     config: &&Config,
     materialize_catalog_config: Option<CatalogConfig>,
@@ -1126,6 +1345,8 @@ async fn create_materialize_state(
         util::postgres::config_url(&config.materialize_internal_pgconfig)?;
 
     for (key, value) in &config.materialize_params {
+        // Session parameter values are raw SQL fragments from testdrive config.
+        #[allow(clippy::disallowed_methods)]
         pgclient
             .batch_execute(&format!("SET {key} = {value}"))
             .await
@@ -1168,12 +1389,32 @@ async fn create_materialize_state(
         materialize_internal_url.host_str().unwrap(),
         config.materialize_internal_http_port
     );
-    let environment_id = pgclient
-        .query_one("SELECT mz_environment_id()", &[])
+    let environment_id = pg_query_one(&pgclient, pg_sql!("SELECT mz_environment_id()"), &[])
         .await?
         .get::<_, String>(0)
         .parse()
         .context("parsing environment ID")?;
+
+    // Tolerate the functions not existing: upgrade tests run testdrive against an
+    // older environmentd whose catalog predates them. A version without them has
+    // no context-folding views either, so no context is the correct fold.
+    let (aws_account_id, aws_external_id_prefix, aws_connection_role_arn) = match pg_query_one(
+        &pgclient,
+        pg_sql!(
+            "SELECT mz_aws_account_id(), mz_aws_external_id_prefix(), \
+                 mz_aws_connection_role_arn()"
+        ),
+        &[],
+    )
+    .await
+    {
+        Ok(row) => (
+            row.get::<_, Option<String>>(0),
+            row.get::<_, Option<String>>(1),
+            row.get::<_, Option<String>>(2),
+        ),
+        Err(_) => (None, None, None),
+    };
 
     let bootstrap_args = BootstrapArgs {
         cluster_replica_size_map: config.materialize_cluster_replica_sizes.clone(),
@@ -1195,6 +1436,9 @@ async fn create_materialize_state(
         pgclient,
         environment_id,
         bootstrap_args,
+        aws_account_id,
+        aws_external_id_prefix,
+        aws_connection_role_arn,
     };
 
     Ok(materialize_state)

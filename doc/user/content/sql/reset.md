@@ -22,7 +22,7 @@ Syntax element | Description
 ---------------|------------
 `<parameter_name>` | The configuration parameter's name.
 
-{{% configuration-parameters %}}
+{{% include-headless "/headless/configuration-parameters" %}}
 
 ## Examples
 

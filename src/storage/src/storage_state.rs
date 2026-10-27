@@ -81,7 +81,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crossbeam_channel::{RecvError, TryRecvError};
 use fail::fail_point;
 use mz_ore::now::NowFn;
 use mz_ore::soft_assert_or_log;
@@ -104,14 +103,14 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_txn_wal::operator::TxnsContext;
-use timely::communication::Allocate;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp as _;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::internal_control::{
@@ -124,30 +123,30 @@ use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorag
 
 pub mod async_storage_worker;
 
-type CommandReceiver = crossbeam_channel::Receiver<StorageCommand>;
+type CommandReceiver = mpsc::UnboundedReceiver<StorageCommand>;
 type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 
 /// State maintained for each worker thread.
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-pub struct Worker<'w, A: Allocate> {
+pub struct Worker<'w> {
     /// The underlying Timely worker.
     ///
     /// NOTE: This is `pub` for testing.
-    pub timely_worker: &'w mut TimelyWorker<A>,
+    pub timely_worker: &'w mut TimelyWorker,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    pub client_rx: crossbeam_channel::Receiver<(Uuid, CommandReceiver, ResponseSender)>,
+    pub client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
 }
 
-impl<'w, A: Allocate> Worker<'w, A> {
+impl<'w> Worker<'w> {
     /// Creates new `Worker` state from the given components.
     pub fn new(
-        timely_worker: &'w mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(Uuid, CommandReceiver, ResponseSender)>,
+        timely_worker: &'w mut TimelyWorker,
+        client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
         metrics: StorageMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
@@ -169,6 +168,57 @@ impl<'w, A: Allocate> Worker<'w, A> {
         let (internal_cmd_tx, internal_cmd_rx) =
             internal_control::setup_command_sequencer(timely_worker);
 
+        let storage_state = StorageState::new_guest(
+            timely_worker.index(),
+            timely_worker.peers(),
+            internal_cmd_tx,
+            Some(internal_cmd_rx),
+            metrics,
+            now,
+            connection_context,
+            instance_context,
+            persist_clients,
+            txns_ctx,
+            tracing_handle,
+            shared_rocksdb_write_buffer_manager,
+        );
+
+        // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
+        // be fields of `Worker` instead of `StorageState`, but at least for the
+        // command flow sources and sinks need access to that. We can refactor
+        // this once we have a clearer boundary between what sources/sinks need
+        // and the full "power" of the internal command flow, which should stay
+        // internal to the worker/not be exposed to source/sink implementations.
+        Self {
+            timely_worker,
+            client_rx,
+            storage_state,
+        }
+    }
+}
+
+impl StorageState {
+    /// Creates per-worker storage state, for hosting on any Timely worker.
+    ///
+    /// The caller provides the internal command channel endpoints: the native storage worker wires
+    /// them to the sequencer dataflow, a foreign host wires the sender to its own sequencing
+    /// channel and passes no receiver, since it dispatches internal commands itself.
+    /// Must be called on the hosting worker's thread, because the async worker unparks the
+    /// creating thread.
+    pub fn new_guest(
+        timely_worker_index: usize,
+        timely_worker_peers: usize,
+        internal_cmd_tx: InternalCommandSender,
+        internal_cmd_rx: Option<InternalCommandReceiver>,
+        metrics: StorageMetrics,
+        now: NowFn,
+        connection_context: ConnectionContext,
+        instance_context: StorageInstanceContext,
+        persist_clients: Arc<PersistClientCache>,
+        txns_ctx: TxnsContext,
+        tracing_handle: Arc<TracingHandle>,
+        shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
+    ) -> Self {
         let storage_configuration =
             StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs());
 
@@ -213,8 +263,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             exports: BTreeMap::new(),
             oneshot_ingestions: BTreeMap::new(),
             now,
-            timely_worker_index: timely_worker.index(),
-            timely_worker_peers: timely_worker.peers(),
+            timely_worker_index,
+            timely_worker_peers,
             instance_context,
             persist_clients,
             txns_ctx,
@@ -222,8 +272,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
             sink_write_frontiers: BTreeMap::new(),
             dropped_ids: Vec::new(),
             aggregated_statistics: AggregatedStatistics::new(
-                timely_worker.index(),
-                timely_worker.peers(),
+                timely_worker_index,
+                timely_worker_peers,
             ),
             shared_status_updates: Default::default(),
             latest_status_updates: Default::default(),
@@ -242,17 +292,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
             server_maintenance_interval: Duration::ZERO,
         };
 
-        // TODO(aljoscha): We might want `async_worker` and `internal_cmd_tx` to
-        // be fields of `Worker` instead of `StorageState`, but at least for the
-        // command flow sources and sinks need access to that. We can refactor
-        // this once we have a clearer boundary between what sources/sinks need
-        // and the full "power" of the internal command flow, which should stay
-        // internal to the worker/not be exposed to source/sink implementations.
-        Self {
-            timely_worker,
-            client_rx,
-            storage_state,
-        }
+        storage_state
     }
 }
 
@@ -325,8 +365,9 @@ pub struct StorageState {
     /// example, for shutting down an entire dataflow from within a
     /// operator/worker.
     pub internal_cmd_tx: InternalCommandSender,
-    /// Receiver for cluster-internal storage commands.
-    pub internal_cmd_rx: InternalCommandReceiver,
+    /// Receiver for cluster-internal storage commands. `None` when the state is hosted outside
+    /// the storage server, whose host dispatches internal commands itself.
+    pub internal_cmd_rx: Option<InternalCommandReceiver>,
 
     /// When this replica/cluster is in read-only mode it must not affect any
     /// changes to external state. This flag can only be changed by a
@@ -383,10 +424,6 @@ impl StorageState {
 pub struct StorageInstanceContext {
     /// A directory that can be used for scratch work.
     pub scratch_directory: Option<PathBuf>,
-    /// A global `rocksdb::Env`, shared across ALL instances of `RocksDB` (even
-    /// across sources!). This `Env` lets us control some resources (like background threads)
-    /// process-wide.
-    pub rocksdb_env: rocksdb::Env,
     /// The memory limit of the materialize cluster replica. This will
     /// be used to calculate and configure the maximum inflight bytes for backpressure
     pub cluster_memory_limit: Option<usize>,
@@ -394,29 +431,35 @@ pub struct StorageInstanceContext {
 
 impl StorageInstanceContext {
     /// Build a new `StorageInstanceContext`.
-    pub fn new(
-        scratch_directory: Option<PathBuf>,
-        cluster_memory_limit: Option<usize>,
-    ) -> Result<Self, anyhow::Error> {
-        // If no file system is available, fall back to running RocksDB in memory.
-        let rocksdb_env = if scratch_directory.is_some() {
-            rocksdb::Env::new()?
-        } else {
-            rocksdb::Env::mem_env()?
-        };
-
-        Ok(Self {
+    pub fn new(scratch_directory: Option<PathBuf>, cluster_memory_limit: Option<usize>) -> Self {
+        Self {
             scratch_directory,
-            rocksdb_env,
             cluster_memory_limit,
-        })
+        }
+    }
+
+    /// Returns a `rocksdb::Env` for a new RocksDB instance.
+    ///
+    /// With a scratch directory this is the default `Env`, which stores data
+    /// on the host filesystem. Without one, RocksDB runs in memory, and every
+    /// call returns a fresh in-memory `Env`. State written through an `Env`
+    /// is only reachable through that same `Env`, so a per-instance `Env`
+    /// isolates instances from each other and from previous incarnations of
+    /// themselves. Background threads are process-wide either way, both
+    /// variants delegate them to the default `Env`.
+    pub fn rocksdb_env(&self) -> Result<rocksdb::Env, rocksdb::Error> {
+        if self.scratch_directory.is_some() {
+            rocksdb::Env::new()
+        } else {
+            rocksdb::Env::mem_env()
+        }
     }
 }
 
-impl<'w, A: Allocate> Worker<'w, A> {
+impl<'w> Worker<'w> {
     /// Waits for client connections and runs them to completion.
     pub fn run(&mut self) {
-        while let Ok((_nonce, rx, tx)) = self.client_rx.recv() {
+        while let Some((_nonce, rx, tx)) = self.client_rx.blocking_recv() {
             self.run_client(rx, tx);
         }
     }
@@ -427,9 +470,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// See the [module documentation](crate::storage_state) for this
     /// workers responsibilities, how it communicates with the other workers and
     /// how commands flow from the controller and through the workers.
-    fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
+    fn run_client(&mut self, mut command_rx: CommandReceiver, response_tx: ResponseSender) {
         // At this point, all workers are still reading from the command flow.
-        if self.reconcile(&command_rx).is_err() {
+        if self.reconcile(&mut command_rx).is_err() {
             return;
         }
 
@@ -516,7 +559,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
             }
 
             // Handle any received commands.
-            while let Some(command) = self.storage_state.internal_cmd_rx.try_recv() {
+            while let Some(command) = self
+                .storage_state
+                .internal_cmd_rx
+                .as_ref()
+                .expect("storage server always wires a receiver")
+                .try_recv()
+            {
                 self.handle_internal_storage_command(command);
             }
         }
@@ -737,7 +786,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // management being a bit of a mess. we should clean this up and remove weird if
                 // statements like this.
                 if resume_uppers.values().all(|frontier| frontier.is_empty()) || as_of.is_empty() {
-                    tracing::info!(
+                    info!(
                         ?resume_uppers,
                         ?as_of,
                         "worker {}/{} skipping building ingestion dataflow \
@@ -818,6 +867,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     self.storage_state.source_tokens.remove(id);
 
                     self.storage_state.sink_tokens.remove(id);
+                    self.storage_state.sink_write_frontiers.remove(id);
 
                     self.storage_state.aggregated_statistics.deinitialize(*id);
                 }
@@ -843,6 +893,30 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 self.storage_state.server_maintenance_interval =
                     STORAGE_SERVER_MAINTENANCE_INTERVAL
                         .get(self.storage_state.storage_configuration.config_set());
+
+                // Apply storage's upsert spill flag to both stash flavors'
+                // mechanisms: the storage chunk spill gate (chunked flavor)
+                // and the storage-owned column pager (paged flavor). The
+                // buffer pool, the pager pool, and their budgets are the
+                // shared ones configured by compute's `apply_worker_config`
+                // (compute and storage run in the same process).
+                //
+                // The flag is replica-scoped: the storage controller merges
+                // per-replica overrides into the `UpdateConfiguration`
+                // commands it sends, so reading this worker's `ConfigSet`
+                // here observes them.
+                {
+                    use mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL;
+
+                    let enabled = ENABLE_UPSERT_PAGED_SPILL
+                        .get(self.storage_state.storage_configuration.config_set());
+                    debug!(
+                        worker = self.timely_worker.index(),
+                        enabled, "upsert stash spill: applying gate",
+                    );
+                    crate::upsert::upsert_stash_spill::set_enabled(enabled);
+                    crate::upsert::upsert_stash_pager::set_enabled(enabled);
+                }
             }
             InternalStorageCommand::StatisticsUpdate { sources, sinks } => self
                 .storage_state
@@ -951,17 +1025,14 @@ impl<'w, A: Allocate> Worker<'w, A> {
     }
 
     /// Send a response to the coordinator.
-    fn send_storage_response(&self, response_tx: &ResponseSender, response: StorageResponse) {
+    pub fn send_storage_response(&self, response_tx: &ResponseSender, response: StorageResponse) {
         // Ignore send errors because the coordinator is free to ignore our
         // responses. This happens during shutdown.
         let _ = response_tx.send(response);
     }
 
-    fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
-        use tokio::sync::mpsc::error::TryRecvError;
-
-        let mut to_remove = vec![];
-
+    /// Forward completed oneshot ingestion results to the coordinator.
+    pub fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
         for (ingestion_id, ingestion_state) in &mut self.storage_state.oneshot_ingestions {
             loop {
                 match ingestion_state.results.try_recv() {
@@ -977,35 +1048,37 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         break;
                     }
                     Err(TryRecvError::Disconnected) => {
-                        to_remove.push(*ingestion_id);
                         break;
                     }
                 }
             }
-        }
-
-        for ingestion_id in to_remove {
-            tracing::info!(?ingestion_id, "removing oneshot ingestion");
-            self.storage_state.oneshot_ingestions.remove(&ingestion_id);
         }
     }
 
     /// Extract commands until `InitializationComplete`, and make the worker
     /// reflect those commands. If the worker can not be made to reflect the
     /// commands, return an error.
-    fn reconcile(&mut self, command_rx: &CommandReceiver) -> Result<(), RecvError> {
-        let worker_id = self.timely_worker.index();
-
+    fn reconcile(&mut self, command_rx: &mut CommandReceiver) -> Result<(), ()> {
         // To initialize the connection, we want to drain all commands until we
         // receive a `StorageCommand::InitializationComplete` command to form a
         // target command state.
         let mut commands = vec![];
         loop {
-            match command_rx.recv()? {
+            match command_rx.blocking_recv().ok_or(())? {
                 StorageCommand::InitializationComplete => break,
                 command => commands.push(command),
             }
         }
+
+        self.reconcile_commands(commands);
+        Ok(())
+    }
+
+    /// Reconciles the worker state with the given target command state,
+    /// which the caller has drained from a new client connection up to (exclusive) the
+    /// `InitializationComplete` marker.
+    pub fn reconcile_commands(&mut self, mut commands: Vec<StorageCommand>) {
+        let worker_id = self.timely_worker.index();
 
         // Track which frontiers this envd expects; we will also set their
         // initial timestamp to the minimum timestamp to reset them as we don't
@@ -1067,7 +1140,12 @@ impl<'w, A: Allocate> Worker<'w, A> {
                     }
                 }
                 StorageCommand::RunOneshotIngestion(ingestion) => {
-                    info!(%worker_id, ?ingestion, "reconcile: received RunOneshotIngestion command");
+                    info!(
+                        %worker_id,
+                        ingestion_id = %ingestion.ingestion_id,
+                        collection_id = %ingestion.collection_id,
+                        "reconcile: received RunOneshotIngestion command",
+                    );
                     create_oneshot_ingestions.insert(ingestion.ingestion_id);
                 }
                 StorageCommand::CancelOneshotIngestion(uuid) => {
@@ -1230,13 +1308,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
             .oneshot_ingestions
             .keys()
             .filter(|ingestion_id| {
-                let created = create_oneshot_ingestions.contains(ingestion_id);
-                let dropped = cancel_oneshot_ingestions.contains(ingestion_id);
+                let to_create = create_oneshot_ingestions.contains(ingestion_id);
+                let to_drop = cancel_oneshot_ingestions.contains(ingestion_id);
                 mz_ore::soft_assert_or_log!(
-                    !created && dropped,
-                    "dropped non-existent oneshot source"
+                    !(!to_create && to_drop),
+                    "attempting to drop oneshot source {ingestion_id} that is not expected to be created during reconciliation"
                 );
-                !created && !dropped
+                !to_create && !to_drop
             })
             .copied()
             .collect::<Vec<_>>();
@@ -1278,8 +1356,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
         for command in commands {
             self.storage_state.handle_storage_command(command);
         }
-
-        Ok(())
     }
 }
 
@@ -1302,7 +1378,7 @@ impl StorageState {
             }
             StorageCommand::UpdateConfiguration(params) => {
                 // These can be done from all workers safely.
-                tracing::info!("Applying configuration update: {params:?}");
+                debug!("Applying configuration update: {params:?}");
 
                 // We serialize the dyncfg updates in StorageParameters, but configure
                 // persist separately.
@@ -1452,6 +1528,6 @@ impl StorageState {
     /// Drop the identified oneshot ingestion from the storage state.
     fn drop_oneshot_ingestion(&mut self, ingestion_id: uuid::Uuid) {
         let prev = self.oneshot_ingestions.remove(&ingestion_id);
-        tracing::info!(%ingestion_id, existed = %prev.is_some(), "dropping oneshot ingestion");
+        info!(%ingestion_id, existed = %prev.is_some(), "dropping oneshot ingestion");
     }
 }

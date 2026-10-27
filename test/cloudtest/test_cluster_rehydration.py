@@ -16,8 +16,7 @@ from materialize.cloudtest.app.materialize_application import MaterializeApplica
 # correctly by not recreating dropped sources. Tests database-issues#5308.
 def test_create_drop_source(mz: MaterializeApplication) -> None:
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             > CREATE CLUSTER c REPLICAS ( r1 (SIZE = 'scale=1,workers=1', INTROSPECTION INTERVAL = 0));
 
             > CREATE SOURCE counter IN CLUSTER c
@@ -25,8 +24,7 @@ def test_create_drop_source(mz: MaterializeApplication) -> None:
                 (TICK INTERVAL '500ms');
 
             > DROP SOURCE counter CASCADE;
-            """
-        ),
+            """),
         no_reset=True,
     )
 
@@ -46,8 +44,7 @@ def test_create_drop_source(mz: MaterializeApplication) -> None:
     assert podcount > 0
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT COUNT(*) FROM (SHOW SOURCES);
             0
 
@@ -56,7 +53,6 @@ def test_create_drop_source(mz: MaterializeApplication) -> None:
             0
 
             > DROP CLUSTER c CASCADE
-            """
-        ),
+            """),
         no_reset=True,
     )

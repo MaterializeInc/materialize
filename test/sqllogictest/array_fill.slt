@@ -77,6 +77,13 @@ SELECT array_fill(5, array[]::int[], array[2, 1])
 query error wrong number of array subscripts
 SELECT array_fill(5, array[3, 1], array[]::int[])
 
+# Dimension and lower bound arrays must be one-dimensional
+query error wrong number of array subscripts
+SELECT array_fill(1, array[[1, 2], [3, 4]])
+
+query error wrong number of array subscripts
+SELECT array_fill(1, array[2, 3], array[[1, 2]])
+
 # Reveal structure of array
 query T
 SELECT
@@ -170,10 +177,10 @@ ORDER BY 1;
 
 # Polymorphic solution
 
-query error db error: ERROR: could not determine polymorphic type because input has type unknown
+query error could not determine polymorphic type because input has type unknown
 SELECT array_fill(null, array[3])
 
-query error db error: ERROR: could not determine polymorphic type because input has type unknown
+query error could not determine polymorphic type because input has type unknown
 SELECT array_fill(null, null)
 
 query T
@@ -195,10 +202,10 @@ SELECT array_fill(LIST[1], array[3, 2])
 query error array_fill on integer list not yet supported
 SELECT array_fill(LIST[1], array[3, 2], array[2, 3])
 
-query error db error: ERROR: array_fill on char\(1\) not yet supported
+query error array_fill on char\(1\) not yet supported
 SELECT array_fill('c'::char, array[3, 2])
 
-query error db error: ERROR: array_fill on char\(1\) not yet supported
+query error array_fill on char\(1\) not yet supported
 SELECT array_fill('c'::char, array[3, 2], array[2, 3])
 
 query error array_fill on map\[text=>integer\] not yet supported
@@ -273,25 +280,25 @@ SELECT array_fill(1, ARRAY[4, 0, 3]);
 
 # Too large of array
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(2, ARRAY[-1]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(2, ARRAY[-1]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(1, ARRAY[4, -199]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(1, ARRAY[-199, 4]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(1, ARRAY[4, 3, -199]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(1, ARRAY[4, -199, 3]);
 
-query error array size exceeds the maximum allowed \(134217728 bytes\)
+query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_fill(8, ARRAY[-1, -1, -1, -1]);
 
 query error number of array dimensions \(10\) exceeds the maximum allowed \(6\)
@@ -301,6 +308,25 @@ query error number of array dimensions \(10\) exceeds the maximum allowed \(6\)
 SELECT array_fill(1, ARRAY[1,1,1,1,1,1,1,1,1,1], ARRAY[1,1,1,1,1,1,1,1,1,1]);
 
 # But large arrays are still ok
+
+# Regression test for database-issues#11267: the budget is `(1 << 28) - 1`
+# bytes, not `1 << (28 - 1)`, so this array of 150994944 bytes is accepted.
+#
+# NOTE: keep the byte size, not the element count, in that window. array_fill
+# builds a transient `Vec<Datum>` of 16 bytes per element, so 1-byte elements
+# would spike past 2 GiB and trip `statement_timeout` on a loaded CI agent.
+query I
+SELECT array_length(array_fill(0::double, ARRAY[16777216]), 1);
+----
+16777216
+
+# The budget counts bytes, not elements: one element past 268435455 bytes is
+# rejected at a ninth of that element count.
+query error array size exceeds the maximum allowed \(268435455 bytes\)
+SELECT array_length(array_fill(0::double, ARRAY[29826162]), 1);
+
+query error array size exceeds the maximum allowed \(268435455 bytes\)
+SELECT array_length(array_fill(false, ARRAY[268435455]), 1);
 
 query II
 SELECT array_length(a, 1), array_length(a, 2) FROM (
@@ -372,3 +398,36 @@ ORDER BY o, i;
 0	-2	null
 0	-1	null
 0	0	null
+
+# array_lower/array_upper must respect the lower bounds of the array
+
+query I
+SELECT array_lower(array_fill(0, ARRAY[3], ARRAY[5]), 1);
+----
+5
+
+query I
+SELECT array_upper(array_fill(0, ARRAY[3], ARRAY[5]), 1);
+----
+7
+
+query II
+SELECT array_lower(a, 1), array_upper(a, 1) FROM (
+    SELECT array_fill(0, ARRAY[3], ARRAY[-3]) AS a
+);
+----
+-3
+-1
+
+query IIII
+SELECT
+    array_lower(a, 1), array_upper(a, 1),
+    array_lower(a, 2), array_upper(a, 2)
+FROM (
+    SELECT array_fill(0, ARRAY[3, 2], ARRAY[4, 3]) AS a
+);
+----
+4
+6
+3
+4

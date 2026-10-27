@@ -16,11 +16,12 @@ import random
 import time
 
 from materialize import buildkite
+from materialize.data_ingest import definition
 from materialize.data_ingest.executor import (
     KafkaExecutor,
     MySqlExecutor,
 )
-from materialize.data_ingest.workload import *  # noqa: F401 F403
+from materialize.data_ingest.workload import *  # noqa: F403
 from materialize.data_ingest.workload import WORKLOADS, execute_workload
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -28,32 +29,31 @@ from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.postgres import (
-    CockroachOrPostgresMetadata,
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
     SqlServer,
     setup_sql_server_testing,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     Postgres(),
     MySql(),
     SqlServer(),
-    Zookeeper(),
     Kafka(
         auto_create_topics=False,
         ports=["30123:30123"],
         allow_host_ports=True,
+        advertised_listeners=[
+            "HOST://localhost:30123",
+            "PLAINTEXT://kafka:9092",
+        ],
         environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
     ),
     SchemaRegistry(),
@@ -74,7 +74,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
-        "--runtime", default=600, type=int, help="Runtime in seconds per workload"
+        "--runtime", default=400, type=int, help="Runtime in seconds per workload"
     )
     parser.add_argument(
         "--workload",
@@ -109,7 +109,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     services = (
         "materialized",
-        "zookeeper",
         "kafka",
         "schema-registry",
         "postgres",
@@ -117,8 +116,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "sql-server",
     )
 
-    # TODO: Reenable KafkaRoundtripExecutor when database-issues#8657 is fixed
-    # TODO: Reenable SqlServerExecutor when database-issues#9618 is fixed
+    # TODO: Reenable KafkaRoundtripExecutor when https://linear.app/materializeinc/issue/SS-303 is fixed
+    # TODO: Reenable SqlServerExecutor when https://linear.app/materializeinc/issue/SS-291 is fixed
     executor_classes = [MySqlExecutor, KafkaExecutor]
 
     with c.override(
@@ -178,15 +177,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         conn = c.sql_connection()
         conn.autocommit = True
         with conn.cursor() as cur:
-            cur.execute(
-                """CREATE CONNECTION IF NOT EXISTS kafka_conn
-                   FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"""
-            )
-            cur.execute(
-                """CREATE CONNECTION IF NOT EXISTS csr_conn
+            cur.execute("""CREATE CONNECTION IF NOT EXISTS kafka_conn
+                   FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT""")
+            cur.execute("""CREATE CONNECTION IF NOT EXISTS csr_conn
                    FOR CONFLUENT SCHEMA REGISTRY
-                   URL 'http://schema-registry:8081'"""
-            )
+                   URL 'http://schema-registry:8081'""")
         conn.autocommit = False
         conn.close()
 
@@ -197,6 +192,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         for i, workload_class in enumerate(workloads):
             random.seed(args.seed)
+            # Row values come from a separate rng, seed it too so that runs
+            # with the same seed are fully reproducible.
+            definition.rng.seed(args.seed)
             print(f"--- Testing workload {workload_class.__name__}")
             workload = workload_class(args.azurite, c, mz_service, deploy_generation)
             execute_workload(

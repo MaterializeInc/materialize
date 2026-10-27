@@ -9,21 +9,40 @@
 
 //! All types we durably persist in the Catalog.
 
-pub mod audit_log;
 pub mod objects;
 pub mod objects_v74;
 pub mod objects_v75;
 pub mod objects_v76;
 pub mod objects_v77;
 pub mod objects_v78;
-pub mod serialization;
+pub mod objects_v79;
+pub mod objects_v80;
+pub mod objects_v81;
+pub mod objects_v82;
+pub mod objects_v83;
+pub mod objects_v84;
+pub mod objects_v85;
+pub mod objects_v86;
+pub mod objects_v87;
+pub mod objects_v88;
+pub mod objects_v89;
+pub mod objects_v90;
+pub mod objects_v91;
+pub mod objects_v92;
+pub mod objects_v93;
+
+impl From<String> for objects::StringWrapper {
+    fn from(value: String) -> Self {
+        objects::StringWrapper { inner: value }
+    }
+}
 
 /// The current version of the `Catalog`.
 ///
 /// We will initialize new `Catalog`s with this version, and migrate existing `Catalog`s to this
 /// version. Whenever the `Catalog` changes, e.g. the types we serialize in the `Catalog`
 /// change, we need to bump this version.
-pub const CATALOG_VERSION: u64 = 78;
+pub const CATALOG_VERSION: u64 = 93;
 
 /// The minimum `Catalog` version number that we support migrating from.
 ///

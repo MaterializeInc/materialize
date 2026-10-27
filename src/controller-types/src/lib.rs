@@ -12,7 +12,7 @@
 pub mod dyncfgs;
 
 /// Identifies a cluster.
-pub type ClusterId = mz_compute_types::ComputeInstanceId;
+pub type ClusterId = mz_cluster_client::instances::StorageInstanceId;
 
 /// Identifies a cluster replica.
 pub type ReplicaId = mz_cluster_client::ReplicaId;
@@ -27,4 +27,5 @@ impl From<u64> for WatchSetId {
     }
 }
 
-pub use mz_compute_types::DEFAULT_COMPUTE_REPLICA_LOGGING_INTERVAL as DEFAULT_REPLICA_LOGGING_INTERVAL;
+/// Default logging interval for replicas.
+pub const DEFAULT_REPLICA_LOGGING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);

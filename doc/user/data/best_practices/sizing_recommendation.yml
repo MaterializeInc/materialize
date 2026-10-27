@@ -44,7 +44,7 @@ rows:
     Description: |
 
       <a name="cpu_limit"></a>
-      The k8s limit for CPU for a replica pod in cores.
+      The Kubernetes CPU limit for a replica pod, in cores.
     Recommendation: |
 
       Prefer whole number values to enable CPU affinity. Kubernetes only allows
@@ -52,24 +52,35 @@ rows:
 
       If the value is not a whole number, set [`cpu_exclusive`](#cpu_exclusive) to false.
 
-  - Field: "**memory_limit**"
+  - Field: "**cpu_request**"
     Type: float
     Description: |
 
-      The k8s limit for memory for a replica pod in bytes.
+      <a name="cpu_request"></a>
+      The Kubernetes CPU request for a replica pod, in cores. If not set, defaults to the value of `cpu_limit`.
+    Recommendation: |
+
+      In most cases, you do not need to set this. It is useful when you want to
+      allow CPU bursting by setting a request lower than the limit.
+
+  - Field: "**memory_limit**"
+    Type: string
+    Description: |
+
+      The Kubernetes memory limit for a replica pod (e.g., `"46575MiB"`).
     Recommendation: |
 
       For most workloads, use an approximate **1:8** CPU-to-memory ratio (1 core
       : 8 GiB). This can vary depending on your workload characteristics.
 
   - Field: "**disk_limit**"
-    Type: float
+    Type: string
     Description: |
 
-      The size of the NVMe persistent volume to provision for a replica pod in bytes.
+      The size of the persistent volume to provision for a replica pod (e.g., `"93150MiB"`).
     Recommendation: |
 
-      When spill-to-disk is enabled, use a **1:2** memory-to-disk ratio. Materialize spills data to disk when memory is insufficient, which can impact performance.
+      When spill-to-disk is enabled, use a **1:2** memory-to-disk ratio. Materialize spills data to disk when memory is insufficient, which can impact performance. When `swap_enabled` is true, this field is automatically set to `"0"` by the Helm chart.
 
   - Field: "**credits_per_hour**"
     Type: string
@@ -80,11 +91,23 @@ rows:
 
       Set to "0.00" for self-managed deployments.
 
+  - Field: "**swap_enabled**"
+    Type: bool
+    Description: |
+
+      Enables swap as the spill-to-disk mechanism for this size. When enabled,
+      the replica uses swap instead of a provisioned persistent volume for
+      spilling data. This also causes `disk_limit` to be set to `"0"`.
+    Recommendation: |
+
+      This defaults to the global `swap_enabled` value if not specified per size.
+      Swap generally performs better than spill-to-disk via persistent volumes.
+
   - Field: "**selectors**"
     Type: map
     Description: |
 
-      This is a map of selector keys to values that will be used to schedule pods for this cluster on specific nodes.
+      A map of Kubernetes label selector keys to values used to schedule pods for this cluster size on specific nodes.
     Recommendation: |
 
       It is generally not required to set this.

@@ -10,7 +10,7 @@
 //! Transform column references in a `Map` into a `Project`.
 
 use mz_expr::visit::Visit;
-use mz_expr::{MirRelationExpr, MirScalarExpr};
+use mz_expr::{Columns, MirRelationExpr, MirScalarExpr};
 
 use crate::TransformCtx;
 
@@ -34,7 +34,7 @@ impl crate::Transform for ProjectionExtraction {
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_post(&mut Self::action)?;
+        relation.visit_mut_post(&mut Self::action);
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }

@@ -37,8 +37,7 @@ class BuildDataStorage(BaseDataStorage):
         mz_version = MzVersion.parse_cargo()
 
         sql_statements = []
-        sql_statements.append(
-            f"""
+        sql_statements.append(f"""
             INSERT INTO build
             (
                pipeline,
@@ -67,10 +66,10 @@ class BuildDataStorage(BaseDataStorage):
                 FROM build
                 WHERE build_id = {as_sanitized_literal(build_id)}
             );
-            """
-        )
+            """)
 
-        self.database_connector.add_update_statements(sql_statements)
+        # The build_id guard makes the INSERT safe to replay.
+        self.database_connector.add_update_statements(sql_statements, idempotent=True)
 
     def add_build_job(
         self,
@@ -105,8 +104,7 @@ class BuildDataStorage(BaseDataStorage):
             start_time_with_tz = "NULL::TIMESTAMPTZ"
 
         sql_statements = []
-        sql_statements.append(
-            f"""
+        sql_statements.append(f"""
             INSERT INTO build_job
             (
                 build_job_id,
@@ -141,21 +139,20 @@ class BuildDataStorage(BaseDataStorage):
                 FROM build_job
                 WHERE build_job_id = {as_sanitized_literal(job_id)}
             );
-            """
-        )
+            """)
 
-        sql_statements.append(
-            f"""
+        sql_statements.append(f"""
             UPDATE build_job
             SET is_latest_retry = FALSE
             WHERE build_step_id = {as_sanitized_literal(step_id)}
             AND (shard_index = {shard_index} OR shard_index IS NULL)
             AND build_job_id <> {as_sanitized_literal(job_id)}
             ;
-            """
-        )
+            """)
 
-        self.database_connector.add_update_statements(sql_statements)
+        # The build_job_id guard makes the INSERT safe to replay, and the
+        # UPDATE assigns a fixed value.
+        self.database_connector.add_update_statements(sql_statements, idempotent=True)
 
     def update_build_job_success(
         self,
@@ -164,15 +161,13 @@ class BuildDataStorage(BaseDataStorage):
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
 
         sql_statements = []
-        sql_statements.append(
-            f"""
+        sql_statements.append(f"""
             UPDATE build_job
             SET success = {was_successful}
             WHERE build_job_id = {as_sanitized_literal(job_id)};
-            """
-        )
+            """)
 
-        self.database_connector.add_update_statements(sql_statements)
+        self.database_connector.add_update_statements(sql_statements, idempotent=True)
 
     def add_build_job_failure(
         self,
@@ -181,8 +176,7 @@ class BuildDataStorage(BaseDataStorage):
         job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
 
         sql_statements = []
-        sql_statements.append(
-            f"""
+        sql_statements.append(f"""
             INSERT INTO build_job_failure
             (
                 build_job_id,
@@ -193,8 +187,7 @@ class BuildDataStorage(BaseDataStorage):
                 {as_sanitized_literal(job_id)},
                 {as_sanitized_literal(part)}
             )
-            """
-        )
+            """)
 
         self.database_connector.add_update_statements(sql_statements)
 
@@ -203,11 +196,10 @@ class BuildDataStorage(BaseDataStorage):
         build_step_key = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_STEP_KEY)
         with self.database_connector.create_cursor() as cur:
             cur.execute('SET cluster = "test_analytics"')
-            cur.execute(f"SET statement_timeout = '{timeout}s'".encode("utf-8"))
+            cur.execute(f"SET statement_timeout = '{timeout}s'".encode())
             # 2 for failures in this PR
             # 1 for failed recently in CI
-            cur.execute(
-                f"""
+            cur.execute(f"""
             SELECT part, MAX(prio)
             FROM (
                 SELECT part, 2 AS prio
@@ -220,9 +212,6 @@ class BuildDataStorage(BaseDataStorage):
                 WHERE build_step_key = {as_sanitized_literal(build_step_key)}
             )
             GROUP BY part;
-            """.encode(
-                    "utf-8"
-                )
-            )
+            """.encode())
             results = cur.fetchall()
             return {part: prio for part, prio in results}

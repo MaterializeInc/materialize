@@ -1,0 +1,10 @@
+- name: "syntax"
+  code: |
+    csv_extract ( <num_csv_col>, <col_name> )
+  syntax_elements:
+    - name: "`<num_csv_col>`"
+      description: |
+        An [`int`](/sql/types/integer/) value specifying the number of columns in the CSV string.
+    - name: "`<col_name>`"
+      description: |
+        A [`string`](/sql/types/text/) value containing the name of the column containing the CSV string.

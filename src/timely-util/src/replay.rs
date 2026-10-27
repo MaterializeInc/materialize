@@ -25,11 +25,12 @@ use std::time::{Duration, Instant};
 
 use timely::Container;
 use timely::communication::Push;
+use timely::dataflow::channels::Message;
 use timely::dataflow::channels::pushers::Counter as PushCounter;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::capture::event::EventIterator;
 use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
-use timely::dataflow::{Scope, StreamCore};
+use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
 use timely::scheduling::ActivateOnDrop;
 
@@ -41,7 +42,7 @@ where
     T: Timestamp,
     A: ActivatorTrait,
 {
-    /// Replays `self` into the provided scope, as a `StreamCore<S, CB::Container>` and provides
+    /// Replays `self` into the provided scope, as a `Stream<S, CB::Container>` and provides
     /// a cancellation token. Uses the supplied container builder `CB` to form containers.
     ///
     /// The `period` argument allows the specification of a re-activation period, where the operator
@@ -52,13 +53,13 @@ where
     /// * `period`: Reschedule the operator once the period has elapsed.
     ///    Provide [Duration::MAX] to disable periodic scheduling.
     /// * `activator`: An activator to trigger the operator.
-    fn mz_replay<S: Scope<Timestamp = T>>(
+    fn mz_replay<'scope>(
         self,
-        scope: &mut S,
+        scope: Scope<'scope, T>,
         name: &str,
         period: Duration,
         activator: A,
-    ) -> (StreamCore<S, C>, Rc<dyn Any>);
+    ) -> (Stream<'scope, T, C>, Rc<dyn Any>);
 }
 
 impl<T, C, I, A> MzReplay<T, C, A> for I
@@ -69,13 +70,13 @@ where
     I::Item: EventIterator<T, C> + 'static,
     A: ActivatorTrait + 'static,
 {
-    fn mz_replay<S: Scope<Timestamp = T>>(
+    fn mz_replay<'scope>(
         self,
-        scope: &mut S,
+        scope: Scope<'scope, T>,
         name: &str,
         period: Duration,
         activator: A,
-    ) -> (StreamCore<S, C>, Rc<dyn Any>) {
+    ) -> (Stream<'scope, T, C>, Rc<dyn Any>) {
         let name = format!("Replay {}", name);
         let mut builder = OperatorBuilder::new(name, scope.clone());
 
@@ -90,8 +91,7 @@ where
 
         let mut last_active = Instant::now();
 
-        let mut progress_sofar =
-            <timely::progress::ChangeBatch<_>>::new_from(S::Timestamp::minimum(), 1);
+        let mut progress_sofar = <timely::progress::ChangeBatch<_>>::new_from(T::minimum(), 1);
         let token = Rc::new(ActivateOnDrop::new(
             (),
             Rc::clone(&address),
@@ -122,8 +122,8 @@ where
                     .len()
                     .try_into()
                     .expect("Implausibly large vector");
-                progress.internals[0].update(S::Timestamp::minimum(), len - 1);
-                progress_sofar.update(S::Timestamp::minimum(), len);
+                progress.internals[0].update(T::minimum(), len - 1);
+                progress_sofar.update(T::minimum(), len);
                 started = true;
             }
 
@@ -137,14 +137,14 @@ where
                                 progress_sofar.extend(vec.into_iter());
                             }
                             Owned(Event::Messages(time, mut data)) => {
-                                output.give(time, &mut data);
+                                Message::push_at(&mut data, time, &mut output);
                             }
                             Borrowed(Event::Progress(vec)) => {
                                 progress.internals[0].extend(vec.iter().cloned());
                                 progress_sofar.extend(vec.iter().cloned());
                             }
                             Borrowed(Event::Messages(time, data)) => {
-                                output.give(time.clone(), &mut data.clone());
+                                Message::push_at(&mut data.clone(), time.clone(), &mut output);
                             }
                         }
                     }

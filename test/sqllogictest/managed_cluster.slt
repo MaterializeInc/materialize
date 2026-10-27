@@ -17,13 +17,13 @@ reset-server
 statement ok
 CREATE CLUSTER foo SIZE 'scale=1,workers=1'
 
-statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
+statement error Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
 ALTER CLUSTER foo.bar SET (SIZE 'scale=1,workers=2')
 
 statement ok
 ALTER CLUSTER foo RESET (REPLICATION FACTOR)
 
-statement error db error: ERROR: SIZE has no default value
+statement error SIZE has no default value
 ALTER CLUSTER foo RESET (SIZE)
 
 statement ok
@@ -38,13 +38,13 @@ ALTER CLUSTER foo RESET (INTROSPECTION INTERVAL)
 statement ok
 DROP CLUSTER foo
 
-statement error db error: ERROR: Expected left parenthesis, found REPLICATION
+statement error Expected left parenthesis, found REPLICATION
 ALTER CLUSTER foo SET REPLICATION FACTOR 2
 
-statement error db error: ERROR: Expected left parenthesis, found REPLICATION
+statement error Expected left parenthesis, found REPLICATION
 ALTER CLUSTER foo RESET REPLICATION FACTOR
 
-statement error db error: ERROR: unknown cluster 'foo'
+statement error unknown cluster 'foo'
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 
 query TTTTT rowsort
@@ -69,37 +69,37 @@ quickstart
 
 # Test invalid option combinations.
 
-statement error db error: ERROR: REPLICAS not supported for managed clusters
+statement error REPLICAS not supported for managed clusters
 CREATE CLUSTER baz REPLICAS (), MANAGED
 
 statement ok
 CREATE CLUSTER baz REPLICAS (), MANAGED = false
 
-statement error db error: ERROR: REPLICATION FACTOR not supported for unmanaged clusters
+statement error REPLICATION FACTOR not supported for unmanaged clusters
 ALTER CLUSTER baz SET (REPLICATION FACTOR 2)
 
-statement error db error: ERROR: SIZE not supported for unmanaged clusters
+statement error SIZE not supported for unmanaged clusters
 ALTER CLUSTER baz SET (SIZE 'scale=1,workers=2')
 
 statement ok
 ALTER CLUSTER baz RESET (REPLICAS)
 
-statement error db error: ERROR: Cannot change REPLICATION FACTOR of unmanaged clusters
+statement error Cannot change REPLICATION FACTOR of unmanaged clusters
 ALTER CLUSTER baz RESET (REPLICATION FACTOR)
 
-statement error db error: ERROR: Cannot change SIZE of unmanaged clusters
+statement error Cannot change SIZE of unmanaged clusters
 ALTER CLUSTER baz RESET (SIZE)
 
-statement error db error: ERROR: Cannot change AVAILABILITY ZONES of unmanaged clusters
+statement error Cannot change AVAILABILITY ZONES of unmanaged clusters
 ALTER CLUSTER baz RESET (AVAILABILITY ZONES)
 
-statement error db error: ERROR: Cannot change INTROSPECTION DEGUBBING of unmanaged clusters
+statement error Cannot change INTROSPECTION DEGUBBING of unmanaged clusters
 ALTER CLUSTER baz RESET (INTROSPECTION DEBUGGING)
 
-statement error db error: ERROR: Cannot change INTROSPECTION INTERVAL of unmanaged clusters
+statement error Cannot change INTROSPECTION INTERVAL of unmanaged clusters
 ALTER CLUSTER baz RESET (INTROSPECTION INTERVAL)
 
-statement error db error: ERROR: Missing SIZE for empty cluster
+statement error Missing SIZE for empty cluster
 ALTER CLUSTER baz SET (MANAGED)
 
 statement ok
@@ -108,17 +108,22 @@ ALTER CLUSTER baz SET (MANAGED, SIZE 'scale=1,workers=1')
 statement ok
 DROP CLUSTER baz
 
-statement error db error: ERROR: SIZE not supported for unmanaged clusters
+statement error SIZE not supported for unmanaged clusters
 CREATE CLUSTER baz REPLICAS (), SIZE 'scale=1,workers=1'
 
-statement error db error: ERROR: REPLICATION FACTOR not supported for unmanaged clusters
+statement error REPLICATION FACTOR not supported for unmanaged clusters
 CREATE CLUSTER baz REPLICAS (), REPLICATION FACTOR 0
 
-statement error db error: ERROR: INTROSPECTION DEBUGGING not supported for unmanaged clusters
+statement error INTROSPECTION DEBUGGING not supported for unmanaged clusters
 CREATE CLUSTER baz REPLICAS (), INTROSPECTION DEBUGGING = true
 
-statement error db error: ERROR: INTROSPECTION INTERVAL not supported for unmanaged clusters
+statement error INTROSPECTION INTERVAL not supported for unmanaged clusters
 CREATE CLUSTER baz REPLICAS (), INTROSPECTION INTERVAL 1
+
+# An out-of-range INTROSPECTION INTERVAL should error gracefully, not panic.
+# See database-issues SQL-361.
+statement error interval out of range
+CREATE CLUSTER baz (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL = '150000000 days')
 
 query TTT
 SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
@@ -127,7 +132,7 @@ mz_catalog_server  r1  scale=1,workers=2
 mz_probe  r1  scale=1,workers=2
 mz_system  r1  scale=1,workers=2
 
-statement error db error: ERROR: unknown cluster replica size abc
+statement error unknown cluster replica size abc
 CREATE CLUSTER foo SIZE 'abc', REPLICATION FACTOR 3
 
 statement ok
@@ -166,13 +171,13 @@ SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name L
 ----
 u5  foo  false  NULL  NULL
 
-statement error db error: ERROR: REPLICATION FACTOR 4 does not match number of replicas \(3\)
+statement error REPLICATION FACTOR 4 does not match number of replicas \(3\)
 ALTER CLUSTER foo SET (MANAGED, REPLICATION FACTOR 4)
 
-statement error db error: ERROR: Cluster replicas of size scale=1,workers=1 do not match expected SIZE scale=1,workers=2
+statement error Cluster replicas of size scale=1,workers=1 do not match expected SIZE scale=1,workers=2
 ALTER CLUSTER foo SET (MANAGED, SIZE 'scale=1,workers=2')
 
-statement error db error: ERROR: Cluster replicas of size scale=1,workers=1 do not match expected SIZE abc
+statement error Cluster replicas of size scale=1,workers=1 do not match expected SIZE abc
 ALTER CLUSTER foo SET (MANAGED, SIZE abc)
 
 statement ok
@@ -203,100 +208,16 @@ mz_catalog_server  r1
 mz_probe  r1
 mz_system  r1
 
-statement error db error: ERROR: cannot drop replica of managed cluster
+statement error cannot drop replica of managed cluster
 DROP CLUSTER REPLICA foo.r1
 
-statement error db error: ERROR: cannot modify managed cluster foo
+statement error cannot modify managed cluster foo
 ALTER CLUSTER REPLICA foo.r2 RENAME TO bar
-
-statement ok
-ALTER CLUSTER foo SET (REPLICATION FACTOR 1)
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-foo  r1  scale=1,workers=1
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
-
-query TTTTT rowsort
-SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
-----
-u5  foo  true  1  scale=1,workers=1
-
-statement ok
-ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-foo  r1  scale=1,workers=1
-foo  r2  scale=1,workers=1
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
-
-query TTTTT rowsort
-SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
-----
-u5  foo  true  2  scale=1,workers=1
-
-statement ok
-ALTER CLUSTER foo RESET (REPLICATION FACTOR)
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-foo  r1  scale=1,workers=1
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
-
-query TTTTT rowsort
-SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
-----
-u5  foo  true  1  scale=1,workers=1
-
-statement ok
-ALTER CLUSTER foo SET (SIZE 'scale=1,workers=2')
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-foo  r1  scale=1,workers=2
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
-
-query TTTTT rowsort
-SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
-----
-u5  foo  true  1  scale=1,workers=2
-
-statement ok
-ALTER CLUSTER foo SET (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-foo  r1  scale=1,workers=1
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
-
-query TTTTT rowsort
-SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
-----
-u5  foo  true  1  scale=1,workers=1
-
-statement error db error: ERROR: cannot drop replica of managed cluster
-DROP CLUSTER REPLICA foo.r1
 
 statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 0)
 
-statement error db error: ERROR: unknown cluster replica size invalid_size
+statement error unknown cluster replica size invalid_size
 ALTER CLUSTER foo SET (SIZE invalid_size)
 
 statement ok
@@ -308,16 +229,8 @@ DROP CLUSTER REPLICA IF EXISTS bar.foo
 statement ok
 DROP CLUSTER REPLICA IF EXISTS quickstart.foo
 
-statement error db error: ERROR: CLUSTER foo has no CLUSTER REPLICA named "r1"
-DROP CLUSTER REPLICA foo.r1
-
-
-query TTT
-SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster != 'quickstart' ORDER BY 1, 2, 3
-----
-mz_catalog_server  r1  scale=1,workers=2
-mz_probe  r1  scale=1,workers=2
-mz_system  r1  scale=1,workers=2
+statement ok
+DROP CLUSTER foo CASCADE
 
 query TTTTTTT
 SELECT r.name, r.size, s.processes, s.cpu_nano_cores, s.memory_bytes, s.workers, s.credits_per_hour FROM mz_cluster_replicas r JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size JOIN mz_clusters ON r.cluster_id = mz_clusters.id WHERE mz_clusters.name != 'quickstart' ORDER BY r.name
@@ -327,12 +240,9 @@ r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
 r1  scale=1,workers=2  1  18446744073709000000  18446744073709551615  2  1
 
 statement ok
-DROP CLUSTER foo CASCADE
-
-statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=2'))
 
-statement error db error: ERROR: Cannot convert unmanaged cluster to managed, non\-unique replica sizes: scale=1,workers=1, scale=1,workers=2
+statement error Cannot convert unmanaged cluster to managed, non\-unique replica sizes: scale=1,workers=1, scale=1,workers=2
 ALTER CLUSTER foo SET (MANAGED)
 
 statement ok
@@ -341,7 +251,7 @@ DROP CLUSTER foo CASCADE
 statement ok
 CREATE CLUSTER foo REPLICAS (c1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'))
 
-statement error db error: ERROR: Cannot convert unmanaged cluster to managed, invalid replica names: c1
+statement error Cannot convert unmanaged cluster to managed, invalid replica names: c1
 ALTER CLUSTER foo SET (MANAGED)
 
 statement ok
@@ -359,10 +269,10 @@ DROP CLUSTER foo CASCADE
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'))
 
-statement error db error: ERROR: Cluster replicas of size scale=1,workers=1 do not match expected SIZE scale=1,workers=2
+statement error Cluster replicas of size scale=1,workers=1 do not match expected SIZE scale=1,workers=2
 ALTER CLUSTER foo SET (MANAGED, SIZE 'scale=1,workers=2')
 
-statement error db error: ERROR: REPLICATION FACTOR 1 does not match number of replicas \(2\)
+statement error REPLICATION FACTOR 1 does not match number of replicas \(2\)
 ALTER CLUSTER foo SET (MANAGED, REPLICATION FACTOR 1)
 
 statement ok
@@ -371,13 +281,13 @@ ALTER CLUSTER foo SET (MANAGED, REPLICATION FACTOR 2)
 statement ok
 DROP CLUSTER foo CASCADE
 
-statement error db error: ERROR: creating cluster replica would violate max_replicas_per_cluster limit \(desired: 99, limit: 5, current: 0\)
+statement error creating cluster replica would violate max_replicas_per_cluster limit \(desired: 99, limit: 5, current: 0\)
 CREATE CLUSTER foo SIZE 'scale=1,workers=1', replication factor 99
 
 statement ok
 CREATE CLUSTER foo SIZE 'scale=1,workers=1', replication factor 1
 
-statement error db error: ERROR: cluster 'foo' already exists
+statement error cluster 'foo' already exists
 CREATE CLUSTER foo SIZE 'scale=1,workers=1', replication factor 1
 
 statement ok
@@ -392,20 +302,22 @@ ALTER CLUSTER foo SET (REPLICATION FACTOR 0)
 statement ok
 DROP CLUSTER foo CASCADE
 
-statement error db error: ERROR: unknown cluster replica size invalid_size
+statement error unknown cluster replica size invalid_size
 CREATE CLUSTER foo SIZE invalid_size, REPLICATION FACTOR 0
 
 # Test for database-issues#6046 . Without the fix, this query will hang indefinitely
-statement error db error: ERROR: creating cluster replica would violate max_replicas_per_cluster limit \(desired: 9999999, limit: 5, current: 0\)
+statement error creating cluster replica would violate max_replicas_per_cluster limit \(desired: 9999999, limit: 5, current: 0\)
 CREATE CLUSTER foo SIZE 'scale=1,workers=1', replication factor 9999999;
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
-----
-COMPLETE 0
 
 statement ok
 CREATE CLUSTER foo (SIZE 'scale=1,workers=1')
+
+# Every WAIT spelling, zero timeout included, writes a reconfiguration record
+# the controller converges on. The realized config advances only at the
+# controller's cut-over, and this suite pins background ALTER CLUSTER on, so the
+# statements below return before that and there is nothing deterministic to read
+# back here. Exercised for acceptance; the realized-config transition and the
+# record's lifecycle are covered in test/testdrive/cluster-controller.td.
 
 statement ok
 ALTER CLUSTER foo set (SIZE 'scale=1,workers=2') WITH (WAIT FOR '0s')
@@ -414,7 +326,151 @@ statement ok
 ALTER CLUSTER foo set (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT') )
 
 statement ok
-ALTER CLUSTER foo set (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '10ms', ON TIMEOUT 'ROLLBACK') )
+ALTER CLUSTER foo set (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '10ms', ON TIMEOUT 'ROLLBACK') )
+
+statement ok
+DROP CLUSTER foo
+
+# Regression: SQL-217. `WITH (WAIT ...)` must be rejected on unmanaged
+# clusters, both when the cluster is already unmanaged and when the same
+# statement transitions it from managed to unmanaged. Previously the WAIT
+# options were silently ignored.
+
+statement ok
+CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+statement error ALTER\.\.\. WITH not supported for unmanaged clusters
+ALTER CLUSTER foo SET (REPLICAS ()) WITH (WAIT FOR '0s')
+
+statement error ALTER\.\.\. WITH not supported for unmanaged clusters
+ALTER CLUSTER foo SET (REPLICAS ()) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+
+statement ok
+DROP CLUSTER foo
+
+# WAIT requires a reconfiguration target option. RF-only changes accept it
+# even without an in-flight reconfiguration, in which case it has no effect.
+
+statement ok
+CREATE CLUSTER foo (SIZE 'scale=1,workers=1')
+
+statement error WAIT can only be used together with a SIZE, REPLICATION FACTOR, AVAILABILITY ZONES, INTROSPECTION, or EXPERIMENTAL ARRANGEMENT COMPRESSION change
+ALTER CLUSTER foo SET (SCHEDULE MANUAL) WITH (WAIT FOR '0s')
+
+statement ok
+ALTER CLUSTER foo SET (REPLICATION FACTOR 2) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'ROLLBACK'))
+
+query I
+SELECT replication_factor FROM mz_clusters WHERE name = 'foo'
+----
+2
+
+statement ok
+ALTER CLUSTER foo SET (REPLICATION FACTOR 1) WITH (WAIT FOR '0s')
+
+query I
+SELECT replication_factor FROM mz_clusters WHERE name = 'foo'
+----
+1
+
+query I
+SELECT count(*) FROM mz_internal.mz_cluster_reconfigurations r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'foo'
+----
+0
+
+# A `WAIT` clause paired with a real shape change is still accepted, including
+# alongside a non-shape option in the same statement. Nothing is in flight for
+# this cluster, so the replication factor is free to ride along into the
+# record's target.
+statement ok
+ALTER CLUSTER foo SET (SIZE 'scale=1,workers=2', REPLICATION FACTOR 2) WITH (WAIT FOR '0s')
+
+statement ok
+DROP CLUSTER foo
+
+statement ok
+CREATE CLUSTER foo (SIZE 'scale=1,workers=1')
+
+statement error ALTER\.\.\. WITH not supported for unmanaged clusters
+ALTER CLUSTER foo SET (MANAGED = false) WITH (WAIT FOR '0s')
+
+statement error ALTER\.\.\. WITH not supported for unmanaged clusters
+ALTER CLUSTER foo SET (MANAGED = false) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+
+statement ok
+DROP CLUSTER foo
+
+# A `WORKLOAD CLASS` change riding along with a shape change reaches the durable
+# config rather than being silently dropped by the reshape. The reshape defers
+# only the replica config shape to the reconfiguration record and applies
+# non-shape fields to the realized config in the same transaction, so the
+# readback needs no retry even though the size transition lands later.
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER wc_test SIZE 'scale=1,workers=1'
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER wc_test SET (SIZE 'scale=1,workers=2', WORKLOAD CLASS 'production') WITH (WAIT FOR '0s')
+----
+COMPLETE 0
+
+query T
+SELECT workload_class FROM mz_internal.mz_cluster_workload_classes WHERE id = (SELECT id FROM mz_clusters WHERE name = 'wc_test')
+----
+production
+
+simple conn=mz_system,user=mz_system
+ALTER CLUSTER wc_test SET (SIZE 'scale=1,workers=4', WORKLOAD CLASS NULL) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+----
+COMPLETE 0
+
+query T
+SELECT workload_class FROM mz_internal.mz_cluster_workload_classes WHERE id = (SELECT id FROM mz_clusters WHERE name = 'wc_test')
+----
+NULL
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER wc_test
+----
+COMPLETE 0
+
+# EXPERIMENTAL ARRANGEMENT COMPRESSION is a per-cluster option. It is accepted
+# and stored regardless of the gating feature flag, which only decides whether a
+# replica honors the value at creation time.
+statement ok
+CREATE CLUSTER ac_test (SIZE 'scale=1,workers=1', EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
+
+query TT
+SHOW CREATE CLUSTER ac_test
+----
+ac_test  CREATE␠CLUSTER␠"ac_test"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠true,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠REPLICATION␠FACTOR␠=␠1,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠MANUAL)
+
+# Compression is a replica config shape dimension, so an ALTER that changes it
+# transitions through a reconfiguration record and the realized config (what
+# SHOW CREATE renders) advances only at cut-over. The suite pins background
+# ALTER CLUSTER on, so the statement returns before that and there is no
+# deterministic readback here. Exercised for acceptance; the realized-config
+# transition and the record's target are covered in
+# test/testdrive/cluster-controller.td.
+statement ok
+ALTER CLUSTER ac_test SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = false)
+
+# A WAIT clause is accepted alongside a compression change: it is a shape
+# dimension, so there is a hydrate-overlap to wait on.
+statement ok
+ALTER CLUSTER ac_test SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = true) WITH (WAIT FOR '0s')
+
+# ALTER CLUSTER ... RESET takes no WITH clause. Exercised for acceptance too.
+statement ok
+ALTER CLUSTER ac_test RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION)
+
+statement ok
+DROP CLUSTER ac_test
+
+statement error EXPERIMENTAL ARRANGEMENT COMPRESSION not supported for unmanaged clusters
+CREATE CLUSTER ac_unmanaged REPLICAS (), EXPERIMENTAL ARRANGEMENT COMPRESSION = true
 
 # Restore pristine server state
 reset-server

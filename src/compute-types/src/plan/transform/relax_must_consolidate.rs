@@ -10,35 +10,23 @@
 //! Placeholder module for an [crate::plan::transform::Transform] that infers
 //! physical monotonicity.
 
-use std::marker::PhantomData;
-
 use crate::plan::interpret::{PhysicallyMonotonic, SingleTimeMonotonic};
 use crate::plan::reduce::{HierarchicalPlan, MonotonicPlan};
 use crate::plan::top_k::{MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan};
 use crate::plan::transform::{BottomUpTransform, TransformConfig};
-use crate::plan::{Plan, PlanNode, ReducePlan};
+use crate::plan::{ArrangementStrategy, LirRelationExpr, LirRelationNode, ReducePlan};
 
 /// A transformation that takes the result of single-time physical monotonicity
 /// analysis and refines, as appropriate, the setting of the `must_consolidate`
-/// flag in monotonic `Plan` nodes with forced consolidation.
+/// flag in monotonic `LirRelationExpr` nodes with forced consolidation. Where it
+/// clears the flag, it also sets the node's temporal bucketing strategy to `Direct`.
 #[derive(Debug)]
-pub struct RelaxMustConsolidate<T = mz_repr::Timestamp> {
-    _phantom: PhantomData<T>,
-}
+pub struct RelaxMustConsolidate;
 
-impl<T> RelaxMustConsolidate<T> {
-    /// TODO(database-issues#7533): Add documentation.
-    pub fn new() -> Self {
-        RelaxMustConsolidate {
-            _phantom: Default::default(),
-        }
-    }
-}
-
-impl<T> BottomUpTransform<T> for RelaxMustConsolidate<T> {
+impl BottomUpTransform for RelaxMustConsolidate {
     type Info = PhysicallyMonotonic;
 
-    type Interpreter<'a> = SingleTimeMonotonic<'a, T>;
+    type Interpreter<'a> = SingleTimeMonotonic<'a>;
 
     fn name(&self) -> &'static str {
         "must_consolidate relaxation"
@@ -48,35 +36,44 @@ impl<T> BottomUpTransform<T> for RelaxMustConsolidate<T> {
         SingleTimeMonotonic::new(&config.monotonic_ids)
     }
 
-    fn action(plan: &mut Plan<T>, _plan_info: &Self::Info, input_infos: &[Self::Info]) {
-        // Look at `input_infos` and type of `Plan` node and refine the `must_consolidate` flag.
+    fn action(plan: &mut LirRelationExpr, _plan_info: &Self::Info, input_infos: &[Self::Info]) {
+        // Look at `input_infos` and type of `LirRelationExpr` node and refine the `must_consolidate`
+        // flag and the temporal bucketing strategy.
         // Note that the LIR nodes we care about have a single input.
         match (&mut plan.node, input_infos) {
             (
-                PlanNode::Reduce {
+                LirRelationNode::Reduce {
                     plan:
                         ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(MonotonicPlan {
                             must_consolidate,
                             ..
                         })),
+                    temporal_bucketing_strategy,
                     ..
                 }
-                | PlanNode::TopK {
+                | LirRelationNode::TopK {
                     top_k_plan:
                         TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                             must_consolidate, ..
                         }),
+                    temporal_bucketing_strategy,
                     ..
                 }
-                | PlanNode::TopK {
+                | LirRelationNode::TopK {
                     top_k_plan:
                         TopKPlan::MonotonicTopK(MonotonicTopKPlan {
                             must_consolidate, ..
                         }),
+                    temporal_bucketing_strategy,
                     ..
                 },
                 [PhysicallyMonotonic(true)],
-            ) => *must_consolidate = false,
+            ) => {
+                *must_consolidate = false;
+                // A single-time dataflow holds no updates past `until`, because temporal MFPs
+                // drop them, so a temporal bucket has nothing to delay.
+                *temporal_bucketing_strategy = ArrangementStrategy::Direct;
+            }
             _ => (),
         }
     }

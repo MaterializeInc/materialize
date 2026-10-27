@@ -4,7 +4,7 @@ columns:
 rows:
   - "Tier": "**All-in-one cluster**"
     Description: |
-      **A cluster** for [sources](/concepts/sources/), compute/transformation
+      **A cluster** for [sources](/fundamentals/concepts/sources/), compute/transformation
       and serving queries:
 
       - Sources to ingest data.
@@ -16,4 +16,4 @@ rows:
       With a 1-tier single-cluster architecture, sources, compute, and queries
       compete for the same cluster resources.
 
-      {{< include-md file="shared-content/shared-cluster-indexed-view-tip.md" >}}
+      {{< include-md file="content/headless/shared-cluster-indexed-view-tip.md" >}}

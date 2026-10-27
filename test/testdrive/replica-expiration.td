@@ -176,11 +176,15 @@ ALTER SYSTEM SET compute_replica_expiration_offset = '20d'
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET compute_replica_expiration_offset = '20d';
+ALTER SYSTEM SET enable_index_options = true;
 > CREATE CLUSTER test (SIZE = 'scale=1,workers=1');
 > SET CLUSTER TO test;
 > CREATE VIEW events_over_time AS VALUES ('joe', 100), ('mike', 101), ('sam', 200), ('end', 18446144073709551615);
 > CREATE VIEW events AS SELECT * FROM events_over_time WHERE mz_now() <= column2 + 2592000000; -- 30d in ms
-> CREATE DEFAULT INDEX ON events;
+# RETAIN HISTORY pins the index's `since` at 0 so the SUBSCRIBE below can use
+# `AS OF 0`; without it, `since` advances toward wall-clock and the query
+# becomes unservable.
+> CREATE DEFAULT INDEX ON events WITH (RETAIN HISTORY = FOR '365000 days');
 > SUBSCRIBE events WITH (progress) AS OF 0;
 mz_timestamp mz_progressed mz_diff column1 column2
 ----

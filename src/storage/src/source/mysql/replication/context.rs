@@ -39,7 +39,6 @@ pub(super) struct ReplContext<'a> {
         (usize, Result<SourceMessage, DataflowError>),
     >,
     pub(super) data_cap_set: &'a mut CapabilitySet<GtidPartition>,
-    pub(super) upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
     // Owned values:
     pub(super) rewinds: BTreeMap<usize, (Capability<GtidPartition>, RewindRequest)>,
     pub(super) errored_outputs: BTreeSet<usize>,
@@ -57,7 +56,6 @@ impl<'a> ReplContext<'a> {
             (usize, Result<SourceMessage, DataflowError>),
         >,
         data_cap_set: &'a mut CapabilitySet<GtidPartition>,
-        upper_cap_set: &'a mut CapabilitySet<GtidPartition>,
         rewinds: BTreeMap<usize, (Capability<GtidPartition>, RewindRequest)>,
     ) -> Self {
         Self {
@@ -68,7 +66,6 @@ impl<'a> ReplContext<'a> {
             metrics,
             data_output,
             data_cap_set,
-            upper_cap_set,
             rewinds,
             errored_outputs: BTreeSet::new(),
         }
@@ -107,16 +104,5 @@ impl<'a> ReplContext<'a> {
             }
             res
         });
-    }
-
-    /// Advances the frontier of the upper capability set to `new_upper`,
-    pub(super) fn downgrade_progress_cap_set(
-        &mut self,
-        reason: &str,
-        new_upper: Antichain<GtidPartition>,
-    ) {
-        let (id, worker_id) = (self.config.id, self.config.worker_id);
-        trace!(%id, "timely-{worker_id} [{reason}] advancing progress frontier to {new_upper:?}");
-        self.upper_cap_set.downgrade(&*new_upper);
     }
 }

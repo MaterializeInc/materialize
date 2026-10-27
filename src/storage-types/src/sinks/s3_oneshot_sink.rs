@@ -39,13 +39,19 @@ pub async fn preflight(
     connection_details: &S3UploadInfo,
     connection_id: CatalogItemId,
     sink_id: GlobalId,
+    enforce_external_addresses: bool,
 ) -> Result<(), anyhow::Error> {
     info!(%sink_id, "s3 copy to initialization");
 
     let s3_key_manager = S3KeyManager::new(&sink_id, &connection_details.uri);
 
     let sdk_config = aws_connection
-        .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+        .load_sdk_config(
+            &connection_context,
+            connection_id,
+            InTask::Yes,
+            enforce_external_addresses,
+        )
         .await?;
 
     let client = mz_aws_util::s3::new_client(&sdk_config);

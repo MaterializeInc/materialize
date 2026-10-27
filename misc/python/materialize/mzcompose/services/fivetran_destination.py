@@ -15,6 +15,7 @@ class FivetranDestination(Service):
         super().__init__(
             name="fivetran-destination",
             config={
+                "init": True,
                 "mzbuild": "fivetran-destination",
                 "ports": [6874],
                 "volumes": volumes_extra,

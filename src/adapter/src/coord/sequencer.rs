@@ -15,8 +15,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
-use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use futures::stream::FuturesOrdered;
 use http::Uri;
@@ -25,8 +25,9 @@ use maplit::btreemap;
 use mz_catalog::memory::objects::Cluster;
 use mz_controller_types::ReplicaId;
 use mz_expr::row::RowCollection;
-use mz_expr::{MapFilterProject, MirRelationExpr, ResultSpec, RowSetFinishing};
+use mz_expr::{Eval, MapFilterProject, MirRelationExpr, ResultSpec, RowSetFinishing};
 use mz_ore::cast::CastFrom;
+use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::stats::SnapshotPartStats;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
@@ -34,9 +35,8 @@ use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowAre
 use mz_sql::catalog::{CatalogError, SessionCatalog};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
-    self, AbortTransactionPlan, CommitTransactionPlan, CopyFromSource, CreateRolePlan,
-    CreateSourcePlanBundle, FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind,
-    RaisePlan,
+    self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
+    FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -52,14 +52,13 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
 use timely::progress::Antichain;
-use timely::progress::Timestamp as TimelyTimestamp;
 use tokio::sync::oneshot;
 use tracing::{Instrument, Level, Span, event, warn};
 
 use crate::ExecuteContext;
 use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, ExecuteResponse, Response};
-use crate::coord::appends::{DeferredOp, DeferredPlan};
+use crate::coord::appends::DeferredPlan;
 use crate::coord::validity::PlanValidity;
 use crate::coord::{
     Coordinator, DeferredPlanStatement, ExplainPlanContext, Message, PlanStatement, TargetCluster,
@@ -68,7 +67,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::notice::AdapterNotice;
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
+use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::peek;
 use crate::session::{
     EndTransactionAction, Session, StateRevision, TransactionOps, TransactionStatus, WriteOp,
@@ -89,24 +88,22 @@ use crate::util::ClientTransmitter;
 // initialized and we need to skip directly to creating role. We have a specific method,
 // `sequence_create_role_for_startup` for this purpose.
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
-// `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
-// - The frontend peek sequencing temporarily reaches into this module for things that are needed
-//   by both the old and new peek sequencing. TODO(peek-seq): We plan to eliminate this with a
-//   big refactoring after the old peek sequencing is removed.
+// `sequence_staged` and `sequence_create_connection_stage_finish`.
+// - The frontend peek sequencing reaches into this module for some shared helpers.
+//   TODO(peek-seq): Move these out of the coordinator.
 
 mod inner;
 
 impl Coordinator {
-    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would
-    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    /// Dispatches a plan in a size-bounded, heap-allocated future.
     pub(crate) fn sequence_plan(
         &mut self,
         mut ctx: ExecuteContext,
         plan: Plan,
         resolved_ids: ResolvedIds,
+        sql_impl_resolved_ids: ResolvedIds,
     ) -> LocalBoxFuture<'_, ()> {
-        async move {
+        let future = async move {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
@@ -124,24 +121,16 @@ impl Coordinator {
                 tracing::debug!(%conn_id, "deferring plan for startup appends");
 
                 let role_metadata = ctx.session().role_metadata().clone();
-                let validity = PlanValidity::new(
-                    self.catalog.transient_revision(),
-                    dependencies,
-                    None,
-                    None,
-                    role_metadata,
-                );
+                let validity =
+                    PlanValidity::new(&self.catalog, dependencies, None, None, role_metadata);
                 let deferred_plan = DeferredPlan {
                     ctx,
                     plan,
                     validity,
-                    requires_locks: BTreeSet::default(),
+                    resolved_ids,
+                    sql_impl_resolved_ids,
                 };
-                // Defer op accepts an optional write lock, but there aren't any writes occurring
-                // here, since the map to `None`.
-                let acquire_future = wait_future.map(|()| None);
-
-                self.defer_op(acquire_future, DeferredOp::Plan(deferred_plan));
+                self.defer_plan(wait_future, deferred_plan);
 
                 // Return early because our op is deferred on waiting for the builtin writes to
                 // complete.
@@ -170,10 +159,12 @@ impl Coordinator {
                 Err(_) => (None, None),
             };
 
-            if let (Some(cluster_id), Some(statement_id)) =
-                (target_cluster_id, ctx.extra().contents())
-            {
-                self.set_statement_execution_cluster(statement_id, cluster_id);
+            if let (Some(cluster_id), Some(cluster_name), Some(statement_id)) = (
+                target_cluster_id,
+                target_cluster_name.clone(),
+                ctx.extra().contents(),
+            ) {
+                self.set_statement_execution_cluster(statement_id, cluster_id, cluster_name);
             }
 
             let session_catalog = self.catalog.for_session(ctx.session());
@@ -188,29 +179,23 @@ impl Coordinator {
                 }
             }
 
+            // The target-connection role only matters for `pg_cancel_backend`,
+            // which the frontend sequences.
             if let Err(e) = rbac::check_plan(
                 &session_catalog,
-                Some(|id| {
-                    // We use linear search through active connections if needed, which is fine
-                    // because the RBAC check will call the closure at most once.
-                    self.active_conns()
-                        .into_iter()
-                        .find(|(conn_id, _)| conn_id.unhandled() == id)
-                        .map(|(_, conn_meta)| *conn_meta.authenticated_role_id())
-                }),
+                None,
                 ctx.session(),
                 &plan,
                 target_cluster_id,
                 &resolved_ids,
+                &sql_impl_resolved_ids,
             ) {
                 return ctx.retire(Err(e.into()));
             }
 
             match plan {
                 Plan::CreateSource(plan) => {
-                    let id_ts = self.get_catalog_write_ts().await;
-                    let (item_id, global_id) =
-                        return_if_err!(self.catalog().allocate_user_id(id_ts).await, ctx);
+                    let (item_id, global_id) = return_if_err!(self.allocate_user_id().await, ctx);
                     let result = self
                         .sequence_create_source(
                             &mut ctx,
@@ -283,14 +268,12 @@ impl Coordinator {
                     self.sequence_create_materialized_view(ctx, plan, resolved_ids)
                         .await;
                 }
-                Plan::CreateContinualTask(plan) => {
-                    let res = self
-                        .sequence_create_continual_task(&mut ctx, plan, resolved_ids)
-                        .await;
-                    ctx.retire(res);
-                }
                 Plan::CreateIndex(plan) => {
                     self.sequence_create_index(ctx, plan, resolved_ids).await;
+                }
+                Plan::CreateMetricSink(plan) => {
+                    self.sequence_create_metric_sink(ctx, plan, resolved_ids)
+                        .await;
                 }
                 Plan::CreateType(plan) => {
                     let result = self
@@ -307,9 +290,6 @@ impl Coordinator {
                 Plan::Comment(plan) => {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
                     ctx.retire(result);
-                }
-                Plan::CopyTo(plan) => {
-                    self.sequence_copy_to(ctx, plan, target_cluster).await;
                 }
                 Plan::DropObjects(plan) => {
                     let result = self.sequence_drop_objects(&mut ctx, plan).await;
@@ -385,7 +365,11 @@ impl Coordinator {
                         } else {
                             self.serialized_ddl.push_back(DeferredPlanStatement {
                                 ctx,
-                                ps: PlanStatement::Plan { plan, resolved_ids },
+                                ps: PlanStatement::Plan {
+                                    plan,
+                                    resolved_ids,
+                                    sql_impl_resolved_ids,
+                                },
                             });
                             return;
                         }
@@ -408,48 +392,20 @@ impl Coordinator {
                     }
                     self.sequence_end_transaction(ctx, action).await;
                 }
-                Plan::Select(plan) => {
-                    let max = Some(ctx.session().vars().max_query_result_size());
-                    self.sequence_peek(ctx, plan, target_cluster, max).await;
-                }
                 Plan::Subscribe(plan) => {
                     self.sequence_subscribe(ctx, plan, target_cluster).await;
-                }
-                Plan::SideEffectingFunc(plan) => {
-                    self.sequence_side_effecting_func(ctx, plan).await;
                 }
                 Plan::ShowCreate(plan) => {
                     ctx.retire(Ok(Self::send_immediate_rows(plan.row)));
                 }
-                Plan::ShowColumns(show_columns_plan) => {
-                    let max = Some(ctx.session().vars().max_query_result_size());
-                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max)
-                        .await;
+                Plan::CopyFrom(plan) => {
+                    self.sequence_copy_from(ctx, plan, target_cluster).await;
                 }
-                Plan::CopyFrom(plan) => match plan.source {
-                    CopyFromSource::Stdin => {
-                        let (tx, _, session, ctx_extra) = ctx.into_parts();
-                        tx.send(
-                            Ok(ExecuteResponse::CopyFrom {
-                                target_id: plan.target_id,
-                                target_name: plan.target_name,
-                                columns: plan.columns,
-                                params: plan.params,
-                                ctx_extra,
-                            }),
-                            session,
-                        );
-                    }
-                    CopyFromSource::Url(_) | CopyFromSource::AwsS3 { .. } => {
-                        self.sequence_copy_from(ctx, plan, target_cluster).await;
-                    }
-                },
                 Plan::ExplainPlan(plan) => {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
                 }
                 Plan::ExplainPushdown(plan) => {
-                    self.sequence_explain_pushdown(ctx, plan, target_cluster)
-                        .await;
+                    self.sequence_explain_pushdown(ctx, plan).await;
                 }
                 Plan::ExplainSinkSchema(plan) => {
                     let result = self.sequence_explain_schema(plan);
@@ -459,11 +415,22 @@ impl Coordinator {
                     self.sequence_explain_timestamp(ctx, plan, target_cluster)
                         .await;
                 }
-                Plan::Insert(plan) => {
-                    self.sequence_insert(ctx, plan).await;
-                }
-                Plan::ReadThenWrite(plan) => {
-                    self.sequence_read_then_write(ctx, plan).await;
+                // `try_frontend_peek` and `try_frontend_read_then_write` take over every statement
+                // that plans to one of these.
+                // TODO(SQL-760): Drop the manual soft panic once internal errors soft-panic
+                // centrally.
+                plan @ (Plan::CopyTo(_)
+                | Plan::Insert(_)
+                | Plan::ReadThenWrite(_)
+                | Plan::Select(_)
+                | Plan::ShowColumns(_)
+                | Plan::SideEffectingFunc(_)) => {
+                    let msg = format!(
+                        "{:?} plan reached the coordinator despite frontend routing",
+                        PlanKind::from(&plan)
+                    );
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg)));
                 }
                 Plan::AlterNoop(plan) => {
                     ctx.retire(Ok(ExecuteResponse::AlteredObject(plan.object_type)));
@@ -494,6 +461,12 @@ impl Coordinator {
                 }
                 Plan::AlterRetainHistory(plan) => {
                     let result = self.sequence_alter_retain_history(&mut ctx, plan).await;
+                    ctx.retire(result);
+                }
+                Plan::AlterSourceTimestampInterval(plan) => {
+                    let result = self
+                        .sequence_alter_source_timestamp_interval(&mut ctx, plan)
+                        .await;
                     ctx.retire(result);
                 }
                 Plan::AlterItemRename(plan) => {
@@ -541,10 +514,8 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterMaterializedViewApplyReplacement(plan) => {
-                    let result = self
-                        .sequence_alter_materialized_view_apply_replacement(&ctx, plan)
+                    self.sequence_alter_materialized_view_apply_replacement_prepare(ctx, plan)
                         .await;
-                    ctx.retire(result);
                 }
                 Plan::AlterNetworkPolicy(plan) => {
                     let res = self
@@ -557,11 +528,22 @@ impl Coordinator {
                     ctx.retire(Ok(ExecuteResponse::DiscardedTemp));
                 }
                 Plan::DiscardAll => {
-                    let ret = if let TransactionStatus::Started(_) = ctx.session().transaction() {
-                        self.clear_transaction(ctx.session_mut()).await;
+                    // Clearing the transaction would silently discard writes staged by an
+                    // earlier statement of the same pipeline.
+                    let txn = ctx.session().transaction();
+                    let discardable =
+                        matches!(txn, TransactionStatus::Started(_)) && !txn.contains_ops();
+                    let ret = if discardable {
+                        let (_, retire_notify) = self.clear_transaction(ctx.session_mut()).await;
+                        ctx.delay_response_until(retire_notify);
                         self.drop_temp_items(ctx.session().conn_id()).await;
-                        ctx.session_mut().reset();
-                        Ok(ExecuteResponse::DiscardedAll)
+                        // NOTE: `reset()` resets session variables durably (see
+                        // `SessionVars::reset_all`). This must stay durable and
+                        // must not be reordered to depend on a transaction
+                        // commit: the transaction was just cleared above, so
+                        // there is no commit left to promote a staged reset.
+                        let params = ctx.session_mut().reset();
+                        Ok(ExecuteResponse::DiscardedAll { params })
                     } else {
                         Err(AdapterError::OperationProhibitsTransaction(
                             "DISCARD ALL".into(),
@@ -618,18 +600,38 @@ impl Coordinator {
                 Plan::Execute(plan) => {
                     match self.sequence_execute(ctx.session_mut(), plan) {
                         Ok(portal_name) => {
-                            let (tx, _, session, extra) = ctx.into_parts();
-                            self.internal_cmd_tx
-                                .send(Message::Command(
-                                    OpenTelemetryContext::obtain(),
-                                    Command::Execute {
-                                        portal_name,
-                                        session,
-                                        tx: tx.take(),
-                                        outer_ctx_extra: Some(extra),
+                            let (tx, _, session, extra, response_barriers) = ctx.into_parts();
+                            // The obligation travels as data and
+                            // `handle_execute` arms it again. It cannot be
+                            // dropped in between: the command goes to the
+                            // channel this loop drains, and a spawned barrier
+                            // task is only dropped when the process is going
+                            // down, at which point nothing records anything.
+                            let command = Message::Command(
+                                OpenTelemetryContext::obtain(),
+                                Command::Execute {
+                                    portal_name,
+                                    session,
+                                    tx: tx.take(),
+                                    outer_ctx_extra: Some(extra.defuse()),
+                                },
+                            );
+                            if response_barriers.is_empty() {
+                                self.internal_cmd_tx
+                                    .send(command)
+                                    .expect("sending to self.internal_cmd_tx cannot fail");
+                            } else {
+                                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                                mz_ore::task::spawn(
+                                    || "execute_after_response_barriers",
+                                    async move {
+                                        for barrier in response_barriers {
+                                            barrier.await;
+                                        }
+                                        let _ = internal_cmd_tx.send(command);
                                     },
-                                ))
-                                .expect("sending to self.internal_cmd_tx cannot fail");
+                                );
+                            }
                         }
                         Err(err) => ctx.retire(Err(err)),
                     };
@@ -704,8 +706,8 @@ impl Coordinator {
                 }
             }
         }
-        .instrument(tracing::debug_span!("coord::sequencer::sequence_plan"))
-        .boxed_local()
+        .instrument(tracing::debug_span!("coord::sequencer::sequence_plan"));
+        crate::coord::box_dispatcher(future)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -716,7 +718,7 @@ impl Coordinator {
         params: Params,
     ) {
         // Put the session into single statement implicit so anything can execute.
-        let (tx, internal_cmd_tx, mut session, extra) = ctx.into_parts();
+        let (tx, internal_cmd_tx, mut session, extra, response_barriers) = ctx.into_parts();
         assert!(matches!(session.transaction(), TransactionStatus::Default));
         session.start_transaction_single_stmt(self.now_datetime());
         let conn_id = session.conn_id().unhandled();
@@ -724,7 +726,13 @@ impl Coordinator {
         // Execute the saved statement in a temp transmitter so we can run COMMIT.
         let (sub_tx, sub_rx) = oneshot::channel();
         let sub_ct = ClientTransmitter::new(sub_tx, self.internal_cmd_tx.clone());
-        let sub_ctx = ExecuteContext::from_parts(sub_ct, internal_cmd_tx, session, extra);
+        let sub_ctx = ExecuteContext::from_parts_with_response_barriers(
+            sub_ct,
+            internal_cmd_tx,
+            session,
+            extra,
+            response_barriers,
+        );
         self.handle_execute_inner(stmt, params, sub_ctx).await;
 
         // The response can need off-thread processing. Wait for it elsewhere so the coordinator can
@@ -848,7 +856,11 @@ impl Coordinator {
                     returning: Vec::new(),
                     max_result_size: catalog.system_config().max_result_size(),
                 };
-                Self::send_diffs(session, diffs_plan)
+                let result = Self::send_diffs(session, diffs_plan);
+                // Let schema-fencing tests land an ALTER after packing rows
+                // against this descriptor but before the transaction commits.
+                fail::fail_point!("insert_after_pack_before_commit");
+                result
             }
             None => panic!(
                 "tried using sequence_insert_constant on non-constant MirRelationExpr\n{}",
@@ -880,6 +892,14 @@ impl Coordinator {
                 // Consolidate rows. This is useful e.g. for an UPDATE where the row
                 // doesn't change, and we need to reflect that in the number of
                 // affected rows.
+                //
+                // NOTE: This differs from PostgreSQL, where `UPDATE t SET x = x`
+                // reports the number of rows matching the WHERE clause even when
+                // no value changes. Because Materialize works in differential
+                // dataflow, the +1 and -1 diffs for an unchanged row cancel out
+                // during consolidation, so it reports 0 affected rows. This is
+                // longstanding behavior and both read-then-write paths agree on
+                // it.
                 differential_dataflow::consolidation::consolidate(&mut plan.updates);
 
                 affected_rows = Diff::ZERO;
@@ -992,7 +1012,7 @@ where
 pub(crate) fn emit_optimizer_notices(
     catalog: &Catalog,
     session: &Session,
-    notices: &Vec<RawOptimizerNotice>,
+    notices: &[RawOptimizerNotice],
 ) {
     // `for_session` below is expensive, so return early if there's nothing to do.
     if notices.is_empty() {
@@ -1003,6 +1023,7 @@ pub(crate) fn emit_optimizer_notices(
     for notice in notices {
         let kind = OptimizerNoticeKind::from(notice);
         let notice_enabled = match kind {
+            OptimizerNoticeKind::EqualsNull => system_vars.enable_notices_for_equals_null(),
             OptimizerNoticeKind::IndexAlreadyExists => {
                 system_vars.enable_notices_for_index_already_exists()
             }
@@ -1028,21 +1049,18 @@ pub(crate) fn emit_optimizer_notices(
 }
 
 /// Evaluates a COPY TO target URI expression and validates it.
-///
-/// This function is shared between the old peek sequencing (sequence_copy_to)
-/// and the new frontend peek sequencing to avoid code duplication.
 pub fn eval_copy_to_uri(
     to: HirScalarExpr,
     session: &Session,
     catalog_state: &CatalogState,
 ) -> Result<Uri, AdapterError> {
-    let style = ExprPrepStyle::OneShot {
+    let style = ExprPrepOneShot {
         logical_time: EvalTime::NotAvailable,
         session,
         catalog_state,
     };
-    let mut to = to.lower_uncorrelated()?;
-    prep_scalar_expr(&mut to, style)?;
+    let mut to = to.lower_uncorrelated(catalog_state.system_config())?;
+    style.prep_scalar_expr(&mut to)?;
     let temp_storage = RowArena::new();
     let evaled = to.eval(&[], &temp_storage)?;
     if evaled == Datum::Null {
@@ -1050,8 +1068,8 @@ pub fn eval_copy_to_uri(
     }
     let to_url = match Uri::from_str(evaled.unwrap_str()) {
         Ok(url) => {
-            if url.scheme_str() != Some("s3") {
-                coord_bail!("only 's3://...' urls are supported as COPY TO target");
+            if url.scheme_str() != Some("s3") && url.scheme_str() != Some("gs") {
+                coord_bail!("only 's3://...' and 'gs://...' urls are supported as COPY TO target");
             }
             url
         }
@@ -1071,12 +1089,16 @@ pub(crate) async fn explain_pushdown_future_inner<
 >(
     session: &Session,
     catalog: &Catalog,
-    storage_collections: &Arc<dyn StorageCollections<Timestamp = Timestamp> + Send + Sync>,
+    storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
     as_of: Antichain<Timestamp>,
     mz_now: ResultSpec<'static>,
     imports: I,
 ) -> impl Future<Output = Result<ExecuteResponse, AdapterError>> + use<I> {
-    let explain_timeout = *session.vars().statement_timeout();
+    let mut explain_timeout = *session.vars().statement_timeout();
+    // Timeout of 0 is equivalent to "off", meaning we will wait "forever."
+    if explain_timeout == Duration::ZERO {
+        explain_timeout = Duration::MAX;
+    }
     let mut futures = FuturesOrdered::new();
     for (id, mfp) in imports {
         let catalog_entry = catalog.get_entry_by_global_id(&id);
@@ -1114,10 +1136,12 @@ pub(crate) async fn explain_pushdown_future_inner<
                 let bytes = u64::cast_from(*bytes);
                 total_bytes += bytes;
                 total_parts += 1u64;
-                let selected = match stats {
+                let selected = match stats.as_ref().and_then(|x| x.try_decode().ok()) {
+                    // Also the arm for stats that do not decode, which a
+                    // newer writer's stats kind can produce. Both report the
+                    // part as selected, matching what a read of it would do.
                     None => true,
                     Some(stats) => {
-                        let stats = stats.decode();
                         let stats = RelationPartStats::new(
                             name.as_str(),
                             &snapshot_stats.metrics.pushdown.part_stats,
@@ -1229,10 +1253,11 @@ pub(crate) async fn statistics_oracle(
     query_as_of: &Antichain<Timestamp>,
     is_oneshot: bool,
     system_config: &vars::SystemVars,
-    storage_collections: &dyn StorageCollections<Timestamp = Timestamp>,
+    storage_collections: &dyn StorageCollections,
 ) -> Result<Box<dyn StatisticsOracle>, AdapterError> {
     if !session.vars().enable_session_cardinality_estimates() {
-        return Ok(Box::new(EmptyStatisticsOracle));
+        let stats: Box<dyn StatisticsOracle> = Box::new(EmptyStatisticsOracle);
+        return Ok(stats);
     }
 
     let timeout = if is_oneshot {
@@ -1269,11 +1294,11 @@ struct CachedStatisticsOracle {
 }
 
 impl CachedStatisticsOracle {
-    pub async fn new<T: TimelyTimestamp>(
+    pub async fn new(
         ids: &BTreeSet<GlobalId>,
-        as_of: &Antichain<T>,
-        storage_collections: &dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T>,
-    ) -> Result<Self, StorageError<T>> {
+        as_of: &Antichain<Timestamp>,
+        storage_collections: &dyn StorageCollections,
+    ) -> Result<Self, StorageError> {
         let mut cache = BTreeMap::new();
 
         for id in ids {

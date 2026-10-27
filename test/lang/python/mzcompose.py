@@ -20,7 +20,7 @@ SERVICES = [
     Service(
         name="python",
         config={
-            "image": "python:3.14.1-trixie",
+            "image": "python:3.14.7-trixie",
             "volumes": [
                 "../../../:/workdir",
             ],

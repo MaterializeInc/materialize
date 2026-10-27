@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Clusters{% endblock %}
+
+{% block head %}
+<style>
+    .process-links {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .process-link {
+        padding: 2px 6px;
+        background: #e8f0fe;
+        border-radius: 3px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>Cluster Replicas</h1>
+<p>HTTP endpoints for cluster replica processes.</p>
+
+{% if replicas.is_empty() %}
+<p>No replicas found.</p>
+{% else %}
+<table>
+    <thead>
+        <tr>
+            <th>Cluster</th>
+            <th>Replica</th>
+            <th>Cluster ID</th>
+            <th>Replica ID</th>
+            <th>Processes</th>
+            <th>Endpoints</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for replica in replicas %}
+        <tr>
+            <td>{{ replica.cluster_name }}</td>
+            <td>{{ replica.replica_name }}</td>
+            <td><code>{{ replica.cluster_id }}</code></td>
+            <td><code>{{ replica.replica_id }}</code></td>
+            <td>{{ replica.process_count }}</td>
+            <td>
+                {% if replica.process_count > 0 %}
+                <div class="process-links">
+                    {% for i in replica.process_indices %}
+                    <a class="process-link" href="/api/cluster/{{ replica.cluster_id }}/replica/{{ replica.replica_id }}/process/{{ i }}/" title="Process {{ i }} root">p{{ i }}</a>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <span class="no-http">No HTTP endpoints</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<h2>URL Format</h2>
+<p>Proxy URL: <code>/api/cluster/{cluster_id}/replica/{replica_id}/process/{process}/{path}</code></p>
+<p>Common paths:</p>
+<ul>
+    <li><code>/metrics</code> - Prometheus metrics</li>
+    <li><code>/</code> - Profiling functions</li>
+</ul>
+{% endblock %}

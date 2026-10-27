@@ -17,17 +17,17 @@
 use std::fmt;
 
 use itertools::Itertools;
-use mz_repr::{ColumnName, GlobalId};
+use mz_repr::{ColumnName, GlobalId, RelationVersion};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    ContinualTaskStmt, CreateConnectionStatement, CreateContinualTaskStatement,
-    CreateContinualTaskSugar, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
-    MutRecBlock, Op, Query, Statement, TableFactor, TableFromSourceColumns, UnresolvedItemName,
-    UnresolvedSchemaName, Value, ViewDefinition,
+    CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
+    CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement,
+    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CteBlock, Function,
+    FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
+    TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value, Version,
+    ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -47,6 +47,22 @@ pub fn ident_ref(ident: &Ident) -> &str {
 /// Normalizes an identifier that represents a column name.
 pub fn column_name(id: Ident) -> ColumnName {
     ColumnName::from(ident(id))
+}
+
+/// Converts a column name into an identifier.
+pub fn column_name_ident(name: &ColumnName) -> Ident {
+    // Note: ColumnNames are known to be less than the max length of an Ident (I think?).
+    Ident::new_unchecked(name.as_str())
+}
+
+/// Converts a version from the AST into a [`RelationVersion`].
+pub fn relation_version(version: Version) -> RelationVersion {
+    RelationVersion::from_raw(version.into_inner())
+}
+
+/// Converts a [`RelationVersion`] into a version for the AST.
+pub fn ast_version(version: RelationVersion) -> Version {
+    Version::new(version.into_raw())
 }
 
 /// Normalizes an unresolved object name.
@@ -362,15 +378,28 @@ pub fn create_statement(
         Statement::CreateSink(CreateSinkStatement {
             name,
             in_cluster: _,
+            from: _,
             connection: _,
             format: _,
             envelope: _,
+            mode: _,
+            with_options: _,
             if_not_exists,
-            ..
         }) => {
             if let Some(name) = name {
                 *name = allocate_name(name)?;
             }
+            *if_not_exists = false;
+        }
+
+        Statement::CreateMetricSink(CreateMetricSinkStatement {
+            name,
+            in_cluster: _,
+            if_not_exists,
+            from: _,
+            with_options: _,
+        }) => {
+            *name = allocate_name(name)?;
             *if_not_exists = false;
         }
 
@@ -403,8 +432,9 @@ pub fn create_statement(
             if_exists,
             name,
             columns: _,
-            replacing: _,
+            replacement_for: _,
             in_cluster: _,
+            in_cluster_replica: _,
             query,
             with_options: _,
             as_of: _,
@@ -420,46 +450,13 @@ pub fn create_statement(
             *if_exists = IfExistsBehavior::Error;
         }
 
-        Statement::CreateContinualTask(CreateContinualTaskStatement {
-            name,
-            columns: _,
-            input,
-            with_options: _,
-            stmts,
-            in_cluster: _,
-            as_of: _,
-            sugar,
-        }) => {
-            let mut normalizer = QueryNormalizer::new();
-            normalizer.visit_item_name_mut(name);
-            normalizer.visit_item_name_mut(input);
-            for stmt in stmts {
-                match stmt {
-                    ContinualTaskStmt::Delete(stmt) => normalizer.visit_delete_statement_mut(stmt),
-                    ContinualTaskStmt::Insert(stmt) => normalizer.visit_insert_statement_mut(stmt),
-                }
-            }
-            match sugar {
-                Some(CreateContinualTaskSugar::Transform { transform }) => {
-                    normalizer.visit_query_mut(transform)
-                }
-                Some(CreateContinualTaskSugar::Retain { retain }) => {
-                    normalizer.visit_expr_mut(retain)
-                }
-                None => {}
-            }
-            if let Some(err) = normalizer.err {
-                return Err(err);
-            }
-        }
-
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
             in_cluster: _,
+            on_name: _,
             key_parts,
             with_options: _,
             if_not_exists,
-            ..
         }) => {
             let mut normalizer = QueryNormalizer::new();
             if let Some(key_parts) = key_parts {
@@ -507,7 +504,7 @@ pub fn create_statement(
                 .retain(|o| o.name != mz_sql_parser::ast::CreateConnectionOptionName::Validate);
         }
 
-        _ => unreachable!(),
+        _ => bail_internal!("unexpected statement type for normalization"),
     }
 
     Ok(stmt.to_ast_string_stable())
@@ -539,34 +536,67 @@ pub fn create_statement(
 ///   also converts the struct's type from `$t` to `Vec<$t>`.
 macro_rules! generate_extracted_config {
     // No default specified, have remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None, false)], $(
-            $tail
-        ),*);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty), $($tail:tt),*
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, Option::<$t>, None, false)],
+            $($tail),*
+        );
     };
     // No default specified, no remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty)) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None, false)]);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty)
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, Option::<$t>, None, false)]
+        );
     };
     // Default specified, have remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v, false)], $(
-            $tail
-        ),*);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, $v, false)],
+            $($tail),*
+        );
     };
     // Default specified, no remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr))) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v, false)]);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, Default($v:expr))
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, $v, false)]
+        );
     };
     // AllowMultiple specified, have remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, AllowMultiple), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, vec![], true)], $(
-            $tail
-        ),*);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, AllowMultiple), $($tail:tt),*
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, vec![], true)],
+            $($tail),*
+        );
     };
     // AllowMultiple specified, no remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, AllowMultiple)) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, vec![], true)]);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, AllowMultiple)
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, vec![], true)]
+        );
     };
     ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr, $allow_multiple:literal))+]) => {
         paste::paste! {
@@ -597,20 +627,34 @@ macro_rules! generate_extracted_config {
                 }
             }
 
-            impl std::convert::TryFrom<Vec<$option_ty<Aug>>> for [<$option_ty Extracted>] {
+            impl std::convert::TryFrom<Vec<$option_ty<Aug>>>
+                for [<$option_ty Extracted>]
+            {
                 type Error = $crate::plan::PlanError;
-                fn try_from(v: Vec<$option_ty<Aug>>) -> Result<[<$option_ty Extracted>], Self::Error> {
+                fn try_from(
+                    v: Vec<$option_ty<Aug>>,
+                ) -> Result<[<$option_ty Extracted>], Self::Error> {
                     use [<$option_ty Name>]::*;
                     let mut extracted = [<$option_ty Extracted>]::default();
                     for option in v {
                         match option.name {
                             $(
                                 $option_name => {
-                                    if !$allow_multiple && !extracted.seen.insert(option.name.clone()) {
-                                        sql_bail!("{} specified more than once", option.name.to_ast_string_simple());
+                                    if !$allow_multiple
+                                        && !extracted.seen.insert(option.name.clone())
+                                    {
+                                        sql_bail!(
+                                            "{} specified more than once",
+                                            option.name.to_ast_string_simple(),
+                                        );
                                     }
-                                    let val: $t = $crate::plan::with_options::TryFromValue::try_from_value(option.value)
-                                        .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string_simple(), e))?;
+                                    let val: $t = $crate::plan::with_options
+                                        ::TryFromValue::try_from_value(option.value)
+                                        .map_err(|e| sql_err!(
+                                            "invalid {}: {}",
+                                            option.name.to_ast_string_simple(),
+                                            e,
+                                        ))?;
                                     generate_extracted_config!(
                                         @ifexpr $allow_multiple,
                                         extracted.[<$option_name:snake>].push(val),
@@ -626,7 +670,10 @@ macro_rules! generate_extracted_config {
 
             impl [<$option_ty Extracted>] {
                 #[allow(unused)]
-                fn into_values(self, catalog: &dyn crate::catalog::SessionCatalog) -> Vec<$option_ty<Aug>> {
+                fn into_values(
+                    self,
+                    catalog: &dyn crate::catalog::SessionCatalog,
+                ) -> Vec<$option_ty<Aug>> {
                     use [<$option_ty Name>]::*;
                     let mut options = Vec::new();
                     $(

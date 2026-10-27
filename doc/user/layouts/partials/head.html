@@ -7,11 +7,16 @@
 <meta http-equiv="X-UA-Compatible" content="IE=edge" />
 <meta name="description" content="{{ $description }}" />
 
-{{ if .Params.robots }}
+{{ if eq hugo.Environment "preview" }}
+  <meta name="robots" content="noindex, nofollow">
+{{ else if .Params.robots }}
   <meta name="robots" content="{{ .Params.robots }}">
 {{ end }}
 
 <title>{{ $title }}</title>
+{{ if partial "has-markdown.html" . }}
+<link rel="alternate" type="text/markdown" href="{{ partial "markdown-url.html" (dict "page" .) }}" />
+{{ end }}
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="true" />
 <link
@@ -23,12 +28,12 @@
 <meta name="msapplication-TileColor" content="#7F4EFF" />
 <meta name="theme-color" content="#ffffff" />
 <meta property="og:locale" content="en_US" />
-<meta property="og:url" content="{{ .Permalink }}" />
+<meta property="og:url" content="{{ partial "absolute-permalink.html" . }}" />
 <meta property="og:type" content="article" />
 <meta property="og:title" content="{{ $title }}" />
 <meta
   property="og:image"
-  content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif"
+  content="https://cdn.sanity.io/images/rz2gt56r/production/2b473d4149f203889e951e95aff805b7b88897f5-1200x630.jpg"
 />
 <meta property="og:description" content="{{ $description }}" />
 <meta property="og:site_name" content="Materialize" />
@@ -38,7 +43,7 @@
 <meta name="twitter:title" content="{{ $title }}" />
 <meta
   name="twitter:image"
-  content="https://user-images.githubusercontent.com/11527560/159138593-09223308-ce91-4582-a47a-a03166fef26b.gif"
+  content="https://cdn.sanity.io/images/rz2gt56r/production/2b473d4149f203889e951e95aff805b7b88897f5-1200x630.jpg"
 />
 <meta name="twitter:description" content="{{ $description }}" />
 <link
@@ -62,7 +67,7 @@
   href="{{ .Site.BaseURL }}images/materialize_logo.svg"
   color="#4d7cfe"
 />
-<link rel="canonical" href="{{ .Permalink }}" />
+<link rel="canonical" href="{{ partial "absolute-permalink.html" . }}" />
 
 
 {{/* Include all JavaScript files here */}}
@@ -116,6 +121,11 @@ toCSS | fingerprint }}
     f.parentNode.insertBefore(j, f);
   })(window, document, 'script', 'dataLayer', 'GTM-5VDFPSJ');
 </script>
+
+{{/* Reo tracking beacon */}}
+<script type="text/javascript">
+  !function(){var e,t,n;e="8480297053d21bd",t=function(){Reo.init({clientID:"8480297053d21bd"})},(n=document.createElement("script")).src="https://static.reo.dev/"+e+"/reo.js",n.defer=!0,n.onload=t,document.head.appendChild(n)}();
+</script>
 {{end}}
 
 {{/* Tabs */}}
@@ -149,11 +159,17 @@ document.addEventListener("DOMContentLoaded", function () {
       // Update pane ID to be unique
       pane.setAttribute("id", paneId);
 
-      // Add heading inside tab pane if level is specified
+      // When a heading level is specified, inject a heading per pane so the tab
+      // titles appear in the table of contents at that level. The heading is
+      // visually hidden (see `.tab-toc-heading` in _content.scss): the tab strip
+      // already shows the title, so a second visible copy in the pane body is
+      // redundant. It stays in the DOM (rather than being dropped) so the TOC
+      // builder and scrollspy in toc.html treat it like any other heading anchor.
       if (headingLevel) {
         const level = parseInt(headingLevel);
         if (level >= 1 && level <= 6) {
           const heading = document.createElement(`h${level}`);
+          heading.className = "tab-toc-heading";
           heading.textContent = title;
           heading.id = `${paneId}-heading`;
           pane.insertBefore(heading, pane.firstChild);

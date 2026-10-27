@@ -30,7 +30,7 @@ see the Terraform module repositories for [Amazon MSK](https://github.com/Materi
 and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink).
 {{</ note >}}
 
-{{% network-security/privatelink-kafka %}}
+{{% include-headless "/headless/privatelink/privatelink-kafka" %}}
 
 {{< /tab >}}
 
@@ -42,7 +42,9 @@ configuration of AWS resources for a PrivateLink connection. For more details,
 see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
 {{</ note >}}
 
-{{% network-security/privatelink-postgres %}}
+{{< include-headless-with file="/headless/privatelink/privatelink-aws-shared" port="5432" instance="RDS or Aurora" >}}
+
+{{% include-headless "/headless/privatelink/privatelink-postgres-create-connection" %}}
 
 {{< /tab >}}
 
@@ -54,7 +56,9 @@ configuration of AWS resources for a PrivateLink connection. For more details,
 see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
 {{</ note >}}
 
-{{% network-security/privatelink-mysql %}}
+{{< include-headless-with file="/headless/privatelink/privatelink-aws-shared" port="3306" instance="RDS" >}}
+
+{{% include-headless "/headless/privatelink/privatelink-mysql-create-connection" %}}
 
 {{< /tab >}}
 

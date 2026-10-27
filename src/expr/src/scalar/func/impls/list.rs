@@ -9,78 +9,57 @@
 
 use std::fmt;
 
-use mz_lowertest::MzReflect;
-use mz_repr::{AsColumnType, Datum, DatumList, Row, RowArena, SqlColumnType, SqlScalarType};
+use mz_expr_derive::sqlfunc;
+use mz_repr::{Datum, DatumList, ExcludeNull, Row, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
-use crate::func::binary::EagerBinaryFunc;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
-use crate::{EvalError, MirScalarExpr};
+use crate::{Eval, EvalError, MirScalarExpr};
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct CastListToString {
     pub ty: SqlScalarType,
 }
 
-impl LazyUnaryFunc for CastListToString {
+// TODO? if typeconv was in expr, we could determine the inverse of this cast
+#[sqlfunc(CastListToString, sqlname = "listtostr", preserves_uniqueness = super::text_preserves_uniqueness(&self.ty))]
+fn cast_list_to_string<'a>(&self, a: ExcludeNull<Datum<'a>>) -> Result<String, EvalError> {
+    let mut buf = String::new();
+    stringify_datum(&mut buf, *a, &self.ty)?;
+    Ok(buf)
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+pub struct CastListToJsonb<E = MirScalarExpr> {
+    pub cast_element: Box<E>,
+}
+
+impl<E: Eval> LazyUnaryFunc for CastListToJsonb<E> {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let mut buf = String::new();
-        stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
-    }
-
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        // TODO? if typeconv was in expr, we could determine this
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastListToString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("listtostr")
-    }
-}
-
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct CastListToJsonb {
-    pub cast_element: Box<MirScalarExpr>,
-}
-
-impl LazyUnaryFunc for CastListToJsonb {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -100,7 +79,7 @@ impl LazyUnaryFunc for CastListToJsonb {
         Ok(temp_storage.push_unary_row(row))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         SqlScalarType::Jsonb.nullable(input_type.nullable)
     }
 
@@ -113,7 +92,11 @@ impl LazyUnaryFunc for CastListToJsonb {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        true
+        // NOTE: `to_jsonb` maps distinct elements to the same JSONB value, for
+        // example `time` and timestamp elements through their text form, which
+        // rounds nanoseconds away. This cast is therefore not
+        // uniqueness-preserving.
+        false
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -125,9 +108,33 @@ impl LazyUnaryFunc for CastListToJsonb {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
-impl fmt::Display for CastListToJsonb {
+impl<E> CastListToJsonb<E> {
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+        &'a self,
+    ) -> Result<CastListToJsonb<E2>, E2::Error> {
+        Ok(CastListToJsonb {
+            cast_element: Box::new(E2::try_from(&*self.cast_element)?),
+        })
+    }
+
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> CastListToJsonb<E2> {
+        CastListToJsonb {
+            cast_element: Box::new(E2::from(&*self.cast_element)),
+        }
+    }
+}
+
+impl<E> fmt::Display for CastListToJsonb<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("listtojsonb")
     }
@@ -135,20 +142,30 @@ impl fmt::Display for CastListToJsonb {
 
 /// Casts between two list types by casting each element of `a` ("list1") using
 /// `cast_expr` and collecting the results into a new list ("list2").
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct CastList1ToList2 {
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+pub struct CastList1ToList2<E = MirScalarExpr> {
     /// List2's type
     pub return_ty: SqlScalarType,
     /// The expression to cast List1's elements to List2's elements' type
-    pub cast_expr: Box<MirScalarExpr>,
+    pub cast_expr: Box<E>,
 }
 
-impl LazyUnaryFunc for CastList1ToList2 {
+impl<E: Eval> LazyUnaryFunc for CastList1ToList2<E> {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if a.is_null() {
@@ -165,7 +182,7 @@ impl LazyUnaryFunc for CastList1ToList2 {
         Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
         self.return_ty
             .without_modifiers()
             .nullable(input_type.nullable)
@@ -191,123 +208,94 @@ impl LazyUnaryFunc for CastList1ToList2 {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
-impl fmt::Display for CastList1ToList2 {
+impl<E> CastList1ToList2<E> {
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+        &'a self,
+    ) -> Result<CastList1ToList2<E2>, E2::Error> {
+        Ok(CastList1ToList2 {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::try_from(&*self.cast_expr)?),
+        })
+    }
+
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> CastList1ToList2<E2> {
+        CastList1ToList2 {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::from(&*self.cast_expr)),
+        }
+    }
+}
+
+impl<E> fmt::Display for CastList1ToList2<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("list1tolist2")
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct ListLength;
-
-impl LazyUnaryFunc for ListLength {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let count = a.unwrap_list().iter().count();
-        match count.try_into() {
-            Ok(c) => Ok(Datum::Int32(c)),
-            Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
-        }
-    }
-
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Int32.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for ListLength {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("list_length")
-    }
+#[sqlfunc(sqlname = "list_length")]
+fn list_length<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
+    let count = a.iter().count();
+    count
+        .try_into()
+        .map_err(|_| EvalError::Int32OutOfRange(count.to_string().into()))
 }
 
 /// The `list_length_max` implementation.
-///
-/// We're not deriving `sqlfunc` here because we need to pass in the `max_layer` parameter.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct ListLengthMax {
     /// Maximal allowed layer to query.
     pub max_layer: usize,
 }
-impl<'a> EagerBinaryFunc<'a> for ListLengthMax {
-    type Input1 = DatumList<'a>;
-    type Input2 = i64;
-    type Output = Result<Option<i32>, EvalError>;
-    // TODO(benesch): remove potentially dangerous usage of `as`.
-    #[allow(clippy::as_conversions)]
-    fn call(&self, a: Self::Input1, b: Self::Input2, _: &'a RowArena) -> Self::Output {
-        fn max_len_on_layer(i: DatumList<'_>, on_layer: i64) -> Option<usize> {
-            let mut i = i.iter();
-            if on_layer > 1 {
-                let mut max_len = None;
-                while let Some(Datum::List(i)) = i.next() {
+#[sqlfunc(ListLengthMax)]
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
+fn list_length_max<'a>(&self, a: DatumList<'a>, b: i64) -> Result<Option<i32>, EvalError> {
+    fn max_len_on_layer(i: DatumList<'_>, on_layer: i64) -> Option<usize> {
+        let i = i.iter();
+        if on_layer > 1 {
+            let mut max_len = None;
+            for d in i {
+                if let Datum::List(i) = d {
                     max_len = std::cmp::max(max_len_on_layer(i, on_layer - 1), max_len);
                 }
-                max_len
-            } else {
-                Some(i.count())
             }
-        }
-        if b as usize > self.max_layer || b < 1 {
-            Err(EvalError::InvalidLayer {
-                max_layer: self.max_layer,
-                val: b,
-            })
+            max_len
         } else {
-            match max_len_on_layer(a, b) {
-                Some(l) => match l.try_into() {
-                    Ok(c) => Ok(Some(c)),
-                    Err(_) => Err(EvalError::Int32OutOfRange(l.to_string().into())),
-                },
-                None => Ok(None),
-            }
+            Some(i.count())
         }
     }
-    fn output_type(
-        &self,
-        input_type_a: SqlColumnType,
-        input_type_b: SqlColumnType,
-    ) -> SqlColumnType {
-        let output = Self::Output::as_column_type();
-        let propagates_nulls = self.propagates_nulls();
-        let nullable = output.nullable;
-        output.nullable(
-            nullable || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable)),
-        )
-    }
-}
-impl fmt::Display for ListLengthMax {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("list_length_max")
+    if b as usize > self.max_layer || b < 1 {
+        Err(EvalError::InvalidLayer {
+            max_layer: self.max_layer,
+            val: b,
+        })
+    } else {
+        match max_len_on_layer(a, b) {
+            Some(l) => match l.try_into() {
+                Ok(c) => Ok(Some(c)),
+                Err(_) => Err(EvalError::Int32OutOfRange(l.to_string().into())),
+            },
+            None => Ok(None),
+        }
     }
 }

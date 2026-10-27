@@ -1,0 +1,137 @@
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the logic test suite in CockroachDB. The
+# original file was retrieved on July 6, 2026 from:
+#
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/privileges_comments
+#
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+subtest regression45707
+
+user root
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE DATABASE d45707; CREATE TABLE d45707.t45707(x INT);
+  GRANT CONNECT ON DATABASE d45707 TO testuser;
+  GRANT SELECT ON d45707.t45707 TO testuser
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+COMMENT ON DATABASE d45707 IS 'd45707';
+COMMENT ON TABLE d45707.t45707 IS 't45707';
+COMMENT ON COLUMN d45707.t45707.x IS 'x45707';
+COMMENT ON INDEX d45707.t45707@t45707_pkey IS 'p45707'
+
+user testuser
+
+statement ok
+SET DATABASE = d45707
+
+# Verify the user cannot modify the comments
+
+statement error unknown database 'd45707'
+COMMENT ON DATABASE d45707 IS 'd45707'
+
+onlyif config local-legacy-schema-changer
+statement error user testuser does not have CREATE privilege on relation t45707
+COMMENT ON TABLE d45707.t45707 IS 't45707'
+
+skipif config local-legacy-schema-changer
+statement error unknown schema 'd45707'
+COMMENT ON TABLE d45707.t45707 IS 't45707'
+
+onlyif config local-legacy-schema-changer
+statement error user testuser does not have CREATE privilege on relation t45707
+COMMENT ON COLUMN d45707.t45707.x IS 'x45707'
+
+skipif config local-legacy-schema-changer
+statement error unknown schema 'd45707'
+COMMENT ON COLUMN d45707.t45707.x IS 'x45707'
+
+onlyif config local-legacy-schema-changer
+statement error user testuser does not have CREATE privilege on relation t45707
+COMMENT ON INDEX d45707.t45707@t45707_pkey IS 'p45707'
+
+skipif config local-legacy-schema-changer
+statement error Expected IS, found operator "@"
+COMMENT ON INDEX d45707.t45707@t45707_pkey IS 'p45707'
+
+# Verify that the user can view the comments
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT shobj_description(oid, 'pg_database')
+  FROM pg_database
+ WHERE datname = 'd45707'
+----
+d45707
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT col_description(attrelid, attnum)
+  FROM pg_attribute
+ WHERE attrelid = 't45707'::regclass AND attname = 'x'
+----
+x45707
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT obj_description('t45707'::REGCLASS)
+----
+t45707
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT obj_description(indexrelid)
+  FROM pg_index
+ WHERE indrelid = 't45707'::REGCLASS
+   AND indisprimary
+----
+p45707
+
+# Verify that the user can modify the comments.
+
+user root
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+GRANT ALL ON DATABASE d45707 TO testuser
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+GRANT ALL ON TABLE d45707.t45707 TO testuser
+
+user testuser
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+COMMENT ON DATABASE d45707 IS 'd45707_2';
+COMMENT ON TABLE d45707.t45707 IS 't45707_2';
+COMMENT ON COLUMN d45707.t45707.x IS 'x45707_2';
+COMMENT ON INDEX d45707.t45707@t45707_pkey IS 'p45707_2'

@@ -51,8 +51,6 @@ pub struct StateConfig {
     pub all_features: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// The deploy generation with which the process was started.
-    pub deploy_generation: u64,
     /// A persistent ID associated with the environment.
     pub environment_id: EnvironmentId,
     /// Whether to start Materialize in read-only mode.
@@ -122,9 +120,8 @@ impl ClusterReplicaSizeMap {
                 let Some(memory_limit) = replica.memory_limit else {
                     bail!("No memory limit found in cluster definition for {name}");
                 };
-                replica.credits_per_hour = Numeric::from(
-                    (memory_limit.0 * replica.scale.get() * u64::cast_from(replica.workers)).0,
-                ) / Numeric::from(1 * GIB);
+                let total_memory = memory_limit.0 * replica.scale.get();
+                replica.credits_per_hour = Numeric::from(total_memory.0) / Numeric::from(GIB);
             }
         }
         Ok(Self(cluster_replica_sizes))
@@ -185,12 +182,14 @@ impl ClusterReplicaSizeMap {
                         ReplicaAllocation {
                             memory_limit: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
                             cpu_limit: None,
+                            cpu_request: None,
                             disk_limit: None,
                             scale: NonZero::new(1).expect("not zero"),
                             workers: NonZero::new(workers).expect("not zero"),
                             credits_per_hour: 1.into(),
                             cpu_exclusive: false,
                             is_cc: false,
+                            family: None,
                             swap_enabled: false,
                             disabled: false,
                             selectors: BTreeMap::default(),
@@ -207,12 +206,14 @@ impl ClusterReplicaSizeMap {
                 ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
+                    cpu_request: None,
                     disk_limit: None,
                     scale: NonZero::new(scale).expect("not zero"),
                     workers: NonZero::new(1).expect("not zero"),
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
                     is_cc: false,
+                    family: None,
                     swap_enabled: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
@@ -224,12 +225,14 @@ impl ClusterReplicaSizeMap {
                 ReplicaAllocation {
                     memory_limit: None,
                     cpu_limit: None,
+                    cpu_request: None,
                     disk_limit: None,
                     scale: NonZero::new(scale).expect("not zero"),
                     workers: NonZero::new(scale.into()).expect("not zero"),
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
                     is_cc: false,
+                    family: None,
                     swap_enabled: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
@@ -241,12 +244,14 @@ impl ClusterReplicaSizeMap {
                 ReplicaAllocation {
                     memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
                     cpu_limit: None,
+                    cpu_request: None,
                     disk_limit: None,
                     scale: NonZero::new(1).expect("not zero"),
                     workers: NonZero::new(8).expect("not zero"),
                     credits_per_hour: 1.into(),
                     cpu_exclusive: false,
                     is_cc: false,
+                    family: None,
                     swap_enabled: false,
                     disabled: false,
                     selectors: BTreeMap::default(),
@@ -259,12 +264,14 @@ impl ClusterReplicaSizeMap {
             ReplicaAllocation {
                 memory_limit: None,
                 cpu_limit: None,
+                cpu_request: None,
                 disk_limit: None,
                 scale: NonZero::new(2).expect("not zero"),
                 workers: NonZero::new(4).expect("not zero"),
                 credits_per_hour: 2.into(),
                 cpu_exclusive: false,
                 is_cc: false,
+                family: None,
                 swap_enabled: false,
                 disabled: false,
                 selectors: BTreeMap::default(),
@@ -276,12 +283,14 @@ impl ClusterReplicaSizeMap {
             ReplicaAllocation {
                 memory_limit: None,
                 cpu_limit: None,
+                cpu_request: None,
                 disk_limit: None,
                 scale: NonZero::new(1).expect("not zero"),
                 workers: NonZero::new(1).expect("not zero"),
                 credits_per_hour: 0.into(),
                 cpu_exclusive: false,
                 is_cc: true,
+                family: None,
                 swap_enabled: false,
                 disabled: true,
                 selectors: BTreeMap::default(),
@@ -303,10 +312,38 @@ pub struct AwsPrincipalContext {
 }
 
 impl AwsPrincipalContext {
+    // NOTE: the `mz_catalog.mz_aws_privatelink_connections` builtin materialized
+    // view reconstructs this ARN format in SQL from the mz_aws_account_id() and
+    // mz_aws_external_id_prefix() functions (see MZ_AWS_PRIVATELINK_CONNECTIONS
+    // in src/catalog/src/builtin/mz_catalog.rs). Keep the two in sync.
     pub fn to_principal_string(&self, aws_external_id_suffix: CatalogItemId) -> String {
         format!(
             "arn:aws:iam::{}:role/mz_{}_{}",
             self.aws_account_id, self.aws_external_id_prefix, aws_external_id_suffix
         )
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault`
+    fn cluster_replica_size_credits_from_memory() {
+        let s = r#"{
+            "test": {
+                "memory_limit": "1000MiB",
+                "scale": 2,
+                "workers": 10,
+                "credits_per_hour": "0"
+            }
+        }"#;
+        let map = ClusterReplicaSizeMap::parse_from_str(s, true).unwrap();
+
+        let alloc = map.get_allocation_by_name("test").unwrap();
+        let expected = Numeric::from(2000) / Numeric::from(1024);
+        assert_eq!(alloc.credits_per_hour, expected);
     }
 }

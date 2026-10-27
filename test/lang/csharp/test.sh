@@ -19,7 +19,7 @@ cd "$(dirname "$0")/../../.."
 
 cd test/lang/csharp
 
-# TODO: Reenable when database-issues#9531 is fixed
+# TODO: Reenable when https://linear.app/materializeinc/issue/DB-125 is fixed
 # dotnet test csharp-npgsql.csproj
 # dotnet test csharp-npgsql8.csproj
 dotnet test csharp-npgsql7.csproj

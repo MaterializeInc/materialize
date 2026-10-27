@@ -17,7 +17,6 @@ use std::time::Instant;
 use differential_dataflow::lattice::antichain_join;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::trace::implementations::WithLayout;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::PartialOrder;
@@ -159,23 +158,15 @@ where
     }
 }
 
-impl<Tr: TraceReader> WithLayout for PaddedTrace<Tr> {
-    type Layout = Tr::Layout;
-}
-
 impl<Tr> TraceReader for PaddedTrace<Tr>
 where
     Tr: TraceReader,
 {
+    type Time = Tr::Time;
     type Batch = Tr::Batch;
-    type Storage = Tr::Storage;
-    type Cursor = Tr::Cursor;
 
-    fn cursor_through(
-        &mut self,
-        upper: AntichainRef<Self::Time>,
-    ) -> Option<(Self::Cursor, Self::Storage)> {
-        self.trace.cursor_through(upper)
+    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
+        self.trace.batches_through(upper)
     }
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::Time>) {
@@ -210,7 +201,7 @@ where
     }
 
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Self::Time> {
-        self.trace.get_logical_compaction()
+        self.trace.get_physical_compaction()
     }
 
     fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
@@ -223,19 +214,16 @@ where
     Tr: TraceReader<Time = Timestamp> + 'static,
 {
     /// Import a trace restricted to a specific time interval `[since, until)`.
-    pub fn import_frontier_core<G>(
+    pub fn import_frontier_core<'scope>(
         &mut self,
-        scope: &G,
+        scope: Scope<'scope, Tr::Time>,
         name: &str,
         since: Antichain<Tr::Time>,
         until: Antichain<Tr::Time>,
     ) -> (
-        Arranged<G, TraceFrontier<TraceAgent<Tr>>>,
+        Arranged<'scope, TraceFrontier<TraceAgent<Tr>>>,
         ShutdownButton<CapabilitySet<Tr::Time>>,
-    )
-    where
-        G: Scope<Timestamp = Tr::Time>,
-    {
+    ) {
         self.trace.import_frontier_core(scope, name, since, until)
     }
 }
@@ -283,6 +271,20 @@ impl TraceBundle {
     /// Returns a mutable reference to the `errs` trace.
     pub fn errs_mut(&mut self) -> &mut PaddedTrace<ErrAgent<Timestamp, Diff>> {
         &mut self.errs
+    }
+
+    /// Returns mutable references to both traces.
+    ///
+    /// A reader of both, such as a peek that must rule out errors before it returns rows, cannot
+    /// take them one at a time, because each of [`TraceBundle::oks_mut`] and
+    /// [`TraceBundle::errs_mut`] borrows the whole bundle.
+    pub fn oks_errs_mut(
+        &mut self,
+    ) -> (
+        &mut PaddedTrace<RowRowAgent<Timestamp, Diff>>,
+        &mut PaddedTrace<ErrAgent<Timestamp, Diff>>,
+    ) {
+        (&mut self.oks, &mut self.errs)
     }
 
     /// Returns a reference to the `to_drop` tokens.

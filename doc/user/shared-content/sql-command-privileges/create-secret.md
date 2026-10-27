@@ -1,1 +1,0 @@
-- `CREATE` privileges on the containing schema.

@@ -10,36 +10,31 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-native-tls = "0.2.14"
-openssl = { version = "0.10.75", features = ["vendored"] }
-reqwest = { version = "0.12.25", features = [
-    "blocking",
-    "json",
-    "native-tls-vendored",
-] }
-mz-tls-util = { path = "../tls-util" }
-proptest = { version = "1.9.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.7.0" }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.145"
-url = { version = "2.5.7", features = ["serde"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+anyhow.workspace = true
+reqwest.workspace = true
+proptest.workspace = true
+zeroize.workspace = true
+proptest-derive.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+url = { workspace = true, features = ["serde"] }
+x509-cert.workspace = true
 
 [dev-dependencies]
-hyper = { version = "1.4.1", features = ["server"] }
-hyper-util = "0.1.19"
+hyper.workspace = true
+hyper-util.workspace = true
 mz-ore = { path = "../ore", features = ["async", "test"] }
-serde_json = "1.0.145"
-tokio = { version = "1.48.0", features = ["macros"] }
-tracing = "0.1.43"
+openssl.workspace = true
+tokio-openssl.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.13.5"
+prost-build.workspace = true
 
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = ["mz-build-tools/default"]

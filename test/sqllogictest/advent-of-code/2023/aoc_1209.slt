@@ -106,11 +106,11 @@ Explained Query:
                             implementation
                               %1:l2[#0, #2, #1]UKKK » %0:l3[#1{line_no}..=#3{round}]KKKif
                             ArrangeBy keys=[[#1{line_no}..=#3{round}]] // { arity: 4 }
-                              Filter (#2{col_no} <= 21) AND (#1{line_no}) IS NOT NULL AND (#2{col_no} > #3{round}) AND (0 != (coalesce(#0{value}, 0) - 0)) // { arity: 4 }
+                              Filter (#2{col_no} <= 21) AND (#1{line_no}) IS NOT NULL AND (0 != coalesce(#0{value}, 0)) AND (#2{col_no} > #3{round}) // { arity: 4 }
                                 Get l3 // { arity: 4 }
                             ArrangeBy keys=[[#0, #2, #1]] // { arity: 3 }
                               Get l2 // { arity: 3 }
-                      Filter (#2{col_no} <= 21) AND (#2{col_no} > #3{round}) AND (0 != (coalesce(#0{value}, 0) - 0)) // { arity: 4 }
+                      Filter (#2{col_no} <= 21) AND (0 != coalesce(#0{value}, 0)) AND (#2{col_no} > #3{round}) // { arity: 4 }
                         Get l3 // { arity: 4 }
                 Map (null, null, null, null) // { arity: 8 }
                   Union // { arity: 4 }

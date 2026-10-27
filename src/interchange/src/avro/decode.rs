@@ -26,12 +26,12 @@ use serde::{Deserialize, Serialize};
 use tracing::trace;
 use uuid::Uuid;
 
-use crate::avro::ConfluentAvroResolver;
+use crate::avro::AvroSchemaResolver;
 
 /// Manages decoding of Avro-encoded bytes.
 #[derive(Debug)]
 pub struct Decoder {
-    csr_avro: ConfluentAvroResolver,
+    csr_avro: AvroSchemaResolver,
     debug_name: String,
     buf1: Vec<u8>,
     row_buf: Row,
@@ -42,7 +42,7 @@ mod tests {
     use mz_ore::assert_err;
     use mz_repr::{Datum, Row};
 
-    use crate::avro::Decoder;
+    use crate::avro::{Decoder, WriterSchemaProvider};
 
     #[mz_ore::test(tokio::test)]
     async fn test_error_followed_by_success() {
@@ -51,7 +51,8 @@ mod tests {
 "name": "test",
 "fields": [{"name": "f1", "type": "int"}, {"name": "f2", "type": "int"}]
 }"#;
-        let mut decoder = Decoder::new(schema, None, "Test".to_string(), false).unwrap();
+        let mut decoder =
+            Decoder::new(schema, &[], WriterSchemaProvider::None, "Test".to_string()).unwrap();
         // This is not a valid Avro blob for the given schema
         let mut bad_bytes: &[u8] = &[0];
         assert_err!(decoder.decode(&mut bad_bytes).await.unwrap());
@@ -71,14 +72,18 @@ impl Decoder {
     /// The provided schema is called the "reader schema", which is the schema
     /// that we are expecting to use to decode records. The records may indicate
     /// that they are encoded with a different schema; as long as those.
+    ///
+    /// The `reader_reference_schemas` parameter provides schemas for types that
+    /// are referenced by the reader schema but defined in separate schemas.
+    /// These should be provided in dependency order (dependencies first).
     pub fn new(
         reader_schema: &str,
-        ccsr_client: Option<mz_ccsr::Client>,
+        reader_reference_schemas: &[String],
+        writer_schemas: crate::avro::WriterSchemaProvider,
         debug_name: String,
-        confluent_wire_format: bool,
     ) -> anyhow::Result<Decoder> {
         let csr_avro =
-            ConfluentAvroResolver::new(reader_schema, ccsr_client, confluent_wire_format)?;
+            AvroSchemaResolver::new(reader_schema, reader_reference_schemas, writer_schemas)?;
 
         Ok(Decoder {
             csr_avro,
@@ -114,7 +119,7 @@ impl Decoder {
             .with_context(|| {
                 format!(
                     "unable to decode row {}",
-                    match csr_schema_id {
+                    match &csr_schema_id {
                         Some(id) => format!("(Avro schema id = {:?})", id),
                         None => "".to_string(),
                     }

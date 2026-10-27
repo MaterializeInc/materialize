@@ -31,7 +31,7 @@ Source defined as t1
 #
 # The Join has a condition that is a local predicate
 # and was lost prior to database-issues#7467.
-apply pipeline=reduction_pushdown
+apply pipeline=ReductionPushdown
 Distinct project=[#1]
   Join on=((#1 + #1) = #0)
     Get x

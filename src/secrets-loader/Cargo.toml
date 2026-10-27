@@ -1,0 +1,21 @@
+[package]
+name = "mz-secrets-loader"
+description = "Loads the secrets reader selected on the command line."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+mz-aws-secrets-controller = { path = "../aws-secrets-controller", default-features = false }
+mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-features = false }
+mz-orchestrator-process = { path = "../orchestrator-process", default-features = false }
+mz-secrets = { path = "../secrets", default-features = false }
+mz-secrets-cli = { path = "../secrets-cli" }
+
+[features]
+default = []

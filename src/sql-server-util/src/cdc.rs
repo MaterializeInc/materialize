@@ -69,6 +69,7 @@ use std::time::Duration;
 use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use mz_repr::GlobalId;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tiberius::numeric::Numeric;
@@ -170,52 +171,57 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
         let mut fence_txn = fencing_client.transaction().await?;
         let qualified_table_name = format!(
             "{schema_name}.{table_name}",
-            schema_name = &table.schema_name,
-            table_name = &table.name
+            schema_name = table.schema_name,
+            table_name = table.name
         );
         self.metrics
             .snapshot_table_lock_start(&qualified_table_name);
-        fence_txn
-            .lock_table_shared(&table.schema_name, &table.name)
-            .await?;
-        tracing::info!(%source_id, %table.schema_name, %table.name, "timely-{worker_id} locked table");
+        let result: Result<_, SqlServerError> = async {
+            fence_txn
+                .lock_table_shared(&table.schema_name, &table.name)
+                .await?;
+            tracing::info!(%source_id, %table.schema_name, %table.name, "timely-{worker_id} locked table");
 
-        self.client
-            .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
-            .await?;
-        let mut txn = self.client.transaction().await?;
-        // Creating a savepoint forces a write to the transaction log, which will
-        // assign an LSN, but it does not force a transaction sequence number to be
-        // assigned as far as I can tell.  I have not observed any entries added to
-        // `sys.dm_tran_active_snapshot_database_transactions` when creating a savepoint
-        // or when reading system views to retrieve the LSN.
-        //
-        // We choose cdc.change_tables because it is a system table that will exist
-        // when CDC is enabled, it has a well known schema, and as a CDC client,
-        // we should be able to read from it already.
-        let res = txn
-            .simple_query("SELECT TOP 1 object_id FROM cdc.change_tables")
-            .await?;
-        if res.len() != 1 {
-            Err(SqlServerError::InvariantViolated(
-                "No objects found in cdc.change_tables".into(),
-            ))?
-        }
+            self.client
+                .set_transaction_isolation(TransactionIsolationLevel::Snapshot)
+                .await?;
+            let mut txn = self.client.transaction().await?;
+            // Creating a savepoint forces a write to the transaction log, which will
+            // assign an LSN, but it does not force a transaction sequence number to be
+            // assigned as far as I can tell.  I have not observed any entries added to
+            // `sys.dm_tran_active_snapshot_database_transactions` when creating a savepoint
+            // or when reading system views to retrieve the LSN.
+            //
+            // We choose cdc.change_tables because it is a system table that will exist
+            // when CDC is enabled, it has a well known schema, and as a CDC client,
+            // we should be able to read from it already.
+            let res = txn
+                .simple_query("SELECT TOP 1 object_id FROM cdc.change_tables")
+                .await?;
+            if res.len() != 1 {
+                Err(SqlServerError::InvariantViolated(
+                    "No objects found in cdc.change_tables".into(),
+                ))?
+            }
 
-        // Because the table is locked, any write operation has either
-        // completed, or is blocked. The LSN and XSN acquired now will represent a
-        // consistent point-in-time view, such that any committed write will be
-        // visible to this snapshot and the LSN of such a write will be less than
-        // or equal to the LSN captured here. Creating the savepoint sets the LSN,
-        // we can read it after rolling back the locks.
-        txn.create_savepoint(SAVEPOINT_NAME).await?;
-        tracing::info!(%source_id, %table.schema_name, %table.name, %SAVEPOINT_NAME, "timely-{worker_id} created savepoint");
+            // Because the table is locked, any write operation has either
+            // completed, or is blocked. The LSN and XSN acquired now will represent a
+            // consistent point-in-time view, such that any committed write will be
+            // visible to this snapshot and the LSN of such a write will be less than
+            // or equal to the LSN captured here. Creating the savepoint sets the LSN,
+            // we can read it after rolling back the locks.
+            txn.create_savepoint(SAVEPOINT_NAME).await?;
+            tracing::info!(%source_id, %table.schema_name, %table.name, %SAVEPOINT_NAME, "timely-{worker_id} created savepoint");
 
-        // Once the savepoint is created (which establishes the XSN and captures the LSN),
-        // the table no longer needs to be locked. Any writes that happen to the upstream table
-        // will have an LSN higher than our captured LSN, and will be read from CDC.
-        fence_txn.rollback().await?;
+            // Once the savepoint is created (which establishes the XSN and captures the LSN),
+            // the table no longer needs to be locked. Any writes that happen to the upstream table
+            // will have an LSN higher than our captured LSN, and will be read from CDC.
+            fence_txn.rollback().await?;
+
+            Ok(txn)
+        }.await;
         self.metrics.snapshot_table_lock_end(&qualified_table_name);
+        let mut txn = result?;
         let lsn = txn.get_lsn().await?;
 
         tracing::info!(%source_id, ?lsn, "timely-{worker_id} starting snapshot");
@@ -331,8 +337,9 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
                             }
                         }
 
-                        let ddl_history = crate::inspect::get_ddl_history(self.client, instance, instance_lsn, &db_max_lsn)
-                            .await?;
+                        let ddl_history = crate::inspect::get_ddl_history(
+                            self.client, instance, instance_lsn, &db_max_lsn,
+                        ).await?;
                         for (table, ddl_events) in ddl_history {
                             for ddl_event in ddl_events {
                                 yield CdcEvent::SchemaUpdate {
@@ -501,9 +508,9 @@ pub enum CdcError {
     Ord,
     Hash,
     Serialize,
-    Deserialize,
-    Arbitrary,
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct Lsn {
     /// Virtual Log File sequence number.
     pub vlf_id: u32,

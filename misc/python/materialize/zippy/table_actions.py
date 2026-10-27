@@ -21,6 +21,7 @@ from materialize.zippy.framework import (
 )
 from materialize.zippy.mz_capabilities import MzIsRunning
 from materialize.zippy.table_capabilities import TableExists
+from materialize.zippy.view_capabilities import ViewExists
 
 MAX_ROWS_PER_ACTION = 10000
 
@@ -77,13 +78,11 @@ class CreateTable(Action):
             else ""
         )
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 > CREATE TABLE {self.table.name} (f1 INTEGER);
                 {index}
                 > INSERT INTO {self.table.name} VALUES ({self.table.watermarks.max});
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -114,25 +113,54 @@ class ValidateTable(Action):
         # Therefore, only use it in 20% of validations.
         if self.select_limit:
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     > CREATE TEMPORARY TABLE {self.table.name}_select_limit (f1 INTEGER);
                     > INSERT INTO {self.table.name}_select_limit SELECT * FROM {self.table.name} LIMIT 999999999;
                     > SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name}_select_limit;
                     {self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
                     > DROP TABLE {self.table.name}_select_limit
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
         else:
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     > SELECT MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM {self.table.name};
                     {self.table.watermarks.min} {self.table.watermarks.max} {(self.table.watermarks.max-self.table.watermarks.min)+1} {(self.table.watermarks.max-self.table.watermarks.min)+1}
-                    """
-                ),
+                    """),
+                mz_service=state.mz_service,
+            )
+
+
+class DropTable(Action):
+    """Drops a table that no view reads from."""
+
+    @classmethod
+    def requires(cls) -> set[type[Capability]]:
+        return {BalancerdIsRunning, MzIsRunning, TableExists}
+
+    def __init__(self, capabilities: Capabilities) -> None:
+        referenced: set[str] = set()
+        for view in capabilities.get(ViewExists):
+            referenced.update(input.name for input in view.inputs)
+
+        candidates = [
+            t for t in capabilities.get(TableExists) if t.name not in referenced
+        ]
+        self.table: TableExists | None = (
+            random.choice(candidates) if candidates else None
+        )
+        if self.table is not None:
+            capabilities.remove_capability_instance(self.table)
+        super().__init__(capabilities)
+
+    def __str__(self) -> str:
+        return f"{Action.__str__(self)} {self.table.name if self.table else '<none>'}"
+
+    def run(self, c: Composition, state: State) -> None:
+        if self.table is not None:
+            c.testdrive(
+                f"> DROP TABLE {self.table.name};",
                 mz_service=state.mz_service,
             )
 

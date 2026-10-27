@@ -72,7 +72,10 @@ macro_rules! ident {
         #[allow(dead_code)]
         const fn check_len<const MAX: usize, const LEN: usize>() {
             if LEN > MAX {
-                panic!(stringify!(length of provided string literal, $val, is greater than specified max of $max_len));
+                panic!(stringify!(
+                    length of provided string literal, $val,
+                    is greater than specified max of $max_len
+                ));
             }
         }
 

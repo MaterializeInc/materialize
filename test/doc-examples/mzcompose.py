@@ -8,9 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """
-Testdrive is the basic framework and language for defining product tests under
-the expected-result/actual-result (aka golden testing) paradigm. A query is
-retried until it produces the desired result.
+Runs examples from our customer-facing documentation as test cases.
 """
 
 import os
@@ -40,11 +38,9 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SERVICES = [
     SshBastionHost(allow_any_key=True),
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Redpanda(),
@@ -55,7 +51,7 @@ SERVICES = [
     Minio(setup_materialize=False, additional_directories=["copytos3"]),
     Materialized(),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
-    Testdrive(),
+    Testdrive(default_timeout="60s"),
     SqlServer(),
 ]
 
@@ -69,11 +65,25 @@ INCLUDE_RE = re.compile(
     re.VERBOSE,
 )
 
+INCLUDE_HEADLESS_RE = re.compile(
+    r"""\{\{\s*[%<]\s*include-headless  # {{% include-headless  or {{< include-headless
+        [\s\S]*?"(/headless/[^"]+)"     # "/headless/path" - must start with /headless/
+        [\s\S]*?[%>]\s*\}\}             # %}} or >}}
+    """,
+    re.VERBOSE,
+)
+
 
 def md_include(text: str) -> str:
     while True:
         new = INCLUDE_RE.sub(
             lambda m: (pathlib.Path("doc/user") / m.group(1)).read_text(), text
+        )
+        new = INCLUDE_HEADLESS_RE.sub(
+            lambda m: (pathlib.Path("doc/user/content") / m.group(1).lstrip("/"))
+            .with_suffix(".md")
+            .read_text(),
+            new,
         )
         if new == text:
             return new
@@ -188,7 +198,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "postgres",
         "mysql",
         "minio",
-        "zookeeper",
         "kafka",
         "schema-registry",
         "ssh-bastion-host",
@@ -213,7 +222,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     files_unsharded: list[pathlib.Path] = []
     for file in args.files:
-        files_unsharded.extend(LOCATION.rglob(file))
+        new_files = list(LOCATION.rglob(file))
+        if not new_files:
+            known = "\n  ".join(
+                [posixpath.relpath(file, LOCATION) for file in LOCATION.rglob("*.yml")]
+            )
+            raise ValueError(f'No files found matching "{file}", known:\n  {known}')
+        files_unsharded.extend(new_files)
     files: list[pathlib.Path] = buildkite.shard_list(
         sorted(files_unsharded),
         lambda file: str(file),

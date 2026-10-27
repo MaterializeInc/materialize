@@ -14,230 +14,28 @@ macro_rules! to_unary {
     };
 }
 
-macro_rules! sqlfunc {
-    // Expand the function name into an attribute if it was omitted
-    (
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = stringify!($fn_name)]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    // Add both uniqueness + inverse attributes if they were omitted
-    (
-        #[sqlname = $name:expr]
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = false]
-            #[inverse = None]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    (
-        #[sqlname = $name:expr]
-        #[is_monotone = $is_monotone:expr]
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = false]
-            #[is_monotone = $is_monotone]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    // Add the inverse attribute if it was omitted
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = $preserves_uniqueness]
-            #[inverse = None]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        #[is_monotone = $is_monotone:expr]
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = $preserves_uniqueness]
-            #[inverse = None]
-            #[is_monotone = $is_monotone]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    // Add the monotone attribute if it was omitted
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        #[inverse = $inverse:expr]
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = $preserves_uniqueness]
-            #[inverse = $inverse]
-            #[is_monotone = false]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    // Add lifetime parameter if it was omitted
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        #[inverse = $inverse:expr]
-        #[is_monotone = $is_monotone:expr]
-        fn $fn_name:ident ($($params:tt)*) $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = $preserves_uniqueness]
-            #[inverse = $inverse]
-            #[is_monotone = $is_monotone]
-            fn $fn_name<'a>($($params)*) $($tail)*
-        );
-    };
-
-    // Normalize mut arguments to non-mut ones
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        #[inverse = $inverse:expr]
-        #[is_monotone = $is_monotone:expr]
-        fn $fn_name:ident<$lt:lifetime>(mut $param_name:ident: $input_ty:ty $(,)?) -> $output_ty:ty
-            $body:block
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = $preserves_uniqueness]
-            #[inverse = $inverse]
-            #[is_monotone = $is_monotone]
-            fn $fn_name<$lt>($param_name: $input_ty) -> $output_ty {
-                let mut $param_name = $param_name;
-                $body
-            }
-        );
-    };
-
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        #[inverse = $inverse:expr]
-        #[is_monotone = $is_monotone:expr]
-        fn $fn_name:ident<$lt:lifetime>($param_name:ident: $input_ty:ty $(,)?) -> $output_ty:ty
-            $body:block
-    ) => {
-        paste::paste! {
-            #[mz_expr_derive::sqlfunc(
-                sqlname = $name,
-                preserves_uniqueness = $preserves_uniqueness,
-                inverse = $inverse,
-                is_monotone = $is_monotone,
-            )]
-            #[allow(clippy::extra_unused_lifetimes)]
-            pub fn $fn_name<$lt>($param_name: $input_ty) -> $output_ty {
-                $body
-            }
-
-            mod $fn_name {
-                #[cfg(test)]
-                #[mz_ore::test]
-                // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
-                #[cfg_attr(miri, ignore)]
-                fn test_sqlfunc_macro() {
-                    use crate::func::EagerUnaryFunc;
-                    let f = super::[<$fn_name:camel>];
-                    let input_type = mz_repr::SqlColumnType {
-                        scalar_type: mz_repr::SqlScalarType::Float32,
-                        nullable: true,
-                    };
-                    let output_type_nullable = f.output_type(input_type);
-
-                    let input_type = mz_repr::SqlColumnType {
-                        scalar_type: mz_repr::SqlScalarType::Float32,
-                        nullable: false,
-                    };
-                    let output_type_nonnullable = f.output_type(input_type);
-
-                    let preserves_uniqueness = f.preserves_uniqueness();
-                    let inverse = f.inverse();
-                    let is_monotone = f.is_monotone();
-                    let propagates_nulls = f.propagates_nulls();
-                    let introduces_nulls = f.introduces_nulls();
-                    let could_error = f.could_error();
-
-                    #[derive(Debug)]
-                    #[allow(unused)]
-                    struct Info {
-                        output_type_nullable: mz_repr::SqlColumnType,
-                        output_type_nonnullable: mz_repr::SqlColumnType,
-                        preserves_uniqueness: bool,
-                        inverse: Option<crate::UnaryFunc>,
-                        is_monotone: bool,
-                        propagates_nulls: bool,
-                        introduces_nulls: bool,
-                        could_error: bool,
-                    }
-
-                    let info = Info {
-                        output_type_nullable,
-                        output_type_nonnullable,
-                        preserves_uniqueness,
-                        inverse,
-                        is_monotone,
-                        propagates_nulls,
-                        introduces_nulls,
-                        could_error,
-                    };
-
-                    insta::assert_debug_snapshot!(info);
-                }
-
-            }
-        }
-    };
-}
-
 #[cfg(test)]
 mod test {
+    use mz_expr_derive::sqlfunc;
     use mz_repr::SqlScalarType;
 
     use crate::EvalError;
     use crate::scalar::func::LazyUnaryFunc;
 
-    sqlfunc!(
-        #[sqlname = "INFALLIBLE"]
-        fn infallible1(a: f32) -> f32 {
-            a
-        }
-    );
+    #[sqlfunc(sqlname = "INFALLIBLE")]
+    fn infallible1(a: f32) -> f32 {
+        a
+    }
 
-    sqlfunc!(
-        fn infallible2(a: Option<f32>) -> f32 {
-            a.unwrap_or_default()
-        }
-    );
+    #[sqlfunc]
+    fn infallible2(a: Option<f32>) -> f32 {
+        a.unwrap_or_default()
+    }
 
-    sqlfunc!(
-        fn infallible3(a: f32) -> Option<f32> {
-            Some(a)
-        }
-    );
+    #[sqlfunc]
+    fn infallible3(a: f32) -> Option<f32> {
+        Some(a)
+    }
 
     #[mz_ore::test]
     fn elision_rules_infallible() {
@@ -255,50 +53,47 @@ mod test {
     #[mz_ore::test]
     fn output_types_infallible() {
         assert_eq!(
-            Infallible1.output_type(SqlScalarType::Float32.nullable(true)),
+            Infallible1.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible1.output_type(SqlScalarType::Float32.nullable(false)),
+            Infallible1.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Infallible2.output_type(SqlScalarType::Float32.nullable(true)),
+            Infallible2.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Infallible2.output_type(SqlScalarType::Float32.nullable(false)),
+            Infallible2.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Infallible3.output_type(SqlScalarType::Float32.nullable(true)),
+            Infallible3.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Infallible3.output_type(SqlScalarType::Float32.nullable(false)),
+            Infallible3.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(true)
         );
     }
 
-    sqlfunc!(
-        fn fallible1(a: f32) -> Result<f32, EvalError> {
-            Ok(a)
-        }
-    );
+    #[sqlfunc]
+    fn fallible1(a: f32) -> Result<f32, EvalError> {
+        Ok(a)
+    }
 
-    sqlfunc!(
-        fn fallible2(a: Option<f32>) -> Result<f32, EvalError> {
-            Ok(a.unwrap_or_default())
-        }
-    );
+    #[sqlfunc]
+    fn fallible2(a: Option<f32>) -> Result<f32, EvalError> {
+        Ok(a.unwrap_or_default())
+    }
 
-    sqlfunc!(
-        fn fallible3(a: f32) -> Result<Option<f32>, EvalError> {
-            Ok(Some(a))
-        }
-    );
+    #[sqlfunc]
+    fn fallible3(a: f32) -> Result<Option<f32>, EvalError> {
+        Ok(Some(a))
+    }
 
     #[mz_ore::test]
     fn elision_rules_fallible() {
@@ -315,31 +110,67 @@ mod test {
     #[mz_ore::test]
     fn output_types_fallible() {
         assert_eq!(
-            Fallible1.output_type(SqlScalarType::Float32.nullable(true)),
+            Fallible1.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible1.output_type(SqlScalarType::Float32.nullable(false)),
+            Fallible1.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Fallible2.output_type(SqlScalarType::Float32.nullable(true)),
+            Fallible2.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(false)
         );
         assert_eq!(
-            Fallible2.output_type(SqlScalarType::Float32.nullable(false)),
+            Fallible2.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(false)
         );
 
         assert_eq!(
-            Fallible3.output_type(SqlScalarType::Float32.nullable(true)),
+            Fallible3.output_sql_type(SqlScalarType::Float32.nullable(true)),
             SqlScalarType::Float32.nullable(true)
         );
         assert_eq!(
-            Fallible3.output_type(SqlScalarType::Float32.nullable(false)),
+            Fallible3.output_sql_type(SqlScalarType::Float32.nullable(false)),
             SqlScalarType::Float32.nullable(true)
         );
+    }
+
+    // Separate from the tests above, which call the lazy traits' methods and would
+    // find them ambiguous with the eager traits in scope.
+    mod stateful {
+        use mz_expr_derive::sqlfunc;
+        use mz_repr::RowArena;
+
+        use crate::EvalError;
+        use crate::scalar::func::EagerUnaryFunc;
+        use crate::scalar::func::binary::EagerBinaryFunc;
+
+        pub struct AddOffset(i64);
+
+        #[sqlfunc(sqlname = "add_offset")]
+        fn add_offset(&self, a: i64) -> i64 {
+            a + self.0
+        }
+
+        pub struct ScaleSum(i64);
+
+        #[sqlfunc(sqlname = "scale_sum")]
+        fn scale_sum(&self, a: i64, b: i64) -> Result<i64, EvalError> {
+            (a + b)
+                .checked_mul(self.0)
+                .ok_or(EvalError::NumericFieldOverflow)
+        }
+
+        #[mz_ore::test]
+        fn stateful_unary_and_binary_read_their_state() {
+            let arena = RowArena::new();
+            assert_eq!(EagerUnaryFunc::call(&AddOffset(3), 4, &arena), 7);
+            assert_eq!(EagerBinaryFunc::call(&ScaleSum(2), (3, 4), &arena), Ok(14));
+            assert_eq!(format!("{}", AddOffset(3)), "add_offset");
+            assert_eq!(format!("{}", ScaleSum(2)), "scale_sum");
+        }
     }
 }
 
@@ -348,26 +179,49 @@ mod test {
 /// variants that use the old definitions.
 ///
 /// Once everything is handled by this macro we can remove it and replace it with `enum_dispatch`
+///
+/// Variants marked `(E)` have payload structs generic over the stored expression type. The
+/// marker must be the literal ident `E`, matching the generic parameter the macro declares.
 macro_rules! derive_unary {
-    ($($name:ident),*) => {
-        #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
-        pub enum UnaryFunc {
-            $($name($name),)*
+    // Internal rules that rebuild one variant payload during expression
+    // conversion. Payloads without a marker are expression free and clone.
+    (@try_map_payload $f:ident) => { $f.clone() };
+    (@try_map_payload $f:ident $marker:ident) => { $f.try_map_expr()? };
+    (@map_payload $f:ident) => { $f.clone() };
+    (@map_payload $f:ident $marker:ident) => { $f.map_expr() };
+    // Internal rules that name a payload type at the MIR instantiation, for
+    // use in the impl block where `E` is not in scope.
+    (@mir_ty $name:ident) => { $name };
+    (@mir_ty $name:ident $marker:ident) => { $name<crate::MirScalarExpr> };
+    ($($name:ident $(($marker:ident))?),* $(,)?) => {
+        #[derive(
+            Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
+            serde::Serialize, serde::Deserialize, Hash,
+                )]
+        pub enum UnaryFunc<E = crate::MirScalarExpr> {
+            $($name($name $(<$marker>)?),)*
         }
 
-        impl UnaryFunc {
+        // The `Eval` bound is required by the expression bearing payloads'
+        // `LazyUnaryFunc` impls, even for methods that never evaluate.
+        impl<E: Eval> UnaryFunc<E> {
             pub fn eval<'a>(
                 &'a self,
                 datums: &[Datum<'a>],
                 temp_storage: &'a RowArena,
-                a: &'a MirScalarExpr,
+                a: &'a impl Eval,
             ) -> Result<Datum<'a>, EvalError> {
                 match self {
                     $(Self::$name(f) => f.eval(datums, temp_storage, a),)*
                 }
             }
 
-            pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+            pub fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::output_sql_type(f, input_type),)*
+                }
+            }
+            pub fn output_type(&self, input_type: ReprColumnType) -> ReprColumnType {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::output_type(f, input_type),)*
                 }
@@ -387,11 +241,6 @@ macro_rules! derive_unary {
                     $(Self::$name(f) => LazyUnaryFunc::preserves_uniqueness(f),)*
                 }
             }
-            pub fn inverse(&self) -> Option<UnaryFunc> {
-                match self {
-                    $(Self::$name(f) => LazyUnaryFunc::inverse(f),)*
-                }
-            }
             pub fn is_monotone(&self) -> bool {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::is_monotone(f),)*
@@ -402,9 +251,111 @@ macro_rules! derive_unary {
                     $(Self::$name(f) => LazyUnaryFunc::could_error(f),)*
                 }
             }
+            pub fn is_eliminable_cast(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::is_eliminable_cast(f),)*
+                }
+            }
         }
 
-        impl fmt::Display for UnaryFunc {
+        impl<E> UnaryFunc<E> {
+            /// The canonical name of this variant, as declared by its
+            /// [`FuncName`](crate::func::FuncName) impl.
+            pub fn variant_name(&self) -> &'static str {
+                match self {
+                    $(Self::$name(_) =>
+                        <$name $(<$marker>)? as crate::func::FuncName>::NAME,)*
+                }
+            }
+
+            /// The `#[sqlfunc]` source of this variant's function, `None` for
+            /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$name $(<$marker>)? as crate::func::FuncName>::SQLFUNC,)*
+                }
+            }
+
+            /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$name $(<$marker>)? as crate::func::FuncName>::sqlfunc_input_types(),)*
+                }
+            }
+
+            /// Rebuilds this function with any stored expressions converted to
+            /// `E2`. Fails if any expression conversion fails, reporting the
+            /// first failure.
+            pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+                &'a self,
+            ) -> Result<UnaryFunc<E2>, E2::Error> {
+                Ok(match self {
+                    $(Self::$name(f) => UnaryFunc::$name(
+                        derive_unary!(@try_map_payload f $($marker)?),
+                    ),)*
+                })
+            }
+
+            /// Rebuilds this function with any stored expressions converted to
+            /// `E2`.
+            pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> UnaryFunc<E2> {
+                match self {
+                    $(Self::$name(f) => UnaryFunc::$name(
+                        derive_unary!(@map_payload f $($marker)?),
+                    ),)*
+                }
+            }
+        }
+
+        // Methods that only exist at the MIR instantiation. `inverse` is an
+        // optimizer concept and the name lookup helpers serve MIR test
+        // tooling.
+        impl UnaryFunc {
+            pub fn inverse(&self) -> Option<UnaryFunc> {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::inverse(f),)*
+                }
+            }
+
+            /// Attempts to construct a `UnaryFunc` from the canonical name of
+            /// one of its variants, as declared by the variant's
+            /// [`FuncName`](crate::func::FuncName) impl (the name of the
+            /// underlying Rust function, e.g. `cast_int32_to_numeric`).
+            ///
+            /// Intended for test tooling that needs to name exact function
+            /// variants. Only variants whose inner function deserializes from
+            /// no data (unit functions and functions all of whose parameters
+            /// may default to `None`) are constructible. Returns `None` for
+            /// other variants and for unknown names. Returns the MIR
+            /// instantiation.
+            pub fn from_variant_name(name: &str) -> Option<Self> {
+                use crate::func::FuncName;
+                $(
+                    if name == <derive_unary!(@mir_ty $name $($marker)?) as FuncName>::NAME {
+                        return serde_json::from_value(
+                            serde_json::json!({ stringify!($name): null }),
+                        )
+                        .ok();
+                    }
+                )*
+                None
+            }
+
+            /// The canonical names of all variants, in declaration order.
+            pub fn variant_names() -> impl Iterator<Item = &'static str> {
+                use crate::func::FuncName;
+                [$(
+                    <derive_unary!(@mir_ty $name $($marker)?) as FuncName>::NAME,
+                )*]
+                .into_iter()
+            }
+        }
+
+        impl<E> fmt::Display for UnaryFunc<E> {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self {
                     $(Self::$name(func) => func.fmt(f),)*
@@ -413,8 +364,8 @@ macro_rules! derive_unary {
         }
 
         $(
-            impl From<$name> for crate::UnaryFunc {
-                fn from(variant: $name) -> Self {
+            impl<E> From<$name $(<$marker>)?> for crate::UnaryFunc<E> {
+                fn from(variant: $name $(<$marker>)?) -> Self {
                     Self::$name(variant)
                 }
             }
@@ -422,22 +373,306 @@ macro_rules! derive_unary {
     }
 }
 
-/// This is not complete yet, pending conversion of all binary funcs to an implementation of
-/// `LazyBinaryFunc`.
-macro_rules! derive_binary_from {
-    ($($name:ident $( ( $variant:ident ) )?),* $(,)?) => {
-        $(
-            derive_binary_from!(from @ $name $( ( $variant ) )?);
-        )*
-    };
-    (from @ $name:ident ( $variant:ident ) ) => {
-        impl From<$variant> for crate::BinaryFunc {
-            fn from(variant: $variant) -> Self {
-                Self::$name(variant)
+/// Generates the `VariadicFunc` enum, its `impl` block,
+/// `Display` impl, and `From<InnerType>` impls for each variant.
+///
+/// All variants must use explicit `Name(Type)` syntax. When the variant name equals
+/// the inner type name, write e.g. `And(And)`.
+macro_rules! derive_variadic {
+    ($($name:ident ( $variant:ident )),* $(,)?) => {
+        #[derive(
+            Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
+            serde::Serialize, serde::Deserialize, Hash,
+        )]
+        pub enum VariadicFunc {
+            $($name($variant),)*
+        }
+
+        impl VariadicFunc {
+            pub fn eval<'a>(
+                &'a self,
+                datums: &[Datum<'a>],
+                temp_storage: &'a RowArena,
+                exprs: &'a [impl Eval],
+            ) -> Result<Datum<'a>, EvalError> {
+                match self {
+                    $(Self::$name(f) => f.eval(datums, temp_storage, exprs),)*
+                }
+            }
+
+            pub fn output_sql_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::output_type(f, &input_types),)*
+                }
+            }
+
+            /// Computes the representation type of this variadic function.
+            ///
+            /// Wrapper around [`Self::output_sql_type`] that converts to representation types.
+            pub fn output_type(&self, input_types: Vec<ReprColumnType>) -> ReprColumnType {
+                let sql_types = input_types.iter().map(SqlColumnType::from_repr).collect();
+                ReprColumnType::from(&self.output_sql_type(sql_types))
+            }
+
+            pub fn propagates_nulls(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::propagates_nulls(f),)*
+                }
+            }
+
+            pub fn introduces_nulls(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::introduces_nulls(f),)*
+                }
+            }
+
+            pub fn could_error(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::could_error(f),)*
+                }
+            }
+
+            pub fn is_monotone(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::is_monotone(f),)*
+                }
+            }
+
+            pub fn is_associative(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::is_associative(f),)*
+                }
+            }
+
+            pub fn is_infix_op(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyVariadicFunc::is_infix_op(f),)*
+                }
+            }
+
+            /// The canonical name of this variant, as declared by its
+            /// [`FuncName`](crate::func::FuncName) impl.
+            pub fn variant_name(&self) -> &'static str {
+                match self {
+                    $(Self::$name(_) => <$variant as crate::func::FuncName>::NAME,)*
+                }
+            }
+
+            /// The `#[sqlfunc]` source of this variant's function, `None` for
+            /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
+                match self {
+                    $(Self::$name(_) => <$variant as crate::func::FuncName>::SQLFUNC,)*
+                }
+            }
+
+            /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$variant as crate::func::FuncName>::sqlfunc_input_types(),)*
+                }
+            }
+
+            /// Attempts to construct a `VariadicFunc` from the canonical name
+            /// of one of its variants, as declared by the variant's
+            /// [`FuncName`](crate::func::FuncName) impl (the name of the
+            /// underlying Rust function, e.g. `record_create`).
+            ///
+            /// Intended for test tooling that needs to name exact function
+            /// variants. Only variants whose inner function deserializes from
+            /// no data (unit functions and functions all of whose parameters
+            /// may default to `None`) are constructible. Returns `None` for
+            /// other variants and for unknown names.
+            pub fn from_variant_name(name: &str) -> Option<Self> {
+                $(
+                    if name == <$variant as crate::func::FuncName>::NAME {
+                        return serde_json::from_value(
+                            serde_json::json!({ stringify!($name): null }),
+                        )
+                        .ok();
+                    }
+                )*
+                None
+            }
+
+            /// The canonical names of all variants, in declaration order.
+            pub fn variant_names() -> impl Iterator<Item = &'static str> {
+                [$(<$variant as crate::func::FuncName>::NAME,)*].into_iter()
             }
         }
-    };
-    (from @ $name:ident) => {
-        derive_binary_from!(from @ $name ( $name ) );
-    };
+
+        impl fmt::Display for VariadicFunc {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                match self {
+                    $(Self::$name(func) => func.fmt(f),)*
+                }
+            }
+        }
+
+        $(
+            impl From<$variant> for crate::VariadicFunc {
+                fn from(variant: $variant) -> Self {
+                    Self::$name(variant)
+                }
+            }
+        )*
+    }
+}
+
+/// Generates the `BinaryFunc` enum, its `impl` block (with 8 delegating methods),
+/// `Display` impl, and `From<InnerType>` impls for each variant.
+///
+/// All variants must use explicit `Name(Type)` syntax. When the variant name equals
+/// the inner type name, write e.g. `AddInt16(AddInt16)`.
+macro_rules! derive_binary {
+    ($($name:ident ( $variant:ident )),* $(,)?) => {
+        #[derive(
+            Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
+            serde::Serialize, serde::Deserialize, Hash,
+                )]
+        pub enum BinaryFunc {
+            $($name($variant),)*
+        }
+
+        impl BinaryFunc {
+            pub fn eval<'a>(
+                &'a self,
+                datums: &[Datum<'a>],
+                temp_storage: &'a RowArena,
+                exprs: &[&'a impl Eval],
+            ) -> Result<Datum<'a>, EvalError> {
+                match self {
+                    $(Self::$name(f) => f.eval(datums, temp_storage, exprs),)*
+                }
+            }
+
+            pub fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+                match self {
+                    $(Self::$name(f) => {
+                        LazyBinaryFunc::output_sql_type(f, input_types)
+                    },)*
+                }
+            }
+
+            pub fn output_type(&self, input_types: &[ReprColumnType]) -> ReprColumnType {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::output_type(f, input_types),)*
+                }
+            }
+
+            pub fn propagates_nulls(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::propagates_nulls(f),)*
+                }
+            }
+
+            pub fn introduces_nulls(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::introduces_nulls(f),)*
+                }
+            }
+
+            pub fn is_infix_op(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::is_infix_op(f),)*
+                }
+            }
+
+            pub fn negate(&self) -> Option<BinaryFunc> {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::negate(f),)*
+                }
+            }
+
+            pub fn could_error(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::could_error(f),)*
+                }
+            }
+
+            pub fn is_monotone(&self) -> (bool, bool) {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::is_monotone(f),)*
+                }
+            }
+
+            pub fn is_infinity_monotone(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::is_infinity_monotone(f),)*
+                }
+            }
+
+            /// The canonical name of this variant, as declared by its
+            /// [`FuncName`](crate::func::FuncName) impl.
+            pub fn variant_name(&self) -> &'static str {
+                match self {
+                    $(Self::$name(_) => <$variant as crate::func::FuncName>::NAME,)*
+                }
+            }
+
+            /// The `#[sqlfunc]` source of this variant's function, `None` for
+            /// hand-written functions. See [`FuncName::SQLFUNC`](crate::func::FuncName::SQLFUNC).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_source(&self) -> Option<crate::func::SqlFuncSource> {
+                match self {
+                    $(Self::$name(_) => <$variant as crate::func::FuncName>::SQLFUNC,)*
+                }
+            }
+
+            /// See [`FuncName::sqlfunc_input_types`](crate::func::FuncName::sqlfunc_input_types).
+            #[cfg(feature = "func-registry")]
+            pub fn sqlfunc_input_types(&self) -> Option<Vec<SqlColumnType>> {
+                match self {
+                    $(Self::$name(_) =>
+                        <$variant as crate::func::FuncName>::sqlfunc_input_types(),)*
+                }
+            }
+
+            /// Attempts to construct a `BinaryFunc` from the canonical name of
+            /// one of its variants, as declared by the variant's
+            /// [`FuncName`](crate::func::FuncName) impl (the name of the
+            /// underlying Rust function, e.g. `add_int32`).
+            ///
+            /// Intended for test tooling that needs to name exact function
+            /// variants. Only variants whose inner function deserializes from
+            /// no data (unit functions and functions all of whose parameters
+            /// may default to `None`) are constructible. Returns `None` for
+            /// other variants and for unknown names.
+            pub fn from_variant_name(name: &str) -> Option<Self> {
+                $(
+                    if name == <$variant as crate::func::FuncName>::NAME {
+                        return serde_json::from_value(
+                            serde_json::json!({ stringify!($name): null }),
+                        )
+                        .ok();
+                    }
+                )*
+                None
+            }
+
+            /// The canonical names of all variants, in declaration order.
+            pub fn variant_names() -> impl Iterator<Item = &'static str> {
+                [$(<$variant as crate::func::FuncName>::NAME,)*].into_iter()
+            }
+        }
+
+        impl fmt::Display for BinaryFunc {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                match self {
+                    $(Self::$name(func) => func.fmt(f),)*
+                }
+            }
+        }
+
+        $(
+            impl From<$variant> for crate::BinaryFunc {
+                fn from(variant: $variant) -> Self {
+                    Self::$name(variant)
+                }
+            }
+        )*
+    }
 }

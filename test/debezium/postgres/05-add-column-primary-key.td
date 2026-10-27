@@ -19,6 +19,7 @@ SELECT true
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_add_column_primary_key (f1 INTEGER);
 INSERT INTO alter_add_column_primary_key VALUES (123);
+ANALYZE;
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

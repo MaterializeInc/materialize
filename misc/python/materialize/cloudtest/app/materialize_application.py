@@ -11,7 +11,7 @@ import logging
 import os
 import subprocess
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from pg8000.exceptions import InterfaceError
 
@@ -27,6 +27,7 @@ from materialize.cloudtest.k8s.environmentd import (
     EnvironmentdStatefulSet,
     ListenersConfigMap,
     MaterializedAliasService,
+    MzInstanceIdentity,
 )
 from materialize.cloudtest.k8s.minio import Minio
 from materialize.cloudtest.k8s.mysql import mysql_resources
@@ -52,9 +53,10 @@ class MaterializeApplication(CloudtestApplicationBase):
         apply_node_selectors: bool = False,
     ) -> None:
         self.tag = tag
+        self.instance_identity = MzInstanceIdentity.generate()
         self.secret = EnvironmentdSecret()
         self.listeners_configmap = ListenersConfigMap()
-        self.environmentd = EnvironmentdService()
+        self.environmentd = EnvironmentdService(self.instance_identity)
         self.materialized_alias = MaterializedAliasService()
         self.testdrive = TestdrivePod(
             release_mode=release_mode,
@@ -86,6 +88,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             self.secret,
             self.listeners_configmap,
             EnvironmentdStatefulSet(
+                instance_identity=self.instance_identity,
                 release_mode=self.release_mode,
                 tag=self.tag,
                 log_filter=log_filter,
@@ -99,7 +102,7 @@ class MaterializeApplication(CloudtestApplicationBase):
         ]
 
     def get_images(self) -> list[str]:
-        return ["environmentd", "clusterd", "testdrive", "postgres"]
+        return ["environmentd", "clusterd", "testdrive", "postgres", "minio", "mc"]
 
     def register_vpc_endpoint(self) -> None:
         self.kubectl(
@@ -148,13 +151,21 @@ class MaterializeApplication(CloudtestApplicationBase):
         """Wait until environmentd pod is ready and can accept SQL connections"""
         wait(condition="condition=Ready", resource="pod/environmentd-0")
 
-        start = datetime.now()
-        while datetime.now() - start < timedelta(seconds=300):
+        start = datetime.now(UTC)
+        while True:
             try:
                 self.environmentd.sql("SELECT 1")
                 break
-            except InterfaceError as e:
-                # Since we crash environmentd, we expect some errors that we swallow.
+            except (InterfaceError, OSError) as e:
+                if datetime.now(UTC) - start > timedelta(seconds=300):
+                    raise
+                # Since we crash environmentd, we expect some errors that we
+                # swallow. pg8000 wraps most connection failures in
+                # InterfaceError, but raw socket errors from its SSL
+                # negotiation (e.g. ConnectionResetError when the connection
+                # is accepted by the port-forwarding proxy and then reset
+                # because environmentd is not listening yet) leak through
+                # unwrapped.
                 LOGGER.info(f"SQL interface not ready, {e} while SELECT 1. Waiting...")
                 time.sleep(2)
 
@@ -198,13 +209,6 @@ class MaterializeApplication(CloudtestApplicationBase):
             remove_quotes,
         )
 
-    def get_pod_label_value(
-        self, cluster_id: str, label: str, remove_quotes: bool = True
-    ) -> str:
-        return self.get_pod_value(
-            cluster_id, "{.items[*].metadata.labels." + label + "}", remove_quotes
-        )
-
     def get_cluster_node_names(self, cluster_name: str) -> list[str]:
         cluster_id = self.get_cluster_id(cluster_name)
         print(f"Cluster with name '{cluster_name}' has ID {cluster_id}")
@@ -220,12 +224,6 @@ class MaterializeApplication(CloudtestApplicationBase):
             f"SELECT id FROM mz_clusters WHERE name = '{cluster_name}'"
         )[0][0]
         return cluster_id
-
-    def get_cluster_and_replica_id(self, mz_table: str, name: str) -> tuple[str, str]:
-        [cluster_id, replica_id] = self.environmentd.sql_query(
-            f"SELECT s.cluster_id, r.id FROM {mz_table} s JOIN mz_cluster_replicas r ON r.cluster_id = s.cluster_id WHERE s.name = '{name}'"
-        )[0]
-        return cluster_id, replica_id
 
     def suspend_k8s_node(self, node_name: str) -> None:
         print(f"Suspending node {node_name}...")

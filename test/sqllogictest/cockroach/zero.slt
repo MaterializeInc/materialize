@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,12 +9,15 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/zero
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/zero
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
@@ -72,17 +75,17 @@ INSERT INTO f VALUES
 query IR
 select * FROM f ORDER BY i
 ----
-1 0
-2 -0
-3 0
-4 -0
-5 -0
-6 0
-7 -0
-8 0
-9 -0
-10 0
-11 -0
+1  0
+2  0
+3  0
+4  -0
+5  0
+6  0
+7  -0
+8  0
+9  -0
+10  0
+11  0
 
 query RRRRRIIRRRR colnames
 SELECT 0.0::float as a,
@@ -97,8 +100,8 @@ SELECT 0.0::float as a,
   '0.0000'::float as j,
  '-0.0000'::float as k
 ----
-a  b   c  d   e   f  g  h  i   j  k
-0  -0  0  -0  -0  0  0  0  -0  0  -0
+a  b   c  d   e  f  g  h  i   j  k
+0  -0  0  -0  0  0  0  0  -0  0  -0
 
 # decimals
 
@@ -113,8 +116,8 @@ SELECT 0.0::decimal as a,
   '0.0000'::decimal as h,
  '-0.0000'::decimal as i
 ----
-a    b    c     d     e      f  g  h       i
-0.0  0.0  0.00  0.00  0.000  0  0  0.0000  0.0000
+a b c d e f g h i
+0  0  0  0  0  0  0  0  0
 
 statement ok
 CREATE TABLE d (i INT, v DECIMAL)
@@ -136,17 +139,17 @@ INSERT INTO d VALUES
 query IR
 select * FROM d ORDER BY i
 ----
-1 0.0
-2 0.0
-3 0.00
-4 0.00
-5 0.000
-6 0
-7 0
-8 0.0000
-9 0.0000
-10 0
-11 0
+1  0
+2  0
+3  0
+4  0
+5  0
+6  0
+7  0
+8  0
+9  0
+10  0
+11  0
 
 statement ok
 CREATE TABLE didx (i INT, v DECIMAL, INDEX vidx (v))
@@ -165,6 +168,8 @@ INSERT INTO didx VALUES
   (10, 0),
   (11, -0)
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT v FROM didx ORDER BY INDEX didx@vidx
 ----
@@ -183,7 +188,7 @@ SELECT v FROM didx ORDER BY INDEX didx@vidx
 query RRRR
 SELECT - -0.00::decimal, - - -0.00::decimal, - - -0.00, - -0.00
 ----
-0.00 0.00 0.00 0.00
+0  0  0  0
 
 # TODO(mjibson):
 #
@@ -200,7 +205,7 @@ SELECT - -0.00::decimal, - - -0.00::decimal, - - -0.00, - -0.00
 query R
 SELECT * FROM (VALUES (-0.0::DECIMAL), (-0::DECIMAL), (0::DECIMAL), (-0.00::DECIMAL)) ORDER BY 1
 ----
-0.0
 0
 0
-0.00
+0
+0

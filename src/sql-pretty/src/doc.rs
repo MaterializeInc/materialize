@@ -10,7 +10,7 @@
 //! Functions that convert SQL AST nodes to pretty Docs.
 
 use itertools::Itertools;
-use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::display::{AstDisplay, FormatMode, escape_single_quote_string};
 use mz_sql_parser::ast::*;
 use pretty::{Doc, RcDoc};
 
@@ -94,6 +94,487 @@ impl Pretty {
         RcDoc::intersperse(docs, Doc::line()).group()
     }
 
+    pub(crate) fn doc_create_webhook_source<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateWebhookSourceStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        let mut title = "CREATE ".to_string();
+        if v.is_table {
+            title.push_str("TABLE");
+        } else {
+            title.push_str("SOURCE");
+        }
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+        docs.push(nest_title(title, self.doc_display_pass(&v.name)));
+
+        // IN CLUSTER (only for sources, not tables)
+        if !v.is_table {
+            if let Some(cluster) = &v.in_cluster {
+                docs.push(nest_title("IN CLUSTER", self.doc_display_pass(cluster)));
+            }
+        }
+
+        docs.push(RcDoc::text("FROM WEBHOOK"));
+        docs.push(nest_title(
+            "BODY FORMAT",
+            self.doc_display_pass(&v.body_format),
+        ));
+
+        if !v.include_headers.mappings.is_empty() || v.include_headers.column.is_some() {
+            let mut header_docs = Vec::new();
+
+            // Individual header mappings
+            for mapping in &v.include_headers.mappings {
+                header_docs.push(self.doc_display_pass(mapping));
+            }
+
+            // INCLUDE HEADERS column
+            if let Some(filters) = &v.include_headers.column {
+                if filters.is_empty() {
+                    header_docs.push(RcDoc::text("INCLUDE HEADERS"));
+                } else {
+                    header_docs.push(bracket(
+                        "INCLUDE HEADERS (",
+                        comma_separate(|f| self.doc_display_pass(f), filters),
+                        ")",
+                    ));
+                }
+            }
+
+            if !header_docs.is_empty() {
+                docs.extend(header_docs);
+            }
+        }
+
+        if let Some(check) = &v.validate_using {
+            docs.push(self.doc_webhook_check(check));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    fn doc_webhook_check<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateWebhookSourceCheck<T>,
+    ) -> RcDoc<'a> {
+        let mut inner = Vec::new();
+
+        if let Some(options) = &v.options {
+            let mut with_items = Vec::new();
+
+            for header in &options.headers {
+                with_items.push(self.doc_display_pass(header));
+            }
+            for body in &options.bodies {
+                with_items.push(self.doc_display_pass(body));
+            }
+            for secret in &options.secrets {
+                with_items.push(self.doc_display_pass(secret));
+            }
+
+            if !with_items.is_empty() {
+                inner.push(bracket("WITH (", comma_separated(with_items), ")"));
+                inner.push(RcDoc::line());
+            }
+        }
+
+        inner.push(self.doc_display_pass(&v.using));
+
+        bracket_doc(
+            RcDoc::text("CHECK ("),
+            RcDoc::concat(inner),
+            RcDoc::text(")"),
+            RcDoc::line(),
+        )
+    }
+
+    pub(crate) fn doc_create_table<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateTableStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE [TEMPORARY] TABLE [IF NOT EXISTS] name
+        let mut title = "CREATE ".to_string();
+        if v.temporary {
+            title.push_str("TEMPORARY ");
+        }
+        title.push_str("TABLE");
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        // Table name and columns/constraints
+        let mut col_items = Vec::new();
+        col_items.extend(v.columns.iter().map(|c| self.doc_display_pass(c)));
+        col_items.extend(v.constraints.iter().map(|c| self.doc_display_pass(c)));
+
+        let table_def = nest(
+            self.doc_display_pass(&v.name),
+            bracket("(", comma_separated(col_items), ")"),
+        );
+        docs.push(nest_title(title, table_def));
+
+        // WITH options
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_table_from_source<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateTableFromSourceStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE TABLE [IF NOT EXISTS] name
+        let mut title = "CREATE TABLE".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        let mut table_def = self.doc_display_pass(&v.name);
+
+        let has_columns_or_constraints = match &v.columns {
+            TableFromSourceColumns::NotSpecified => false,
+            _ => true,
+        } || !v.constraints.is_empty();
+
+        if has_columns_or_constraints {
+            let mut items = Vec::new();
+
+            match &v.columns {
+                TableFromSourceColumns::NotSpecified => {}
+                TableFromSourceColumns::Named(cols) => {
+                    items.extend(cols.iter().map(|c| self.doc_display_pass(c)));
+                }
+                TableFromSourceColumns::Defined(cols) => {
+                    items.extend(cols.iter().map(|c| self.doc_display_pass(c)));
+                }
+            }
+
+            items.extend(v.constraints.iter().map(|c| self.doc_display_pass(c)));
+
+            if !items.is_empty() {
+                table_def = nest(table_def, bracket("(", comma_separated(items), ")"));
+            }
+        }
+
+        docs.push(nest_title(title, table_def));
+
+        // FROM SOURCE
+        let mut from_source = nest_title("FROM SOURCE", self.doc_display_pass(&v.source));
+        if let Some(reference) = &v.external_reference {
+            from_source = nest(
+                from_source,
+                bracket("(REFERENCE = ", self.doc_display_pass(reference), ")"),
+            );
+        }
+        docs.push(from_source);
+
+        if let Some(format) = &v.format {
+            docs.push(self.doc_format_specifier(format));
+        }
+
+        if !v.include_metadata.is_empty() {
+            docs.push(nest_title(
+                "INCLUDE",
+                comma_separate(|im| self.doc_display_pass(im), &v.include_metadata),
+            ));
+        }
+
+        if let Some(envelope) = &v.envelope {
+            docs.push(nest_title("ENVELOPE", self.doc_display_pass(envelope)));
+        }
+
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_connection<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateConnectionStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        let mut title = "CREATE CONNECTION".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+        docs.push(nest_title(title, self.doc_display_pass(&v.name)));
+
+        let connection_with_values = nest(
+            RcDoc::concat([
+                RcDoc::text("TO "),
+                self.doc_display_pass(&v.connection_type),
+            ]),
+            bracket(
+                "(",
+                comma_separate(|val| self.doc_display_pass(val), &v.values),
+                ")",
+            ),
+        );
+        docs.push(connection_with_values);
+
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_sink<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateSinkStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE SINK [IF NOT EXISTS] [name]
+        let mut title = "CREATE SINK".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        if let Some(name) = &v.name {
+            docs.push(nest_title(title, self.doc_display_pass(name)));
+        } else {
+            docs.push(RcDoc::text(title));
+        }
+
+        if let Some(cluster) = &v.in_cluster {
+            docs.push(nest_title("IN CLUSTER", self.doc_display_pass(cluster)));
+        }
+
+        docs.push(nest_title("FROM", self.doc_display_pass(&v.from)));
+        docs.push(nest_title("INTO", self.doc_display_pass(&v.connection)));
+
+        if let Some(format) = &v.format {
+            docs.push(self.doc_format_specifier(format));
+        }
+
+        if let Some(envelope) = &v.envelope {
+            docs.push(nest_title("ENVELOPE", self.doc_display_pass(envelope)));
+        }
+
+        if let Some(mode) = &v.mode {
+            docs.push(nest_title("MODE", self.doc_display_pass(mode)));
+        }
+
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_subsource<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateSubsourceStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE SUBSOURCE [IF NOT EXISTS] name
+        let mut title = "CREATE SUBSOURCE".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        // Table name with columns/constraints
+        let mut col_items = Vec::new();
+        col_items.extend(v.columns.iter().map(|c| self.doc_display_pass(c)));
+        col_items.extend(v.constraints.iter().map(|c| self.doc_display_pass(c)));
+
+        let table_def = nest(
+            self.doc_display_pass(&v.name),
+            bracket("(", comma_separated(col_items), ")"),
+        );
+        docs.push(nest_title(title, table_def));
+
+        // OF SOURCE
+        if let Some(of_source) = &v.of_source {
+            docs.push(nest_title("OF SOURCE", self.doc_display_pass(of_source)));
+        }
+
+        // WITH options
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_cluster<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateClusterStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE CLUSTER [IF NOT EXISTS] name
+        let mut title = "CREATE CLUSTER".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+        docs.push(nest_title(&title, self.doc_display_pass(&v.name)));
+
+        // OPTIONS (...)
+        if !v.options.is_empty() {
+            docs.push(bracket(
+                "(",
+                comma_separate(|o| self.doc_display_pass(o), &v.options),
+                ")",
+            ));
+        }
+
+        // FEATURES (...)
+        if !v.features.is_empty() {
+            docs.push(bracket(
+                "FEATURES (",
+                comma_separate(|f| self.doc_display_pass(f), &v.features),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_cluster_replica<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateClusterReplicaStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE CLUSTER REPLICA [IF NOT EXISTS] cluster.replica
+        let mut title = "CREATE CLUSTER REPLICA".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+        let replica_name = RcDoc::concat([
+            self.doc_display_pass(&v.of_cluster),
+            RcDoc::text("."),
+            self.doc_display_pass(&v.definition.name),
+        ]);
+        docs.push(nest_title(&title, replica_name));
+
+        // OPTIONS (...)
+        docs.push(bracket(
+            "(",
+            comma_separate(|o| self.doc_display_pass(o), &v.definition.options),
+            ")",
+        ));
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_network_policy<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateNetworkPolicyStatement<T>,
+    ) -> RcDoc<'a> {
+        let docs = vec![
+            // CREATE NETWORK POLICY name
+            nest_title("CREATE NETWORK POLICY", self.doc_display_pass(&v.name)),
+            // OPTIONS (...)
+            bracket(
+                "(",
+                comma_separate(|o| self.doc_display_pass(o), &v.options),
+                ")",
+            ),
+        ];
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_index<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateIndexStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE [DEFAULT] INDEX [IF NOT EXISTS] [name]
+        let mut title = "CREATE".to_string();
+        if v.key_parts.is_none() {
+            title.push_str(" DEFAULT");
+        }
+        title.push_str(" INDEX");
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        if let Some(name) = &v.name {
+            // A bare `in` index name re-lexes as the start of the optional
+            // `IN CLUSTER` clause, so force it quoted (matching the
+            // `CreateIndexStatement` AstDisplay impl). `in` is fine bare in a
+            // required-name position, so this isn't a `can_be_printed_bare` case.
+            let name_doc = if name.as_str().eq_ignore_ascii_case("in") {
+                RcDoc::text(format!("\"{}\"", name.as_str()))
+            } else {
+                self.doc_display_pass(name)
+            };
+            docs.push(nest_title(title, name_doc));
+        } else {
+            docs.push(RcDoc::text(title));
+        }
+
+        // IN CLUSTER
+        if let Some(cluster) = &v.in_cluster {
+            docs.push(nest_title("IN CLUSTER", self.doc_display_pass(cluster)));
+        }
+
+        // ON table_name [(key_parts)]
+        let on_clause = if let Some(key_parts) = &v.key_parts {
+            nest(
+                self.doc_display_pass(&v.on_name),
+                bracket(
+                    "(",
+                    comma_separate(|k| self.doc_display_pass(k), key_parts),
+                    ")",
+                ),
+            )
+        } else {
+            self.doc_display_pass(&v.on_name)
+        };
+        docs.push(nest_title("ON", on_clause));
+
+        // WITH options
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
     fn doc_format_specifier<T: AstInfo>(&self, v: &FormatSpecifier<T>) -> RcDoc<'_> {
         match v {
             FormatSpecifier::Bare(format) => nest_title("FORMAT", self.doc_display_pass(format)),
@@ -163,7 +644,17 @@ impl Pretty {
         v: &'a SubscribeStatement<T>,
     ) -> RcDoc<'a> {
         let doc = match &v.relation {
-            SubscribeRelation::Name(name) => nest_title("SUBSCRIBE", self.doc_display_pass(name)),
+            SubscribeRelation::Name(name) => {
+                let title = if v.relation.needs_explicit_to(matches!(
+                    self.config.format_mode,
+                    FormatMode::Simple | FormatMode::SimpleRedacted
+                )) {
+                    "SUBSCRIBE TO"
+                } else {
+                    "SUBSCRIBE"
+                };
+                nest_title(title, self.doc_display_pass(name))
+            }
             SubscribeRelation::Query(query) => bracket("SUBSCRIBE (", self.doc_query(query), ")"),
         };
         let mut docs = vec![doc];
@@ -243,9 +734,14 @@ impl Pretty {
     ) -> RcDoc<'a> {
         let mut docs = vec![];
         docs.push(RcDoc::text(format!(
-            "CREATE{} MATERIALIZED VIEW{} {}",
+            "CREATE{}{} MATERIALIZED VIEW{} {}",
             if v.if_exists == IfExistsBehavior::Replace {
                 " OR REPLACE"
+            } else {
+                ""
+            },
+            if v.replacement_for.is_some() {
+                " REPLACEMENT"
             } else {
                 ""
             },
@@ -263,17 +759,33 @@ impl Pretty {
                 ")",
             ));
         }
-        if let Some(target) = &v.replacing {
+        if let Some(target) = &v.replacement_for {
             docs.push(RcDoc::text(format!(
-                "REPLACING {}",
+                "FOR {}",
                 target.to_ast_string_simple()
             )));
         }
-        if let Some(cluster) = &v.in_cluster {
-            docs.push(RcDoc::text(format!(
-                "IN CLUSTER {}",
-                cluster.to_ast_string_simple()
-            )));
+        match (&v.in_cluster, &v.in_cluster_replica) {
+            (Some(cluster), Some(replica)) => {
+                docs.push(RcDoc::text(format!(
+                    "IN CLUSTER {} REPLICA {}",
+                    cluster.to_ast_string_simple(),
+                    replica.to_ast_string_simple(),
+                )));
+            }
+            (Some(cluster), None) => {
+                docs.push(RcDoc::text(format!(
+                    "IN CLUSTER {}",
+                    cluster.to_ast_string_simple(),
+                )));
+            }
+            (None, Some(replica)) => {
+                docs.push(RcDoc::text(format!(
+                    "IN REPLICA {}",
+                    replica.to_ast_string_simple(),
+                )));
+            }
+            (None, None) => {}
         }
         if !v.with_options.is_empty() {
             docs.push(bracket(
@@ -283,7 +795,83 @@ impl Pretty {
             ));
         }
         docs.push(nest_title("AS", self.doc_query(&v.query)));
+        // `AS OF` is internal syntax that follows the query; the generic AstDisplay
+        // emits it, so we must too, otherwise it is silently dropped.
+        if let Some(time) = &v.as_of {
+            docs.push(RcDoc::text(format!("AS OF {time}")));
+        }
         intersperse_line_nest(docs)
+    }
+
+    pub(crate) fn doc_create_role<'a>(&'a self, v: &'a CreateRoleStatement) -> RcDoc<'a> {
+        let mut docs = vec![RcDoc::text(format!(
+            "CREATE ROLE {}",
+            v.name.to_ast_string_simple()
+        ))];
+        for option in &v.options {
+            docs.push(self.doc_role_attribute(option));
+        }
+        intersperse_line_nest(docs)
+    }
+
+    pub(crate) fn doc_alter_role<'a, T: AstInfo>(
+        &'a self,
+        v: &'a AlterRoleStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = vec![RcDoc::text(format!(
+            "ALTER ROLE {}",
+            v.name.to_ast_string_simple()
+        ))];
+        match &v.option {
+            AlterRoleOption::Attributes(attrs) => {
+                for attr in attrs {
+                    docs.push(self.doc_role_attribute(attr));
+                }
+            }
+            // `SET`/`RESET` variables carry no password-like data, so the generic
+            // AstDisplay is already lossless here.
+            AlterRoleOption::Variable(var) => docs.push(self.doc_display_pass(var)),
+        }
+        intersperse_line_nest(docs)
+    }
+
+    /// Like the generic AstDisplay for `RoleAttribute`, but preserves the `PASSWORD`
+    /// value instead of dropping it (the AstDisplay redaction is a global safety net
+    /// for logs/catalog; a pretty-printer that round-trips user SQL must keep it).
+    fn doc_role_attribute<'a>(&'a self, attr: &'a RoleAttribute) -> RcDoc<'a> {
+        match attr {
+            RoleAttribute::Password(Some(password)) => RcDoc::text(format!(
+                "PASSWORD '{}'",
+                escape_single_quote_string(password)
+            )),
+            RoleAttribute::Password(None) => RcDoc::text("PASSWORD NULL"),
+            other => self.doc_display_pass(other),
+        }
+    }
+
+    /// `DECLARE <name> CURSOR FOR <stmt>`. The inner statement is printed via the
+    /// recursive doc printer (not the redacting AstDisplay fallback) so a secret
+    /// it carries — e.g. `CURSOR FOR ALTER ROLE r PASSWORD '…'` — survives the
+    /// round trip instead of becoming `'<REDACTED>'`.
+    pub(crate) fn doc_declare<'a, T: AstInfo<NestedStatement = Statement<Raw>>>(
+        &'a self,
+        v: &'a DeclareStatement<T>,
+    ) -> RcDoc<'a> {
+        RcDoc::text(format!(
+            "DECLARE {} CURSOR FOR ",
+            v.name.to_ast_string_simple()
+        ))
+        .append(self.to_doc(&v.stmt))
+    }
+
+    /// `PREPARE <name> AS <stmt>`. Recurses into the inner statement for the same
+    /// reason as [`Self::doc_declare`].
+    pub(crate) fn doc_prepare<'a, T: AstInfo<NestedStatement = Statement<Raw>>>(
+        &'a self,
+        v: &'a PrepareStatement<T>,
+    ) -> RcDoc<'a> {
+        RcDoc::text(format!("PREPARE {} AS ", v.name.to_ast_string_simple()))
+            .append(self.to_doc(&v.stmt))
     }
 
     fn doc_view_definition<'a, T: AstInfo>(&'a self, v: &'a ViewDefinition<T>) -> RcDoc<'a> {
@@ -313,7 +901,7 @@ impl Pretty {
         }
         let sources = match &v.source {
             InsertSource::Query(query) => self.doc_query(query),
-            _ => self.doc_display(&v.source, "insert source"),
+            InsertSource::DefaultValues => self.doc_display(&v.source, "insert source"),
         };
         let mut doc = intersperse_line_nest([intersperse_line_nest(first), sources]);
         if !v.returning.is_empty() {
@@ -332,7 +920,16 @@ impl Pretty {
         &'a self,
         v: &'a SelectStatement<T>,
     ) -> RcDoc<'a> {
-        let mut doc = self.doc_query(&v.query);
+        let query = self.doc_query(&v.query);
+        // A query whose rendering begins with `SHOW` (a bare `SHOW` body or a
+        // set operation whose leftmost operand is one) only reparses when
+        // parenthesized — a top-level leading `SHOW` is dispatched directly and
+        // terminates the statement. Mirror `AstDisplay for SelectStatement`.
+        let mut doc = if v.query.body.starts_with_show() {
+            bracket("(", query, ")")
+        } else {
+            query
+        };
         if let Some(as_of) = &v.as_of {
             doc = intersperse_line_nest([doc, self.doc_as_of(as_of)]);
         }
@@ -490,7 +1087,7 @@ impl Pretty {
             JoinOperator::FullOuter(constraint) => (constraint, "FULL JOIN"),
             JoinOperator::LeftOuter(constraint) => (constraint, "LEFT JOIN"),
             JoinOperator::RightOuter(constraint) => (constraint, "RIGHT JOIN"),
-            _ => return self.doc_display(v, "join operator"),
+            JoinOperator::CrossJoin => return self.doc_display(v, "join operator"),
         };
         let constraint = match constraint {
             JoinConstraint::On(expr) => nest_title("ON", self.doc_expr(expr)),
@@ -505,7 +1102,7 @@ impl Pretty {
                 }
                 doc
             }
-            _ => return self.doc_display(v, "join constraint"),
+            JoinConstraint::Natural => return self.doc_display(v, "join constraint"),
         };
         intersperse_line_nest([
             RcDoc::text(name),
@@ -628,7 +1225,12 @@ impl Pretty {
                         self.doc_expr(expr2).nest(TAB),
                     ])
                 } else {
-                    RcDoc::concat([RcDoc::text(format!("{} ", op)), self.doc_expr(expr1)])
+                    let operand = if prefix_operand_needs_parens(op, expr1.as_ref()) {
+                        bracket("(", self.doc_expr(expr1), ")")
+                    } else {
+                        self.doc_expr(expr1)
+                    };
+                    RcDoc::concat([RcDoc::text(format!("{} ", op)), operand])
                 }
             }
             Expr::Case {
@@ -652,13 +1254,26 @@ impl Pretty {
                 let doc = intersperse_line_nest(docs);
                 bracket_doc(RcDoc::text("CASE"), doc, RcDoc::text("END"), RcDoc::line())
             }
-            Expr::Cast { expr, data_type } => {
+            Expr::Cast {
+                expr,
+                data_type,
+                failure_mode: CastFailureMode::Error,
+            } => {
                 let doc = self.doc_expr(expr);
                 RcDoc::concat([
                     doc,
                     RcDoc::text(format!("::{}", data_type.to_ast_string_simple())),
                 ])
             }
+            Expr::Cast {
+                expr,
+                data_type,
+                failure_mode: CastFailureMode::NullFallback,
+            } => bracket(
+                "TRY_CAST(",
+                self.doc_expr(expr),
+                format!(" AS {})", data_type.to_ast_string_simple()),
+            ),
             Expr::Nested(ast) => bracket("(", self.doc_expr(ast), ")"),
             Expr::Function(fun) => self.doc_function(fun),
             Expr::Subquery(ast) => bracket("(", self.doc_query(ast), ")"),
@@ -771,7 +1386,8 @@ impl Pretty {
                 if v.filter.is_some() || v.over.is_some() || !order_by.is_empty() {
                     return self.doc_display(v, "function filter or over or order by");
                 }
-                let special = match v.name.to_ast_string_stable().as_str() {
+                let name_stable = v.name.to_ast_string_stable();
+                let special = match name_stable.as_str() {
                     r#""extract""# if v.args.len() == Some(2) => true,
                     r#""position""# if v.args.len() == Some(2) => true,
                     _ => false,
@@ -779,9 +1395,40 @@ impl Pretty {
                 if special {
                     return self.doc_display(v, "special function");
                 }
+                // Mirror the same carve-out as the `AstDisplay for Function`
+                // impl: function names that clash with a keyword having its
+                // own special-grammar parser form (`(Kw, LParen)` dispatch in
+                // parse_prefix) must be quoted on emit, or the reparse goes
+                // through the special grammar instead of a regular call. (The
+                // `ANY`/`ALL`/`SOME` quantifier keywords are handled more
+                // generally by `can_be_printed_bare`, since they're also unsafe
+                // as bare identifiers.)
+                let needs_quote = matches!(
+                    name_stable.as_str(),
+                    r#""array""#
+                        | r#""coalesce""#
+                        | r#""exists""#
+                        | r#""extract""#
+                        | r#""greatest""#
+                        | r#""least""#
+                        | r#""list""#
+                        | r#""map""#
+                        | r#""normalize""#
+                        | r#""nullif""#
+                        | r#""operator""#
+                        | r#""position""#
+                        | r#""row""#
+                        | r#""substring""#
+                        | r#""trim""#
+                );
+                let printed_name = if needs_quote {
+                    name_stable
+                } else {
+                    v.name.to_ast_string_simple()
+                };
                 let name = format!(
                     "{}({}",
-                    v.name.to_ast_string_simple(),
+                    printed_name,
                     if v.distinct { "DISTINCT " } else { "" }
                 );
                 bracket(name, comma_separate(|e| self.doc_expr(e), args), ")")

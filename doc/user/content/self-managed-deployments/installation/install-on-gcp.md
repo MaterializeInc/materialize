@@ -12,19 +12,18 @@ menu:
 Materialize provides a set of modular [Terraform
 modules](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
 that can be used to deploy all services required for Materialize to run on Google Cloud.
-The module is intended to provide a simple set of examples on how to deploy
-Materialize. It can be used as is or modules can be taken from the example and
-integrated with existing DevOps tooling.
+These modules serve as composable building blocks that you can integrate into
+existing DevOps workflows, either as a full set or individually.
 
 {{% self-managed/materialize-components-sentence %}} The example on this page
 deploys a complete Materialize environment on GCP using the modular Terraform
 setup from this repository.
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
 
 ## What Gets Created
 
@@ -46,8 +45,8 @@ This example provisions the following infrastructure:
 | Resource | Description |
 |----------|-------------|
 | GKE Cluster | Regional cluster with Workload Identity enabled |
-| Generic Node Pool | e2-standard-8 machines, autoscaling 2-5 nodes, 50GB disk, for general workloads |
-| Materialize Node Pool | n2-highmem-8 machines, autoscaling 2-5 nodes, 100GB disk, 1 local SSD, swap enabled, dedicated taints for Materialize workloads |
+| Generic Node Pool | c4-standard-8 machines, autoscaling 2-5 nodes, 50GB disk, for general workloads |
+| Materialize Node Pool | c4a-highmem-8-lssd machines (Arm-based), autoscaling 2-5 nodes, 100GB disk, 2 bundled local SSDs, swap enabled, dedicated taints for Materialize workloads |
 | Service Account | GKE service account with workload identity binding |
 
 ### Database
@@ -55,7 +54,7 @@ This example provisions the following infrastructure:
 | Resource | Description |
 |----------|-------------|
 | Cloud SQL PostgreSQL | Private IP only (no public IP) |
-| Tier | db-custom-2-4096 (2 vCPUs, 4GB memory) |
+| Tier | db-custom-N4-2-4096 (N4 series, 2 vCPUs, 4GB memory) |
 | Database | `materialize` database with UTF8 charset |
 | User | `materialize` user with auto-generated password |
 | Network | Connected via VPC peering for private access |
@@ -82,6 +81,35 @@ This example provisions the following infrastructure:
 | Operator | Materialize Kubernetes operator in the `materialize` namespace |
 | Instance | Single Materialize instance in the `materialize-environment` namespace |
 | Load Balancers | GCP Load Balancers for access to Materialize {{< yaml-table data="self_managed/default_ports" >}} |
+
+### Observability
+
+On by default starting with v11.0.0 of the Materialize Terraform Modules.
+Whenever `enable_observability` is `true`,
+the following are created as well:
+
+| Resource | Description |
+|----------|-------------|
+| Monitoring stack | Grafana, Thanos, Loki, Grafana Alloy, and Alertmanager in the `monitoring` namespace, with the Materialize dashboards pre-installed |
+| Cloud Storage Buckets | Dedicated buckets for metrics and logs |
+| Grafana Cloud SQL PostgreSQL | `db-f1-micro` instance holding Grafana's own state (users, API tokens, annotations, dashboard versions) |
+| Grafana Load Balancer | Internal GCP Load Balancer for reaching Grafana, allowlisted to `ingress_cidr_blocks` |
+
+This stack requires v10.0.0 or later of the Materialize Terraform Modules,
+which replaced an earlier Prometheus-and-Grafana pair. The Grafana database
+and load balancer were added in v10.1.0, and are both billable. Starting with
+v11.0.0, `enable_observability` defaults to `true`, so set it to `false` if you
+do not want the stack. For what the stack stores and where else it can send
+it, see [How logs and metrics are
+stored](/observability/self-managed/storage/). For reaching Grafana, see
+[Grafana](/observability/self-managed/grafana/).
+
+{{< note >}}
+Alertmanager installs with a default set of alert rules but no receiver, so no
+one is notified until you configure one. Starting with v15.0.0 of the
+Materialize Terraform Modules, you configure receivers on the `monitoring`
+module. See [Alerting](/observability/self-managed/alerting/).
+{{< /note >}}
 
 ## Prerequisites
 
@@ -110,11 +138,24 @@ A Google account with permission to:
 
 ## Getting started: Simple example
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
+
+{{< tip >}}
+
+* {{% self-managed/terraform-simple-example-tip %}}
+
+* The simple example used in this tutorial enables [Password
+authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v10.1.0/gcp/examples/simple/main.tf#L500)
+for the Materialize instance. To use a different authentication method, update
+[`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v10.1.0/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind).
+See [Authentication](/security/self-managed/authentication/) for the supported
+authentication mechanisms.
+
+{{< /tip >}}
 
 ### Step 1: Set Up the Environment
 
@@ -175,13 +216,18 @@ A Google account with permission to:
    | `name_prefix` | Set a prefix for all resource names (e.g., `simple-demo`) as well as your release name for the Operator |
    | `region`      | Set the GCP region for the deployment (e.g., `us-central1`).  |
    | `license_key` | Set to your Materialize license key.     |
+   | `crd_version` | CRD API version to use for the Materialize instance: `v1` (default starting with Materialize Terraform Modules v4.0.0) or `v1alpha1`. |
    | `labels`      | Set to the labels to apply to resources. |
 
-   ```bash
+   {{% include-from-yaml data="self_managed/installation"
+   name="installation-tfvars-crd-version-tip" %}}
+
+   ```hcl
    project_id  = "my-gcp-project"
    name_prefix = "simple-demo"
    region      = "us-central1"
    license_key = "your-materialize-license-key"
+   crd_version = "v1"   # Default starting with Materialize Terraform Modules v4.0.0. v1 requires Materialize v26.30+.
    labels = {
      environment = "demo"
      created_by  = "terraform"
@@ -189,7 +235,17 @@ A Google account with permission to:
    # internal_load_balancer = false   # default = true (internal load balancer). You can set to false = public load balancer.
    # ingress_cidr_blocks = ["x.x.x.x/n", ...]
    # k8s_apiserver_authorized_networks  = ["x.x.x.x/n", ...]
+   # enable_observability = false   # default = true (install the observability stack).
+   # grafana_host = "grafana.example.com"   # Only used when enable_observability = true.
    ```
+
+   {{< note >}}
+   With `enable_observability` on, the modules also create a `db-f1-micro`
+   Cloud SQL instance for Grafana's own state and an internal load balancer to
+   reach Grafana on.
+   Both are billable. See
+   [Grafana](/observability/self-managed/grafana/).
+   {{< /note >}}
 
    {{% include-from-yaml data="self_managed/installation"
    name="installation-tfvars-variables-optional" %}}
@@ -251,6 +307,10 @@ A Google account with permission to:
 1. Check the status of your deployment:
    {{% include-from-yaml data="self_managed/installation"
    name="installation-verify-status" %}}
+
+1. Check the CRD version of the Materialize manifest.
+   {{% include-from-yaml data="self_managed/crd_version_checks"
+   name="check-crd-version-tf" %}}
 
 ### Step 5: Connect to Materialize
 
@@ -360,6 +420,8 @@ guide](/self-managed-deployments/deployment-guidelines/gcp-deployment-guidelines
 {{< /note >}}
 
 See also:
+- [Configuring System
+  Parameters](/self-managed-deployments/configuration-system-parameters/)
 - [Materialize Operator
   Configuration](/self-managed-deployments/operator-configuration/)
 - [Materialize CRD Field
@@ -371,5 +433,5 @@ See also:
 
 ## See Also
 
-- [Materialize Operator Configuration](/installation/configuration/)
-- [Troubleshooting](/installation/troubleshooting/)
+- [Troubleshooting](/self-managed-deployments/troubleshooting/)
+- [Security](/security/self-managed/)

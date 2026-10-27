@@ -18,8 +18,7 @@ MANY_VALUES = ", ".join(
     [f'{{"name": "f{i+1}", "type": "string"}}' for i in range(1000)]
 )
 
-MANY_KEYS_SCHEMA = dedent(
-    f"""
+MANY_KEYS_SCHEMA = dedent(f"""
     $ set keyschema={{
       "type" : "record",
       "name" : "Key",
@@ -33,11 +32,9 @@ MANY_KEYS_SCHEMA = dedent(
         {{"name":"f1", "type":"string"}}
       ]
       }}
-    """
-)
+    """)
 
-MANY_VALUES_SCHEMA = dedent(
-    f"""
+MANY_VALUES_SCHEMA = dedent(f"""
    $ set keyschema={{
      "type": "record",
      "name": "Key",
@@ -51,8 +48,7 @@ MANY_VALUES_SCHEMA = dedent(
      "name" : "test",
      "fields" : [ {MANY_VALUES} ]
      }}
-   """
-)
+   """)
 
 
 class UpsertManyValueColumns(Check):
@@ -63,10 +59,7 @@ class UpsertManyValueColumns(Check):
     DATA_C = ", ".join([f'"f{i+1}": "C{i+1}XYZ"' for i in range(1000)])
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            MANY_VALUES_SCHEMA
-            + dedent(
-                f"""
+        return Testdrive(MANY_VALUES_SCHEMA + dedent(f"""
                 $ kafka-create-topic topic=upsert-many-value-columns
                 $ kafka-ingest format=avro key-format=avro topic=upsert-many-value-columns key-schema=${{keyschema}} schema=${{schema}}
                 {{"key1": "1"}} {{ {UpsertManyValueColumns.DATA_A} }}
@@ -82,9 +75,7 @@ class UpsertManyValueColumns(Check):
                 > CREATE MATERIALIZED VIEW upsert_many_value_columns_view AS
                   SELECT key1, f1, f1000
                   FROM upsert_many_value_columns
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -104,14 +95,10 @@ class UpsertManyValueColumns(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM upsert_many_value_columns_view
                 1 C1XYZ C1000XYZ
-                """
-            )
-        )
+                """))
 
 
 class UpsertManyKeyColumns(Check):
@@ -122,10 +109,7 @@ class UpsertManyKeyColumns(Check):
     KEYS_C = ", ".join([f'"key{i+1}": "C{i+1}XYZ"' for i in range(1000)])
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            MANY_KEYS_SCHEMA
-            + dedent(
-                f"""
+        return Testdrive(MANY_KEYS_SCHEMA + dedent(f"""
                 $ kafka-create-topic topic=upsert-many-key-columns
                 $ kafka-ingest format=avro key-format=avro topic=upsert-many-key-columns key-schema=${{keyschema}} schema=${{schema}}
                 {{ {UpsertManyKeyColumns.KEYS_A} }} {{ "f1" : "X" }}
@@ -141,9 +125,7 @@ class UpsertManyKeyColumns(Check):
                 > CREATE MATERIALIZED VIEW upsert_many_key_columns_view AS
                   SELECT key1, key1000, f1
                   FROM upsert_many_key_columns
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -163,11 +145,7 @@ class UpsertManyKeyColumns(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM upsert_many_key_columns_view
                 A1XYZ A1000XYZ Z
-                """
-            )
-        )
+                """))

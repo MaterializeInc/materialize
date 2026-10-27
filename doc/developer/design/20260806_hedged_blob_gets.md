@@ -1,0 +1,603 @@
+# Hedged blob gets
+
+Persist reads batch parts and rollups, including those of the txn-wal txns
+shard, through `Blob::get` calls against an object store. A single slow get on a
+hot path can stall a whole replica, because everything downstream waits on
+that fetch. This document describes a hedging mechanism for those gets: if
+a get has not completed within a short delay, persist fires a second
+request for the same key on an isolated connection and takes whichever
+succeeds first.
+
+## Goals
+
+- Cap the freshness impact of the dead-connection failure class (described
+  below) at roughly the hedge delay plus one normal get, whenever a healthy
+  connection is reachable. When it is not (both requests stall), behavior
+  falls back to today's, with `retry_external` (persist's retry wrapper)
+  as the backstop.
+- Change nothing about persist's semantics, error surface, or write paths.
+
+## Non-Goals
+
+- Hedging writes, deletes, or lists. Writes and deletes have side effects.
+  Lists are idempotent like gets but not latency-critical: they serve
+  usage collection and admin paths, not the dataflow read path that a
+  stalled get freezes.
+- Consensus. Stalls of the CockroachDB-backed consensus layer are a
+  different failure class and are untouched by this design.
+- Improving tail latency in the healthy case. The delay is chosen so that
+  hedges are rare, and the budget (see Bounding amplification) bounds the
+  exceptions.
+
+## The Problem
+
+Established connections to S3 occasionally die in ways that surface only
+after several seconds. The observed pattern is a pooled connection that
+stops responding, then delivers a TCP reset 5 to 15 seconds later. The AWS
+SDK then marks the connection as unusable ("Connection encountered an issue
+and should not be re-used") and the request is retried on a fresh
+connection, either by the SDK within the same call or by `retry_external`,
+persist's retry-with-backoff wrapper around every external call. That
+fresh-connection retry succeeded promptly in every event we examined. The
+cost is the hang before the reset, which nothing bounds tightly today.
+
+Persist's client-side timeouts do not catch the hang. Persist configures
+the SDK with `persist_blob_read_timeout` (10s, but it only limits time to
+the first response byte), `persist_blob_connect_timeout` (7s, but it only
+applies to connection establishment), and a 90s per-attempt timeout that is
+far too long to help at freshness timescales. In the events we
+characterized, the TCP reset arrived before any of these fired, so those
+hung requests never incremented the corresponding timeout counters
+(`mz_persist_s3_read_timeouts` and friends). A different, smaller set of
+events fleet-wide does trip those counters at a low background rate.
+
+We characterized two manifestations of the class:
+
+- A background rate of roughly two connection events per hour per pod.
+  Almost all are invisible, absorbed by the retry off any hot path.
+- A single hung get on the part fetch path of a high-fan-in shard (one
+  whose data feeds many dataflows, such as the txns shard), which starved
+  an entire replica for about 10 seconds. Such visible starvations
+  occurred roughly once per day in the busy environment where we
+  characterized the class, each a multi-second freshness stall for a
+  workload with single-digit-second freshness expectations.
+
+The evidence says a hedge on a separate connection would have won almost
+all of these races. During one event, 58 of 67 storage collections on the
+same pod (each a table or source backed by its own shard) stayed at their
+normal latency, and the stalled nine were the collections behind the
+affected fetch path, so the other established connections were fine at
+that instant.
+A peer replica of the affected one read the same shard with normal latency
+at the same moment. And every observed recovery was itself a successful
+fresh-connection retry, which is exactly a hedge that fired late. One
+caveat feeds the design below: connection deaths sometimes cluster (three
+on one pod within 1.5 seconds), and during regional network events the
+fleet's connect-timeout counters step, so brand-new connections are
+sometimes slow to establish exactly when they are needed, and a useful
+hedge therefore needs an already-established connection waiting.
+
+Regionally synchronized stalls, in which the table shards of many
+environments stall for several seconds at once, are a different class. In
+the one examined closely, the stalled environments were exactly those whose
+compare-and-set round trips to CockroachDB took over 2 seconds in those
+minutes, while gets stayed fast. Hedging does not address them.
+
+Hedging slow requests is what the object-store vendors recommend. AWS's
+S3 performance guidance advises aggressively retrying slow operations on
+a new connection with a fresh DNS lookup, and suggests a 2 second
+threshold for small gets. Google Cloud Storage documentation recommends
+hedged requests for latency-sensitive applications, and Microsoft ships
+a first-class hedging strategy in its official resilience stack.
+
+## The Design
+
+### The wrapper
+
+`HedgedBlob` (`src/persist/src/hedge.rs`) is a decorator implementing the
+`Blob` trait. It holds two `Arc<dyn Blob>` handles on the same durable
+store: the primary, and a second handle we call the sibling, on which hedge
+requests run. Only `get` is hedged. Every other trait method forwards to
+the primary untouched.
+
+Because the wrapper works against the `Blob` trait object, one
+implementation covers every backend: S3, GCS through the S3 interop mode,
+and Azure.
+
+### The race
+
+A hedged get runs up to two requests, called legs below. The primary leg
+starts immediately and races a timer set to the configured delay. If the
+primary completes first (the full blob, not just its first byte: `Blob::get`
+returns a complete result), its result is returned verbatim, success or
+error.
+A fast error therefore still takes today's path into `retry_external`'s
+retries. Hedging targets hangs, not failures.
+
+If the delay elapses, the hedge leg fires on the sibling, subject to the
+two admission guards described under Bounding amplification below. If the
+guards refuse, the get simply continues waiting on the primary, exactly
+today's behavior.
+
+Once both legs are running, the first success wins and the losing future is
+dropped, which cancels its request. An error on one leg does not end the
+race, and the two error cases are asymmetric. If the hedge leg errors, the
+get keeps waiting on the primary alone, so a fast-failing hedge cannot turn
+a get that was about to succeed into an error. If the primary errors after
+the hedge fired, the get waits a delay-sized grace window for the hedge and
+then returns the primary's error, so a slow hedge cannot hold the get past
+the point where handing the error to `retry_external` is the better move.
+Either way, when the get does fail, the caller sees the primary's error
+object, unchanged. This matters because `ExternalError::is_timeout` matches
+on the error string, so even attaching the hedge's error as context could
+change how a caller classifies the failure.
+
+The race operates entirely within one `retry_external` attempt, leaving
+the existing retry machinery untouched as the backstop.
+
+### Where the wrapper sits
+
+`PersistClientCache::open_blob` (in `mz_persist_client::cache`) composes
+the production blob stack. With `HedgedBlob` in place, from the outside in:
+
+- `BlobMemCache`, an in-memory cache of recently fetched blobs,
+- `Tasked`, which runs each call in a spawned tokio task so that
+  Timely-polled callers cannot stall blob calls by polling them lazily,
+- `MetricsBlob`, which records per-operation metrics,
+- `HedgedBlob`,
+- the backend (`S3Blob` or `AzureBlob`).
+
+Each neighbor constrains that position ("below" meaning closer to the
+backend). `HedgedBlob` must be below `BlobMemCache` so that cache hits
+never hedge. It must be below `MetricsBlob` so that a hedged get is
+recorded as one `blob_get` operation at the winner's latency, rather than
+as two operations, one of which would carry the loser's hang into the very
+latency histogram used to detect this failure class.
+
+It must also be below `Tasked`, so that the race runs inside the spawned
+task rather than around it. That buys two properties. First, cancellation
+is real: dropping the losing leg aborts its request in flight, whereas a
+`Tasked` boundary between the race and the backend would merely detach a
+spawned task that keeps running, holding its socket and buffers. Second,
+the hedge timer is driven by tokio. Outside the spawned task it would be
+polled by Timely operators, which can poll futures arbitrarily late, and a
+timer that fires late is a hedge that does not fire.
+
+### Pool isolation
+
+The sibling shares no connection state with the primary, so a hedge
+cannot be handed a connection dying in the same event that stalled the
+primary. The full case for isolation, including what a shared pool
+forecloses, is under Alternatives. Three facts make the isolation work.
+
+First, isolation cannot come from cloning: the AWS SDK client embedded in
+`S3BlobConfig` is reference-counted, so cloning the config shares the HTTP
+connection pool. The sibling is instead built from a second, from-scratch
+config. Every `mz_aws_util::defaults()` call installs a fresh hyper client
+with its own pool, and hyper resolves DNS per connection establishment,
+which also satisfies the fresh-DNS guidance. Azure behaves the same way,
+since `AzureBlobConfig::new` builds its own client per call. (One shared
+piece remains: the SDK keeps process-global retry bookkeeping per service
+and region. It never gates first attempts, only the SDK's own internal
+retries.)
+
+Second, a from-scratch config also carries its own credential provider
+chain, so the sibling authenticates independently of the primary. That is
+a small robustness gain and a new failure mode to watch (see
+Observability).
+
+Third, per-backend knowledge lives in one place, `open_hedge_sibling` in
+`mz_persist::cfg`. For S3 and Azure it opens the independent second
+handle. For file, mem, and turmoil (persist's deterministic
+network-simulation backend for tests) it returns the primary instance
+itself, because a second open of those would observe an independent store:
+a hedged get against a different store can return `Ok(None)`, a legitimate
+success, for data that exists, winning races and reporting live batch
+parts as missing. Sharing the instance eliminates the hazard by
+construction while still exercising the race path in tests.
+
+Opening the sibling is best-effort and runs off the startup path: a
+background task makes one attempt regardless of the flag, retries with
+exponential backoff only while hedging is enabled, and arms hedging once
+an attempt succeeds. Until then hedging is unavailable, visible in metrics
+as `hedges_skipped{reason="unavailable"}` and as `hedge_armed` staying 0,
+with a warning logged per failed attempt. Retrying matters because a
+blob-store or credential blip at process start would otherwise disarm
+hedging for the process lifetime, which is what happened to processes
+started during a regional outage of the credential service (AWS STS).
+
+### Keeping the sibling warm
+
+A cold hedge can pay a connection handshake of up to the 7 second connect
+timeout, and fresh connects are sometimes slow exactly during the
+correlated events (see The Problem). So the design keeps the sibling's pool
+warm. A background task issues concurrent liveness gets on the sibling
+(fetching a reserved key that never exists, so each ping is a cheap
+not-found response) as soon as the sibling is armed and then every 20
+seconds, well inside hyper's eviction of connections idle for 90 seconds.
+(NOTE: that 90 is coincidentally equal to, and unrelated to, the SDK's 90
+second attempt timeout.) The number of concurrent pings follows the hedge
+concurrency cap, because HTTP/1.1 allows one in-flight request per
+connection: N concurrent pings open or refresh N sockets. (A raised cap
+grows the pool at the next cycle.)
+
+How warm that keeps the pool is limited by S3 itself, which closes a
+keep-alive connection after about 6 seconds idle. This was measured
+directly, and in-region through the warmer's own round-trip gauge, which
+reads 20 to 40 ms per cycle, the cost of a fresh TLS handshake. At the 20
+second interval the sibling's sockets are therefore closed for most of
+each cycle, and a hedge usually opens a fresh connection: 20 to 40 ms in
+normal conditions, up to the connect timeout during a connect-path stall.
+Such a stall hits the sibling's fresh connections as much as the
+primary's: in the regional connect stalls observed since enablement, the
+sibling's pings on the affected pods took 7.4 to 7.9 seconds. Two effects
+shrink the pool further. A lost hedge closes its socket, because hyper
+closes a connection whose response body was dropped mid-stream instead of
+returning it to the pool. And a hedge of a multi-part blob opens one
+connection per part (`S3Blob::get` fetches all 8 MiB parts at once, up to
+16 for a 128 MiB part), of which at most the concurrency cap were warm.
+Whether the warmer earns its cost is an open question (see Open
+questions).
+
+Each warm cycle is bounded by a timeout: an unbounded hung ping would block
+warming past the idle eviction, going cold exactly during the correlated
+events warming exists for, and the timeout also drops the hung request,
+which closes its dying socket. A successful cycle records its round-trip
+time in a gauge. A failed or timed-out cycle increments a warm-error
+counter and leaves the gauge alone, so a fast-failing sibling (for
+example, one whose credentials rotted) cannot masquerade as a fast healthy
+one.
+
+Because the killed ping closes its socket, the warm interval bounds how
+long a dead sibling socket lingers in the pool: about two intervals (one
+until a ping lands on it, one more until the cycle timeout kills it).
+Until that purge a hedge can check out the dead socket, hang until the
+read timeout while contributing nothing, and hold its concurrency slot
+the whole time, so an event's first hedges can pin both default slots
+and leave later gets unhedged with
+`hedges_skipped{reason="concurrency"}` climbing. At 20 seconds, hedging
+therefore survives a correlated event that also hits the sibling's
+sockets only if the sibling escaped it.
+
+An interval under the 6 second idle close would keep the sibling's
+sockets open between cycles, cut the dead-socket exposure to a few
+seconds and let the pool heal mid-event, and its restarted handshakes
+probe better than one patient handshake: each resets TCP's exponential
+SYN backoff (about one probe per second) and re-resolves DNS, which can
+retarget a rotated S3 front-end address once the record's short TTL
+lapses. Nothing waits on a warming handshake, so aborting a
+viable-but-slow one costs nothing. The interval nevertheless stays at 20
+seconds on cost: there the warmer adds about an eighth to the fleet's
+organic blob gets, while at 5 seconds it would add about half, and at a
+few seconds it would rival or exceed the fleet's entire organic blob-get
+request volume. The evidence that would justify that spend is correlated
+events still visible in freshness after enablement, hedges erroring on
+dead sibling sockets, concurrency skips clustering at event times, and
+the warm-error counter spiking alongside. The interval is a dyncfg, so
+lowering it needs no release.
+
+The warmer runs only while hedging is enabled, re-checking the flag at its
+normal cadence while idle. While hedging is disabled, the sibling is
+therefore fully idle: no requests, no credential refreshes (SDK providers
+refresh lazily, on use), and its startup sockets idle out. The trade-off
+is a short cold window after a runtime enablement: until the warmer's
+first cycle, up to one warm interval plus a handshake later, a hedge can
+land on an empty pool and pay a cold connect (bounded by the connect
+timeout). Hedges in that window are no better than no hedge, and never
+worse since the primary keeps racing regardless, except that a primary
+error arriving after the delay reaches the caller up to one delay later
+(the grace window, see The race). Setting the warm
+interval to zero stops warmer traffic while keeping hedging on.
+
+### Bounding amplification
+
+Two admission guards bound how much extra load hedging can create, each
+protecting a different resource. Every hedge must pass both.
+
+A concurrency cap (default 2) bounds memory. Batch parts can be up to the
+128 MiB blob target size, and the hedge leg's buffers are invisible to the
+fetch-path memory accounting (the fetch semaphore sizes its memory budget
+before the blob layer runs, and on cc replicas that memory budget is tied to
+the process memory limit), so the cap is what keeps unaccounted transient
+buffers to about two parts. The warmer holds one warm socket per admitted
+hedge (see above), so the cap also sizes the warm pool.
+
+A token bucket, called the budget, bounds request rate and egress. The
+bucket holds up to 32 tokens, a hedge costs one token, and every completed
+get adds `budget_ratio` tokens (default 0.01), so under sustained slowness
+hedging settles at one percent of gets. Without it, a store-wide brownout
+that pushes every get past the delay would deterministically double the
+request rate onto an already-degraded dependency. The same guard keeps
+large gets that legitimately exceed the delay (a 128 MiB part on a
+bandwidth-constrained pod) from settling into permanent double egress.
+The bucket starts full, so a low-traffic process can still hedge the
+rare event that motivates the feature, and 32 is an order of magnitude
+above the handful of rescues one event needs per process. The bucket is
+per process and refills only as gets complete, with no clock, so once
+drained it admits about one hedge per 100 completed gets, and a full
+refill takes 3,200 gets without a hedge. The blind spot mirrors the
+protection: where more than one percent of gets are legitimately slow,
+the drained bucket also refuses the occasional genuine dead-connection
+hang, visible as `hedges_skipped{reason="budget"}`.
+
+Which guard refuses depends on how many gets are slow. An ordinary
+hydration has only a few gets over the delay, never empties the bucket,
+and is capped by concurrency. Where more than about one percent of a
+process's gets are slow, the bucket drains and budget refusals dominate:
+hydrations of the largest replicas reading hundreds of GB per hour, bulk
+readers of large parts, and small replicas too slow for their workload.
+Observed small replicas of that kind fired 6 to 52 hedges per hour for
+days, won 1 to 5% of them, and added 0.7 to 1% extra gets. A process
+whose hedges themselves hang pins both slots and stays capped by
+concurrency. Because the concurrency check runs first,
+`hedges_skipped{reason="concurrency"}` also counts refusals that the
+empty bucket would have made.
+
+### Configuration
+
+Five dyncfgs, all readable per call so LaunchDarkly changes apply live.
+One exception: an environmentd generation that has not been promoted yet,
+such as the new generation during a release rollout, applies LaunchDarkly
+changes only once promoted.
+
+| Name | Default | Purpose |
+| --- | --- | --- |
+| `persist_blob_hedged_get_enabled` | `true` | Master switch for hedging. |
+| `persist_blob_hedged_get_delay` | `2s` | Time in flight before the hedge fires. |
+| `persist_blob_hedged_get_max_concurrent` | `2` | Memory bound. |
+| `persist_blob_hedged_get_budget_ratio` | `0.01` | Rate bound. |
+| `persist_blob_hedged_get_warm_interval` | `20s` | Warm interval. `0` disables the warmer without disabling hedging. |
+
+The bucket capacity (32) is hard-coded: it is the bucket's shape rather
+than an operational lever, and fewer knobs means less to review and fewer
+LaunchDarkly entries. Note that `budget_ratio = 0` is not a kill switch,
+because the bucket starts full. `enabled` is the kill switch for hedging.
+
+Retuning the delay trades two effects. Lowering it moves the rescue
+floor (a hedge win arrives no
+earlier than the delay plus one round trip) but grows the false-fire
+population: the race triggers on full-blob completion, not first byte,
+so the gets that legitimately outlast the delay are large parts on
+constrained bandwidth, and each false fire both duplicates that part's
+egress and spends a budget token, so a lower delay can drain the bucket
+with healthy traffic and leave a real event refused. Raising it has a
+wide plateau in the other direction: a rescue stays useful as long as
+the delay plus one normal get fits the freshness target, which holds up
+to several seconds. Any retune should start by re-measuring the
+would-be fire rate at the candidate delay (the rate in Rollout is
+workload-dependent, dominated by part sizes and pod bandwidth).
+
+What the kill switch does not cover: `enabled = false` leaves the
+sibling idle, pending open retries included (see Pool isolation and
+Keeping the sibling warm; an attempt already in flight runs to
+completion, bounded by the blob client's timeouts), but its client and
+credential chain are constructed shortly after process start regardless,
+so that the sibling is usually open before hedging gets enabled. The
+disabled standing costs are at most one extra SDK client's memory per
+process, one extra credential resolution, and a doubled blob-open
+(including the backend's own health-check get), off the startup path.
+Removing the sibling machinery is a rollback, not a flag flip.
+
+### Testing
+
+Unit tests drive the race deterministically on tokio's paused test clock:
+
+- the hedge winning, with the get resolving at exactly the hedge delay
+  while the primary is still pending (cancellation),
+- the primary winning after the hedge fired,
+- a fast-failing hedge not failing a get whose primary later succeeds,
+- the primary failing after the hedge fired, with the hedge winning inside
+  the grace window in one test and the grace window expiring in another,
+- both legs failing, returning the primary's error verbatim,
+- budget exhaustion and refill, the concurrency cap, and release of the
+  concurrency slot when a hedged get is dropped mid-race,
+- the warmer's cadence, and its absence for a same-instance sibling,
+- the sibling open retried until it succeeds, with hedging armed only then,
+  its backoff doubling up to the one-minute ceiling, retries only while
+  hedging is enabled, and dropping the wrapper stopping the retries and
+  cancelling an open in progress.
+
+The existing `Blob` conformance suite runs against `HedgedBlob` with the
+delay at zero and the primary's gets artificially slowed, so a hedge fires
+and wins on every get through the full set/get/delete/list matrix over one
+shared store (the test asserts hedges actually fired and won). An
+additional test runs the same suite against real S3 with two genuinely
+independent clients. Like the existing external-storage S3 tests it is
+ignored by default and runs on demand against the external test bucket, so
+true pool isolation has manual but not continuous coverage.
+
+In CI the feature is on everywhere (repo convention for new feature
+flags, wired through the mzcompose system-parameter defaults) at a 10ms
+delay rather than the production 2s, so hedges genuinely fire in every
+run. CI's system-parameters randomization mode can additionally set the
+delay to 0s, making every blob get hedge under real workloads, and the
+parallel-workload suite flips `enabled` and the delay mid-workload.
+Benchmarks are the exception: the harnesses pin the planned production
+configuration (hedging on, production delay and budget) through the
+shared benchmarking parameter overrides, so benchmark history
+accumulates against what production will run.
+
+## Correctness
+
+Racing two gets is sound because blobs are write-once and modify-never, and
+the store is linearizable (`BlobMemCache` already relies on both). Both
+legs start after the caller invokes `get`, so any result either leg returns
+is a correct answer for some point during the call, including `Ok(None)`
+for a key that does not exist. The one way this argument breaks is if the
+two handles observe different stores, which is exactly what
+`open_hedge_sibling`'s per-backend contract prevents.
+
+Write-once is a statement about blob contents, not key existence: a
+concurrent delete can change the answer between the two legs, and the
+hedge leg observes the store up to one delay later than the primary would
+have. That adds no new outcome. An unhedged get whose request reached the
+store at the same moment, after a slow network path or as a retry after a
+hang, would return the same answer, so a caller that is correct without
+hedging stays correct with it. Leased reads cannot race a delete at all:
+garbage collection keeps every blob that a leased seqno references. Reads
+that hold no lease (unleased snapshots, rollup reads) already race garbage
+collection without hedging, and hedging only moves their read point
+within the call. For the dead-connection class it moves it earlier: the
+hedge reads about 2 seconds into the call, where the unhedged retry reads
+after the 5 to 15 second hang. (This is also why a runtime cross-check
+that both legs agree was rejected, see Alternatives.)
+
+The error surface is unchanged: callers see a success or the primary's
+error exactly as they would have without hedging, so the error text, the
+timeout heuristic, and the determinate versus indeterminate
+classification are all preserved.
+
+## Observability
+
+New metrics, all prefixed `mz_persist_blob_` (elided in prose below):
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `hedges_fired` | counter | Gets that fired a hedge request. |
+| `hedges_won` | counter | Gets the hedge request won. |
+| `hedge_won_seconds` | histogram | End-to-end latency of gets the hedge won. |
+| `hedges_skipped` | counter, by `reason` | Hedges refused: `budget`, `concurrency`, or `unavailable`. |
+| `hedge_errors` | counter | Hedge legs (not primaries) that completed with an error. |
+| `hedge_warm_errors` | counter | Warm cycles that failed or timed out. |
+| `hedge_armed` | gauge | 1 once the process has opened a sibling and can hedge. |
+| `hedge_rtt_latency` | gauge | Round-trip time of the last successful warm cycle. |
+
+Enabling hedging makes the old detection signals go quiet. The hung
+primary is cancelled at the delay, so the background increments of
+`mz_persist_s3_read_timeouts`, the SDK's connection-poisoning log lines,
+and spikes in the persist-observed blob round-trip gauge
+(`mz_persist_external_rtt_latency`, which measures through the hedged
+stack) largely stop occurring for this class. `hedges_won` replaces them
+as the detector.
+
+Two further notes. On accounting: the pre-existing S3 request counters
+(`mz_persist_s3_operations`, for example its `get_part` label) count both
+legs of a hedged get plus the warmer's pings, so they can exceed the logical
+`blob_get` operation count. On health: `hedge_warm_errors` and
+`hedge_errors` are the signals that the sibling's independent credential
+chain has rotted, which would otherwise silently turn the feature into a
+no-op. Both only move while hedging is enabled, so expect any rot to
+surface within the first warm cycles after enablement. Neither counter is
+specific to credentials, though. The discriminator is whether the primary
+fails on the same process at the same time. Hedge errors alongside primary
+failures have a shared cause: a pod starved at its network limit, or a
+connection reset or credential outage hitting both clients at once. Hedge
+errors and warm errors without primary failures, across many processes,
+point at the sibling itself. `hedge_armed` certifies only that the sibling
+is open, not that it is warm.
+
+## Alternatives
+
+### Hedging on the primary's pool
+
+Hedging on the primary's own connection pool would need no sibling
+machinery, and in the dominant event shape (one connection dies while
+its pool-mates stay healthy, which is why the same-pool retry succeeds
+promptly today) it would usually work. Isolation is for the residual
+minority of correlated, path-scoped events, where connection kills
+clustered within a second on one pod and fresh connects stalled
+fleet-wide, so a shared pool is most likely to hand the hedge a sick
+connection exactly when the hedge matters most. A shared pool also
+forecloses levers that matter regardless of fate sharing: it pins the
+hedge to the pool's cached DNS answer and front-end address, lets a
+checkout queue behind the very jam the hung get is part of, and cannot
+be kept warm without distorting the primary's pool.
+
+### Just lowering the client timeouts
+
+Lowering the client timeouts instead of hedging was the 2023 answer to
+this class (connect and read were cut from 30 and 60 seconds to today's
+7 and 10), and the residual hang is what that lever left behind.
+Tightening further runs into the structural limits The Problem lists, and
+the timeouts do not cover the response body at all. A body that stops
+delivering bytes fails after about 6 seconds through the SDK's
+stalled-stream protection, but a body that keeps trickling a byte every
+few seconds is bounded by no timeout, and the attempt timeout could not
+come down anyway without killing legitimately long large-part fetches. A
+timeout is also sequential and forces a trade: it converts a
+possibly-about-to-succeed request into an error, pays backoff and
+restart, and retries on the same pool with no fresh connection or DNS
+resolution guaranteed, so its threshold must stay conservative. A hedge
+is concurrent, so firing early costs a bounded duplicate rather than a
+lost success, which is why hedging affords a 2 second trigger where a 2
+second timeout could not.
+
+### Per-chunk hedging
+
+Hedging per multipart chunk inside `S3Blob::get` is a possible refinement:
+`S3Blob::get` already fetches large blobs in 8 MiB parts, so a per-chunk
+hedge would duplicate one chunk instead of the whole blob and could trigger
+on missing first bytes rather than wall clock. It is S3-only, duplicates
+the race logic per backend, and is a natural follow-up once the generic
+version has proven itself, not the first version.
+
+### A pool-less sibling
+
+Disabling pooling on the sibling client (max idle connections of zero)
+would guarantee isolation and fresh DNS with no warmer machinery, but it
+puts a full TCP and TLS handshake on the critical path of every hedge,
+which is up to 7 seconds during exactly the correlated events the feature
+targets.
+
+### A both-legs debug mode
+
+A debug mode that awaits both legs and asserts they agree was rejected as
+unsound, not merely unnecessary: as Correctness explains, two gets of the
+same key are only required to agree for keys protected by a live lease, so
+the assertion would misfire on legitimate delete races.
+
+### A hedging-aware Blob trait
+
+Extending the `Blob` trait with a hedging-aware method was rejected because
+it pushes a transport concern into a five-method correctness-critical trait
+that most implementations have no answer for.
+
+### Hedging in maelstrom
+
+A configuration for maelstrom was considered and deferred. Maelstrom's
+blob is neither S3 nor Azure, so its sibling would be the same instance,
+and `UnreliableBlob` injects errors but not delays, so hedges would
+essentially never fire. The
+configuration becomes worthwhile together with delay injection in
+`UnreliableBlob`.
+
+## Rollout
+
+The feature shipped dark: the code path was present everywhere, but
+hedging was off by default (and on in CI, see Testing) until enabled at
+runtime. Cloud enabled it per environment through LaunchDarkly, in steps
+that reached every cloud environment. The compiled-in default is now on,
+which enables hedging for deployments that do not set the parameter, such
+as self-managed ones. `enabled = false` remains the kill switch. On
+enablement, expect the old detection signals to fade (see Observability),
+`hedges_fired` to run at a low background rate (measured on a busy
+reference environment: gets over the 2s delay ran at roughly 4 per day
+on the busiest replica and a few per hour environment-wide, so
+single-digit fires per day per process is the expected order, with
+hydration bursts of large parts as the exception the guards cap), and
+`hedges_won` to step where the old signals would have fired.
+Success is the dead-connection class becoming sub-breach: each
+instance should cap near the hedge delay plus one normal get, and the
+roughly-daily visible freshness stalls attributed to the class in a busy
+environment should disappear from per-minute freshness data. The known
+residual is the case where both legs stall (a correlated event defeating
+the warm pool, or a drained budget), which falls back to today's behavior
+and stays visible as `hedge_won_seconds` outliers and
+`hedges_skipped` increments.
+
+## Open questions
+
+**Is the warmer worth its cost?** At the 20 second interval the sibling's
+sockets are closed for most of each cycle (see Keeping the sibling warm),
+so the warmer mostly does not keep a warm pool. What it does provide is a
+health signal for the sibling (`hedge_warm_errors`, `hedge_rtt_latency`)
+and an exercised credential chain, at about an eighth of the fleet's
+organic blob gets. The options are to keep it as is, to shorten the
+interval below the 6 second idle close so that sockets actually stay warm
+(about half the fleet's organic blob gets at 5 seconds), or to drop it and
+let hedges open their own connections. A shorter interval is what would
+carry the sibling through a connect-path stall on sockets it established
+before the stall, since at 20 seconds every cycle reconnects and stalls
+along with the primary. The deciding evidence would be hedge wins in the 4
+to 8 s bucket or later that coincide with slow connects a warm pool would
+have avoided.

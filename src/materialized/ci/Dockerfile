@@ -9,15 +9,19 @@
 
 MZFROM materialized-base
 
-COPY listener_configs/ /listener_configs/
+# The binary in this image is always current, so it ships only the current
+# listener config schema, flattened to /listener_configs/.
+COPY listener_configs/v26_32_0/ /listener_configs/
+
+USER materialize
+
+RUN /usr/lib/postgresql/17/bin/initdb -D /mzdata/postgres -U root --auth-local=trust
+
 COPY materialized entrypoint.sh /usr/local/bin/
 
 USER root
 RUN ln -s /usr/local/bin/materialized /usr/local/bin/environmentd \
   && ln -s /usr/local/bin/materialized /usr/local/bin/clusterd
-
 USER materialize
-
-RUN /usr/lib/postgresql/17/bin/initdb -D /mzdata/postgres -U root --auth-local=trust
 
 ENTRYPOINT ["tini", "--", "entrypoint.sh"]

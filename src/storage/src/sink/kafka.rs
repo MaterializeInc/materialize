@@ -15,11 +15,11 @@
 //!        ┃   persist    ┃
 //!        ┃    source    ┃
 //!        ┗━━━━━━┯━━━━━━━┛
-//!               │ row data, the input to this module
+//!               │ stream of arrangement batches (trace reader dropped)
 //!               │
 //!        ┏━━━━━━v━━━━━━┓
-//!        ┃    row      ┃
-//!        ┃   encoder   ┃
+//!        ┃    row      ┃ walks each batch's cursor and emits one
+//!        ┃   encoder   ┃ encoded `KafkaMessage` per DiffPair
 //!        ┗━━━━━━┯━━━━━━┛
 //!               │ encoded data
 //!               │
@@ -36,10 +36,11 @@
 //!
 //! # Encoding
 //!
-//! One part of the dataflow deals with encoding the rows that we read from persist. There isn't
-//! anything surprizing here, it is *almost* just a `Collection::map` with the exception of an
-//! initialization step that makes sure the schemas are published to the Schema Registry. After
-//! that step the operator just encodes each batch it receives record by record.
+//! One part of the dataflow deals with encoding the rows that we read from persist. The encoder
+//! walks the input arrangement's batches via
+//! [`mz_interchange::envelopes::for_each_diff_pair`], producing one encoded `KafkaMessage` per
+//! `DiffPair` observed at each `(key, timestamp)`. An initialization step first ensures that the
+//! schemas are published to the Schema Registry.
 //!
 //! # Sinking
 //!
@@ -81,17 +82,17 @@ use std::time::Duration;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::kafka::KafkaSinkMetrics;
-use crate::render::sinks::SinkRender;
+use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 use anyhow::{Context, anyhow, bail};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use maplit::btreemap;
-use mz_expr::MirScalarExpr;
-use mz_interchange::avro::{AvroEncoder, DiffPair};
+use mz_expr::{Eval, MirScalarExpr};
+use mz_interchange::avro::{AvroEncoder, AvroSchemaId};
 use mz_interchange::encode::Encode;
-use mz_interchange::envelopes::dbz_format;
+use mz_interchange::envelopes::{dbz_format, for_each_diff_pair};
 use mz_interchange::json::JsonEncoder;
 use mz_interchange::text_binary::{BinaryEncoder, TextEncoder};
 use mz_kafka_util::admin::EnsureTopicConfig;
@@ -108,19 +109,22 @@ use mz_ore::task::{self, AbortOnDropHandle};
 use mz_persist_client::Diagnostics;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::{
-    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, SINK_ENSURE_TOPIC_CONFIG, SINK_PROGRESS_SEARCH,
+    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, KAFKA_SINK_BATCH_NUM_MESSAGES,
+    KAFKA_SINK_BATCH_SIZE, KAFKA_SINK_EMIT_SINK_ID_HEADER, KAFKA_SINK_MESSAGE_MAX_BYTES,
+    SINK_ENSURE_TOPIC_CONFIG, SINK_PROGRESS_SEARCH,
 };
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
     KafkaSinkConnection, KafkaSinkFormatType, SinkEnvelope, StorageSinkDesc,
 };
 use mz_storage_types::sources::SourceData;
+use mz_storage_types::wire_format::WireFormat;
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
@@ -134,15 +138,16 @@ use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::operators::{CapabilitySet, Concatenate};
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
 
-impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
+impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
     fn get_key_indices(&self) -> Option<&[usize]> {
         self.key_desc_and_indices
             .as_ref()
@@ -158,12 +163,16 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
+        batches: SinkBatchStream<'scope>,
+        key_is_synthetic: bool,
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
-        _err_collection: VecCollection<G, DataflowError, Diff>,
-    ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
-        let mut scope = input.scope();
+        _err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
+    ) -> (
+        StreamVec<'scope, Timestamp, HealthStatusMessage>,
+        Vec<PressOnDropButton>,
+    ) {
+        let scope = batches.scope();
 
         let write_handle = {
             let persist = Arc::clone(&storage_state.persist_clients);
@@ -189,10 +198,13 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
 
         let (encoded, encode_status, encode_token) = encode_collection(
             format!("kafka-{sink_id}-{}-encode", self.format.get_format_name()),
-            &input,
+            batches,
             sink.envelope,
             self.clone(),
             storage_state.storage_configuration.clone(),
+            sink_id,
+            sink.from,
+            key_is_synthetic,
         );
 
         let metrics = storage_state.metrics.get_kafka_sink_metrics(sink_id);
@@ -204,7 +216,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
 
         let (sink_status, sink_token) = sink_collection(
             format!("kafka-{sink_id}-sink"),
-            &encoded,
+            encoded,
             sink_id,
             self.clone(),
             storage_state.storage_configuration.clone(),
@@ -220,7 +232,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
             update: HealthStatusUpdate::Running,
             namespace: StatusNamespace::Kafka,
         })
-        .to_stream(&mut scope);
+        .to_stream(scope);
 
         let status = scope.concatenate([running_status, encode_status, sink_status]);
 
@@ -239,6 +251,8 @@ struct TransactionalProducer {
     progress_key: ProgressKey,
     /// The version of this sink, used to fence out previous versions from writing.
     sink_version: u64,
+    /// The `materialize-sink-id` header value, when the header is enabled.
+    sink_id_header: Option<String>,
     /// The number of partitions in the target topic.
     partition_count: Arc<AtomicU64>,
     /// A task to periodically refresh the partition count.
@@ -298,7 +312,7 @@ impl TransactionalProducer {
         options.insert("queue.buffering.max.messages", "0".into());
         // Make the Kafka producer wait at least 10 ms before sending out MessageSets
         options.insert("queue.buffering.max.ms", format!("{}", 10));
-        // Time out transactions after 60 seconds
+        // Time out transactions after `transaction_timeout`.
         options.insert(
             "transaction.timeout.ms",
             format!("{}", timeout_config.transaction_timeout.as_millis()),
@@ -309,6 +323,32 @@ impl TransactionalProducer {
         options.insert("client.id", client_id);
         // We want to be notified regularly with statistics
         options.insert("statistics.interval.ms", "1000".into());
+        // Maximum size of a single produced message, controlled by dyncfg so
+        // operators can raise the limit when messages exceed librdkafka's 1MB
+        // default.
+        options.insert(
+            "message.max.bytes",
+            format!(
+                "{}",
+                KAFKA_SINK_MESSAGE_MAX_BYTES.get(storage_configuration.config_set())
+            ),
+        );
+        // Maximum size (bytes) of a produced MessageSet.
+        options.insert(
+            "batch.size",
+            format!(
+                "{}",
+                KAFKA_SINK_BATCH_SIZE.get(storage_configuration.config_set())
+            ),
+        );
+        // Maximum number of messages batched in one MessageSet.
+        options.insert(
+            "batch.num.messages",
+            format!(
+                "{}",
+                KAFKA_SINK_BATCH_NUM_MESSAGES.get(storage_configuration.config_set())
+            ),
+        );
 
         let ctx = MzClientContext::default();
 
@@ -361,6 +401,9 @@ impl TransactionalProducer {
                 .into_owned(),
             progress_key,
             sink_version,
+            sink_id_header: KAFKA_SINK_EMIT_SINK_ID_HEADER
+                .get(storage_configuration.config_set())
+                .then(|| sink_id.to_string()),
             producer,
             statistics,
             staged_messages: 0,
@@ -457,6 +500,12 @@ impl TransactionalProducer {
             key: "materialize-timestamp",
             value: Some(time.to_string().as_bytes()),
         });
+        if let Some(sink_id) = &self.sink_id_header {
+            headers = headers.insert(Header {
+                key: "materialize-sink-id",
+                value: Some(sink_id.as_bytes()),
+            });
+        }
         for header in &message.headers {
             // Headers that start with `materialize-` are reserved for our
             // internal use, so we silently drop any such user-specified
@@ -558,16 +607,23 @@ async fn collect_statistics(
     mut receiver: watch::Receiver<Statistics>,
     metrics: Arc<KafkaSinkMetrics>,
 ) {
-    let mut outbuf_cnt: i64 = 0;
-    let mut outbuf_msg_cnt: i64 = 0;
-    let mut waitresp_cnt: i64 = 0;
-    let mut waitresp_msg_cnt: i64 = 0;
-    let mut txerrs: u64 = 0;
-    let mut txretries: u64 = 0;
-    let mut req_timeouts: u64 = 0;
-    let mut connects: i64 = 0;
-    let mut disconnects: i64 = 0;
     while receiver.changed().await.is_ok() {
+        // The librdkafka per-broker statistics are either running totals (counters)
+        // or point-in-time values (gauges). In both cases we aggregate across brokers
+        // by re-summing from scratch each interval, so these accumulators are reset
+        // every time statistics are fetched.
+        //
+        // see <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_STATISTICS.html#autotoc_md121>
+        let mut outbuf_cnt: i64 = 0;
+        let mut outbuf_msg_cnt: i64 = 0;
+        let mut waitresp_cnt: i64 = 0;
+        let mut waitresp_msg_cnt: i64 = 0;
+        let mut txerrs: u64 = 0;
+        let mut txretries: u64 = 0;
+        let mut req_timeouts: u64 = 0;
+        let mut connects: i64 = 0;
+        let mut disconnects: i64 = 0;
+
         let stats = receiver.borrow();
         for broker in stats.brokers.values() {
             outbuf_cnt += broker.outbuf_cnt;
@@ -625,9 +681,9 @@ struct KafkaHeader {
 /// This operator exchanges all updates to a single worker by hashing on the given sink `id`.
 ///
 /// Updates are sent in ascending timestamp order.
-fn sink_collection<G: Scope<Timestamp = Timestamp>>(
+fn sink_collection<'scope>(
     name: String,
-    input: &VecCollection<G, KafkaMessage, Diff>,
+    input: VecCollection<'scope, Timestamp, KafkaMessage, Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -638,7 +694,10 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-) -> (Stream<G, HealthStatusMessage>, PressOnDropButton) {
+) -> (
+    StreamVec<'scope, Timestamp, HealthStatusMessage>,
+    PressOnDropButton,
+) {
     let scope = input.scope();
     let mut builder = AsyncOperatorBuilder::new(name.clone(), input.inner.scope());
 
@@ -648,7 +707,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     let buffer_min_capacity =
         KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS.handle(storage_configuration.config_set());
 
-    let mut input = builder.new_disconnected_input(&input.inner, Exchange::new(move |_| hashed_id));
+    let mut input = builder.new_disconnected_input(input.inner, Exchange::new(move |_| hashed_id));
 
     let as_of = sink.as_of.clone();
     let sink_version = sink.version;
@@ -774,22 +833,20 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
                             producer.begin_transaction().await?;
                         }
 
-                        // N.B. Shrinking the Vec here is important because when starting the Sink
-                        // we might buffer a ton of updates into these collections, e.g. if someone
-                        // deleted the progress topic and the resume upper is 0, and we don't want
-                        // to keep around a massively oversized VEc.
-                        deferred_updates.shrink_to(buffer_min_capacity.get());
                         extra_updates.extend(
                             deferred_updates
                                 .extract_if(.., |(_, time, _)| !progress.less_equal(time)),
                         );
+                        // Shrink after draining items out, so the call actually
+                        // reduces capacity in the oversized-buffer scenario
+                        // (e.g. progress topic was deleted and resume upper is 0).
+                        deferred_updates.shrink_to(buffer_min_capacity.get());
                         extra_updates.sort_unstable_by(|a, b| a.1.cmp(&b.1));
 
-                        // N.B. See the comment above.
-                        extra_updates.shrink_to(buffer_min_capacity.get());
                         for (message, time, diff) in extra_updates.drain(..) {
                             producer.send(&message, time, diff)?;
                         }
+                        extra_updates.shrink_to(buffer_min_capacity.get());
 
                         debug!("{name}: committing transaction for {}", progress.pretty());
                         producer.commit_transaction(progress.clone()).await?;
@@ -1206,8 +1263,8 @@ fn progress_search<C: ConsumerContext + 'static>(
             {
                 bail!(
                     "upper regressed in topic {progress_topic}:{partition} from {:?} to {:?}",
-                    &last_progress.frontier,
-                    &progress.frontier,
+                    last_progress.frontier,
+                    progress.frontier,
                 );
             }
             _ => last_progress = Some(progress),
@@ -1352,24 +1409,115 @@ async fn fetch_partition_count_loop<F>(
     }
 }
 
-/// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.
+/// Register an Avro `schema` with the sink's schema registry and build an
+/// [`AvroEncoder`] framing records for that registry.
 ///
-/// Input [`Row`] updates must me compatible with the given implementor of [`Encode`].
-fn encode_collection<G: Scope>(
+/// `subject` is the registry name for the schema, either `{topic}-key` or
+/// `{topic}-value`. It is the Confluent subject or, for Glue, the schema name.
+/// Registration happens here in the render cycle, so schemas are re-published
+/// each time the sink is rendered. The `WireFormat` must carry a registry:
+/// sinks are never built without one (see the sink planner), so a missing
+/// registry is unreachable.
+async fn build_avro_encoder(
+    desc: RelationDesc,
+    debezium: bool,
+    schema: String,
+    compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
+    wire_format: WireFormat,
+    subject: String,
+    storage_configuration: &StorageConfiguration,
+) -> Result<AvroEncoder, anyhow::Error> {
+    let schema_id = match wire_format {
+        WireFormat::Confluent {
+            registry: Some(csr),
+        } => {
+            let ccsr = csr.connect(storage_configuration, InTask::Yes).await?;
+            let schema_id = mz_storage_client::sink::publish_kafka_schema(
+                ccsr,
+                subject,
+                schema.clone(),
+                mz_ccsr::SchemaType::Avro,
+                compatibility_level,
+            )
+            .await
+            .context("error publishing kafka schemas for sink")?;
+            AvroSchemaId::Confluent(schema_id)
+        }
+        WireFormat::Glue {
+            registry: Some(glue),
+        } => {
+            let enforce_external_addresses = mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+                .get(storage_configuration.config_set());
+            let sdk_config = glue
+                .aws_connection
+                .connection
+                .load_sdk_config(
+                    &storage_configuration.connection_context,
+                    glue.aws_connection.connection_id,
+                    InTask::Yes,
+                    enforce_external_addresses,
+                )
+                .await?;
+            let client = mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build();
+            let compatibility =
+                compatibility_level.map(mz_storage_client::sink::glue_compatibility_from_csr);
+            // `subject` is used verbatim as the Glue schema name. When it is
+            // topic-derived (`{topic}-key` or `{topic}-value`) no mangling is
+            // needed: Kafka topic chars `[a-zA-Z0-9._-]` are a subset of Glue's
+            // `[a-zA-Z0-9-_$#.]`, and the longest suffix `-value` (6 chars) plus
+            // the max Kafka topic length (249) lands exactly on Glue's max
+            // schema name length (255).
+            //
+            // A user-supplied schema name carries no such guarantee. As with
+            // CSR subjects, it is not validated at plan time, so an out-of-range
+            // or ill-formed name is rejected by Glue here at registration.
+            //
+            // Kafka topic name rules:
+            // https://github.com/a0x8o/kafka/blob/master/core/src/main/scala/kafka/common/Topic.scala
+            // Glue schema name rules:
+            // https://docs.aws.amazon.com/glue/latest/webapi/API_CreateSchema.html
+            let schema_version_id = mz_storage_client::sink::publish_glue_schema(
+                client,
+                glue.registry_name,
+                subject,
+                schema.clone(),
+                compatibility,
+            )
+            .await
+            .context("error publishing glue schemas for sink")?;
+            AvroSchemaId::Glue(schema_version_id)
+        }
+        other => unreachable!(
+            "sink Avro wire_format must carry a registry, got {:?}",
+            other
+        ),
+    };
+    Ok(AvroEncoder::new(desc, debezium, &schema, schema_id))
+}
+
+/// Walks each arrangement batch and emits encoded Kafka messages, one per
+/// `DiffPair` observed at each `(key, timestamp)`.
+///
+/// When `key_is_synthetic`, the batch keys are per-row hashes used only for
+/// worker distribution; the emitted `KafkaMessage` uses no key in that case.
+fn encode_collection<'scope>(
     name: String,
-    input: &VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
+    batches: SinkBatchStream<'scope>,
     envelope: SinkEnvelope,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
+    sink_id: GlobalId,
+    from_id: GlobalId,
+    key_is_synthetic: bool,
 ) -> (
-    VecCollection<G, KafkaMessage, Diff>,
-    Stream<G, HealthStatusMessage>,
+    VecCollection<'scope, Timestamp, KafkaMessage, Diff>,
+    StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
-    let mut builder = AsyncOperatorBuilder::new(name, input.inner.scope());
+    let mut builder = AsyncOperatorBuilder::new(name, batches.scope());
 
-    let (output, stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut input = builder.new_input_for(&input.inner, Pipeline, &output);
+    let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let mut input = builder.new_input_for(batches, Pipeline, &output);
 
     let (button, errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
@@ -1394,27 +1542,22 @@ fn encode_collection<G: Scope>(
                     (Some(desc), Some(KafkaSinkFormatType::Avro {
                         schema,
                         compatibility_level,
-                        csr_connection,
+                        schema_name,
+                        wire_format,
                     })) => {
-                        // Ensure that schemas are registered with the schema registry.
-                        //
-                        // Note that where this lies in the rendering cycle means that we will publish the
-                        // schemas each time the sink is rendered.
-                        let ccsr = csr_connection
-                            .connect(&storage_configuration, InTask::Yes)
-                            .await?;
-
-                        let schema_id = mz_storage_client::sink::publish_kafka_schema(
-                            ccsr,
-                            format!("{}-key", connection.topic),
-                            schema.clone(),
-                            mz_ccsr::SchemaType::Avro,
+                        let subject = schema_name
+                            .unwrap_or_else(|| format!("{}-key", connection.topic));
+                        let encoder = build_avro_encoder(
+                            desc,
+                            false,
+                            schema,
                             compatibility_level,
+                            wire_format,
+                            subject,
+                            &storage_configuration,
                         )
-                        .await
-                        .context("error publishing kafka schemas for sink")?;
-
-                        Some(Box::new(AvroEncoder::new(desc, false, &schema, schema_id)))
+                        .await?;
+                        Some(Box::new(encoder))
                     }
                     (None, None) => None,
                     (desc, format) => {
@@ -1436,27 +1579,22 @@ fn encode_collection<G: Scope>(
                 KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level,
-                    csr_connection,
+                    schema_name,
+                    wire_format,
                 } => {
-                    // Ensure that schemas are registered with the schema registry.
-                    //
-                    // Note that where this lies in the rendering cycle means that we will publish the
-                    // schemas each time the sink is rendered.
-                    let ccsr = csr_connection
-                        .connect(&storage_configuration, InTask::Yes)
-                        .await?;
-
-                    let schema_id = mz_storage_client::sink::publish_kafka_schema(
-                        ccsr,
-                        format!("{}-value", connection.topic),
-                        schema.clone(),
-                        mz_ccsr::SchemaType::Avro,
+                    let subject = schema_name
+                        .unwrap_or_else(|| format!("{}-value", connection.topic));
+                    let encoder = build_avro_encoder(
+                        value_desc,
+                        debezium,
+                        schema,
                         compatibility_level,
+                        wire_format,
+                        subject,
+                        &storage_configuration,
                     )
-                    .await
-                    .context("error publishing kafka schemas for sink")?;
-
-                    Box::new(AvroEncoder::new(value_desc, debezium, &schema, schema_id))
+                    .await?;
+                    Box::new(encoder)
                 }
             };
 
@@ -1469,67 +1607,94 @@ fn encode_collection<G: Scope>(
 
             let mut row_buf = Row::default();
             let mut datums = DatumVec::new();
+            let mut pk_warner =
+                (!key_is_synthetic).then(|| PkViolationWarner::new(sink_id, from_id));
 
             while let Some(event) = input.next().await {
-                if let Event::Data(cap, rows) = event {
-                    for ((key, value), time, diff) in rows {
-                        let mut hash = None;
-                        let mut headers = vec![];
-                        if connection.headers_index.is_some() || connection.partition_by.is_some() {
-                            // Header values and partition by values are derived from the row that
-                            // produces an event. But it is ambiguous whether to use the `before` or
-                            // `after` from the event. The rule applied here is simple: use `after`
-                            // if it exists (insertions and updates), otherwise fall back to `before`
-                            // (deletions).
-                            //
-                            // It is up to the SQL planner to ensure this produces sensible results.
-                            // (When using the upsert envelope and both `before` and `after` are
-                            // present, it's always unambiguous to use `after` because that's all
-                            // that will be present in the Kafka message; when using the Debezium
-                            // envelope, it's okay to refer to columns in the key because those
-                            // are guaranteed to be the same in both `before` and `after`.)
-                            let row = value
-                                .after
-                                .as_ref()
-                                .or(value.before.as_ref())
-                                .expect("one of before or after must be set");
-                            let row = datums.borrow_with(row);
-
-                            if let Some(i) = connection.headers_index {
-                                headers = encode_headers(row[i]);
+                if let Event::Data(cap, mut batches) = event {
+                    for batch in batches.drain(..) {
+                        for_each_diff_pair(&batch, |key, time, value| {
+                            if let Some(warner) = pk_warner.as_mut() {
+                                warner.observe(key, time);
                             }
+                            // Only emit the arrangement key when the user configured one; relation-key
+                            // and synthetic-hash arrangements exist purely for grouping / worker
+                            // distribution and have no corresponding key encoder.
+                            let key_for_message = if key_encoder.is_some() { key } else { &None };
 
-                            if let Some(partition_by) = &connection.partition_by {
-                                hash = Some(evaluate_partition_by(partition_by, &row));
+                            let mut hash = None;
+                            let mut headers = vec![];
+                            if connection.headers_index.is_some()
+                                || connection.partition_by.is_some()
+                            {
+                                // Header values and partition by values are derived from the row
+                                // that produces an event. But it is ambiguous whether to use the
+                                // `before` or `after` from the event. The rule applied here is
+                                // simple: use `after` if it exists (insertions and updates),
+                                // otherwise fall back to `before` (deletions).
+                                //
+                                // It is up to the SQL planner to ensure this produces sensible
+                                // results. (When using the upsert envelope and both `before` and
+                                // `after` are present, it's always unambiguous to use `after`
+                                // because that's all that will be present in the Kafka message;
+                                // when using the Debezium envelope, it's okay to refer to columns
+                                // in the key because those are guaranteed to be the same in both
+                                // `before` and `after`.)
+                                let row = value
+                                    .after
+                                    .as_ref()
+                                    .or(value.before.as_ref())
+                                    .expect("one of before or after must be set");
+                                let row = datums.borrow_with(row);
+
+                                if let Some(i) = connection.headers_index {
+                                    headers = encode_headers(row[i]);
+                                }
+
+                                if let Some(partition_by) = &connection.partition_by {
+                                    hash = Some(evaluate_partition_by(partition_by, &row));
+                                }
                             }
+                            let (encoded_key, hash) = match key_for_message {
+                                Some(key) => {
+                                    let key_encoder =
+                                        key_encoder.as_ref().expect("key present");
+                                    let encoded = key_encoder.encode_unchecked(key.clone());
+                                    let hash =
+                                        hash.unwrap_or_else(|| key_encoder.hash(&encoded));
+                                    (Some(encoded), hash)
+                                }
+                                None => (None, hash.unwrap_or(0)),
+                            };
+                            let value = match envelope {
+                                SinkEnvelope::Upsert => value.after,
+                                SinkEnvelope::Debezium => {
+                                    dbz_format(&mut row_buf.packer(), value);
+                                    Some(row_buf.clone())
+                                }
+                                SinkEnvelope::Append => {
+                                    unreachable!("Append envelope is not valid for Kafka sinks")
+                                }
+                            };
+                            let value = value.map(|value| value_encoder.encode_unchecked(value));
+                            let message = KafkaMessage {
+                                hash,
+                                key: encoded_key,
+                                value,
+                                headers,
+                            };
+                            output.give(&cap, (message, time, Diff::ONE));
+                        });
+                        // Flush after each batch so the final `(key, time)` group of the walk is
+                        // resolved immediately — a PK violation in the last group is otherwise
+                        // held until more data arrives or the operator shuts down.
+                        if let Some(warner) = pk_warner.as_mut() {
+                            warner.flush();
                         }
-                        let (key, hash) = match key {
-                            Some(key) => {
-                                let key_encoder = key_encoder.as_ref().expect("key present");
-                                let key = key_encoder.encode_unchecked(key);
-                                let hash = hash.unwrap_or_else(|| key_encoder.hash(&key));
-                                (Some(key), hash)
-                            }
-                            None => (None, hash.unwrap_or(0))
-                        };
-                        let value = match envelope {
-                            SinkEnvelope::Upsert => value.after,
-                            SinkEnvelope::Debezium => {
-                                dbz_format(&mut row_buf.packer(), value);
-                                Some(row_buf.clone())
-                            }
-                        };
-                        let value = value.map(|value| value_encoder.encode_unchecked(value));
-                        let message = KafkaMessage {
-                            hash,
-                            key,
-                            value,
-                            headers,
-                        };
-                        output.give(&cap, (message, time, diff));
                     }
                 }
             }
+
             Ok::<(), anyhow::Error>(())
         })
     });

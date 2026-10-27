@@ -134,7 +134,23 @@ async fn test_permissions(config: BTreeMap<String, String>) -> Result<(), OpErro
 pub async fn connect(
     mut config: BTreeMap<String, String>,
 ) -> Result<(String, tokio_postgres::Client), OpError> {
-    tracing::info!(?config, "Connecting to Materialize");
+    // Log only non-sensitive fields to avoid leaking credentials.
+    tracing::info!(
+        host = config
+            .get("host")
+            .map(String::as_str)
+            .unwrap_or("<not set>"),
+        user = config
+            .get("user")
+            .map(String::as_str)
+            .unwrap_or("<not set>"),
+        dbname = config
+            .get("dbname")
+            .map(String::as_str)
+            .unwrap_or("<not set>"),
+        has_cluster = config.get("cluster").is_some_and(|v| !v.is_empty()),
+        "Connecting to Materialize",
+    );
     let host = config
         .remove("host")
         .ok_or(OpErrorKind::FieldMissing("host"))?;

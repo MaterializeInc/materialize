@@ -1,0 +1,8 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`queries > buildStatementLoggingMaxSampleRateQuery produces the expected query 1`] = `
+{
+  "parameters": [],
+  "sql": "SHOW statement_logging_max_sample_rate",
+}
+`;

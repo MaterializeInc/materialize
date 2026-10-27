@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,36 +9,36 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/errors
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/errors
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
-statement error pgcode 42P01 relation "fake1" does not exist
+statement error pgcode 42P01 Expected one of SET or RENAME or OWNER or RESET or ADD, found DROP
 ALTER TABLE fake1 DROP COLUMN a
 
-statement error pgcode 42P01 relation "fake2" does not exist
+statement error pgcode 42P01 unknown catalog item 'fake2'
 CREATE INDEX i ON fake2 (a)
 
-statement error pgcode 42P01 relation "fake3" does not exist
+statement error pgcode 42P01 Expected end of statement, found operator "@"
 DROP INDEX fake3@i
 
-statement error pgcode 42P01 relation "fake4" does not exist
+statement error pgcode 42P01 unknown catalog item 'fake4'
 DROP TABLE fake4
 
-statement error pgcode 42P01 relation "fake5" does not exist
+statement error pgcode 42P01 unknown catalog item 'fake5'
 SHOW COLUMNS FROM fake5
 
-statement error pgcode 42P01 relation "fake6" does not exist
+statement error pgcode 42P01 unknown catalog item 'fake6'
 INSERT INTO fake6 VALUES (1, 2)
 
-statement error pgcode 42P01 relation "fake7" does not exist
+statement error pgcode 42P01 unknown catalog item 'fake7'
 SELECT * FROM fake7

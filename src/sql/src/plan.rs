@@ -37,9 +37,7 @@ use ipnet::IpNet;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{
-    CollectionPlan, ColumnOrder, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
-};
+use mz_expr::{CollectionPlan, ColumnOrder, MapFilterProject, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -49,20 +47,22 @@ use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, ColumnIndex, ColumnName, Diff, GlobalId, RelationDesc, Row, SqlColumnType,
-    SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
+    CatalogItemId, ColumnIndex, ColumnName, Diff, GlobalId, RelationDesc, ReprColumnType, Row,
+    SqlColumnType, SqlRelationType, SqlScalarType, Timestamp, VersionedRelationDesc,
 };
 use mz_sql_parser::ast::{
-    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, QualifiedReplica,
-    RawDataType, SelectStatement, TransactionIsolationLevel, TransactionMode, UnresolvedItemName,
-    Value, WithOptionValue,
+    AlterSourceAddSubsourceOption, ClusterAlterOptionValue, ConnectionOptionName, CreateSinkOption,
+    CreateSinkOptionName, QualifiedReplica, RawDataType, SelectStatement,
+    TransactionIsolationLevel, TransactionMode, UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::AwsConnection;
+use mz_storage_types::connections::gcp::{GcpConnection, GcpServiceAccountKeyTokenUri};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{
-    AwsPrivatelinkConnection, CsrConnection, IcebergCatalogConnection, KafkaConnection,
-    MySqlConnection, PostgresConnection, SqlServerConnectionDetails, SshConnection,
+    AwsPrivatelinkConnection, CsrConnection, GlueSchemaRegistryConnection,
+    IcebergCatalogConnection, KafkaConnection, MySqlConnection, PostgresConnection,
+    SqlServerConnectionDetails, SshConnection,
 };
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::sinks::{S3SinkFormat, SinkEnvelope, StorageSinkConnection};
@@ -99,6 +99,9 @@ pub(crate) mod statement;
 pub(crate) mod transform_ast;
 pub(crate) mod transform_hir;
 pub(crate) mod typeconv;
+pub use typeconv::{
+    CastContext, plan_hypothetical_cast_with_failure_mode, valid_cast_base_type_pairs,
+};
 pub(crate) mod with_options;
 
 use crate::plan;
@@ -112,20 +115,22 @@ pub use hir::{
 };
 pub use lowering::Config as HirToMirConfig;
 pub use notice::PlanNotice;
-pub use query::{ExprContext, QueryContext, QueryLifetime};
+pub use query::{ExprContext, QueryContext, QueryLifetime, scalar_type_from_catalog};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{
-    AlterSourceAddSubsourceOptionExtracted, MySqlConfigOptionExtracted, PgConfigOptionExtracted,
-    PlannedAlterRoleOption, PlannedRoleVariable, SqlServerConfigOptionExtracted,
+    AlterSourceAddSubsourceOptionExtracted, METRIC_SINK_CURATED_PREFIX_MARKER,
+    MySqlConfigOptionExtracted, PgConfigOptionExtracted, PlannedAlterRoleOption,
+    PlannedRoleAttributes, PlannedRoleVariable, SqlServerConfigOptionExtracted,
+    validate_metric_sink_desc, validate_metric_sink_prefix, validate_user_metric_sink_prefix,
 };
 pub use statement::{
     StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,
     resolve_cluster_for_materialized_view,
 };
+pub use with_options::TryFromValue;
 
 use self::statement::ddl::ClusterAlterOptionExtracted;
-use self::with_options::TryFromValue;
 
 /// Instructions for executing a SQL query.
 #[derive(Debug, EnumKind)]
@@ -144,9 +149,9 @@ pub enum Plan {
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
-    CreateContinualTask(CreateContinualTaskPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
+    CreateMetricSink(CreateMetricSinkPlan),
     CreateType(CreateTypePlan),
     Comment(CommentPlan),
     DiscardTemp,
@@ -212,6 +217,7 @@ pub enum Plan {
     SideEffectingFunc(SideEffectingFunc),
     ValidateConnection(ValidateConnectionPlan),
     AlterRetainHistory(AlterRetainHistoryPlan),
+    AlterSourceTimestampInterval(AlterSourceTimestampIntervalPlan),
 }
 
 impl Plan {
@@ -244,6 +250,7 @@ impl Plan {
                 PlanKind::AlterNoop,
                 PlanKind::AlterSource,
                 PlanKind::AlterRetainHistory,
+                PlanKind::AlterSourceTimestampInterval,
             ],
             StatementKind::AlterSystemReset => &[PlanKind::AlterNoop, PlanKind::AlterSystemReset],
             StatementKind::AlterSystemResetAll => {
@@ -274,11 +281,11 @@ impl Plan {
             StatementKind::CreateIndex => &[PlanKind::CreateIndex],
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
-            StatementKind::CreateContinualTask => &[PlanKind::CreateContinualTask],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
             StatementKind::CreateSink => &[PlanKind::CreateSink],
+            StatementKind::CreateMetricSink => &[PlanKind::CreateMetricSink],
             StatementKind::CreateSource | StatementKind::CreateSubsource => {
                 &[PlanKind::CreateSource]
             }
@@ -327,6 +334,7 @@ impl Plan {
             StatementKind::Update => &[PlanKind::ReadThenWrite],
             StatementKind::ValidateConnection => &[PlanKind::ValidateConnection],
             StatementKind::AlterRetainHistory => &[PlanKind::AlterRetainHistory],
+            StatementKind::ExecuteUnitTest => &[],
         }
     }
 
@@ -346,8 +354,8 @@ impl Plan {
             Plan::CreateTable(_) => "create table",
             Plan::CreateView(_) => "create view",
             Plan::CreateMaterializedView(_) => "create materialized view",
-            Plan::CreateContinualTask(_) => "create continual task",
             Plan::CreateIndex(_) => "create index",
+            Plan::CreateMetricSink(_) => "create metric sink",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
             Plan::Comment(_) => "comment",
@@ -359,6 +367,7 @@ impl Plan {
                 ObjectType::MaterializedView => "drop materialized view",
                 ObjectType::Source => "drop source",
                 ObjectType::Sink => "drop sink",
+                ObjectType::MetricSink => "drop metric sink",
                 ObjectType::Index => "drop index",
                 ObjectType::Type => "drop type",
                 ObjectType::Role => "drop roles",
@@ -369,7 +378,6 @@ impl Plan {
                 ObjectType::Database => "drop database",
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
-                ObjectType::ContinualTask => "drop continual task",
                 ObjectType::NetworkPolicy => "drop network policy",
             },
             Plan::DropOwned(_) => "drop owned",
@@ -400,6 +408,7 @@ impl Plan {
                 ObjectType::MaterializedView => "alter materialized view",
                 ObjectType::Source => "alter source",
                 ObjectType::Sink => "alter sink",
+                ObjectType::MetricSink => "alter metric sink",
                 ObjectType::Index => "alter index",
                 ObjectType::Type => "alter type",
                 ObjectType::Role => "alter role",
@@ -410,7 +419,6 @@ impl Plan {
                 ObjectType::Database => "alter database",
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
-                ObjectType::ContinualTask => "alter continual task",
                 ObjectType::NetworkPolicy => "alter network policy",
             },
             Plan::AlterCluster(_) => "alter cluster",
@@ -436,6 +444,7 @@ impl Plan {
                 ObjectType::MaterializedView => "alter materialized view owner",
                 ObjectType::Source => "alter source owner",
                 ObjectType::Sink => "alter sink owner",
+                ObjectType::MetricSink => "alter metric sink owner",
                 ObjectType::Index => "alter index owner",
                 ObjectType::Type => "alter type owner",
                 ObjectType::Role => "alter role owner",
@@ -446,7 +455,6 @@ impl Plan {
                 ObjectType::Database => "alter database owner",
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
-                ObjectType::ContinualTask => "alter continual task owner",
                 ObjectType::NetworkPolicy => "alter network policy owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
@@ -474,6 +482,7 @@ impl Plan {
             Plan::SideEffectingFunc(_) => "side effecting func",
             Plan::ValidateConnection(_) => "validate connection",
             Plan::AlterRetainHistory(_) => "alter retain history",
+            Plan::AlterSourceTimestampInterval(_) => "alter source timestamp interval",
         }
     }
 
@@ -567,6 +576,7 @@ pub struct CreateClusterPlan {
     pub name: String,
     pub variant: CreateClusterVariant,
     pub workload_class: Option<String>,
+    pub if_not_exists: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -588,6 +598,9 @@ pub struct CreateClusterManagedPlan {
     pub compute: ComputeReplicaConfig,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
+    /// The user-configured autoscaling policy, or `None` if autoscaling is
+    /// disabled for the cluster.
+    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
 }
 
 #[derive(Debug)]
@@ -595,10 +608,21 @@ pub struct CreateClusterReplicaPlan {
     pub cluster_id: ClusterId,
     pub name: String,
     pub config: ReplicaConfig,
+    pub if_not_exists: bool,
 }
 
 /// Configuration of introspection for a cluster replica.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq
+)]
 pub struct ComputeReplicaIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
@@ -609,6 +633,10 @@ pub struct ComputeReplicaIntrospectionConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ComputeReplicaConfig {
     pub introspection: Option<ComputeReplicaIntrospectionConfig>,
+    /// Whether arrangements on this replica request dictionary compression. The
+    /// gating feature flag decides whether a replica honors this value at
+    /// creation time.
+    pub arrangement_compression: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -642,6 +670,25 @@ impl Default for ClusterSchedule {
         // (Has to be consistent with `impl Default for ClusterScheduleOptionValue`.)
         ClusterSchedule::Manual
     }
+}
+
+/// The user-configured autoscaling policy of a managed cluster.
+///
+/// Extensible: future strategies are added as additional optional sub-policies,
+/// so the block as a whole can grow without changing existing ones.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct AutoScalingStrategy {
+    pub on_hydration: Option<OnHydration>,
+}
+
+/// The `ON HYDRATION` autoscaling sub-policy: while objects are un-hydrated, run
+/// an extra replica at `hydration_size` to accelerate hydration.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialOrd, PartialEq, Eq, Ord)]
+pub struct OnHydration {
+    pub hydration_size: String,
+    /// How long the burst replica lingers after the steady-state replicas
+    /// hydrate. `None` falls back to the system default at the controller.
+    pub linger_duration: Option<Duration>,
 }
 
 #[derive(Debug)]
@@ -754,20 +801,6 @@ pub struct CreateMaterializedViewPlan {
 }
 
 #[derive(Debug, Clone)]
-pub struct CreateContinualTaskPlan {
-    pub name: QualifiedItemName,
-    /// During initial creation, the `LocalId` placeholder for this CT in `continual_task.expr`.
-    /// None on restart.
-    pub placeholder_id: Option<mz_expr::LocalId>,
-    pub desc: RelationDesc,
-    /// ID of the collection we read into this continual task.
-    pub input_id: GlobalId,
-    pub with_snapshot: bool,
-    /// Definition for the continual task.
-    pub continual_task: MaterializedView,
-}
-
-#[derive(Debug, Clone)]
 pub struct CreateNetworkPolicyPlan {
     pub name: String,
     pub rules: Vec<NetworkPolicyRule>,
@@ -784,6 +817,13 @@ pub struct AlterNetworkPolicyPlan {
 pub struct CreateIndexPlan {
     pub name: QualifiedItemName,
     pub index: Index,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateMetricSinkPlan {
+    pub name: QualifiedItemName,
+    pub metric_sink: MetricSink,
     pub if_not_exists: bool,
 }
 
@@ -880,7 +920,7 @@ impl SelectPlan {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SubscribeOutput {
     Diffs,
     WithinTimestampOrderBy {
@@ -897,7 +937,19 @@ pub enum SubscribeOutput {
     },
 }
 
-#[derive(Debug)]
+impl SubscribeOutput {
+    pub fn row_order(&self) -> &[ColumnOrder] {
+        match self {
+            SubscribeOutput::Diffs => &[],
+            // This ordering prepends the diff, so its `order_by` field cannot be applied to rows.
+            SubscribeOutput::WithinTimestampOrderBy { .. } => &[],
+            SubscribeOutput::EnvelopeUpsert { order_by_keys } => order_by_keys,
+            SubscribeOutput::EnvelopeDebezium { order_by_keys } => order_by_keys,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SubscribePlan {
     pub from: SubscribeFrom,
     pub with_snapshot: bool,
@@ -914,7 +966,7 @@ pub enum SubscribeFrom {
     Id(GlobalId),
     /// Query to subscribe to.
     Query {
-        expr: MirRelationExpr,
+        expr: HirRelationExpr,
         desc: RelationDesc,
     },
 }
@@ -1069,6 +1121,12 @@ pub enum ExplaineeStatement {
         broken: bool,
         plan: plan::CreateIndexPlan,
     },
+    /// The object to be explained is a SUBSCRIBE statement.
+    Subscribe {
+        /// Broken flag (see [`ExplaineeStatement::broken()`]).
+        broken: bool,
+        plan: plan::SubscribePlan,
+    },
 }
 
 impl ExplaineeStatement {
@@ -1078,6 +1136,7 @@ impl ExplaineeStatement {
             Self::CreateView { plan, .. } => plan.view.expr.depends_on(),
             Self::CreateMaterializedView { plan, .. } => plan.materialized_view.expr.depends_on(),
             Self::CreateIndex { plan, .. } => btreeset! {plan.index.on},
+            Self::Subscribe { plan, .. } => plan.from.depends_on(),
         }
     }
 
@@ -1097,6 +1156,7 @@ impl ExplaineeStatement {
             Self::CreateView { broken, .. } => *broken,
             Self::CreateMaterializedView { broken, .. } => *broken,
             Self::CreateIndex { broken, .. } => *broken,
+            Self::Subscribe { broken, .. } => *broken,
         }
     }
 }
@@ -1109,6 +1169,9 @@ impl ExplaineeStatementKind {
             Self::CreateView => ![GlobalPlan, PhysicalPlan].contains(stage),
             Self::CreateMaterializedView => true,
             Self::CreateIndex => ![RawPlan, DecorrelatedPlan, LocalPlan].contains(stage),
+            // SUBSCRIBE doesn't support RAW, DECORRELATED, or LOCAL stages because
+            // it takes MIR directly rather than going through HIR lowering.
+            Self::Subscribe => ![RawPlan, DecorrelatedPlan, LocalPlan].contains(stage),
         }
     }
 }
@@ -1120,6 +1183,7 @@ impl std::fmt::Display for ExplaineeStatementKind {
             Self::CreateView => write!(f, "CREATE VIEW"),
             Self::CreateMaterializedView => write!(f, "CREATE MATERIALIZED VIEW"),
             Self::CreateIndex => write!(f, "CREATE INDEX"),
+            Self::Subscribe => write!(f, "SUBSCRIBE"),
         }
     }
 }
@@ -1188,6 +1252,13 @@ pub struct AlterRetainHistoryPlan {
     pub object_type: ObjectType,
 }
 
+#[derive(Debug)]
+pub struct AlterSourceTimestampIntervalPlan {
+    pub id: CatalogItemId,
+    pub value: Option<Value>,
+    pub interval: Duration,
+}
+
 #[derive(Debug, Clone)]
 
 pub enum AlterOptionParameter<T = String> {
@@ -1237,6 +1308,27 @@ pub struct AlterSinkPlan {
     pub sink: Sink,
     pub with_snapshot: bool,
     pub in_cluster: ClusterId,
+    /// The with-option edit requested by the `ALTER SINK`. Sequencing must
+    /// re-apply it to the catalog's `create_sql` (via
+    /// [`apply_sink_option_edits`]) because the `create_sql` may have changed
+    /// since planning, for example due to a schema swap.
+    pub set_options: Vec<CreateSinkOption<Aug>>,
+    pub reset_options: Vec<CreateSinkOptionName>,
+}
+
+/// Applies the option edits of an `ALTER SINK ... SET/RESET (...)` to the
+/// with-options of a `CREATE SINK` statement.
+pub fn apply_sink_option_edits<T: mz_sql_parser::ast::AstInfo>(
+    with_options: &mut Vec<CreateSinkOption<T>>,
+    set_options: &[CreateSinkOption<T>],
+    reset_options: &[CreateSinkOptionName],
+) where
+    CreateSinkOption<T>: Clone,
+{
+    with_options.retain(|o| {
+        set_options.iter().all(|s| s.name != o.name) && !reset_options.contains(&o.name)
+    });
+    with_options.extend(set_options.iter().cloned());
 }
 
 #[derive(Debug, Clone)]
@@ -1336,7 +1428,7 @@ pub struct AlterTablePlan {
     pub raw_sql_type: RawDataType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AlterMaterializedViewApplyReplacementPlan {
     pub id: CatalogItemId,
     pub replacement_id: CatalogItemId,
@@ -1414,6 +1506,11 @@ pub struct UpdatePrivilege {
     pub target_id: SystemObjectId,
     /// The role that is granting the privileges.
     pub grantor: RoleId,
+    /// Whether `acl_mode` was derived from the `ALL [PRIVILEGES]` shorthand.
+    /// Used to suppress the `NonApplicablePrivilegeTypes` notice in that
+    /// case: the shorthand is not the user explicitly naming a privilege
+    /// that doesn't apply to the object type, so warning would be noisy.
+    pub acl_from_all: bool,
 }
 
 #[derive(Debug)]
@@ -1526,7 +1623,7 @@ pub enum DataSourceDesc {
     },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WebhookValidation {
     /// The expression used to validate a request.
     pub expression: MirScalarExpr,
@@ -1560,7 +1657,13 @@ impl WebhookValidation {
         let reduce_task = mz_ore::task::spawn_blocking(
             || "webhook-validation-reduce",
             move || {
-                expression_.reduce(&desc_.typ().column_types);
+                let repr_col_types: Vec<ReprColumnType> = desc_
+                    .typ()
+                    .column_types
+                    .iter()
+                    .map(ReprColumnType::from)
+                    .collect();
+                expression_.reduce(&repr_col_types);
                 expression_
             },
         );
@@ -1575,7 +1678,7 @@ impl WebhookValidation {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct WebhookHeaders {
     /// Optionally include a column named `headers` whose content is possibly filtered.
     pub header_column: Option<WebhookHeaderFilters>,
@@ -1593,13 +1696,13 @@ impl WebhookHeaders {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct WebhookHeaderFilters {
     pub block: BTreeSet<String>,
     pub allow: BTreeSet<String>,
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Arbitrary)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Arbitrary)]
 pub enum WebhookBodyFormat {
     Json { array: bool },
     Bytes,
@@ -1616,7 +1719,7 @@ impl From<WebhookBodyFormat> for SqlScalarType {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WebhookValidationSecret {
     /// Identifies the secret by [`CatalogItemId`].
     pub id: CatalogItemId,
@@ -1636,6 +1739,7 @@ pub struct Connection {
 pub enum ConnectionDetails {
     Kafka(KafkaConnection<ReferencedConnection>),
     Csr(CsrConnection<ReferencedConnection>),
+    GlueSchemaRegistry(GlueSchemaRegistryConnection<ReferencedConnection>),
     Postgres(PostgresConnection<ReferencedConnection>),
     Ssh {
         connection: SshConnection,
@@ -1644,6 +1748,7 @@ pub enum ConnectionDetails {
     },
     Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
+    Gcp(GcpConnection),
     MySql(MySqlConnection<ReferencedConnection>),
     SqlServer(SqlServerConnectionDetails<ReferencedConnection>),
     IcebergCatalog(IcebergCatalogConnection<ReferencedConnection>),
@@ -1656,6 +1761,9 @@ impl ConnectionDetails {
                 mz_storage_types::connections::Connection::Kafka(c.clone())
             }
             ConnectionDetails::Csr(c) => mz_storage_types::connections::Connection::Csr(c.clone()),
+            ConnectionDetails::GlueSchemaRegistry(c) => {
+                mz_storage_types::connections::Connection::GlueSchemaRegistry(c.clone())
+            }
             ConnectionDetails::Postgres(c) => {
                 mz_storage_types::connections::Connection::Postgres(c.clone())
             }
@@ -1666,6 +1774,7 @@ impl ConnectionDetails {
             ConnectionDetails::AwsPrivatelink(c) => {
                 mz_storage_types::connections::Connection::AwsPrivatelink(c.clone())
             }
+            ConnectionDetails::Gcp(c) => mz_storage_types::connections::Connection::Gcp(c.clone()),
             ConnectionDetails::MySql(c) => {
                 mz_storage_types::connections::Connection::MySql(c.clone())
             }
@@ -1675,6 +1784,31 @@ impl ConnectionDetails {
             ConnectionDetails::IcebergCatalog(c) => {
                 mz_storage_types::connections::Connection::IcebergCatalog(c.clone())
             }
+        }
+    }
+
+    /// Secrets whose *contents* this connection places requirements on, paired
+    /// with the check to apply. Callers must re-apply these checks whenever the
+    /// connection is created or altered, and whenever the contents of one of
+    /// the returned secrets change (e.g. `ALTER SECRET`).
+    ///
+    /// We rely on the caller to actually execute these checks because we don't know:
+    /// - which secrets the caller cares about
+    /// - which secrets require an async operation to fetch
+    ///
+    /// For example, the ALTER SECRET caller should only perform checks on its own secret,
+    /// while the ALTER CONNECTION caller fetches and checks every secret from its connection.
+    pub fn secret_content_guards(
+        &self,
+    ) -> Vec<(CatalogItemId, fn(&str) -> Result<(), anyhow::Error>)> {
+        match self {
+            // A service-account key defines its own OAuth2 token URI. We only
+            // want to send requests to the actual Google OAuth2 token API.
+            ConnectionDetails::Gcp(gcp) => vec![(
+                gcp.credentials_json,
+                GcpServiceAccountKeyTokenUri::validate_json,
+            )],
+            _ => vec![],
         }
     }
 }
@@ -1687,7 +1821,17 @@ pub struct NetworkPolicyRule {
     pub direction: NetworkPolicyRuleDirection,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
 pub enum NetworkPolicyRuleAction {
     Allow,
 }
@@ -1738,7 +1882,7 @@ impl TryFrom<&str> for NetworkPolicyRuleDirection {
 pub struct PolicyAddress(pub IpNet);
 impl std::fmt::Display for PolicyAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.0.to_string())
+        write!(f, "{}", self.0)
     }
 }
 impl From<String> for PolicyAddress {
@@ -1760,7 +1904,7 @@ impl Serialize for PolicyAddress {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&format!("{}", &self.0))
+        serializer.serialize_str(&format!("{}", self.0))
     }
 }
 
@@ -1833,6 +1977,8 @@ pub struct MaterializedView {
     pub replacement_target: Option<CatalogItemId>,
     /// Cluster this materialized view will get installed on.
     pub cluster_id: ClusterId,
+    /// If set, only install this materialized view's dataflow on the specified replica.
+    pub target_replica: Option<ReplicaId>,
     pub non_null_assertions: Vec<usize>,
     pub compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
@@ -1848,6 +1994,18 @@ pub struct Index {
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub compaction_window: Option<CompactionWindow>,
     pub cluster_id: ClusterId,
+}
+
+#[derive(Clone, Debug)]
+pub struct MetricSink {
+    /// Parse-able SQL that defines this metric sink.
+    pub create_sql: String,
+    /// Collection we read into this metric sink.
+    pub from: GlobalId,
+    pub cluster_id: ClusterId,
+    /// Prepended to every metric name this sink publishes, so that the families it registers
+    /// cannot collide with another sink's or with the platform's own.
+    pub prefix: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1977,12 +2135,16 @@ pub struct PlanClusterOption {
     pub availability_zones: AlterOptionParameter<Vec<String>>,
     pub introspection_debugging: AlterOptionParameter<bool>,
     pub introspection_interval: AlterOptionParameter<OptionalDuration>,
+    pub arrangement_compression: AlterOptionParameter<bool>,
     pub managed: AlterOptionParameter<bool>,
     pub replicas: AlterOptionParameter<Vec<(String, ReplicaConfig)>>,
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
     pub schedule: AlterOptionParameter<ClusterSchedule>,
     pub workload_class: AlterOptionParameter<Option<String>>,
+    /// The autoscaling policy block. `Set(None)` disables autoscaling (an empty
+    /// `AUTO SCALING STRATEGY = ()` or `RESET (AUTO SCALING STRATEGY)`).
+    pub auto_scaling_strategy: AlterOptionParameter<Option<AutoScalingStrategy>>,
 }
 
 impl Default for PlanClusterOption {
@@ -1991,12 +2153,14 @@ impl Default for PlanClusterOption {
             availability_zones: AlterOptionParameter::Unchanged,
             introspection_debugging: AlterOptionParameter::Unchanged,
             introspection_interval: AlterOptionParameter::Unchanged,
+            arrangement_compression: AlterOptionParameter::Unchanged,
             managed: AlterOptionParameter::Unchanged,
             replicas: AlterOptionParameter::Unchanged,
             replication_factor: AlterOptionParameter::Unchanged,
             size: AlterOptionParameter::Unchanged,
             schedule: AlterOptionParameter::Unchanged,
             workload_class: AlterOptionParameter::Unchanged,
+            auto_scaling_strategy: AlterOptionParameter::Unchanged,
         }
     }
 }
@@ -2006,21 +2170,29 @@ pub enum AlterClusterPlanStrategy {
     None,
     For(Duration),
     UntilReady {
-        on_timeout: OnTimeoutAction,
+        /// `None` when the `ALTER` omits `ON TIMEOUT`. The executing path
+        /// supplies the implicit action.
+        on_timeout: Option<OnTimeoutAction>,
         timeout: Duration,
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Serialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord
+)]
 pub enum OnTimeoutAction {
+    /// Cut over to the target shape even though it has not hydrated.
     Commit,
+    /// Drop the target replicas and keep the pre-reconfiguration set.
     Rollback,
-}
-
-impl Default for OnTimeoutAction {
-    fn default() -> Self {
-        Self::Commit
-    }
 }
 
 impl TryFrom<&str> for OnTimeoutAction {
@@ -2059,13 +2231,13 @@ impl TryFrom<ClusterAlterOptionExtracted> for AlterClusterPlanStrategy {
                         None => Err(PlanError::UntilReadyTimeoutRequired)?,
                     },
                     on_timeout: match extracted.on_timeout {
-                        Some(v) => OnTimeoutAction::try_from(v.as_str()).map_err(|e| {
+                        Some(v) => Some(OnTimeoutAction::try_from(v.as_str()).map_err(|e| {
                             PlanError::InvalidOptionValue {
                                 option_name: "ON TIMEOUT".into(),
                                 err: Box::new(e),
                             }
-                        })?,
-                        None => OnTimeoutAction::default(),
+                        })?),
+                        None => None,
                     },
                 }
             }
@@ -2097,7 +2269,18 @@ impl Params {
 }
 
 /// Controls planning of a SQL query.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Copy)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    Copy
+)]
 pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
     pub ignore_if_exists_errors: bool,

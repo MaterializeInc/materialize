@@ -32,9 +32,7 @@ def test_testdrive(mz: MaterializeApplication) -> None:
     mz.testdrive.copy("test/testdrive", "/workdir")
     mz.testdrive.run("testdrive/testdrive.td")
 
-    mz.testdrive.run(
-        input=dedent(
-            """
+    mz.testdrive.run(input=dedent("""
                 $ kafka-create-topic topic=test
 
                 $ kafka-ingest format=bytes topic=test
@@ -68,6 +66,4 @@ def test_testdrive(mz: MaterializeApplication) -> None:
                 1
 
                 > DROP CLUSTER c1 CASCADE;
-                """
-        )
-    )
+                """))

@@ -61,7 +61,7 @@ pub(crate) struct StatementLogging {
     /// Only used by tests; otherwise, `rand::rng()` is used.
     /// Controlled by the system var `statement_logging_use_reproducible_rng`.
     /// This same instance will be used by all frontend tasks.
-    reproducible_rng: Arc<Mutex<rand_chacha::ChaCha8Rng>>,
+    reproducible_rng: Arc<Mutex<rand::rngs::ChaCha8Rng>>,
 
     /// Events to be persisted periodically.
     pending_statement_execution_events: Vec<(Row, Diff)>,
@@ -83,7 +83,7 @@ impl StatementLogging {
         Self {
             executions_begun: BTreeMap::new(),
             unlogged_sessions: BTreeMap::new(),
-            reproducible_rng: Arc::new(Mutex::new(rand_chacha::ChaCha8Rng::seed_from_u64(
+            reproducible_rng: Arc::new(Mutex::new(rand::rngs::ChaCha8Rng::seed_from_u64(
                 Self::REPRODUCIBLE_RNG_SEED,
             ))),
             pending_statement_execution_events: Vec::new(),
@@ -170,10 +170,15 @@ impl Coordinator {
                 self.end_statement_execution(
                     StatementLoggingId(ended_record.id),
                     ended_record.reason,
+                    ended_record.ended_at,
                 );
             }
-            FrontendStatementLoggingEvent::SetCluster { id, cluster_id } => {
-                self.set_statement_execution_cluster(id, cluster_id);
+            FrontendStatementLoggingEvent::SetCluster {
+                id,
+                cluster_id,
+                cluster_name,
+            } => {
+                self.set_statement_execution_cluster(id, cluster_id, cluster_name);
             }
             FrontendStatementLoggingEvent::SetTimestamp { id, timestamp } => {
                 self.set_statement_execution_timestamp(id, timestamp);
@@ -296,8 +301,9 @@ impl Coordinator {
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
     ) {
         let logging = session.qcell_rw(&*logging);
-        if let PreparedStatementLoggingInfo::StillToLog { .. } = logging {
-            *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
+        if let PreparedStatementLoggingInfo::StillToLog { kind, .. } = logging {
+            let kind = *kind;
+            *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid, kind };
         }
     }
 
@@ -323,7 +329,7 @@ impl Coordinator {
         let logging = session.qcell_ro(&*logging);
 
         match logging {
-            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => (None, *uuid),
+            PreparedStatementLoggingInfo::AlreadyLogged { uuid, .. } => (None, *uuid),
             PreparedStatementLoggingInfo::StillToLog {
                 sql,
                 redacted_sql,
@@ -386,31 +392,49 @@ impl Coordinator {
         }
     }
 
-    /// Record the end of statement execution for a statement whose beginning was logged.
-    /// It is an error to call this function for a statement whose beginning was not logged
-    /// (because it was not sampled). Requiring the opaque `StatementLoggingId` type,
-    /// which is only instantiated by `begin_statement_execution` if the statement is actually logged,
-    /// should prevent this.
+    /// Record the end of statement execution for a statement whose beginning
+    /// was logged. Ends are idempotent: the first end wins and later ends for
+    /// the same statement are ignored.
+    ///
+    /// `ended_at` is when execution finished, which is not the same as when this
+    /// runs. A statement sequenced off the coordinator loop finishes in its
+    /// session task and reports the end as a message, so taking the clock here
+    /// would charge it for however long that message sat in the queue.
     pub(crate) fn end_statement_execution(
         &mut self,
         id: StatementLoggingId,
         reason: StatementEndedExecutionReason,
+        ended_at: EpochMillis,
     ) {
         let StatementLoggingId(uuid) = id;
-        let now = self.now();
         let ended_record = StatementEndedExecutionRecord {
             id: uuid,
             reason,
-            ended_at: now,
+            ended_at,
         };
 
-        let began_record = self
-            .statement_logging
-            .executions_begun
-            .remove(&uuid)
-            .expect(
-                "matched `begin_statement_execution` and `end_statement_execution` invocations",
+        let Some(began_record) = self.statement_logging.executions_begun.remove(&uuid) else {
+            // The statement was already ended; the first end wins.
+            //
+            // A missing entry can only mean a duplicate end, never an end that
+            // overtook its begin: a StatementLoggingId is only minted when a
+            // begin is logged, and begins travel the same FIFO command channel
+            // as the commands that hand statements to the coordinator, so the
+            // coordinator never ends a statement before processing its begin.
+            //
+            // Duplicate ends are legitimate, if rare. Ownership of the end is
+            // handed from the frontend to the coordinator while a statement is
+            // dispatched, and async cancellation can strike mid-handoff: if a
+            // client disconnect drops the frontend future after the
+            // coordinator registered a peek but before the frontend defused
+            // its logging guard, both sides own the end and both emit one.
+            tracing::warn!(
+                statement_uuid = %uuid,
+                reason = ?ended_record.reason,
+                "duplicate end_statement_execution, keeping the first end",
             );
+            return;
+        };
         for (row, diff) in
             Self::pack_statement_ended_execution_updates(&began_record, &ended_record)
         {
@@ -421,7 +445,7 @@ impl Coordinator {
         self.record_statement_lifecycle_event(
             &id,
             &StatementLifecycleEvent::ExecutionFinished,
-            now,
+            ended_at,
         );
     }
 
@@ -474,7 +498,18 @@ impl Coordinator {
                 ),
                 StatementEndedExecutionReason::Canceled => ("canceled", None, None, None, None),
                 StatementEndedExecutionReason::Errored { error } => {
-                    ("error", Some(error.as_str()), None, None, None)
+                    // Backstop for SQL-435: `CREATE SECRET`/`ALTER SECRET` errors
+                    // can embed secret material (the rejected statement text, or a
+                    // value-bearing eval error). The per-site fixes redact the known
+                    // cases, but we never persist an unredacted error for these
+                    // kinds, regardless of which error variant fired. The client
+                    // still receives the real error over pgwire.
+                    let error = if began_record.kind.is_some_and(|kind| kind.is_secret()) {
+                        "<error redacted for secret statement>"
+                    } else {
+                        error.as_str()
+                    };
+                    ("error", Some(error), None, None, None)
                 }
                 StatementEndedExecutionReason::Aborted => ("aborted", None, None, None, None),
             };
@@ -524,28 +559,42 @@ impl Coordinator {
             .push((update, Diff::ONE));
     }
 
-    /// Set the `cluster_id` for a statement, once it's known.
+    /// Set the `cluster_id` and `cluster_name` for a statement, once they're known.
     ///
-    /// TODO(peek-seq): We could do cluster resolution and packing in the frontend task, and just
-    /// send over the rows.
+    /// The name is resolved by the caller (from the same catalog snapshot that selected the
+    /// cluster), rather than re-resolved here from `cluster_id`. This avoids a panic when the
+    /// cluster was concurrently dropped, and logs the name as it was at selection time.
+    ///
+    /// TODO(peek-seq): We could do the packing in the frontend task, and just send over the rows.
     pub(crate) fn set_statement_execution_cluster(
         &mut self,
         id: StatementLoggingId,
         cluster_id: ClusterId,
+        cluster_name: String,
     ) {
-        let cluster_name = self.catalog().get_cluster(cluster_id).name.clone();
         self.mutate_record(id, |record| {
             record.cluster_name = Some(cluster_name);
             record.cluster_id = Some(cluster_id);
         });
     }
 
-    /// Set the `execution_timestamp` for a statement, once it's known
+    /// Sets the execution timestamp if the statement is still active.
+    ///
+    /// A duplicate end can race the asynchronous group-commit update, so an ended statement is
+    /// skipped rather than treated as corruption.
     pub(crate) fn set_statement_execution_timestamp(
         &mut self,
         id: StatementLoggingId,
         timestamp: Timestamp,
     ) {
+        let StatementLoggingId(uuid) = id;
+        if !self.statement_logging.executions_begun.contains_key(&uuid) {
+            tracing::warn!(
+                statement_uuid = %uuid,
+                "execution already ended, skipping execution timestamp update",
+            );
+            return;
+        }
         self.mutate_record(id, |record| {
             record.execution_timestamp = Some(u64::from(timestamp));
         });
@@ -646,6 +695,7 @@ impl Coordinator {
             .config()
             .build_info
             .human_version(None);
+        let kind = session.qcell_ro(logging).kind();
         let record = create_began_execution_record(
             execution_uuid,
             ps_uuid,
@@ -654,6 +704,7 @@ impl Coordinator {
             session,
             began_at,
             build_info_version,
+            kind,
         );
 
         // `mz_statement_execution_history`

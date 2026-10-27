@@ -16,17 +16,13 @@ class Threshold(Check):
     """Exercise the 'threshold' portion of a MFP plan"""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE threshold_table1 (f1 INT);
             > INSERT INTO threshold_table1 VALUES (0);
 
             > CREATE TABLE threshold_table2 (f1 INT);
             > INSERT INTO threshold_table2 VALUES (1);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -46,14 +42,10 @@ class Threshold(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM threshold_view1;
                 0
 
                 > SELECT * FROM threshold_view2;
                 3
-            """
-            )
-        )
+            """))

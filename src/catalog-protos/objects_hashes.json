@@ -1,26 +1,86 @@
 [
   {
     "name": "objects.rs",
-    "md5": "26ae04e683a5462c3998d8f9d8d6a0fa"
+    "md5": "be29f39519f928075079f9064321f954"
   },
   {
     "name": "objects_v74.rs",
-    "md5": "b87d99e30098642f98b0bb1927516baa"
+    "md5": "ba4536a45674638817f739fe6e5683c0"
   },
   {
     "name": "objects_v75.rs",
-    "md5": "67a4a7da3e3f7cb1fd01963d5b118b01"
+    "md5": "fa305f492f183ba2883fc15e3bc32297"
   },
   {
     "name": "objects_v76.rs",
-    "md5": "26ae04e683a5462c3998d8f9d8d6a0fa"
+    "md5": "17cc855db0cea044b709db4ea0b9fb41"
   },
   {
     "name": "objects_v77.rs",
-    "md5": "26ae04e683a5462c3998d8f9d8d6a0fa"
+    "md5": "17cc855db0cea044b709db4ea0b9fb41"
   },
   {
     "name": "objects_v78.rs",
-    "md5": "26ae04e683a5462c3998d8f9d8d6a0fa"
+    "md5": "3b34e160733bc6d26274d163229d107d"
+  },
+  {
+    "name": "objects_v79.rs",
+    "md5": "20913dc612bd85439274022c72aa5016"
+  },
+  {
+    "name": "objects_v80.rs",
+    "md5": "81bfe01e9891a4325cf50eebed093f0a"
+  },
+  {
+    "name": "objects_v81.rs",
+    "md5": "6ee8eb215409de2102166461f28a74a0"
+  },
+  {
+    "name": "objects_v82.rs",
+    "md5": "d7675550f85716224499575ce3811e97"
+  },
+  {
+    "name": "objects_v83.rs",
+    "md5": "d7675550f85716224499575ce3811e97"
+  },
+  {
+    "name": "objects_v84.rs",
+    "md5": "d7675550f85716224499575ce3811e97"
+  },
+  {
+    "name": "objects_v85.rs",
+    "md5": "e80f862e380a58535975f052a9ace35f"
+  },
+  {
+    "name": "objects_v86.rs",
+    "md5": "0a6d43b9ddebef398dcd4f6484d3c4d6"
+  },
+  {
+    "name": "objects_v87.rs",
+    "md5": "509db4848f5b31a31199497369592027"
+  },
+  {
+    "name": "objects_v88.rs",
+    "md5": "3a1579511813991605225a60534943f1"
+  },
+  {
+    "name": "objects_v89.rs",
+    "md5": "22c6fb5d20536bb409b0ec513db00d00"
+  },
+  {
+    "name": "objects_v90.rs",
+    "md5": "b661fcd073a04f5a5cfcead68f3f4ccf"
+  },
+  {
+    "name": "objects_v91.rs",
+    "md5": "3f63def282801a99c187bbf721674a28"
+  },
+  {
+    "name": "objects_v92.rs",
+    "md5": "033aea36ed61e9181489faffbf9de51d"
+  },
+  {
+    "name": "objects_v93.rs",
+    "md5": "be29f39519f928075079f9064321f954"
   }
 ]

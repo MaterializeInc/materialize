@@ -36,12 +36,16 @@ CREATE TABLE t (
   FAMILY (c)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t VALUES
   ('2015-08-30 03:34:45.34567', '2015-08-30', '34h2s'),
   ('2015-08-25 04:45:45.53453', '2015-08-25', '2h45m2s234ms'),
   ('2015-08-29 23:10:09.98763', '2015-08-29', '234h45m2s234ms')
 
+# Not supported by Materialize.
+onlyif cockroach
 # Spot-check date math.
 query T
 SELECT b + '6 month' from t order by a desc
@@ -50,11 +54,15 @@ SELECT b + '6 month' from t order by a desc
 2016-02-29 00:00:00 +0000 UTC
 2016-02-25 00:00:00 +0000 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT
 SELECT * FROM t WHERE a = '2015-08-25 04:45:45.53453+01:00'::timestamp
 ----
 2015-08-25 04:45:45.53453 +0000 +0000  2015-08-25 00:00:00 +0000 +0000  02:45:02.234
 
+# Not supported by Materialize.
+onlyif cockroach
 # insert duplicate value with different time zone offset
 statement error duplicate key value \(a\)=\('2015-08-30 03:34:45\.34567\+00:00'\) violates unique constraint "primary"
 INSERT INTO t VALUES
@@ -70,24 +78,34 @@ CREATE TABLE u (
   e INTERVAL
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO u VALUES
   (123, '2015-08-30 03:34:45.34567', '2015-08-30 03:34:45.34567', '2015-08-30', '34h2s'),
   (234, '2015-08-25 04:45:45.53453-02:00', '2015-08-25 04:45:45.53453-02:00', '2015-08-25', '2h45m2s234ms')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE -5
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT
 SELECT DATE '2000-01-01', DATE '2000-12-31', DATE '1993-05-16'
 ----
 2000-01-01 00:00:00 +0000 +0000     2000-12-31 00:00:00 +0000 +0000     1993-05-16 00:00:00 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO u VALUES
   (345, '2015-08-29 23:10:09.98763', '2015-08-29 23:10:09.98763', '2015-08-29', '234h45m2s234ms'),
   (456, '2015-08-29 23:10:09.98763 UTC', '2015-08-29 23:10:09.98763 UTC', '2015-08-29', '234h45m2s234ms')
 
+# Not supported by Materialize.
+onlyif cockroach
 query ITTTT
 SELECT * FROM u ORDER BY a
 ----
@@ -99,6 +117,8 @@ SELECT * FROM u ORDER BY a
 statement ok
 SET TIME ZONE UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query ITTTT
 SELECT * FROM u ORDER BY a
 ----
@@ -107,14 +127,20 @@ SELECT * FROM u ORDER BY a
 345  2015-08-29 23:10:09.98763 +0000 +0000  2015-08-30 04:10:09.98763 +0000 UTC  2015-08-29 00:00:00 +0000 +0000  234:45:02.234
 456  2015-08-29 23:10:09.98763 +0000 +0000  2015-08-29 23:10:09.98763 +0000 UTC  2015-08-29 00:00:00 +0000 +0000  234:45:02.234
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE -5
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTT
 SELECT max(b), max(c), max(d), max(e) FROM u
 ----
 2015-08-30 03:34:45.34567 +0000 +0000  2015-08-29 23:10:09.98763 -0500 -0500  2015-08-30 00:00:00 +0000 +0000  234:45:02.234
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTT
 SELECT min(b), min(c), min(d), min(e) FROM u
 ----
@@ -132,6 +158,8 @@ true true
 
 # Date sentinel values.
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT
 SELECT 'epoch'::date, 'infinity'::date, '-infinity'::date
 ----
@@ -139,14 +167,20 @@ SELECT 'epoch'::date, 'infinity'::date, '-infinity'::date
 
 # Date edge cases.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error year value 0 is out of range
 SELECT '0000-01-01'::date
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTT
 SELECT '4714-11-24 BC'::date, '5874897-12-31'::date, '2000-01-01'::date, '0001-01-01'::date, '0001-12-13 BC'::date
 ----
 -4713-11-24 00:00:00 +0000 +0000  5874897-12-31 00:00:00 +0000 +0000  2000-01-01 00:00:00 +0000 +0000  0001-01-01 00:00:00 +0000 +0000  0000-12-13 00:00:00 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 # Also test as strings because lib/pq marshals the previous results to
 # time.Times, which don't stringify the same.
 query TTTTT
@@ -154,25 +188,37 @@ SELECT '4714-11-24 BC'::date::string, '5874897-12-31'::date::string, '2000-01-01
 ----
 4714-11-24 BC  5874897-12-31  2000-01-01  0001-01-01  0001-12-13 BC
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error date is out of range
 SELECT '4714-11-24 BC'::date - 1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error date is out of range
 SELECT '5874897-12-31'::date + 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT ('4714-11-24 BC'::date + 1)::string, ('5874897-12-31'::date - 1)::string
 ----
 4714-11-25 BC  5874897-12-30
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTT
 SELECT 'infinity'::date + 1, 'infinity'::date - 1, '-infinity'::date + 1, '-infinity'::date - 1
 ----
 infinity  infinity  -infinity  -infinity
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error cannot subtract infinite dates
 SELECT 'infinity'::date - 'infinity'::date
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT '5874897-12-31'::date - '4714-11-24 BC'::date
 ----
@@ -180,11 +226,15 @@ SELECT '5874897-12-31'::date - '4714-11-24 BC'::date
 
 # TIMESTAMP/DATE builtins.
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT age('2001-04-10 22:06:45', '1957-06-13')
 ----
 384190:06:45
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT age('1957-06-13') - age(now(), '1957-06-13') = interval '0s'
 ----
@@ -215,6 +265,8 @@ SELECT now()::timestamp <= now(), now() <= now()::timestamp
 ----
 true true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT current_date - current_date() = 0
 ----
@@ -230,16 +282,22 @@ SELECT now() - current_timestamp = interval '0s'
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT now() - statement_timestamp() < interval '10s'
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT clock_timestamp() - statement_timestamp() < interval '10s'
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT now() - transaction_timestamp() = interval '0s'
 ----
@@ -254,14 +312,20 @@ CREATE TABLE kv (
   v TIMESTAMPTZ
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO kv (k,v) VALUES ('a', transaction_timestamp())
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT k FROM kv
 ----
 a
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT k FROM kv where v = transaction_timestamp()
 ----
@@ -272,9 +336,13 @@ COMMIT TRANSACTION
 
 # Changing timezones changes the output of current_date().
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 RESET TIME ZONE
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT
     d = tz, d = t, d = n
@@ -289,19 +357,27 @@ FROM
 ----
 true true true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT now() - current_date()::timestamptz < interval '24h10s'
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 48
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT now() - current_date()::timestamptz < interval '24h10s'
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query BBB
 SELECT
     d = tz, d = t, d = n
@@ -316,9 +392,13 @@ FROM
 ----
 true true true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 RESET TIME ZONE
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check that the current_timestamp, now and transaction_timestamp are the same.
 # Test that the transaction_timestamp can differ from the statement_timestamp.
 # Check that the transaction_timestamp changes with each transaction.
@@ -346,6 +426,8 @@ SELECT * FROM KV;
 INSERT INTO kv (k,v) VALUES ('i', transaction_timestamp());
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT count(DISTINCT (v)) FROM kv
 ----
@@ -356,22 +438,30 @@ SELECT count(DISTINCT (v)) FROM kv
 statement ok
 DELETE FROM kv
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 INSERT INTO kv (k,v) VALUES ('a', transaction_timestamp());
 SELECT * FROM kv
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO kv (k,v) VALUES ('b', transaction_timestamp());
 SELECT * FROM kv;
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 SELECT * FROM KV;
 INSERT INTO kv (k,v) VALUES ('c', transaction_timestamp());
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT count(DISTINCT (v)) FROM kv
 ----
@@ -386,6 +476,8 @@ CREATE TABLE kv (
    v DECIMAL
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test that cluster_logical_timestamp() is consistent in transactions
 # spanning multiple batches of statements.
 statement ok
@@ -393,17 +485,23 @@ BEGIN;
 INSERT INTO kv (k,v) VALUES (1, cluster_logical_timestamp());
 SELECT * FROM kv
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO kv (k,v) VALUES (2, cluster_logical_timestamp());
 SELECT * FROM kv;
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 BEGIN;
 SELECT * FROM kv;
 INSERT INTO kv (k,v) VALUES (3, cluster_logical_timestamp());
 COMMIT
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT count(DISTINCT (v)) FROM kv
 ----
@@ -415,34 +513,50 @@ DELETE FROM kv
 statement ok
 CREATE TABLE m (mints DECIMAL)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO m VALUES (cluster_logical_timestamp())
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test that cluster_logical_timestamp() is monotonic in transaction order
 statement ok
 INSERT INTO kv (k,v) VALUES (1, cluster_logical_timestamp()-(select mints from m));
 SELECT * FROM kv
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO kv (k,v) VALUES (2, cluster_logical_timestamp()-(select mints from m));
 SELECT * FROM kv
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO kv (k,v) VALUES (3, cluster_logical_timestamp()-(select mints from m));
 SELECT * FROM kv
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO kv (k,v) VALUES (4, cluster_logical_timestamp()-(select mints from m));
 SELECT * FROM kv
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO kv (k,v) VALUES (5, cluster_logical_timestamp()-(select mints from m));
 SELECT * FROM kv
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO kv (k,v) VALUES (6, cluster_logical_timestamp()-(select mints from m));
 SELECT * FROM kv
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT k FROM kv ORDER BY v
 ----
@@ -508,6 +622,8 @@ INSERT INTO ex VALUES
   (39, 'microsecond',  '2016-02-10 19:46:33.306157519',    306158,    '2016-02-10 19:46:33.306158'),
   (40, 'microseconds', '2016-02-10 19:46:33.306157519',    306158,    '2016-02-10 19:46:33.306158')
 
+# Not supported by Materialize.
+onlyif cockroach
 query IBI
 SELECT k, extract(element, input::timestamp) = extract_result, extract(element, input::timestamp) FROM ex ORDER BY k
 ----
@@ -552,15 +668,23 @@ SELECT k, extract(element, input::timestamp) = extract_result, extract(element, 
 39 true 306158
 40 true 306158
 
+# Not supported by Materialize.
+onlyif cockroach
 query error extract\(\): unsupported timespan: nansecond
 SELECT extract(nansecond from '2001-04-10 12:04:59.34565423'::timestamp)
 
+# Not supported by Materialize.
+onlyif cockroach
 query error unknown unit "nanosecond"
 SELECT INTERVAL '1 nanosecond';
 
+# Not supported by Materialize.
+onlyif cockroach
 query error unknown unit "ns"
 SELECT INTERVAL '1 ns';
 
+# Not supported by Materialize.
+onlyif cockroach
 query IBI
 SELECT k, extract(element, input::timestamptz) = extract_result, extract(element, input::timestamptz) FROM ex ORDER BY k
 ----
@@ -605,19 +729,27 @@ SELECT k, extract(element, input::timestamptz) = extract_result, extract(element
 39 true 306158
 40 true 306158
 
+# Not supported by Materialize.
+onlyif cockroach
 query error extract\(\): unsupported timespan: nansecond
 SELECT extract(nansecond from '2001-04-10 12:04:59.34565423'::timestamptz)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT extract(hour from '2016-02-10 19:46:33.306157519-04'::timestamptz)
 ----
 19
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT extract(hours from '2016-02-10 19:46:33.306157519-04'::timestamptz)
 ----
 19
 
+# Not supported by Materialize.
+onlyif cockroach
 query IBT
 SELECT k, date_trunc(element, input::timestamp) = date_trunc_result, date_trunc(element, input::timestamp)::string
 FROM ex WHERE date_trunc_result IS NOT NULL ORDER BY k
@@ -656,6 +788,8 @@ FROM ex WHERE date_trunc_result IS NOT NULL ORDER BY k
 39 true 2016-02-10 19:46:33.306158+00:00
 40 true 2016-02-10 19:46:33.306158+00:00
 
+# Not supported by Materialize.
+onlyif cockroach
 query IBT
 SELECT k, date_trunc(element, input::timestamptz) = date_trunc_result, date_trunc(element, input::timestamptz)::string
 FROM ex WHERE date_trunc_result IS NOT NULL ORDER BY k
@@ -694,16 +828,22 @@ FROM ex WHERE date_trunc_result IS NOT NULL ORDER BY k
 39 true 2016-02-10 19:46:33.306158+00:00
 40 true 2016-02-10 19:46:33.306158+00:00
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT date_trunc('hour', '2016-02-10 19:46:33.306157519-04'::timestamptz)::string
 ----
 2016-02-10 19:00:00-04:00
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT date_trunc('hours', '2016-02-10 19:46:33.306157519-04'::timestamptz)::string
 ----
 2016-02-10 19:00:00-04:00
 
+# Not supported by Materialize.
+onlyif cockroach
 query IBT
 SELECT k, date_trunc(element, input::date) = date_trunc_result::date, date_trunc(element, input::date)::string
 FROM ex WHERE date_trunc_result IS NOT NULL ORDER BY k
@@ -742,11 +882,15 @@ FROM ex WHERE date_trunc_result IS NOT NULL ORDER BY k
 39  true  2016-02-10 00:00:00+00:00
 40  true  2016-02-10 00:00:00+00:00
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT (timestamp '2016-02-10 19:46:33.306157519')::string
 ----
 2016-02-10 19:46:33.306158+00:00
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT (timestamptz '2016-02-10 19:46:33.306157519')::string
 ----
@@ -754,239 +898,343 @@ SELECT (timestamptz '2016-02-10 19:46:33.306157519')::string
 
 # Test SET TIME ZONE
 
+# Not supported by Materialize.
+onlyif cockroach
 # default time zone of UTC
 query T
 SELECT '2015-08-25 05:45:45.53453'::timestamp
 ----
 2015-08-25 05:45:45.53453 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45.53453'::timestamp
 ----
 2015-08-25 05:45:45.53453 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 'Europe/Rome'
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pq: unimplemented: timestamp abbreviations not supported
 SELECT '2015-08-25 05:45:45.53453 CET'::timestamptz WHERE false
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE +1
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pq: unimplemented: timestamp abbreviations not supported
 SELECT '2015-08-25 05:45:45.53453 CET'::timestamptz WHERE false
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45.53453'::timestamp
 ----
 2015-08-25 05:45:45.53453 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45.53453'::timestamptz
 ----
 2015-08-25 05:45:45.53453 +0100 +0100
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamp
 ----
 2015-08-25 05:45:45 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamp::timestamptz
 ----
 2015-08-25 05:45:45 +0100 +0100
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamptz::timestamp
 ----
 2015-08-25 07:45:45 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamptz
 ----
 2015-08-25 07:45:45 +0100 +0100
 
+# Not supported by Materialize.
+onlyif cockroach
 # alias test: TIMEZONE instead of TIME ZONE
 statement ok
 SET TIMEZONE = +2
 
+# Not supported by Materialize.
+onlyif cockroach
 query error pq: unimplemented: timestamp abbreviations not supported
 SELECT '2015-08-25 05:45:45.53453 CET'::timestamptz WHERE false
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45.53453'::timestamp
 ----
 2015-08-25 05:45:45.53453 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45.53453'::timestamptz
 ----
 2015-08-25 05:45:45.53453 +0200 +0200
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamp
 ----
 2015-08-25 05:45:45 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamp::timestamptz
 ----
 2015-08-25 05:45:45 +0200 +0200
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamptz::timestamp
 ----
 2015-08-25 08:45:45 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamptz
 ----
 2015-08-25 08:45:45 +0200 +0200
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE -5
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 23:45:45.53453'::timestamp
 ----
 2015-08-24 23:45:45.53453 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 23:45:45.53453'::timestamptz
 ----
 2015-08-24 23:45:45.53453 -0500 -0500
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 23:45:45.53453 UTC'::timestamp
 ----
 2015-08-24 23:45:45.53453 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 23:45:45.53453 UTC'::timestamptz
 ----
 2015-08-24 18:45:45.53453 -0500 -0500
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 23:45:45.53453-02:00'::timestamp
 ----
 2015-08-24 23:45:45.53453 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 23:45:45.53453-02:00'::timestamptz
 ----
 2015-08-24 20:45:45.53453 -0500 -0500
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 23:45:45.53453-05:00'::timestamptz
 ----
 2015-08-24 23:45:45.53453 -0500 -0500
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 23:45:45.534 -02:00'::timestamp
 ----
 2015-08-24 23:45:45.534 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 23:45:45.534 -02:00'::timestamptz
 ----
 2015-08-24 20:45:45.534 -0500 -0500
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamp::timestamptz
 ----
 2015-08-25 05:45:45 -0500 -0500
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamptz::timestamp
 ----
 2015-08-25 01:45:45 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 # using Eastern instead of fixed -5 should handle DST.
 statement ok
 SET TIME ZONE 'America/New_York'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamp::timestamptz
 ----
 2015-08-25 05:45:45 -0400 -0400
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 05:45:45-01:00'::timestamptz::timestamp
 ----
 2015-08-25 02:45:45 +0000 +0000
 
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error cannot find time zone "foobar"
 SET TIME ZONE 'foobar'
 
 statement ok
 SET TIME ZONE default
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamptz
 ----
 2015-08-24 21:45:45.53453 +0000 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE local
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamptz
 ----
 2015-08-24 21:45:45.53453 +0000 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 'DEFAULT'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamptz
 ----
 2015-08-24 21:45:45.53453 +0000 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE ''
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamptz
 ----
 2015-08-24 21:45:45.53453 +0000 UTC
 
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE INTERVAL '-7h'
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamp
 ----
 2015-08-24 21:45:45.53453 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamptz
 ----
 2015-08-24 21:45:45.53453 -0700 -0700
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE -7.5
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamp
 ----
 2015-08-24 21:45:45.53453 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamptz
 ----
 2015-08-24 21:45:45.53453 -0730 -0730
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453 UTC'::timestamptz
 ----
 2015-08-24 14:15:45.53453 -0730 -0730
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE LOCAL
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 04:45:45.53453'::timestamp
 ----
@@ -995,6 +1243,8 @@ SELECT '2015-08-25 04:45:45.53453'::timestamp
 statement ok
 SET TIME ZONE DEFAULT
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-25 04:45:45.53453'::timestamp
 ----
@@ -1004,6 +1254,8 @@ SELECT '2015-08-25 04:45:45.53453'::timestamp
 statement ok
 SET TIME ZONE 'UTC'
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check that casting from a timestamp to a date and vice versa
 # uses the time zone.
 query TTTT
@@ -1011,19 +1263,27 @@ SELECT b, b::date, c, c::date FROM u WHERE a = 123
 ----
 2015-08-30 03:34:45.34567 +0000 +0000  2015-08-30 00:00:00 +0000 +0000  2015-08-30 03:34:45.34567 +0000 UTC  2015-08-30 00:00:00 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT d::timestamp FROM u WHERE a = 123
 ----
 2015-08-30 00:00:00 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE -5
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTT
 SELECT b, b::date, c, c::date FROM u WHERE a = 123
 ----
 2015-08-30 03:34:45.34567 +0000 +0000  2015-08-30 00:00:00 +0000 +0000  2015-08-29 22:34:45.34567 -0500 -0500  2015-08-29 00:00:00 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT d::timestamp FROM u WHERE a = 123
 ----
@@ -1040,6 +1300,8 @@ CREATE TABLE tz (
   d TIMESTAMPTZ
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTBTTTB
 SHOW COLUMNS FROM tz
 ----
@@ -1053,15 +1315,21 @@ INSERT INTO tz VALUES
   (1, timestamp '2015-08-30 03:34:45', timestamptz '2015-08-30 03:34:45',  timestamptz '2015-08-30 03:34:45'),
   (2, timestamp '2015-08-30 03:34:45+01:00', timestamptz '2015-08-30 03:34:45+01:00',  timestamptz '2015-08-30 03:34:45')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE -2
 
+# Not supported by Materialize.
+onlyif cockroach
 query ITT
 SELECT a, b, c FROM tz ORDER BY a
 ----
 1   2015-08-30 03:34:45 +0000 +0000     2015-08-30 01:34:45 -0200 -0200
 2   2015-08-30 03:34:45 +0000 +0000     2015-08-30 00:34:45 -0200 -0200
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTT
 SELECT b + interval '1m', interval '1m' + b, c + interval '1m', interval '1m' + c FROM tz WHERE a = 1
 ----
@@ -1084,6 +1352,8 @@ SELECT a FROM tz WHERE c < d
 2
 
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT a FROM tz WHERE b = c::timestamp
 ----
@@ -1097,65 +1367,95 @@ SELECT a FROM tz WHERE c = d::timestamp
 statement ok
 SET TIME ZONE 'UTC'
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE -5
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW TIME ZONE
 ----
 -5
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE INTERVAL '+04:00' HOUR TO MINUTE
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamptz
 ----
 2015-08-24 21:45:45.53453 +0400 +0400
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE INTERVAL '-04:00' MINUTE TO SECOND
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamptz
 ----
 2015-08-24 21:45:45.53453 -0400 -0400
 
+# Not supported by Materialize.
+onlyif cockroach
 # alias test: TIMEZONE instead of TIME ZONE
 statement ok
 SET TIMEZONE TO INTERVAL '+05:00' HOUR TO MINUTE
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamptz
 ----
 2015-08-24 21:45:45.53453 +0500 +0500
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIMEZONE TO INTERVAL '-05:00' MINUTE TO SECOND
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '2015-08-24 21:45:45.53453'::timestamptz
 ----
 2015-08-24 21:45:45.53453 -0500 -0500
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 SET TIME ZONE 0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SHOW TIME ZONE
 ----
 0
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT DATE '1999-01-01' + INTERVAL '4 minutes'
 ----
 1999-01-01 00:04:00 +0000 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT INTERVAL '4 minutes' + DATE '1999-01-01'
 ----
 1999-01-01 00:04:00 +0000 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT DATE '1999-01-01' - INTERVAL '4 minutes'
 ----
@@ -1242,6 +1542,8 @@ SELECT INTERVAL '5' DAY;
 ----
 5 days
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT INTERVAL '5' MONTH, INTERVAL '5' YEAR TO MONTH;
 ----
@@ -1252,27 +1554,37 @@ SELECT INTERVAL '5' YEAR
 ----
 5 years
 
+# Not supported by Materialize.
+onlyif cockroach
 ## Test truncation via field specifiers
 query TTTT
 SELECT INTERVAL '1-2 3 4:5:6' SECOND, INTERVAL '1-2 3 4:5:6' MINUTE TO SECOND, INTERVAL '1-2 3 4:5:6' HOUR TO SECOND, INTERVAL '1-2 3 4:5:6' DAY TO SECOND;
 ----
 1 year 2 mons 3 days 04:05:06  1 year 2 mons 3 days 04:05:06  1 year 2 mons 3 days 04:05:06  1 year 2 mons 3 days 04:05:06
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTT
 SELECT INTERVAL '1-2 3 4:5:6' MINUTE, INTERVAL '1-2 3 4:5:6' HOUR TO MINUTE, INTERVAL '1-2 3 4:5:6' DAY TO MINUTE;
 ----
 1 year 2 mons 3 days 04:05:00  1 year 2 mons 3 days 04:05:00  1 year 2 mons 3 days 04:05:00
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT INTERVAL '1-2 3 4:5:6' HOUR, INTERVAL '1-2 3 4:5:6' DAY TO HOUR
 ----
 1 year 2 mons 3 days 04:00:00  1 year 2 mons 3 days 04:00:00
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT INTERVAL '1-2 3 4:5:6' DAY;
 ----
 1 year 2 mons 3 days
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT INTERVAL '1-2 3 4:5:6' MONTH, INTERVAL '1-2 3 4:5:6' YEAR TO MONTH;
 ----
@@ -1301,16 +1613,22 @@ INSERT INTO topics VALUES (
   '2017-12-05 04:04:04.913231+00:00'
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT date_trunc('month', ts) AS date_trunc_month_created_at FROM "topics";
 ----
 2017-12-01 00:00:00 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT date_trunc('month', tstz) AS date_trunc_month_created_at FROM "topics";
 ----
 2017-12-01 00:00:00 +0000 UTC
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT date_trunc('month', "date") AS date_trunc_month_created_at FROM "topics";
 ----
@@ -1323,22 +1641,32 @@ SELECT date_trunc('month', "date") AS date_trunc_month_created_at FROM "topics";
 # dates from this issue are no longer possible to express.
 subtest regression_35255
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error date is out of range
 SELECT '-56325279622-12-26'::DATE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error date is out of range
 SELECT '-5632-12-26'::DATE
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '-563-12-26'::DATE
 ----
 -0563-12-26 00:00:00 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '-56-12-26'::DATE
 ----
 -0056-12-26 00:00:00 +0000 +0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
 SELECT '-5-12-26'::DATE
 ----
@@ -1348,6 +1676,8 @@ SELECT '-5-12-26'::DATE
 # dates from this issue are no longer possible to express.
 subtest regression_36146
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error out of range
 WITH
     w (c) AS (VALUES (NULL), (NULL))
@@ -1358,6 +1688,8 @@ FROM
 ORDER BY
     c
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error out of range
 SELECT
     '1971-03-18'::DATE + 300866802885581286
@@ -1366,17 +1698,25 @@ SELECT
 # dates from this issue are no longer possible to express.
 subtest regression_36557
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error out of range
 SELECT 7133080445639580613::INT8 + '1977-11-03'::DATE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error out of range
 SELECT '-239852040018-04-28':::DATE
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error out of range
 SELECT(7133080445639580613::INT8 + '1977-11-03'::DATE) = '-239852040018-04-28':::DATE
 
 subtest interval_math
 
+# Not supported by Materialize.
+onlyif cockroach
 query TTTTTTT
 SELECT
     i,

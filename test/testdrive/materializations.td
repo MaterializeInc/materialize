@@ -158,7 +158,7 @@ a  b
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-view2-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:data_view is a view, which cannot be exported as a sink
+contains:view data_view cannot be exported as a sink
 
 # Can create indexed view from unmaterialized view.
 > CREATE VIEW test5 AS
@@ -172,7 +172,7 @@ contains:data_view is a view, which cannot be exported as a sink
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-data-view2-sink-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:test5 is a view, which cannot be exported as a sink
+contains:view test5 cannot be exported as a sink
 
 $ set-regex match=(\s\(u\d+\)) replacement=
 
@@ -198,7 +198,7 @@ b  c
 > CREATE INDEX idx1 ON test5(c)
 
 ! SELECT * FROM idx1
-contains:materialize.public.idx1 is an index, which cannot be depended upon
+contains:index materialize.public.idx1 cannot be depended upon
 
 # If there exists a second primary index, dropping one primary index will not
 # unmaterialize the view.
@@ -496,3 +496,15 @@ c    d
 "Dataflow: materialize.public.test7" AccumulableErrorCheck
 "Dataflow: materialize.public.test7" "ArrangeAccumulable [val: empty]"
 "Dataflow: materialize.public.test7" ReduceAccumulable
+"Dataflow: materialize.public.test1" "Arrange errors"
+"Dataflow: materialize.public.test1" "Distinct errors"
+"Dataflow: materialize.public.test2" "Arrange errors"
+"Dataflow: materialize.public.test2" "Distinct errors"
+"Dataflow: materialize.public.test4" "Arrange errors"
+"Dataflow: materialize.public.test4" "Distinct errors"
+"Dataflow: materialize.public.test6" "Arrange errors"
+"Dataflow: materialize.public.test6" "Distinct errors"
+"Dataflow: materialize.public.test7" "Arrange bundle err"
+"Dataflow: materialize.public.test7" "Arrange errors"
+"Dataflow: materialize.public.test7" "Distinct errors"
+"Dataflow: materialize.public.test7" "Distinct errors[[]]"

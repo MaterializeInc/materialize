@@ -160,7 +160,7 @@ impl Blob for FileBlob {
         // To implement atomic set, write to a temp file and rename it into
         // place.
         let mut tmp_name = file_path.clone();
-        debug_assert_eq!(tmp_name.extension(), None);
+        mz_ore::soft_assert_none_no_log!(tmp_name.extension());
         tmp_name.set_extension("tmp");
         // NB: Don't use create_new(true) for this so that if we have a partial
         // one from a previous crash, it will just get overwritten (which is

@@ -15,24 +15,26 @@ use std::fmt::{Display, Write};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use chrono::DateTime;
 use columnar::{Columnar, Index, Ref};
 use differential_dataflow::VecCollection;
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::trace::{BatchReader, Cursor};
+use differential_dataflow::trace::{BatchReader, Cursor, Navigable};
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
+use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
-use timely::Data;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::{Scope, Stream};
-use timely::scheduling::Scheduler;
+use timely::dataflow::{Scope, StreamVec};
+use timely::scheduling::activate::{Activations, Activator};
 use tracing::error;
 use uuid::Uuid;
 
@@ -41,8 +43,8 @@ use crate::logging::{
     ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, PermutedRowPacker,
     SharedLoggingState, Update,
 };
-use crate::row_spine::RowRowBuilder;
 use crate::typedefs::RowRowSpine;
+use mz_row_spine::RowRowBuilder;
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEventBuilder>;
@@ -156,6 +158,13 @@ pub struct ErrorCount {
     pub diff: Diff,
 }
 
+/// An export started hydrating.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct HydrationStart {
+    /// Identifier of the export.
+    pub export_id: GlobalId,
+}
+
 /// An export is hydrated.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct Hydration {
@@ -225,6 +234,8 @@ pub enum ComputeEvent {
     DataflowShutdown(DataflowShutdown),
     /// The number of errors in a dataflow export has changed.
     ErrorCount(ErrorCount),
+    /// A dataflow export started hydrating, i.e. its dataflow was unsuspended.
+    HydrationStart(HydrationStart),
     /// A dataflow export was hydrated.
     Hydration(Hydration),
     /// A dataflow operator's hydration status changed.
@@ -301,9 +312,9 @@ pub(super) struct Return {
 /// * `event_queue`: The source to read compute log events from.
 /// * `compute_event_streams`: Additional compute event streams to absorb.
 /// * `shared_state`: Shared state between logging dataflow fragments.
-pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
-    scheduler: S,
+pub(super) fn construct<'scope>(
+    scope: Scope<'scope, Timestamp>,
+    activations: Rc<RefCell<Activations>>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
@@ -327,7 +338,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux = OperatorBuilder::new("Compute Logging Demux".to_string(), scope.clone());
-        let mut input = demux.new_input(&logs, Pipeline);
+        let mut input = demux.new_input(logs, Pipeline);
         let (export_out, export) = demux.new_output();
         let mut export_out = OutputBuilder::from(export_out);
         let (frontier_out, frontier) = demux.new_output();
@@ -338,15 +349,13 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let mut peek_out = OutputBuilder::from(peek_out);
         let (peek_duration_out, peek_duration) = demux.new_output();
         let mut peek_duration_out = OutputBuilder::from(peek_duration_out);
-        let (shutdown_duration_out, shutdown_duration) = demux.new_output();
-        let mut shutdown_duration_out = OutputBuilder::from(shutdown_duration_out);
         let (arrangement_heap_size_out, arrangement_heap_size) = demux.new_output();
         let mut arrangement_heap_size_out = OutputBuilder::from(arrangement_heap_size_out);
         let (arrangement_heap_capacity_out, arrangement_heap_capacity) = demux.new_output();
         let mut arrangement_heap_capacity_out = OutputBuilder::from(arrangement_heap_capacity_out);
-        let (arrangement_heap_allocations_out, arrangement_heap_allocations) =
-            demux.new_output();
-        let mut arrangement_heap_allocations_out = OutputBuilder::from(arrangement_heap_allocations_out);
+        let (arrangement_heap_allocations_out, arrangement_heap_allocations) = demux.new_output();
+        let mut arrangement_heap_allocations_out =
+            OutputBuilder::from(arrangement_heap_allocations_out);
         let (error_count_out, error_count) = demux.new_output();
         let mut error_count_out = OutputBuilder::from(error_count_out);
         let (hydration_time_out, hydration_time) = demux.new_output();
@@ -358,7 +367,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let (dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
         let mut dataflow_global_ids_out = OutputBuilder::from(dataflow_global_ids_out);
 
-        let mut demux_state = DemuxState::new(scheduler, scope.index());
+        let mut demux_state = DemuxState::new(activations, scope.index());
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut export = export_out.activate();
@@ -366,7 +375,6 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                 let mut import_frontier = import_frontier_out.activate();
                 let mut peek = peek_out.activate();
                 let mut peek_duration = peek_duration_out.activate();
-                let mut shutdown_duration = shutdown_duration_out.activate();
                 let mut arrangement_heap_size = arrangement_heap_size_out.activate();
                 let mut arrangement_heap_capacity = arrangement_heap_capacity_out.activate();
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
@@ -383,13 +391,15 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                         import_frontier: import_frontier.session_with_builder(&cap),
                         peek: peek.session_with_builder(&cap),
                         peek_duration: peek_duration.session_with_builder(&cap),
-                        shutdown_duration: shutdown_duration.session_with_builder(&cap),
-                        arrangement_heap_allocations: arrangement_heap_allocations.session_with_builder(&cap),
-                        arrangement_heap_capacity: arrangement_heap_capacity.session_with_builder(&cap),
+                        arrangement_heap_allocations: arrangement_heap_allocations
+                            .session_with_builder(&cap),
+                        arrangement_heap_capacity: arrangement_heap_capacity
+                            .session_with_builder(&cap),
                         arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
                         error_count: error_count.session_with_builder(&cap),
                         hydration_time: hydration_time.session_with_builder(&cap),
-                        operator_hydration_status: operator_hydration_status.session_with_builder(&cap),
+                        operator_hydration_status: operator_hydration_status
+                            .session_with_builder(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
                         dataflow_global_ids: dataflow_global_ids.session_with_builder(&cap),
                     };
@@ -424,7 +434,6 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
             (OperatorHydrationStatus, operator_hydration_status),
             (PeekCurrent, peek),
             (PeekDuration, peek_duration),
-            (ShutdownDuration, shutdown_duration),
         ];
 
         // Build the output arrangements.
@@ -432,11 +441,17 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         for (variant, stream) in logs {
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
+                let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                    columnar_exchange::<Row, Row, Timestamp, Diff>,
+                );
                 let trace = stream
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
-                        &format!("Arrange {variant:?}"),
-                    )
+                    .mz_arrange_core::<
+                        _,
+                        batcher::Chunker<_>,
+                        Col2ValBatcher<_, _, _, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {
                     trace,
@@ -464,10 +479,25 @@ where
     Datum::String(scratch)
 }
 
+/// Pack an offset from the Unix epoch into a `Datum::TimestampTz`.
+///
+/// The offset is rounded to microseconds, the maximum resolution of `timestamptz`. Rounding is
+/// monotone, so it cannot reorder two offsets that were ordered before.
+fn epoch_offset_datum(offset: Duration) -> Datum<'static> {
+    let secs = i64::try_from(offset.as_secs()).expect("must fit");
+    let datetime = DateTime::from_timestamp(secs, offset.subsec_nanos())
+        .expect("epoch offset is in range for `DateTime`");
+    let timestamp = CheckedTimestamp::try_from(datetime)
+        .expect("epoch offset is a valid timestamp")
+        .round_to_precision(None)
+        .expect("epoch offset is far from the maximum timestamp");
+    Datum::TimestampTz(timestamp)
+}
+
 /// State maintained by the demux operator.
-struct DemuxState<A> {
-    /// The timely scheduler.
-    scheduler: A,
+struct DemuxState {
+    /// The timely activations handle.
+    activations: Rc<RefCell<Activations>>,
     /// The index of this worker.
     worker_id: usize,
     /// A reusable scratch string for formatting IDs.
@@ -476,12 +506,6 @@ struct DemuxState<A> {
     scratch_string_b: String,
     /// State tracked per dataflow export.
     exports: BTreeMap<GlobalId, ExportState>,
-    /// Maps live dataflows to counts of their exports.
-    dataflow_export_counts: BTreeMap<usize, u32>,
-    /// Maps dropped dataflows to their drop time.
-    dataflow_drop_times: BTreeMap<usize, Duration>,
-    /// Contains dataflows that have shut down but not yet been dropped.
-    shutdown_dataflows: BTreeSet<usize>,
     /// Maps pending peeks to their installation time.
     peek_stash: BTreeMap<Uuid, Duration>,
     /// Arrangement size stash.
@@ -514,23 +538,18 @@ struct DemuxState<A> {
     peek_duration_packer: PermutedRowPacker,
     /// A row packer for the peek output.
     peek_packer: PermutedRowPacker,
-    /// A row packer for the shutdown duration output.
-    shutdown_duration_packer: PermutedRowPacker,
     /// A row packer for the hydration time output.
     hydration_time_packer: PermutedRowPacker,
 }
 
-impl<A: Scheduler> DemuxState<A> {
-    fn new(scheduler: A, worker_id: usize) -> Self {
+impl DemuxState {
+    fn new(activations: Rc<RefCell<Activations>>, worker_id: usize) -> Self {
         Self {
-            scheduler,
+            activations,
             worker_id,
             scratch_string_a: String::new(),
             scratch_string_b: String::new(),
             exports: Default::default(),
-            dataflow_export_counts: Default::default(),
-            dataflow_drop_times: Default::default(),
-            shutdown_dataflows: Default::default(),
             peek_stash: Default::default(),
             arrangement_size: Default::default(),
             lir_mapping: Default::default(),
@@ -554,7 +573,6 @@ impl<A: Scheduler> DemuxState<A> {
             ),
             peek_duration_packer: PermutedRowPacker::new(ComputeLog::PeekDuration),
             peek_packer: PermutedRowPacker::new(ComputeLog::PeekCurrent),
-            shutdown_duration_packer: PermutedRowPacker::new(ComputeLog::ShutdownDuration),
         }
     }
 
@@ -623,16 +641,25 @@ impl<A: Scheduler> DemuxState<A> {
         ])
     }
 
-    /// Pack a hydration time update key-value for the given export ID and hydration time.
+    /// Pack a hydration time update key-value for the given export ID, hydration time, and
+    /// hydration lifecycle timestamps.
     fn pack_hydration_time_update(
         &mut self,
         export_id: GlobalId,
         time_ns: Option<u64>,
+        timestamps: &HydrationTimestamps,
     ) -> (&RowRef, &RowRef) {
         self.hydration_time_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::from(time_ns),
+            epoch_offset_datum(timestamps.installed_at),
+            timestamps
+                .started_at
+                .map_or(Datum::Null, epoch_offset_datum),
+            timestamps
+                .hydrated_at
+                .map_or(Datum::Null, epoch_offset_datum),
         ])
     }
 
@@ -727,14 +754,28 @@ impl<A: Scheduler> DemuxState<A> {
             Datum::MzTimestamp(time),
         ])
     }
+}
 
-    /// Pack a shutdown duration update key-value for the given time bucket.
-    fn pack_shutdown_duration_update(&mut self, bucket: u128) -> (&RowRef, &RowRef) {
-        self.shutdown_duration_packer.pack_slice(&[
-            Datum::UInt64(u64::cast_from(self.worker_id)),
-            Datum::UInt64(bucket.try_into().expect("bucket too big")),
-        ])
-    }
+/// Wallclock instants of an export's hydration lifecycle, as durations since the Unix epoch.
+///
+/// These are sampled from compute logging event times, which advance off an `Instant` anchored to
+/// the epoch once per worker when logging is initialized. They are therefore monotone within a
+/// worker and unaffected by system clock steps, but they carry that worker's anchor, so comparing
+/// them across workers absorbs anchor skew.
+///
+/// The invariant `installed_at <= started_at <= hydrated_at` holds over the non-NULL values, and no
+/// later stage is ever set without its predecessors.
+#[derive(Debug, Clone, Copy)]
+struct HydrationTimestamps {
+    /// When this export's dataflow was installed, still suspended. Also the start of queueing.
+    installed_at: Duration,
+    /// When hydration work began, that is, when the dataflow was unsuspended.
+    ///
+    /// Equals `installed_at` for a dataflow that was never suspended, since such a dataflow starts
+    /// running the moment it is built.
+    started_at: Option<Duration>,
+    /// When this export's output frontier passed the dataflow as-of.
+    hydrated_at: Option<Duration>,
 }
 
 /// State tracked for each dataflow export.
@@ -750,17 +791,28 @@ struct ExportState {
     created_at: Instant,
     /// Whether the exported collection is hydrated.
     hydration_time_ns: Option<u64>,
+    /// Wallclock instants of this export's hydration lifecycle.
+    ///
+    /// Distinct from `created_at`/`hydration_time_ns`, which remain the authoritative per-worker
+    /// duration at nanosecond precision. These instants exist to identify and bound hydration
+    /// episodes, which a duration cannot do.
+    hydration_timestamps: HydrationTimestamps,
     /// Hydration status of operators feeding this export.
     operator_hydration: BTreeMap<LirId, bool>,
 }
 
 impl ExportState {
-    fn new(dataflow_index: usize) -> Self {
+    fn new(dataflow_index: usize, installed_at: Duration) -> Self {
         Self {
             dataflow_index,
             error_count: Diff::ZERO,
             created_at: Instant::now(),
             hydration_time_ns: None,
+            hydration_timestamps: HydrationTimestamps {
+                installed_at,
+                started_at: None,
+                hydrated_at: None,
+            },
             operator_hydration: BTreeMap::new(),
         }
     }
@@ -781,7 +833,6 @@ struct DemuxOutput<'a, 'b> {
     import_frontier: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     peek: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     peek_duration: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
-    shutdown_duration: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_allocations: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_capacity: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_size: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
@@ -793,9 +844,9 @@ struct DemuxOutput<'a, 'b> {
 }
 
 /// Event handler of the demux operator.
-struct DemuxHandler<'a, 'b, 'c, A: Scheduler> {
+struct DemuxHandler<'a, 'b, 'c> {
     /// State kept by the demux operator.
-    state: &'a mut DemuxState<A>,
+    state: &'a mut DemuxState,
     /// State shared across log receivers.
     shared_state: &'a mut SharedLoggingState,
     /// Demux output sessions.
@@ -806,7 +857,7 @@ struct DemuxHandler<'a, 'b, 'c, A: Scheduler> {
     time: Duration,
 }
 
-impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
+impl DemuxHandler<'_, '_, '_> {
     /// Return the timestamp associated with the current event, based on the event time and the
     /// logging interval.
     fn ts(&self) -> Timestamp {
@@ -835,6 +886,7 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
             }
             DataflowShutdown(shutdown) => self.handle_dataflow_shutdown(shutdown),
             ErrorCount(error_count) => self.handle_error_count(error_count),
+            HydrationStart(hydration) => self.handle_hydration_start(hydration),
             Hydration(hydration) => self.handle_hydration(hydration),
             OperatorHydration(hydration) => self.handle_operator_hydration(hydration),
             LirMapping(mapping) => self.handle_lir_mapping(mapping),
@@ -854,22 +906,27 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
         let datum = self.state.pack_export_update(export_id, dataflow_index);
         self.output.export.give((datum, ts, Diff::ONE));
 
+        // Stamp the event time, not `ts`, which is rounded up to the logging interval. The rounding
+        // then only delays when an update becomes visible, rather than skewing recorded instants.
+        let installed_at = self.time;
+
         let existing = self
             .state
             .exports
-            .insert(export_id, ExportState::new(dataflow_index));
+            .insert(export_id, ExportState::new(dataflow_index, installed_at));
         if existing.is_some() {
             error!(%export_id, "export already registered");
         }
 
-        *self
-            .state
-            .dataflow_export_counts
-            .entry(dataflow_index)
-            .or_default() += 1;
-
         // Insert hydration time logging for this export.
-        let datum = self.state.pack_hydration_time_update(export_id, None);
+        let timestamps = HydrationTimestamps {
+            installed_at,
+            started_at: None,
+            hydrated_at: None,
+        };
+        let datum = self
+            .state
+            .pack_hydration_time_update(export_id, None, &timestamps);
         self.output.hydration_time.give((datum, ts, Diff::ONE));
     }
 
@@ -889,18 +946,6 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
         let datum = self.state.pack_export_update(export_id, dataflow_index);
         self.output.export.give((datum, ts, Diff::MINUS_ONE));
 
-        match self.state.dataflow_export_counts.get_mut(&dataflow_index) {
-            entry @ Some(0) | entry @ None => {
-                error!(
-                    %export_id,
-                    %dataflow_index,
-                    "invalid dataflow_export_counts entry at time of export drop: {entry:?}",
-                );
-            }
-            Some(1) => self.handle_dataflow_dropped(dataflow_index),
-            Some(count) => *count -= 1,
-        }
-
         // Remove error count logging for this export.
         if export.error_count != Diff::ZERO {
             let datum = self
@@ -910,9 +955,11 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
         }
 
         // Remove hydration time logging for this export.
-        let datum = self
-            .state
-            .pack_hydration_time_update(export_id, export.hydration_time_ns);
+        let datum = self.state.pack_hydration_time_update(
+            export_id,
+            export.hydration_time_ns,
+            &export.hydration_timestamps,
+        );
         self.output
             .hydration_time
             .give((datum, ts, Diff::MINUS_ONE));
@@ -928,45 +975,11 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
         }
     }
 
-    fn handle_dataflow_dropped(&mut self, dataflow_index: usize) {
-        let ts = self.ts();
-        self.state.dataflow_export_counts.remove(&dataflow_index);
-
-        if self.state.shutdown_dataflows.remove(&dataflow_index) {
-            // Dataflow has already shut down before it was dropped.
-            let datum = self.state.pack_shutdown_duration_update(0);
-            self.output.shutdown_duration.give((datum, ts, Diff::ONE));
-        } else {
-            // Dataflow has not yet shut down.
-            let existing = self
-                .state
-                .dataflow_drop_times
-                .insert(dataflow_index, self.time);
-            if existing.is_some() {
-                error!(%dataflow_index, "dataflow already dropped");
-            }
-        }
-    }
-
     fn handle_dataflow_shutdown(
         &mut self,
         DataflowShutdownReference { dataflow_index }: Ref<'_, DataflowShutdown>,
     ) {
         let ts = self.ts();
-
-        if let Some(start) = self.state.dataflow_drop_times.remove(&dataflow_index) {
-            // Dataflow has already been dropped.
-            let elapsed_ns = self.time.saturating_sub(start).as_nanos();
-            let elapsed_pow = elapsed_ns.next_power_of_two();
-            let datum = self.state.pack_shutdown_duration_update(elapsed_pow);
-            self.output.shutdown_duration.give((datum, ts, Diff::ONE));
-        } else {
-            // Dataflow has not yet been dropped.
-            let was_new = self.state.shutdown_dataflows.insert(dataflow_index);
-            if !was_new {
-                error!(%dataflow_index, "dataflow already shutdown");
-            }
-        }
 
         // We deal with any `GlobalId` based mappings in this event.
         if let Some(global_ids) = self.state.dataflow_global_ids.remove(&dataflow_index) {
@@ -1030,8 +1043,47 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
         }
     }
 
+    fn handle_hydration_start(
+        &mut self,
+        HydrationStartReference { export_id }: Ref<'_, HydrationStart>,
+    ) {
+        let ts = self.ts();
+        // Stamp the event time rather than `ts`, as in `handle_export`.
+        let started_at = self.time;
+        let export_id = Columnar::into_owned(export_id);
+
+        let Some(export) = self.state.exports.get_mut(&export_id) else {
+            error!(%export_id, "hydration start event for unknown export");
+            return;
+        };
+        if export.hydration_timestamps.started_at.is_some() {
+            // A `Schedule` command is re-sent for dataflows retained across reconciliation, and is
+            // sent even for dataflows that were never suspended and have hydrated already. Ignore
+            // the repeats, mirroring the guard in `handle_hydration`.
+            return;
+        }
+
+        let old_timestamps = export.hydration_timestamps;
+        export.hydration_timestamps.started_at = Some(started_at);
+        let new_timestamps = export.hydration_timestamps;
+        let time_ns = export.hydration_time_ns;
+
+        let retraction = self
+            .state
+            .pack_hydration_time_update(export_id, time_ns, &old_timestamps);
+        self.output
+            .hydration_time
+            .give((retraction, ts, Diff::MINUS_ONE));
+        let insertion = self
+            .state
+            .pack_hydration_time_update(export_id, time_ns, &new_timestamps);
+        self.output.hydration_time.give((insertion, ts, Diff::ONE));
+    }
+
     fn handle_hydration(&mut self, HydrationReference { export_id }: Ref<'_, Hydration>) {
         let ts = self.ts();
+        // Stamp the event time rather than `ts`, as in `handle_export`.
+        let hydrated_at = self.time;
         let export_id = Columnar::into_owned(export_id);
 
         let Some(export) = self.state.exports.get_mut(&export_id) else {
@@ -1048,13 +1100,31 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
         let nanos = u64::try_from(duration.as_nanos()).expect("must fit");
         export.hydration_time_ns = Some(nanos);
 
-        let retraction = self.state.pack_hydration_time_update(export_id, None);
+        let old_timestamps = export.hydration_timestamps;
+        export.hydration_timestamps.hydrated_at = Some(hydrated_at);
+        // A dataflow can reach hydration before its `Schedule` arrives, and not only when it has
+        // no imports to suspend: an index over an already-hydrated arrangement reports hydration
+        // while still suspended, which happens for a handful of `mz_catalog_server` indexes on
+        // every bootstrap. So this is a normal path, not a repair for an exotic one.
+        //
+        // Stamp `started_at` from `installed_at`, which keeps `installed_at <= started_at <=
+        // hydrated_at` total and reports the queueing interval as zero. Stamping `hydrated_at`
+        // instead would invert it, charging the whole life to queueing and reporting zero
+        // hydration time for a dataflow that only ever hydrated.
+        if export.hydration_timestamps.started_at.is_none() {
+            export.hydration_timestamps.started_at = Some(export.hydration_timestamps.installed_at);
+        }
+        let new_timestamps = export.hydration_timestamps;
+
+        let retraction = self
+            .state
+            .pack_hydration_time_update(export_id, None, &old_timestamps);
         self.output
             .hydration_time
             .give((retraction, ts, Diff::MINUS_ONE));
-        let insertion = self
-            .state
-            .pack_hydration_time_update(export_id, Some(nanos));
+        let insertion =
+            self.state
+                .pack_hydration_time_update(export_id, Some(nanos), &new_timestamps);
         self.output.hydration_time.give((insertion, ts, Diff::ONE));
     }
 
@@ -1257,10 +1327,10 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
             address,
         }: Ref<'_, ArrangementHeapSizeOperator>,
     ) {
-        let activator = self
-            .state
-            .scheduler
-            .activator_for(address.into_iter().collect());
+        let activator = Activator::new(
+            address.into_iter().collect(),
+            Rc::clone(&self.state.activations),
+        );
         let existing = self
             .state
             .arrangement_size
@@ -1463,6 +1533,17 @@ impl CollectionLogging {
         }
     }
 
+    /// Record that the collection's dataflow was unsuspended, so hydration work has begun.
+    ///
+    /// Repeated calls are ignored by the demux, so callers need not track whether the dataflow was
+    /// already unsuspended.
+    pub fn set_hydration_start(&self) {
+        self.logger
+            .log(&ComputeEvent::HydrationStart(HydrationStart {
+                export_id: self.export_id,
+            }));
+    }
+
     /// Set the collection as hydrated.
     pub fn set_hydrated(&self) {
         self.logger.log(&ComputeEvent::Hydration(Hydration {
@@ -1498,10 +1579,10 @@ pub(crate) trait LogDataflowErrors {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self;
 }
 
-impl<G, D> LogDataflowErrors for VecCollection<G, D, Diff>
+impl<'scope, T, D> LogDataflowErrors for VecCollection<'scope, T, D, Diff>
 where
-    G: Scope,
-    D: Data,
+    T: timely::progress::Timestamp,
+    D: Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.inner
@@ -1519,10 +1600,11 @@ where
     }
 }
 
-impl<G, B> LogDataflowErrors for Stream<G, B>
+impl<'scope, T, B> LogDataflowErrors for StreamVec<'scope, T, B>
 where
-    G: Scope,
-    for<'a> B: BatchReader<DiffGat<'a> = &'a Diff> + Clone + 'static,
+    T: timely::progress::Timestamp,
+    B: BatchReader + Navigable + Clone + 'static,
+    for<'a> B::Cursor: Cursor<DiffGat<'a> = &'a Diff>,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
@@ -1546,7 +1628,8 @@ where
 /// batches might become large.
 fn sum_batch_diffs<B>(batch: &B) -> Diff
 where
-    for<'a> B: BatchReader<DiffGat<'a> = &'a Diff>,
+    B: BatchReader + Navigable,
+    for<'a> B::Cursor: Cursor<DiffGat<'a> = &'a Diff>,
 {
     let mut sum = Diff::ZERO;
     let mut cursor = batch.cursor();

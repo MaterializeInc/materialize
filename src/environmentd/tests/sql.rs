@@ -13,10 +13,13 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
+#![recursion_limit = "256"]
+
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -39,7 +42,6 @@ use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{assert_contains, assert_err, assert_ok};
 use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
-use mz_sql::catalog::BuiltinsConfig;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
 use mz_storage_types::sources::Timeline;
 use postgres::Row;
@@ -66,7 +68,7 @@ impl MockHttpServer {
     async fn new() -> MockHttpServer {
         let (conn_tx, conn_rx) = mpsc::unbounded_channel();
         let router = Router::new().route(
-            "/*path",
+            "/{*path}",
             routing::get(|| async move {
                 let (response_tx, response_rx) = oneshot::channel();
                 conn_tx
@@ -107,6 +109,7 @@ impl MockHttpServer {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_no_block() {
     // We manually time out the test because it's better than relying on CI to time out, because
     // an actual failure (as opposed to a CI timeout) causes `services.log` to be uploaded.
@@ -135,7 +138,7 @@ async fn test_no_block() {
                 ))
                 .await;
             println!("test_no_block: in thread; create CSR conn done");
-            let _ = result.unwrap();
+            result.unwrap();
 
             let admin: AdminClient<_> = ClientConfig::new()
                 .set("bootstrap.servers", &*KAFKA_ADDRS)
@@ -155,11 +158,11 @@ async fn test_no_block() {
             let result = client
                     .batch_execute(&format!(
                         "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
-                        &*KAFKA_ADDRS,
+                        *KAFKA_ADDRS,
                     ))
                     .await;
             println!("test_no_block: in thread; create Kafka conn done");
-            let _ = result.unwrap();
+            result.unwrap();
 
             let result = client
                 .batch_execute(
@@ -209,6 +212,7 @@ async fn test_no_block() {
 /// Test that dropping a connection while a source is undergoing purification
 /// does not crash the server.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_drop_connection_race() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -234,7 +238,7 @@ async fn test_drop_connection_race() {
     client
         .batch_execute(&format!(
             "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
-            &*KAFKA_ADDRS,
+            *KAFKA_ADDRS,
         ))
         .await
         .unwrap();
@@ -309,6 +313,7 @@ async fn test_drop_connection_race() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_time() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -357,7 +362,53 @@ fn test_time() {
     );
 }
 
+/// The builtin `mz_internal.mz_analytics` connection is an assume-role AWS
+/// connection present on every environment. Its row in
+/// `mz_internal.mz_aws_connections` is reconstructed from the plan-time AWS
+/// context functions. Without the AWS context those functions fold to NULL, and
+/// the view must drop the row entirely, matching the packer it replaced, which
+/// bailed and wrote no row in that case. See MZ_AWS_CONNECTIONS in
+/// src/catalog/src/builtin/mz_internal.rs.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_mz_aws_connections_context_dependent_row() {
+    // With the AWS context configured (the default), the assume-role row is
+    // present and fully populated.
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let count: i64 = client
+        .query_one("SELECT count(*) FROM mz_internal.mz_aws_connections", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1, "mz_analytics row present with AWS context");
+
+    // Without the AWS context, the assume-role row is dropped rather than
+    // emitted with a malformed example_trust_policy.
+    let server = test_util::TestHarness::default()
+        .without_aws_connection_context()
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let count: i64 = client
+        .query_one("SELECT count(*) FROM mz_internal.mz_aws_connections", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 0, "mz_analytics row dropped without AWS context");
+
+    // The connection object itself still exists; only its derived view row is
+    // suppressed.
+    let count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM mz_catalog.mz_connections \
+             WHERE name = 'mz_analytics' AND type = 'aws'",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1, "mz_analytics connection object still present");
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_consolidation() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
@@ -387,6 +438,7 @@ fn test_subscribe_consolidation() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_negative_diffs() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
@@ -438,6 +490,7 @@ fn test_subscribe_negative_diffs() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_empty_subscribe_notice() {
     let server = test_util::TestHarness::default()
         .with_now(NOW_ZERO.clone())
@@ -464,8 +517,12 @@ async fn test_empty_subscribe_notice() {
     Retry::default()
         .max_duration(Duration::from_secs(10))
         .retry(|_| {
-            let Some(e) = rx.try_next().unwrap() else {
-                return Err("No notice received".to_string());
+            let e = match rx.try_recv() {
+                Ok(e) => e,
+                Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                    panic!("unexpected channel close")
+                }
+                Err(_) => return Err("No notice received".to_string()),
             };
             if e.message().contains("guaranteed to be empty") {
                 Ok(())
@@ -477,6 +534,7 @@ async fn test_empty_subscribe_notice() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_empty_subscribe_error() {
     let server = test_util::TestHarness::default()
         .with_now(NOW_ZERO.clone())
@@ -498,6 +556,7 @@ async fn test_empty_subscribe_error() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_basic() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -506,15 +565,6 @@ fn test_subscribe_basic() {
     let mut client_reads = server.connect(postgres::NoTls).unwrap();
 
     server.enable_feature_flags(&["enable_index_options", "enable_logical_compaction_window"]);
-
-    let mut sys_client = server.connect_internal(postgres::NoTls).unwrap();
-
-    sys_client
-        .execute(
-            "ALTER SYSTEM SET constraint_based_timestamp_selection = 'verify'",
-            &[],
-        )
-        .unwrap();
 
     // Create a table with disabled compaction.
     client_writes
@@ -649,10 +699,26 @@ fn test_subscribe_basic() {
         }
     };
 
-    assert!(
-        err.unwrap_db_error()
-            .message()
-            .starts_with("Timestamp (1) is not valid for all inputs")
+    let err = err.unwrap_db_error();
+    assert_eq!(
+        err.message(),
+        "could not find a valid timestamp for the query"
+    );
+    let detail = err.detail().expect("error should have detail");
+    // Replace timestamps and GlobalIds with placeholders for comparison
+    let detail = Regex::new(r"\s*\d+ \([^)]+\)")
+        .unwrap()
+        .replace_all(detail, "<TIMESTAMP>");
+    let detail = Regex::new(r"u\d+").unwrap().replace_all(&detail, "<ID>");
+    let expected_detail = "Constraints:
+lower:
+  (Storage inputs: [<ID>]): [<TIMESTAMP>]
+upper:
+  (Query's AS OF): [<TIMESTAMP>]
+";
+    assert_eq!(
+        detail, expected_detail,
+        "detail mismatch:\ngot:\n{detail}\nexpected:\n{expected_detail}"
     );
 }
 
@@ -661,6 +727,7 @@ fn test_subscribe_basic() {
 /// batches and we won't yet insert a second row, we know that if we've seen a
 /// data row we will also see one progressed message.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_progress() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -778,6 +845,7 @@ fn test_subscribe_progress() {
 // Verifies that subscribing to non-nullable columns with progress information
 // turns them into nullable columns. See database-issues#1946.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_progress_non_nullable_columns() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
@@ -828,6 +896,7 @@ fn test_subscribe_progress_non_nullable_columns() {
 /// Verifies that we get continuous progress messages, regardless of if we
 /// receive data or not.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subcribe_continuous_progress() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_writes = server.connect(postgres::NoTls).unwrap();
@@ -912,6 +981,7 @@ fn test_subcribe_continuous_progress() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_fetch_timeout() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -1008,6 +1078,7 @@ fn test_subscribe_fetch_timeout() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_fetch_wait() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -1070,6 +1141,7 @@ fn test_subscribe_fetch_wait() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_empty_upper_frontier() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -1090,6 +1162,7 @@ fn test_subscribe_empty_upper_frontier() {
 // Tests that a client that launches a non-terminating SUBSCRIBE and disconnects
 // does not keep the server alive forever.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[allow(clippy::disallowed_methods)]
 async fn test_subscribe_shutdown() {
     let server = test_util::TestHarness::default().start().await;
 
@@ -1118,6 +1191,7 @@ async fn test_subscribe_shutdown() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_table_rw_timestamps() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_interactive = server.connect(postgres::NoTls).unwrap();
@@ -1202,6 +1276,7 @@ fn test_subscribe_table_rw_timestamps() {
 // Tests that temporary views created by one connection cannot be viewed
 // by another connection.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_temporary_views() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client_a = server.connect(postgres::NoTls).unwrap();
@@ -1232,6 +1307,7 @@ fn test_temporary_views() {
 
 // Test EXPLAIN TIMESTAMP with tables.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_explain_timestamp_table() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -1254,19 +1330,23 @@ source materialize.public.t1 (u1, storage):
 
 binding constraints:
 lower:
-  (StorageInput([User(1)])): [<TIMESTAMP>]
-  (IsolationLevel(StrictSerializable)): [<TIMESTAMP>]\n";
+  (Isolation level: StrictSerializable): [<TIMESTAMP>]\n";
 
     let row = client
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
         .unwrap();
     let explain: String = row.get(0);
     let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+    // The storage inputs constraint appears non-deterministically depending on
+    // whether the storage frontier has advanced before the query runs.
+    let storage_inputs_re = Regex::new(r"  \(Storage inputs: \[.*\]\): \[<TIMESTAMP>\]\n").unwrap();
+    let explain = storage_inputs_re.replace_all(&explain, "");
     assert_eq!(explain, expect, "{explain}\n\n{expect}");
 }
 
 // Test `EXPLAIN TIMESTAMP AS JSON`
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_explain_timestamp_json() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -1277,7 +1357,7 @@ fn test_explain_timestamp_json() {
         .unwrap();
     let explain: String = row.get(0);
     // Just check that we can round-trip to the original type
-    let _explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+    let _explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
 }
 
 // Verify that `EXPLAIN TIMESTAMP ...` within acts like a peek within a transaction.
@@ -1289,6 +1369,7 @@ fn test_explain_timestamp_json() {
 //
 // GitHub issue # 18950
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_transactional_explain_timestamps() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -1334,7 +1415,7 @@ fn test_transactional_explain_timestamps() {
             .unwrap();
 
         let explain: String = row.get(0);
-        let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+        let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
         let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
 
         if let Some(timestamp) = query_timestamp {
@@ -1398,7 +1479,7 @@ fn test_transactional_explain_timestamps() {
         .unwrap();
 
     let explain: String = row.get(0);
-    let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+    let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
     let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
 
     assert_eq!(*explain_timestamp, mz_now_timestamp);
@@ -1411,7 +1492,8 @@ fn test_transactional_explain_timestamps() {
 // but please at least keep _something_ that tests that custom compaction windows are working.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5600
-#[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/8491 is fixed
+#[ignore] // TODO: Reenable when https://linear.app/materializeinc/issue/SQL-407 is fixed
+#[allow(clippy::disallowed_methods)]
 async fn test_utilization_hold() {
     const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
     // `mz_catalog_server` tests indexes, `quickstart` tests tables.
@@ -1452,7 +1534,7 @@ async fn test_utilization_hold() {
 
             let row = client.query_one(explain_q, &[]).await.unwrap();
             let explain: String = row.get(0);
-            let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+            let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
 
             // Assert that we actually used the indexes/tables, as required
             for s in &explain.sources {
@@ -1517,8 +1599,7 @@ async fn test_utilization_hold() {
                     .unwrap();
                 let row = client.query_one(explain_q, &[]).await.unwrap();
                 let explain: String = row.get(0);
-                let explain: TimestampExplanation<Timestamp> =
-                    serde_json::from_str(&explain).unwrap();
+                let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
                 let since = explain
                     .determination
                     .since
@@ -1549,6 +1630,7 @@ async fn test_utilization_hold() {
 // of cancelled (sends a pgwire cancel request on a new connection).
 #[ignore] // TODO(necaris): Re-enable this as soon as possible
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[allow(clippy::disallowed_methods)]
 async fn test_github_12546() {
     let server = test_util::TestHarness::default()
         .with_propagate_crashes(false)
@@ -1600,6 +1682,7 @@ async fn test_github_12546() {
 
 /// Regression test for database-issues#3721.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_github_3721() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -1657,6 +1740,7 @@ fn test_github_3721() {
 
 #[mz_ore::test]
 // Tests github issue database-issues#3761
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_outlive_cluster() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -1678,8 +1762,12 @@ fn test_subscribe_outlive_cluster() {
         .batch_execute("CREATE CLUSTER newcluster REPLICAS (r1 (size 'scale=1,workers=1'))")
         .unwrap();
     client2_cancel.cancel_query(postgres::NoTls).unwrap();
-    client2
-        .batch_execute("ROLLBACK; SET CLUSTER = default")
+    // The cancel is asynchronous and might race with subsequent commands.
+    // Retry ROLLBACK in a loop in case it gets canceled.
+    Retry::default()
+        .max_tries(5)
+        .clamp_backoff(Duration::from_millis(100))
+        .retry(|_| client2.batch_execute("ROLLBACK; SET CLUSTER = default"))
         .unwrap();
     assert_eq!(
         client2
@@ -1690,7 +1778,187 @@ fn test_subscribe_outlive_cluster() {
     );
 }
 
+/// Regression test for SQL-267. A blind INSERT packs its rows against the table's RelationDesc as
+/// of when it ran, but group commit resolves the append to whatever version is latest by the time
+/// it commits. An ALTER TABLE ADD COLUMN landing in between used to leave group commit encoding
+/// those rows against a wider descriptor, which panicked the persist table write worker and took
+/// environmentd down with it.
+///
+/// The window is a cross-thread gap, so the test drives it through the
+/// `insert_after_pack_before_commit` failpoint as a rendezvous: the INSERT blocks there and tells
+/// the test it has arrived, the test widens the table, then the test hands it back. No wall-clock
+/// waiting is involved, so there is no window to miss.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_insert_concurrent_alter_table() {
+    let server = test_util::TestHarness::default().start_blocking();
+    server.enable_feature_flags(&["enable_alter_table_add_column"]);
+
+    let mut ddl_client = server.connect(postgres::NoTls).unwrap();
+    ddl_client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    ddl_client
+        .batch_execute("INSERT INTO t VALUES (1)")
+        .unwrap();
+
+    // Arm only once setup is done, so it's the INSERT below that parks and not one of these.
+    let packed = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback("insert_after_pack_before_commit", {
+        let packed = Arc::clone(&packed);
+        let resume = Arc::clone(&resume);
+        move || {
+            // This runs on a worker of the server's runtime, and `resume` does not clear until the
+            // `ALTER TABLE` below has committed. That statement needs the runtime to get there:
+            // its catalog writes, the persist schema evolution, and the table registration all run
+            // as tasks, and the harness caps Consensus at a single connection, so a worker parked
+            // here can stall the statement, which in turn never releases the worker.
+            // `block_in_place` hands this worker's queue to another thread before parking.
+            tokio::task::block_in_place(|| {
+                packed.wait();
+                resume.wait();
+            });
+        }
+    })
+    .unwrap();
+
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    let (writer_tx, writer_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = writer_tx.send(writer.batch_execute("INSERT INTO t VALUES (100)"));
+    });
+
+    // Returns once the INSERT has packed its rows and reached the failpoint, so the ALTER below
+    // cannot land too early.
+    packed.wait();
+
+    // Widen the table while the INSERT's rows sit packed against the old schema.
+    ddl_client
+        .batch_execute("ALTER TABLE t ADD COLUMN b int")
+        .unwrap();
+
+    // Disarm before handing the INSERT back, so the one at the end of this test doesn't park at a
+    // rendezvous nobody is waiting on.
+    fail::remove("insert_after_pack_before_commit");
+    resume.wait();
+
+    let insert_res = writer_rx
+        .recv_timeout(Duration::from_secs(60))
+        .expect("INSERT finished");
+
+    // The rows were packed against the old schema, so this should come back as a serialization
+    // failure instead of getting appended.
+    let err = insert_res
+        .expect_err("stale write must be rejected")
+        .unwrap_db_error();
+    assert_eq!(err.code(), &SqlState::T_R_SERIALIZATION_FAILURE);
+    assert_contains!(err.message(), "was concurrently modified");
+
+    // The table still works at its new schema, and the rejected row didn't land.
+    let rows = ddl_client
+        .query("SELECT a, b FROM t ORDER BY a", &[])
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, i32>(0), 1);
+    assert_eq!(rows[0].get::<_, Option<i32>>(1), None);
+    ddl_client
+        .batch_execute("INSERT INTO t VALUES (9, 10)")
+        .unwrap();
+}
+
+// A SELECT whose `emit_timestamp_notice` notice is explained after an index it read was dropped
+// returns its rows without the notice, instead of aborting environmentd.
+//
+// The SELECT parks at the `timestamp_notice_before_dispatch` failpoint, after it has read through
+// the index and before the coordinator looks up the index's frontiers for the notice. The failpoint
+// is process-global, so the test relies on running in its own process, as nextest runs it.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_timestamp_notice_after_concurrent_index_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    for stmt in [
+        "CREATE TABLE t (a int)",
+        "INSERT INTO t VALUES (1)",
+        "CREATE DEFAULT INDEX t_idx ON t",
+    ] {
+        ddl_client.batch_execute(stmt).await.unwrap();
+    }
+
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let reader = server
+        .connect()
+        .notice_callback({
+            let notices = Arc::clone(&notices);
+            move |notice| {
+                notices
+                    .lock()
+                    .expect("not poisoned")
+                    .push(notice.message().to_string())
+            }
+        })
+        .await
+        .unwrap();
+    reader
+        .batch_execute("SET emit_timestamp_notice = true")
+        .await
+        .unwrap();
+    let has_timestamp_notice = || {
+        notices
+            .lock()
+            .expect("not poisoned")
+            .iter()
+            .any(|n| n.contains("EXPLAIN TIMESTAMP"))
+    };
+
+    reader.query("SELECT * FROM t", &[]).await.unwrap();
+    assert!(has_timestamp_notice(), "no timestamp notice without a drop");
+    notices.lock().expect("not poisoned").clear();
+
+    // Arm only once setup is done, so it's the SELECT below that parks.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback("timestamp_notice_before_dispatch", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            // This runs on a worker of the runtime that also has to run the `DROP INDEX` below.
+            // `block_in_place` hands this worker's queue to another thread before parking.
+            tokio::task::block_in_place(|| {
+                parked.wait();
+                resume.wait();
+            });
+        }
+    })
+    .unwrap();
+
+    let select = task::spawn(|| "reader_select", async move {
+        reader.query("SELECT * FROM t", &[]).await
+    });
+    task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
+
+    ddl_client.batch_execute("DROP INDEX t_idx").await.unwrap();
+
+    // Disarm before handing the SELECT back, so that no later statement parks.
+    fail::remove("timestamp_notice_before_dispatch");
+    task::spawn_blocking(|| "resume", move || resume.wait()).await;
+
+    let rows = select
+        .await
+        .expect("SELECT succeeds despite the dropped index");
+    assert_eq!(rows.len(), 1);
+    assert!(
+        !has_timestamp_notice(),
+        "timestamp notice despite the dropped index"
+    );
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -1741,6 +2009,7 @@ fn test_read_then_write_serializability() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_timestamp_recovery() {
     let now = Arc::new(Mutex::new(1));
     let now_fn = {
@@ -1786,6 +2055,7 @@ async fn test_strong_session_serializability() {
     test_session_linearizability("strong session serializable").await;
 }
 
+#[allow(clippy::disallowed_methods)]
 async fn test_session_linearizability(isolation_level: &str) {
     // Set the timestamp to zero for deterministic initial timestamps.
     let now = Arc::new(Mutex::new(0));
@@ -1928,6 +2198,7 @@ fn test_internal_users() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_internal_users_cluster() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -1949,6 +2220,7 @@ fn test_internal_users_cluster() {
 // Tests that you can have simultaneous connections on the internal and external ports without
 // crashing
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_internal_ports() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2006,6 +2278,7 @@ fn test_internal_ports() {
 // doesn't allow you to specify a connection and expect a failure which is
 // needed for this test.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_alter_system_invalid_param() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2035,6 +2308,7 @@ fn test_alter_system_invalid_param() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_concurrent_writes() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2092,6 +2366,7 @@ fn test_concurrent_writes() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_load_generator() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -2138,6 +2413,7 @@ fn test_load_generator() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_support_user_permissions() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2181,6 +2457,7 @@ fn test_support_user_permissions() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_idle_in_transaction_session_timeout() {
     #[track_caller]
     fn assert_db_error(error: tokio_postgres::Error, message: &str) {
@@ -2244,6 +2521,7 @@ fn test_idle_in_transaction_session_timeout() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_peek_on_dropped_cluster() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -2301,6 +2579,110 @@ fn test_peek_on_dropped_cluster() {
 }
 
 #[mz_ore::test]
+fn test_parse_error_codes() {
+    // Parse/cast and overflow failures should report data-exception (class 22)
+    // SQLSTATEs rather than the catch-all XX000 (INTERNAL_ERROR). Regression
+    // test for the fix tracked in SQL-326.
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    let cases: &[(&str, &SqlState)] = &[
+        // Out-of-range datetime value -> datetime_field_overflow (22008).
+        (
+            "SELECT '14714-12-31 18:01:00+00 BC'::date",
+            &SqlState::DATETIME_FIELD_OVERFLOW,
+        ),
+        // Malformed datetime string -> invalid_datetime_format (22007).
+        (
+            "SELECT 'not a date'::date",
+            &SqlState::INVALID_DATETIME_FORMAT,
+        ),
+        // Out-of-range float value -> numeric_value_out_of_range (22003).
+        (
+            "SELECT '1e400'::float8",
+            &SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+        ),
+        // Malformed integer string -> invalid_text_representation (22P02).
+        (
+            "SELECT 'abc'::integer",
+            &SqlState::INVALID_TEXT_REPRESENTATION,
+        ),
+        // Division by zero -> division_by_zero (22012). Previously XX000.
+        ("SELECT 1 / 0", &SqlState::DIVISION_BY_ZERO),
+        // Square root of a negative -> invalid_argument_for_power_function
+        // (2201F). Previously XX000.
+        (
+            "SELECT sqrt(-1.0)",
+            &SqlState::INVALID_ARGUMENT_FOR_POWER_FUNCTION,
+        ),
+        // More than one row from a scalar subquery -> cardinality_violation
+        // (21000). Previously XX000.
+        (
+            "SELECT (SELECT generate_series(1, 2))",
+            &SqlState::CARDINALITY_VIOLATION,
+        ),
+    ];
+
+    for (query, expected) in cases {
+        let err = client.query_one(*query, &[]).unwrap_err().unwrap_db_error();
+        assert_eq!(
+            err.code(),
+            *expected,
+            "unexpected SQLSTATE {} for query `{query}`: {}",
+            err.code().code(),
+            err.message(),
+        );
+    }
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_dataflow_error_codes() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a int4, b int4)")
+        .unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1, 0)").unwrap();
+
+    let cases: &[(&str, &SqlState)] = &[
+        ("SELECT a / b FROM t", &SqlState::DIVISION_BY_ZERO),
+        (
+            "SELECT 2147483647 + a FROM t",
+            &SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+        ),
+    ];
+
+    for (query, expected) in cases {
+        let err = client.query_one(*query, &[]).unwrap_err().unwrap_db_error();
+        assert_eq!(
+            err.code(),
+            *expected,
+            "unexpected SQLSTATE {} for query `{query}`: {}",
+            err.code().code(),
+            err.message(),
+        );
+    }
+
+    client
+        .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a / b AS x FROM t;")
+        .unwrap();
+    let err = client
+        .query_one("SELECT * FROM mv", &[])
+        .unwrap_err()
+        .unwrap_db_error();
+    assert_eq!(
+        err.code(),
+        &SqlState::DIVISION_BY_ZERO,
+        "unexpected SQLSTATE {} reading from materialized view: {}",
+        err.code().code(),
+        err.message(),
+    );
+}
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_emit_timestamp_notice() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2326,15 +2708,17 @@ fn test_emit_timestamp_notice() {
     let first_timestamp = Retry::default()
         .retry(|_| {
             loop {
-                match rx.try_next() {
-                    Ok(Some(msg)) => {
+                match rx.try_recv() {
+                    Ok(msg) => {
                         if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default())
                         {
                             let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
                             return Ok(mz_repr::Timestamp::from(ts));
                         }
                     }
-                    Ok(None) => panic!("unexpected channel close"),
+                    Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                        panic!("unexpected channel close")
+                    }
                     Err(e) => return Err(e),
                 }
             }
@@ -2346,8 +2730,8 @@ fn test_emit_timestamp_notice() {
         .retry(|_| {
             client.batch_execute("SELECT * FROM t").unwrap();
             loop {
-                match rx.try_next() {
-                    Ok(Some(msg)) => {
+                match rx.try_recv() {
+                    Ok(msg) => {
                         if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default())
                         {
                             let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
@@ -2358,7 +2742,9 @@ fn test_emit_timestamp_notice() {
                             return Err("not yet advanced");
                         }
                     }
-                    Ok(None) => panic!("unexpected channel close"),
+                    Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                        panic!("unexpected channel close")
+                    }
                     Err(_) => return Err("no messages available"),
                 }
             }
@@ -2367,6 +2753,7 @@ fn test_emit_timestamp_notice() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_isolation_level_notice() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2390,18 +2777,19 @@ fn test_isolation_level_notice() {
 
     Retry::default()
         .max_duration(Duration::from_secs(10))
-        .retry(|_| match rx.try_next() {
-            Ok(Some(msg)) => notice_re
+        .retry(|_| match rx.try_recv() {
+            Ok(msg) => notice_re
                 .captures(msg.message())
                 .ok_or("wrong message")
                 .map(|_| ()),
-            Ok(None) => panic!("unexpected channel close"),
+            Err(futures::channel::mpsc::TryRecvError::Closed) => panic!("unexpected channel close"),
             Err(_) => Err("no messages available"),
         })
         .unwrap();
 }
 
 #[test] // allow(test-attribute)
+#[allow(clippy::disallowed_methods)]
 fn test_emit_tracing_notice() {
     let server = test_util::TestHarness::default()
         .with_enable_tracing(true)
@@ -2427,8 +2815,8 @@ fn test_emit_tracing_notice() {
     let _row = client.query_one("SELECT 1;", &[]).unwrap();
 
     let tracing_re = Regex::new("trace id: (.*)").unwrap();
-    match rx.try_next() {
-        Ok(Some(msg)) => {
+    match rx.try_recv() {
+        Ok(msg) => {
             // assert the NOTICE we recieved contained a trace_id
             let captures = tracing_re.captures(msg.message()).expect("no matches?");
             let trace_id = captures.get(1).expect("trace_id not captured?").as_str();
@@ -2441,6 +2829,7 @@ fn test_emit_tracing_notice() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_subscribe_on_dropped_source() {
     fn test_subscribe_on_dropped_source_inner(
         server: &TestServerWithRuntime,
@@ -2510,10 +2899,18 @@ fn test_subscribe_on_dropped_source() {
 
     fn assert_subscribe_error(res: Result<(), tokio_postgres::error::Error>) {
         assert_err!(res);
+        let err = res.unwrap_db_error();
+        assert_eq!(
+            err.code(),
+            &SqlState::UNDEFINED_OBJECT,
+            "subscribe on a dropped dependency should report 42704, got {:?}: {}",
+            err.code(),
+            err.message()
+        );
         assert!(
-            res.unwrap_db_error()
-                .message()
-                .contains("subscribe has been terminated because underlying relation")
+            err.message().contains("relation") && err.message().contains("was dropped"),
+            "unexpected error message: {}",
+            err.message()
         );
     }
 
@@ -2534,6 +2931,7 @@ fn test_subscribe_on_dropped_source() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_dont_drop_sinks_twice() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2567,10 +2965,7 @@ fn test_dont_drop_sinks_twice() {
         .cancel_query(postgres::NoTls)
         .expect("failed to cancel subscribe");
     let err = out.read_to_end(&mut vec![]).unwrap_err();
-    assert!(
-        err.to_string_with_causes()
-            .contains("subscribe has been terminated")
-    );
+    assert!(err.to_string_with_causes().contains("was dropped"));
 
     drop(out);
     client_a.close().expect("failed to drop client");
@@ -2579,6 +2974,7 @@ fn test_dont_drop_sinks_twice() {
 // This can almost be tested with SLT using the simple directive, but
 // we have no way to disconnect sessions using SLT.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_mz_sessions() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -2713,6 +3109,7 @@ fn test_mz_sessions() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_auto_run_on_introspection_feature_enabled() {
     // unsafe_mode enables the feature as a whole
     let server = test_util::TestHarness::default()
@@ -2729,8 +3126,8 @@ fn test_auto_run_on_introspection_feature_enabled() {
         .unwrap();
 
     let mut assert_catalog_server_notice = |expected| {
-        match (rx.try_next(), expected) {
-            (Ok(Some(notice)), true) => {
+        match (rx.try_recv(), expected) {
+            (Ok(notice), true) => {
                 let msg = notice.message();
                 let expected = "query was automatically run on the \"mz_catalog_server\" cluster";
                 assert_eq!(msg, expected);
@@ -2740,7 +3137,7 @@ fn test_auto_run_on_introspection_feature_enabled() {
             (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
-        while let Ok(Some(_)) = rx.try_next() {}
+        while let Ok(_) = rx.try_recv() {}
     };
 
     // The notice we assert on only gets emitted at the DEBUG level
@@ -2807,6 +3204,7 @@ fn test_auto_run_on_introspection_feature_enabled() {
 const INTROSPECTION_NOTICE: &str = "results from querying these objects depend on the current values of the `cluster` and `cluster_replica` session variables";
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_auto_run_on_introspection_feature_disabled() {
     // unsafe_mode enables the feature as a whole
     let server = test_util::TestHarness::default()
@@ -2823,8 +3221,8 @@ fn test_auto_run_on_introspection_feature_disabled() {
         .unwrap();
 
     let mut assert_notice = |expected: Option<&str>| {
-        match (rx.try_next(), expected) {
-            (Ok(Some(notice)), Some(expected)) => {
+        match (rx.try_recv(), expected) {
+            (Ok(notice), Some(expected)) => {
                 let msg = notice.message();
                 assert!(msg.contains(expected));
             }
@@ -2833,7 +3231,7 @@ fn test_auto_run_on_introspection_feature_disabled() {
             (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
-        while let Ok(Some(_)) = rx.try_next() {}
+        while let Ok(_) = rx.try_recv() {}
     };
 
     // The notice we assert on only gets emitted at the DEBUG level
@@ -2883,6 +3281,7 @@ fn test_auto_run_on_introspection_feature_disabled() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_auto_run_on_introspection_per_replica_relations() {
     // unsafe_mode enables the feature as a whole
     let server = test_util::TestHarness::default()
@@ -2899,8 +3298,8 @@ fn test_auto_run_on_introspection_per_replica_relations() {
         .unwrap();
 
     let mut assert_notice = |expected: Option<&str>| {
-        match (rx.try_next(), expected) {
-            (Ok(Some(notice)), Some(expected)) => {
+        match (rx.try_recv(), expected) {
+            (Ok(notice), Some(expected)) => {
                 let msg = notice.message();
                 assert!(msg.contains(expected));
             }
@@ -2909,7 +3308,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
             (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
-        while let Ok(Some(_)) = rx.try_next() {}
+        while let Ok(_) = rx.try_recv() {}
     };
 
     // The notice we assert on only gets emitted at the DEBUG level
@@ -2962,6 +3361,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_pg_cancel_backend() {
     mz_ore::test::init_logging();
     let server = test_util::TestHarness::default().start_blocking();
@@ -2985,7 +3385,7 @@ fn test_pg_cancel_backend() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let _ = client1.batch_execute("CREATE TABLE t (i INT)").unwrap();
+    client1.batch_execute("CREATE TABLE t (i INT)").unwrap();
 
     // Start a thread to perform the cancel while the SUBSCRIBE is running in this thread.
     let handle = thread::spawn(move || {
@@ -3083,8 +3483,43 @@ fn test_pg_cancel_backend() {
     );
 }
 
+/// Regression test for SQL-295: `pg_cancel_backend(NULL)` used to panic while
+/// planning the call (`Datum::unwrap_int32 called on Null`). Like in
+/// PostgreSQL, a `NULL` argument must return `NULL` instead.
+#[mz_ore::test]
+fn test_pg_cancel_backend_null() {
+    mz_ore::test::init_logging();
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // A `NULL` argument returns `NULL`, matching PostgreSQL, rather than
+    // panicking. Cover the literal `NULL`, an explicitly-typed `NULL`, a `NULL`
+    // bound parameter, and an expression that evaluates to `NULL`.
+    for query in [
+        "SELECT pg_cancel_backend(NULL)",
+        "SELECT pg_cancel_backend(NULL::int4)",
+    ] {
+        let found_conn: Option<bool> = client.query_one(query, &[]).unwrap().get(0);
+        assert_eq!(found_conn, None, "query: {query}");
+    }
+
+    let found_conn: Option<bool> = client
+        .query_one("SELECT pg_cancel_backend($1)", &[&None::<i32>])
+        .unwrap()
+        .get(0);
+    assert_eq!(found_conn, None);
+
+    let found_conn: Option<bool> = client
+        .query_one("SELECT pg_cancel_backend($1 + 42)", &[&None::<i32>])
+        .unwrap()
+        .get(0);
+    assert_eq!(found_conn, None);
+}
+
 // Test params in interesting places.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_params() {
     mz_ore::test::init_logging();
     let server = test_util::TestHarness::default().start_blocking();
@@ -3139,6 +3574,7 @@ fn test_params() {
 
 // Test pg_cancel_backend after the authenticated role is dropped.
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_pg_cancel_dropped_role() {
     let server = test_util::TestHarness::default().start_blocking();
     let dropped_role = "r1";
@@ -3189,6 +3625,7 @@ fn test_pg_cancel_dropped_role() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_peek_on_dropped_indexed_view() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -3271,6 +3708,7 @@ fn test_peek_on_dropped_indexed_view() {
 /// Test AS OF in EXPLAIN. This output will only differ from the non-ASOF versions with RETAIN
 /// HISTORY, where the object and its indexes have differing compaction policies.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_explain_as_of() {
     // TODO: This would be better in testdrive, but we'd need to support negative intervals in AS
     // OF first.
@@ -3308,6 +3746,7 @@ async fn test_explain_as_of() {
 // Test that RETAIN HISTORY results in the since and upper being separated by the specified amount.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[ignore] // TODO: Reenable when database-issues#7450 is fixed
+#[allow(clippy::disallowed_methods)]
 async fn test_retain_history() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3443,6 +3882,7 @@ async fn test_retain_history() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_temporal_static_queries() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3543,6 +3983,7 @@ async fn test_temporal_static_queries() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_constant_materialized_view() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -3579,6 +4020,7 @@ async fn test_constant_materialized_view() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_explain_timestamp_blocking() {
     let server = test_util::TestHarness::default().start().await;
     server
@@ -3636,6 +4078,7 @@ async fn test_explain_timestamp_on_const_with_temporal() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_cancel_linearize_reads() {
     let server = test_util::TestHarness::default().start().await;
     server
@@ -3683,6 +4126,179 @@ async fn test_cancel_linearize_reads() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_cancel_linearize_commit_discards_set_local() {
+    let server = test_util::TestHarness::default().start().await;
+    server
+        .enable_feature_flags(&["enable_refresh_every_mvs", "allow_real_time_recency"])
+        .await;
+    let client = server.connect().await.unwrap();
+    let client_cancel = client.cancel_token();
+
+    // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
+    // to fix the test.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW const_mv WITH (REFRESH AT '30000-01-01 23:59') AS SELECT 2;",
+        )
+        .await
+        .unwrap();
+    client
+        .batch_execute("SET transaction_isolation = 'serializable';")
+        .await
+        .unwrap();
+
+    let (commit_sent_tx, commit_sent_rx) = oneshot::channel();
+    let (tx, rx) = oneshot::channel();
+
+    let commit_task = task::spawn(|| "commit task", async move {
+        client
+            .batch_execute(
+                "BEGIN;
+                 SET LOCAL transaction_isolation = 'strict serializable';
+                 SET LOCAL real_time_recency = true;",
+            )
+            .await
+            .unwrap();
+        // The since of const_mv is in the year 30,000, so the read's timestamp is too, and COMMIT
+        // waits for the timestamp oracle to catch up.
+        client
+            .query_one("SELECT * FROM const_mv;", &[])
+            .await
+            .unwrap();
+        commit_sent_tx.send(()).unwrap();
+        let err = client.batch_execute("COMMIT;").await.unwrap_err();
+        assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+        tx.send(()).unwrap();
+        client
+    });
+
+    commit_sent_rx.await.unwrap();
+    let (_, res) = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry_async_with_state(
+            (client_cancel, rx),
+            |_, (client_cancel, mut rx)| async move {
+                client_cancel.cancel_query(postgres::NoTls).await.unwrap();
+                let res = rx.try_recv();
+                ((client_cancel, rx), res)
+            },
+        )
+        .await;
+    res.unwrap();
+    let client = commit_task.await;
+
+    // NOTE: This must use the simple query protocol. An extended-protocol query first sends Parse
+    // and Sync, and that Sync ends an empty transaction, which would discard leaked values before
+    // the SHOW runs.
+    let shown: Vec<String> = client
+        .simple_query("SHOW transaction_isolation; SHOW real_time_recency;")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|m| match m {
+            postgres::SimpleQueryMessage::Row(row) => Some(row.get(0).unwrap().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        ["serializable", "off"],
+        "SET LOCAL values outlived their cancelled transaction"
+    );
+}
+
+/// A COMMIT whose write is queued for group commit and then cancelled must not leave its
+/// `SET LOCAL` values on the session.
+///
+/// Group commits run one at a time, so a group commit parked at the
+/// `group_commit_before_apply_write` failpoint holds the COMMIT in `pending_writes`, where the
+/// cancel finds it. The failpoint is process-global, so the test relies on running in its own
+/// process, as nextest runs it.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_cancel_group_commit_discards_set_local() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let client_cancel = client.cancel_token();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client
+        .batch_execute("SET transaction_isolation = 'serializable'")
+        .unwrap();
+    client
+        .batch_execute(
+            "BEGIN;
+             SET LOCAL transaction_isolation = 'strict serializable';
+             INSERT INTO t VALUES (1);",
+        )
+        .unwrap();
+
+    // Park the first group commit to reach the failpoint, whether it is the INSERT below or a
+    // table keepalive. Later ones pass through, so nothing waits on a rendezvous nobody is at.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    let first = Arc::new(AtomicBool::new(true));
+    fail::cfg_callback("group_commit_before_apply_write", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            if first.swap(false, Ordering::SeqCst) {
+                // This runs on a worker of the server's runtime, which the COMMIT and the cancel
+                // below need. `block_in_place` hands this worker's queue to another thread.
+                tokio::task::block_in_place(|| {
+                    parked.wait();
+                    resume.wait();
+                });
+            }
+        }
+    })
+    .unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    let writer_thread = thread::spawn(move || writer.batch_execute("INSERT INTO t VALUES (2)"));
+    parked.wait();
+
+    let (commit_tx, commit_rx) = std::sync::mpsc::channel();
+    let commit_thread = thread::spawn(move || {
+        commit_tx.send(client.batch_execute("COMMIT")).unwrap();
+        client
+    });
+    // A cancel that lands before the COMMIT is queued has no effect, so retry until it returns.
+    let commit_res = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            client_cancel.cancel_query(postgres::NoTls).unwrap();
+            commit_rx.try_recv()
+        })
+        .expect("COMMIT returned");
+    fail::remove("group_commit_before_apply_write");
+    resume.wait();
+    writer_thread.join().unwrap().unwrap();
+    let mut client = commit_thread.join().unwrap();
+
+    let err = commit_res.expect_err("COMMIT was cancelled");
+    assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+    // NOTE: This must use the simple query protocol, see
+    // `test_cancel_linearize_commit_discards_set_local`.
+    let shown: Vec<String> = client
+        .simple_query("SHOW transaction_isolation")
+        .unwrap()
+        .into_iter()
+        .filter_map(|m| match m {
+            postgres::SimpleQueryMessage::Row(row) => Some(row.get(0).unwrap().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        ["serializable"],
+        "SET LOCAL values outlived their cancelled transaction"
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_cancel_linearize_read_then_writes() {
     let server = test_util::TestHarness::default().start().await;
     server
@@ -3745,18 +4361,16 @@ async fn test_cancel_linearize_read_then_writes() {
     handle.await;
 }
 
-// Test that builtin objects are created in the schemas they advertise in builtin.rs.
+// Test that builtin objects are created in the schemas they advertise in the builtin submodules.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_builtin_schemas() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
 
-    let builtins_cfg = BuiltinsConfig {
-        include_continual_tasks: true,
-    };
     let mut builtins = BTreeMap::new();
-    for builtin in BUILTINS::iter(&builtins_cfg) {
+    for builtin in BUILTINS::iter() {
         builtins.insert(builtin.name(), builtin.schema());
     }
 
@@ -3783,7 +4397,7 @@ async fn test_builtin_schemas() {
         assert_eq!(
             builtin_schema,
             Some(&schema.as_str()),
-            "wrong schema for {name}, builtin.rs has {builtin_schema:?}, database has {schema}"
+            "wrong schema for {name}, builtin submodules have {builtin_schema:?}, database has {schema}"
         );
     }
 }
@@ -3793,6 +4407,7 @@ async fn test_builtin_schemas() {
 // others to fail.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_serialized_ddl_serial() {
     let server = test_util::TestHarness::default().start().await;
     let mut handles = Vec::new();
@@ -3831,6 +4446,7 @@ async fn test_serialized_ddl_serial() {
 // Test that serial DDLs are cancellable.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_serialized_ddl_cancel() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -3861,10 +4477,28 @@ async fn test_serialized_ddl_cancel() {
             .unwrap_err();
         err
     });
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    // Cancel the pending statement (this uses different cancellation logic and is the actual thing
-    // we are trying to test here).
-    cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
+    // Cancel the pending statement (this uses different cancellation logic, scanning the
+    // `serialized_ddl` queue, and is the actual thing we are trying to test here). There's a race
+    // for when client2's statement is actually enqueued behind client1's DDL lock, and another for
+    // when client1's optimization finishes and releases the lock (after which client2 would be
+    // dequeued and run to completion). Because both views depend on the unstable `mz_unsafe.mz_sleep`,
+    // a statement that escapes the queue fails with "cannot create view with unstable dependencies"
+    // rather than being canceled, which previously made this test flaky. Retry the cancel (as the
+    // `test_cancel_linearize_*` tests above do) until it lands while the statement is still pending.
+    let ((_, handle2), res) = Retry::default()
+        .clamp_backoff(Duration::from_millis(250))
+        .max_duration(Duration::from_secs(30))
+        .retry_async_with_state((cancel2, handle2), |_, (cancel2, handle2)| async move {
+            cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
+            let res = if handle2.is_finished() {
+                Ok(())
+            } else {
+                Err("pending statement not yet canceled".to_string())
+            };
+            ((cancel2, handle2), res)
+        })
+        .await;
+    res.unwrap();
     let err = handle2.await;
     assert_contains!(
         err.to_string_with_causes(),
@@ -3881,4 +4515,65 @@ async fn test_serialized_ddl_cancel() {
     // The mz_sleep calls above cause this test to not exit until the optimization tasks have fully
     // run, because spawn_blocking (used by optimization) are waited upon during Drop. Thus, don't
     // pass very high durations to mz_sleep so that we aren't waiting for long.
+}
+
+// Regression test for SQL-232: `GRANT ALL ON TABLE <view>` must not emit the
+// non-applicable-privilege-types notice. The shorthand expands to the full
+// table privilege set for PostgreSQL compatibility, but the user did not
+// explicitly request a non-applicable privilege, so warning is noisy. The
+// notice still fires when the user explicitly names a non-applicable
+// privilege like `GRANT INSERT, UPDATE ON TABLE <view>`.
+#[test] // allow(test-attribute)
+#[allow(clippy::disallowed_methods)]
+fn test_grant_all_on_view_suppresses_non_applicable_notice() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config()
+        .notice_callback(move |notice| {
+            tx.unbounded_send(notice).unwrap();
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    client.batch_execute("CREATE VIEW v AS SELECT 1").unwrap();
+    client.batch_execute("CREATE ROLE joe").unwrap();
+
+    // Drain any notices accumulated during setup.
+    while rx.try_recv().is_ok() {}
+
+    let non_applicable = |msg: &str| msg.contains("non-applicable privilege types");
+
+    // Explicit non-applicable privileges: the notice MUST fire.
+    client
+        .batch_execute("GRANT INSERT, UPDATE ON TABLE v TO joe")
+        .unwrap();
+    let saw_notice = Retry::default()
+        .max_duration(Duration::from_secs(5))
+        .retry(|_| match rx.try_recv() {
+            Ok(msg) if non_applicable(msg.message()) => Ok(()),
+            Ok(_) => Err("other notice, keep looking"),
+            Err(_) => Err("no notice yet"),
+        });
+    assert!(
+        saw_notice.is_ok(),
+        "expected non-applicable privilege types notice for explicit GRANT INSERT, UPDATE",
+    );
+
+    // `ALL` shorthand: the notice MUST NOT fire.
+    client.batch_execute("GRANT ALL ON TABLE v TO joe").unwrap();
+    client
+        .batch_execute("REVOKE ALL ON TABLE v FROM joe")
+        .unwrap();
+    client
+        .batch_execute("GRANT ALL PRIVILEGES ON TABLE v TO joe")
+        .unwrap();
+    while let Ok(msg) = rx.try_recv() {
+        assert!(
+            !non_applicable(msg.message()),
+            "unexpected non-applicable privilege types notice for `ALL` shorthand: {}",
+            msg.message(),
+        );
+    }
 }

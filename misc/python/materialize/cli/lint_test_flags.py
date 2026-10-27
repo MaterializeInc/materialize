@@ -22,7 +22,10 @@ from materialize.mzcompose import (
 )
 from materialize.parallel_workload.action import FlipFlagsAction
 
-CONFIG_REGEX = re.compile(r' Config::new\(\s*"([^"]+)"', re.MULTILINE)
+# Match both the bare `Config::new(` (imported via `use mz_dyncfg::Config`) and
+# the qualified `mz_dyncfg::Config::new(`, without matching unrelated third-party
+# Config types like `tokio_postgres::Config::new(`.
+CONFIG_REGEX = re.compile(r'(?: |mz_dyncfg::)Config::new\(\s*"([^"]+)"', re.MULTILINE)
 
 
 def main() -> int:
@@ -36,7 +39,12 @@ def main() -> int:
     configs = []
 
     for path in Path("src").rglob("*.rs"):
-        if path in [Path("src/dyncfg/src/lib.rs"), Path("src/dyncfg-file/src/lib.rs")]:
+        if path in [
+            Path("src/dyncfg/src/lib.rs"),
+            Path("src/dyncfg-file/src/lib.rs"),
+            # Has a local `Config` type unrelated to dyncfg.
+            Path("src/orchestratord/src/gcp_node_upgrade.rs"),
+        ]:
             continue  # contains tests
         with path.open(encoding="utf-8") as file:
             content = file.read()

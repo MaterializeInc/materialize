@@ -11,6 +11,12 @@ mode cockroach
 
 # Verify that the persist fast path only kicks in when it's expected to do so.
 
+# The ORDER BY and key-lookup cases below depend on this flag.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_fast_path_order = true
+----
+COMPLETE 0
+
 # Generate a table, with multiple batches of data and some partial overlaps
 statement ok
 CREATE TABLE numbers (
@@ -118,7 +124,7 @@ SELECT value from numbers LIMIT 5;
 statement ok
 CREATE MATERIALIZED VIEW erroring AS SELECT 10.0 / (value - 1) FROM numbers;
 
-query error db error: ERROR: Evaluation error: division by zero
+query error Evaluation error: division by zero
 SELECT * FROM erroring LIMIT 10;
 
 # Does not apply when the limit is high, or when mixed with features
@@ -209,6 +215,85 @@ Target cluster: quickstart
 
 EOF
 
+# The ORDER BY and key-lookup fast paths read rows in the shard's sort order and
+# stop early. That is only correct if the shard order matches SQL order:
+# negative before positive numbers, bytewise text, NULLs last. Each INSERT and
+# DELETE below writes its own batch, so the reads also consolidate across runs,
+# including a retraction of the row that would otherwise sort first. The LIMIT
+# is below the row count, so the early stop decides which rows come back.
+
+statement ok
+CREATE TABLE ordered (a int, b text);
+
+statement ok
+INSERT INTO ordered VALUES (3, 'c'), (NULL, 'n'), (-2, 'x');
+
+statement ok
+INSERT INTO ordered VALUES (1, 'b'), (-10, 'z'), (1, 'B');
+
+statement ok
+INSERT INTO ordered VALUES (2, 'q'), (-2, 'a');
+
+statement ok
+DELETE FROM ordered WHERE a = -10;
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM ordered ORDER BY a, b LIMIT 3;
+----
+Explained Query (fast path):
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] limit=3 output=[#0, #1]
+    PeekPersist materialize.public.ordered
+
+Target cluster: quickstart
+
+EOF
+
+query IT
+SELECT * FROM ordered ORDER BY a, b LIMIT 3;
+----
+-2 a
+-2 x
+1 B
+
+statement ok
+CREATE TABLE events (k int, v text);
+
+statement ok
+CREATE MATERIALIZED VIEW event_counts AS SELECT k, count(*) AS n FROM events GROUP BY k;
+
+statement ok
+INSERT INTO events VALUES (1, 'x'), (5, 'x'), (-5, 'x'), (9, 'x');
+
+statement ok
+INSERT INTO events VALUES (5, 'y');
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM event_counts WHERE k = 5;
+----
+Explained Query (fast path):
+  Filter (#0{k} = 5)
+    PeekPersist materialize.public.event_counts [value=(5)]
+
+Target cluster: quickstart
+
+EOF
+
+# The second INSERT retracted (5, 1) in a later batch.
+query II
+SELECT * FROM event_counts WHERE k = 5;
+----
+5 2
+
+query II
+SELECT * FROM event_counts WHERE k = -5;
+----
+-5 1
+
+# Filters beyond the key still apply.
+query II
+SELECT * FROM event_counts WHERE k = 5 AND n > 2;
+----
+
 # Check that we bound result set size correctly
 
 statement ok
@@ -231,7 +316,7 @@ ALTER SYSTEM SET enable_compute_peek_response_stash = false
 ----
 COMPLETE 0
 
-query error db error: ERROR: result exceeds max size of 1\.0 MiB
+query error result exceeds max size of 1\.0 MiB
 SELECT * FROM large_rows LIMIT 99;
 
 simple conn=mz_system,user=mz_system
@@ -244,7 +329,57 @@ ALTER SYSTEM RESET enable_compute_peek_response_stash
 ----
 COMPLETE 0
 
-# Does not apply when an index exists.
+# Persist-backed peeks enforce the same row iteration limit.
+#
+# The limit is per worker, so this needs a single-worker cluster to be
+# deterministic. Spread across several workers the same rows are walked a share
+# at a time and no single walk reaches the limit, which also makes a one-shot
+# query disagree with the indexed view --auto-index-selects wraps it in.
+statement ok
+CREATE CLUSTER peek_iteration_limit_cluster SIZE 'scale=1,workers=1'
+
+statement ok
+SET cluster TO 'peek_iteration_limit_cluster'
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_row_iteration_limit TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_peek_row_iteration_limit TO 2;
+----
+COMPLETE 0
+
+query error query exceeded the configured row iteration limit of 2 rows
+SELECT a FROM large_rows LIMIT 3;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_peek_row_iteration_limit TO 3;
+----
+COMPLETE 0
+
+query I rowsort
+SELECT a FROM large_rows LIMIT 3;
+----
+1
+2
+3
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET compute_peek_row_iteration_limit;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_peek_row_iteration_limit;
+----
+COMPLETE 0
+
+statement ok
+RESET cluster
+
+# The Persist fast path does not apply when an index exists.
 
 statement ok
 CREATE DEFAULT INDEX ON numbers;

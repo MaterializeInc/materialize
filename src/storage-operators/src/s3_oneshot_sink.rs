@@ -17,7 +17,6 @@ use std::rc::Rc;
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
 use differential_dataflow::Hashable;
-use differential_dataflow::containers::TimelyStack;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -31,11 +30,12 @@ use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use mz_timely_util::columnation::ColumnationStack;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::Broadcast;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::vec::Broadcast;
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tracing::debug;
 
@@ -58,10 +58,14 @@ mod pgcopy;
 ///
 /// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
 /// modulo the number of batches.
-pub fn copy_to<G, F>(
-    input_collection: Stream<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
-    err_stream: Stream<G, (DataflowError, G::Timestamp, Diff)>,
-    up_to: Antichain<G::Timestamp>,
+pub fn copy_to<'scope, F>(
+    input_collection: StreamVec<
+        'scope,
+        Timestamp,
+        Vec<ColumnationStack<((Row, ()), Timestamp, Diff)>>,
+    >,
+    err_stream: StreamVec<'scope, Timestamp, (DataflowError, Timestamp, Diff)>,
+    up_to: Antichain<Timestamp>,
     connection_details: S3UploadInfo,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
@@ -70,9 +74,9 @@ pub fn copy_to<G, F>(
     params: CopyToParameters,
     worker_callback: F,
     output_batch_count: u64,
+    enforce_external_addresses: bool,
 ) -> Rc<dyn Any>
 where
-    G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
 {
     let scope = input_collection.scope();
@@ -83,7 +87,7 @@ where
         render_initialization_operator(scope.clone(), sink_id, up_to.clone(), err_stream);
 
     let (completion_stream, upload_token) = match connection_details.format {
-        S3SinkFormat::PgCopy(_) => render_upload_operator::<G, pgcopy::PgCopyUploader>(
+        S3SinkFormat::PgCopy(_) => render_upload_operator::<pgcopy::PgCopyUploader>(
             scope.clone(),
             connection_context.clone(),
             aws_connection.clone(),
@@ -95,8 +99,9 @@ where
             start_stream,
             params,
             output_batch_count,
+            enforce_external_addresses,
         ),
-        S3SinkFormat::Parquet => render_upload_operator::<G, parquet::ParquetUploader>(
+        S3SinkFormat::Parquet => render_upload_operator::<parquet::ParquetUploader>(
             scope.clone(),
             connection_context.clone(),
             aws_connection.clone(),
@@ -108,6 +113,7 @@ where
             start_stream,
             params,
             output_batch_count,
+            enforce_external_addresses,
         ),
     };
 
@@ -120,6 +126,7 @@ where
         s3_key_manager,
         completion_stream,
         worker_callback,
+        enforce_external_addresses,
     );
 
     Rc::new(vec![start_token, upload_token, completion_token])
@@ -133,15 +140,15 @@ where
 ///
 /// Returns the `start_stream` with an error received in the `err_stream`, if
 /// any, otherwise `Ok(())`.
-fn render_initialization_operator<G>(
-    scope: G,
+fn render_initialization_operator<'scope>(
+    scope: Scope<'scope, Timestamp>,
     sink_id: GlobalId,
-    up_to: Antichain<G::Timestamp>,
-    err_stream: Stream<G, (DataflowError, G::Timestamp, Diff)>,
-) -> (Stream<G, Result<(), String>>, PressOnDropButton)
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+    up_to: Antichain<Timestamp>,
+    err_stream: StreamVec<'scope, Timestamp, (DataflowError, Timestamp, Diff)>,
+) -> (
+    StreamVec<'scope, Timestamp, Result<(), String>>,
+    PressOnDropButton,
+) {
     let worker_id = scope.index();
     let num_workers = scope.peers();
     let leader_id = usize::cast_from((sink_id, "initialization").hashed()) % num_workers;
@@ -156,7 +163,7 @@ where
     // This should be at-most 1 incoming error per-worker due to the filtering of this stream
     // in `CopyToS3OneshotSinkConnection::render_continuous_sink`.
     let mut error_handle = builder.new_input_for(
-        &err_stream,
+        err_stream,
         Exchange::new(move |_| u64::cast_from(leader_id)),
         &start_handle,
     );
@@ -206,18 +213,18 @@ where
 ///
 /// This cleanup work removes the INCOMPLETE sentinel file (see description
 /// of `render_initialization_operator` for more details).
-fn render_completion_operator<G, F>(
-    scope: G,
+fn render_completion_operator<'scope, F>(
+    scope: Scope<'scope, Timestamp>,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
     connection_id: CatalogItemId,
     sink_id: GlobalId,
     s3_key_manager: S3KeyManager,
-    completion_stream: Stream<G, Result<u64, String>>,
+    completion_stream: StreamVec<'scope, Timestamp, Result<u64, String>>,
     worker_callback: F,
+    enforce_external_addresses: bool,
 ) -> PressOnDropButton
 where
-    G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
 {
     let worker_id = scope.index();
@@ -227,7 +234,7 @@ where
 
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-completion".to_string(), scope.clone());
 
-    let mut completion_input = builder.new_disconnected_input(&completion_stream, Pipeline);
+    let mut completion_input = builder.new_disconnected_input(completion_stream, Pipeline);
 
     let button = builder.build(move |_| async move {
         // fallible async block to use the `?` operator for convenience
@@ -249,7 +256,12 @@ where
             if is_leader {
                 debug!(%sink_id, %worker_id, "s3 leader worker completion");
                 let sdk_config = aws_connection
-                    .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+                    .load_sdk_config(
+                        &connection_context,
+                        connection_id,
+                        InTask::Yes,
+                        enforce_external_addresses,
+                    )
                     .await?;
 
                 let client = mz_aws_util::s3::new_client(&sdk_config);
@@ -290,30 +302,37 @@ where
 ///
 /// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
 /// modulo the number of batches.
-fn render_upload_operator<G, T>(
-    scope: G,
+fn render_upload_operator<'scope, T>(
+    scope: Scope<'scope, Timestamp>,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
     connection_id: CatalogItemId,
     connection_details: S3UploadInfo,
     sink_id: GlobalId,
-    input_collection: Stream<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
-    up_to: Antichain<G::Timestamp>,
-    start_stream: Stream<G, Result<(), String>>,
+    input_collection: StreamVec<
+        'scope,
+        Timestamp,
+        Vec<ColumnationStack<((Row, ()), Timestamp, Diff)>>,
+    >,
+    up_to: Antichain<Timestamp>,
+    start_stream: StreamVec<'scope, Timestamp, Result<(), String>>,
     params: CopyToParameters,
     output_batch_count: u64,
-) -> (Stream<G, Result<u64, String>>, PressOnDropButton)
+    enforce_external_addresses: bool,
+) -> (
+    StreamVec<'scope, Timestamp, Result<u64, String>>,
+    PressOnDropButton,
+)
 where
-    G: Scope<Timestamp = Timestamp>,
     T: CopyToS3Uploader,
 {
     let worker_id = scope.index();
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-uploader".to_string(), scope.clone());
 
-    let mut input_handle = builder.new_disconnected_input(&input_collection, Pipeline);
+    let mut input_handle = builder.new_disconnected_input(input_collection, Pipeline);
     let (completion_handle, completion_stream) =
         builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut start_handle = builder.new_input_for(&start_stream, Pipeline, &completion_handle);
+    let mut start_handle = builder.new_input_for(start_stream, Pipeline, &completion_handle);
 
     let button = builder.build(move |caps| async move {
         let [completion_cap] = caps.try_into().unwrap();
@@ -338,7 +357,12 @@ where
         // fallible async block to use the `?` operator for convenience
         let res = async move {
             let sdk_config = aws_connection
-                .load_sdk_config(&connection_context, connection_id, InTask::Yes)
+                .load_sdk_config(
+                    &connection_context,
+                    connection_id,
+                    InTask::Yes,
+                    enforce_external_addresses,
+                )
                 .await?;
 
             // Map of an uploader per batch.

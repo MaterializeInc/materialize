@@ -1,0 +1,99 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+import { sql } from "kysely";
+
+import { queryBuilder } from "~/api/materialize";
+import {
+  buildHydrationStatusesTable,
+  buildSourceExportsQuery,
+} from "~/api/materialize/expressionBuilders";
+
+export interface HydrationAggregateRow {
+  object_id: string;
+  hydratedReplicas: bigint | null;
+  totalReplicas: bigint | null;
+  sourceStatus: string | null;
+  sourceError: string | null;
+  snapshotCommitted: boolean | null;
+  /** Set for subsources and source-fed tables: the source ingesting them. */
+  parentSourceId: string | null;
+}
+
+/**
+ * One row per object: how many of its replicas report `hydrated = true` out of
+ * the total replicas recorded in `mz_hydration_statuses`, plus, for sources
+ * and the subsources and tables they ingest into, their ingestion status,
+ * error, snapshot flag, and parent source.
+ *
+ * Source status rides on this feed rather than its own SUBSCRIBE: it is the
+ * same one-row-per-object grain, and `mz_hydration_statuses` already reads
+ * `mz_source_statistics`, so this adds no new frontier dependency. The join
+ * with `mz_source_statuses` is FULL so webhook sources, which have a status but
+ * no hydration rows, still get a row.
+ *
+ * `snapshot_committed` is aggregated with `bool_and`, so a source only reads as
+ * committed once every replica reporting statistics agrees. A replica that has
+ * not reported yet contributes no row, so a scale-up cannot flip a committed
+ * source back to snapshotting. Statistics rows can outlive their replica, so
+ * the aggregate is restricted to live replicas (keeping rows with no
+ * `replica_id`, which is how webhook sources report); a dropped replica's
+ * stale row must not pin the flag.
+ *
+ * Progress collections are excluded: the UI hides them, and every source
+ * carries one. Subsources only appear through their status. They also have
+ * hydration rows, but the UI reports them by ingestion status like their
+ * parent.
+ */
+export function buildHydrationAggregateQuery() {
+  const hydration = queryBuilder
+    .selectFrom(buildHydrationStatusesTable().as("hs"))
+    .select((eb) => [
+      "hs.object_id",
+      sql<bigint>`count(*) FILTER (WHERE ${eb.ref("hs.hydrated")})`.as(
+        "hydratedReplicas",
+      ),
+      sql<bigint>`count(*)`.as("totalReplicas"),
+    ])
+    .groupBy("hs.object_id");
+
+  const statuses = queryBuilder
+    .selectFrom("mz_source_statuses")
+    .where("type", "<>", "progress")
+    .select(["id", "status", "error"]);
+
+  const snapshotCommittedBySource = queryBuilder
+    .selectFrom("mz_source_statistics as st")
+    .leftJoin("mz_cluster_replicas as r", "r.id", "st.replica_id")
+    .where((eb) =>
+      eb.or([eb("r.id", "is not", null), eb("st.replica_id", "is", null)]),
+    )
+    .select((eb) => [
+      "st.id",
+      sql<boolean | null>`bool_and(${eb.ref("st.snapshot_committed")})`.as(
+        "snapshotCommitted",
+      ),
+    ])
+    .groupBy("st.id");
+
+  return queryBuilder
+    .selectFrom(hydration.as("h"))
+    .fullJoin(statuses.as("ss"), "ss.id", "h.object_id")
+    .leftJoin(snapshotCommittedBySource.as("stats"), "stats.id", "ss.id")
+    .leftJoin(buildSourceExportsQuery().as("ep"), "ep.exportId", "ss.id")
+    .select([
+      sql<string>`coalesce(h.object_id, ss.id)`.as("object_id"),
+      "h.hydratedReplicas",
+      "h.totalReplicas",
+      "ss.status as sourceStatus",
+      "ss.error as sourceError",
+      "stats.snapshotCommitted",
+      "ep.sourceId as parentSourceId",
+    ]);
+}

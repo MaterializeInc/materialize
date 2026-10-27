@@ -20,6 +20,7 @@ import random
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -33,15 +34,15 @@ import yaml
 from psycopg import sql as psycopg_sql
 from semver.version import Version
 
-from materialize import MZ_ROOT, buildkite, ci_util, git, spawn
+from materialize import MZ_ROOT, buildkite, ci_util, spawn
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.service import Service as ServiceDefinition
 from materialize.mzcompose.services.balancerd import Balancerd
-from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.environmentd import Environmentd
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.mz_debug import MzDebug
@@ -64,11 +65,21 @@ SERVICES = [
     Testdrive(),
     Orchestratord(),
     Environmentd(),
-    Clusterd(),
+    # orchestratord deploys clusterd and console pods with the standalone
+    # materialize/clusterd and materialize/console images (at the same tag
+    # as environmentd), so those exact images must be built and loaded into
+    # kind. The Clusterd compose service would resolve to the `materialized`
+    # fat image instead, leaving materialize/clusterd:<tag> nowhere to be
+    # found when the tag was never published (e.g. when running against a
+    # local commit).
+    ServiceDefinition(name="clusterd", config={"mzbuild": "clusterd"}),
+    ServiceDefinition(name="console", config={"mzbuild": "console"}),
     Balancerd(),
     MzDebug(),
     Mz(app_password=""),
 ]
+
+KIND_CLUSTER_NAME = "kind"
 
 
 def run_mz_debug() -> None:
@@ -91,7 +102,7 @@ def get_tag(tag: str | None = None) -> str:
     # We can't use the mzbuild tag because it has a different fingerprint for
     # environmentd/clusterd/balancerd and the orchestratord depends on them
     # being identical.
-    return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+    return tag or ci_util.dev_docker_tag()
 
 
 def get_version(tag: str | None = None) -> MzVersion:
@@ -99,7 +110,7 @@ def get_version(tag: str | None = None) -> MzVersion:
 
 
 def get_image(image: str, tag: str | None) -> str:
-    return f'{image.rsplit(":", 1)[0]}:{get_tag(tag)}'
+    return f"{image.rsplit(':', 1)[0]}:{get_tag(tag)}"
 
 
 def get_upgrade_target(
@@ -158,11 +169,79 @@ def get_pod_data(
     )
 
 
+def get_current_operator_pod_template_hash() -> str | None:
+    """The `pod-template-hash` of the operator deployment's current revision,
+    or None if it can't be determined because the operator isn't installed.
+
+    A Deployment records the revision it is currently rolling out in an
+    annotation, and each ReplicaSet it owns records the revision it was created
+    for, so the ReplicaSet whose revision matches is the current one. The
+    deployment is looked up by label rather than by name so that this keeps
+    working across the chart versions the upgrade tests install.
+    """
+
+    def get_operator_resources(kind: str) -> list[dict[str, Any]]:
+        return json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    kind,
+                    "-l",
+                    "app.kubernetes.io/instance=operator",
+                    "-n",
+                    "materialize",
+                    "-o",
+                    "json",
+                ]
+            )
+        )["items"]
+
+    def revision(resource: dict[str, Any]) -> str | None:
+        annotations = resource["metadata"].get("annotations") or {}
+        return annotations.get("deployment.kubernetes.io/revision")
+
+    deployments = get_operator_resources("deployment")
+    if len(deployments) != 1:
+        return None
+    current_revision = revision(deployments[0])
+    if current_revision is None:
+        return None
+
+    for replicaset in get_operator_resources("replicaset"):
+        if revision(replicaset) == current_revision:
+            return replicaset["metadata"]["labels"].get("pod-template-hash")
+    return None
+
+
 def get_orchestratord_data() -> dict[str, Any]:
-    return get_pod_data(
+    data = get_pod_data(
         labels={"app.kubernetes.io/instance": "operator"},
         namespace="materialize",
     )
+    # A rollout of the operator leaves pods of the previous generation around,
+    # both terminating ones and (while the replacements come up) ones that are
+    # still running. Callers only care about the pods that are here to stay, so
+    # keep only the current generation. Falling back to dropping just the
+    # terminating pods keeps this usable before the deployment exists.
+    pod_template_hash = get_current_operator_pod_template_hash()
+    data["items"] = [
+        pod
+        for pod in data["items"]
+        if pod["metadata"].get("deletionTimestamp") is None
+        and (
+            pod_template_hash is None
+            or pod["metadata"]["labels"].get("pod-template-hash") == pod_template_hash
+        )
+    ]
+    # Callers index into the pods, and the filtering above can transiently leave
+    # nothing behind: a new ReplicaSet carries the deployment's revision before
+    # its pods exist. Fail with something readable rather than an IndexError.
+    assert data["items"], (
+        "found no operator pods of the current deployment revision "
+        f"(pod-template-hash {pod_template_hash})"
+    )
+    return data
 
 
 def get_balancerd_data() -> dict[str, Any]:
@@ -181,6 +260,194 @@ def get_environmentd_data() -> dict[str, Any]:
     return get_pod_data(
         labels={"materialize.cloud/app": "environmentd"},
     )
+
+
+def get_clusterd_data() -> dict[str, Any]:
+    return get_pod_data(
+        labels={"environmentd.materialize.cloud/namespace": "cluster"},
+    )
+
+
+def get_console_app_config(namespace="materialize-environment") -> dict[str, Any]:
+    """Return the parsed contents of the console's `app-config.json` configmap."""
+    data = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "configmap",
+                "-l",
+                "materialize.cloud/app=console",
+                "-n",
+                namespace,
+                "-o",
+                "json",
+            ]
+        )
+    )
+    items = data["items"]
+    assert len(items) == 1, f"Expected exactly one console configmap, but got {items}"
+    return json.loads(items[0]["data"]["app-config.json"])
+
+
+def ensure_kind_version() -> None:
+    kind_version = Version.parse(spawn.capture(["kind", "version"]).split(" ")[1][1:])
+    assert kind_version >= Version.parse(
+        "0.32.0"
+    ), f"kind >= v0.32.0 required, while you are on {kind_version}"
+
+
+def stop_and_remove_container(container_name: str) -> None:
+    try:
+        spawn.runv(["docker", "stop", container_name])
+    except:
+        pass
+    try:
+        spawn.runv(["docker", "rm", container_name])
+    except:
+        pass
+
+
+REGISTRY_PROXY_IMAGE = "registry:2"
+
+
+def pull_registry_proxy_image(max_attempts: int = 5) -> None:
+    # Docker Hub sporadically answers 502 Bad Gateway (on the token endpoint or
+    # on blob downloads), which made the implicit pull in `docker run` fail
+    # with exit status 125 before any test ran, so pull explicitly with retries.
+    delay = 2
+    for attempt in range(1, max_attempts + 1):
+        try:
+            spawn.runv(["docker", "pull", REGISTRY_PROXY_IMAGE])
+            return
+        except subprocess.CalledProcessError:
+            if attempt == max_attempts:
+                raise
+            print(
+                f"Pulling {REGISTRY_PROXY_IMAGE} failed (attempt {attempt}/{max_attempts}), retrying in {delay}s"
+            )
+            time.sleep(delay)
+            delay *= 2
+
+
+def start_registry_proxy(
+    *,
+    container_name: str,
+    cache_dir: str,
+    remote_url: str,
+    username: str | None = None,
+    password: str | None = None,
+) -> None:
+    env = ["-e", f"REGISTRY_PROXY_REMOTEURL={remote_url}"]
+    if username and password:
+        env.extend(
+            [
+                "-e",
+                f"REGISTRY_PROXY_USERNAME={username}",
+                "-e",
+                f"REGISTRY_PROXY_PASSWORD={password}",
+            ]
+        )
+
+    spawn.runv(
+        [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            container_name,
+            "--restart=always",
+            "--net=kind",
+            "-v",
+            cache_dir,
+            *env,
+            REGISTRY_PROXY_IMAGE,
+        ]
+    )
+
+
+def render_kind_cluster_config() -> None:
+    with (
+        open(MZ_ROOT / "test" / "orchestratord" / "cluster.yaml.tmpl") as in_file,
+        open(MZ_ROOT / "test" / "orchestratord" / "cluster.yaml", "w") as out_file,
+    ):
+        text = in_file.read()
+        out_file.write(
+            text.replace(
+                "$DOCKER_CONFIG",
+                os.getenv("DOCKER_CONFIG", f"{os.environ['HOME']}/.docker"),
+            )
+        )
+
+
+def install_metrics_server() -> None:
+    spawn.runv(
+        [
+            "helm",
+            "repo",
+            "add",
+            "metrics-server",
+            "https://kubernetes-sigs.github.io/metrics-server/",
+        ]
+    )
+    spawn.runv(["helm", "repo", "update", "metrics-server"])
+    spawn.runv(
+        [
+            "helm",
+            "install",
+            "metrics-server",
+            "metrics-server/metrics-server",
+            "--namespace",
+            "kube-system",
+            "--set",
+            "args={--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP}",
+        ]
+    )
+
+
+def recreate_kind_cluster() -> None:
+    ensure_kind_version()
+
+    spawn.runv(["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME])
+
+    try:
+        spawn.runv(["docker", "network", "create", "kind"])
+    except:
+        pass
+
+    stop_and_remove_container("proxy-dockerhub")
+    stop_and_remove_container("proxy-ghcr")
+
+    pull_registry_proxy_image()
+    start_registry_proxy(
+        container_name="proxy-dockerhub",
+        cache_dir=f"{MZ_ROOT}/misc/kind/cache/dockerhub:/var/lib/registry",
+        remote_url="https://registry-1.docker.io",
+        username=os.getenv("DOCKERHUB_USERNAME"),
+        password=os.getenv("DOCKERHUB_ACCESS_TOKEN"),
+    )
+    start_registry_proxy(
+        container_name="proxy-ghcr",
+        cache_dir=f"{MZ_ROOT}/misc/kind/cache/ghcr:/var/lib/registry",
+        remote_url="https://ghcr.io",
+        username="materialize-bot",
+        password=os.getenv("GITHUB_GHCR_TOKEN"),
+    )
+
+    render_kind_cluster_config()
+    spawn.runv(
+        [
+            "kind",
+            "create",
+            "cluster",
+            "--name",
+            KIND_CLUSTER_NAME,
+            "--config",
+            MZ_ROOT / "test" / "orchestratord" / "cluster.yaml",
+        ]
+    )
+
+    retry(install_metrics_server, 20)
 
 
 @contextmanager
@@ -235,7 +502,7 @@ def port_forward_environmentd(
 
 def retry(fn: Callable, timeout: int) -> None:
     end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=timeout)
+        datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=timeout)
     ).timestamp()
     while time.time() < end_time:
         try:
@@ -245,6 +512,47 @@ def retry(fn: Callable, timeout: int) -> None:
             pass
         time.sleep(1)
     fn()
+
+
+def download_repo_file_at_tag(path: str, tag: str) -> bytes:
+    """Fetch a repository file at a git tag from GitHub.
+
+    Uses the authenticated Contents API when GITHUB_TOKEN is set (5000
+    requests/hour), which is what CI relies on. Falls back to anonymous
+    raw.githubusercontent.com otherwise. Anonymous raw content throttles
+    shared CI IPs with 429, so retry with backoff on rate-limit and 5xx
+    statuses, honoring Retry-After when present. The Contents API also
+    occasionally answers 404 for a path that exists at the tag, so 404 is
+    retried too; a genuine 404 surfaces after the full backoff.
+    """
+    token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+        "GITHUB_TOKEN"
+    )
+    if token:
+        url = f"https://api.github.com/repos/MaterializeInc/materialize/contents/{path}?ref={tag}"
+        headers = {
+            "Accept": "application/vnd.github.raw",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+    else:
+        url = f"https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/{tag}/{path}"
+        headers = {}
+
+    delay = 2.0
+    for _ in range(8):
+        response = requests.get(url, headers=headers, timeout=30)
+        if response.status_code == 200:
+            return response.content
+        if response.status_code not in (404, 429, 500, 502, 503, 504):
+            break
+        wait = float(response.headers.get("Retry-After", delay))
+        print(f"Got {response.status_code} for {url}, retrying in {wait}s")
+        time.sleep(wait)
+        delay = min(delay * 2, 60)
+    raise AssertionError(
+        f"Failed to download {path} at {tag} from {url}: {response.status_code}"
+    )
 
 
 # TODO: Cover src/cloud-resources/src/crd/materialize.rs
@@ -263,7 +571,7 @@ class Modification:
     def to_dict(self) -> dict[str, Any]:
         return {"modification": self.__class__.__name__, "value": self.value}
 
-    def __eq__(self, other: "Modification"):
+    def __eq__(self, other: object):
         if not isinstance(other, self.__class__):
             return NotImplemented
         return self.value == other.value
@@ -442,7 +750,7 @@ class BalancerdEnabled(Modification):
                 assert not result, f"Unexpected result: {result}"
 
         # Balancerd can take a while to start up
-        retry(check, 120)
+        retry(check, 240)
 
 
 class BalancerdNodeSelector(Modification):
@@ -482,7 +790,88 @@ class BalancerdNodeSelector(Modification):
                 assert not balancerd["items"], f"Unexpected items: {balancerd['items']}"
 
         # Balancerd can take a while to start up
-        retry(check, 120)
+        retry(check, 240)
+
+
+# Must match test/orchestratord/priorityclass.yaml.
+PRIORITY_CLASS_NAME = "mz-test-priority"
+PRIORITY_CLASS_VALUE = 1000000000
+# Release in which environmentd learned
+# --orchestrator-kubernetes-priority-class-name. Must match `V26_42_0` in
+# src/orchestratord/src/controller/materialize/generation.rs: the operator
+# forwards the flag from 26.42.0-dev.0 on, so the gate has to name the -dev.0
+# prerelease or every 26.42.0 release candidate sorts below it.
+PRIORITY_CLASS_VERSION = "v26.42.0-dev.0"
+
+
+def assert_priority_class(pod: dict[str, Any], expected: str | None) -> None:
+    """Assert a pod's priority class by name and by resolved value.
+
+    `spec.priority` is filled in by the API server from the named class, so
+    checking it is what distinguishes a class Kubernetes actually resolved from
+    a string the operator copied into the spec.
+    """
+    spec = pod["spec"]
+    name = pod["metadata"]["name"]
+    actual = spec.get("priorityClassName")
+    priority = spec.get("priority")
+    if expected is None:
+        assert not actual, f"{name}: unexpected priorityClassName {actual}"
+        assert not priority, f"{name}: unexpected priority {priority}"
+    else:
+        assert actual == expected, f"{name}: expected {expected}, got {actual}"
+        assert (
+            priority == PRIORITY_CLASS_VALUE
+        ), f"{name}: expected priority {PRIORITY_CLASS_VALUE}, got {priority}"
+
+
+class PriorityClassName(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [None, PRIORITY_CLASS_NAME]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if not self.value:
+            return
+        definition["operator"]["environmentd"]["priorityClassName"] = self.value
+        definition["operator"]["clusterd"]["priorityClassName"] = self.value
+        # environmentd and clusterd only pick up generation-affecting changes on
+        # a requested rollout, so without this the pods keep the spec they were
+        # created with and the assertions below check the wrong generation.
+        request = str(uuid.uuid4())
+        if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+            definition["materialize"]["spec"]["requestRollout"] = request
+        definition["materialize"]["spec"]["forceRollout"] = request
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+        # The operator sets environmentd's class directly, but forwards
+        # clusterd's to environmentd behind a version gate, so an older image
+        # gets one and not the other.
+        clusterd_expected = (
+            self.value
+            if version >= MzVersion.parse_mz(PRIORITY_CLASS_VERSION)
+            else None
+        )
+
+        def check() -> None:
+            environmentd = get_environmentd_data()["items"]
+            clusterd = get_clusterd_data()["items"]
+            # A class the API server cannot resolve yields no pod at all, which
+            # an assertion over an empty list would otherwise call a pass.
+            assert environmentd, "no environmentd pods"
+            assert clusterd, "no clusterd pods"
+            for pod in environmentd:
+                assert_priority_class(pod, self.value)
+            for pod in clusterd:
+                assert_priority_class(pod, clusterd_expected)
+
+        # Clusterd is recreated by the rollout and can take a while
+        retry(check, 240)
 
 
 class ConsoleEnabled(Modification):
@@ -498,35 +887,34 @@ class ConsoleEnabled(Modification):
         definition["operator"]["console"]["enabled"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
-        # TODO: https://github.com/MaterializeInc/database-issues/issues/9984
-        pass
-        # # TODO: Should this work with older versions? Fails in upgrade chain: AssertionError: Unexpected result: pod/mz9bvcfyoxae-console-654bd7f8f5-fbv4q
-        # if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
-        #     "v0.148.0"
-        # ):
-        #     return
+        # TODO: Should this work with older versions? Fails in upgrade chain: AssertionError: Unexpected result: pod/mz9bvcfyoxae-console-654bd7f8f5-fbv4q
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v0.148.0"
+        ):
+            return
 
-        # def check() -> None:
-        #     result = spawn.capture(
-        #         [
-        #             "kubectl",
-        #             "get",
-        #             "pods",
-        #             "-l",
-        #             "app=console",
-        #             "-n",
-        #             "materialize-environment",
-        #             "-o",
-        #             "name",
-        #         ],
-        #     )
-        #     if self.value:
-        #         assert result, f"Unexpected result: {result}"
-        #     else:
-        #         assert not result, f"Unexpected result: {result}"
-        #
-        # # Console can take a while to start up
-        # retry(check, 120)
+        def check() -> None:
+            pass  # TODO: https://linear.app/materializeinc/issue/DB-105
+            # result = spawn.capture(
+            #     [
+            #         "kubectl",
+            #         "get",
+            #         "pods",
+            #         "-l",
+            #         "app=console",
+            #         "-n",
+            #         "materialize-environment",
+            #         "-o",
+            #         "name",
+            #     ],
+            # )
+            # if self.value:
+            #     assert result, f"Unexpected result: {result}"
+            # else:
+            #     assert not result, f"Unexpected result: {result}"
+
+        # Console can take a while to start up
+        retry(check, 120)
 
 
 class EnableRBAC(Modification):
@@ -580,11 +968,35 @@ class EnvironmentdImageRef(Modification):
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         def check() -> None:
             environmentd = get_environmentd_data()
-            image = environmentd["items"][0]["spec"]["containers"][0]["image"]
-            expected = f"materialize/environmentd:{self.value}"
-            assert (
-                image == expected or f"ghcr.io/materializeinc/{image}" == expected
-            ), f"Expected environmentd image {expected}, but found {image}"
+            for item in environmentd["items"]:
+                # Skip terminating pods from a previous rolling update
+                if item.get("metadata", {}).get("deletionTimestamp"):
+                    continue
+                image = item["spec"]["containers"][0]["image"]
+                expected = f"materialize/environmentd:{self.value}"
+                assert (
+                    image == expected or f"ghcr.io/materializeinc/{image}" == expected
+                ), f"Expected environmentd image {expected}, but found {image}"
+
+            balancerd = get_balancerd_data()
+            for item in balancerd["items"]:
+                # Skip terminating pods from a previous rolling update
+                if item.get("metadata", {}).get("deletionTimestamp"):
+                    continue
+                image = item["spec"]["containers"][0]["image"]
+                expected = f"materialize/balancerd:{self.value}"
+                assert (
+                    image == expected or f"ghcr.io/materializeinc/{image}" == expected
+                ), f"Expected balancerd image {expected}, but found {image}"
+
+            # TODO: Console version is currently set via --console-image-tag-default
+            # console = get_console_data()
+            # for item in console["items"]:
+            #     image = item["spec"]["containers"][0]["image"]
+            #     expected = f"materialize/console:{self.value}"
+            #     assert (
+            #         image == expected or f"ghcr.io/materializeinc/{image}" == expected
+            #     ), f"Expected console image {expected}, but found {image}"
 
         retry(check, 240)
 
@@ -742,18 +1154,6 @@ class ObservabilityPodMetricsEnabled(Modification):
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         return  # TODO: Doesn't work with upgrade: Expected no --collect-pod-metrics in environmentd args, but found it
 
-        orchestratord = get_orchestratord_data()
-        args = orchestratord["items"][0]["spec"]["containers"][0]["args"]
-        expected = "--collect-pod-metrics"
-        if self.value and mods[ObservabilityEnabled]:
-            assert (
-                expected in args
-            ), f"Expected {expected} in environmentd args, but only found {args}"
-        else:
-            assert (
-                expected not in args
-            ), f"Expected no {expected} in environmentd args, but found it: {args}"
-
 
 class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
     @classmethod
@@ -826,21 +1226,75 @@ class ConsoleReplicas(Modification):
             definition["materialize"]["spec"]["consoleReplicas"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
-        # TODO: https://github.com/MaterializeInc/database-issues/issues/9984
-        pass
-        # if not mods[ConsoleEnabled]:
-        #     return
+        if not mods[ConsoleEnabled]:
+            return
 
-        # def check_replicas():
-        #     console = get_console_data()
-        #     num_pods = len(console["items"])
-        #     expected = self.value if self.value is not None else 2
-        #     assert (
-        #         num_pods == expected
-        #     ), f"Expected {expected} console pods, but found {num_pods}"
+        def check_replicas():
+            console = get_console_data()
+            len(console["items"])
+            # TODO: https://linear.app/materializeinc/issue/DB-105
+            # assert (
+            #     num_pods == expected
+            # ), f"Expected {expected} console pods, but found {num_pods}"
 
-        # # console doesn't get launched until last
-        # retry(check_replicas, 120)
+        # console doesn't get launched until last
+        retry(check_replicas, 120)
+
+
+def balancerd_configmap() -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": "balancerd-settings",
+            "namespace": "materialize-environment",
+        },
+        "data": {"config.json": json.dumps({"balancerd_max_connections": 123})},
+    }
+
+
+class BalancerdConfigMap(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        if version >= MzVersion.parse_mz("v26.44.0-dev.0"):
+            return [None, "balancerd-settings"]
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["balancerdConfigmapName"] = self.value
+        if self.value is not None:
+            definition["balancerd_configmap"] = balancerd_configmap()
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if not mods[BalancerdEnabled] or MzVersion.parse_mz(
+            mods[EnvironmentdImageRef]
+        ) < MzVersion.parse_mz("v26.44.0-dev.0"):
+            return
+
+        def check() -> None:
+            pods = get_balancerd_data()["items"]
+            assert pods
+            for pod in pods:
+                volumes = [
+                    v for v in pod["spec"]["volumes"] if v["name"] == "dynamic-config"
+                ]
+                args = pod["spec"]["containers"][0]["args"]
+                if self.value is None:
+                    assert not volumes
+                    assert not any(
+                        arg.startswith("--config-sync-file-path=") for arg in args
+                    )
+                else:
+                    assert len(volumes) == 1
+                    assert volumes[0]["configMap"]["name"] == self.value
+                    assert "--config-sync-file-path=/etc/balancerd/config.json" in args
+                    assert "--config-sync-loop-interval=1s" in args
+
+        retry(check, 240)
 
 
 class SystemParamConfigMap(Modification):
@@ -932,6 +1386,7 @@ class SystemParamConfigMap(Modification):
             6875
             if (version >= MzVersion.parse_mz("v0.147.0") and auth == "Password")
             or (version >= MzVersion.parse_mz("v26.0.0") and auth == "Sasl")
+            or (version >= MzVersion.parse_mz("v26.16.0-dev.0") and auth == "Oidc")
             else 6877
         )
 
@@ -993,6 +1448,27 @@ def validate_node_selector(
         assert "materialize.cloud/scratch-fs" not in selector
 
 
+EXPECTED_CLUSTERD_SYSCTLS = {
+    "net.ipv4.tcp_keepalive_time": "300",
+    "net.ipv4.tcp_keepalive_intvl": "30",
+    "net.ipv4.tcp_keepalive_probes": "3",
+}
+
+
+def validate_clusterd_pod(pod: dict[str, Any], version: MzVersion) -> None:
+    """Validate always-on properties of a clusterd pod."""
+    if version >= MzVersion.parse_mz("v26.24.0-dev.0"):
+        sysctls = {
+            s["name"]: s["value"]
+            for s in pod["spec"].get("securityContext", {}).get("sysctls", [])
+        }
+        for name, expected in EXPECTED_CLUSTERD_SYSCTLS.items():
+            actual = sysctls.get(name)
+            assert (
+                actual == expected
+            ), f"Expected sysctl {name}={expected}, but got {actual}"
+
+
 def validate_container_resources(
     resources: dict[str, dict[str, str]],
     swap_enabled: bool,
@@ -1041,6 +1517,7 @@ class SwapEnabledGlobal(Modification):
 
         def check_pods() -> None:
             clusterd = get_pod_data(labels)["items"][0]
+            validate_clusterd_pod(clusterd, version)
 
             resources = clusterd["spec"]["containers"][0]["resources"]
             validate_container_resources(resources, self.value)
@@ -1096,6 +1573,7 @@ class StorageClass(Modification):
 
         def check_pods() -> None:
             clusterd = get_pod_data(labels)["items"][0]
+            validate_clusterd_pod(clusterd, version)
 
             resources = clusterd["spec"]["containers"][0]["resources"]
             validate_container_resources(resources, mods[SwapEnabledGlobal])
@@ -1107,6 +1585,124 @@ class StorageClass(Modification):
 
         # Clusterd can take a while to start up
         retry(check_pods, 5)
+
+
+class ClusterdCpu(Modification):
+    # The default cluster (s2) uses the "25cc" size.
+    DEFAULT_SIZE_NAME = "25cc"
+
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [
+            None,
+            # These values were chosen to be different from the defaults,
+            # with the cpu_request lower than the limit,
+            # and to be small enough to fit in developer laptops.
+            {"cpu_limit": 1.5},
+            {"cpu_request": 0.25},
+            {"cpu_limit": 1.5, "cpu_request": 0.25},
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is None:
+            return
+
+        default_size = definition["operator"]["operator"]["clusters"]["sizes"][
+            self.DEFAULT_SIZE_NAME
+        ]
+
+        default_size.pop("cpu_limit", None)
+        default_size.pop("cpu_request", None)
+        for key, val in self.value.items():
+            default_size[key] = val
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+        environmentd_supports_cpu_request = version >= MzVersion.parse_mz(
+            "v26.15.0-dev.0"
+        )
+
+        environmentd = get_environmentd_data()
+        args = environmentd["items"][0]["spec"]["containers"][0]["args"]
+        cluster_replica_sizes_arg = next(
+            (arg for arg in args if arg.startswith("--cluster-replica-sizes=")),
+            None,
+        )
+        assert (
+            cluster_replica_sizes_arg is not None
+        ), f"Expected --cluster-replica-sizes in environmentd args, but only found: {args}"
+
+        cluster_replica_sizes = json.loads(cluster_replica_sizes_arg.split("=", 1)[1])
+        default_size = cluster_replica_sizes[self.DEFAULT_SIZE_NAME]
+
+        # Verify the args passed to environmentd are what we expect.
+
+        if self.value is None or "cpu_limit" not in self.value:
+            # expect the value from the helm chart
+            expected_arg_cpu_limit = "0.5"
+        else:
+            expected_arg_cpu_limit = self.value["cpu_limit"]
+
+        if self.value is None or "cpu_request" not in self.value:
+            # expect the value from the helm chart
+            expected_arg_cpu_request = None
+        else:
+            expected_arg_cpu_request = self.value["cpu_request"]
+
+        # compare as strings to avoid float issues
+        assert str(default_size.get("cpu_request")) == str(expected_arg_cpu_request), (
+            f"Expected arg cpu request {expected_arg_cpu_request}, "
+            f"but got {default_size.get('cpu_request')}"
+        )
+        assert str(default_size.get("cpu_limit")) == str(expected_arg_cpu_limit), (
+            f"Expected arg cpu limit {expected_arg_cpu_limit}, "
+            f"but got {default_size.get('cpu_limit')}"
+        )
+
+        # Verify clusterd pods have correct CPU resources.
+
+        def cpu_to_k8s_quantity(cpu: float | None) -> str | None:
+            if cpu is None:
+                return None
+            return f"{int(cpu * 1000)}m"
+
+        expected_pod_cpu_limit = cpu_to_k8s_quantity(default_size.get("cpu_limit"))
+        if environmentd_supports_cpu_request:
+            expected_pod_cpu_request = cpu_to_k8s_quantity(
+                # We fall back to cpu_limit if we have no request,
+                # so that the pod gets some guaranteed resources.
+                default_size.get("cpu_request", default_size.get("cpu_limit")),
+            )
+        else:
+            expected_pod_cpu_request = expected_pod_cpu_limit
+
+        labels = {
+            "cluster.environmentd.materialize.cloud/type": "cluster",
+            "cluster.environmentd.materialize.cloud/cluster-id": "s2",
+            "cluster.environmentd.materialize.cloud/replica-id": "s1",
+            "materialize.cloud/organization-name": "12345678-1234-1234-1234-123456789012",
+        }
+
+        def check_pods() -> None:
+            clusterd = get_pod_data(labels)["items"][0]
+            validate_clusterd_pod(clusterd, version)
+            resources = clusterd["spec"]["containers"][0]["resources"]
+            actual_cpu_request = resources.get("requests", {}).get("cpu")
+            actual_cpu_limit = resources.get("limits", {}).get("cpu")
+            assert actual_cpu_request == expected_pod_cpu_request, (
+                f"Expected pod cpu request {expected_pod_cpu_request}, "
+                f"but got {actual_cpu_request}: {resources}"
+            )
+            assert actual_cpu_limit == expected_pod_cpu_limit, (
+                f"Expected pod cpu limit {expected_pod_cpu_limit}, "
+                f"but got {actual_cpu_limit}: {resources}"
+            )
+
+        retry(check_pods, 120)
 
 
 class EnvironmentdResources(Modification):
@@ -1155,6 +1751,76 @@ class EnvironmentdResources(Modification):
             assert (
                 resources == expected
             ), f"Expected environmentd resources {expected}, but got {resources}"
+
+        retry(check_pods, 120)
+
+
+class EnvironmentdProbes(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        if version >= MzVersion.parse_mz("v26.48.0-dev.0"):
+            return [
+                None,
+                {
+                    "readiness": {"periodSeconds": 5},
+                    "liveness": {"failureThreshold": 60, "timeoutSeconds": 3},
+                    "startup": {"failureThreshold": 360},
+                },
+            ]
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            spec = definition["materialize"]["spec"]
+            spec["environmentdReadinessProbe"] = self.value["readiness"]
+            spec["environmentdLivenessProbe"] = self.value["liveness"]
+            spec["environmentdStartupProbe"] = self.value["startup"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v26.48.0-dev.0"
+        ):
+            return
+
+        # The CR's fields are overlaid onto the operator's built-in probe.
+        base = {"initialDelaySeconds": 1, "failureThreshold": 12}
+        overrides = self.value or {"readiness": {}, "liveness": {}}
+        expected = {
+            "readinessProbe": {**base, **overrides["readiness"]},
+            "livenessProbe": {**base, **overrides["liveness"]},
+        }
+        # There is no startup probe unless one is configured.
+        expected_startup = (
+            {**base, **self.value["startup"]} if self.value is not None else None
+        )
+
+        def check_pods() -> None:
+            container = get_environmentd_data()["items"][0]["spec"]["containers"][0]
+            for probe_name, expected_fields in expected.items():
+                probe = container[probe_name]
+                assert (
+                    "tcpSocket" in probe
+                ), f"Expected tcpSocket in {probe_name}: {probe}"
+                actual = {k: probe.get(k) for k in expected_fields}
+                assert (
+                    actual == expected_fields
+                ), f"Expected environmentd {probe_name} {expected_fields}, but got {probe}"
+            startup = container.get("startupProbe")
+            if expected_startup is None:
+                assert startup is None, f"Expected no startupProbe, but got {startup}"
+            else:
+                assert startup is not None, "Expected a startupProbe"
+                assert (
+                    "tcpSocket" in startup
+                ), f"Expected tcpSocket in startupProbe: {startup}"
+                actual = {k: startup.get(k) for k in expected_startup}
+                assert (
+                    actual == expected_startup
+                ), f"Expected environmentd startupProbe {expected_startup}, but got {startup}"
 
         retry(check_pods, 120)
 
@@ -1254,25 +1920,120 @@ class ConsoleResources(Modification):
             }
 
         def check_pods() -> None:
-            console = get_console_data()["items"][0]
+            console_data = get_console_data()
+            assert console_data["items"], "No console pods found, expected at least one"
+            console = console_data["items"][0]
 
             resources = console["spec"]["containers"][0]["resources"]
             assert (
                 resources == expected
             ), f"Expected console resources {expected}, but got {resources}"
 
-        retry(check_pods, 240)
+        retry(check_pods, 360)
+
+
+class BalancerdExternalDnsNames(Modification):
+    # The operator surfaces the balancerd external certificate's DNS names to
+    # the console's `app-config.json` as `balancerd_dns_names`, so the console
+    # knows which hostnames balancerd serves.
+    DNS_NAMES = ["balancerd.example.com"]
+
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [None, cls.DNS_NAMES]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            definition["materialize"]["spec"]["balancerdExternalCertificateSpec"] = {
+                "dnsNames": self.value,
+            }
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        # `balancerd_dns_names` was added to the console app config in v26.27;
+        # older orchestratord builds don't surface the cert spec's DNS names.
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v26.27.0-dev.0"
+        ):
+            return
+        # Without a console there's no app config to inspect.
+        if not mods[ConsoleEnabled]:
+            return
+
+        def check() -> None:
+            app_config = get_console_app_config()
+            actual = app_config.get("balancerd_dns_names")
+            assert (
+                actual == self.value
+            ), f"Expected balancerd_dns_names {self.value}, but got {actual}: {app_config}"
+
+        # The console is reconciled last and the configmap update is async.
+        retry(check, 360)
+
+
+class RecommendedK8sLabels(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        pass
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v26.24.0"
+        ):
+            return
+
+        def get(kind: str, name: str) -> dict[str, Any]:
+            return json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        kind,
+                        name,
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+
+        def check() -> None:
+            pod = get_environmentd_data()["items"][0]
+            statefulset = get(
+                "statefulset", pod["metadata"]["labels"]["materialize.cloud/name"]
+            )
+            service = get("service", statefulset["spec"]["serviceName"])
+            for kind, obj in (("statefulset", statefulset), ("service", service)):
+                actual = obj["metadata"].get("labels", {}).get("app.kubernetes.io/name")
+                assert (
+                    actual == "environmentd"
+                ), f"Expected app.kubernetes.io/name=environmentd on {kind}/{obj['metadata']['name']}, got {actual!r}"
+
+        retry(check, 120)
 
 
 class AuthenticatorKind(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:
-        # Test None, Password (v0.147.7+), and Sasl
+        # Test None, Password (v0.147.7+), Sasl, and Oidc
         result = ["None"]
         if version >= MzVersion.parse_mz("v0.147.7"):
             result.append("Password")
         if version >= MzVersion.parse_mz("v26.0.0"):
             result.append("Sasl")
+        if version >= MzVersion.parse_mz("v26.16.0-dev.0"):
+            result.append("Oidc")
         return result
 
     @classmethod
@@ -1281,7 +2042,7 @@ class AuthenticatorKind(Modification):
 
     def modify(self, definition: dict[str, Any]) -> None:
         definition["materialize"]["spec"]["authenticatorKind"] = self.value
-        if self.value == "Password" or self.value == "Sasl":
+        if self.value == "Password" or self.value == "Sasl" or self.value == "Oidc":
             definition["secret"]["stringData"][
                 "external_login_password_mz_system"
             ] = "superpassword"
@@ -1300,10 +2061,16 @@ class AuthenticatorKind(Modification):
         if self.value == "Sasl" and version < MzVersion.parse_mz("v26.0.0"):
             return
 
+        if self.value == "Oidc" and version < MzVersion.parse_mz("v26.16.0-dev.0"):
+            return
+
         port = (
             6875
             if (version >= MzVersion.parse_mz("v0.147.0") and self.value == "Password")
             or (version >= MzVersion.parse_mz("v26.0.0") and self.value == "Sasl")
+            or (
+                version >= MzVersion.parse_mz("v26.16.0-dev.0") and self.value == "Oidc"
+            )
             else 6877
         )
         for i in range(120):
@@ -1407,6 +2174,14 @@ class AuthenticatorKind(Modification):
                         http_auth == "Password"
                     ), f"Expected HTTP listener to use Password, got {http_auth}"
                     print(f"Password mode verified: SQL={sql_auth}, HTTP={http_auth}")
+                elif self.value == "Oidc":
+                    assert (
+                        sql_auth == "Oidc"
+                    ), f"Expected SQL listener to use Oidc, got {sql_auth}"
+                    assert (
+                        http_auth == "Oidc"
+                    ), f"Expected HTTP listener to use Oidc, got {http_auth}"
+                    print(f"Oidc mode verified: SQL={sql_auth}, HTTP={http_auth}")
                 elif self.value == "None":
                     assert (
                         sql_auth == "None"
@@ -1450,6 +2225,233 @@ class RolloutStrategy(Modification):
         return
 
 
+class MaterializeCRDVersion(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [
+            "materialize.cloud/v1alpha1",
+            "materialize.cloud/v1",
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return "materialize.cloud/v1"
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value == "materialize.cloud/v1" and operator_supports_v1(definition):
+            # The operator only installs and serves the v1 CRD version when
+            # explicitly asked to.
+            enable_v1_crd(definition)
+            definition["materialize"]["apiVersion"] = self.value
+        else:
+            # Older versions do not support v1, and without installV1CRD the
+            # operator does not serve it.
+            definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        # This should be OK without additional validation, as we check we
+        # deployed in post_run_check and check the installed CRD versions in
+        # check_crd_versions.
+        return
+
+
+class CertificateSource(Modification):
+    SECRET_NAME = "orchestratord-custom-cert"
+
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return ["cert-manager", "secret"]
+
+    @classmethod
+    def default(cls) -> Any:
+        return "cert-manager"
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        # The certificate is only used to serve the conversion webhook, which
+        # is only installed together with the v1 CRD.
+        if operator_supports_v1(definition):
+            enable_v1_crd(definition)
+        definition["operator"]["operator"]["certificate"]["source"] = self.value
+        if self.value == "secret":
+            definition["operator"]["operator"]["certificate"][
+                "secretName"
+            ] = self.SECRET_NAME
+            self._create_cert_secret()
+
+    @classmethod
+    def _create_cert_secret(cls) -> None:
+        dns_name = "operator-materialize-operator.materialize.svc"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ca_key = os.path.join(tmpdir, "ca.key")
+            ca_crt = os.path.join(tmpdir, "ca.crt")
+            tls_key = os.path.join(tmpdir, "tls.key")
+            tls_crt = os.path.join(tmpdir, "tls.crt")
+            csr_path = os.path.join(tmpdir, "server.csr")
+            ext_path = os.path.join(tmpdir, "ext.cnf")
+
+            # Generate CA key and self-signed cert
+            spawn.runv(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-newkey",
+                    "rsa:2048",
+                    "-keyout",
+                    ca_key,
+                    "-out",
+                    ca_crt,
+                    "-days",
+                    "1",
+                    "-nodes",
+                    "-subj",
+                    "/CN=Test CA",
+                ]
+            )
+
+            # Generate server key
+            spawn.runv(
+                [
+                    "openssl",
+                    "genpkey",
+                    "-algorithm",
+                    "rsa",
+                    "-pkeyopt",
+                    "rsa_keygen_bits:2048",
+                    "-out",
+                    tls_key,
+                ]
+            )
+
+            # Generate CSR
+            spawn.runv(
+                [
+                    "openssl",
+                    "req",
+                    "-new",
+                    "-key",
+                    tls_key,
+                    "-out",
+                    csr_path,
+                    "-subj",
+                    f"/CN={dns_name}",
+                ]
+            )
+
+            # Write extension file for SAN
+            with open(ext_path, "w") as f:
+                f.write(f"subjectAltName=DNS:{dns_name}\n")
+
+            # Sign CSR with CA
+            spawn.runv(
+                [
+                    "openssl",
+                    "x509",
+                    "-req",
+                    "-in",
+                    csr_path,
+                    "-CA",
+                    ca_crt,
+                    "-CAkey",
+                    ca_key,
+                    "-CAcreateserial",
+                    "-out",
+                    tls_crt,
+                    "-days",
+                    "1",
+                    "-extfile",
+                    ext_path,
+                ]
+            )
+
+            # Delete existing secret if present
+            try:
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "delete",
+                        "secret",
+                        cls.SECRET_NAME,
+                        "-n",
+                        "materialize",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                )
+            except subprocess.CalledProcessError:
+                pass
+
+            # Create the secret with ca.crt, tls.crt, and tls.key
+            spawn.runv(
+                [
+                    "kubectl",
+                    "create",
+                    "secret",
+                    "generic",
+                    cls.SECRET_NAME,
+                    f"--from-file=ca.crt={ca_crt}",
+                    f"--from-file=tls.crt={tls_crt}",
+                    f"--from-file=tls.key={tls_key}",
+                    "-n",
+                    "materialize",
+                ]
+            )
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        def check() -> None:
+            orchestratord = get_orchestratord_data()
+            container = orchestratord["items"][0]["spec"]["containers"][0]
+            if "--install-v1-crd" not in container["args"]:
+                # The operator does not serve the conversion webhook (e.g. it
+                # is too old to know the flag), so no certificate is mounted.
+                return
+            volumes = orchestratord["items"][0]["spec"].get("volumes") or []
+            cert_volume = next(
+                (v for v in volumes if v.get("name") == "certificate"),
+                None,
+            )
+            assert cert_volume is not None, f"Expected certificate volume in {volumes}"
+
+            secret_name = cert_volume["secret"]["secretName"]
+            if self.value == "cert-manager":
+                expected = "operator-materialize-operator-cert"
+            else:
+                expected = self.SECRET_NAME
+            assert (
+                secret_name == expected
+            ), f"Expected certificate secret name '{expected}', got '{secret_name}'"
+
+        retry(check, 120)
+
+
+def operator_supports_v1(definition: dict[str, Any]):
+    operator_version = MzVersion.parse(
+        definition["operator"]["operator"]["image"]["tag"]
+    )
+    # v1 first ships in v26.30; no released self-managed operator serves
+    # the v1 CRD, so anything older must use v1alpha1. Keep this in sync
+    # with the release that actually introduces the v1 CRD.
+    return operator_version >= MzVersion.parse("v26.30.0-dev.0")
+
+
+def operator_serves_v1(definition: dict[str, Any]) -> bool:
+    """Whether the operator in this definition installs and serves the v1 CRD.
+
+    Even operators that support v1 only install it when the installV1CRD helm
+    value is set."""
+    return operator_supports_v1(definition) and bool(
+        definition["operator"]["operator"]["args"].get("installV1CRD")
+    )
+
+
+def enable_v1_crd(definition: dict[str, Any]) -> None:
+    """Make the operator install the v1 CRD and its conversion webhook."""
+    assert operator_supports_v1(
+        definition
+    ), "the operator version is too old to install the v1 CRD"
+    definition["operator"]["operator"]["args"]["installV1CRD"] = True
+
+
 class Properties(Enum):
     Defaults = "defaults"
     Individual = "individual"
@@ -1479,13 +2481,20 @@ def workflow_documentation_defaults(
 
     # Following https://materialize.com/docs/installation/install-on-local-kind/
     # orchestratord test can't run against future versions, so ignore those
-    versions = reversed(
-        [
-            version
-            for version in get_self_managed_versions()
-            if version < current_version
-        ]
-        + [current_version]
+    # Pre-v26 versions don't have balancerd/console images on Docker Hub
+    versions = buildkite.shard_list(
+        list(
+            reversed(
+                [
+                    version
+                    for version in get_self_managed_versions()
+                    if version < current_version
+                    and version >= MzVersion.parse_mz("v26.0.0")
+                ]
+                + [current_version]
+            )
+        ),
+        lambda version: str(version),
     )
     for version in versions:
         print(f"--- Running with defaults against {version}")
@@ -1493,43 +2502,21 @@ def workflow_documentation_defaults(
         if os.path.exists(dir):
             shutil.rmtree(dir)
         os.mkdir(dir)
-        spawn.runv(["kind", "delete", "cluster"])
-        spawn.runv(["kind", "create", "cluster"])
-        spawn.runv(
-            [
-                "kubectl",
-                "label",
-                "node",
-                "kind-control-plane",
-                "materialize.cloud/disk=true",
-            ]
-        )
-        spawn.runv(
-            [
-                "kubectl",
-                "label",
-                "node",
-                "kind-control-plane",
-                "materialize.cloud/swap=true",
-            ]
-        )
-        spawn.runv(
-            [
-                "kubectl",
-                "label",
-                "node",
-                "kind-control-plane",
-                "workload=materialize-instance",
-            ]
-        )
+        recreate_kind_cluster()
+
+        helm_install_cert_manager()
 
         shutil.copyfile(
             "misc/helm-charts/operator/values.yaml",
             os.path.join(dir, "sample-values.yaml"),
         )
+        # The docs fetch MinIO from main rather than a release tag.
+        shutil.copyfile(
+            "misc/helm-charts/testing/minio.yaml",
+            os.path.join(dir, "sample-minio.yaml"),
+        )
         files = {
             "sample-postgres.yaml": "misc/helm-charts/testing/postgres.yaml",
-            "sample-minio.yaml": "misc/helm-charts/testing/minio.yaml",
             "sample-materialize.yaml": "misc/helm-charts/testing/materialize.yaml",
         }
 
@@ -1537,89 +2524,55 @@ def workflow_documentation_defaults(
             if version == current_version:
                 shutil.copyfile(path, os.path.join(dir, file))
             else:
-                url = f"https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/{version}/{path}"
-                response = requests.get(url)
-                assert (
-                    response.status_code == 200
-                ), f"Failed to download {file} from {url}: {response.status_code}"
+                content = download_repo_file_at_tag(path, str(version))
                 with open(os.path.join(dir, file), "wb") as f:
-                    f.write(response.content)
+                    f.write(content)
 
-        spawn.runv(
-            [
-                "helm",
-                "repo",
-                "add",
-                "materialize",
-                "https://materializeinc.github.io/materialize",
-            ]
-        )
-        spawn.runv(["helm", "repo", "update", "materialize"])
-        spawn.runv(
-            [
-                "helm",
-                "install",
-                "my-materialize-operator",
-                MZ_ROOT / "misc" / "helm-charts" / "operator",
-                "--namespace=materialize",
-                "--create-namespace",
-                "--version",
-                "v26.0.0",
-                "--set",
-                "observability.podMetrics.enabled=true",
-                "-f",
-                os.path.join(dir, "sample-values.yaml"),
-            ]
-        )
+        with open(os.path.join(dir, "sample-values.yaml")) as f:
+            sample_values = yaml.load(f, Loader=yaml.Loader)
+        sample_values["operator"]["image"]["tag"] = str(current_version)
+        helm_install_operator(sample_values, upgrade=False)
+
         spawn.runv(
             ["kubectl", "apply", "-f", os.path.join(dir, "sample-postgres.yaml")]
         )
         spawn.runv(["kubectl", "apply", "-f", os.path.join(dir, "sample-minio.yaml")])
         spawn.runv(["kubectl", "get", "all", "-n", "materialize"])
-        spawn.runv(
-            [
-                "helm",
-                "repo",
-                "add",
-                "metrics-server",
-                "https://kubernetes-sigs.github.io/metrics-server/",
-            ]
-        )
-        spawn.runv(["helm", "repo", "update", "metrics-server"])
-        spawn.runv(
-            [
-                "helm",
-                "install",
-                "metrics-server",
-                "metrics-server/metrics-server",
-                "--namespace",
-                "kube-system",
-                "--set",
-                "args={--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP}",
-            ]
-        )
-        for i in range(120):
-            try:
-                spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        "crd",
-                        "materializes.materialize.cloud",
-                        "-n",
-                        "materialize",
-                        "-o",
-                        "name",
-                    ],
-                    stderr=subprocess.DEVNULL,
-                )
-                break
 
-            except subprocess.CalledProcessError:
-                pass
-            time.sleep(1)
-        else:
-            raise ValueError("Never completed")
+        wait_for_crd_established()
+        spawn.runv(
+            [
+                "kubectl",
+                "wait",
+                "-n",
+                "materialize",
+                "--for=condition=Available",
+                "--timeout=300s",
+                "deployment/minio",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "wait",
+                "-n",
+                "materialize",
+                "--for=condition=Complete",
+                "--timeout=300s",
+                "job/minio-setup",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "wait",
+                "-n",
+                "materialize",
+                "--for=condition=Available",
+                "--timeout=300s",
+                "deployment/postgres",
+            ]
+        )
 
         with open(os.path.join(dir, "sample-materialize.yaml")) as f:
             materialize_setup = list(yaml.load_all(f, Loader=yaml.Loader))
@@ -1647,6 +2600,10 @@ def workflow_documentation_defaults(
             ["kubectl", "apply", "-f", os.path.join(dir, "sample-materialize.yaml")]
         )
 
+        # This should finish quickly, see https://github.com/MaterializeInc/database-issues/issues/10099
+        # The timeout is generous because the oldest supported environmentd
+        # versions boot slowly and the operator can spend ~30s in a single
+        # reconcile before it creates the console.
         for i in range(240):
             try:
                 data = json.loads(
@@ -1928,7 +2885,8 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
     thread.start()
     time.sleep(10)  # some time to make sure the thread runs fine
     request = str(uuid.uuid4())
-    definition["materialize"]["spec"]["requestRollout"] = request
+    if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+        definition["materialize"]["spec"]["requestRollout"] = request
     definition["materialize"]["spec"]["forceRollout"] = request
     run(definition, False)
     time.sleep(120)  # some time to make sure there is no downtime later
@@ -1938,8 +2896,8 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
     assert len(downtimes) == 2, f"Wrong number of downtimes: {downtimes}"
 
     test_failed = False
-    # TODO: Reduce to 15 s when https://github.com/MaterializeInc/database-issues/issues/9967 is fixed
-    max_downtime = 60
+    # TODO: Reduce to 15 s when https://linear.app/materializeinc/issue/DB-106 is fixed
+    max_downtime = 120
     upgrade_downtime = downtimes[-1]
     if upgrade_downtime > max_downtime:
         print(
@@ -1972,8 +2930,2002 @@ def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
     definition = setup(c, args)
+    if args.tag is None:
+        definition["balancerd_configmap"] = balancerd_configmap()
+        definition["balancer"]["spec"]["configmapName"] = "balancerd-settings"
     init(definition)
     run_balancer(definition, False)
+    if args.tag is None:
+        check_balancer_config_sync(definition)
+
+
+def check_balancer_config_sync(definition: dict[str, Any]) -> None:
+    namespace = definition["balancer"]["metadata"]["namespace"]
+    pods = get_balancerd_data()["items"]
+    assert pods, "Expected balancerd pods"
+
+    def pod_state() -> dict[str, tuple[str, list[int]]]:
+        return {
+            pod["metadata"]["name"]: (
+                pod["metadata"]["uid"],
+                [s["restartCount"] for s in pod["status"].get("containerStatuses", [])],
+            )
+            for pod in get_balancerd_data()["items"]
+        }
+
+    initial_pod_state = pod_state()
+    volume = next(
+        v for v in pods[0]["spec"]["volumes"] if v["name"] == "dynamic-config"
+    )
+    config_map_name = volume["configMap"]["name"]
+    assert config_map_name == "balancerd-settings"
+
+    def read_config() -> dict[str, Any]:
+        cm = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "configmap",
+                    config_map_name,
+                    "-n",
+                    namespace,
+                    "-o",
+                    "json",
+                ]
+            )
+        )
+        assert not cm["metadata"].get(
+            "ownerReferences"
+        ), "Operator adopted an external ConfigMap"
+        return json.loads(cm["data"]["config.json"])
+
+    def check_limit(expected: int) -> None:
+        for pod in pods:
+            container = pod["spec"]["containers"][0]
+            port = next(
+                p["containerPort"]
+                for p in container["ports"]
+                if p["name"] == "internal-http"
+            )
+            name = pod["metadata"]["name"]
+            metrics = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "--raw",
+                    f"/api/v1/namespaces/{namespace}/pods/{name}:{port}/proxy/metrics",
+                ]
+            )
+            assert (
+                f"mz_balancer_connection_limit {expected}" in metrics.splitlines()
+            ), metrics
+
+    assert read_config() == {"balancerd_max_connections": 123}
+    retry(lambda: check_limit(123), 60)
+    for index, limit in enumerate((456, 0)):
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "configmap",
+                config_map_name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "-p",
+                json.dumps(
+                    {
+                        "data": {
+                            "config.json": json.dumps(
+                                {"balancerd_max_connections": limit}
+                            )
+                        }
+                    }
+                ),
+            ]
+        )
+        # A spec change forces reconciliation, which must leave the external
+        # ConfigMap unchanged.
+        replicas = len(pods) + index + 1
+        name = definition["balancer"]["metadata"]["name"]
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "balancer",
+                name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "-p",
+                json.dumps({"spec": {"replicas": replicas}}),
+            ]
+        )
+        deployment = pods[0]["metadata"]["labels"]["materialize.cloud/name"]
+
+        def check_reconciled() -> None:
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "deployment",
+                        deployment,
+                        "-n",
+                        namespace,
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+            assert data["spec"]["replicas"] == replicas
+
+        retry(check_reconciled, 60)
+        assert read_config() == {"balancerd_max_connections": limit}
+        # Kubelet projection can take two minutes before the one-second sync.
+        retry(lambda: check_limit(limit), 180)
+        current_pod_state = pod_state()
+        for name, state in initial_pod_state.items():
+            assert (
+                current_pod_state.get(name) == state
+            ), "balancerd restarted during config sync"
+
+
+def get_materialize_v1alpha1() -> dict[str, Any]:
+    """Get the first Materialize resource at v1alpha1."""
+    data = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes.v1alpha1.materialize.cloud",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+    )
+    return data["items"][0]
+
+
+def get_materialize_at_stored_version() -> dict[str, Any]:
+    """Get the first Materialize resource at the stored version (currently v1alpha1)."""
+    return get_materialize_v1alpha1()
+
+
+def get_materialize_status_at_stored_version() -> dict[str, Any] | None:
+    """Get the status of the first Materialize resource at the stored version."""
+    return get_materialize_at_stored_version().get("status")
+
+
+def get_materialize_v1() -> dict[str, Any]:
+    """Get the first Materialize resource at v1."""
+    data = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes.v1.materialize.cloud",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+    )
+    return data["items"][0]
+
+
+def workflow_v1_opt_in(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test that applying a v1 resource triggers reconciliation only
+    when the spec has changed, and not when it is unchanged.
+
+    The conversion webhook computes a rollout hash from the v1 spec.
+    When converting to v1alpha1 for storage, it derives a deterministic
+    requestRollout UUID from the hash. When the spec is unchanged, the
+    derived UUID matches lastCompletedRolloutRequest, so no rollout occurs.
+    When the spec changes, the derived UUID differs, triggering a rollout.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    enable_v1_crd(definition)
+
+    # Step 1: Deploy with v1, complete initial rollout.
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
+    init(definition)
+    run(definition, False)
+    print("Initial v1 deployment completed")
+
+    # Record the initial v1alpha1 status.
+    mz_v1 = get_materialize_v1alpha1()
+    initial_request_rollout = mz_v1["spec"]["requestRollout"]
+    initial_last_completed_rollout_request = mz_v1["status"][
+        "lastCompletedRolloutRequest"
+    ]
+    assert (
+        initial_request_rollout == initial_last_completed_rollout_request
+    ), f"Expected completed rollout: requestRollout={initial_request_rollout} != lastCompletedRolloutRequest={initial_last_completed_rollout_request}"
+    print(f"Initial requestRollout: {initial_request_rollout}")
+
+    # Step 2: Re-apply the same spec at v1 (no changes).
+    # The conversion webhook should compute the same hash, deriving the
+    # same requestRollout UUID, so no new rollout should occur.
+    print("Re-applying same spec at v1 (expecting no rollout)...")
+    apply_materialize(definition)
+
+    # Wait a bit and verify that no new rollout was triggered.
+    time.sleep(30)
+    mz_v1 = get_materialize_v1alpha1()
+    noop_request_rollout = mz_v1["spec"]["requestRollout"]
+    assert (
+        noop_request_rollout == initial_request_rollout
+    ), f"Expected requestRollout unchanged, but changed from {initial_request_rollout} to {noop_request_rollout}"
+    noop_last_completed_rollout_request = mz_v1["status"]["lastCompletedRolloutRequest"]
+    assert (
+        noop_last_completed_rollout_request == initial_last_completed_rollout_request
+    ), f"Expected lastCompletedRolloutRequest unchanged, but changed from {initial_last_completed_rollout_request} to {noop_last_completed_rollout_request}"
+    print("Confirmed: no rollout triggered by v1 apply with no changes")
+
+    # Step 3: Apply at v1 with a spec change (extra env var).
+    # The conversion webhook should compute a different hash, deriving a
+    # different requestRollout UUID, triggering a rollout.
+    print("Applying v1 with changed environmentdExtraEnv (expecting rollout)...")
+    definition["materialize"]["spec"]["environmentdExtraEnv"] = [
+        {"name": "V1_OPT_IN_TEST", "value": "true"},
+    ]
+    run(definition, False)
+
+    mz_v1 = get_materialize_v1alpha1()
+    changed_request_rollout = mz_v1["spec"]["requestRollout"]
+    assert (
+        changed_request_rollout != initial_request_rollout
+    ), f"Expected requestRollout to change after spec change, but still {changed_request_rollout}"
+
+    def check_rollout_complete():
+        mz_v1 = get_materialize_v1alpha1()
+        changed_last_completed_rollout_request = mz_v1["status"][
+            "lastCompletedRolloutRequest"
+        ]
+        assert (
+            changed_last_completed_rollout_request == changed_request_rollout
+        ), f"Expected rollout to complete: requestRollout={changed_request_rollout} != lastCompletedRolloutRequest={changed_last_completed_rollout_request}"
+
+    retry(check_rollout_complete, 120)
+    print(
+        f"Confirmed: rollout triggered by v1 spec change. "
+        f"requestRollout changed from {initial_request_rollout} to {changed_request_rollout}"
+    )
+    print("v1 opt-in test PASSED")
+
+
+WEBHOOK_FAILURE_MARKERS = (
+    # Conversion webhook, reached when a resource is applied or read at a CRD
+    # version other than the stored one.
+    "conversion webhook for",
+    # Validating/mutating admission webhook.
+    "failed calling webhook",
+)
+
+WEBHOOK_READY_TIMEOUT_SECS = 300
+
+
+def kubectl_apply_retrying_webhook(cmd: list[str], yaml_str: str) -> None:
+    """Run a `kubectl apply` that reads `yaml_str` from stdin, retrying while a
+    webhook is still coming up.
+
+    Raises `subprocess.CalledProcessError` for any other failure, and for a
+    webhook failure that outlives `WEBHOOK_READY_TIMEOUT_SECS`.
+    """
+    deadline = time.monotonic() + WEBHOOK_READY_TIMEOUT_SECS
+    attempt = 0
+    while True:
+        attempt += 1
+        result = subprocess.run(cmd, input=yaml_str.encode(), capture_output=True)
+        if result.returncode == 0:
+            return
+        stderr_str = result.stderr.decode(errors="replace")
+        if (
+            any(marker in stderr_str for marker in WEBHOOK_FAILURE_MARKERS)
+            and time.monotonic() < deadline
+        ):
+            print(f"Webhook not yet ready (attempt {attempt}), retrying: {stderr_str}")
+            time.sleep(2)
+            continue
+        print(f"Failed to apply: {result.stdout}\nSTDERR:{result.stderr}")
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
+
+
+def apply_server_side(
+    obj: dict[str, Any],
+    field_manager: str | None = None,
+    force_conflicts: bool = True,
+) -> None:
+    """Server-side apply a single object via kubectl, retrying while the
+    conversion webhook is still coming up."""
+    cmd = ["kubectl", "apply", "--server-side", "-f", "-"]
+    if force_conflicts:
+        cmd.append("--force-conflicts")
+    if field_manager:
+        cmd.append(f"--field-manager={field_manager}")
+    yaml_str = yaml.dump(obj)
+    print(f"Attempting to apply server-side:\n{yaml_str}")
+    kubectl_apply_retrying_webhook(cmd, yaml_str)
+
+
+def workflow_server_side_apply(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test `kubectl apply --server-side` of Materialize resources across CRD
+    versions.
+
+    When an object has managed fields recorded at another CRD version,
+    server-side apply round-trips each field manager's owned subset of the
+    object through the conversion webhook while reconciling field ownership.
+    Those subsets are partial objects that lack required fields, so the
+    conversion webhook must convert them field-wise instead of rejecting
+    them.
+
+    Regression test for the conversion webhook rejecting such partial objects
+    with "missing field `environmentdImageRef`", which broke every
+    server-side apply of a v1 resource whose managed fields were recorded at
+    v1alpha1 (the situation after enabling the v1 CRD on an existing
+    v1alpha1-managed instance).
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    enable_v1_crd(definition)
+
+    # Step 1: Deploy at v1alpha1 with client-side apply and complete the
+    # initial rollout. This records the applier's and orchestratord's managed
+    # fields at v1alpha1.
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
+    init(definition)
+    run(definition, False)
+    print("Initial v1alpha1 deployment completed")
+
+    mz = get_materialize_v1alpha1()
+    initial_request_rollout = mz["spec"]["requestRollout"]
+
+    # Guard that the test exercises what it claims to: there must be managed
+    # fields recorded at v1alpha1 for the server-side apply below to prune.
+    managed_fields = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes.v1alpha1.materialize.cloud",
+                mz["metadata"]["name"],
+                "-n",
+                "materialize-environment",
+                "--show-managed-fields",
+                "-o",
+                "jsonpath={.metadata.managedFields}",
+            ]
+        )
+    )
+    assert any(
+        entry["apiVersion"] == "materialize.cloud/v1alpha1" for entry in managed_fields
+    ), f"expected managed fields recorded at v1alpha1, got {managed_fields}"
+
+    # Step 2: Server-side apply the same spec at v1. Reconciling the
+    # v1alpha1-recorded managed fields sends partial objects through the
+    # conversion webhook. Before the webhook tolerated partial objects this
+    # failed with:
+    #   failed to prune fields: failed add back owned items: failed to
+    #   convert pruned object at version materialize.cloud/v1: conversion
+    #   webhook for materialize.cloud/v1alpha1, Kind=Materialize failed
+    mz_v1 = copy.deepcopy(definition["materialize"])
+    mz_v1["apiVersion"] = "materialize.cloud/v1"
+    for field in ("requestRollout", "inPlaceRollout", "environmentdIamRoleArn"):
+        mz_v1["spec"].pop(field, None)
+    apply_server_side(mz_v1)
+    print("Server-side apply of the v1 resource succeeded")
+
+    # Adopting the resource at v1 replaces the random initial requestRollout
+    # with one derived from the v1 spec hash, which triggers one rollout.
+    # Wait for it to complete so the assertions below aren't racing it.
+    def check_rollout_complete():
+        mz = get_materialize_v1alpha1()
+        assert (
+            mz["status"]["lastCompletedRolloutRequest"] == mz["spec"]["requestRollout"]
+        ), f"Expected rollout to complete: requestRollout={mz['spec']['requestRollout']} != lastCompletedRolloutRequest={mz['status']['lastCompletedRolloutRequest']}"
+
+    retry(check_rollout_complete, 600)
+    mz = get_materialize_v1alpha1()
+    adopted_request_rollout = mz["spec"]["requestRollout"]
+    print(
+        f"v1 adoption rollout completed: requestRollout changed from "
+        f"{initial_request_rollout} to {adopted_request_rollout}"
+    )
+
+    # Step 3: Server-side re-apply the unchanged v1 spec (the routine GitOps
+    # path). The derived requestRollout is deterministic, so this must not
+    # trigger another rollout.
+    apply_server_side(mz_v1)
+    time.sleep(30)
+    mz = get_materialize_v1alpha1()
+    assert (
+        mz["spec"]["requestRollout"] == adopted_request_rollout
+    ), f"Expected requestRollout unchanged after server-side re-apply, but changed from {adopted_request_rollout} to {mz['spec']['requestRollout']}"
+    print("Confirmed: no rollout triggered by unchanged server-side re-apply")
+
+    # Step 4: Server-side apply a partial v1 manifest under a dedicated field
+    # manager that owns only a subset of the spec, without forcing conflicts.
+    # The value matches the existing one, so ownership becomes shared and
+    # nothing changes.
+    mz_partial = {
+        "apiVersion": "materialize.cloud/v1",
+        "kind": "Materialize",
+        "metadata": {
+            "name": mz_v1["metadata"]["name"],
+            "namespace": mz_v1["metadata"]["namespace"],
+        },
+        "spec": {
+            "environmentdImageRef": mz_v1["spec"]["environmentdImageRef"],
+        },
+    }
+    apply_server_side(
+        mz_partial, field_manager="materialize-ssa", force_conflicts=False
+    )
+    mz = get_materialize_v1alpha1()
+    assert (
+        mz["spec"]["requestRollout"] == adopted_request_rollout
+    ), f"Expected requestRollout unchanged after partial server-side apply, but changed from {adopted_request_rollout} to {mz['spec']['requestRollout']}"
+    print("Server-side apply of a partial v1 resource succeeded")
+
+    # Step 5: Server-side apply a partial v1 manifest that does not contain
+    # environmentdImageRef at all, under a field manager that does not own
+    # it. The applied subset lacks the fields the conversion webhook used to
+    # hard-require, and its owned subset stays that way on every future
+    # apply. balancerdReplicas is excluded from the rollout hash and set to
+    # its default, so nothing rolls out.
+    #
+    # This must force conflicts: orchestratord updates the Materialize
+    # resource by writing the full serialized object, which spells every
+    # unset optional spec field as an explicit null, so its field manager
+    # ("unknown") owns all of them, including balancerdReplicas. Forcing only
+    # transfers ownership of the one field this manifest sets.
+    mz_no_image_ref = {
+        "apiVersion": "materialize.cloud/v1",
+        "kind": "Materialize",
+        "metadata": {
+            "name": mz_v1["metadata"]["name"],
+            "namespace": mz_v1["metadata"]["namespace"],
+        },
+        "spec": {
+            "balancerdReplicas": 2,
+        },
+    }
+    apply_server_side(
+        mz_no_image_ref, field_manager="materialize-ssa-subset", force_conflicts=True
+    )
+    managed_fields = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes.v1.materialize.cloud",
+                mz_v1["metadata"]["name"],
+                "-n",
+                "materialize-environment",
+                "--show-managed-fields",
+                "-o",
+                "jsonpath={.metadata.managedFields}",
+            ]
+        )
+    )
+    subset_entries = [
+        entry
+        for entry in managed_fields
+        if entry["manager"] == "materialize-ssa-subset"
+    ]
+    assert len(subset_entries) == 1, f"expected one entry, got {managed_fields}"
+    subset_fields = subset_entries[0]["fieldsV1"]["f:spec"]
+    assert "f:balancerdReplicas" in subset_fields, f"got {subset_fields}"
+    assert "f:environmentdImageRef" not in subset_fields, f"got {subset_fields}"
+
+    mz = get_materialize_v1alpha1()
+    assert (
+        mz["spec"]["requestRollout"] == adopted_request_rollout
+    ), f"Expected requestRollout unchanged after subset server-side apply, but changed from {adopted_request_rollout} to {mz['spec']['requestRollout']}"
+    assert (
+        mz["spec"]["environmentdImageRef"] == mz_v1["spec"]["environmentdImageRef"]
+    ), f"Expected environmentdImageRef unchanged, got {mz['spec']['environmentdImageRef']}"
+
+    # Re-apply the same subset. Its owned subset (which still lacks
+    # environmentdImageRef) is now what gets round-tripped through the
+    # conversion webhook during managed-field reconciliation.
+    apply_server_side(
+        mz_no_image_ref, field_manager="materialize-ssa-subset", force_conflicts=False
+    )
+    print(
+        "Server-side apply of a partial v1 resource without "
+        "environmentdImageRef succeeded"
+    )
+
+    # The resource must remain readable at both versions (both directions of
+    # the conversion webhook).
+    get_materialize_v1()
+    get_materialize_v1alpha1()
+
+    print("server-side apply test PASSED")
+
+
+OPERATOR_CERT_SECRET = "operator-materialize-operator-cert"
+OPERATOR_CA_SECRET = "operator-materialize-operator-ca"
+MATERIALIZE_CRD = "materializes.materialize.cloud"
+
+
+def conversion_webhook_works() -> bool:
+    """Returns whether the conversion webhook is currently functional.
+
+    Reading the Materialize resource at v1 forces the Kubernetes API
+    server to call the conversion webhook to convert the stored v1alpha1
+    object. If the webhook's serving certificate isn't trusted by the
+    caBundle registered in the CRD, the API server rejects the call and this
+    returns False.
+    """
+    result = subprocess.run(
+        [
+            "kubectl",
+            "get",
+            "materializes.v1.materialize.cloud",
+            "-n",
+            "materialize-environment",
+            "-o",
+            "json",
+        ],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        print(
+            f"conversion webhook probe failed: {result.stderr.decode(errors='replace')}"
+        )
+        return False
+    items = json.loads(result.stdout).get("items", [])
+    return len(items) > 0
+
+
+def get_crd_ca_bundle() -> str:
+    """The caBundle the API server uses to trust the conversion webhook."""
+    return spawn.capture(
+        [
+            "kubectl",
+            "get",
+            "crd",
+            MATERIALIZE_CRD,
+            "-o",
+            "jsonpath={.spec.conversion.webhook.clientConfig.caBundle}",
+        ]
+    ).strip()
+
+
+def get_secret_field(secret: str, field: str) -> str:
+    """A base64-encoded field from a secret in the materialize namespace."""
+    return spawn.capture(
+        [
+            "kubectl",
+            "get",
+            "secret",
+            secret,
+            "-n",
+            "materialize",
+            "-o",
+            rf"jsonpath={{.data.{field}}}",
+        ]
+    ).strip()
+
+
+def get_serving_cert_ca() -> str:
+    """The ca.crt in the mounted serving-certificate secret (the root CA)."""
+    return get_secret_field(OPERATOR_CERT_SECRET, r"ca\.crt")
+
+
+def get_serving_cert_leaf() -> str:
+    """The tls.crt (leaf) in the mounted serving-certificate secret."""
+    return get_secret_field(OPERATOR_CERT_SECRET, r"tls\.crt")
+
+
+def workflow_webhook_cert_rotation(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test that the conversion webhook keeps working as its TLS certificate is
+    rotated, i.e. once the original certificate would have expired.
+
+    The webhook is served by orchestratord using a certificate that
+    cert-manager rotates out-of-band, and orchestratord reloads the serving
+    certificate from disk periodically. The serving certificate is signed by a
+    stable root CA, so there are two distinct rotation cases, both tested here
+    without restarting orchestratord:
+
+      1. Serving-certificate rotation (the common case): the leaf rotates but
+         the CA -- and therefore the caBundle registered on the CRD -- stays the
+         same. The webhook must keep working with no caBundle change.
+
+      2. Root CA rotation (rare): ca.crt changes, so orchestratord must
+         re-register the CRD's caBundle to match the newly-served certificate,
+         otherwise the API server would reject every conversion request.
+
+    Rather than wait out real certificate lifetimes, this test deploys with a
+    very short reload interval and forces cert-manager to reissue certificates
+    by deleting their secrets.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    enable_v1_crd(definition)
+
+    # Use cert-manager (the default) so we exercise the real rotation path,
+    # and reload the certificate aggressively so a rotation is picked up in
+    # seconds rather than the default hour.
+    assert definition["operator"]["operator"]["certificate"]["source"] == "cert-manager"
+    definition["operator"]["operator"]["args"]["webhookCertReloadInterval"] = "5s"
+
+    # Deploy a v1 resource. The initial apply already goes through the
+    # conversion webhook (v1 -> stored v1alpha1), so this confirms the
+    # webhook works before any rotation.
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
+    init(definition)
+    apply_materialize(definition)
+
+    def webhook_works() -> None:
+        assert conversion_webhook_works(), "conversion webhook is not working"
+
+    retry(webhook_works, 120)
+    print("Conversion webhook works before rotation")
+
+    initial_ca_bundle = get_crd_ca_bundle()
+    assert initial_ca_bundle, "expected a caBundle to be registered on the CRD"
+
+    # --- Case 1: serving-certificate rotation, CA unchanged ------------------
+    #
+    # Deleting the serving-certificate secret makes cert-manager reissue the
+    # leaf (new key + new tls.crt) signed by the same stable root CA, so ca.crt
+    # is unchanged. The webhook must keep working and the caBundle must NOT
+    # change.
+    leaf_before = get_serving_cert_leaf()
+    ca_before = get_serving_cert_ca()
+    print("Rotating the serving certificate (deleting the serving cert secret)...")
+    spawn.runv(
+        ["kubectl", "delete", "secret", OPERATOR_CERT_SECRET, "-n", "materialize"]
+    )
+
+    def leaf_rotated() -> None:
+        leaf = get_serving_cert_leaf()
+        assert (
+            leaf and leaf != leaf_before
+        ), "cert-manager has not reissued the leaf yet"
+
+    retry(leaf_rotated, 120)
+    assert (
+        get_serving_cert_ca() == ca_before
+    ), "root CA changed during a serving-certificate rotation; expected it to be stable"
+    print("Serving certificate rotated; root CA is unchanged")
+
+    # Give orchestratord time to reload the new leaf (interval is 5s), then
+    # confirm the webhook still works and the caBundle was left untouched.
+    retry(webhook_works, 120)
+    assert (
+        get_crd_ca_bundle() == initial_ca_bundle
+    ), "caBundle changed even though the CA did not"
+    apply_materialize(definition)
+    print("Conversion webhook still works after serving-certificate rotation")
+
+    # --- Case 2: root CA rotation --------------------------------------------
+    #
+    # Rotate the root CA, then reissue the leaf so its ca.crt reflects the new
+    # CA. orchestratord must notice ca.crt changed and re-register the CRD's
+    # caBundle, otherwise the API server would reject conversions.
+    print("Rotating the root CA (deleting the CA secret)...")
+    spawn.runv(["kubectl", "delete", "secret", OPERATOR_CA_SECRET, "-n", "materialize"])
+
+    def ca_secret_rotated() -> None:
+        ca = get_secret_field(OPERATOR_CA_SECRET, r"tls\.crt")
+        assert ca, "cert-manager has not reissued the root CA yet"
+
+    retry(ca_secret_rotated, 120)
+
+    # Force the leaf to be re-signed by the new CA so the mounted ca.crt updates.
+    spawn.runv(
+        ["kubectl", "delete", "secret", OPERATOR_CERT_SECRET, "-n", "materialize"]
+    )
+
+    def serving_ca_changed() -> None:
+        assert (
+            get_serving_cert_ca() != ca_before
+        ), "serving cert's ca.crt has not picked up the new root CA yet"
+
+    retry(serving_ca_changed, 180)
+    print("Root CA rotated and serving certificate re-signed by the new CA")
+
+    # orchestratord must refresh the CRD's caBundle to match the new CA. Waiting
+    # for the caBundle to change proves the re-registration happened.
+    def ca_bundle_refreshed() -> None:
+        current = get_crd_ca_bundle()
+        assert (
+            current and current != initial_ca_bundle
+        ), "orchestratord has not refreshed the conversion webhook caBundle yet"
+
+    retry(ca_bundle_refreshed, 300)
+    print("orchestratord refreshed the conversion webhook caBundle after CA rotation")
+
+    # Decisive check: the old CA is gone, so the webhook can only work if the
+    # newly-served certificate is trusted via the refreshed caBundle. We never
+    # restarted orchestratord, so this exercises the in-process reload +
+    # re-registration path that runs in production.
+    retry(webhook_works, 120)
+    apply_materialize(definition)
+    print("Conversion webhook still works after root CA rotation")
+    print("webhook cert rotation test PASSED")
+
+
+# The reporter of the events the Materialize controller publishes.
+MATERIALIZE_EVENT_REPORTER = "orchestratord.materialize.cloud/materialize"
+
+
+def get_materialize_events(definition: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the events published about the test's Materialize resource."""
+    name = definition["materialize"]["metadata"]["name"]
+    events = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                # `kubectl get events` serves the core v1 view of events, which
+                # renames the events.k8s.io fields these tests read.
+                "events.events.k8s.io",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+        )
+    )["items"]
+    return [
+        event
+        for event in events
+        if event.get("regarding", {}).get("kind") == "Materialize"
+        and event.get("regarding", {}).get("name") == name
+    ]
+
+
+def wait_for_failure_note(
+    definition: dict[str, Any],
+    matches: Callable[[str], bool],
+) -> str:
+    """Wait for a ReconcileFailed event on the Materialize resource whose note
+    satisfies `matches`, and return that note."""
+    found: list[str] = []
+
+    def check() -> None:
+        failures = [
+            event
+            for event in get_materialize_events(definition)
+            if event.get("reason") == "ReconcileFailed"
+        ]
+        matching = [event for event in failures if matches(event.get("note") or "")]
+        assert (
+            matching
+        ), f"No matching ReconcileFailed event; notes were {[e.get('note') for e in failures]}"
+        assert matching[0]["type"] == "Warning", matching[0]
+        found.append(matching[0]["note"])
+
+    retry(check, 300)
+    return found[0]
+
+
+def workflow_failure_events(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test that the ReconcileFailed event on a Materialize resource follows
+    the current cause of the failure, rather than the first one.
+
+    The environment first fails because its backend secret is missing, then,
+    once the secret exists with an invalid license key, because the key fails
+    to validate.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    init(definition)
+
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [definition["namespace"], definition["materialize"]]
+        ).encode(),
+    )
+    first = wait_for_failure_note(definition, lambda note: "not found" in note.lower())
+    print(f"First failure reported: {first}")
+
+    secret = copy.deepcopy(definition["secret"])
+    secret["stringData"]["license_key"] = "not-a-real-license-key"
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all([secret]).encode(),
+    )
+    second = wait_for_failure_note(definition, lambda note: note != first)
+    print(f"Second failure reported: {second}")
+
+    reporters = {
+        event["reportingController"] for event in get_materialize_events(definition)
+    }
+    assert reporters == {MATERIALIZE_EVENT_REPORTER}, reporters
+    print("workflow_failure_events PASSED")
+
+
+def workflow_manually_promote(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test ManuallyPromote rollout strategy with both v1alpha1 and v1
+    force-promote mechanisms.
+
+    Verifies that promotion can be triggered by setting forcePromote to either:
+    - The v1alpha1 requestRollout UUID
+    - The v1 requestedRolloutHash
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    enable_v1_crd(definition)
+
+    # Deploy with v1 and ManuallyPromote strategy.
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
+    definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
+    init(definition)
+    run(definition, False)
+    print("Initial deployment with ManuallyPromote completed")
+
+    # --- Test 1: Promote using v1alpha1 requestRollout UUID ---
+    print("Test 1: Promote using v1alpha1 requestRollout UUID")
+
+    # Make a spec change to trigger a new rollout.
+    definition["materialize"]["spec"]["environmentdExtraEnv"] = [
+        {"name": "MANUALLY_PROMOTE_TEST_1", "value": "true"},
+    ]
+    apply_materialize(definition)
+
+    wait_for_ready_to_promote()
+
+    # Promote using v1alpha1 requestRollout.
+    mz_v1 = get_materialize_v1alpha1()
+    request_rollout = mz_v1["spec"]["requestRollout"]
+    mz_name = mz_v1["metadata"]["name"]
+    print(f"Promoting via v1alpha1 requestRollout: {request_rollout}")
+    spawn.runv(
+        [
+            "kubectl",
+            "patch",
+            "materializes.v1alpha1.materialize.cloud",
+            mz_name,
+            "-n",
+            "materialize-environment",
+            "--type=merge",
+            "-p",
+            json.dumps({"spec": {"forcePromote": request_rollout}}),
+        ],
+    )
+    wait_for_rollout_complete()
+    print("Test 1 PASSED: Promotion via v1alpha1 requestRollout succeeded")
+
+    # --- Test 2: Promote using v1 requestedRolloutHash ---
+    print("Test 2: Promote using v1 requestedRolloutHash")
+
+    # Make another spec change to trigger a new rollout.
+    definition["materialize"]["spec"]["environmentdExtraEnv"] = [
+        {"name": "MANUALLY_PROMOTE_TEST_2", "value": "true"},
+    ]
+    apply_materialize(definition)
+
+    wait_for_ready_to_promote()
+
+    # Read the v1 status to get the requestedRolloutHash.
+    mz_v2 = get_materialize_v1()
+    requested_rollout_hash = mz_v2["status"]["requestedRolloutHash"]
+    mz_name = mz_v2["metadata"]["name"]
+    print(f"Promoting via v1 requestedRolloutHash: {requested_rollout_hash}")
+
+    # Patch at v1 using the hash as forcePromote.
+    spawn.runv(
+        [
+            "kubectl",
+            "patch",
+            "materializes.v1.materialize.cloud",
+            mz_name,
+            "-n",
+            "materialize-environment",
+            "--type=merge",
+            "-p",
+            json.dumps({"spec": {"forcePromote": requested_rollout_hash}}),
+        ],
+    )
+    wait_for_rollout_complete()
+    print("Test 2 PASSED: Promotion via v1 requestedRolloutHash succeeded")
+
+    check_lifecycle_events(definition)
+    print("workflow_manually_promote PASSED")
+
+
+def check_lifecycle_events(definition: dict[str, Any]) -> None:
+    """Assert that each phase of a ManuallyPromote rollout was published as an
+    event on the Materialize resource, with the condition's reason and
+    message."""
+    by_reason = {event["reason"]: event for event in get_materialize_events(definition)}
+    for reason in ("Applying", "ReadyToPromote", "Promoting", "Applied"):
+        assert reason in by_reason, f"No {reason} event, found {sorted(by_reason)}"
+        event = by_reason[reason]
+        assert event["type"] == "Normal", event
+        assert event["reportingController"] == MATERIALIZE_EVENT_REPORTER, event
+        assert "generation" in (event.get("note") or ""), event
+
+
+def apply_materialize(definition: dict[str, Any]) -> None:
+    """Apply the materialize resource definition via kubectl."""
+    defs = [
+        definition["namespace"],
+        definition["secret"],
+        definition["materialize"],
+    ]
+    if "materialize2" in definition:
+        defs.append(definition["materialize2"])
+    if "system_params_configmap" in definition:
+        defs.append(definition["system_params_configmap"])
+    if "balancerd_configmap" in definition:
+        defs.append(definition["balancerd_configmap"])
+    yaml_str = yaml.dump_all(defs)
+    print(f"Attempting to apply:\n{yaml_str}")
+    kubectl_apply_retrying_webhook(["kubectl", "apply", "-f", "-"], yaml_str)
+
+
+def wait_for_ready_to_promote() -> None:
+    """Wait for the Materialize resource to reach ReadyToPromote status."""
+    for _ in range(900):
+        time.sleep(1)
+        if is_ready_to_manually_promote():
+            break
+    else:
+        print(yaml.dump(get_materialize_at_stored_version()))
+        raise RuntimeError("Never became ready for manual promotion")
+
+    # Verify it stays in ReadyToPromote (doesn't auto-promote).
+    time.sleep(30)
+    if not is_ready_to_manually_promote():
+        print(yaml.dump(get_materialize_at_stored_version()))
+        raise RuntimeError("Stopped being ready for manual promotion before promoting")
+
+
+def wait_for_rollout_complete() -> None:
+    """Wait for the rollout to complete (UpToDate condition becomes True)."""
+    for _ in range(900):
+        time.sleep(1)
+        try:
+            status = get_materialize_status_at_stored_version()
+            if not status:
+                continue
+            conditions = status.get("conditions", [])
+            if (
+                conditions
+                and conditions[0]["type"] == "UpToDate"
+                and conditions[0]["status"] == "True"
+            ):
+                return
+        except subprocess.CalledProcessError:
+            pass
+    print(yaml.dump(get_materialize_at_stored_version()))
+    raise RuntimeError("Rollout never completed")
+
+
+def workflow_orchestratord_upgrade(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    # TODO: ideally we'd just be able to compare the images directly, but
+    # this test isn't consistently handling ghcr overrides yet - remove this
+    # and go back to full image comparisons once we fix that
+    def image_tag(image: str):
+        return image.rsplit(":", 1)[1]
+
+    def check_orchestratord_version(version: MzVersion):
+        def check():
+            data = get_orchestratord_data()
+            # The number of operator replicas differs between chart versions,
+            # so we require that all of the pods that exist run the expected
+            # image rather than pinning an exact pod count. Pods of the
+            # previous version linger while they terminate, so this also waits
+            # for the rollout to finish. get_orchestratord_data() already
+            # rejects an empty set of pods, so this can't pass vacuously.
+            expected_image = get_image(
+                c.compose["services"]["orchestratord"]["image"],
+                str(version),
+            )
+            for pod in data["items"]:
+                got_image = pod["spec"]["containers"][0]["image"]
+                assert image_tag(got_image) == image_tag(
+                    expected_image
+                ), f"{got_image} != {expected_image}"
+
+        retry(check, 60)
+
+    def check_environmentd_version(version: MzVersion):
+        def check():
+            data = get_environmentd_data()
+            assert len(data["items"]) == 1, f"got {len(data['items'])} items"
+
+            got_image = data["items"][0]["spec"]["containers"][0]["image"]
+            expected_image = get_image(
+                c.compose["services"]["environmentd"]["image"],
+                str(version),
+            )
+            assert image_tag(got_image) == image_tag(
+                expected_image
+            ), f"{got_image} != {expected_image}"
+
+        retry(check, 60)
+
+    def check_clusterd_version(version: MzVersion):
+        def check():
+            data = get_clusterd_data()
+            assert len(data["items"]) == 2, f"got {len(data['items'])} items"
+
+            got_image = data["items"][0]["spec"]["containers"][0]["image"]
+            expected_image = get_image(
+                c.compose["services"]["clusterd"]["image"],
+                str(version),
+            )
+            assert image_tag(got_image) == image_tag(
+                expected_image
+            ), f"{got_image} != {expected_image}"
+
+        retry(check, 60)
+
+    def check_balancerd_version(version: MzVersion):
+        def check():
+            data = get_balancerd_data()
+            assert len(data["items"]) == 2, f"got {len(data['items'])} items"
+
+            got_image = data["items"][0]["spec"]["containers"][0]["image"]
+            expected_image = get_image(
+                c.compose["services"]["balancerd"]["image"],
+                str(version),
+            )
+            assert image_tag(got_image) == image_tag(
+                expected_image
+            ), f"{got_image} != {expected_image}"
+
+        # balancerd pods have a 60s draining period after termination, so we
+        # have to wait longer to ensure that the old ones are gone
+        retry(check, 180)
+
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    versions = get_all_self_managed_versions()
+    versions.append(get_version(args.tag))
+
+    def set_latest_supported_crd_version(definition: dict[str, Any]):
+        if operator_supports_v1(definition):
+            enable_v1_crd(definition)
+            definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
+        else:
+            definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
+
+    def request_rollout_if_needed(definition: dict[str, Any]):
+        if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+        else:
+            definition["materialize"]["spec"].pop("requestRollout", None)
+
+    print(f"running orchestratord {versions[-3]}")
+    definition["operator"]["operator"]["image"]["tag"] = str(versions[-3])
+    set_latest_supported_crd_version(definition)
+    init(definition)
+    check_orchestratord_version(versions[-3])
+
+    print(f"running environmentd {versions[-3]}")
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(versions[-3]),
+    )
+    run(definition, False)
+    check_environmentd_version(versions[-3])
+    check_clusterd_version(versions[-3])
+    check_balancerd_version(versions[-3])
+
+    for version in versions[-2:]:
+        print(f"running orchestratord {version}")
+        definition["operator"]["operator"]["image"]["tag"] = str(version)
+        # Set before the helm upgrade so that operators which support the v1
+        # CRD are deployed with --install-v1-crd and can serve the v1
+        # apiVersion used below.
+        set_latest_supported_crd_version(definition)
+        helm_install_operator(definition["operator"], upgrade=True)
+        wait_for_crd_established()
+        check_crd_versions(definition)
+        check_orchestratord_version(version)
+
+        print(f"running environmentd {version}")
+        definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+            c.compose["services"]["environmentd"]["image"],
+            str(version),
+        )
+        set_latest_supported_crd_version(definition)
+        request_rollout_if_needed(definition)
+        run(definition, False)
+        check_environmentd_version(version)
+        check_clusterd_version(version)
+        # balancerd is broken in the upgrade to 26.4.0
+        if str(version) != "v26.4.0":
+            check_balancerd_version(version)
+
+    # We cannot roll back orchestratord versions once the CRD is updated,
+    # so let's just get a clean cluster and start over.
+    spawn.runv(
+        [
+            "kind",
+            "delete",
+            "cluster",
+            "--name",
+            "kind",
+        ]
+    )
+    definition = setup(c, args)
+
+    print(f"running orchestratord {versions[-3]}")
+    definition["operator"]["operator"]["image"]["tag"] = str(versions[-3])
+    set_latest_supported_crd_version(definition)
+    init(definition)
+    check_orchestratord_version(versions[-3])
+
+    print(f"running environmentd {versions[-3]}")
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(versions[-3]),
+    )
+    run(definition, False)
+    check_environmentd_version(versions[-3])
+    check_clusterd_version(versions[-3])
+    check_balancerd_version(versions[-3])
+
+    print(f"running orchestratord {versions[-1]}")
+    definition["operator"]["operator"]["image"]["tag"] = str(versions[-1])
+    # Set before the helm upgrade so that operators which support the v1 CRD
+    # are deployed with --install-v1-crd and can serve the v1 apiVersion used
+    # below.
+    set_latest_supported_crd_version(definition)
+    helm_install_operator(definition["operator"], upgrade=True)
+    wait_for_crd_established()
+    check_crd_versions(definition)
+    check_orchestratord_version(versions[-1])
+
+    print(f"running environmentd {versions[-1]}")
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(versions[-1]),
+    )
+    set_latest_supported_crd_version(definition)
+    request_rollout_if_needed(definition)
+    run(definition, False)
+    check_environmentd_version(versions[-1])
+    check_clusterd_version(versions[-1])
+    # balancerd is broken in the upgrade to 26.4.0
+    if str(versions[-1]) != "v26.4.0":
+        check_balancerd_version(versions[-1])
+
+
+def workflow_revert_rollout(c: Composition, parser: WorkflowArgumentParser) -> None:
+    # Regression test for DEP-42: if a user starts an upgrade and then cancels
+    # by reverting only `spec.requestRollout` without also reverting
+    # `spec.environmentdImageRef`, the spec image stays ahead of the image
+    # actually running in environmentd. Downstream resources (balancerd,
+    # console) must continue tracking the last completed rollout's image
+    # rather than the diverged spec image — otherwise they end up
+    # version-skewed from environmentd.
+    #
+    # We exercise this end-to-end by initial-deploying on a prior released
+    # version, then starting a `ManuallyPromote` upgrade to the current
+    # build's image and parking it at `ReadyToPromote` (never promoting it),
+    # and finally reverting only `requestRollout`.
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    def get_cr(plural: str) -> dict[str, Any]:
+        # orchestratord creates the Balancer and Console CRs after writing
+        # `lastCompletedRolloutRequest`, so `post_run_check` can return
+        # before they exist. Retry until the resource shows up.
+        #
+        # Use this only for the Balancer/Console CRs. The Materialize CR must
+        # be read via `get_materialize_at_stored_version`, since a bare
+        # `materializes` resolves to the default-served v1 version, which
+        # lacks `requestRollout`/`lastCompletedRolloutRequest`.
+        result: dict[str, Any] = {}
+
+        def fetch() -> None:
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        plural,
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+            assert len(data["items"]) >= 1, f"{plural} not yet present"
+            result["item"] = data["items"][0]
+
+        retry(fetch, 120)
+        return result["item"]
+
+    definition = setup(c, args)
+
+    # Initial deploy on a prior released version, so the upgrade target
+    # (current build) is a real, pullable, different image. orchestratord
+    # itself stays on the current build — that's the binary whose fix is
+    # under test.
+    initial_version = get_all_self_managed_versions()[-1]
+    initial_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(initial_version),
+    )
+    upgrade_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        args.tag,
+    )
+    assert upgrade_image != initial_image, (
+        "test setup invariant: initial and upgrade env images must differ "
+        f"(both are {initial_image!r})"
+    )
+
+    definition["materialize"]["spec"]["environmentdImageRef"] = initial_image
+    init(definition)
+    run(definition, False)
+
+    initial_mz = get_materialize_at_stored_version()
+    initial_request = initial_mz["spec"]["requestRollout"]
+    assert initial_mz["status"]["lastCompletedRolloutRequest"] == initial_request
+    assert (
+        initial_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"]
+        == initial_image
+    ), (
+        "status.lastCompletedRolloutEnvironmentdImageRef was not populated "
+        "with the rolled-out image"
+    )
+    initial_balancerd_image_ref = get_cr("balancers")["spec"]["balancerdImageRef"]
+    initial_console_image_ref = get_cr("consoles")["spec"]["consoleImageRef"]
+
+    # Kick off a real ManuallyPromote upgrade to the current build's image
+    # and leave it parked at ReadyToPromote. At this point the new-generation
+    # environmentd is up and running, but the active environmentd is still
+    # the initial-version pod, so `status.lastCompletedRollout*` must not
+    # have advanced.
+    definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
+    definition["materialize"]["spec"]["environmentdImageRef"] = upgrade_image
+    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [
+                definition["namespace"],
+                definition["secret"],
+                definition["materialize"],
+            ]
+        ).encode(),
+    )
+    for _ in range(900):
+        time.sleep(1)
+        if is_ready_to_manually_promote():
+            break
+    else:
+        spawn.runv(
+            [
+                "kubectl",
+                "get",
+                "materializes",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "yaml",
+            ],
+        )
+        raise RuntimeError("upgrade never became ready for manual promotion")
+
+    parked_mz = get_materialize_at_stored_version()
+    assert parked_mz["status"]["lastCompletedRolloutRequest"] == initial_request
+    assert (
+        parked_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"] == initial_image
+    )
+
+    # Even mid-rollout (spec.envImageRef = upgrade, status = initial),
+    # downstream CRs must track the active image, not the spec image.
+    parked_balancerd_image_ref = get_cr("balancers")["spec"]["balancerdImageRef"]
+    assert parked_balancerd_image_ref == initial_balancerd_image_ref, (
+        f"Balancer CR balancerdImageRef drifted during a parked upgrade: "
+        f"{initial_balancerd_image_ref!r} -> {parked_balancerd_image_ref!r}"
+    )
+    parked_console_image_ref = get_cr("consoles")["spec"]["consoleImageRef"]
+    assert parked_console_image_ref == initial_console_image_ref, (
+        f"Console CR consoleImageRef drifted during a parked upgrade: "
+        f"{initial_console_image_ref!r} -> {parked_console_image_ref!r}"
+    )
+
+    # Cancel the upgrade by reverting only `requestRollout`. Deliberately
+    # leave `environmentdImageRef` pointed at the upgrade image — that's the
+    # DEP-42 scenario: spec image and running image diverge.
+    definition["materialize"]["spec"]["requestRollout"] = initial_request
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump(definition["materialize"]).encode(),
+    )
+
+    def check_revert_applied() -> None:
+        mz = get_materialize_at_stored_version()
+        assert mz["spec"]["requestRollout"] == initial_request
+        assert mz["spec"]["environmentdImageRef"] == upgrade_image
+
+    retry(check_revert_applied, 60)
+
+    # Let orchestratord reconcile several times after the revert.
+    time.sleep(30)
+
+    final_mz = get_materialize_at_stored_version()
+    assert final_mz["status"]["lastCompletedRolloutRequest"] == initial_request
+    assert (
+        final_mz["status"]["lastCompletedRolloutEnvironmentdImageRef"] == initial_image
+    ), "lastCompletedRolloutEnvironmentdImageRef should not change without a completed rollout"
+
+    final_balancerd_image_ref = get_cr("balancers")["spec"]["balancerdImageRef"]
+    assert final_balancerd_image_ref == initial_balancerd_image_ref, (
+        f"Balancer CR balancerdImageRef tracked diverged spec image instead "
+        f"of the last completed rollout image: "
+        f"{initial_balancerd_image_ref!r} -> {final_balancerd_image_ref!r}"
+    )
+
+    final_console_image_ref = get_cr("consoles")["spec"]["consoleImageRef"]
+    assert final_console_image_ref == initial_console_image_ref, (
+        f"Console CR consoleImageRef tracked diverged spec image instead of "
+        f"the last completed rollout image: "
+        f"{initial_console_image_ref!r} -> {final_console_image_ref!r}"
+    )
+
+
+def workflow_rollout_timeout(c: Composition, parser: WorkflowArgumentParser) -> None:
+    # Tests CLO-81: orchestratord automatically cancels an in-progress rollout
+    # once it has been running longer than `spec.rolloutRequestTimeout`. A new
+    # generation left un-promoted holds back compaction via read holds, and
+    # promoting it after a long delay can cause incident-inducing load, so
+    # instead of parking it indefinitely orchestratord tears it down and keeps
+    # serving the previously-active generation. The user must request a fresh
+    # rollout to retry.
+    #
+    # We deploy on a prior released version, then start a default
+    # (WaitUntilReady) upgrade to the current build with a deliberately tiny
+    # `rolloutRequestTimeout`. The new generation cannot boot and catch up
+    # within the timeout, so orchestratord must cancel the rollout: the active
+    # environmentd stays on the initial image, the un-promoted generation is
+    # torn down, `status.conditions` reports reason `RolloutTimeout`, and
+    # `lastCompletedRolloutRequest` advances to the cancelled request (so it is
+    # not immediately retried) while `lastCompletedRolloutEnvironmentdImageRef`
+    # never moves to the upgrade image.
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+
+    # Initial deploy on a prior released version so the upgrade target (current
+    # build) is a real, pullable, different image. orchestratord stays on the
+    # current build — that's the binary whose timeout logic is under test.
+    initial_version = get_all_self_managed_versions()[-1]
+    initial_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(initial_version),
+    )
+    upgrade_image = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        args.tag,
+    )
+    assert upgrade_image != initial_image, (
+        "test setup invariant: initial and upgrade env images must differ "
+        f"(both are {initial_image!r})"
+    )
+
+    definition["materialize"]["spec"]["environmentdImageRef"] = initial_image
+    init(definition)
+    run(definition, False)
+
+    initial_status = get_materialize_status_at_stored_version()
+    assert initial_status is not None
+    assert initial_status["lastCompletedRolloutEnvironmentdImageRef"] == initial_image
+
+    # Start a default (WaitUntilReady) upgrade with a tiny timeout. The new
+    # generation cannot become ready within the timeout, so the rollout will be
+    # cancelled. We apply the manifest directly (rather than via `run`, which
+    # would wait for a successful rollout) and poll for the cancellation.
+    upgrade_request = str(uuid.uuid4())
+    definition["materialize"]["spec"]["environmentdImageRef"] = upgrade_image
+    definition["materialize"]["spec"]["rolloutRequestTimeout"] = "1s"
+    definition["materialize"]["spec"]["requestRollout"] = upgrade_request
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [
+                definition["namespace"],
+                definition["secret"],
+                definition["materialize"],
+            ]
+        ).encode(),
+    )
+
+    # Wait for orchestratord to observe the timeout and cancel the rollout.
+    def check_cancelled() -> None:
+        status = get_materialize_status_at_stored_version() or {}
+        conditions = status.get("conditions") or []
+        assert conditions, "no status conditions yet"
+        condition = conditions[0]
+        assert (
+            condition["type"] == "UpToDate"
+            and condition["status"] == "False"
+            and condition["reason"] == "RolloutTimeout"
+        ), f"expected a RolloutTimeout condition, but got {condition}"
+        # The cancelled request is marked completed so it isn't retried...
+        assert (
+            status["lastCompletedRolloutRequest"] == upgrade_request
+        ), f"lastCompletedRolloutRequest did not advance to the cancelled request: {status}"
+        # ...but the rollout never actually became active.
+        assert (
+            status["lastCompletedRolloutEnvironmentdImageRef"] == initial_image
+        ), f"lastCompletedRolloutEnvironmentdImageRef advanced despite cancellation: {status}"
+
+    retry(check_cancelled, 300)
+
+    # The previously-active generation keeps serving on the initial image, and
+    # the un-promoted generation has been torn down (releasing its read holds).
+    def check_active_generation_intact() -> None:
+        live_images = [
+            item["spec"]["containers"][0]["image"]
+            for item in get_environmentd_data()["items"]
+            if not item.get("metadata", {}).get("deletionTimestamp")
+        ]
+        assert live_images, "no environmentd pods running"
+        assert all(
+            image != upgrade_image for image in live_images
+        ), f"cancelled upgrade generation is still running: {live_images}"
+        assert any(
+            image == initial_image for image in live_images
+        ), f"active generation is not on the initial image: {live_images}"
+
+    retry(check_active_generation_intact, 120)
+
+    def check_single_generation() -> None:
+        statefulsets = (
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "statefulset",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "name",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+            .strip()
+            .split("\n")
+        )
+        environmentd_statefulsets = [s for s in statefulsets if "-environmentd-" in s]
+        assert (
+            len(environmentd_statefulsets) == 1
+        ), f"expected exactly one environmentd statefulset after cancellation, but found {environmentd_statefulsets}"
+
+    retry(check_single_generation, 120)
+
+
+OPERATOR_DEPLOYMENT = "operator-materialize-operator"
+# The lease name is fixed in the orchestratord binary. A single lease guards
+# all of its controllers, in the namespace orchestratord runs in.
+LEADER_ELECTION_LEASE = "orchestratord"
+
+
+def get_operator_pod_names() -> list[str]:
+    """Names of the ready orchestratord pods of the current generation.
+
+    Readiness rather than the `Running` phase, because only ready pods are in
+    the webhook service's endpoints, and a pod whose readiness probe fails
+    stays in the `Running` phase.
+    """
+    return [
+        pod["metadata"]["name"]
+        for pod in get_orchestratord_data()["items"]
+        if any(
+            condition["type"] == "Ready" and condition["status"] == "True"
+            for condition in pod["status"].get("conditions") or []
+        )
+    ]
+
+
+def get_operator_pod_restart_counts() -> dict[str, int]:
+    """Container restart count per orchestratord pod of the current generation."""
+    return {
+        pod["metadata"]["name"]: sum(
+            container["restartCount"]
+            for container in pod["status"].get("containerStatuses") or []
+        )
+        for pod in get_orchestratord_data()["items"]
+    }
+
+
+def get_lease_holder(lease_name: str) -> str | None:
+    """The holderIdentity of a lease, or None if the lease doesn't exist or
+    has no holder. orchestratord uses its pod name as the identity."""
+    try:
+        holder = spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "lease",
+                lease_name,
+                "-n",
+                "materialize",
+                "-o",
+                "jsonpath={.spec.holderIdentity}",
+            ],
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return None
+    return holder or None
+
+
+def get_lease_transitions(lease_name: str) -> int:
+    """How many times a lease has changed hands, or 0 if the lease doesn't
+    exist yet.
+
+    Every takeover increments this and renewals by the incumbent leave it
+    alone, so requiring it to grow across an event proves that leadership
+    really moved, rather than that the incumbent simply held on.
+    """
+    try:
+        transitions = spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "lease",
+                lease_name,
+                "-n",
+                "materialize",
+                "-o",
+                "jsonpath={.spec.leaseTransitions}",
+            ],
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return 0
+    return int(transitions) if transitions else 0
+
+
+def get_operator_is_leader_metric(pod: str) -> float:
+    """The `orchestratord_is_leader` gauge scraped from an operator pod.
+
+    Scraped through the API server's pod proxy rather than a port-forward,
+    since the operator image has no shell or HTTP client to exec into.
+    """
+    metrics = spawn.capture(
+        [
+            "kubectl",
+            "get",
+            "--raw",
+            f"/api/v1/namespaces/materialize/pods/{pod}:3100/proxy/metrics",
+        ]
+    )
+    for line in metrics.splitlines():
+        if line.startswith("orchestratord_is_leader "):
+            return float(line.split(" ", 1)[1])
+    raise AssertionError(f"operator pod {pod} does not report orchestratord_is_leader")
+
+
+def check_is_leader_metric_agrees_with_lease() -> None:
+    """Assert that exactly the lease holder reports itself as the leader.
+
+    The metric is what alerting keys off, so it has to track the lease rather
+    than merely be present. A total of zero across the replicas means nobody
+    is reconciling, which is otherwise only visible in the operator's logs.
+    """
+    holder = get_lease_holder(LEADER_ELECTION_LEASE)
+    reported = {
+        pod: get_operator_is_leader_metric(pod) for pod in get_operator_pod_names()
+    }
+    assert holder is not None and reported.get(holder) == 1, (
+        f"lease {LEADER_ELECTION_LEASE} is held by {holder!r}, "
+        f"but the replicas report {reported}"
+    )
+    assert (
+        sum(reported.values()) == 1
+    ), f"expected exactly one operator replica to report itself leader, got {reported}"
+
+
+def check_lease_held_by_operator_pod() -> None:
+    """Assert that the controller lease is held by a running operator pod."""
+    pods = get_operator_pod_names()
+    holder = get_lease_holder(LEADER_ELECTION_LEASE)
+    assert (
+        holder in pods
+    ), f"lease {LEADER_ELECTION_LEASE} is held by {holder!r}, expected one of {pods}"
+
+
+def request_rollout_via_v1(definition: dict[str, Any]) -> None:
+    """Change the v1 spec so the next apply triggers a rollout.
+
+    The v1 CRD has no requestRollout field (setting it would be silently
+    pruned by the API server). Instead the conversion webhook derives
+    requestRollout from a hash of the v1 spec, so changing any hashed field
+    (environmentdExtraEnv here) requests a new rollout.
+    """
+    definition["materialize"]["spec"]["environmentdExtraEnv"] = [
+        {"name": "LEADER_FAILOVER_TEST_NONCE", "value": str(uuid.uuid4())}
+    ]
+
+
+def workflow_leader_failover(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test that orchestratord leader election fails over between replicas.
+
+    orchestratord runs with multiple replicas (the chart default), and its
+    controllers (materialize, balancer, console) are all guarded by a single
+    coordination.k8s.io Lease so that only one replica reconciles at a time,
+    while the other replicas wait to take the lease over. The conversion
+    webhook is served by every replica (that's the motivation for running
+    more than one), so the v1 CRD is enabled and the webhook must stay
+    functional across both failover paths:
+
+      1. Leader pod deletion: the lease stops being renewed, so a standby
+         replica must take it over after the lease expires and then actually
+         reconcile (proven by driving a rollout to completion), while the
+         surviving replica keeps serving the conversion webhook.
+
+      2. Rolling restart of the operator deployment (the production rollout
+         scenario that motivates running multiple replicas): after the
+         rollout the lease must be held by a new pod, reconciliation must
+         still work, and the webhook must still work.
+
+      3. Losing the lease to another candidate: the replica that lost it must
+         rejoin the election in process rather than restarting, so that it
+         keeps serving the conversion webhook throughout.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    replicas = definition["operator"]["operator"]["replicas"]
+    assert (
+        replicas >= 2
+    ), f"leader failover requires at least 2 operator replicas, chart default is {replicas}"
+
+    # Serve the v1 CRD and apply the Materialize resource at v1, so that
+    # writes go through the conversion webhook and webhook availability
+    # across failovers is actually exercised.
+    enable_v1_crd(definition)
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1"
+
+    init(definition)
+    run(definition, expect_fail=False)
+
+    def webhook_works() -> None:
+        assert conversion_webhook_works(), "conversion webhook is not working"
+
+    retry(webhook_works, 120)
+    print("Conversion webhook works")
+
+    # The balancer and console controllers must have reconciled their pods
+    # into a running state, proving all three controllers work under the
+    # lease. run() already proved this for the materialize controller.
+    def balancer_and_console_running() -> None:
+        for name, data in (
+            ("balancerd", get_balancerd_data()),
+            ("console", get_console_data()),
+        ):
+            pods = data["items"]
+            assert pods and all(
+                pod["status"]["phase"] == "Running" for pod in pods
+            ), f"expected all {name} pods to be running, got {[(pod['metadata']['name'], pod['status']['phase']) for pod in pods]}"
+
+    retry(balancer_and_console_running, 300)
+    print("Balancerd and console pods are running")
+
+    # The chart must create a PodDisruptionBudget so that node drains can't
+    # take down all operator replicas at once.
+    spawn.runv(["kubectl", "get", "pdb", OPERATOR_DEPLOYMENT, "-n", "materialize"])
+
+    def all_replicas_ready() -> None:
+        pods = get_operator_pod_names()
+        assert (
+            len(pods) == replicas
+        ), f"expected {replicas} ready operator pods, got {pods}"
+
+    retry(all_replicas_ready, 120)
+    retry(check_lease_held_by_operator_pod, 120)
+    # Retried because the leader sets the gauge when it starts running the
+    # controllers, which is just after it writes the lease.
+    retry(check_is_leader_metric_agrees_with_lease, 60)
+    print(
+        "The controller lease is held by an operator pod, which reports itself leader"
+    )
+
+    # --- Case 1: leader pod deletion -----------------------------------------
+    old_leader = get_lease_holder(LEADER_ELECTION_LEASE)
+    assert old_leader is not None
+    print(f"Deleting leader pod {old_leader}")
+    spawn.runv(
+        ["kubectl", "delete", "pod", old_leader, "-n", "materialize", "--wait=false"]
+    )
+
+    # The dead leader stops renewing, so after the lease duration (15s by
+    # default) a standby replica (or the replacement pod) must take over.
+    def new_leader_elected() -> None:
+        holder = get_lease_holder(LEADER_ELECTION_LEASE)
+        pods = get_operator_pod_names()
+        assert (
+            holder != old_leader and holder in pods
+        ), f"lease {LEADER_ELECTION_LEASE} is held by {holder!r}, expected a pod other than {old_leader} among {pods}"
+
+    retry(new_leader_elected, 120)
+    print(f"New leader elected: {get_lease_holder(LEADER_ELECTION_LEASE)}")
+
+    # The surviving replica must keep serving the conversion webhook while
+    # the deleted pod's replacement comes up.
+    retry(webhook_works, 60)
+
+    # Prove the new leader actually reconciles: request a fresh rollout and
+    # wait for it to complete.
+    request_rollout_via_v1(definition)
+    run(definition, expect_fail=False)
+    print("Reconciliation works after leader pod deletion")
+
+    # --- Case 2: rolling restart of the operator deployment ------------------
+    spawn.runv(
+        [
+            "kubectl",
+            "rollout",
+            "restart",
+            f"deployment/{OPERATOR_DEPLOYMENT}",
+            "-n",
+            "materialize",
+        ]
+    )
+    spawn.runv(
+        [
+            "kubectl",
+            "rollout",
+            "status",
+            f"deployment/{OPERATOR_DEPLOYMENT}",
+            "-n",
+            "materialize",
+            "--timeout=300s",
+        ]
+    )
+
+    # All pods were replaced, so the lease must be taken over by a new pod
+    # once the old holder's lease expires, and the webhook must be served by
+    # the new pods.
+    retry(check_lease_held_by_operator_pod, 120)
+    retry(webhook_works, 60)
+    request_rollout_via_v1(definition)
+    run(definition, expect_fail=False)
+    print("Reconciliation works after a rolling restart of the operator")
+
+    # --- Case 3: losing the lease to another candidate -----------------------
+    # Hand the lease to an identity that belongs to nobody. The leader notices
+    # on its next renewal that it is no longer the holder and gives leadership
+    # up, and since the fake holder never renews, the lease is taken over
+    # again once it expires.
+    restarts_before = get_operator_pod_restart_counts()
+    transitions_before = get_lease_transitions(LEADER_ELECTION_LEASE)
+    spawn.runv(
+        [
+            "kubectl",
+            "patch",
+            "lease",
+            LEADER_ELECTION_LEASE,
+            "-n",
+            "materialize",
+            "--type=merge",
+            "-p",
+            json.dumps({"spec": {"holderIdentity": "not-a-real-candidate"}}),
+        ]
+    )
+
+    # An operator pod holding the lease is not enough here: unlike the cases
+    # above, the incumbent leader is still running and eligible, so it could
+    # satisfy that without ever having noticed the patch. Requiring a new
+    # transition proves leadership was actually given up and taken back.
+    def lease_taken_over_again() -> None:
+        check_lease_held_by_operator_pod()
+        transitions = get_lease_transitions(LEADER_ELECTION_LEASE)
+        assert transitions > transitions_before, (
+            f"lease {LEADER_ELECTION_LEASE} is at {transitions} transitions, "
+            f"expected more than {transitions_before}"
+        )
+
+    retry(lease_taken_over_again, 120)
+    retry(webhook_works, 60)
+    # This is the case that exercises clearing the gauge: unlike the failovers
+    # above, the replica that gave leadership up is still running, so it has to
+    # stop reporting itself leader rather than being replaced by a fresh pod.
+    retry(check_is_leader_metric_agrees_with_lease, 60)
+    request_rollout_via_v1(definition)
+    run(definition, expect_fail=False)
+
+    # Losing the lease must not restart the process: the replica rejoins the
+    # election in place, which is what keeps it serving the conversion webhook
+    # the whole time.
+    restarts_after = get_operator_pod_restart_counts()
+    for pod, restarts in restarts_before.items():
+        # A pod that vanished entirely is a failure too, so require that every
+        # pod is still there rather than defaulting a missing one to a pass.
+        assert (
+            pod in restarts_after
+        ), f"operator pod {pod} disappeared after losing the lease"
+        assert restarts_after[pod] == restarts, (
+            f"operator pod {pod} restarted after losing the lease "
+            f"({restarts} -> {restarts_after[pod]})"
+        )
+    print("Reconciliation works after losing the lease, without a restart")
+    print("leader failover test PASSED")
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -2021,6 +4973,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             for mod_class in mod_classes
             if mod_class.__name__ in args.modification
         ]
+    mod_classes = buildkite.shard_list(mod_classes, lambda mod: mod.__name__)
 
     if args.scenario:
         assert not args.runtime
@@ -2036,7 +4989,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if args.runtime:
         end_time = (
-            datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
+            datetime.datetime.now(datetime.UTC)
+            + datetime.timedelta(seconds=args.runtime)
         ).timestamp()
 
     action = Action(args.action)
@@ -2044,7 +4998,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     mod_source = make_mod_source(properties, mod_classes, rng)
 
     end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=args.runtime or 1800)
+        datetime.datetime.now(datetime.UTC)
+        + datetime.timedelta(seconds=args.runtime or 1800)
     ).timestamp()
     versions = get_all_self_managed_versions()
 
@@ -2067,12 +5022,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 run_scenario(scenario, definition)
 
             elif action == Action.UpgradeChain:
+                max_chain_length = 6
                 current_version = rng.choice(versions)
                 chain = [current_version]
                 next_version = current_version
 
                 try:
                     for _ in range(len(versions)):
+                        if len(chain) >= max_chain_length:
+                            break
                         next_version = get_upgrade_target(rng, next_version, versions)
                         chain.append(next_version)
                 except ValueError:
@@ -2095,142 +5053,12 @@ def setup(c: Composition, args) -> dict[str, Any]:
     c.up(Service("testdrive", idle=True), Service("mz-debug", idle=True))
     c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
 
-    cluster = "kind"
+    cluster = KIND_CLUSTER_NAME
     clusters = spawn.capture(["kind", "get", "clusters"]).strip().split("\n")
     if cluster not in clusters or args.recreate_cluster:
-        kind_version = Version.parse(
-            spawn.capture(["kind", "version"]).split(" ")[1][1:]
-        )
-        assert kind_version >= Version.parse(
-            "0.29.0"
-        ), f"kind >= v0.29.0 required, while you are on {kind_version}"
+        recreate_kind_cluster()
 
-        spawn.runv(["kind", "delete", "cluster", "--name", cluster])
-
-        try:
-            spawn.runv(["docker", "network", "create", "kind"])
-        except:
-            pass
-        try:
-            spawn.runv(["docker", "stop", "proxy-dockerhub"])
-        except:
-            pass
-        try:
-            spawn.runv(["docker", "rm", "proxy-dockerhub"])
-        except:
-            pass
-        try:
-            spawn.runv(["docker", "stop", "proxy-ghcr"])
-        except:
-            pass
-        try:
-            spawn.runv(["docker", "rm", "proxy-ghcr"])
-        except:
-            pass
-
-        dockerhub_username = os.getenv("DOCKERHUB_USERNAME")
-        dockerhub_token = os.getenv("DOCKERHUB_ACCESS_TOKEN")
-        spawn.runv(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                "proxy-dockerhub",
-                "--restart=always",
-                "--net=kind",
-                "-v",
-                f"{MZ_ROOT}/misc/kind/cache/dockerhub:/var/lib/registry",
-                "-e",
-                "REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io",
-                *(
-                    [
-                        "-e",
-                        f"REGISTRY_PROXY_USERNAME={dockerhub_username}",
-                        "-e",
-                        f"REGISTRY_PROXY_PASSWORD={dockerhub_token}",
-                    ]
-                    if dockerhub_username and dockerhub_token
-                    else []
-                ),
-                "registry:2",
-            ]
-        )
-
-        ghcr_username = "materialize-bot"
-        ghcr_token = os.getenv("GITHUB_GHCR_TOKEN")
-        spawn.runv(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                "proxy-ghcr",
-                "--restart=always",
-                "--net=kind",
-                "-v",
-                f"{MZ_ROOT}/misc/kind/cache/ghcr:/var/lib/registry",
-                "-e",
-                "REGISTRY_PROXY_REMOTEURL=https://ghcr.io",
-                *(
-                    [
-                        "-e",
-                        f"REGISTRY_PROXY_USERNAME={ghcr_username}",
-                        "-e",
-                        f"REGISTRY_PROXY_PASSWORD={ghcr_token}",
-                    ]
-                    if ghcr_username and ghcr_token
-                    else []
-                ),
-                "registry:2",
-            ]
-        )
-
-        with (
-            open(MZ_ROOT / "test" / "orchestratord" / "cluster.yaml.tmpl") as in_file,
-            open(MZ_ROOT / "test" / "orchestratord" / "cluster.yaml", "w") as out_file,
-        ):
-            text = in_file.read()
-            out_file.write(
-                text.replace(
-                    "$DOCKER_CONFIG",
-                    os.getenv("DOCKER_CONFIG", f'{os.environ["HOME"]}/.docker'),
-                )
-            )
-
-        spawn.runv(
-            [
-                "kind",
-                "create",
-                "cluster",
-                "--name",
-                cluster,
-                "--config",
-                MZ_ROOT / "test" / "orchestratord" / "cluster.yaml",
-            ]
-        )
-        spawn.runv(
-            [
-                "helm",
-                "repo",
-                "add",
-                "metrics-server",
-                "https://kubernetes-sigs.github.io/metrics-server/",
-            ]
-        )
-        spawn.runv(["helm", "repo", "update", "metrics-server"])
-        spawn.runv(
-            [
-                "helm",
-                "install",
-                "metrics-server",
-                "metrics-server/metrics-server",
-                "--namespace",
-                "kube-system",
-                "--set",
-                "args={--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP}",
-            ]
-        )
+        helm_install_cert_manager()
 
         spawn.runv(["kubectl", "create", "namespace", "materialize"])
 
@@ -2258,15 +5086,24 @@ def setup(c: Composition, args) -> dict[str, Any]:
                 MZ_ROOT / "test" / "orchestratord" / "storageclass.yaml",
             ]
         )
+        spawn.runv(
+            [
+                "kubectl",
+                "apply",
+                "-f",
+                MZ_ROOT / "test" / "orchestratord" / "priorityclass.yaml",
+            ]
+        )
 
     if not args.tag:
         services = [
             "orchestratord",
             "environmentd",
             "clusterd",
+            "console",
             "balancerd",
         ]
-        c.up(*[Service(service, idle=True) for service in services])
+        c.pull_images(*services)
         for service in services:
             spawn.runv(
                 [
@@ -2307,6 +5144,8 @@ def setup(c: Composition, args) -> dict[str, Any]:
     # definition["operator"]["networkPolicies"]["ingress"]["enabled"] = True
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
+    # TODO: Remove once the pinned operator image knows '--disable-database-network-policies'
+    definition["operator"]["operator"]["args"]["enableDatabaseNetworkPolicies"] = True
     definition["operator"]["clusterd"]["nodeSelector"][
         "workload"
     ] = "materialize-instance"
@@ -2360,8 +5199,17 @@ def run_scenario(
             run(definition, expect_fail)
             initialize = False  # only initialize once
         else:
-            upgrade_operator_helm_chart(definition, expect_fail)
-            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+            helm_install_operator(
+                values=definition["operator"],
+                upgrade=True,
+            )
+            # The set of served CRD versions may change between steps (e.g.
+            # when installV1CRD flips), so wait until the operator has
+            # re-registered the CRD before applying resources against it.
+            wait_for_crd_established()
+            check_crd_versions(definition)
+            if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+                definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
             run(definition, expect_fail)
         mod_dict = {mod.__class__: mod.value for mod in mods}
         for subclass in all_subclasses(Modification):
@@ -2381,14 +5229,122 @@ def run_scenario(
                 run_mz_debug()
 
 
-def init(definition: dict[str, Any]) -> None:
+def is_prerelease_tag(tag: str) -> bool:
+    version = Version.parse(tag.removeprefix("v"))
+    if version.prerelease is not None:
+        return True
+    if version.build is not None:
+        return True
+    return False
+
+
+def helm_install_operator(
+    values: dict[str, Any],
+    upgrade: bool,
+):
+    tag = values.get("operator", {}).get("image", {}).get("tag")
+    helm_release_version = tag or "dev"
+    chart_path = MZ_ROOT / "misc" / "helm-charts" / "operator"
+
+    # If installing existing released versions of orchestratord,
+    # we should use the corresponding helm chart.
+    if not is_prerelease_tag(tag or "v26.0.0"):
+        chart_path = "materialize/materialize-operator"
+        spawn.runv(
+            [
+                "helm",
+                "repo",
+                "add",
+                "materialize",
+                "https://materializeinc.github.io/materialize",
+            ]
+        )
+        spawn.runv(["helm", "repo", "update", "materialize"])
+
+    operation = "upgrade" if upgrade else "install"
+    stdin = yaml.dump(values).encode()
+
     try:
-        spawn.capture(
-            ["kubectl", "delete", "namespace", "materialize-environment"],
-            stderr=subprocess.DEVNULL,
+        spawn.runv(
+            [
+                "helm",
+                operation,
+                "operator",
+                chart_path,
+                "--namespace=materialize",
+                "--create-namespace",
+                "--version",
+                helm_release_version,
+                "--wait",
+                "-f",
+                "-",
+            ],
+            stdin=stdin,
         )
     except subprocess.CalledProcessError:
-        pass
+        # Helm's --wait can panic due to a race condition in fluxcd/cli-utils
+        # (send on closed channel). On failure, clean up the potentially
+        # broken release and retry once.
+        print("helm install failed, retrying...")
+        try:
+            spawn.capture(
+                ["helm", "uninstall", "operator", "--namespace=materialize"],
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError:
+            pass
+        spawn.runv(
+            [
+                "helm",
+                "install",
+                "operator",
+                chart_path,
+                "--namespace=materialize",
+                "--create-namespace",
+                "--version",
+                helm_release_version,
+                "--wait",
+                "-f",
+                "-",
+            ],
+            stdin=stdin,
+        )
+
+
+def helm_install_cert_manager():
+    spawn.runv(
+        [
+            "helm",
+            "install",
+            "cert-manager",
+            "oci://quay.io/jetstack/charts/cert-manager",
+            "--version",
+            "v1.19.2",
+            "--namespace",
+            "cert-manager",
+            "--create-namespace",
+            "--set",
+            "crds.enabled=true",
+        ]
+    )
+
+
+def init(definition: dict[str, Any]) -> None:
+    # `--wait=true` blocks until the namespace is fully terminated. If the
+    # timeout is hit and we proceed anyway, the next `kubectl apply` races the
+    # terminating namespace and fails with "is being terminated", so let any
+    # timeout error propagate instead of swallowing it.
+    spawn.runv(
+        [
+            "kubectl",
+            "delete",
+            "namespace",
+            "materialize-environment",
+            "--ignore-not-found",
+            "--wait=true",
+            "--timeout=300s",
+        ],
+    )
     try:
         spawn.capture(
             ["helm", "uninstall", "operator", "--namespace=materialize"],
@@ -2396,144 +5352,115 @@ def init(definition: dict[str, Any]) -> None:
         )
     except subprocess.CalledProcessError:
         pass
-    spawn.runv(
-        [
-            "helm",
-            "install",
-            "operator",
-            MZ_ROOT / "misc" / "helm-charts" / "operator",
-            "--namespace=materialize",
-            "--create-namespace",
-            "--version",
-            "v26.0.0",
-            "-f",
-            "-",
-        ],
-        stdin=yaml.dump(definition["operator"]).encode(),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+
+    helm_install_operator(
+        values=definition["operator"],
+        upgrade=False,
     )
 
-    for i in range(240):
-        try:
+    wait_for_crd_established()
+    check_crd_versions(definition)
+
+
+def check_crd_versions(definition: dict[str, Any]) -> None:
+    """Check that the v1 CRD version and the conversion webhook are installed
+    if and only if the operator was asked to install them."""
+
+    def check() -> None:
+        crd = json.loads(
             spawn.capture(
-                [
-                    "kubectl",
-                    "get",
-                    "crd",
-                    "materializes.materialize.cloud",
-                    "-n",
-                    "materialize",
-                    "-o",
-                    "name",
-                ],
+                ["kubectl", "get", "crd", MATERIALIZE_CRD, "-o", "json"],
                 stderr=subprocess.DEVNULL,
             )
-            break
+        )
+        versions = sorted(version["name"] for version in crd["spec"]["versions"])
+        conversion_strategy = (crd["spec"].get("conversion") or {}).get("strategy")
+        if operator_serves_v1(definition):
+            assert versions == [
+                "v1",
+                "v1alpha1",
+            ], f"expected v1 and v1alpha1 to be served, got {versions}"
+            assert (
+                conversion_strategy == "Webhook"
+            ), f"expected Webhook conversion, got {conversion_strategy}"
+        else:
+            assert versions == [
+                "v1alpha1"
+            ], f"expected only v1alpha1 to be served, got {versions}"
+            # The API server defaults spec.conversion to {"strategy": "None"}
+            # (the string "None") when no conversion is configured.
+            assert conversion_strategy in (
+                None,
+                "None",
+            ), f"expected no conversion, got {conversion_strategy}"
+
+    retry(check, 240)
+
+
+def wait_for_crd_established():
+    for _ in range(240):
+        try:
+            crd = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "crd",
+                        "materializes.materialize.cloud",
+                        "-n",
+                        "materialize",
+                        "-o",
+                        "json",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                )
+            )
+            conditions = crd.get("status", {}).get("conditions") or []
+            established_condition = next(
+                (
+                    condition
+                    for condition in conditions
+                    if condition["type"] == "Established"
+                ),
+                {"status": "False"},
+            )
+            if established_condition["status"] == "True":
+                break
 
         except subprocess.CalledProcessError:
             pass
         time.sleep(1)
     else:
-        raise ValueError("Never completed")
-
-
-def upgrade_operator_helm_chart(definition: dict[str, Any], expect_fail: bool) -> None:
-    spawn.runv(
-        [
-            "helm",
-            "upgrade",
-            "operator",
-            MZ_ROOT / "misc" / "helm-charts" / "operator",
-            "--namespace=materialize",
-            "--version",
-            "v26.0.0",
-            "-f",
-            "-",
-        ],
-        stdin=yaml.dump(definition["operator"]).encode(),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+        raise ValueError("CRD never became 'Established'")
 
 
 def run(definition: dict[str, Any], expect_fail: bool) -> None:
-    defs = [
-        definition["namespace"],
-        definition["secret"],
-        definition["materialize"],
-    ]
-    if "materialize2" in definition:
-        defs.append(definition["materialize2"])
-    if "system_params_configmap" in definition:
-        defs.append(definition["system_params_configmap"])
-    try:
-        spawn.runv(
-            ["kubectl", "apply", "-f", "-"],
-            stdin=yaml.dump_all(defs).encode(),
-        )
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
-        raise
+    apply_materialize(definition)
 
     if definition["materialize"]["spec"].get("rolloutStrategy") == "ManuallyPromote":
-        # First wait for it to become ready to promote, but not yet promoted
-        for _ in range(900):
-            time.sleep(1)
-            if is_ready_to_manually_promote():
-                break
-        else:
-            spawn.runv(
-                [
-                    "kubectl",
-                    "get",
-                    "materializes",
-                    "-n",
-                    "materialize-environment",
-                    "-o",
-                    "yaml",
-                ],
-            )
-            raise RuntimeError("Never became ready for manual promotion")
+        wait_for_ready_to_promote()
 
-        # Wait to see that it doesn't promote
-        time.sleep(30)
-        if not is_ready_to_manually_promote():
-            spawn.runv(
-                [
-                    "kubectl",
-                    "get",
-                    "materializes",
-                    "-n",
-                    "materialize-environment",
-                    "-o",
-                    "yaml",
-                ],
-            )
-            raise RuntimeError(
-                "Stopped being ready for manual promotion before promoting"
-            )
-
-        # Manually promote it
-        mz = json.loads(
-            spawn.capture(
-                [
-                    "kubectl",
-                    "get",
-                    "materializes",
-                    "-n",
-                    "materialize-environment",
-                    "-o",
-                    "json",
-                ],
-                stderr=subprocess.DEVNULL,
-            )
-        )["items"][0]
-        definition["materialize"]["spec"]["forcePromote"] = mz["spec"]["requestRollout"]
+        # Manually promote it by reading the v1alpha1 resource to get the
+        # requestRollout UUID, then patching forcePromote to match it.
+        # Alternatively, forcePromote can be set to the v1
+        # requestedRolloutHash (tested in workflow_manually_promote).
+        mz = get_materialize_v1alpha1()
+        request_rollout = mz["spec"]["requestRollout"]
+        assert request_rollout is not None
+        mz_name = mz["metadata"]["name"]
         try:
             spawn.runv(
-                ["kubectl", "apply", "-f", "-"],
-                stdin=yaml.dump(definition["materialize"]).encode(),
+                [
+                    "kubectl",
+                    "patch",
+                    "materializes.v1alpha1.materialize.cloud",
+                    mz_name,
+                    "-n",
+                    "materialize-environment",
+                    "--type=merge",
+                    "-p",
+                    json.dumps({"spec": {"forcePromote": request_rollout}}),
+                ],
             )
         except subprocess.CalledProcessError as e:
             print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
@@ -2543,23 +5470,11 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
 
 
 def is_ready_to_manually_promote():
-    data = json.loads(
-        spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "materializes",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "json",
-            ],
-            stderr=subprocess.DEVNULL,
-        )
-    )
-    conditions = data["items"][0].get("status", {}).get("conditions")
+    mz = get_materialize_at_stored_version()
+    conditions = mz.get("status", {}).get("conditions")
     return (
         conditions is not None
+        and len(conditions)
         and conditions[0]["type"] == "UpToDate"
         and conditions[0]["status"] == "Unknown"
         and conditions[0]["reason"] == "ReadyToPromote"
@@ -2567,24 +5482,13 @@ def is_ready_to_manually_promote():
 
 
 def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
+    # Read at the stored version explicitly to avoid going through the
+    # conversion webhook, which may not be ready yet during initial deployment.
     for i in range(900):
         time.sleep(1)
         try:
-            data = json.loads(
-                spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        "materializes",
-                        "-n",
-                        "materialize-environment",
-                        "-o",
-                        "json",
-                    ],
-                    stderr=subprocess.DEVNULL,
-                )
-            )
-            status = data["items"][0].get("status")
+            mz = get_materialize_at_stored_version()
+            status = mz.get("status")
             if not status:
                 continue
             if expect_fail:
@@ -2595,9 +5499,19 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
                 or status["conditions"][0]["status"] != "True"
             ):
                 continue
-            if (
-                status["lastCompletedRolloutRequest"]
-                == data["items"][0]["spec"]["requestRollout"]
+            # Wait for the rollout of the spec we just applied to complete,
+            # not a stale rollout left over from a previous upgrade step. On
+            # an upgrade the operator may still report the old rollout as
+            # UpToDate before it reacts to the new spec, and returning early
+            # there races the `ImmediatelyPromoteCausingDowntime` teardown of
+            # the old environmentd pod (leaving validate with zero pods).
+            # Both v1 and v1alpha1 resources are stored as v1alpha1, where the
+            # conversion webhook derives `spec.requestRollout` from the v1 spec
+            # hash, so comparing requestRollout UUIDs works for either
+            # apiVersion.
+            last_completed = status.get("lastCompletedRolloutRequest")
+            if last_completed is not None and last_completed == mz["spec"].get(
+                "requestRollout"
             ):
                 break
         except subprocess.CalledProcessError:
@@ -2607,7 +5521,7 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
             [
                 "kubectl",
                 "get",
-                "materializes",
+                "materializes.v1alpha1.materialize.cloud",
                 "-n",
                 "materialize-environment",
                 "-o",
@@ -2650,7 +5564,7 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
                         stderr=subprocess.DEVNULL,
                     )
                     if (
-                        f"ERROR k8s_controller::controller: Materialize reconciliation error. err=reconciler for object Materialize.v1alpha1.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment failed"
+                        f"ERROR reconciling object{{object.ref=Materialize.v1alpha1.materialize.cloud/{definition['materialize']['metadata']['name']}.materialize-environment"
                         in logs
                     ):
                         break
@@ -2673,12 +5587,36 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
         )
         raise ValueError("Never completed")
 
+    if expect_fail:
+        wait_for_reconcile_failed_event(definition)
+
+
+def wait_for_reconcile_failed_event(definition: dict[str, Any]) -> None:
+    """Assert that the operator published a ReconcileFailed warning event on
+    the Materialize resource, with the error as its note."""
+
+    def check() -> None:
+        failures = [
+            event
+            for event in get_materialize_events(definition)
+            if event.get("reason") == "ReconcileFailed"
+        ]
+        assert failures, "No ReconcileFailed event on the Materialize resource"
+        event = failures[0]
+        assert event["type"] == "Warning", event
+        assert event["reportingController"] == MATERIALIZE_EVENT_REPORTER, event
+        assert event.get("note"), event
+
+    retry(check, 120)
+
 
 def run_balancer(definition: dict[str, Any], expect_fail: bool) -> None:
     defs = [
         definition["namespace"],
-        definition["balancer"],
     ]
+    if "balancerd_configmap" in definition:
+        defs.append(definition["balancerd_configmap"])
+    defs.append(definition["balancer"])
     try:
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],
@@ -2790,3 +5728,626 @@ def post_run_check_balancer(definition: dict[str, Any], expect_fail: bool) -> No
             ]
         )
         raise ValueError("Never completed")
+
+
+# OIDC end-to-end testing
+#
+# Spins up Ory Hydra as a real OIDC provider next to orchestratord/environmentd
+# in kind and verifies:
+#   1. mz_system password fallback login (Materialize CR backend secret).
+#   2. pgwire login as an OIDC user with a JWT issued by Hydra via the
+#      client_credentials grant.
+
+OIDC_HYDRA_NAMESPACE = "hydra"
+OIDC_HYDRA_IMAGE = "oryd/hydra:v2.2.0"
+OIDC_HYDRA_PUBLIC_PORT = 4444
+OIDC_HYDRA_ADMIN_PORT = 4445
+OIDC_HYDRA_ISSUER = f"http://hydra-public.{OIDC_HYDRA_NAMESPACE}.svc.cluster.local:{OIDC_HYDRA_PUBLIC_PORT}"
+OIDC_CLIENT_ID = "mz-test-client"
+OIDC_CLIENT_SECRET = "mz-test-client-secret"
+OIDC_AUDIENCE = "mz-test-audience"
+OIDC_SYSTEM_PARAMS_CM = "oidc-system-params"
+OIDC_MZ_SYSTEM_PASSWORD = "oidc-test-mz-system-password"
+
+
+def _hydra_manifests() -> list[dict[str, Any]]:
+    # `hydra serve all --dev` relaxes TLS requirements for the public/admin
+    # endpoints, which is required since the kind cluster has no TLS.
+    # `secrets.system` must be >= 16 bytes; `dsn: memory` keeps everything
+    # in-memory so no separate database is needed for the test.
+    hydra_config = yaml.dump(
+        {
+            "dsn": "memory",
+            "secrets": {"system": ["mz-test-secret-please-change-me"]},
+            "urls": {
+                "self": {"issuer": OIDC_HYDRA_ISSUER},
+                "login": "http://unused/login",
+                "consent": "http://unused/consent",
+            },
+            "oauth2": {
+                "expose_internal_errors": True,
+            },
+            "strategies": {"access_token": "jwt"},
+            "log": {"level": "info", "leak_sensitive_values": True},
+            "ttl": {"access_token": "10m"},
+        }
+    )
+    return [
+        {
+            "apiVersion": "v1",
+            "kind": "Namespace",
+            "metadata": {"name": OIDC_HYDRA_NAMESPACE},
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": "hydra-config", "namespace": OIDC_HYDRA_NAMESPACE},
+            "data": {"hydra.yaml": hydra_config},
+        },
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"name": "hydra", "namespace": OIDC_HYDRA_NAMESPACE},
+            "spec": {
+                "replicas": 1,
+                "selector": {"matchLabels": {"app": "hydra"}},
+                "template": {
+                    "metadata": {"labels": {"app": "hydra"}},
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "hydra",
+                                "image": OIDC_HYDRA_IMAGE,
+                                "imagePullPolicy": "IfNotPresent",
+                                "args": [
+                                    "serve",
+                                    "all",
+                                    "--dev",
+                                    "--config",
+                                    "/etc/hydra/hydra.yaml",
+                                ],
+                                "ports": [
+                                    {"containerPort": OIDC_HYDRA_PUBLIC_PORT},
+                                    {"containerPort": OIDC_HYDRA_ADMIN_PORT},
+                                ],
+                                "readinessProbe": {
+                                    "httpGet": {
+                                        "path": "/health/ready",
+                                        "port": OIDC_HYDRA_ADMIN_PORT,
+                                    },
+                                    "initialDelaySeconds": 2,
+                                    "periodSeconds": 2,
+                                },
+                                "volumeMounts": [
+                                    {
+                                        "name": "config",
+                                        "mountPath": "/etc/hydra",
+                                        "readOnly": True,
+                                    }
+                                ],
+                            }
+                        ],
+                        "volumes": [
+                            {
+                                "name": "config",
+                                "configMap": {"name": "hydra-config"},
+                            }
+                        ],
+                    },
+                },
+            },
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": "hydra-public",
+                "namespace": OIDC_HYDRA_NAMESPACE,
+            },
+            "spec": {
+                "selector": {"app": "hydra"},
+                "ports": [
+                    {
+                        "port": OIDC_HYDRA_PUBLIC_PORT,
+                        "targetPort": OIDC_HYDRA_PUBLIC_PORT,
+                    }
+                ],
+            },
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": "hydra-admin",
+                "namespace": OIDC_HYDRA_NAMESPACE,
+            },
+            "spec": {
+                "selector": {"app": "hydra"},
+                "ports": [
+                    {
+                        "port": OIDC_HYDRA_ADMIN_PORT,
+                        "targetPort": OIDC_HYDRA_ADMIN_PORT,
+                    }
+                ],
+            },
+        },
+    ]
+
+
+def install_hydra() -> None:
+    """Deploy Ory Hydra into the kind cluster and create the test client."""
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(_hydra_manifests()).encode(),
+    )
+    spawn.runv(
+        [
+            "kubectl",
+            "wait",
+            "-n",
+            OIDC_HYDRA_NAMESPACE,
+            "deployment/hydra",
+            "--for=condition=Available",
+            "--timeout=300s",
+        ]
+    )
+    _create_hydra_client()
+
+
+def _create_hydra_client() -> None:
+    """Idempotently register the OAuth2 client used by the test."""
+    with _port_forward(
+        "deployment/hydra",
+        OIDC_HYDRA_ADMIN_PORT,
+        namespace=OIDC_HYDRA_NAMESPACE,
+    ) as admin_port:
+        # Delete any pre-existing client of the same id (best effort).
+        try:
+            requests.delete(
+                f"http://127.0.0.1:{admin_port}/admin/clients/{OIDC_CLIENT_ID}",
+                timeout=10,
+            )
+        except requests.RequestException:
+            pass
+        # `audience` on the client constrains which audiences the client may
+        # request; the `aud` claim is asserted in the token request below.
+        resp = requests.post(
+            f"http://127.0.0.1:{admin_port}/admin/clients",
+            json={
+                "client_id": OIDC_CLIENT_ID,
+                "client_secret": OIDC_CLIENT_SECRET,
+                "grant_types": ["client_credentials"],
+                "token_endpoint_auth_method": "client_secret_post",
+                "audience": [OIDC_AUDIENCE],
+                "access_token_strategy": "jwt",
+            },
+            timeout=10,
+        )
+        assert resp.status_code in (
+            200,
+            201,
+        ), f"hydra create client failed: {resp.status_code} {resp.text}"
+
+
+@contextmanager
+def _port_forward(
+    target: str, port: int, namespace: str, local_port: int | None = None
+) -> Iterator[int]:
+    """Generic kubectl port-forward context manager."""
+    local_port = local_port if local_port is not None else port
+    process = subprocess.Popen(
+        [
+            "kubectl",
+            "port-forward",
+            target,
+            f"{local_port}:{port}",
+            "-n",
+            namespace,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        time.sleep(2)
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise RuntimeError(
+                f"Port forward to {target} failed: "
+                f"stdout={stdout.decode()}, stderr={stderr.decode()}"
+            )
+        yield local_port
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def _fetch_hydra_jwt() -> str:
+    """Run a client_credentials grant against Hydra and return the access token."""
+    with _port_forward(
+        "deployment/hydra",
+        OIDC_HYDRA_PUBLIC_PORT,
+        namespace=OIDC_HYDRA_NAMESPACE,
+    ) as public_port:
+        resp = requests.post(
+            f"http://127.0.0.1:{public_port}/oauth2/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": OIDC_CLIENT_ID,
+                "client_secret": OIDC_CLIENT_SECRET,
+                "audience": OIDC_AUDIENCE,
+            },
+            timeout=10,
+        )
+        assert (
+            resp.status_code == 200
+        ), f"hydra token grant failed: {resp.status_code} {resp.text}"
+        body = resp.json()
+        token = body.get("access_token")
+        assert token, f"no access_token in response: {body}"
+        # Cheap sanity check that we got a JWT (three base64 segments), not an
+        # opaque reference token; a misconfigured strategy would silently
+        # return an opaque token that environmentd can't validate.
+        assert token.count(".") == 2, f"hydra returned non-JWT token: {token!r}"
+        return token
+
+
+def _oidc_system_params_configmap() -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": OIDC_SYSTEM_PARAMS_CM,
+            "namespace": "materialize-environment",
+        },
+        "data": {
+            "system-params.json": json.dumps(
+                {
+                    "oidc_issuer": OIDC_HYDRA_ISSUER,
+                    "oidc_audience": [OIDC_AUDIENCE],
+                    "oidc_authentication_claim": "sub",
+                }
+            )
+        },
+    }
+
+
+def workflow_oidc_auth(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """End-to-end OIDC auth test via orchestratord + Ory Hydra."""
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    version = get_version(args.tag)
+    min_version = MzVersion.parse_mz("v26.16.0-dev.0")
+    if version < min_version:
+        raise ValueError(
+            f"workflow_oidc_auth requires environmentd >= {min_version}, got {version}"
+        )
+
+    definition = setup(c, args)
+
+    install_hydra()
+
+    definition["materialize"]["spec"]["authenticatorKind"] = "Oidc"
+    definition["materialize"]["spec"][
+        "systemParameterConfigmapName"
+    ] = OIDC_SYSTEM_PARAMS_CM
+    definition["secret"]["stringData"][
+        "external_login_password_mz_system"
+    ] = OIDC_MZ_SYSTEM_PASSWORD
+    definition["system_params_configmap"] = _oidc_system_params_configmap()
+
+    init(definition)
+    run(definition, expect_fail=False)
+
+    with port_forward_environmentd() as port:
+        print("Verifying mz_system password fallback...")
+        with (
+            psycopg.connect(
+                host="127.0.0.1",
+                port=port,
+                user="mz_system",
+                password=OIDC_MZ_SYSTEM_PASSWORD,
+                dbname="materialize",
+                connect_timeout=30,
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute("SELECT current_user")
+            row = cur.fetchone()
+            assert row == ("mz_system",), f"unexpected current_user: {row}"
+
+        print(f"Fetching JWT from Hydra for client {OIDC_CLIENT_ID}...")
+        token = _fetch_hydra_jwt()
+
+        print(f"Verifying OIDC pgwire login as {OIDC_CLIENT_ID}...")
+        with (
+            psycopg.connect(
+                host="127.0.0.1",
+                port=port,
+                user=OIDC_CLIENT_ID,
+                password=token,
+                dbname="materialize",
+                connect_timeout=30,
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute("SELECT current_user")
+            row = cur.fetchone()
+            assert row == (OIDC_CLIENT_ID,), f"unexpected current_user: {row}"
+
+        print("Verifying OIDC login rejects an invalid token...")
+        bad_token = token[:-4] + "AAAA"
+        try:
+            psycopg.connect(
+                host="127.0.0.1",
+                port=port,
+                user=OIDC_CLIENT_ID,
+                password=bad_token,
+                dbname="materialize",
+                connect_timeout=30,
+            ).close()
+        except psycopg.OperationalError:
+            pass
+        else:
+            raise AssertionError(
+                "OIDC login with tampered token unexpectedly succeeded"
+            )
+
+    print("OIDC end-to-end auth test passed.")
+
+
+def workflow_clusterd_generation_scheduling(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Regression test for CLO-77.
+
+    Clusterd pod scheduling constraints (anti-affinity, topology spread) must
+    only consider pods of the same deploy generation. Otherwise, during a
+    generation rollout, the still-running old-generation pod can block the
+    new-generation pod from scheduling — e.g. when topology spread + a
+    single eligible AZ count the old-gen pod toward `maxSkew`, leaving the
+    new-gen pod Pending and the rollout stuck.
+
+    The kind nodes in `cluster.yaml.tmpl` happen to make this easy to
+    reproduce: only one of the two worker nodes carries
+    `materialize.cloud/swap=true`, so all clusterd pods land in that node's
+    AZ. With topology spread enabled and `maxSkew=1`, the new-generation
+    pod can only schedule there if the spread selector filters to its own
+    generation.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument("--tag", type=str, help="Custom version tag to use")
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    init(definition)
+    run(definition, expect_fail=False)
+
+    gen_label = "cluster.environmentd.materialize.cloud/generation"
+    cluster_id_label = "cluster.environmentd.materialize.cloud/cluster-id"
+
+    # Enable topology spread (off by default on self-hosted via
+    # `cluster_enable_topology_spread=false`). The internal SQL listener
+    # at 6877 has no authenticator, so a plain mz_system connection works.
+    with port_forward_environmentd(6877) as port:
+        with (
+            psycopg.connect(
+                f"host=localhost port={port} user=mz_system sslmode=disable",
+                autocommit=True,
+            ) as conn,
+            conn.cursor() as cur,
+        ):
+            cur.execute("ALTER SYSTEM SET cluster_enable_topology_spread = true")
+
+    def list_clusterd_statefulsets() -> list[dict[str, Any]]:
+        # `kubectl get -l` matches against statefulset metadata labels, but
+        # clusterd statefulsets only carry labels on the pod template (not
+        # on the statefulset itself), so filter client-side.
+        data = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "statefulset",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "json",
+                ]
+            )
+        )
+        return [
+            ss
+            for ss in data["items"]
+            if ss["spec"]["template"]["metadata"]
+            .get("labels", {})
+            .get("environmentd.materialize.cloud/namespace")
+            == "cluster"
+        ]
+
+    # The ALTER SYSTEM above only takes effect for replicas created after
+    # the change, so cycle clusterd to pick up topology spread by forcing
+    # a new generation. `requestRollout` alone is a no-op when nothing
+    # else in the spec changed; `forceRollout` set to the same value
+    # makes orchestratord treat the resources as changed and bump the
+    # generation anyway.
+    initial_request = definition["materialize"]["spec"].get("requestRollout")
+    new_request = str(uuid.uuid4())
+    assert new_request != initial_request
+
+    # Park the rollout at `ReadyToPromote` so both the old- and new-
+    # generation clusterd pods are alive simultaneously while we inspect
+    # them. Without the CLO-77 fix, the new-gen clusterd would never
+    # become ready (pod Pending) and `ReadyToPromote` would never fire.
+    definition["materialize"]["spec"]["rolloutStrategy"] = "ManuallyPromote"
+    definition["materialize"]["spec"]["requestRollout"] = new_request
+    definition["materialize"]["spec"]["forceRollout"] = new_request
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [
+                definition["namespace"],
+                definition["secret"],
+                definition["materialize"],
+            ]
+        ).encode(),
+    )
+
+    for _ in range(900):
+        time.sleep(1)
+        if is_ready_to_manually_promote():
+            break
+    else:
+        spawn.runv(
+            [
+                "kubectl",
+                "get",
+                "statefulsets,pods",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "wide",
+            ]
+        )
+        raise RuntimeError(
+            "rollout never reached ReadyToPromote — likely a clusterd "
+            "statefulset for the new generation has a pod stuck Pending "
+            "(check that scheduling constraints filter to the same "
+            "generation; see CLO-77)"
+        )
+
+    # Both generations should be live now. Group statefulsets by replica
+    # so we can verify every replica brought up its new generation while
+    # the old one was still running.
+    statefulsets = list_clusterd_statefulsets()
+    assert statefulsets, "no clusterd statefulsets found"
+    by_replica: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+    for ss in statefulsets:
+        labels = ss["spec"]["template"]["metadata"]["labels"]
+        cluster_id = labels[cluster_id_label]
+        replica_id = labels["cluster.environmentd.materialize.cloud/replica-id"]
+        gen = labels[gen_label]
+        by_replica.setdefault((cluster_id, replica_id), {})[gen] = ss
+
+    # The current orchestratord generation, derived from the parked
+    # Materialize CR — used to compute the expected (old, new) pair per
+    # replica.
+    parked_mz = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ]
+        )
+    )["items"][0]
+    new_gen = int(parked_mz["status"]["activeGeneration"]) + 1
+    old_gen = new_gen - 1
+
+    errors: list[str] = []
+    for (cluster_id, replica_id), gens in sorted(by_replica.items()):
+        replica = f"{cluster_id}/{replica_id}"
+        present = sorted(int(g) for g in gens)
+        if present != [old_gen, new_gen]:
+            errors.append(
+                f"{replica}: expected statefulsets for generations "
+                f"{[old_gen, new_gen]}, got {present}"
+            )
+            continue
+        for gen_value, ss in gens.items():
+            if ss["status"].get("readyReplicas") != 1:
+                errors.append(f"{replica} gen {gen_value}: not ready: {ss['status']}")
+
+        # Each new-generation statefulset's anti-affinity and topology
+        # spread selectors must pin to its own generation. Without that
+        # filter, the new-gen pod's spread/anti-affinity would have
+        # counted the old-gen pod and (depending on capacity) blocked
+        # scheduling.
+        new_ss = gens[str(new_gen)]
+        pod_template = new_ss["spec"]["template"]
+        actual_gen_label = pod_template["metadata"]["labels"].get(gen_label)
+        if actual_gen_label != str(new_gen):
+            errors.append(
+                f"{replica} gen {new_gen}: pod template missing/incorrect "
+                f"{gen_label}: {actual_gen_label!r}"
+            )
+
+        affinity = pod_template["spec"]["affinity"]
+        anti_affinity_terms = affinity["podAntiAffinity"][
+            "requiredDuringSchedulingIgnoredDuringExecution"
+        ]
+        if not anti_affinity_terms:
+            errors.append(f"{replica} gen {new_gen}: no required pod anti-affinity")
+            continue
+        anti_affinity_exprs = anti_affinity_terms[0]["labelSelector"][
+            "matchExpressions"
+        ]
+        if not any(
+            e["key"] == gen_label
+            and e["operator"] == "In"
+            and e["values"] == [str(new_gen)]
+            for e in anti_affinity_exprs
+        ):
+            errors.append(
+                f"{replica} gen {new_gen}: anti-affinity does not filter by "
+                f"generation; matchExpressions={anti_affinity_exprs}"
+            )
+
+        topology_spread = pod_template["spec"]["topologySpreadConstraints"]
+        if not topology_spread:
+            errors.append(f"{replica} gen {new_gen}: topology spread not present")
+            continue
+        spread_exprs = topology_spread[0]["labelSelector"]["matchExpressions"]
+        if not any(
+            e["key"] == gen_label
+            and e["operator"] == "In"
+            and e["values"] == [str(new_gen)]
+            for e in spread_exprs
+        ):
+            errors.append(
+                f"{replica} gen {new_gen}: topology spread does not filter by "
+                f"generation; matchExpressions={spread_exprs}"
+            )
+
+    assert not errors, "clusterd generation scheduling check failed:\n" + "\n".join(
+        errors
+    )
+
+    print(
+        f"verified {len(by_replica)} replica(s) have generations "
+        f"{old_gen} and {new_gen} live and that new-gen selectors filter "
+        f"to generation {new_gen}"
+    )

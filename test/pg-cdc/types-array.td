@@ -104,6 +104,8 @@ ALTER TABLE t_timestamptz_array REPLICA IDENTITY FULL;
 
 INSERT INTO t_timestamptz_array VALUES ('{''2007-02-01 15:04:05+06'',''2007-02-01 15:04:06+06''}');
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SECRET pgpass AS 'postgres'

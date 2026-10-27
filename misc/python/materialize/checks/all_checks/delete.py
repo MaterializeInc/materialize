@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class Delete(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE delete_table (f1 INTEGER);
                 > INSERT INTO delete_table SELECT * FROM generate_series(1,10000);
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -37,11 +33,7 @@ class Delete(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT COUNT(*), MIN(f1), MAX(f1), COUNT(f1), COUNT(DISTINCT f1) FROM delete_table GROUP BY f1 % 3;
                 3333 2 9998 3333 3333
-                """
-            )
-        )
+                """))

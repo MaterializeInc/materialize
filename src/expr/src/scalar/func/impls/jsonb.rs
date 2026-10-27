@@ -7,238 +7,210 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
-use mz_lowertest::MzReflect;
+use mz_expr_derive::sqlfunc;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{Datum, Row, RowPacker, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
-use crate::scalar::func::EagerUnaryFunc;
 use crate::scalar::func::impls::numeric::*;
 
-sqlfunc!(
-    #[sqlname = "jsonb_to_text"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastStringToJsonb)]
-    fn cast_jsonb_to_string<'a>(a: JsonbRef<'a>) -> String {
-        let mut buf = String::new();
-        strconv::format_jsonb(&mut buf, a);
-        buf
-    }
-);
+#[sqlfunc(
+    sqlname = "jsonb_to_text",
+    preserves_uniqueness = false,
+    inverse = super::CastStringToJsonb
+)]
+pub fn cast_jsonb_to_string<'a>(a: JsonbRef<'a>) -> String {
+    let mut buf = String::new();
+    strconv::format_jsonb(&mut buf, a);
+    buf
+}
 
-sqlfunc!(
-    #[sqlname = "jsonb_to_smallint"]
-    #[is_monotone = true]
-    fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {
-        match a.into_datum() {
-            Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),
-            datum => Err(EvalError::InvalidJsonbCast {
-                from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
-                to: "smallint".into(),
-            }),
-        }
+#[sqlfunc(sqlname = "jsonb_to_smallint", is_monotone = true)]
+fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {
+    match a.into_datum() {
+        Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),
+        datum => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
+            to: "smallint".into(),
+        }),
     }
-);
+}
 
-sqlfunc!(
-    #[sqlname = "jsonb_to_integer"]
-    #[is_monotone = true]
-    fn cast_jsonb_to_int32<'a>(a: JsonbRef<'a>) -> Result<i32, EvalError> {
-        match a.into_datum() {
-            Datum::Numeric(a) => cast_numeric_to_int32(a.into_inner()),
-            datum => Err(EvalError::InvalidJsonbCast {
-                from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
-                to: "integer".into(),
-            }),
-        }
+#[sqlfunc(sqlname = "jsonb_to_integer", is_monotone = true)]
+fn cast_jsonb_to_int32<'a>(a: JsonbRef<'a>) -> Result<i32, EvalError> {
+    match a.into_datum() {
+        Datum::Numeric(a) => cast_numeric_to_int32(a.into_inner()),
+        datum => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
+            to: "integer".into(),
+        }),
     }
-);
+}
 
-sqlfunc!(
-    #[sqlname = "jsonb_to_bigint"]
-    #[is_monotone = true]
-    fn cast_jsonb_to_int64<'a>(a: JsonbRef<'a>) -> Result<i64, EvalError> {
-        match a.into_datum() {
-            Datum::Numeric(a) => cast_numeric_to_int64(a.into_inner()),
-            datum => Err(EvalError::InvalidJsonbCast {
-                from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
-                to: "bigint".into(),
-            }),
-        }
+#[sqlfunc(sqlname = "jsonb_to_bigint", is_monotone = true)]
+fn cast_jsonb_to_int64<'a>(a: JsonbRef<'a>) -> Result<i64, EvalError> {
+    match a.into_datum() {
+        Datum::Numeric(a) => cast_numeric_to_int64(a.into_inner()),
+        datum => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
+            to: "bigint".into(),
+        }),
     }
-);
+}
 
-sqlfunc!(
-    #[sqlname = "jsonb_to_real"]
-    #[is_monotone = true]
-    fn cast_jsonb_to_float32<'a>(a: JsonbRef<'a>) -> Result<f32, EvalError> {
-        match a.into_datum() {
-            Datum::Numeric(a) => cast_numeric_to_float32(a.into_inner()),
-            datum => Err(EvalError::InvalidJsonbCast {
-                from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
-                to: "real".into(),
-            }),
-        }
+#[sqlfunc(sqlname = "jsonb_to_real", is_monotone = true)]
+fn cast_jsonb_to_float32<'a>(a: JsonbRef<'a>) -> Result<f32, EvalError> {
+    match a.into_datum() {
+        Datum::Numeric(a) => cast_numeric_to_float32(a.into_inner()),
+        datum => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
+            to: "real".into(),
+        }),
     }
-);
+}
 
-sqlfunc!(
-    #[sqlname = "jsonb_to_double"]
-    #[is_monotone = true]
-    fn cast_jsonb_to_float64<'a>(a: JsonbRef<'a>) -> Result<f64, EvalError> {
-        match a.into_datum() {
-            Datum::Numeric(a) => cast_numeric_to_float64(a.into_inner()),
-            datum => Err(EvalError::InvalidJsonbCast {
-                from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
-                to: "double precision".into(),
-            }),
-        }
+#[sqlfunc(sqlname = "jsonb_to_double", is_monotone = true)]
+fn cast_jsonb_to_float64<'a>(a: JsonbRef<'a>) -> Result<f64, EvalError> {
+    match a.into_datum() {
+        Datum::Numeric(a) => cast_numeric_to_float64(a.into_inner()),
+        datum => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
+            to: "double precision".into(),
+        }),
     }
-);
+}
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct CastJsonbToNumeric(pub Option<NumericMaxScale>);
 
-impl<'a> EagerUnaryFunc<'a> for CastJsonbToNumeric {
-    type Input = JsonbRef<'a>;
-    type Output = Result<Numeric, EvalError>;
-
-    fn call(&self, a: JsonbRef<'a>) -> Result<Numeric, EvalError> {
-        match a.into_datum() {
-            Datum::Numeric(mut num) => match self.0 {
-                None => Ok(num.into_inner()),
-                Some(scale) => {
-                    if numeric::rescale(&mut num.0, scale.into_u8()).is_err() {
-                        return Err(EvalError::NumericFieldOverflow);
-                    };
-                    Ok(num.into_inner())
-                }
-            },
-            datum => Err(EvalError::InvalidJsonbCast {
-                from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
-                to: "numeric".into(),
-            }),
-        }
-    }
-
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for CastJsonbToNumeric {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("jsonb_to_numeric")
-    }
-}
-
-sqlfunc!(
-    #[sqlname = "jsonb_to_boolean"]
-    #[is_monotone = true]
-    fn cast_jsonb_to_bool<'a>(a: JsonbRef<'a>) -> Result<bool, EvalError> {
-        match a.into_datum() {
-            Datum::True => Ok(true),
-            Datum::False => Ok(false),
-            datum => Err(EvalError::InvalidJsonbCast {
-                from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
-                to: "boolean".into(),
-            }),
-        }
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "jsonbable_to_jsonb"]
-    fn cast_jsonbable_to_jsonb<'a>(a: JsonbRef<'a>) -> JsonbRef<'a> {
-        match a.into_datum() {
-            Datum::Numeric(n) => {
-                let n = n.into_inner();
-                let datum = if n.is_finite() {
-                    Datum::from(n)
-                } else if n.is_nan() {
-                    Datum::String("NaN")
-                } else if n.is_negative() {
-                    Datum::String("-Infinity")
-                } else {
-                    Datum::String("Infinity")
+#[sqlfunc(
+    CastJsonbToNumeric,
+    sqlname = "jsonb_to_numeric",
+    is_monotone = true,
+    output_type_expr = SqlScalarType::Numeric { max_scale: self.0 }
+        .nullable(input_type.nullable)
+)]
+fn cast_jsonb_to_numeric<'a>(&self, a: JsonbRef<'a>) -> Result<Numeric, EvalError> {
+    match a.into_datum() {
+        Datum::Numeric(mut num) => match self.0 {
+            None => Ok(num.into_inner()),
+            Some(scale) => {
+                if numeric::rescale(&mut num.0, scale.into_u8()).is_err() {
+                    return Err(EvalError::NumericFieldOverflow);
                 };
-                JsonbRef::from_datum(datum)
+                Ok(num.into_inner())
             }
-            datum => JsonbRef::from_datum(datum),
-        }
+        },
+        datum => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
+            to: "numeric".into(),
+        }),
     }
-);
+}
 
-sqlfunc!(
-    fn jsonb_array_length<'a>(a: JsonbRef<'a>) -> Result<Option<i32>, EvalError> {
-        match a.into_datum() {
-            Datum::List(list) => {
-                let count = list.iter().count();
-                match i32::try_from(count) {
-                    Ok(len) => Ok(Some(len)),
-                    Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
-                }
+#[sqlfunc(sqlname = "jsonb_to_boolean", is_monotone = true)]
+fn cast_jsonb_to_bool<'a>(a: JsonbRef<'a>) -> Result<bool, EvalError> {
+    match a.into_datum() {
+        Datum::True => Ok(true),
+        Datum::False => Ok(false),
+        datum => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
+            to: "boolean".into(),
+        }),
+    }
+}
+
+#[sqlfunc(sqlname = "jsonbable_to_jsonb")]
+fn cast_jsonbable_to_jsonb<'a>(a: JsonbRef<'a>) -> JsonbRef<'a> {
+    match a.into_datum() {
+        Datum::Numeric(n) => {
+            let n = n.into_inner();
+            let datum = if n.is_finite() {
+                Datum::from(n)
+            } else if n.is_nan() {
+                Datum::String("NaN")
+            } else if n.is_negative() {
+                Datum::String("-Infinity")
+            } else {
+                Datum::String("Infinity")
+            };
+            JsonbRef::from_datum(datum)
+        }
+        datum => JsonbRef::from_datum(datum),
+    }
+}
+
+#[sqlfunc]
+fn jsonb_array_length<'a>(a: JsonbRef<'a>) -> Result<Option<i32>, EvalError> {
+    match a.into_datum() {
+        Datum::List(list) => {
+            let count = list.iter().count();
+            match i32::try_from(count) {
+                Ok(len) => Ok(Some(len)),
+                Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
             }
-            _ => Ok(None),
         }
+        _ => Ok(None),
     }
-);
+}
 
-sqlfunc!(
-    fn jsonb_typeof<'a>(a: JsonbRef<'a>) -> &'a str {
-        match a.into_datum() {
-            Datum::Map(_) => "object",
-            Datum::List(_) => "array",
-            Datum::String(_) => "string",
-            Datum::Numeric(_) => "number",
-            Datum::True | Datum::False => "boolean",
-            Datum::JsonNull => "null",
-            d => panic!("Not jsonb: {:?}", d),
-        }
+#[sqlfunc]
+fn jsonb_typeof<'a>(a: JsonbRef<'a>) -> &'a str {
+    match a.into_datum() {
+        Datum::Map(_) => "object",
+        Datum::List(_) => "array",
+        Datum::String(_) => "string",
+        Datum::Numeric(_) => "number",
+        Datum::True | Datum::False => "boolean",
+        Datum::JsonNull => "null",
+        d => panic!("Not jsonb: {:?}", d),
     }
-);
+}
 
-sqlfunc!(
-    fn jsonb_strip_nulls<'a>(a: JsonbRef<'a>) -> Jsonb {
-        fn strip_nulls(a: Datum, row: &mut RowPacker) {
-            match a {
-                Datum::Map(dict) => row.push_dict_with(|row| {
-                    for (k, v) in dict.iter() {
-                        match v {
-                            Datum::JsonNull => (),
-                            _ => {
-                                row.push(Datum::String(k));
-                                strip_nulls(v, row);
-                            }
+#[sqlfunc]
+fn jsonb_strip_nulls<'a>(a: JsonbRef<'a>) -> Jsonb {
+    fn strip_nulls(a: Datum, row: &mut RowPacker) {
+        match a {
+            Datum::Map(dict) => row.push_dict_with(|row| {
+                for (k, v) in dict.iter() {
+                    match v {
+                        Datum::JsonNull => (),
+                        _ => {
+                            row.push(Datum::String(k));
+                            strip_nulls(v, row);
                         }
                     }
-                }),
-                Datum::List(list) => row.push_list_with(|row| {
-                    for elem in list.iter() {
-                        strip_nulls(elem, row);
-                    }
-                }),
-                _ => row.push(a),
-            }
+                }
+            }),
+            Datum::List(list) => row.push_list_with(|row| {
+                for elem in list.iter() {
+                    strip_nulls(elem, row);
+                }
+            }),
+            _ => row.push(a),
         }
-        let mut row = Row::default();
-        strip_nulls(a.into_datum(), &mut row.packer());
-        Jsonb::from_row(row)
     }
-);
+    let mut row = Row::default();
+    strip_nulls(a.into_datum(), &mut row.packer());
+    Jsonb::from_row(row)
+}
 
-sqlfunc!(
-    fn jsonb_pretty<'a>(a: JsonbRef<'a>) -> String {
-        let mut buf = String::new();
-        strconv::format_jsonb_pretty(&mut buf, a);
-        buf
-    }
-);
+// NOTE: no budget pre-check, see the exception on `crate::func::check_build_fits_budget`.
+#[sqlfunc]
+fn jsonb_pretty<'a>(a: JsonbRef<'a>) -> String {
+    let mut buf = String::new();
+    strconv::format_jsonb_pretty(&mut buf, a);
+    buf
+}

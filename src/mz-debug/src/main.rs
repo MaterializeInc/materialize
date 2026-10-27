@@ -104,10 +104,23 @@ pub struct Args {
     /// If true, the tool will dump the prometheus metrics in Materialize.
     #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
     dump_prometheus_metrics: bool,
+    /// If true, the tool will collect CPU profiles from Materialize. While a CPU
+    /// profile is captured, memory profiling is temporarily disabled on that
+    /// service and restored afterwards.
+    #[clap(long, default_value = "true", action = clap::ArgAction::Set, global = true)]
+    dump_cpu_profiles: bool,
+    /// How long, in seconds, to sample each CPU profile.
+    #[clap(
+        long,
+        default_value = "10",
+        value_parser = clap::value_parser!(u64).range(1..=3600),
+        global = true
+    )]
+    cpu_profile_duration_seconds: u64,
     /// The username to use to connect to Materialize,
     #[clap(long, env = "MZ_USERNAME", global = true)]
     mz_username: Option<String>,
-    /// The password to use to connect to Materialize if the authenticator kind is Password.
+    /// The password to use to connect to Materialize if the authenticator kind is Password, Sasl, or Oidc.
     #[clap(long, env = "MZ_PASSWORD", global = true)]
     mz_password: Option<String>,
     /// The URL of the Materialize SQL connection used to dump the system catalog.
@@ -194,10 +207,20 @@ pub struct Context {
     dump_system_catalog: bool,
     dump_heap_profiles: bool,
     dump_prometheus_metrics: bool,
+    dump_cpu_profiles: bool,
+    cpu_profile_duration_secs: u64,
 }
 
 #[tokio::main]
 async fn main() {
+    // Pin the rustls crypto provider to aws-lc-rs. The kube client builds its
+    // rustls config via `ClientConfig::builder()`, which resolves the
+    // process-default provider and panics when rustls' `ring` and `aws-lc-rs`
+    // features are both enabled and no default is installed.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("installing the aws-lc-rs crypto provider should not fail");
+
     let args: Args = cli::parse_args(CliConfig {
         // mz_ore::cli::parse_args' env_prefix doesn't apply for subcommand flags. Thus
         // we manually set each env_prefix to MZ_ for each flag.
@@ -252,15 +275,18 @@ fn create_mz_connection_url(
     local_port: i32,
     credentials: Option<PasswordAuthCredentials>,
 ) -> String {
-    let password_auth_segment = if let Some(credentials) = credentials {
-        format!("{}:{}@", credentials.username, credentials.password)
-    } else {
-        "".to_string()
-    };
-    format!(
-        "postgres://{}{}:{}?sslmode=prefer",
-        password_auth_segment, local_address, local_port
-    )
+    let mut url = url::Url::parse(&format!(
+        "postgres://{}:{}?sslmode=prefer",
+        local_address, local_port
+    ))
+    .expect("static prefix is a valid URL");
+    if let Some(creds) = credentials {
+        url.set_username(&creds.username)
+            .expect("postgres scheme allows userinfo");
+        url.set_password(Some(&creds.password))
+            .expect("postgres scheme allows userinfo");
+    }
+    url.into()
 }
 
 async fn initialize_context(
@@ -388,6 +414,8 @@ async fn initialize_context(
         dump_system_catalog: global_args.dump_system_catalog,
         dump_heap_profiles: global_args.dump_heap_profiles,
         dump_prometheus_metrics: global_args.dump_prometheus_metrics,
+        dump_cpu_profiles: global_args.dump_cpu_profiles,
+        cpu_profile_duration_secs: global_args.cpu_profile_duration_seconds,
     })
 }
 
@@ -498,7 +526,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
 
     info!("Zipping debug directory");
 
-    let zip_file_name = format!("{}.zip", &context.base_path.display());
+    let zip_file_name = format!("{}.zip", context.base_path.display());
 
     if let Err(e) = zip_debug_folder(PathBuf::from(&zip_file_name), &context.base_path) {
         warn!("Failed to zip debug directory: {:#}", e);

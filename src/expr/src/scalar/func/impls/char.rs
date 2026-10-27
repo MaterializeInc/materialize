@@ -7,55 +7,49 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
-use mz_lowertest::MzReflect;
+use mz_expr_derive::sqlfunc;
+use mz_repr::SqlScalarType;
 use mz_repr::adt::char::{Char, CharLength, format_str_pad};
-use mz_repr::{SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
-
-use crate::scalar::func::EagerUnaryFunc;
 
 /// All Char data is stored in Datum::String with its blank padding removed
 /// (i.e. trimmed), so this function provides a means of restoring any
 /// removed padding.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct PadChar {
     pub length: Option<CharLength>,
 }
 
-impl<'a> EagerUnaryFunc<'a> for PadChar {
-    type Input = &'a str;
-    type Output = Char<String>;
-
-    fn call(&self, a: &'a str) -> Char<String> {
-        Char(format_str_pad(a, self.length))
-    }
-
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Char {
-            length: self.length,
-        }
-        .nullable(input.nullable)
-    }
-}
-
-impl fmt::Display for PadChar {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("padchar")
-    }
+#[sqlfunc(
+    PadChar,
+    sqlname = "padchar",
+    output_type_expr = SqlScalarType::Char { length: self.length }.nullable(input_type.nullable)
+)]
+fn pad_char<'a>(&self, a: &'a str) -> Char<String> {
+    Char(format_str_pad(a, self.length))
 }
 
 // This function simply allows the expression of changing a's type from char to
 // string
-sqlfunc!(
-    #[sqlname = "char_to_text"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToChar{
+#[sqlfunc(
+    sqlname = "char_to_text",
+    preserves_uniqueness = true,
+    is_eliminable_cast = true,
+    inverse = super::CastStringToChar{
         length: None,
         fail_on_len: false,
-    })]
-    fn cast_char_to_string<'a>(a: Char<&'a str>) -> &'a str {
-        a.0
     }
-);
+)]
+fn cast_char_to_string<'a>(a: Char<&'a str>) -> &'a str {
+    a.0
+}

@@ -181,7 +181,6 @@ use differential_dataflow::{AsCollection, ExchangeData, VecCollection, consolida
 use mz_ore::Overflowing;
 use mz_ore::collections::CollectionExt;
 use timely::communication::{Pull, Push};
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::capture::Event;
@@ -198,33 +197,36 @@ use timely::progress::{Antichain, Timestamp};
 /// In order for the operator to read the `source` collection a `Pusher` is returned which can be
 /// used with timely's capture facilities to connect a collection from a foreign scope to this
 /// operator.
-pub fn reclock<G, D, FromTime, IntoTime, R>(
-    remap_collection: &VecCollection<G, FromTime, Overflowing<i64>>,
-    as_of: Antichain<G::Timestamp>,
+pub fn reclock<'scope, D, FromTime, IntoTime, R>(
+    remap_collection: VecCollection<'scope, IntoTime, FromTime, Overflowing<i64>>,
+    as_of: Antichain<IntoTime>,
 ) -> (
     Box<dyn Push<Event<FromTime, Vec<(D, FromTime, R)>>>>,
-    VecCollection<G, D, R>,
+    VecCollection<'scope, IntoTime, D, R>,
 )
 where
-    G: Scope<Timestamp = IntoTime>,
     D: ExchangeData,
     FromTime: Timestamp,
     IntoTime: Timestamp + Lattice + TotalOrder,
     R: Semigroup + 'static,
 {
-    let mut scope = remap_collection.scope();
+    let scope = remap_collection.scope();
     let mut builder = OperatorBuilder::new("Reclock".into(), scope.clone());
     // Here we create a channel that can be used to send data from a foreign scope into this
     // operator. The channel is associated with this operator's address so that it is activated
     // every time events are available for consumption. This mechanism is similar to Timely's input
     // handles where data can be introduced into a timely scope from an exogenous source.
     let info = builder.operator_info();
-    let channel_id = scope.new_identifier();
-    let (pusher, mut events) =
-        scope.pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
+    let channel_id = scope.worker().new_identifier();
+    let (pusher, mut events) = scope
+        .worker()
+        .pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
 
-    let mut remap_input = builder.new_input(&remap_collection.inner, Pipeline);
-    let (output, reclocked) = builder.new_output();
+    let mut remap_input = builder.new_input(remap_collection.inner, Pipeline);
+    // Keep the output disconnected from the remap collection input so that we can drop the output
+    // capability when we finish reclocking the source, which can happen before the
+    // remap_collection reaches the input frontier. See the `test_finalized_source` for an example.
+    let (output, reclocked) = builder.new_output_connection([]);
     let mut output = OutputBuilder::from(output);
 
     builder.build(move |caps| {
@@ -242,12 +244,12 @@ where
         // maintenance implemented in this operator becomes problematic.
         let mut remap_upper = Antichain::from_elem(IntoTime::minimum());
         let mut remap_since = as_of.clone();
-        let mut remap_trace = Vec::new();
+        let mut remap_trace = VecDeque::new();
 
         // A stash of source updates for which we don't know the corresponding binding yet.
         let mut deferred_source_updates: Vec<ChainBatch<_, _, _>> = Vec::new();
         // The frontier of the `events` input
-        let mut source_frontier = MutableAntichain::new_bottom(FromTime::minimum());
+        let mut source_frontier = MutableAntichain::from_elem(FromTime::minimum());
 
         let mut binding_buffer = Vec::new();
 
@@ -268,6 +270,7 @@ where
         // map to and also compact the maintained `remap_trace` to that time.
         move |frontiers| {
             let Some(cap) = capset.get(0).cloned() else {
+                remap_input.for_each(|_, _| {});
                 return;
             };
             let mut output = output.activate();
@@ -275,12 +278,12 @@ where
 
             // STEP 1. Accept new bindings into `pending_remap`.
             // Advance all `into` times by `as_of`, and consolidate all updates at that frontier.
-            while let Some((_, data)) = remap_input.next() {
+            remap_input.for_each(|_, data| {
                 for (from, mut into, diff) in data.drain(..) {
                     into.advance_by(as_of.borrow());
                     remap_accum_buffer.update((into, from), diff.into_inner());
                 }
-            }
+            });
             // Drain consolidated bindings into the `pending_remap` heap.
             // Only do this once any of the `remap_input` frontier has passed `as_of`.
             // For as long as the input frontier is less-equal `as_of`, we have no finalized times.
@@ -296,7 +299,7 @@ where
             while let Some(update) = pending_remap.peek_mut() {
                 if !remap_upper.less_equal(&update.0.0) {
                     let Reverse((into, from, diff)) = PeekMut::pop(update);
-                    remap_trace.push((from, into, diff));
+                    remap_trace.push_back((from, into, diff));
                 } else {
                     break;
                 }
@@ -426,21 +429,40 @@ where
                     }
                 }
 
-                // STEP 5. Downgrade capability and compact remap trace
-                capset.downgrade(&reclocked_source_frontier.borrow());
-                remap_since = reclocked_source_frontier;
-                for (_, t, _) in remap_trace.iter_mut() {
-                    t.advance_by(remap_since.borrow());
-                }
-                consolidation::consolidate_updates(&mut remap_trace);
-                remap_trace
-                    .sort_unstable_by(|(_, t1, _): &(_, IntoTime, _), (_, t2, _)| t1.cmp(t2));
+                // STEP 5. Downgrade capability and compact remap trace if our since frontier
+                //         advanced
+                if PartialOrder::less_than(&remap_since, &reclocked_source_frontier) {
+                    capset.downgrade(&reclocked_source_frontier.borrow());
+                    remap_since = reclocked_source_frontier;
 
-                // If using less than a quarter of the capacity, shrink the container. To avoid having
-                // to resize the container on a subsequent push, shrink to 2x the length, which is
-                // what push would grow it to.
-                if remap_trace.len() < remap_trace.capacity() / 4 {
-                    remap_trace.shrink_to(remap_trace.len() * 2);
+                    // The remap trace is stored in time order and T is a total order. The updates
+                    // that can have their time advanced will form a prefix, which we extract here.
+                    let mut advanced = vec![];
+                    while !remap_trace.is_empty() && !remap_since.less_equal(&remap_trace[0].1) {
+                        let (d, mut t, r) = remap_trace.pop_front().unwrap();
+                        t.advance_by(remap_since.borrow());
+                        advanced.push((d, t, r));
+                    }
+                    if !advanced.is_empty() {
+                        // If we have updates whose time was advanced, further peel the prefix of
+                        // updates that sit *at* the time of the since frontier.
+                        while !remap_trace.is_empty() && remap_since.contains(&remap_trace[0].1) {
+                            advanced.push(remap_trace.pop_front().unwrap());
+                        }
+                        consolidation::consolidate_updates(&mut advanced);
+                        advanced.sort_unstable_by(|(_, t1, _): &(_, IntoTime, _), (_, t2, _)| {
+                            t1.cmp(t2)
+                        });
+                        for u in advanced.into_iter().rev() {
+                            remap_trace.push_front(u);
+                        }
+                        // If using less than a quarter of the capacity, shrink the container. To avoid having
+                        // to resize the container on a subsequent push, shrink to 2x the length, which is
+                        // what push would grow it to.
+                        if remap_trace.len() < remap_trace.capacity() / 4 {
+                            remap_trace.shrink_to(remap_trace.len() * 2);
+                        }
+                    }
                 }
             }
 
@@ -465,6 +487,11 @@ where
             // what push would grow it to.
             if deferred_source_updates.len() < deferred_source_updates.capacity() / 4 {
                 deferred_source_updates.shrink_to(deferred_source_updates.len() * 2);
+            }
+
+            // If this condition holds then this operator has no more work to do, so we drop the capability.
+            if source_frontier.frontier().is_empty() && deferred_source_updates.is_empty() {
+                capset = CapabilitySet::new();
             }
         }
     });
@@ -586,10 +613,10 @@ mod test {
     use differential_dataflow::consolidation;
     use differential_dataflow::input::{Input, InputSession};
     use serde::{Deserialize, Serialize};
-    use timely::communication::allocator::Thread;
     use timely::dataflow::operators::capture::{Event, Extract};
-    use timely::dataflow::operators::unordered_input::UnorderedHandle;
-    use timely::dataflow::operators::{ActivateCapability, Capture, UnorderedInput};
+    use timely::dataflow::operators::vec::UnorderedInput;
+    use timely::dataflow::operators::vec::unordered_input::UnorderedHandle;
+    use timely::dataflow::operators::{ActivateCapability, Capture};
     use timely::progress::PathSummary;
     use timely::progress::timestamp::Refines;
     use timely::worker::Worker;
@@ -624,7 +651,7 @@ mod test {
         FromTime: Timestamp + Refines<()>,
         D: ExchangeData,
         F: FnOnce(
-                &mut Worker<Thread>,
+                &mut Worker,
                 BindingHandle<FromTime>,
                 DataHandle<D, FromTime>,
                 ReclockedStream<D>,
@@ -640,13 +667,13 @@ mod test {
                     scope.scoped::<IntoTime, _, _>("IntoScope", move |scope| {
                         let (binding_handle, binding_collection) = scope.new_collection();
                         let (data_pusher, reclocked_collection) =
-                            reclock(&binding_collection, as_of);
+                            reclock(binding_collection, as_of);
                         let reclocked_capture = reclocked_collection.inner.capture();
                         (binding_handle, data_pusher, reclocked_capture)
                     });
 
                 let (data, data_cap) = scope.scoped::<FromTime, _, _>("FromScope", move |scope| {
-                    let ((handle, cap), data) = scope.new_unordered_input();
+                    let ((handle, cap), data) = scope.new_unordered_input::<(D, FromTime, Diff)>();
                     data.capture_into(PusherCapture(data_pusher));
                     (handle, cap)
                 });
@@ -660,7 +687,7 @@ mod test {
 
     /// Steps the worker four times which is the required number of times for both data and
     /// frontier updates to propagate across the two scopes and into the probing channels.
-    fn step(worker: &mut Worker<Thread>) {
+    fn step(worker: &mut Worker) {
         for _ in 0..4 {
             worker.step();
         }
@@ -766,10 +793,74 @@ mod test {
                 // Drop the capability which should advance the reclocked frontier to 1001.
                 drop(data_cap);
                 step(worker);
+                assert_eq!(reclocked.try_recv(), Ok(Event::Progress(vec![(1000, -1)])));
+            },
+        );
+    }
+
+    // Test that once the input stream has reached the empty frontier with no pending data we
+    // eagerly downgrade the output frontier to the empty frontier regardless of the remap stream.
+    #[mz_ore::test]
+    fn test_finalized_source() {
+        let as_of = Antichain::from_elem(IntoTime::minimum());
+        harness(
+            as_of,
+            |worker, mut bindings, (mut data, data_cap), reclocked| {
+                // The starts by producing data in the source stream and advancing the frontier to
+                // the empty frontier. The reclock operator buffers the data and holds the
+                // appropriate capability to reclock the pending data in the future.
+                data.activate().session(&data_cap).give_iterator(
+                    vec![
+                        (1, Partitioned::new_singleton(0, 1), Diff::ONE),
+                        (2, Partitioned::new_singleton(0, 2), Diff::ONE),
+                    ]
+                    .into_iter(),
+                );
+                drop(data_cap);
+                step(worker);
+
+                // Reclock offset 0 and 1 to timestamp 1000
+                bindings.update_at(Partitioned::minimum(), 0, Diff::ONE);
+                bindings.update_at(Partitioned::minimum(), 1000, Diff::MINUS_ONE);
+                for time in partitioned_frontier([(0, 2)]) {
+                    bindings.update_at(time, 1000, Diff::ONE);
+                }
+                bindings.advance_to(1001);
+                bindings.flush();
+                step(worker);
+
+                // At this point the reclock operator is able to release one of the updates and
+                // downgrade the output capability to timestamp 1001. It can't yet downgrade to the
+                // empty frontier since the other update is still pending.
                 assert_eq!(
                     reclocked.try_recv(),
-                    Ok(Event::Progress(vec![(1000, -1), (1001, 1)]))
+                    Ok(Event::Messages(0u64, vec![(1, 1000, Diff::ONE),]))
                 );
+                assert_eq!(
+                    reclocked.try_recv(),
+                    Ok(Event::Progress(vec![(0, -1), (1001, 1)]))
+                );
+
+                // Reclock offset 2 to timestamp 2000
+                for time in partitioned_frontier([(0, 2)]) {
+                    bindings.update_at(time, 2000, Diff::MINUS_ONE);
+                }
+                for time in partitioned_frontier([(0, 3)]) {
+                    bindings.update_at(time, 2000, Diff::ONE);
+                }
+                bindings.advance_to(2001);
+                bindings.flush();
+                step(worker);
+
+                // Now the reclock operator reclocks the last data item and since the source
+                // frontier is empty there will be no more work to be done, so the output frontier
+                // downgrades to the empty frontier even though the frontier of the remap bindings
+                // is still at [2001].
+                assert_eq!(
+                    reclocked.try_recv(),
+                    Ok(Event::Messages(1001u64, vec![(2, 2000, Diff::ONE),]))
+                );
+                assert_eq!(reclocked.try_recv(), Ok(Event::Progress(vec![(1001, -1)])));
             },
         );
     }
@@ -980,10 +1071,7 @@ mod test {
                     reclocked.try_recv(),
                     Ok(Event::Progress(vec![(0, -1), (1000, 1)]))
                 );
-                assert_eq!(
-                    reclocked.try_recv(),
-                    Ok(Event::Progress(vec![(1000, -1), (3001, 1)]))
-                );
+                assert_eq!(reclocked.try_recv(), Ok(Event::Progress(vec![(1000, -1)])));
             },
         );
     }

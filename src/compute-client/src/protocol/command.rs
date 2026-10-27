@@ -12,14 +12,13 @@
 use std::time::Duration;
 
 use mz_cluster_client::client::TryIntoProtocolNonce;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::render_plan::RenderPlan;
+use mz_cluster_client::params::GrpcClientParameters;
+use mz_compute_types::dataflows::RenderDataflowDescription;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
-use mz_repr::{GlobalId, RelationDesc, Row};
-use mz_service::params::GrpcClientParameters;
+use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_tracing::params::TracingParameters;
 use serde::{Deserialize, Serialize};
@@ -35,7 +34,7 @@ use crate::logging::LoggingConfig;
 ///
 /// [Protocol Stages]: super#protocol-stages
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ComputeCommand<T = mz_repr::Timestamp> {
+pub enum ComputeCommand {
     /// `Hello` is the first command sent to a replica after a connection was established. It
     /// provides the replica with meta information about the connection.
     ///
@@ -88,14 +87,14 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// allows the replica to hoist `UpdateConfiguration` commands during reconciliation.
     ///
     /// Configuration parameters that should not be applied globally, but only to specific
-    /// dataflows or peeks, should be added to the [`DataflowDescription`] or [`Peek`] types,
+    /// dataflows or peeks, should be added to the [`RenderDataflowDescription`] or [`Peek`] types,
     /// rather than as [`ComputeParameters`].
     UpdateConfiguration(Box<ComputeParameters>),
 
     /// `CreateDataflow` instructs the replica to create a dataflow according to the given
-    /// [`DataflowDescription`].
+    /// [`RenderDataflowDescription`].
     ///
-    /// The [`DataflowDescription`] must have the following properties:
+    /// The [`RenderDataflowDescription`] must have the following properties:
     ///
     ///   * Dataflow imports are valid:
     ///     * Imported storage collections specified in [`source_imports`] exist and are readable by
@@ -134,14 +133,14 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// the compute controller should eventually send a `Schedule` command for each sent
     /// `CreateDataflow` command.
     ///
-    /// [`objects_to_build`]: DataflowDescription::objects_to_build
-    /// [`source_imports`]: DataflowDescription::source_imports
-    /// [`index_imports`]: DataflowDescription::index_imports
-    /// [`as_of`]: DataflowDescription::as_of
+    /// [`objects_to_build`]: RenderDataflowDescription::objects_to_build
+    /// [`source_imports`]: RenderDataflowDescription::source_imports
+    /// [`index_imports`]: RenderDataflowDescription::index_imports
+    /// [`as_of`]: RenderDataflowDescription::as_of
     /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [`CopyToResponse`]: super::response::ComputeResponse::CopyToResponse
-    CreateDataflow(Box<DataflowDescription<RenderPlan<T>, CollectionMetadata, T>>),
+    CreateDataflow(Box<RenderDataflowDescription<CollectionMetadata>>),
 
     /// `Schedule` allows the replica to start computation for a compute collection.
     ///
@@ -210,7 +209,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         /// TODO(database-issues#7533): Add documentation.
         id: GlobalId,
         /// TODO(database-issues#7533): Add documentation.
-        frontier: Antichain<T>,
+        frontier: Antichain<Timestamp>,
     },
 
     /// `Peek` instructs the replica to perform a peek on a collection: either an index or a
@@ -233,15 +232,16 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// After receiving a `Peek` command, the replica must eventually produce a single
     /// [`PeekResponse`]:
     ///
-    ///    * For peeks that were not cancelled: either [`Rows`] or [`Error`].
-    ///    * For peeks that were cancelled: either [`Rows`], or [`Error`], or [`Canceled`].
+    ///    * For peeks that were not cancelled: [`Rows`], [`Stashed`], or [`Error`].
+    ///    * For peeks that were cancelled: any response above, or [`Canceled`].
     ///
     /// [`PeekResponse`]: super::response::PeekResponse
     /// [`PeekResponse::Error`]: super::response::PeekResponse::Error
     /// [`Rows`]: super::response::PeekResponse::Rows
+    /// [`Stashed`]: super::response::PeekResponse::Stashed
     /// [`Error`]: super::response::PeekResponse::Error
     /// [`Canceled`]: super::response::PeekResponse::Canceled
-    Peek(Box<Peek<T>>),
+    Peek(Box<Peek>),
 
     /// `CancelPeek` instructs the replica to cancel the identified pending peek.
     ///
@@ -275,6 +275,22 @@ pub struct InstanceConfig {
     pub expiration_offset: Option<Duration>,
     /// The persist location where we can stash large peek results.
     pub peek_stash_persist_location: PersistLocation,
+    /// Whether arrangements created by this replica use dictionary compression.
+    ///
+    /// Captured from `enable_arrangement_dictionary_compression_alpha` when the replica is created and
+    /// held fixed for the replica's lifetime, so flipping the flag only affects replicas created
+    /// afterwards rather than retroactively changing arrangements across the environment.
+    pub arrangement_dictionary_compression: bool,
+    /// A snapshot of the controller's dynamic configuration at replica creation, including any
+    /// replica-scoped overrides.
+    ///
+    /// The replica applies this to its worker configuration before running create-time setup, so
+    /// that work performed while handling `CreateInstance` (for example rendering introspection
+    /// dataflows) observes controller-synced values rather than dyncfg defaults. The values are
+    /// also delivered through the subsequent `UpdateConfiguration`, which applies globally and
+    /// keeps the configuration current for the replica's lifetime. An empty snapshot leaves the
+    /// worker at its defaults until that first `UpdateConfiguration`.
+    pub initial_config: ConfigUpdates,
 }
 
 impl InstanceConfig {
@@ -285,17 +301,31 @@ impl InstanceConfig {
     /// We consider a stricter offset compatible, which allows us to strengthen the value without
     /// forcing replica restarts. However, it also means that replicas will only pick up the new
     /// value after a restart.
+    ///
+    /// Dictionary compression is intentionally excluded from this check: it is captured at replica
+    /// creation, so a change is always compatible and a running replica keeps the value it was
+    /// created with (a new value is only picked up by replicas created afterwards).
+    ///
+    /// The initial config snapshot is likewise excluded: it carries dyncfg values that apply
+    /// globally and are kept current through `UpdateConfiguration`, so a difference across
+    /// reconnects is expected and does not require a restart.
     pub fn compatible_with(&self, other: &InstanceConfig) -> bool {
         // Destructure to protect against adding fields in the future.
         let InstanceConfig {
             logging: self_logging,
             expiration_offset: self_offset,
             peek_stash_persist_location: self_peek_stash_persist_location,
+            // Captured at replica creation; intentionally not part of compatibility (see above).
+            arrangement_dictionary_compression: _,
+            // Globally-applied dyncfg snapshot, intentionally not part of compatibility (see above).
+            initial_config: _,
         } = self;
         let InstanceConfig {
             logging: other_logging,
             expiration_offset: other_offset,
             peek_stash_persist_location: other_peek_stash_persist_location,
+            arrangement_dictionary_compression: _,
+            initial_config: _,
         } = other;
 
         // Logging is compatible if exactly the same.
@@ -417,7 +447,7 @@ impl PeekTarget {
 /// the dataflow runners are responsible for ensuring that they can
 /// correctly answer the `Peek`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Peek<T = mz_repr::Timestamp> {
+pub struct Peek {
     /// Target-specific metadata.
     pub target: PeekTarget,
     /// The relation description for the rows returned by this peek, before
@@ -432,7 +462,7 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// Used in responses and cancellation requests.
     pub uuid: Uuid,
     /// The logical timestamp at which the collection is queried.
-    pub timestamp: T,
+    pub timestamp: Timestamp,
     /// Actions to apply to the result set before returning them.
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.

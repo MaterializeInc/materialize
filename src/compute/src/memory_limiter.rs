@@ -15,11 +15,11 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
 use mz_compute_types::dyncfgs::{
     MEMORY_LIMITER_BURST_FACTOR, MEMORY_LIMITER_INTERVAL, MEMORY_LIMITER_USAGE_BIAS,
 };
 use mz_dyncfg::ConfigSet;
+use mz_metrics::usage::ProcStatus;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
@@ -193,10 +193,7 @@ impl LimiterTask {
                 Err(err)
             }
             #[cfg(not(target_os = "linux"))]
-            Err(_err) => Ok(ProcStatus {
-                vm_rss: 0,
-                vm_swap: 0,
-            }),
+            Err(_err) => Ok(ProcStatus::default()),
         }
     }
 
@@ -204,7 +201,9 @@ impl LimiterTask {
     fn check(&mut self) -> Result<(), anyhow::Error> {
         debug!("checking memory limits");
 
-        let ProcStatus { vm_rss, vm_swap } = Self::current_utilization()?;
+        let ProcStatus {
+            vm_rss, vm_swap, ..
+        } = Self::current_utilization()?;
 
         let memory_limit = self.config.memory_limit;
         let burst_budget_remaining = self.burst_budget_remaining;
@@ -260,6 +259,13 @@ impl LimiterTask {
         info!(?config, "applying memory limiter config");
         self.config = config;
         self.burst_budget_remaining = config.burst_budget;
+        // Reset `last_check` so the next `check` measures the excess interval
+        // against the new config, not against a stale checkpoint left over from
+        // a period when the limiter was disabled or running with a different
+        // interval. Without this, enabling the limiter at runtime can charge an
+        // arbitrarily large excess byte-second amount against the burst budget
+        // and immediately terminate the process.
+        self.last_check = Instant::now();
 
         self.metrics
             .memory_limit
@@ -308,41 +314,63 @@ impl LimiterMetrics {
     }
 }
 
-/// Helper for reading and parsing `/proc/self/status` on Linux.
-pub struct ProcStatus {
-    /// Resident Set Size (RSS) in bytes.
-    pub vm_rss: usize,
-    /// Swap memory in bytes.
-    pub vm_swap: usize,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl ProcStatus {
-    /// Populate a new `ProcStatus` with information in /proc/self/status.
-    pub fn from_proc() -> anyhow::Result<Self> {
-        let contents = std::fs::read_to_string("/proc/self/status")?;
-        let mut vm_rss = 0;
-        let mut vm_swap = 0;
-
-        for line in contents.lines() {
-            if line.starts_with("VmRSS:") {
-                vm_rss = line
-                    .split_whitespace()
-                    .nth(1)
-                    .ok_or_else(|| anyhow::anyhow!("failed to parse VmRSS"))?
-                    .parse::<usize>()
-                    .context("failed to parse VmRSS")?
-                    * 1024
-            } else if line.starts_with("VmSwap:") {
-                vm_swap = line
-                    .split_whitespace()
-                    .nth(1)
-                    .ok_or_else(|| anyhow::anyhow!("failed to parse VmSwap"))?
-                    .parse::<usize>()
-                    .context("failed to parse VmSwap")?
-                    * 1024;
-            }
+    fn task_for_test() -> LimiterTask {
+        let registry = MetricsRegistry::new();
+        let metrics = LimiterMetrics::new(&registry);
+        LimiterTask {
+            config: LimiterConfig::disabled(),
+            burst_budget_remaining: 0,
+            last_check: Instant::now(),
+            metrics,
         }
+    }
 
-        Ok(Self { vm_rss, vm_swap })
+    /// Regression test for an issue where enabling the limiter at runtime would
+    /// immediately terminate the process because `last_check` had not been
+    /// advanced since task startup. After `apply_config` the next `check` would
+    /// see a huge `elapsed`, multiply it with the over-limit memory amount, and
+    /// instantly exhaust the burst budget.
+    #[mz_ore::test]
+    fn apply_config_resets_last_check() {
+        let mut task = task_for_test();
+
+        // Simulate a long period during which the limiter was disabled and
+        // `last_check` was never refreshed.
+        let stale = Instant::now() - Duration::from_secs(3600);
+        task.last_check = stale;
+
+        let new_config = LimiterConfig {
+            interval: Duration::from_secs(1),
+            memory_limit: 1024,
+            burst_budget: 1024,
+        };
+        task.apply_config(new_config);
+
+        assert!(
+            task.last_check > stale,
+            "apply_config must refresh last_check to avoid charging stale elapsed time \
+             against the burst budget when the limiter is enabled at runtime"
+        );
+        assert!(
+            task.last_check.elapsed() < Duration::from_secs(60),
+            "last_check should be ~now after apply_config"
+        );
+    }
+
+    /// A no-op config change must not refresh `last_check`, otherwise repeated
+    /// no-op calls would silently delay the next limit check.
+    #[mz_ore::test]
+    fn apply_config_noop_keeps_last_check() {
+        let mut task = task_for_test();
+        let stale = Instant::now() - Duration::from_secs(60);
+        task.last_check = stale;
+
+        task.apply_config(LimiterConfig::disabled());
+
+        assert_eq!(task.last_check, stale);
     }
 }

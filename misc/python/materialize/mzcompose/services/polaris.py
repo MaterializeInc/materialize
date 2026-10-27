@@ -18,13 +18,13 @@ class PolarisBootstrap(Service):
         self,
         name: str = "polaris-bootstrap",
         image: str = "apache/polaris-admin-tool",
-        tag: str = "1.2.0-incubating",
+        tag: str = "1.7.0",
         environment: list[str] = [
             "POLARIS_BOOTSTRAP_CREDENTIALS=POLARIS,root,root",
             "POLARIS_PERSISTENCE_TYPE=relational-jdbc",
             "QUARKUS_DATASOURCE_USERNAME=postgres",
             "QUARKUS_DATASOURCE_PASSWORD=postgres",
-            "QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://postgres:5432/postgres",
+            "QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://postgres:5432/polaris",
             "POLARIS_PERSISTENCE_RELATIONAL_JDBC_MAX_RETRIES=5",
             "POLARIS_PERSISTENCE_RELATIONAL_JDBC_INITIAL_DELAY_IN_MS=100",
             "POLARIS_PERSISTENCE_RELATIONAL_JDBC_MAX_DURATION_IN_MS=5000",
@@ -40,7 +40,7 @@ class PolarisBootstrap(Service):
                 "--credential",
                 "POLARIS,root,root",
             ],
-            "depends_on": {"postgres": {"condition": "service_healthy"}},
+            "depends_on": {"postgres": {"condition": "service_started"}},
         }
         super().__init__(name, config)
 
@@ -50,14 +50,15 @@ class Polaris(Service):
         self,
         name: str = "polaris",
         image: str = "apache/polaris",
-        # Fails with 1.1.0-incubating
-        tag: str = "1.2.0-incubating",
+        # Fails with 1.1.0-incubating. Releases from 1.4.0 on drop the
+        # `-incubating` suffix, so keep this tag in sync with the admin tool's.
+        tag: str = "1.7.0",
         # 8181: api port, 8182: management port
         ports: list[str | int] = [8181, 8182],
         environment: list[str] = [
             "QUARKUS_DATASOURCE_USERNAME=postgres",
             "QUARKUS_DATASOURCE_PASSWORD=postgres",
-            "QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://postgres:5432/postgres",
+            "QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://postgres:5432/polaris",
             "POLARIS_PERSISTENCE_TYPE=relational-jdbc",
             "POLARIS_PERSISTENCE_RELATIONAL_JDBC_MAX_RETRIES=5",
             "POLARIS_PERSISTENCE_RELATIONAL_JDBC_INITIAL_DELAY_IN_MS=100",
@@ -76,14 +77,27 @@ class Polaris(Service):
             "environment": environment + extra_environment,
             "depends_on": {
                 "polaris-bootstrap": {"condition": "service_completed_successfully"},
-                "postgres": {"condition": "service_healthy"},
+                "postgres": {"condition": "service_started"},
             },
             "healthcheck": {
-                "test": ["CMD", "curl", "http://localhost:8182/q/health"],
-                "interval": "2s",
-                "timeout": "10s",
+                "test": [
+                    "CMD",
+                    "curl",
+                    "--fail",
+                    "http://localhost:8182/q/health/live",
+                ],
+                "interval": "1s",
+                "timeout": "5s",
                 "retries": 10,
-                "start_period": "10s",
+                # The Quarkus JVM plus its JDBC connection to Postgres can take
+                # well over a minute to start listening on the management port
+                # when the CI host is under heavy load (every container starting
+                # at once). A short start_period made `docker compose up --wait`
+                # declare Polaris unhealthy, which triggered an `up` retry that
+                # re-ran polaris-bootstrap and failed with "realm already
+                # bootstrapped" (exit 3). Give Polaris generous time to come up
+                # so it reliably passes its health check on the first attempt.
+                "start_period": "120s",
             },
         }
         super().__init__(name, config)

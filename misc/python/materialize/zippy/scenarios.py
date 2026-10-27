@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 
-from materialize.zippy.all_actions import Action, ValidateAll  # noqa
+from materialize.zippy.all_actions import ValidateAll  # noqa
 from materialize.zippy.backup_and_restore_actions import BackupAndRestore
 from materialize.zippy.balancerd_actions import (
     BalancerdRestart,
@@ -18,7 +18,7 @@ from materialize.zippy.balancerd_actions import (
 from materialize.zippy.blob_store_actions import BlobStoreRestart, BlobStoreStart
 from materialize.zippy.crdb_actions import CockroachRestart, CockroachStart
 from materialize.zippy.debezium_actions import CreateDebeziumSource, DebeziumStart
-from materialize.zippy.framework import ActionFactory, ActionOrFactory  # noqa
+from materialize.zippy.framework import ActionOrFactory
 from materialize.zippy.kafka_actions import (
     CreateTopicParameterized,
     Ingest,
@@ -60,6 +60,10 @@ from materialize.zippy.replica_actions import (
     DropDefaultReplica,
     DropReplica,
 )
+from materialize.zippy.iceberg_actions import (
+    CreateIcebergSinkParameterized,
+    IcebergStart,
+)
 from materialize.zippy.sink_actions import CreateSinkParameterized
 from materialize.zippy.source_actions import (
     AlterSourceConnectionParameterized,
@@ -70,13 +74,23 @@ from materialize.zippy.storaged_actions import (
     StoragedRestart,
     StoragedStart,
 )
-from materialize.zippy.table_actions import DML, CreateTableParameterized, ValidateTable
-from materialize.zippy.view_actions import CreateViewParameterized, ValidateView
+from materialize.zippy.copy_s3_actions import CopyFromS3, CopyToS3
+from materialize.zippy.table_actions import (
+    DML,
+    CreateTableParameterized,
+    DropTable,
+    ValidateTable,
+)
+from materialize.zippy.view_actions import (
+    CreateViewParameterized,
+    DropView,
+    ValidateView,
+)
 
 
 class Scenario:
     def bootstrap(self) -> list[ActionOrFactory]:
-        return [
+        bootstrap: list[ActionOrFactory] = [
             KafkaStart,
             CockroachStart,
             BlobStoreStart,
@@ -84,6 +98,13 @@ class Scenario:
             StoragedStart,
             BalancerdStart,
         ]
+        # Polaris is only needed if the scenario can create Iceberg sinks.
+        if any(
+            isinstance(action, CreateIcebergSinkParameterized)
+            for action in self.actions_with_weight()
+        ):
+            bootstrap.append(IcebergStart)
+        return bootstrap
 
     def actions_with_weight(self) -> dict[ActionOrFactory, float]:
         raise RuntimeError
@@ -114,7 +135,9 @@ class KafkaSources(Scenario):
             CreateTopicParameterized(): 5,
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
+            DropView: 5,
             CreateSinkParameterized(): 5,
+            CreateIcebergSinkParameterized(): 5,
             ValidateView: 10,
             Ingest: 100,
             PeekCancellation: 5,
@@ -137,6 +160,7 @@ class AlterConnectionWithKafkaSources(Scenario):
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
             CreateSinkParameterized(): 5,
+            CreateIcebergSinkParameterized(): 5,
             AlterSourceConnectionParameterized(): 5,
             ValidateView: 10,
             Ingest: 100,
@@ -155,13 +179,18 @@ class UserTables(Scenario):
             Mz0dtDeploy: 10,
             BalancerdStop: 1,
             BalancerdRestart: 1,
-            BackupAndRestore: 1,
+            # No mid-test BackupAndRestore since the state of the sinks is not
+            # recorded across a backup&restore cycle, see
+            # https://github.com/MaterializeInc/database-issues/issues/9589
             KillClusterd: 10,
             # Disabled because a separate clusterd is not supported by Mz0dtDeploy yet
             # StoragedRestart: 5,
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 10,
+            DropTable: 5,
+            DropView: 5,
             CreateSinkParameterized(): 10,
+            CreateIcebergSinkParameterized(): 5,
             ValidateTable: 20,
             ValidateView: 20,
             DML: 30,
@@ -281,10 +310,18 @@ class ClusterReplicas(Scenario):
             CreateTableParameterized(): 10,
             CreateViewParameterized(): 20,
             CreateSinkParameterized(): 10,
+            CreateIcebergSinkParameterized(): 5,
             ValidateView: 20,
             Ingest: 50,
             DML: 50,
-            PeekCancellation: 5,
+            # PeekCancellation is intentionally omitted here: this scenario drops
+            # the default replica and constantly creates/drops/resizes replicas on
+            # the quickstart cluster, so it can be left without a hydrated replica.
+            # statement_timeout only bounds the row-streaming phase of a peek, not
+            # the wait for the cluster to be able to serve it, so the timeout INSERT
+            # can stall until testdrive's deadline ("deadline has elapsed") instead
+            # of returning the expected timeout error. PeekCancellation still runs in
+            # the KafkaSources* scenarios, which keep the default replica.
         }
 
 
@@ -313,6 +350,7 @@ class CrdbBlobStoreRestart(Scenario):
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
             CreateSinkParameterized(): 5,
+            CreateIcebergSinkParameterized(): 5,
             Ingest: 50,
             CreateTableParameterized(): 10,
             DML: 50,
@@ -336,6 +374,7 @@ class CrdbRestart(Scenario):
             CreateSourceParameterized(): 5,
             CreateViewParameterized(max_inputs=2): 5,
             CreateSinkParameterized(): 5,
+            CreateIcebergSinkParameterized(): 5,
             Ingest: 50,
             CreateTableParameterized(): 10,
             DML: 50,
@@ -360,6 +399,7 @@ class KafkaSourcesLarge(Scenario):
                 max_views=50, expensive_aggregates=False, max_inputs=1
             ): 5,
             CreateSinkParameterized(max_sinks=25): 10,
+            CreateIcebergSinkParameterized(): 5,
             ValidateView: 10,
             Ingest: 100,
             PeekCancellation: 5,
@@ -395,6 +435,7 @@ class UserTablesLarge(Scenario):
                 max_views=5, expensive_aggregates=True, max_inputs=5
             ): 10,
             CreateSinkParameterized(max_sinks=10): 10,
+            CreateIcebergSinkParameterized(): 5,
             ValidateView: 10,
             DML: 50,
         }
@@ -483,4 +524,20 @@ class SqlServerCdcLarge(Scenario):
             CreateViewParameterized(): 10,
             ValidateView: 20,
             SqlServerDML: 100,
+        }
+
+
+class CopyToFromS3(Scenario):
+    """A Zippy test performing roundtrip copy-to-S3 and copy-from-S3 operations over user tables."""
+
+    def actions_with_weight(self) -> dict[ActionOrFactory, float]:
+        return {
+            MzStart: 5,
+            MzStop: 5,
+            KillClusterd: 5,
+            CreateTableParameterized(): 10,
+            DML: 30,
+            ValidateTable: 10,
+            CopyToS3: 20,
+            CopyFromS3: 20,
         }

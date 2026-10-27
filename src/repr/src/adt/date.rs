@@ -31,7 +31,18 @@ pub enum DateError {
 /// A Postgres-compatible Date. Additionally clamp valid dates for the range
 /// that chrono supports to allow for safe string operations. Infinite dates are
 /// not yet supported.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
+)]
 pub struct Date {
     /// Number of days from the postgres epoch (2000-01-01).
     days: i32,
@@ -43,7 +54,11 @@ impl RustType<ProtoDate> for Date {
     }
 
     fn from_proto(proto: ProtoDate) -> Result<Self, TryFromProtoError> {
-        Ok(Date { days: proto.days })
+        // Go through `from_pg_epoch` so out-of-range days are rejected here.
+        // Pushing them into a `Row` succeeds, but `read_datum` would later
+        // panic when reconstructing the date.
+        Date::from_pg_epoch(proto.days)
+            .map_err(|err| TryFromProtoError::InvalidFieldError(err.to_string()))
     }
 }
 

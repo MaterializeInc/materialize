@@ -129,8 +129,7 @@ class Identifiers(Check):
         return Testdrive(schemas() + cluster() + dedent(cmds))
 
     def manipulate(self) -> list[Testdrive]:
-        cmds = [
-            f"""
+        cmds = [f"""
             > SET CLUSTER=identifiers;
             > SET DATABASE={dq(self.ident["db"])};
             > CREATE MATERIALIZED VIEW {dq(self.ident["schema"])}.{dq(self.ident["mv" + i])} IN CLUSTER {self._default_cluster()} AS
@@ -142,9 +141,7 @@ class Identifiers(Check):
               INTO KAFKA CONNECTION {dq(self.ident["kafka_conn"])} (TOPIC 'sink-sink-ident')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {dq(self.ident["csr_conn"])}
               ENVELOPE DEBEZIUM;
-            """
-            for i in ["1", "2"]
-        ]
+            """ for i in ["1", "2"]]
         return [Testdrive(dedent(s)) for s in cmds]
 
     def validate(self) -> Testdrive:

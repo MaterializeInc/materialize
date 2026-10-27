@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use mz_adapter::catalog::Catalog;
 use mz_ore::collections::CollectionExt;
 use mz_repr::SqlScalarType;

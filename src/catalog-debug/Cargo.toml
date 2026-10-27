@@ -1,7 +1,7 @@
 [package]
 name = "mz-catalog-debug"
 description = "Durable metadata storage debug tool."
-version = "26.6.0-dev.0"
+version = "26.49.0-dev.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -10,9 +10,9 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-clap = { version = "4.5.23", features = ["derive", "env"] }
-futures = "0.3.31"
+anyhow.workspace = true
+clap = { workspace = true, features = ["env"] }
+futures.workspace = true
 mz-adapter = { path = "../adapter" }
 mz-adapter-types = { path = "../adapter-types" }
 mz-build-info = { path = "../build-info" }
@@ -25,16 +25,13 @@ mz-storage-types = { path = "../storage-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
-mz-service = { path = "../service" }
+mz-secrets-cli = { path = "../secrets-cli" }
+mz-secrets-loader = { path = "../secrets-loader" }
 mz-sql = { path = "../sql" }
-serde = "1.0.219"
-serde_json = "1.0.145"
-tokio = "1.48.0"
-tracing = "0.1.43"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []

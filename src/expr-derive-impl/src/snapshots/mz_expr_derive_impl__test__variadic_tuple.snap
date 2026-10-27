@@ -1,0 +1,84 @@
+---
+source: src/expr-derive-impl/src/test.rs
+expression: "#[sqlfunc(Replace, sqlname = \"replace\")]\nfn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {\n    Ok(text.replace(from, to))\n}\n"
+---
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
+pub struct Replace;
+impl crate::func::variadic::EagerVariadicFunc for Replace {
+    type Input<'a> = (&'a str, &'a str, &'a str);
+    type Output<'a> = Result<String, EvalError>;
+    fn call<'a>(
+        &self,
+        (text, from, to): Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        replace(text, from, to)
+    }
+    fn output_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::variadic::EagerVariadicFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false
+            || input_types.get(0usize).map_or(false, |t| t.nullable)
+            || input_types.get(1usize).map_or(false, |t| t.nullable)
+            || input_types.get(2usize).map_or(false, |t| t.nullable);
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
+        output.nullable(is_null)
+    }
+}
+impl std::fmt::Display for Replace {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("replace")
+    }
+}
+impl crate::func::FuncName for Replace {
+    const NAME: &'static str = stringify!(replace);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(Replace, sqlname = \"replace\",)] fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError>",
+        signature: "fn(&'a str, &'a str, &'a str) -> Result<String, EvalError>",
+        body_fingerprint: 18087132299484514323u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                &'static str,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                &'static str,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                &'static str,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
+}
+fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
+    Ok(text.replace(from, to))
+}

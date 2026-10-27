@@ -16,16 +16,20 @@ use std::sync::LazyLock;
 
 use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
+use mz_expr::func;
+use mz_expr::func::variadic::{JsonbBuildObject, RecordCreate};
 use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
-use mz_expr::{VariadicFunc, func};
+use mz_ore::soft_panic_or_log;
 use mz_repr::{
-    ColumnName, Datum, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType,
+    ColumnName, Datum, Row, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType,
 };
+use mz_sql_parser::ast::CastFailureMode;
 
 use crate::catalog::TypeCategory;
 use crate::plan::error::PlanError;
 use crate::plan::hir::{
-    AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, HirScalarExpr, UnaryFunc,
+    AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, HirScalarExpr, NameMetadata,
+    UnaryFunc,
 };
 use crate::plan::query::{ExprContext, QueryContext};
 use crate::plan::scope::Scope;
@@ -33,9 +37,9 @@ use crate::plan::scope::Scope;
 /// Like func::sql_impl_func, but for casts.
 fn sql_impl_cast(expr: &'static str) -> CastTemplate {
     let invoke = crate::func::sql_impl(expr);
-    CastTemplate::new(move |ecx, _ccx, from_type, _to_type| {
+    CastTemplate::strict_only(move |ecx, _ccx, from_type, _to_type| {
         // Oddly, this needs to be able to gracefully fail so we can detect unmet dependencies.
-        let mut out = invoke(ecx.qcx, vec![from_type.clone()]).ok()?;
+        let mut out = invoke(ecx, vec![from_type.clone()]).ok()?;
         Some(move |e| {
             out.splice_parameters(&[e], 0);
             out
@@ -48,9 +52,9 @@ fn sql_impl_cast_per_context(casts: &[(CastContext, &'static str)]) -> CastTempl
         .iter()
         .map(|(ccx, expr)| (ccx.clone(), crate::func::sql_impl(expr)))
         .collect();
-    CastTemplate::new(move |ecx, ccx, from_type, _to_type| {
+    CastTemplate::strict_only(move |ecx, ccx, from_type, _to_type| {
         let invoke = &casts[&ccx];
-        let r = invoke(ecx.qcx, vec![from_type.clone()]);
+        let r = invoke(ecx, vec![from_type.clone()]);
         let mut out = r.ok()?;
         Some(move |e| {
             out.splice_parameters(&[e], 0);
@@ -63,8 +67,9 @@ fn sql_impl_cast_per_context(casts: &[(CastContext, &'static str)]) -> CastTempl
 type Cast = Box<dyn FnOnce(HirScalarExpr) -> HirScalarExpr>;
 
 /// A cast template is a function that produces a `Cast` given a concrete input
-/// and output type. A template can return `None` to indicate that it is
-/// incapable of producing a cast for the specified types.
+/// and output type and a failure mode. A template can return `None` to
+/// indicate that it is incapable of producing a cast for the specified types,
+/// or for the specified failure mode.
 ///
 /// Cast templates are used to share code for similar casts, where the input or
 /// output type is of one "category" of type. For example, a single cast
@@ -73,13 +78,35 @@ type Cast = Box<dyn FnOnce(HirScalarExpr) -> HirScalarExpr>;
 /// which is impractical.
 struct CastTemplate(
     Box<
-        dyn Fn(&ExprContext, CastContext, &SqlScalarType, &SqlScalarType) -> Option<Cast>
+        dyn Fn(
+                &ExprContext,
+                CastContext,
+                CastFailureMode,
+                &SqlScalarType,
+                &SqlScalarType,
+            ) -> Option<Cast>
             + Send
             + Sync,
     >,
 );
 
 impl CastTemplate {
+    /// Builds a template from a builder of the erroring cast.
+    ///
+    /// Under [`CastFailureMode::NullFallback`] the builder is run once on a
+    /// placeholder of the input type, and its result must be that placeholder
+    /// wrapped in zero or more `CallUnary` nodes with nothing else in between.
+    /// The template then emits those stages with each one that could error
+    /// wrapped in `TryCast`, so a failure at any stage yields NULL, while a
+    /// stage that cannot error is emitted as is and keeps its nullability.
+    ///
+    /// A builder whose result has any other shape, for example one that
+    /// compares or branches on its input, makes `TRY_CAST` report that the
+    /// cast cannot fall back to NULL, even when the strict cast cannot error.
+    /// `test_try_cast_wraps_every_stage_of_every_cast` in `mz_adapter` plans
+    /// every entry of the cast table in both modes and fails on such a
+    /// builder. A template whose builder has another shape on purpose uses
+    /// [`CastTemplate::strict_only`].
     fn new<T, C>(t: T) -> CastTemplate
     where
         T: Fn(&ExprContext, CastContext, &SqlScalarType, &SqlScalarType) -> Option<C>
@@ -88,10 +115,90 @@ impl CastTemplate {
             + 'static,
         C: FnOnce(HirScalarExpr) -> HirScalarExpr + 'static,
     {
-        CastTemplate(Box::new(move |ecx, ccx, from_ty, to_ty| {
-            Some(Box::new(t(ecx, ccx, from_ty, to_ty)?))
+        CastTemplate(Box::new(move |ecx, ccx, mode, from_ty, to_ty| {
+            let cast = t(ecx, ccx, from_ty, to_ty)?;
+            match mode {
+                CastFailureMode::Error => Some(Box::new(cast)),
+                CastFailureMode::NullFallback => {
+                    let stages = extract_unary_stages_for_try_cast(from_ty, cast)?;
+                    Some(Box::new(move |mut expr: HirScalarExpr| {
+                        for stage in stages {
+                            expr = expr.call_unary(UnaryFunc::try_cast_if_fallible(stage));
+                        }
+                        expr
+                    }))
+                }
+            }
         }))
     }
+
+    /// Builds a template that supports only [`CastFailureMode::Error`].
+    ///
+    /// For casts implemented in SQL: their failures come from `mz_error_if_null`
+    /// calls and from subquery cardinality, neither of which a scalar-level
+    /// wrapper can turn into NULL.
+    fn strict_only<T, C>(t: T) -> CastTemplate
+    where
+        T: Fn(&ExprContext, CastContext, &SqlScalarType, &SqlScalarType) -> Option<C>
+            + Send
+            + Sync
+            + 'static,
+        C: FnOnce(HirScalarExpr) -> HirScalarExpr + 'static,
+    {
+        CastTemplate(Box::new(move |ecx, ccx, mode, from_ty, to_ty| match mode {
+            CastFailureMode::Error => Some(Box::new(t(ecx, ccx, from_ty, to_ty)?)),
+            CastFailureMode::NullFallback => None,
+        }))
+    }
+}
+
+/// The unary functions a strict cast from `from` applies to its input,
+/// innermost first, or `None` if the cast has any other shape. See
+/// [`CastTemplate::new`] for the shape a cast must have.
+///
+/// Every stage after the first must propagate NULLs, so that the NULL a
+/// failed stage produces flows through the rest of the chain unchanged:
+/// `f(g(e))` matches `try[f](try[g](e))` only when `f` returns NULL on a NULL
+/// input. A violation is reported as a planner bug rather than refused
+/// silently, since every cast function propagates NULLs and a new one that
+/// does not is a bug in that function.
+fn extract_unary_stages_for_try_cast(
+    from: &SqlScalarType,
+    cast: impl FnOnce(HirScalarExpr) -> HirScalarExpr,
+) -> Option<Vec<UnaryFunc>> {
+    // Templates never inspect their input, so a dummy of the input type serves
+    // to discover the stages they apply. Built directly because
+    // `HirScalarExpr::literal` asserts that the datum inhabits the type, which
+    // `Datum::Dummy` never does.
+    let sentinel = HirScalarExpr::Literal(
+        Row::pack([Datum::Dummy]),
+        from.clone().nullable(false),
+        NameMetadata::default(),
+    );
+    let mut expr = cast(sentinel.clone());
+    let mut stages = vec![];
+    loop {
+        match expr {
+            HirScalarExpr::CallUnary {
+                func, expr: inner, ..
+            } => {
+                stages.push(func);
+                expr = *inner;
+            }
+            other if other == sentinel => break,
+            _ => return None,
+        }
+    }
+    stages.reverse();
+    if let Some(stage) = stages
+        .iter()
+        .skip(1)
+        .find(|stage| !stage.propagates_nulls())
+    {
+        soft_panic_or_log!("cast stage {stage} does not propagate NULLs; TRY_CAST cannot wrap it");
+        return None;
+    }
+    Some(stages)
 }
 
 impl From<UnaryFunc> for CastTemplate {
@@ -122,6 +229,8 @@ impl<const N: usize> From<[UnaryFunc; N]> for CastTemplate {
 /// A reg* type represents a specific type of object by oid.
 ///
 /// Casting from a string to a reg*:
+/// - Accepts `-`, the absent reference, as OID 0 in all cases, matching
+///   PostgreSQL's `parseDashOrOid`.
 /// - Accepts a string that looks like an OID and converts the value to the
 ///   specified reg* type. This is available in all cases except explicitly
 ///   casting text values to regclass (e.g. `SELECT '2'::text::regclass`)
@@ -137,6 +246,9 @@ const STRING_REG_CAST_TEMPLATE: &str = "
 (SELECT
 CASE
     WHEN $1 IS NULL THEN NULL
+-- Handle the absent reference, which the reg* text output spells `-`. PostgreSQL's
+-- `parseDashOrOid` accepts it for every reg* type, including text to regclass.
+    WHEN $1 = '-' THEN 0::pg_catalog.oid::pg_catalog.{0}
 -- Handle OID-like input, if available via {2}
     WHEN {2} AND pg_catalog.substring($1, 1, 1) BETWEEN '0' AND '9' THEN
         $1::pg_catalog.oid::pg_catalog.{0}
@@ -202,9 +314,16 @@ static STRING_TO_REGTYPE: LazyLock<String> = LazyLock::new(|| {
         .to_string()
 });
 
+// OID 0 renders as `-` to match PostgreSQL's `regprocout`, `regclassout` and
+// `regtypeout`, which all spell the absent reference that way. A nonzero OID
+// that names nothing still renders as its digits, also as PostgreSQL does.
 const REG_STRING_CAST_TEMPLATE: &str = "(
 SELECT
-    COALESCE(mz_internal.mz_global_id_to_name(o.id), CAST($1 AS pg_catalog.oid)::pg_catalog.text)
+    CASE
+      WHEN CAST($1 AS pg_catalog.oid) = 0::pg_catalog.oid THEN '-'
+      ELSE
+        COALESCE(mz_internal.mz_global_id_to_name(o.id), CAST($1 AS pg_catalog.oid)::pg_catalog.text)
+    END
     AS text
 FROM
   (
@@ -317,7 +436,8 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             (Int16, Float64) => Implicit: CastInt16ToFloat64(func::CastInt16ToFloat64),
             (Int16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastInt16ToNumeric(func::CastInt16ToNumeric(s))))
+                let f = CastInt16ToNumeric(func::CastInt16ToNumeric(s));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (Int16, Oid) => Implicit: [
                 CastInt16ToInt32(func::CastInt16ToInt32),
@@ -355,7 +475,8 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 CastInt32ToOid(func::CastInt32ToOid),
                 CastOidToRegType(func::CastOidToRegType),
             ],
-            (Int32, PgLegacyChar) => Explicit: CastInt32ToPgLegacyChar(func::CastInt32ToPgLegacyChar),
+            (Int32, PgLegacyChar) => Explicit:
+                CastInt32ToPgLegacyChar(func::CastInt32ToPgLegacyChar),
             (Int32, Int16) => Assignment: CastInt32ToInt16(func::CastInt32ToInt16),
             (Int32, Int64) => Implicit: CastInt32ToInt64(func::CastInt32ToInt64),
             (Int32, UInt16) => Assignment: CastInt32ToUint16(func::CastInt32ToUint16),
@@ -365,7 +486,8 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             (Int32, Float64) => Implicit: CastInt32ToFloat64(func::CastInt32ToFloat64),
             (Int32, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastInt32ToNumeric(func::CastInt32ToNumeric(s))))
+                let f = CastInt32ToNumeric(func::CastInt32ToNumeric(s));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (Int32, String) => Assignment: CastInt32ToString(func::CastInt32ToString),
 
@@ -378,7 +500,8 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             (Int64, UInt64) => Assignment: CastInt64ToUint64(func::CastInt64ToUint64),
             (Int64, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastInt64ToNumeric(func::CastInt64ToNumeric(s))))
+                let f = CastInt64ToNumeric(func::CastInt64ToNumeric(s));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (Int64, Float32) => Implicit: CastInt64ToFloat32(func::CastInt64ToFloat32),
             (Int64, Float64) => Implicit: CastInt64ToFloat64(func::CastInt64ToFloat64),
@@ -405,7 +528,8 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             (UInt16, Int64) => Implicit: CastUint16ToInt64(func::CastUint16ToInt64),
             (UInt16, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastUint16ToNumeric(func::CastUint16ToNumeric(s))))
+                let f = CastUint16ToNumeric(func::CastUint16ToNumeric(s));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (UInt16, Float32) => Implicit: CastUint16ToFloat32(func::CastUint16ToFloat32),
             (UInt16, Float64) => Implicit: CastUint16ToFloat64(func::CastUint16ToFloat64),
@@ -419,7 +543,8 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             (UInt32, Int64) => Implicit: CastUint32ToInt64(func::CastUint32ToInt64),
             (UInt32, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastUint32ToNumeric(func::CastUint32ToNumeric(s))))
+                let f = CastUint32ToNumeric(func::CastUint32ToNumeric(s));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (UInt32, Float32) => Implicit: CastUint32ToFloat32(func::CastUint32ToFloat32),
             (UInt32, Float64) => Implicit: CastUint32ToFloat64(func::CastUint32ToFloat64),
@@ -433,29 +558,46 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             (UInt64, Int64) => Assignment: CastUint64ToInt64(func::CastUint64ToInt64),
             (UInt64, Numeric) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastUint64ToNumeric(func::CastUint64ToNumeric(s))))
+                let f = CastUint64ToNumeric(func::CastUint64ToNumeric(s));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (UInt64, Float32) => Implicit: CastUint64ToFloat32(func::CastUint64ToFloat32),
             (UInt64, Float64) => Implicit: CastUint64ToFloat64(func::CastUint64ToFloat64),
             (UInt64, String) => Assignment: CastUint64ToString(func::CastUint64ToString),
 
             // MZ_TIMESTAMP
-            (MzTimestamp, String) => Assignment: CastMzTimestampToString(func::CastMzTimestampToString),
-            (MzTimestamp, Timestamp) => Assignment: CastMzTimestampToTimestamp(func::CastMzTimestampToTimestamp),
-            (MzTimestamp, TimestampTz) => Assignment: CastMzTimestampToTimestampTz(func::CastMzTimestampToTimestampTz),
-            (String, MzTimestamp) => Assignment: CastStringToMzTimestamp(func::CastStringToMzTimestamp),
-            (UInt64, MzTimestamp) => Implicit: CastUint64ToMzTimestamp(func::CastUint64ToMzTimestamp),
-            (UInt32, MzTimestamp) => Implicit: CastUint32ToMzTimestamp(func::CastUint32ToMzTimestamp),
-            (Int64, MzTimestamp) => Implicit: CastInt64ToMzTimestamp(func::CastInt64ToMzTimestamp),
-            (Int32, MzTimestamp) => Implicit: CastInt32ToMzTimestamp(func::CastInt32ToMzTimestamp),
-            (Numeric, MzTimestamp) => Implicit: CastNumericToMzTimestamp(func::CastNumericToMzTimestamp),
-            (Timestamp, MzTimestamp) => Implicit: CastTimestampToMzTimestamp(func::CastTimestampToMzTimestamp),
-            (TimestampTz, MzTimestamp) => Implicit: CastTimestampTzToMzTimestamp(func::CastTimestampTzToMzTimestamp),
-            (Date, MzTimestamp) => Implicit: CastDateToMzTimestamp(func::CastDateToMzTimestamp),
+            (MzTimestamp, String) => Assignment:
+                CastMzTimestampToString(func::CastMzTimestampToString),
+            (MzTimestamp, Timestamp) => Assignment:
+                CastMzTimestampToTimestamp(func::CastMzTimestampToTimestamp),
+            (MzTimestamp, TimestampTz) => Assignment:
+                CastMzTimestampToTimestampTz(
+                    func::CastMzTimestampToTimestampTz,
+                ),
+            (String, MzTimestamp) => Assignment:
+                CastStringToMzTimestamp(func::CastStringToMzTimestamp),
+            (UInt64, MzTimestamp) => Implicit:
+                CastUint64ToMzTimestamp(func::CastUint64ToMzTimestamp),
+            (UInt32, MzTimestamp) => Implicit:
+                CastUint32ToMzTimestamp(func::CastUint32ToMzTimestamp),
+            (Int64, MzTimestamp) => Implicit:
+                CastInt64ToMzTimestamp(func::CastInt64ToMzTimestamp),
+            (Int32, MzTimestamp) => Implicit:
+                CastInt32ToMzTimestamp(func::CastInt32ToMzTimestamp),
+            (Numeric, MzTimestamp) => Implicit:
+                CastNumericToMzTimestamp(func::CastNumericToMzTimestamp),
+            (Timestamp, MzTimestamp) => Implicit:
+                CastTimestampToMzTimestamp(func::CastTimestampToMzTimestamp),
+            (TimestampTz, MzTimestamp) => Implicit:
+                CastTimestampTzToMzTimestamp(
+                    func::CastTimestampTzToMzTimestamp,
+                ),
+            (Date, MzTimestamp) => Implicit:
+                CastDateToMzTimestamp(func::CastDateToMzTimestamp),
 
             // OID
             (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
-            (Oid, Int64) => Assignment: CastOidToInt32(func::CastOidToInt32),
+            (Oid, Int64) => Assignment: CastOidToInt64(func::CastOidToInt64),
             (Oid, String) => Explicit: CastOidToString(func::CastOidToString),
             (Oid, RegClass) => Implicit: CastOidToRegClass(func::CastOidToRegClass),
             (Oid, RegProc) => Implicit: CastOidToRegProc(func::CastOidToRegProc),
@@ -483,7 +625,8 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             (Float32, Float64) => Implicit: CastFloat32ToFloat64(func::CastFloat32ToFloat64),
             (Float32, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToNumeric(func::CastFloat32ToNumeric(s))))
+                let f = CastFloat32ToNumeric(func::CastFloat32ToNumeric(s));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (Float32, String) => Assignment: CastFloat32ToString(func::CastFloat32ToString),
 
@@ -497,18 +640,21 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             (Float64, Float32) => Assignment: CastFloat64ToFloat32(func::CastFloat64ToFloat32),
             (Float64, Numeric) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToNumeric(func::CastFloat64ToNumeric(s))))
+                let f = CastFloat64ToNumeric(func::CastFloat64ToNumeric(s));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (Float64, String) => Assignment: CastFloat64ToString(func::CastFloat64ToString),
 
             // DATE
             (Date, Timestamp) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let p = to_type.unwrap_timestamp_precision();
-                Some(move |e: HirScalarExpr| e.call_unary(CastDateToTimestamp(func::CastDateToTimestamp(p))))
+                let f = CastDateToTimestamp(func::CastDateToTimestamp(p));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (Date, TimestampTz) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let p = to_type.unwrap_timestamp_precision();
-                Some(move |e: HirScalarExpr| e.call_unary(CastDateToTimestampTz(func::CastDateToTimestampTz(p))))
+                let f = CastDateToTimestampTz(func::CastDateToTimestampTz(p));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (Date, String) => Assignment: CastDateToString(func::CastDateToString),
 
@@ -518,33 +664,55 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
 
             // TIMESTAMP
             (Timestamp, Date) => Assignment: CastTimestampToDate(func::CastTimestampToDate),
-            (Timestamp, TimestampTz) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            (Timestamp, TimestampTz) => Implicit: CastTemplate::new(
+                |_ecx, _ccx, from_type, to_type|
+            {
                 let from = from_type.unwrap_timestamp_precision();
                 let to = to_type.unwrap_timestamp_precision();
-                Some(move |e: HirScalarExpr| e.call_unary(CastTimestampToTimestampTz(func::CastTimestampToTimestampTz{from, to})))
+                let f = CastTimestampToTimestampTz(
+                    func::CastTimestampToTimestampTz { from, to },
+                );
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
-            (Timestamp, Timestamp) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            (Timestamp, Timestamp) => Assignment: CastTemplate::new(
+                |_ecx, _ccx, from_type, to_type|
+            {
                 let from = from_type.unwrap_timestamp_precision();
                 let to = to_type.unwrap_timestamp_precision();
-                Some(move |e: HirScalarExpr| e.call_unary(AdjustTimestampPrecision(func::AdjustTimestampPrecision{from, to})))
+                let f = AdjustTimestampPrecision(
+                    func::AdjustTimestampPrecision { from, to },
+                );
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (Timestamp, Time) => Assignment: CastTimestampToTime(func::CastTimestampToTime),
             (Timestamp, String) => Assignment: CastTimestampToString(func::CastTimestampToString),
 
             // TIMESTAMPTZ
             (TimestampTz, Date) => Assignment: CastTimestampTzToDate(func::CastTimestampTzToDate),
-            (TimestampTz, Timestamp) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            (TimestampTz, Timestamp) => Assignment: CastTemplate::new(
+                |_ecx, _ccx, from_type, to_type|
+            {
                 let from = from_type.unwrap_timestamp_precision();
                 let to = to_type.unwrap_timestamp_precision();
-                Some(move |e: HirScalarExpr| e.call_unary(CastTimestampTzToTimestamp(func::CastTimestampTzToTimestamp{from, to})))
+                let f = CastTimestampTzToTimestamp(
+                    func::CastTimestampTzToTimestamp { from, to },
+                );
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
-            (TimestampTz, TimestampTz) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
+            (TimestampTz, TimestampTz) => Assignment: CastTemplate::new(
+                |_ecx, _ccx, from_type, to_type|
+            {
                 let from = from_type.unwrap_timestamp_precision();
                 let to = to_type.unwrap_timestamp_precision();
-                Some(move |e: HirScalarExpr| e.call_unary(AdjustTimestampTzPrecision(func::AdjustTimestampTzPrecision{from, to})))
+                let f = AdjustTimestampTzPrecision(
+                    func::AdjustTimestampTzPrecision { from, to },
+                );
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
-            (TimestampTz, Time) => Assignment: CastTimestampTzToTime(func::CastTimestampTzToTime),
-            (TimestampTz, String) => Assignment: CastTimestampTzToString(func::CastTimestampTzToString),
+            (TimestampTz, Time) => Assignment:
+                CastTimestampTzToTime(func::CastTimestampTzToTime),
+            (TimestampTz, String) => Assignment:
+                CastTimestampTzToString(func::CastTimestampTzToString),
 
             // INTERVAL
             (Interval, Time) => Assignment: CastIntervalToTime(func::CastIntervalToTime),
@@ -584,17 +752,22 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             (String, Float64) => Explicit: CastStringToFloat64(func::CastStringToFloat64),
             (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(func::CastStringToNumeric(s))))
+                let f = CastStringToNumeric(func::CastStringToNumeric(s));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (String, Date) => Explicit: CastStringToDate(func::CastStringToDate),
             (String, Time) => Explicit: CastStringToTime(func::CastStringToTime),
             (String, Timestamp) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let p = to_type.unwrap_timestamp_precision();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToTimestamp(func::CastStringToTimestamp(p))))
+                let f = CastStringToTimestamp(func::CastStringToTimestamp(p));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (String, TimestampTz) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let p = to_type.unwrap_timestamp_precision();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToTimestampTz(func::CastStringToTimestampTz(p))))
+                let f = CastStringToTimestampTz(
+                    func::CastStringToTimestampTz(p),
+                );
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (String, Interval) => Explicit: CastStringToInterval(func::CastStringToInterval),
             (String, Bytes) => Explicit: CastStringToBytes(func::CastStringToBytes),
@@ -604,150 +777,277 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_array_element_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_el_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToArray(func::CastStringToArray {
-                    return_ty,
-                    cast_expr: Box::new(cast_expr),
-                })))
+                Some(|e: HirScalarExpr| {
+                    e.call_unary(UnaryFunc::CastStringToArray(
+                        func::CastStringToArray {
+                            return_ty,
+                            cast_expr: Box::new(cast_expr),
+                        },
+                    ))
+                })
             }),
             (String, List) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_list_element_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_el_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToList(func::CastStringToList {
-                    return_ty,
-                    cast_expr: Box::new(cast_expr),
-                })))
+                Some(|e: HirScalarExpr| {
+                    e.call_unary(UnaryFunc::CastStringToList(
+                        func::CastStringToList {
+                            return_ty,
+                            cast_expr: Box::new(cast_expr),
+                        },
+                    ))
+                })
             }),
             (String, Map) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_val_type = to_type.unwrap_map_value_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_val_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToMap(func::CastStringToMap {
-                    return_ty,
-                    cast_expr: Box::new(cast_expr),
-                })))
+                Some(|e: HirScalarExpr| {
+                    e.call_unary(UnaryFunc::CastStringToMap(
+                        func::CastStringToMap {
+                            return_ty,
+                            cast_expr: Box::new(cast_expr),
+                        },
+                    ))
+                })
             }),
             (String, Range) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_range_element_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_el_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToRange(func::CastStringToRange {
-                    return_ty,
-                    cast_expr: Box::new(cast_expr),
-                })))
+                Some(|e: HirScalarExpr| {
+                    e.call_unary(UnaryFunc::CastStringToRange(
+                        func::CastStringToRange {
+                            return_ty,
+                            cast_expr: Box::new(cast_expr),
+                        },
+                    ))
+                })
             }),
             (String, Int2Vector) => Explicit: CastStringToInt2Vector(func::CastStringToInt2Vector),
             (String, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx != CastContext::Explicit})))
+                let fail_on_len = ccx != CastContext::Explicit;
+                let f = CastStringToChar(func::CastStringToChar {
+                    length, fail_on_len,
+                });
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (String, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_varchar_max_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
+                let fail_on_len = ccx != CastContext::Explicit;
+                let f = CastStringToVarChar(func::CastStringToVarChar {
+                    length, fail_on_len,
+                });
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
-            (String, PgLegacyChar) => Assignment: CastStringToPgLegacyChar(func::CastStringToPgLegacyChar),
+            (String, PgLegacyChar) => Assignment:
+                CastStringToPgLegacyChar(func::CastStringToPgLegacyChar),
             // CHAR
             (Char, String) => Implicit: CastCharToString(func::CastCharToString),
             (Char, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx != CastContext::Explicit})))
+                let fail_on_len = ccx != CastContext::Explicit;
+                let f = CastStringToChar(func::CastStringToChar {
+                    length, fail_on_len,
+                });
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (Char, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_varchar_max_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
+                let fail_on_len = ccx != CastContext::Explicit;
+                let f = CastStringToVarChar(func::CastStringToVarChar {
+                    length, fail_on_len,
+                });
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
-            (Char, PgLegacyChar) => Assignment: CastStringToPgLegacyChar(func::CastStringToPgLegacyChar),
+            (Char, PgLegacyChar) => Assignment:
+                CastStringToPgLegacyChar(func::CastStringToPgLegacyChar),
 
             // VARCHAR
             (VarChar, String) => Implicit: CastVarCharToString(func::CastVarCharToString),
             (VarChar, Char) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx != CastContext::Explicit})))
+                let fail_on_len = ccx != CastContext::Explicit;
+                let f = CastStringToChar(func::CastStringToChar {
+                    length, fail_on_len,
+                });
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (VarChar, VarChar) => Implicit: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_varchar_max_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
+                let fail_on_len = ccx != CastContext::Explicit;
+                let f = CastStringToVarChar(func::CastStringToVarChar {
+                    length, fail_on_len,
+                });
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
-            (VarChar, PgLegacyChar) => Assignment: CastStringToPgLegacyChar(func::CastStringToPgLegacyChar),
+            (VarChar, PgLegacyChar) => Assignment:
+                CastStringToPgLegacyChar(func::CastStringToPgLegacyChar),
 
             // PG LEGACY CHAR
-            (PgLegacyChar, String) => Implicit: CastPgLegacyCharToString(func::CastPgLegacyCharToString),
-            (PgLegacyChar, Char) => Assignment: CastPgLegacyCharToChar(func::CastPgLegacyCharToChar),
-            (PgLegacyChar, VarChar) => Assignment: CastPgLegacyCharToVarChar(func::CastPgLegacyCharToVarChar),
-            (PgLegacyChar, Int32) => Explicit: CastPgLegacyCharToInt32(func::CastPgLegacyCharToInt32),
+            (PgLegacyChar, String) => Implicit:
+                CastPgLegacyCharToString(func::CastPgLegacyCharToString),
+            (PgLegacyChar, Char) => Assignment:
+                CastPgLegacyCharToChar(func::CastPgLegacyCharToChar),
+            (PgLegacyChar, VarChar) => Assignment:
+                CastPgLegacyCharToVarChar(func::CastPgLegacyCharToVarChar),
+            (PgLegacyChar, Int32) => Explicit:
+                CastPgLegacyCharToInt32(func::CastPgLegacyCharToInt32),
 
             // PG LEGACY NAME
-            // Under the hood VarChars and Name's are just Strings, so we can re-use existing methods
+            // Under the hood VarChars and Name's are just Strings, so we
+            // can re-use existing methods
             // on Strings and VarChars instead of defining new ones.
             (PgLegacyName, String) => Implicit: CastVarCharToString(func::CastVarCharToString),
             (PgLegacyName, Char) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
                 let length = to_type.unwrap_char_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToChar(func::CastStringToChar {length, fail_on_len: ccx != CastContext::Explicit})))
+                let fail_on_len = ccx != CastContext::Explicit;
+                let f = CastStringToChar(func::CastStringToChar {
+                    length, fail_on_len,
+                });
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
-            (PgLegacyName, VarChar) => Assignment: CastTemplate::new(|_ecx, ccx, _from_type, to_type| {
+            (PgLegacyName, VarChar) => Assignment: CastTemplate::new(
+                |_ecx, ccx, _from_type, to_type|
+            {
                 let length = to_type.unwrap_varchar_max_length();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToVarChar(func::CastStringToVarChar {length, fail_on_len: ccx != CastContext::Explicit})))
+                let fail_on_len = ccx != CastContext::Explicit;
+                let f = CastStringToVarChar(func::CastStringToVarChar {
+                    length, fail_on_len,
+                });
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
-            (String, PgLegacyName) => Implicit: CastStringToPgLegacyName(func::CastStringToPgLegacyName),
-            (Char, PgLegacyName) => Implicit: CastStringToPgLegacyName(func::CastStringToPgLegacyName),
-            (VarChar, PgLegacyName) => Implicit: CastStringToPgLegacyName(func::CastStringToPgLegacyName),
+            (String, PgLegacyName) => Implicit:
+                CastStringToPgLegacyName(func::CastStringToPgLegacyName),
+            (Char, PgLegacyName) => Implicit:
+                CastStringToPgLegacyName(func::CastStringToPgLegacyName),
+            (VarChar, PgLegacyName) => Implicit:
+                CastStringToPgLegacyName(func::CastStringToPgLegacyName),
 
             // RECORD
             (Record, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastRecordToString(func::CastRecordToString { ty })))
+                Some(|e: HirScalarExpr| {
+                    e.call_unary(CastRecordToString(
+                        func::CastRecordToString { ty },
+                    ))
+                })
             }),
             (Record, Record) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
-                if from_type.unwrap_record_element_type().len() != to_type.unwrap_record_element_type().len() {
+                let from_fields = from_type.unwrap_record_element_type();
+                let to_fields = to_type.unwrap_record_element_type();
+                if from_fields.len() != to_fields.len() {
                     return None;
                 }
 
-                if let (l @ SqlScalarType::Record {custom_id: Some(..), ..}, r) = (from_type, to_type) {
-                    // Changing `from`'s custom_id requires at least Assignment context
+                if let (
+                    l @ SqlScalarType::Record {
+                        custom_id: Some(..), ..
+                    },
+                    r,
+                ) = (from_type, to_type)
+                {
+                    // Changing `from`'s custom_id requires at least
+                    // Assignment context
                     if ccx == CastContext::Implicit && l != r {
                         return None;
                     }
                 }
 
-                let cast_exprs = from_type.unwrap_record_element_type()
+                let cast_exprs = from_fields
                     .iter()
-                    .zip_eq(to_type.unwrap_record_element_type())
+                    .zip_eq(to_fields)
                     .map(|(f, t)| plan_hypothetical_cast(ecx, ccx, f, t))
                     .collect::<Option<Box<_>>>()?;
                 let to = to_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastRecord1ToRecord2(func::CastRecord1ToRecord2 { return_ty: to, cast_exprs })))
+                Some(|e: HirScalarExpr| {
+                    e.call_unary(CastRecord1ToRecord2(
+                        func::CastRecord1ToRecord2 {
+                            return_ty: to,
+                            cast_exprs,
+                        },
+                    ))
+                })
             }),
 
             // ARRAY
             (Array, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastArrayToString(func::CastArrayToString { ty })))
+                Some(|e: HirScalarExpr| {
+                    e.call_unary(CastArrayToString(
+                        func::CastArrayToString { ty },
+                    ))
+                })
             }),
             (Array, List) => Explicit: CastArrayToListOneDim(func::CastArrayToListOneDim),
             (Array, Array) => Explicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let inner_from_type = from_type.unwrap_array_element_type();
                 let inner_to_type = to_type.unwrap_array_element_type();
-                let cast_expr = plan_hypothetical_cast(ecx, ccx, inner_from_type, inner_to_type)?;
+                let cast_expr = plan_hypothetical_cast(
+                    ecx, ccx, inner_from_type, inner_to_type,
+                )?;
                 let return_ty = to_type.clone();
 
-                Some(move |e: HirScalarExpr| e.call_unary(CastArrayToArray(func::CastArrayToArray { return_ty, cast_expr: Box::new(cast_expr) })))
+                Some(move |e: HirScalarExpr| {
+                    e.call_unary(CastArrayToArray(func::CastArrayToArray {
+                        return_ty,
+                        cast_expr: Box::new(cast_expr),
+                    }))
+                })
             }),
 
             // INT2VECTOR
-            (Int2Vector, Array) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, _to_type| {
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastInt2VectorToArray(func::CastInt2VectorToArray)))
+            (Int2Vector, Array) => Implicit: CastTemplate::new(|ecx, ccx, _from_type, to_type| {
+                let inner_to_type = to_type.unwrap_array_element_type();
+                // Int2Vector elements are Int16, so if the target element type
+                // differs we need to also cast the array elements after the
+                // Int2Vector -> Array(Int16) conversion. (Postgres seems to do the same.)
+                let element_cast = if inner_to_type != &SqlScalarType::Int16 {
+                    let cast_expr = plan_hypothetical_cast(
+                        ecx, ccx, &SqlScalarType::Int16, inner_to_type
+                    )?;
+                    Some((to_type.clone(), cast_expr))
+                } else {
+                    None
+                };
+                Some(move |e: HirScalarExpr| {
+                    let arr = e.call_unary(
+                        UnaryFunc::CastInt2VectorToArray(func::CastInt2VectorToArray)
+                    );
+                    match element_cast {
+                        Some((return_ty, cast_expr)) => {
+                            arr.call_unary(CastArrayToArray(
+                                func::CastArrayToArray { return_ty, cast_expr: Box::new(cast_expr) }
+                            ))
+                        }
+                        None => arr,
+                    }
+                })
             }),
             (Int2Vector, String) => Explicit: CastInt2VectorToString(func::CastInt2VectorToString),
 
             // LIST
             (List, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastListToString(func::CastListToString { ty })))
+                Some(|e: HirScalarExpr| {
+                    e.call_unary(CastListToString(
+                        func::CastListToString { ty },
+                    ))
+                })
             }),
             (List, List) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
 
-                if let (l @ SqlScalarType::List {custom_id: Some(..), ..}, r) = (from_type, to_type) {
-                    // Changing `from`'s custom_id requires at least Assignment context
+                if let (
+                    l @ SqlScalarType::List {
+                        custom_id: Some(..), ..
+                    },
+                    r,
+                ) = (from_type, to_type)
+                {
+                    // Changing `from`'s custom_id requires at least
+                    // Assignment context
                     if ccx == CastContext::Implicit && !l.base_eq(r) {
                         return None;
                     }
@@ -756,11 +1056,17 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 let return_ty = to_type.clone();
                 let from_el_type = from_type.unwrap_list_element_type();
                 let to_el_type = to_type.unwrap_list_element_type();
-                let cast_expr = plan_hypothetical_cast(ecx, ccx, from_el_type, to_el_type)?;
-                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastList1ToList2(func::CastList1ToList2 {
-                    return_ty,
-                    cast_expr: Box::new(cast_expr),
-                })))
+                let cast_expr = plan_hypothetical_cast(
+                    ecx, ccx, from_el_type, to_el_type,
+                )?;
+                Some(|e: HirScalarExpr| {
+                    e.call_unary(UnaryFunc::CastList1ToList2(
+                        func::CastList1ToList2 {
+                            return_ty,
+                            cast_expr: Box::new(cast_expr),
+                        },
+                    ))
+                })
             }),
 
             // MAP
@@ -778,7 +1084,8 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             (Jsonb, Float64) => Explicit: CastJsonbToFloat64(func::CastJsonbToFloat64),
             (Jsonb, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_numeric_max_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToNumeric(func::CastJsonbToNumeric(s))))
+                let f = CastJsonbToNumeric(func::CastJsonbToNumeric(s));
+                Some(move |e: HirScalarExpr| e.call_unary(f))
             }),
             (Jsonb, String) => Assignment: CastJsonbToString(func::CastJsonbToString),
 
@@ -790,7 +1097,11 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 let scale = to_type.unwrap_numeric_max_scale();
                 Some(move |e: HirScalarExpr| match scale {
                     None => e,
-                    Some(scale) => e.call_unary(UnaryFunc::AdjustNumericScale(func::AdjustNumericScale(scale))),
+                    Some(scale) => e.call_unary(
+                        UnaryFunc::AdjustNumericScale(
+                            func::AdjustNumericScale(scale),
+                        ),
+                    ),
                 })
             }),
             (Numeric, Float32) => Implicit: CastNumericToFloat32(func::CastNumericToFloat32),
@@ -806,7 +1117,11 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             // Range
             (Range, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: HirScalarExpr| e.call_unary(CastRangeToString(func::CastRangeToString { ty })))
+                Some(|e: HirScalarExpr| {
+                    e.call_unary(CastRangeToString(
+                        func::CastRangeToString { ty },
+                    ))
+                })
             }),
 
             // MzAclItem
@@ -830,10 +1145,15 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 SELECT makeaclitem(
                     (CASE mz_internal.mz_aclitem_grantee($1)
                         WHEN 'p' THEN 0
-                        ELSE (SELECT oid FROM mz_catalog.mz_roles WHERE id = mz_internal.mz_aclitem_grantee($1))
+                        ELSE (SELECT oid FROM mz_catalog.mz_roles
+                            WHERE id = mz_internal.mz_aclitem_grantee($1))
                     END),
-                    (SELECT oid FROM mz_catalog.mz_roles WHERE id = mz_internal.mz_aclitem_grantor($1)),
-                    (SELECT array_to_string(mz_internal.mz_format_privileges(mz_internal.mz_aclitem_privileges($1)), ',')),
+                    (SELECT oid FROM mz_catalog.mz_roles
+                        WHERE id = mz_internal.mz_aclitem_grantor($1)),
+                    (SELECT array_to_string(
+                        mz_internal.mz_format_privileges(
+                            mz_internal.mz_aclitem_privileges($1)
+                        ), ',')),
                     -- GRANT OPTION isn't implemented so we hardcode false.
                     false
                 )
@@ -860,44 +1180,133 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 SELECT mz_internal.make_mz_aclitem(
                     (CASE mz_internal.aclitem_grantee($1)
                         WHEN 0 THEN 'p'
-                        ELSE (SELECT id FROM mz_catalog.mz_roles WHERE oid = mz_internal.aclitem_grantee($1))
+                        ELSE (SELECT id FROM mz_catalog.mz_roles
+                            WHERE oid = mz_internal.aclitem_grantee($1))
                     END),
-                    (SELECT id FROM mz_catalog.mz_roles WHERE oid = mz_internal.aclitem_grantor($1)),
-                    (SELECT array_to_string(mz_internal.mz_format_privileges(mz_internal.aclitem_privileges($1)), ','))
+                    (SELECT id FROM mz_catalog.mz_roles
+                        WHERE oid = mz_internal.aclitem_grantor($1)),
+                    (SELECT array_to_string(
+                        mz_internal.mz_format_privileges(
+                            mz_internal.aclitem_privileges($1)
+                        ), ','))
                 )
             )")
         }
     });
 
+/// Error returned when a cast is not available or not allowed.
+#[derive(Debug)]
+pub enum CastError {
+    /// No cast exists between the given types (or not in this cast context).
+    InvalidCast {
+        ccx: CastContext,
+        from: String,
+        to: String,
+    },
+    /// Cast would apply but is disallowed (e.g. range over an unsupported element type).
+    UnsupportedRangeElementType { element_type_name: String },
+    /// The cast exists but has no null-fallback form, so `TRY_CAST` cannot use it.
+    NullFallbackUnsupported { from: String, to: String },
+}
+
+impl CastError {
+    /// Convert to a [`PlanError`] for use in planning; requires the expression name for context.
+    pub fn into_plan_error(self, name: String) -> PlanError {
+        match self {
+            CastError::InvalidCast { ccx, from, to } => PlanError::InvalidCast {
+                name,
+                ccx,
+                from,
+                to,
+            },
+            CastError::UnsupportedRangeElementType { element_type_name } => {
+                PlanError::UnsupportedRangeElementType { element_type_name }
+            }
+            CastError::NullFallbackUnsupported { from, to } => {
+                PlanError::TryCastUnsupported { from, to }
+            }
+        }
+    }
+}
+
 /// Get casts directly between two [`SqlScalarType`]s, with control over the
 /// allowed [`CastContext`].
+///
+/// Returns `Err` when the cast is not supported: either no cast exists
+/// ([`CastError::InvalidCast`]) or the cast is disallowed
+/// ([`CastError::UnsupportedRangeElementType`], e.g. range over float/uint).
 fn get_cast(
     ecx: &ExprContext,
     ccx: CastContext,
+    mode: CastFailureMode,
     from: &SqlScalarType,
     to: &SqlScalarType,
-) -> Option<Cast> {
+) -> Result<Cast, CastError> {
     use CastContext::*;
 
+    // The identity cast cannot fail, so it is the same in every failure mode.
     if from == to || (ccx == Implicit && from.base_eq(to)) {
-        return Some(Box::new(|expr| expr));
+        return Ok(Box::new(|expr| expr));
     }
 
-    let imp = VALID_CASTS.get(&(from.into(), to.into()))?;
+    // Reject casts to range types with unsupported element types at plan time.
+    if let SqlScalarType::Range { element_type } = to {
+        validate_range_element_type(ecx, element_type)?;
+    }
+
+    let imp = match VALID_CASTS.get(&(from.into(), to.into())) {
+        Some(imp) => imp,
+        None => {
+            return Err(CastError::InvalidCast {
+                ccx,
+                from: ecx.humanize_sql_scalar_type(from, false),
+                to: ecx.humanize_sql_scalar_type(to, false),
+            });
+        }
+    };
     let template = if ccx >= imp.context {
         Some(&imp.template)
     } else {
         None
     };
-    template.and_then(|template| (template.0)(ecx, ccx, from, to))
+    let build = |mode| template.and_then(|template| (template.0)(ecx, ccx, mode, from, to));
+    match build(mode) {
+        Some(cast) => Ok(cast),
+        // A template declines a failure mode by returning `None`, the same way
+        // it declines a type pair. Tell the two apart so that the error names
+        // the actual problem.
+        None if mode == CastFailureMode::NullFallback
+            && build(CastFailureMode::Error).is_some() =>
+        {
+            Err(CastError::NullFallbackUnsupported {
+                from: ecx.humanize_sql_scalar_type(from, false),
+                to: ecx.humanize_sql_scalar_type(to, false),
+            })
+        }
+        None => Err(CastError::InvalidCast {
+            ccx,
+            from: ecx.humanize_sql_scalar_type(from, false),
+            to: ecx.humanize_sql_scalar_type(to, false),
+        }),
+    }
+}
+
+/// The base type pairs that have an entry in the cast table, for tests that
+/// want to prove they exercised every one.
+pub fn valid_cast_base_type_pairs() -> impl Iterator<Item = (SqlScalarBaseType, SqlScalarBaseType)>
+{
+    VALID_CASTS.keys().copied()
 }
 
 /// Converts an expression to `SqlScalarType::String`.
 ///
-/// All types are convertible to string, so this never fails.
-pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
+/// Most types have an explicit cast to string, but a few do not: `mz_aclitem`
+/// has no text cast at all, and the `reg*` casts are implemented as subqueries
+/// that `plan_cast` rejects in contexts that disallow subqueries (e.g. a
+/// `RETURNING` clause or a `to_jsonb` element cast). We surface those as a
+/// planning error rather than panicking.
+pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> Result<HirScalarExpr, PlanError> {
     plan_cast(ecx, CastContext::Explicit, expr, &SqlScalarType::String)
-        .expect("cast known to exist")
 }
 
 /// Converts an expression to `SqlScalarType::Jsonb`.
@@ -908,12 +1317,13 @@ pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 ///   * Records are converted to a JSON object where the record's field names
 ///     are the keys of the object, and the record's fields are recursively
 ///     converted to JSON by `to_jsonb`.
-///   * Other types are converted to strings by their usual cast function an
-//      become JSON strings.
-pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
+///   * Other types are converted to strings by their usual cast function and
+///     become JSON strings. That cast can fail (see `to_string`), in which case
+///     we propagate the planning error instead of panicking.
+pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> Result<HirScalarExpr, PlanError> {
     use SqlScalarType::*;
 
-    match ecx.scalar_type(&expr) {
+    Ok(match ecx.scalar_type(&expr) {
         Bool | Jsonb | Numeric { .. } => {
             expr.call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb))
         }
@@ -936,9 +1346,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                     ecx,
                     expr.clone()
                         .call_unary(UnaryFunc::RecordGet(func::RecordGet(i))),
-                ));
+                )?);
             }
-            HirScalarExpr::call_variadic(VariadicFunc::JsonbBuildObject, exprs)
+            HirScalarExpr::call_variadic(JsonbBuildObject, exprs)
         }
         ref ty @ List {
             ref element_type, ..
@@ -960,9 +1370,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
 
             // Create an element-casting expression by calling `to_jsonb` on
             // an expression that references the first column in a row.
-            let cast_element = to_jsonb(&ecx, HirScalarExpr::column(0));
+            let cast_element = to_jsonb(&ecx, HirScalarExpr::column(0))?;
             let cast_element = cast_element
-                .lower_uncorrelated()
+                .lower_uncorrelated(ecx.catalog().system_vars())
                 .expect("to_jsonb does not produce correlated expressions on uncorrelated input");
 
             // The `Cast{Array|List}ToJsonb` functions take the element-casting
@@ -1001,9 +1411,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
         | MzTimestamp
         | Range { .. }
         | MzAclItem
-        | AclItem => to_string(ecx, expr)
+        | AclItem => to_string(ecx, expr)?
             .call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb)),
-    }
+    })
 }
 
 /// Guesses the most-common type among a set of [`SqlScalarType`]s that all members
@@ -1021,7 +1431,8 @@ pub fn guess_best_common_type(
     // This function is a translation of `select_common_type` in PostgreSQL with
     // the addition of our near match logic, which supports Materialize
     // non-linear type promotions.
-    // https://github.com/postgres/postgres/blob/d1b307eef/src/backend/parser/parse_coerce.c#L1288-L1308
+    // https://github.com/postgres/postgres/blob/d1b307eef/
+    //   src/backend/parser/parse_coerce.c#L1288-L1308
 
     // If every type is a literal record with the same number of fields, the
     // best common type is a record with that number of fields. We recursively
@@ -1095,8 +1506,8 @@ pub fn guess_best_common_type(
             sql_bail!(
                 "{} types {} and {} cannot be matched",
                 ecx.name,
-                ecx.humanize_scalar_type(candidate, false),
-                ecx.humanize_scalar_type(typ, false),
+                ecx.humanize_sql_scalar_type(candidate, false),
+                ecx.humanize_sql_scalar_type(typ, false),
             );
         };
 
@@ -1120,6 +1531,18 @@ pub fn plan_coerce<'a>(
     e: CoercibleScalarExpr,
     coerce_to: &SqlScalarType,
 ) -> Result<HirScalarExpr, PlanError> {
+    plan_coerce_with_failure_mode(ecx, e, coerce_to, CastFailureMode::Error)
+}
+
+/// Like [`plan_coerce`], but the casts that coerce a literal to `coerce_to`
+/// use the given failure mode. `TRY_CAST('abc' AS int4)` reaches its cast
+/// through this coercion, so the mode has to apply here too.
+pub fn plan_coerce_with_failure_mode<'a>(
+    ecx: &'a ExprContext,
+    e: CoercibleScalarExpr,
+    coerce_to: &SqlScalarType,
+    mode: CastFailureMode,
+) -> Result<HirScalarExpr, PlanError> {
     use CoercibleScalarExpr::*;
 
     Ok(match e {
@@ -1134,25 +1557,35 @@ pub fn plan_coerce<'a>(
             // (with either implicit or explicit semantics) via a separate call
             // to `plan_cast`.
             let coerce_to_base = &coerce_to.without_modifiers();
-            plan_cast(ecx, CastContext::Coerced, lit, coerce_to_base)?
+            plan_cast_with_failure_mode(ecx, CastContext::Coerced, mode, lit, coerce_to_base)?
         }
 
         LiteralRecord(exprs) => {
             let arity = exprs.len();
-            let coercions = match coerce_to {
-                SqlScalarType::Record { fields, .. } if fields.len() == arity => fields
-                    .iter()
-                    .map(|(_name, ty)| &ty.scalar_type)
-                    .cloned()
-                    .collect(),
+            // Under `NullFallback` the target field types are not pushed into
+            // the literal. Fields are typed on their own, so every field
+            // conversion happens inside the record cast that follows, where
+            // the `TryCast` wrapper covers it, and a bad field yields NULL for
+            // the whole record rather than a record with a NULL field. This
+            // mirrors how `plan_cast` treats collection constructors.
+            let coercions = match (coerce_to, mode) {
+                (SqlScalarType::Record { fields, .. }, CastFailureMode::Error)
+                    if fields.len() == arity =>
+                {
+                    fields
+                        .iter()
+                        .map(|(_name, ty)| &ty.scalar_type)
+                        .cloned()
+                        .collect()
+                }
                 _ => vec![SqlScalarType::String; exprs.len()],
             };
             let mut out = vec![];
             for (e, coerce_to) in exprs.into_iter().zip_eq(coercions) {
-                out.push(plan_coerce(ecx, e, &coerce_to)?);
+                out.push(plan_coerce_with_failure_mode(ecx, e, &coerce_to, mode)?);
             }
             HirScalarExpr::call_variadic(
-                VariadicFunc::RecordCreate {
+                RecordCreate {
                     field_names: (0..arity)
                         .map(|i| ColumnName::from(format!("f{}", i + 1)))
                         .collect(),
@@ -1166,16 +1599,43 @@ pub fn plan_coerce<'a>(
             if let Some(prev) = prev {
                 if prev != *coerce_to {
                     sql_bail!(
-                        "there are contradicting constraints for the type of parameter ${}: should be both {} and {}",
+                        "there are contradicting constraints for \
+                         the type of parameter ${}: \
+                         should be both {} and {}",
                         n,
-                        ecx.humanize_scalar_type(&prev, false),
-                        ecx.humanize_scalar_type(coerce_to, false),
+                        ecx.humanize_sql_scalar_type(&prev, false),
+                        ecx.humanize_sql_scalar_type(coerce_to, false),
                     );
                 }
             }
             HirScalarExpr::parameter(n)
         }
     })
+}
+
+/// Returns an error if the given type is not a supported range element type
+/// (PostgreSQL built-in range types: int32, int64, date, numeric, timestamp,
+/// timestamptz).
+fn validate_range_element_type(
+    ecx: &ExprContext,
+    element_type: &SqlScalarType,
+) -> Result<(), CastError> {
+    let allowed = matches!(
+        element_type,
+        SqlScalarType::Int32
+            | SqlScalarType::Int64
+            | SqlScalarType::Date
+            | SqlScalarType::Numeric { .. }
+            | SqlScalarType::Timestamp { .. }
+            | SqlScalarType::TimestampTz { .. }
+    );
+    if allowed {
+        Ok(())
+    } else {
+        Err(CastError::UnsupportedRangeElementType {
+            element_type_name: ecx.humanize_sql_scalar_type(element_type, false),
+        })
+    }
 }
 
 /// Similar to `plan_cast`, but for situations where you only know the type of
@@ -1187,6 +1647,17 @@ pub fn plan_coerce<'a>(
 pub fn plan_hypothetical_cast(
     ecx: &ExprContext,
     ccx: CastContext,
+    from: &SqlScalarType,
+    to: &SqlScalarType,
+) -> Option<mz_expr::MirScalarExpr> {
+    plan_hypothetical_cast_with_failure_mode(ecx, ccx, CastFailureMode::Error, from, to)
+}
+
+/// Similar to `plan_hypothetical_cast`, but with a `CastFailureMode` to specify behavior.
+pub fn plan_hypothetical_cast_with_failure_mode(
+    ecx: &ExprContext,
+    ccx: CastContext,
+    mode: CastFailureMode,
     from: &SqlScalarType,
     to: &SqlScalarType,
 ) -> Option<mz_expr::MirScalarExpr> {
@@ -1217,10 +1688,16 @@ pub fn plan_hypothetical_cast(
 
     // Determine the `ScalarExpr` required to cast our column to the target
     // component type.
-    plan_cast(&ecx, ccx, col_expr, to)
+    //
+    // NOTE: the templates plan element casts through `plan_hypothetical_cast`,
+    // which is always strict, whatever the enclosing cast's failure mode. Under
+    // `TRY_CAST` the enclosing function is what gets wrapped, so a bad element
+    // makes the whole value NULL rather than producing a value with NULL holes
+    // in it.
+    plan_cast_with_failure_mode(&ecx, ccx, mode, col_expr, to)
         .ok()?
         // TODO(jkosh44) Support casts that have correlated implementations.
-        .lower_uncorrelated()
+        .lower_uncorrelated(ecx.catalog().system_vars())
         .ok()
 }
 
@@ -1239,30 +1716,50 @@ pub fn plan_cast(
     expr: HirScalarExpr,
     to: &SqlScalarType,
 ) -> Result<HirScalarExpr, PlanError> {
+    plan_cast_with_failure_mode(ecx, ccx, CastFailureMode::Error, expr, to)
+}
+
+/// Like [`plan_cast`], but with the given failure mode. Under
+/// [`CastFailureMode::NullFallback`] every stage of the cast, including the
+/// intermediate string cast that string-like types route through, is wrapped so
+/// that a failure anywhere yields NULL.
+pub fn plan_cast_with_failure_mode(
+    ecx: &ExprContext,
+    ccx: CastContext,
+    mode: CastFailureMode,
+    expr: HirScalarExpr,
+    to: &SqlScalarType,
+) -> Result<HirScalarExpr, PlanError> {
     let from = ecx.scalar_type(&expr);
 
-    // Close over `ccx`, `from`, and `to` to simplify error messages in the
-    // face of intermediate expressions.
-    let cast_inner = |from, to, expr| match get_cast(ecx, ccx, from, to) {
-        Some(cast) => Ok(cast(expr)),
-        None => Err(PlanError::InvalidCast {
-            name: ecx.name.into(),
-            ccx,
-            from: ecx.humanize_scalar_type(from, false),
-            to: ecx.humanize_scalar_type(to, false),
-        }),
+    // Close over `ccx`, `mode`, `from`, and `to` to simplify error messages in
+    // the face of intermediate expressions.
+    let cast_inner = |from, to, expr| {
+        get_cast(ecx, ccx, mode, from, to)
+            .map(|cast| cast(expr))
+            .map_err(|e| e.into_plan_error(ecx.name.into()))
     };
 
-    // Get cast which might include parameter rewrites + generating intermediate
-    // expressions.
-    //
     // String-like types get special handling to match PostgreSQL.
-    // See: https://github.com/postgres/postgres/blob/6b04abdfc/src/backend/parser/parse_coerce.c#L3205-L3223
+    // See: https://github.com/postgres/postgres/blob/6b04abdfc/
+    //   src/backend/parser/parse_coerce.c#L3205-L3223
     let from_category = TypeCategory::from_type(&from);
     let to_category = TypeCategory::from_type(to);
     if from_category == TypeCategory::String && to_category != TypeCategory::String {
         // Converting from stringlike to something non-stringlike. Handle as if
-        // `from` were a `SqlScalarType::String.
+        // `from` were a `SqlScalarType::String`.
+        //
+        // `"char"` is string-like but stores a byte (`Datum::UInt8`), so the
+        // string-source cast functions cannot consume it directly. Use its
+        // registered cast when one exists (`int4`, by byte value) and
+        // otherwise render it to text first.
+        let expr = match from {
+            SqlScalarType::PgLegacyChar => match get_cast(ecx, ccx, mode, &from, to) {
+                Ok(cast) => return Ok(cast(expr)),
+                Err(_) => cast_inner(&from, &SqlScalarType::String, expr)?,
+            },
+            _ => expr,
+        };
         cast_inner(&SqlScalarType::String, to, expr)
     } else if from_category != TypeCategory::String && to_category == TypeCategory::String {
         // Converting from non-stringlike to something stringlike. Convert to a
@@ -1282,5 +1779,70 @@ pub fn can_cast(
     cast_from: &SqlScalarType,
     cast_to: &SqlScalarType,
 ) -> bool {
-    get_cast(ecx, ccx, cast_from, cast_to).is_some()
+    get_cast(ecx, ccx, CastFailureMode::Error, cast_from, cast_to).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_expr::func::{CastInt64ToInt32, CastStringToInt64, Eq as EqFunc, IsNull};
+    use mz_repr::SqlScalarType;
+
+    use super::extract_unary_stages_for_try_cast;
+    use crate::plan::hir::HirScalarExpr;
+
+    #[mz_ore::test]
+    fn cast_stages_of_chain_are_innermost_first() {
+        let stages =
+            extract_unary_stages_for_try_cast(&SqlScalarType::String, |e: HirScalarExpr| {
+                e.call_unary(CastStringToInt64.into())
+                    .call_unary(CastInt64ToInt32.into())
+            });
+        assert_eq!(
+            stages,
+            Some(vec![CastStringToInt64.into(), CastInt64ToInt32.into()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn cast_stages_of_identity_is_empty() {
+        assert_eq!(
+            extract_unary_stages_for_try_cast(&SqlScalarType::Int32, |e: HirScalarExpr| e),
+            Some(vec![])
+        );
+    }
+
+    #[mz_ore::test]
+    fn cast_stages_rejects_non_unary_shapes() {
+        let compares = |e: HirScalarExpr| {
+            let zero = HirScalarExpr::literal_null(SqlScalarType::Int32);
+            e.call_binary(zero, EqFunc)
+        };
+        assert_eq!(
+            extract_unary_stages_for_try_cast(&SqlScalarType::Int32, compares),
+            None
+        );
+        let ignores_input = |_: HirScalarExpr| HirScalarExpr::literal_null(SqlScalarType::Int32);
+        assert_eq!(
+            extract_unary_stages_for_try_cast(&SqlScalarType::Int32, ignores_input),
+            None
+        );
+    }
+
+    /// A stage after the first that does not propagate NULLs would turn the
+    /// NULL of an earlier failure into a value, so wrapping must refuse it.
+    #[mz_ore::test]
+    fn cast_stages_rejects_non_null_propagating_later_stage() {
+        let chain = |e: HirScalarExpr| {
+            e.call_unary(CastInt64ToInt32.into())
+                .call_unary(IsNull.into())
+        };
+        let outcome = mz_ore::panic::catch_unwind(|| {
+            extract_unary_stages_for_try_cast(&SqlScalarType::Int64, chain)
+        });
+        if mz_ore::assert::soft_assertions_enabled() {
+            assert!(outcome.is_err(), "soft assertion should have fired");
+        } else {
+            assert_eq!(outcome.expect("no panic"), None);
+        }
+    }
 }

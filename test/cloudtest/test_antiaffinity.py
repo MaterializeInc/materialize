@@ -66,14 +66,12 @@ def zones_used(
 
 def test_create_cluster_antiaffinity(mz: MaterializeApplication) -> None:
     """Test that multiple replicas as defined in CREATE CLUSTER are placed in different availability zones."""
-    mz.environmentd.sql(
-        """
+    mz.environmentd.sql("""
         CREATE CLUSTER antiaffinity_cluster1 REPLICAS (
             antiaffinity_replica1 (SIZE 'scale=1,workers=1'),
             antiaffinity_replica2 (SIZE 'scale=1,workers=1'),
             antiaffinity_replica3 (SIZE 'scale=1,workers=1')
-        )"""
-    )
+        )""")
 
     assert zones_used(mz) == 3
 
@@ -82,14 +80,12 @@ def test_create_cluster_antiaffinity(mz: MaterializeApplication) -> None:
 
 def test_create_cluster_replica_antiaffinity(mz: MaterializeApplication) -> None:
     """Test that multiple replicas as created with CREATE CLUSTER REPLICA are placed in different availability zones."""
-    mz.environmentd.sql(
-        """
+    mz.environmentd.sql("""
         CREATE CLUSTER antiaffinity_cluster1 REPLICAS ();
         CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE 'scale=1,workers=1';
         CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE 'scale=1,workers=1';
         CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE 'scale=1,workers=1';
-        """
-    )
+        """)
 
     assert zones_used(mz) == 3
 
@@ -98,14 +94,12 @@ def test_create_cluster_replica_antiaffinity(mz: MaterializeApplication) -> None
 
 def test_create_cluster_replica_zone_specified(mz: MaterializeApplication) -> None:
     """Test that the AVAILABILITY ZONE argument to CREATE CLUSTER REPLICA is observed."""
-    mz.environmentd.sql(
-        """
+    mz.environmentd.sql("""
         CREATE CLUSTER antiaffinity_cluster1 REPLICAS ();
         CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE 'scale=1,workers=1' , AVAILABILITY ZONE '3';
         CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE 'scale=1,workers=1' , AVAILABILITY ZONE '3';
         CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE 'scale=1,workers=1' , AVAILABILITY ZONE '3';
-        """
-    )
+        """)
 
     assert zones_used(mz) == 1
 
@@ -114,14 +108,12 @@ def test_create_cluster_replica_zone_specified(mz: MaterializeApplication) -> No
 
 def test_create_cluster_replica_zone_mixed(mz: MaterializeApplication) -> None:
     """Test that the AVAILABILITY ZONE argument to CREATE CLUSTER REPLICA is observed."""
-    mz.environmentd.sql(
-        """
+    mz.environmentd.sql("""
         CREATE CLUSTER antiaffinity_cluster1 REPLICAS ();
         CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica1 SIZE 'scale=1,workers=1' , AVAILABILITY ZONE '3';
         CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica2 SIZE 'scale=1,workers=1' , AVAILABILITY ZONE '3';
         CREATE CLUSTER REPLICA antiaffinity_cluster1.antiaffinity_replica3 SIZE 'scale=1,workers=1';
-        """
-    )
+        """)
 
     assert zones_used(mz) == 2
 
@@ -137,11 +129,9 @@ def test_managed_set_azs(mz: MaterializeApplication) -> None:
         user="mz_system",
     )
 
-    mz.environmentd.sql(
-        """
+    mz.environmentd.sql("""
         CREATE CLUSTER antiaffinity_cluster1 SIZE 'scale=1,workers=1', REPLICATION FACTOR 3, AVAILABILITY ZONES ('1', '3')
-        """
-    )
+        """)
 
     assert (
         zones_used(
@@ -162,8 +152,7 @@ def test_managed_set_azs(mz: MaterializeApplication) -> None:
 def test_create_clusters_antiaffinity(mz: MaterializeApplication) -> None:
     """Test that multiple independent clusters are spread out to different availability zones."""
 
-    mz.environmentd.sql(
-        """
+    mz.environmentd.sql("""
         CREATE CLUSTER antiaffinity_cluster1 REPLICAS (
             antiaffinity_replica1 (SIZE 'scale=1,workers=1')
         );
@@ -173,15 +162,12 @@ def test_create_clusters_antiaffinity(mz: MaterializeApplication) -> None:
         CREATE CLUSTER antiaffinity_cluster3 REPLICAS (
             antiaffinity_replica3 (SIZE 'scale=1,workers=1')
         );
-        """
-    )
+        """)
 
     assert zones_used(mz) == 3
 
-    mz.environmentd.sql(
-        """
+    mz.environmentd.sql("""
         DROP CLUSTER antiaffinity_cluster1 CASCADE;
         DROP CLUSTER antiaffinity_cluster2 CASCADE;
         DROP CLUSTER antiaffinity_cluster3 CASCADE;
-        """
-    )
+        """)

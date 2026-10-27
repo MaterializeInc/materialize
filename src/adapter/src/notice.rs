@@ -79,7 +79,7 @@ pub enum AdapterNotice {
         name: String,
     },
     QueryTimestamp {
-        explanation: TimestampExplanation<mz_repr::Timestamp>,
+        explanation: TimestampExplanation,
     },
     EqualSubscribeBounds {
         bound: mz_repr::Timestamp,
@@ -132,10 +132,30 @@ pub enum AdapterNotice {
         role: Option<String>,
         var_name: Option<String>,
     },
+    /// An `ALTER SYSTEM` statement named a system parameter that
+    /// `environmentd` only reads at startup, so the running process keeps the
+    /// value it sampled at boot.
+    StartupOnlyVarUpdated {
+        var_name: String,
+    },
     Welcome(String),
     PlanInsights(String),
     IntrospectionClusterUsage,
     AutoRouteIntrospectionQueriesUsage,
+    /// A cluster contains sources that run on only one replica, yet the
+    /// cluster has (or is about to have) more than one replica.
+    SingleReplicaSourcesOnMultiReplicaCluster {
+        cluster: String,
+        sources: Vec<String>,
+    },
+    /// An OIDC group maps to a reserved role name (mz_/pg_ prefix).
+    OidcGroupSyncReservedRole {
+        group: String,
+    },
+    /// OIDC group sync encountered an error (fail-open mode).
+    OidcGroupSyncError {
+        message: String,
+    },
 }
 
 impl AdapterNotice {
@@ -199,10 +219,14 @@ impl AdapterNotice {
             AdapterNotice::DroppedInUseIndex { .. } => Severity::Notice,
             AdapterNotice::PerReplicaLogRead { .. } => Severity::Notice,
             AdapterNotice::VarDefaultUpdated { .. } => Severity::Notice,
+            AdapterNotice::StartupOnlyVarUpdated { .. } => Severity::Warning,
             AdapterNotice::Welcome(_) => Severity::Notice,
             AdapterNotice::PlanInsights(_) => Severity::Notice,
             AdapterNotice::IntrospectionClusterUsage => Severity::Warning,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Severity::Warning,
+            AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Severity::Warning,
+            AdapterNotice::OidcGroupSyncReservedRole { .. } => Severity::Warning,
+            AdapterNotice::OidcGroupSyncError { .. } => Severity::Warning,
         }
     }
 
@@ -210,6 +234,11 @@ impl AdapterNotice {
     pub fn detail(&self) -> Option<String> {
         match self {
             AdapterNotice::PlanNotice(notice) => notice.detail(),
+            AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
+                "Adding replicas to the cluster does not make these sources more fault tolerant \
+                 and does not increase their ingestion throughput."
+                    .into(),
+            ),
             AdapterNotice::QueryTimestamp { explanation } => Some(format!("\n{explanation}")),
             AdapterNotice::CascadeDroppedObject { objects } => Some(
                 objects
@@ -226,7 +255,11 @@ impl AdapterNotice {
         match self {
             AdapterNotice::DatabaseDoesNotExist { name: _ } => Some("Create the database with CREATE DATABASE or pick an extant database with SET DATABASE = name. List available databases with SHOW DATABASES.".into()),
             AdapterNotice::ClusterDoesNotExist { name: _ } => Some("Create the cluster with CREATE CLUSTER or pick an extant cluster with SET CLUSTER = name. List available clusters with SHOW CLUSTERS.".into()),
-            AdapterNotice::DefaultClusterDoesNotExist { name: _, kind: _, suggested_action } => Some(suggested_action.clone()),
+            AdapterNotice::DefaultClusterDoesNotExist {
+                name: _,
+                kind: _,
+                suggested_action,
+            } => Some(suggested_action.clone()),
             AdapterNotice::NoResolvableSearchPathSchema { search_path: _ } => Some("Create a schema with CREATE SCHEMA or pick an extant schema with SET SCHEMA = name. List available schemas with SHOW SCHEMAS.".into()),
             AdapterNotice::DroppedActiveDatabase { name: _ } => Some("Choose a new active database by executing SET DATABASE = <name>.".into()),
             AdapterNotice::DroppedActiveCluster { name: _ } => Some("Choose a new active cluster by executing SET CLUSTER = <name>.".into()),
@@ -250,6 +283,11 @@ impl AdapterNotice {
             AdapterNotice::DroppedInUseIndex(..) => Some("To free up the resources used by the index, recreate all the above-mentioned objects.".into()),
             AdapterNotice::IntrospectionClusterUsage => Some("Use the new name instead.".into()),
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Some("Use the new name instead.".into()),
+            AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
+                "To achieve fault tolerance for other objects in the cluster, consider moving \
+                 these sources to a separate cluster with a single replica."
+                    .into(),
+            ),
             _ => None
         }
     }
@@ -304,10 +342,14 @@ impl AdapterNotice {
             AdapterNotice::WebhookSourceCreated { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PerReplicaLogRead { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::VarDefaultUpdated { .. } => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::StartupOnlyVarUpdated { .. } => SqlState::WARNING,
             AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
             AdapterNotice::IntrospectionClusterUsage => SqlState::WARNING,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => SqlState::WARNING,
+            AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => SqlState::WARNING,
+            AdapterNotice::OidcGroupSyncReservedRole { .. } => SqlState::WARNING,
+            AdapterNotice::OidcGroupSyncError { .. } => SqlState::WARNING,
         }
     }
 }
@@ -393,7 +435,7 @@ impl fmt::Display for AdapterNotice {
                 write!(
                     f,
                     "transaction isolation level {isolation_level} is unimplemented, the session will be upgraded to {}",
-                    IsolationLevel::Serializable.as_str()
+                    IsolationLevel::Serializable
                 )
             }
             AdapterNotice::StrongSessionSerializable => {
@@ -486,6 +528,11 @@ impl fmt::Display for AdapterNotice {
                     "{vars} updated for {target}, this will have no effect on the current session"
                 )
             }
+            AdapterNotice::StartupOnlyVarUpdated { var_name } => write!(
+                f,
+                "changes to {} only take effect when environmentd restarts",
+                var_name.quoted()
+            ),
             AdapterNotice::Welcome(message) => message.fmt(f),
             AdapterNotice::PlanInsights(message) => message.fmt(f),
             AdapterNotice::IntrospectionClusterUsage => write!(
@@ -496,6 +543,34 @@ impl fmt::Display for AdapterNotice {
                 f,
                 "The auto_route_introspection_queries variable has been renamed to auto_route_catalog_queries."
             ),
+            AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { cluster, sources } => {
+                // Keep the notice readable on clusters with many sources.
+                const MAX_LISTED_SOURCES: usize = 3;
+                write!(
+                    f,
+                    "cluster {} has more than one replica, but the following sources in it always \
+                     run on only the first replica: {}",
+                    cluster.quoted(),
+                    separated(
+                        ", ",
+                        sources.iter().take(MAX_LISTED_SOURCES).map(|n| n.quoted())
+                    ),
+                )?;
+                if sources.len() > MAX_LISTED_SOURCES {
+                    write!(f, ", and {} more", sources.len() - MAX_LISTED_SOURCES)?;
+                }
+                Ok(())
+            }
+            AdapterNotice::OidcGroupSyncReservedRole { group } => {
+                write!(
+                    f,
+                    "OIDC group \"{}\" maps to a reserved role name, skipping",
+                    group
+                )
+            }
+            AdapterNotice::OidcGroupSyncError { message } => {
+                write!(f, "OIDC group-to-role sync failed: {}", message)
+            }
         }
     }
 }

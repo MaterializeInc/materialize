@@ -50,7 +50,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
 use mz_catalog::config::ClusterReplicaSizeMap;
-use mz_controller::ControllerConfig;
+use mz_controller::{ControllerConfig, ReplicaHttpLocator};
 use mz_environmentd::CatalogConfig;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
@@ -61,6 +61,8 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
+use mz_ore::sql;
+use mz_ore::sql::Sql;
 use mz_ore::task;
 use mz_ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use mz_ore::tracing::TracingHandle;
@@ -77,9 +79,10 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::mz_acl_item::{AclItem, MzAclItem};
 use mz_repr::adt::numeric;
 use mz_secrets::SecretsController;
+use mz_server_core::listeners::v26_32_0::ListenersConfig;
 use mz_server_core::listeners::{
-    AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpListenerConfig, HttpRoutesEnabled,
-    ListenersConfig, SqlListenerConfig,
+    AllowedRoles, AuthenticatorKind, HttpListenerConfig, HttpRoutesEnabled, RouteGroup,
+    SqlListenerConfig,
 };
 use mz_sql::ast::{Expr, Raw, Statement};
 use mz_sql::catalog::EnvironmentId;
@@ -121,6 +124,7 @@ pub enum Outcome<'a> {
     },
     PlanFailure {
         error: anyhow::Error,
+        expected_error: Option<String>,
         location: Location,
     },
     UnexpectedPlanSuccess {
@@ -202,20 +206,23 @@ impl<'a> Outcome<'a> {
         match self {
             Outcome::Unsupported { error, .. }
             | Outcome::ParseFailure { error, .. }
-            | Outcome::PlanFailure { error, .. } => Some(
+            | Outcome::PlanFailure { error, .. } => {
+                // Take only the first line, which should be sufficient for
+                // meaningfully matching the error.
+                let err_str = error.to_string_with_causes();
+                let err_str = err_str.split('\n').next().unwrap();
+                // Strip the "db error: ERROR: " prefix added by the postgres
+                // client library, as it's noisy and not useful for matching.
+                let err_str = err_str.strip_prefix("db error: ERROR: ").unwrap_or(err_str);
                 // This value gets fed back into regex to check that it matches
-                // `self`, so escape its meta characters.
-                regex::escape(
-                    // Take only the first string in the error message, which should be
-                    // sufficient for meaningfully matching the error.
-                    error.to_string_with_causes().split('\n').next().unwrap(),
-                )
-                // We need to undo the escaping of #. `regex::escape` escapes this because it
-                // expects that we use the `x` flag when building a regex, but this is not the case,
-                // so \# would end up being an invalid escape sequence, which would choke the
-                // parsing of the slt file the next time around.
-                .replace(r"\#", "#"),
-            ),
+                // `self`, so escape its meta characters. We need to undo the
+                // escaping of #. `regex::escape` escapes this because it
+                // expects that we use the `x` flag when building a regex, but
+                // this is not the case, so \# would end up being an invalid
+                // escape sequence, which would choke the parsing of the slt
+                // file the next time around.
+                Some(regex::escape(err_str).replace(r"\#", "#"))
+            }
             _ => None,
         }
     }
@@ -240,7 +247,23 @@ impl fmt::Display for Outcome<'_> {
                     error.display_with_causes()
                 )
             }
-            PlanFailure { error, location } => write!(f, "PlanFailure:{}:\n{:#}", location, error),
+            PlanFailure {
+                error,
+                expected_error,
+                location,
+            } => {
+                if let Some(expected_error) = expected_error {
+                    write!(
+                        f,
+                        "PlanFailure:{}:\nerror does not match expected pattern:\n  expected: /{}/\n  actual:    {}",
+                        location,
+                        expected_error,
+                        error.display_with_causes()
+                    )
+                } else {
+                    write!(f, "PlanFailure:{}:\n{:#}", location, error)
+                }
+            }
             UnexpectedPlanSuccess {
                 expected_error,
                 location,
@@ -305,8 +328,8 @@ impl fmt::Display for Outcome<'_> {
                 location,
             } => write!(
                 f,
-                "InconsistentViewOutcome:{}{}expected from query: {:?}{}actually from indexed view: {:?}{}",
-                location, INDENT, query_outcome, INDENT, view_outcome, INDENT
+                "InconsistentViewOutcome:{}{}expected from query: {}{}actually from indexed view: {}",
+                location, INDENT, query_outcome, INDENT, view_outcome
             ),
             Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
             Warning { cause, location } => write!(f, "Warning:{} {}", location, cause),
@@ -418,6 +441,12 @@ impl<'a> fmt::Display for OutcomesDisplay<'a> {
 struct QueryInfo {
     is_select: bool,
     num_attributes: Option<usize>,
+    /// Whether the `SELECT` carries an `AS OF` clause. Such queries are
+    /// excluded from the `--auto-index-selects` consistency check: re-running
+    /// them against a freshly created indexed view is inherently racy, because
+    /// the view's `since` advances with time and can move past a historical
+    /// `AS OF`, yielding a spurious "could not find a valid timestamp" failure.
+    has_as_of: bool,
 }
 
 enum PrepareQueryOutcome<'a> {
@@ -428,6 +457,10 @@ enum PrepareQueryOutcome<'a> {
 pub struct Runner<'a> {
     config: &'a RunConfig<'a>,
     inner: Option<RunnerInner<'a>>,
+    /// Active `replace` substitutions, applied to actual query output before it
+    /// is compared/rewritten. Held on the outer `Runner` so they survive a
+    /// `reset-server`. See `Record::Replace`.
+    replacements: Vec<(Regex, String)>,
 }
 
 pub struct RunnerInner<'a> {
@@ -439,11 +472,14 @@ pub struct RunnerInner<'a> {
     client: tokio_postgres::Client,
     system_client: tokio_postgres::Client,
     clients: BTreeMap<String, tokio_postgres::Client>,
+    /// The user set by the most recent `user` directive, if any. Records run
+    /// on that user's connection (cached in `clients`) instead of `client`.
+    active_user: Option<String>,
     auto_index_tables: bool,
     auto_index_selects: bool,
     auto_transactions: bool,
     enable_table_keys: bool,
-    verbosity: u8,
+    verbose: bool,
     stdout: &'a dyn WriteFmt,
     _shutdown_trigger: trigger::Trigger,
     _server_thread: JoinOnDropHandle<()>,
@@ -652,7 +688,7 @@ where
     T::from_sql_nullable(type_, value)
 }
 
-fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
+fn format_datum(d: Slt, typ: &Type, mode: Mode) -> String {
     match (typ, d.0) {
         (Type::Bool, Value::Bool(b)) => b.to_string(),
 
@@ -731,16 +767,21 @@ fn format_datum(d: Slt, typ: &Type, mode: Mode, col: usize) -> String {
         // like arrays, tuples, and strings that need to be quoted.
         (Type::Text, d) => {
             let mut buf = BytesMut::new();
-            d.encode_text(&mut buf);
+            d.encode_text(&mut buf, mz_pgrepr::TextEncodeSettings::STABLE);
             String::from_utf8_lossy(&buf).into_owned()
         }
 
         (Type::Oid, Value::Oid(o)) => o.to_string(),
 
-        (_, d) => panic!(
-            "Don't know how to format {:?} as {:?} in column {}",
-            d, typ, col,
-        ),
+        // A mismatch between the declared column type and the value the query
+        // actually returned. Fall back to normal text encoding so the
+        // mismatch surfaces as an output diff rather than a panic that aborts
+        // the entire run.
+        (_, d) => {
+            let mut buf = BytesMut::new();
+            d.encode_text(&mut buf, mz_pgrepr::TextEncodeSettings::STABLE);
+            String::from_utf8_lossy(&buf).into_owned()
+        }
     }
 }
 
@@ -748,7 +789,7 @@ fn format_row(row: &Row, types: &[Type], mode: Mode) -> Vec<String> {
     let mut formatted: Vec<String> = vec![];
     for i in 0..row.len() {
         let t: Option<Slt> = row.get::<usize, Option<Slt>>(i);
-        let t: Option<String> = t.map(|d| format_datum(d, &types[i], mode, i));
+        let t: Option<String> = t.map(|d| format_datum(d, &types[i], mode));
         formatted.push(match t {
             Some(t) => t,
             None => "NULL".into(),
@@ -758,11 +799,93 @@ fn format_row(row: &Row, types: &[Type], mode: Mode) -> Vec<String> {
     formatted
 }
 
+/// Reports whether `err` matches the `expected_error` regex of a record.
+///
+/// Expected errors in files imported from CockroachDB are not always valid
+/// regexes. An invalid regex cannot match, so the record fails with the usual
+/// mismatch outcome rather than aborting the entire run.
+fn error_matches(expected_error: &str, err: &str) -> bool {
+    match Regex::new(expected_error) {
+        Ok(re) => re.is_match(err),
+        Err(_) => false,
+    }
+}
+
+/// Removes CockroachDB-specific physical-layout items (`INDEX`,
+/// `UNIQUE INDEX`, `INVERTED INDEX`, and `FAMILY` definitions) from the
+/// column list of a `CREATE TABLE` statement. Constraints are kept, since
+/// dropping them would change the statement's semantics. Returns `None` if
+/// `sql` does not look like a `CREATE TABLE` statement.
+fn strip_crdb_table_items(sql: &str) -> Option<String> {
+    if !sql.trim_start().to_uppercase().starts_with("CREATE TABLE") {
+        return None;
+    }
+    let open = sql.find('(')?;
+    let mut depth = 1;
+    let mut in_string = false;
+    let mut in_ident = false;
+    let mut items: Vec<&str> = vec![];
+    let mut item_start = open + 1;
+    let mut close = None;
+    for (i, c) in sql[open + 1..].char_indices() {
+        let i = open + 1 + i;
+        match c {
+            '\'' if !in_ident => in_string = !in_string,
+            '"' if !in_string => in_ident = !in_ident,
+            _ if in_string || in_ident => (),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(i);
+                    break;
+                }
+            }
+            ',' if depth == 1 => {
+                items.push(&sql[item_start..i]);
+                item_start = i + 1;
+            }
+            _ => (),
+        }
+    }
+    let close = close?;
+    items.push(&sql[item_start..close]);
+    fn first_word(s: &str) -> String {
+        s.trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect::<String>()
+            .to_uppercase()
+    }
+    let kept: Vec<&str> = items
+        .into_iter()
+        .filter(|item| {
+            let first = first_word(item);
+            let is_physical = match first.as_str() {
+                "INDEX" | "FAMILY" => true,
+                "UNIQUE" | "INVERTED" => {
+                    let rest = &item.trim_start()[first.len()..];
+                    first_word(rest) == "INDEX"
+                }
+                _ => false,
+            };
+            !is_physical
+        })
+        .collect();
+    Some(format!(
+        "{}{}{}",
+        &sql[..open + 1],
+        kept.join(","),
+        &sql[close..]
+    ))
+}
+
 impl<'a> Runner<'a> {
     pub async fn start(config: &'a RunConfig<'a>) -> Result<Runner<'a>, anyhow::Error> {
         let mut runner = Self {
             config,
             inner: None,
+            replacements: Vec::new(),
         };
         runner.reset().await?;
         Ok(runner)
@@ -785,11 +908,20 @@ impl<'a> Runner<'a> {
         if let Record::ResetServer = record {
             self.reset().await?;
             Ok(Outcome::Success)
+        } else if let Record::Replace {
+            pattern,
+            replacement,
+        } = record
+        {
+            // Validated at parse time, so this compile cannot fail.
+            let regex = Regex::new(pattern).expect("replace regex validated by parser");
+            self.replacements.push((regex, replacement.clone()));
+            Ok(Outcome::Success)
         } else {
             self.inner
                 .as_mut()
                 .expect("RunnerInner missing")
-                .run_record(record, in_transaction)
+                .run_record(record, in_transaction, &self.replacements)
                 .await
         }
     }
@@ -802,6 +934,7 @@ impl<'a> Runner<'a> {
             .await
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn reset_database(&mut self) -> Result<(), anyhow::Error> {
         let inner = self.inner.as_mut().expect("RunnerInner missing");
 
@@ -830,9 +963,10 @@ impl<'a> Runner<'a> {
             let name: &str = row.get("name");
             inner
                 .system_client
-                .batch_execute(&format!("DROP DATABASE \"{name}\""))
+                .batch_execute(sql!("DROP DATABASE {}", Sql::ident(name)).as_str())
                 .await?;
         }
+
         inner
             .system_client
             .batch_execute("CREATE DATABASE materialize")
@@ -852,7 +986,7 @@ impl<'a> Runner<'a> {
                 name => {
                     inner
                         .system_client
-                        .batch_execute(&format!("DROP CLUSTER {name}"))
+                        .batch_execute(sql!("DROP CLUSTER {}", Sql::ident(name)).as_str())
                         .await?
                 }
             }
@@ -879,7 +1013,7 @@ impl<'a> Runner<'a> {
             for (i, row) in rows.iter().enumerate() {
                 let name: &str = row.get("name");
                 let size: &str = row.get("size");
-                if name != format!("r{i}") || size != self.config.replica_size {
+                if name != format!("r{}", i + 1) || size != self.config.replica_size {
                     needs_default_replica = true;
                     break;
                 }
@@ -903,22 +1037,48 @@ impl<'a> Runner<'a> {
                 let name: &str = row.get("name");
                 inner
                     .system_client
-                    .batch_execute(&format!("DROP CLUSTER REPLICA quickstart.{}", name))
+                    .batch_execute(
+                        sql!("DROP CLUSTER REPLICA quickstart.{}", Sql::ident(name)).as_str(),
+                    )
                     .await?;
             }
             for i in 1..=self.config.replicas {
                 inner
                     .system_client
-                    .batch_execute(&format!(
-                        "CREATE CLUSTER REPLICA quickstart.r{i} SIZE '{}'",
-                        self.config.replica_size
-                    ))
+                    .batch_execute(
+                        sql!(
+                            "CREATE CLUSTER REPLICA quickstart.r{} SIZE {}",
+                            i,
+                            Sql::literal(&self.config.replica_size)
+                        )
+                        .as_str(),
+                    )
                     .await?;
             }
             inner
                 .system_client
                 .batch_execute("ALTER CLUSTER quickstart SET (MANAGED = true)")
                 .await?;
+        }
+
+        // Drop all user roles except the default one, so that roles created
+        // via the `user` directive or by the tests themselves do not leak
+        // into later files. Best-effort: a role that still owns objects (for
+        // example through default privileges) stays behind rather than
+        // failing the reset.
+        for row in inner
+            .system_client
+            .query(
+                "SELECT name FROM mz_roles WHERE id LIKE 'u%' AND name != 'materialize'",
+                &[],
+            )
+            .await?
+        {
+            let name: &str = row.get("name");
+            let _ = inner
+                .system_client
+                .batch_execute(sql!("DROP ROLE {}", Sql::ident(name)).as_str())
+                .await;
         }
 
         // Grant initial privileges.
@@ -964,6 +1124,7 @@ impl<'a> Runner<'a> {
             .await
             .unwrap();
         inner.clients = BTreeMap::new();
+        inner.active_user = None;
 
         Ok(())
     }
@@ -995,6 +1156,9 @@ impl<'a> RunnerInner<'a> {
                     panic!("connection error: {}", e);
                 }
             });
+            // `prefix` is generated by sqllogictest harness configuration and
+            // cannot be represented with composable `Sql`.
+            #[allow(clippy::disallowed_methods)]
             client
                 .batch_execute(&format!(
                     "DROP SCHEMA IF EXISTS {prefix}_tsoracle CASCADE;
@@ -1095,38 +1259,38 @@ impl<'a> RunnerInner<'a> {
             },
             http: btreemap![
                 "external".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::None,
-                        allowed_roles: AllowedRoles::Normal,
-                        enable_tls: false
-                    },
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    enable_tls: false,
                     routes: HttpRoutesEnabled {
-                        base: true,
-                        webhook: true,
-                        internal: false,
-                        metrics: false,
-                        profiling: false,
+                        base: RouteGroup::Enabled(AllowedRoles::Normal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::Normal),
+                        internal: RouteGroup::Disabled,
+                        metrics: RouteGroup::Disabled,
+                        profiling: RouteGroup::Disabled,
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::Normal),
                     },
                 },
                 "internal".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::None,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls: false
-                    },
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    enable_tls: false,
                     routes: HttpRoutesEnabled {
-                        base: true,
-                        webhook: true,
-                        internal: true,
-                        metrics: true,
-                        profiling: true,
+                        base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        internal: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        metrics: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Disabled,
                     },
                 },
             ],
         };
-        let listeners = mz_environmentd::Listeners::bind(listeners_config).await?;
+        let listeners = mz_environmentd::Listeners::bind(listeners_config)?;
         let host_name = format!(
             "localhost:{}",
             listeners.http["external"].handle.local_addr.port()
@@ -1135,6 +1299,7 @@ impl<'a> RunnerInner<'a> {
             persist_clients: Arc::clone(&persist_clients),
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&MetricsRegistry::new())),
         };
+        let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
         let server_config = mz_environmentd::Config {
             catalog_config,
             timestamp_oracle_url: Some(timestamp_oracle_url),
@@ -1157,22 +1322,27 @@ impl<'a> RunnerInner<'a> {
                 now: SYSTEM_TIME.clone(),
                 metrics_registry: metrics_registry.clone(),
                 persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
-                secrets_args: mz_service::secrets::SecretsReaderCliArgs {
-                    secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                secrets_args: mz_secrets_cli::SecretsReaderCliArgs {
+                    secrets_reader: mz_secrets_cli::SecretsControllerKind::LocalFile,
                     secrets_reader_local_file_dir: Some(secrets_dir),
                     secrets_reader_kubernetes_context: None,
                     secrets_reader_aws_prefix: None,
                     secrets_reader_name_prefix: None,
                 },
                 connection_context,
+                replica_http_locator: Arc::new(ReplicaHttpLocator::default()),
             },
             secrets_controller,
             cloud_resource_controller: None,
+            system_dyncfgs,
             tls: None,
             frontegg: None,
+            frontegg_oauth_issuer_url: None,
             cors_allowed_origin: AllowOrigin::list([]),
+            cors_allowed_origin_list: Vec::new(),
             unsafe_mode: true,
             all_features: false,
+            restarted_in_place: false,
             metrics_registry,
             now,
             environment_id,
@@ -1223,6 +1393,7 @@ impl<'a> RunnerInner<'a> {
             aws_account_id: None,
             aws_privatelink_availability_zones: None,
             launchdarkly_sdk_key: None,
+            launchdarkly_base_uri: None,
             launchdarkly_key_map: Default::default(),
             config_sync_file_path: None,
             config_sync_timeout: Duration::from_secs(30),
@@ -1278,7 +1449,7 @@ impl<'a> RunnerInner<'a> {
             internal_http_server_addr_tx
                 .send(server.http_listener_handles["internal"].local_addr)
                 .expect("receiver should not drop first");
-            let _ = runtime.block_on(shutdown_trigger_rx);
+            runtime.block_on(shutdown_trigger_rx);
         });
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;
@@ -1301,11 +1472,12 @@ impl<'a> RunnerInner<'a> {
             client,
             system_client,
             clients: BTreeMap::new(),
+            active_user: None,
             auto_index_tables: config.auto_index_tables,
             auto_index_selects: config.auto_index_selects,
             auto_transactions: config.auto_transactions,
             enable_table_keys: config.enable_table_keys,
-            verbosity: config.verbosity,
+            verbose: config.verbose,
             stdout: config.stdout,
         };
         inner.ensure_fixed_features().await?;
@@ -1315,6 +1487,7 @@ impl<'a> RunnerInner<'a> {
 
     /// Set features that should be enabled regardless of whether reset-server was
     /// called. These features may be set conditionally depending on the run configuration.
+    #[allow(clippy::disallowed_methods)]
     async fn ensure_fixed_features(&self) -> Result<(), anyhow::Error> {
         // We turn on enable_reduce_mfp_fusion, as we wish
         // to get as much coverage of these features as we can.
@@ -1330,12 +1503,79 @@ impl<'a> RunnerInner<'a> {
         Ok(())
     }
 
+    /// The connection records run on: the `user` directive's connection when
+    /// one is active, the default connection otherwise.
+    fn active_client(&self) -> &tokio_postgres::Client {
+        match &self.active_user {
+            Some(user) => self
+                .clients
+                .get(user)
+                .expect("connection for the active user exists"),
+            None => &self.client,
+        }
+    }
+
+    /// Handles a `user` directive: ensures the role exists, connects as it,
+    /// and makes it the active user. CockroachDB's `root` maps to the
+    /// default `materialize` user.
+    #[allow(clippy::disallowed_methods)]
+    async fn run_user<'r>(
+        &mut self,
+        user: &'r str,
+        location: &Location,
+        in_transaction: &mut bool,
+    ) -> Result<Outcome<'r>, anyhow::Error> {
+        if self.auto_transactions && *in_transaction {
+            self.active_client().execute("COMMIT", &[]).await?;
+            *in_transaction = false;
+        }
+        if user == "root" || user == "materialize" {
+            self.active_user = None;
+            return Ok(Outcome::Success);
+        }
+        if !self.clients.contains_key(user) {
+            let create = sql!("CREATE ROLE {}", Sql::ident(user));
+            if let Err(error) = self.system_client.batch_execute(create.as_str()).await {
+                if !error.to_string_with_causes().contains("already exists") {
+                    return Ok(Outcome::Bail {
+                        cause: Box::new(Outcome::PlanFailure {
+                            error: anyhow!(error),
+                            expected_error: None,
+                            location: location.clone(),
+                        }),
+                        location: location.clone(),
+                    });
+                }
+            }
+            match connect(self.server_addr, Some(user), None).await {
+                Ok(client) => {
+                    self.clients.insert(user.to_string(), client);
+                }
+                Err(error) => {
+                    return Ok(Outcome::Bail {
+                        cause: Box::new(Outcome::PlanFailure {
+                            error: anyhow!(error),
+                            expected_error: None,
+                            location: location.clone(),
+                        }),
+                        location: location.clone(),
+                    });
+                }
+            }
+        }
+        self.active_user = Some(user.to_string());
+        Ok(Outcome::Success)
+    }
+
+    #[allow(clippy::disallowed_methods)]
     async fn run_record<'r>(
         &mut self,
         record: &'r Record<'r>,
         in_transaction: &mut bool,
+        replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
         match &record {
+            Record::User { user, location } => self.run_user(user, location, in_transaction).await,
             Record::Statement {
                 expected_error,
                 rows_affected,
@@ -1343,7 +1583,7 @@ impl<'a> RunnerInner<'a> {
                 location,
             } => {
                 if self.auto_transactions && *in_transaction {
-                    self.client.execute("COMMIT", &[]).await?;
+                    self.active_client().execute("COMMIT", &[]).await?;
                     *in_transaction = false;
                 }
                 match self
@@ -1354,7 +1594,7 @@ impl<'a> RunnerInner<'a> {
                         if self.auto_index_tables {
                             let additional = mutate(sql);
                             for stmt in additional {
-                                self.client.execute(&stmt, &[]).await?;
+                                self.active_client().execute(&stmt, &[]).await?;
                             }
                         }
                         Ok(Outcome::Success)
@@ -1379,7 +1619,7 @@ impl<'a> RunnerInner<'a> {
                 output,
                 location,
             } => {
-                self.run_query(sql, output, location.clone(), in_transaction)
+                self.run_query(sql, output, location.clone(), in_transaction, replacements)
                     .await
             }
             Record::Simple {
@@ -1410,7 +1650,7 @@ impl<'a> RunnerInner<'a> {
                 let tsv = tokio::fs::read(tsv_path).await?;
                 let copy = self
                     .client
-                    .copy_in(&*format!("COPY {} FROM STDIN", table_name))
+                    .copy_in(sql!("COPY {} FROM STDIN", Sql::ident(*table_name)).as_str())
                     .await?;
                 tokio::pin!(copy);
                 copy.send(bytes::Bytes::from(tsv)).await?;
@@ -1421,6 +1661,7 @@ impl<'a> RunnerInner<'a> {
         }
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn run_statement<'r>(
         &self,
         expected_error: Option<&'r str>,
@@ -1435,7 +1676,44 @@ impl<'a> RunnerInner<'a> {
             return Ok(Outcome::Success);
         }
 
-        match self.client.execute(sql, &[]).await {
+        // CockroachDB's logic tests frequently pack multiple commands into
+        // one statement record. The extended protocol used by `execute`
+        // rejects those, and Materialize restricts DDL inside the implicit
+        // transaction the simple protocol would wrap them in, so run each
+        // command separately and report the first error. This path cannot
+        // report an affected-row count, so records that assert one keep the
+        // single-command path (and fail if they contain multiple commands).
+        let commands = if expected_rows_affected.is_none() {
+            match mz_sql::parse::parse(sql) {
+                Ok(stmts) if stmts.len() > 1 => {
+                    Some(stmts.iter().map(|s| s.sql.to_owned()).collect::<Vec<_>>())
+                }
+                Ok(_) => None,
+                // A statement Materialize cannot parse may be a CockroachDB
+                // `CREATE TABLE` with inline physical-layout items. Retry
+                // with those stripped, so the semantic records that follow
+                // can still run against the table.
+                Err(_) => strip_crdb_table_items(sql)
+                    .filter(|stripped| mz_sql::parse::parse(stripped).is_ok())
+                    .map(|stripped| vec![stripped]),
+            }
+        } else {
+            None
+        };
+        let result = match commands {
+            Some(commands) => {
+                let mut result = Ok(0);
+                for command in &commands {
+                    if let Err(error) = self.active_client().execute(command, &[]).await {
+                        result = Err(error);
+                        break;
+                    }
+                }
+                result
+            }
+            None => self.active_client().execute(sql, &[]).await,
+        };
+        match result {
             Ok(actual) => {
                 if let Some(expected_error) = expected_error {
                     return Ok(Outcome::UnexpectedPlanSuccess {
@@ -1460,18 +1738,37 @@ impl<'a> RunnerInner<'a> {
             }
             Err(error) => {
                 if let Some(expected_error) = expected_error {
-                    if Regex::new(expected_error)?.is_match(&error.to_string_with_causes()) {
+                    if error_matches(expected_error, &error.to_string_with_causes()) {
                         return Ok(Outcome::Success);
                     }
+                    return Ok(Outcome::PlanFailure {
+                        error: anyhow!(error),
+                        expected_error: Some(expected_error.to_string()),
+                        location,
+                    });
+                }
+                // CockroachDB tests configure many CockroachDB-specific
+                // session settings. Treat setting an unknown parameter as a
+                // no-op success so the records that follow still run.
+                static SET_STATEMENT_REGEX: LazyLock<Regex> =
+                    LazyLock::new(|| Regex::new("(?i)^(SET|RESET) ").unwrap());
+                if SET_STATEMENT_REGEX.is_match(sql.trim_start())
+                    && error
+                        .to_string_with_causes()
+                        .contains("unrecognized configuration parameter")
+                {
+                    return Ok(Outcome::Success);
                 }
                 Ok(Outcome::PlanFailure {
                     error: anyhow!(error),
+                    expected_error: None,
                     location,
                 })
             }
         }
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn prepare_query<'r>(
         &self,
         sql: &str,
@@ -1490,7 +1787,7 @@ impl<'a> RunnerInner<'a> {
                     }));
                 }
                 Err(expected_error) => {
-                    if Regex::new(expected_error)?.is_match(&e.to_string_with_causes()) {
+                    if error_matches(expected_error, &e.to_string_with_causes()) {
                         return Ok(PrepareQueryOutcome::Outcome(Outcome::Success));
                     } else {
                         return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
@@ -1501,27 +1798,38 @@ impl<'a> RunnerInner<'a> {
                 }
             },
         };
+        // Query records in files imported from CockroachDB occasionally
+        // contain zero or multiple statements. Fail the record rather than
+        // the entire run.
         let statement = match &*statements {
-            [] => bail!("Got zero statements?"),
             [statement] => &statement.ast,
-            _ => bail!("Got multiple statements: {:?}", statements),
+            _ => {
+                return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
+                    error: anyhow!("expected one statement, but got {}", statements.len()),
+                    location,
+                }));
+            }
         };
-        let (is_select, num_attributes) = match statement {
-            Statement::Select(stmt) => (true, derive_num_attributes(&stmt.query.body)),
-            _ => (false, None),
+        let (is_select, num_attributes, has_as_of) = match statement {
+            Statement::Select(stmt) => (
+                true,
+                derive_num_attributes(&stmt.query.body),
+                stmt.as_of.is_some(),
+            ),
+            _ => (false, None, false),
         };
 
         match output {
             Ok(_) => {
                 if self.auto_transactions && !*in_transaction {
                     // No ISOLATION LEVEL SERIALIZABLE because of database-issues#5323
-                    self.client.execute("BEGIN", &[]).await?;
+                    self.active_client().execute("BEGIN", &[]).await?;
                     *in_transaction = true;
                 }
             }
             Err(_) => {
                 if self.auto_transactions && *in_transaction {
-                    self.client.execute("COMMIT", &[]).await?;
+                    self.active_client().execute("COMMIT", &[]).await?;
                     *in_transaction = false;
                 }
             }
@@ -1533,7 +1841,7 @@ impl<'a> RunnerInner<'a> {
         match statement {
             Statement::Show(..) => {
                 if self.auto_transactions && *in_transaction {
-                    self.client.execute("COMMIT", &[]).await?;
+                    self.active_client().execute("COMMIT", &[]).await?;
                     *in_transaction = false;
                 }
             }
@@ -1542,16 +1850,19 @@ impl<'a> RunnerInner<'a> {
         Ok(PrepareQueryOutcome::QueryPrepared(QueryInfo {
             is_select,
             num_attributes,
+            has_as_of,
         }))
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn execute_query<'r>(
         &self,
         sql: &str,
         output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
+        replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
-        let rows = match self.client.query(sql, &[]).await {
+        let rows = match self.active_client().query(sql, &[]).await {
             Ok(rows) => rows,
             Err(error) => {
                 let error_string = error.to_string_with_causes();
@@ -1566,16 +1877,18 @@ impl<'a> RunnerInner<'a> {
                         } else {
                             Ok(Outcome::PlanFailure {
                                 error: anyhow!(error),
+                                expected_error: None,
                                 location,
                             })
                         }
                     }
                     Err(expected_error) => {
-                        if Regex::new(expected_error)?.is_match(&error_string) {
+                        if error_matches(expected_error, &error_string) {
                             Ok(Outcome::Success)
                         } else {
                             Ok(Outcome::PlanFailure {
                                 error: anyhow!(error),
+                                expected_error: Some(expected_error.to_string()),
                                 location,
                             })
                         }
@@ -1625,6 +1938,18 @@ impl<'a> RunnerInner<'a> {
             values.sort();
         }
 
+        // Apply any `replace` substitutions to the actual output, so that
+        // non-deterministic tokens (e.g. a folded `mz_now()` timestamp) are
+        // masked before the output is compared against, or rewritten into, the
+        // expected output.
+        if !replacements.is_empty() {
+            for value in &mut values {
+                for (regex, replacement) in replacements {
+                    *value = regex.replace_all(value, replacement.as_str()).into_owned();
+                }
+            }
+        }
+
         // Various checks as long as there are returned rows.
         if let Some(row) = rows.get(0) {
             // check column names
@@ -1666,7 +1991,7 @@ impl<'a> RunnerInner<'a> {
                     hasher.update(value);
                     hasher.update("\n");
                 }
-                let md5 = format!("{:x}", hasher.finalize());
+                let md5 = hex::encode(hasher.finalize());
                 if values.len() != *num_values || md5 != *expected_md5 {
                     return Ok(Outcome::OutputFailure {
                         expected_output,
@@ -1684,29 +2009,32 @@ impl<'a> RunnerInner<'a> {
         Ok(Outcome::Success)
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn execute_view_inner<'r>(
         &self,
         sql: &str,
         output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
     ) -> Result<Option<Outcome<'r>>, anyhow::Error> {
-        print_sql_if(self.stdout, sql, self.verbosity >= 2);
-        let sql_result = self.client.execute(sql, &[]).await;
+        print_sql_if(self.stdout, sql, self.verbose);
+        let sql_result = self.active_client().execute(sql, &[]).await;
 
         // Evaluate if we already reached an outcome or not.
         let tentative_outcome = if let Err(view_error) = sql_result {
             if let Err(expected_error) = output {
-                if Regex::new(expected_error)?.is_match(&view_error.to_string_with_causes()) {
+                if error_matches(expected_error, &view_error.to_string_with_causes()) {
                     Some(Outcome::Success)
                 } else {
                     Some(Outcome::PlanFailure {
                         error: view_error.into(),
+                        expected_error: Some(expected_error.to_string()),
                         location: location.clone(),
                     })
                 }
             } else {
                 Some(Outcome::PlanFailure {
                     error: view_error.into(),
+                    expected_error: None,
                     location: location.clone(),
                 })
             }
@@ -1716,12 +2044,14 @@ impl<'a> RunnerInner<'a> {
         Ok(tentative_outcome)
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn execute_view<'r>(
         &self,
         sql: &str,
         num_attributes: Option<usize>,
         output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
+        replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
         // Create indexed view SQL commands and execute `CREATE VIEW`.
         let expected_column_names = if let Ok(QueryOutput { column_names, .. }) = output {
@@ -1753,15 +2083,17 @@ impl<'a> RunnerInner<'a> {
         if let Some(outcome) = tentative_outcome {
             view_outcome = outcome;
         } else {
-            print_sql_if(self.stdout, view_sql.as_str(), self.verbosity >= 2);
+            print_sql_if(self.stdout, view_sql.as_str(), self.verbose);
             view_outcome = self
-                .execute_query(view_sql.as_str(), output, location.clone())
+                .execute_query(view_sql.as_str(), output, location.clone(), replacements)
                 .await?;
         }
 
         // Remember to clean up after ourselves by dropping the view.
-        print_sql_if(self.stdout, drop_view.as_str(), self.verbosity >= 2);
-        self.client.execute(drop_view.as_str(), &[]).await?;
+        print_sql_if(self.stdout, drop_view.as_str(), self.verbose);
+        self.active_client()
+            .execute(drop_view.as_str(), &[])
+            .await?;
 
         Ok(view_outcome)
     }
@@ -1772,6 +2104,7 @@ impl<'a> RunnerInner<'a> {
         output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
         in_transaction: &mut bool,
+        replacements: &[(Regex, String)],
     ) -> Result<Outcome<'r>, anyhow::Error> {
         let prepare_outcome = self
             .prepare_query(sql, output, location.clone(), in_transaction)
@@ -1780,34 +2113,40 @@ impl<'a> RunnerInner<'a> {
             PrepareQueryOutcome::QueryPrepared(QueryInfo {
                 is_select,
                 num_attributes,
+                has_as_of,
             }) => {
-                let query_outcome = self.execute_query(sql, output, location.clone()).await?;
-                if is_select && self.auto_index_selects {
+                let query_outcome = self
+                    .execute_query(sql, output, location.clone(), replacements)
+                    .await?;
+                // `AS OF` queries are excluded from the indexed-view consistency
+                // check: re-running them against a freshly created indexed view
+                // is racy, since the view's `since` can advance past a historical
+                // `AS OF` and spuriously fail with "could not find a valid
+                // timestamp" even though the one-shot query succeeded.
+                if is_select && !has_as_of && self.auto_index_selects && query_outcome.success() {
                     let view_outcome = self
-                        .execute_view(sql, None, output, location.clone())
+                        .execute_view(sql, None, output, location.clone(), replacements)
                         .await?;
 
-                    // We compare here the query-based and view-based outcomes.
-                    // We only produce a test failure if the outcomes are of different
-                    // variant types, thus accepting smaller deviations in the details
-                    // produced for each variant.
-                    if std::mem::discriminant::<Outcome>(&query_outcome)
-                        != std::mem::discriminant::<Outcome>(&view_outcome)
-                    {
+                    if !view_outcome.success() {
                         // Before producing a failure outcome, we try to obtain a new
                         // outcome for view-based execution exploiting analysis of the
                         // number of attributes. This two-level strategy can avoid errors
                         // produced by column ambiguity in the `SELECT`.
                         let view_outcome = if num_attributes.is_some() {
-                            self.execute_view(sql, num_attributes, output, location.clone())
-                                .await?
+                            self.execute_view(
+                                sql,
+                                num_attributes,
+                                output,
+                                location.clone(),
+                                replacements,
+                            )
+                            .await?
                         } else {
                             view_outcome
                         };
 
-                        if std::mem::discriminant::<Outcome>(&query_outcome)
-                            != std::mem::discriminant::<Outcome>(&view_outcome)
-                        {
+                        if !view_outcome.success() {
                             let inconsistent_view_outcome = Outcome::InconsistentViewOutcome {
                                 query_outcome: Box::new(query_outcome),
                                 view_outcome: Box::new(view_outcome),
@@ -1859,6 +2198,7 @@ impl<'a> RunnerInner<'a> {
         }
     }
 
+    #[allow(clippy::disallowed_methods)]
     async fn run_simple<'r>(
         &mut self,
         conn: Option<&'r str>,
@@ -1976,7 +2316,8 @@ pub trait WriteFmt {
 pub struct RunConfig<'a> {
     pub stdout: &'a dyn WriteFmt,
     pub stderr: &'a dyn WriteFmt,
-    pub verbosity: u8,
+    pub verbose: bool,
+    pub quiet: bool,
     pub postgres_url: String,
     pub prefix: String,
     pub no_fail: bool,
@@ -1998,21 +2339,72 @@ pub struct RunConfig<'a> {
     pub replica_size: String,
 }
 
+/// Indentation used for verbose output of SQL statements.
+const PRINT_INDENT: usize = 4;
+
 fn print_record(config: &RunConfig<'_>, record: &Record) {
     match record {
-        Record::Statement { sql, .. } | Record::Query { sql, .. } => print_sql(config.stdout, sql),
-        _ => (),
+        Record::Statement { sql, .. } | Record::Query { sql, .. } => {
+            print_sql(config.stdout, sql, None)
+        }
+        Record::Simple { conn, sql, .. } => print_sql(config.stdout, sql, *conn),
+        Record::Copy {
+            table_name,
+            tsv_path,
+        } => {
+            writeln!(
+                config.stdout,
+                "{}slt copy {} from {}",
+                " ".repeat(PRINT_INDENT),
+                table_name,
+                tsv_path
+            )
+        }
+        Record::User { user, .. } => {
+            writeln!(config.stdout, "{}user {}", " ".repeat(PRINT_INDENT), user)
+        }
+        Record::ResetServer => {
+            writeln!(config.stdout, "{}reset-server", " ".repeat(PRINT_INDENT))
+        }
+        Record::Halt => {
+            writeln!(config.stdout, "{}halt", " ".repeat(PRINT_INDENT))
+        }
+        Record::HashThreshold { threshold } => {
+            writeln!(
+                config.stdout,
+                "{}hash-threshold {}",
+                " ".repeat(PRINT_INDENT),
+                threshold
+            )
+        }
+        Record::Replace {
+            pattern,
+            replacement,
+        } => {
+            writeln!(
+                config.stdout,
+                "{}replace {}  {}",
+                " ".repeat(PRINT_INDENT),
+                pattern,
+                replacement
+            )
+        }
     }
 }
 
 fn print_sql_if<'a>(stdout: &'a dyn WriteFmt, sql: &str, cond: bool) {
     if cond {
-        print_sql(stdout, sql)
+        print_sql(stdout, sql, None)
     }
 }
 
-fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str) {
-    writeln!(stdout, "{}", crate::util::indent(sql, 4))
+fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str, conn: Option<&str>) {
+    let text = if let Some(conn) = conn {
+        format!("[conn={}] {}", conn, sql)
+    } else {
+        sql.to_string()
+    };
+    writeln!(stdout, "{}", util::indent(&text, PRINT_INDENT))
 }
 
 /// Regular expressions for matching error messages that should force a plan failure
@@ -2041,12 +2433,8 @@ const INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS: [&str; 9] = [
 /// provides enough information as to whether a warning should be emitted or not.
 fn should_warn(outcome: &Outcome) -> bool {
     match outcome {
-        Outcome::InconsistentViewOutcome {
-            query_outcome,
-            view_outcome,
-            ..
-        } => match (query_outcome.as_ref(), view_outcome.as_ref()) {
-            (Outcome::Success, Outcome::PlanFailure { error, .. }) => {
+        Outcome::InconsistentViewOutcome { view_outcome, .. } => match view_outcome.as_ref() {
+            Outcome::PlanFailure { error, .. } => {
                 INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS.iter().any(|s| {
                     Regex::new(s)
                         .expect("unexpected error in regular expression parsing")
@@ -2065,6 +2453,9 @@ pub async fn run_string(
     input: &str,
 ) -> Result<Outcomes, anyhow::Error> {
     runner.reset_database().await?;
+    // `replace` directives are scoped to a single file; clear any registered by
+    // a previous file so they do not leak into this one.
+    runner.replacements.clear();
 
     let mut outcomes = Outcomes::default();
     let mut parser = crate::parser::Parser::new(source, input);
@@ -2074,10 +2465,10 @@ pub async fn run_string(
     writeln!(runner.config.stdout, "--- {}", source);
 
     for record in parser.parse_records()? {
-        // In maximal-verbosity mode, print the query before attempting to run
+        // In maximal-verbose mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
         // what query we are trying to run *before* we panic.
-        if runner.config.verbosity >= 2 {
+        if runner.config.verbose {
             print_record(runner.config, &record);
         }
 
@@ -2088,9 +2479,9 @@ pub async fn run_string(
             .unwrap();
 
         // Print warnings and failures in verbose mode.
-        if runner.config.verbosity >= 1 && !outcome.success() {
-            if runner.config.verbosity < 2 {
-                // If `verbosity >= 2`, we'll already have printed the record,
+        if !runner.config.quiet && !outcome.success() {
+            if !runner.config.verbose {
+                // If `verbose` is enabled, we'll already have printed the record,
                 // so don't print it again. Yes, this is an ugly bit of logic.
                 // Please don't try to consolidate it with the `print_record`
                 // call above, as it's important to have a mode in which records
@@ -2105,7 +2496,7 @@ pub async fn run_string(
                 }
                 print_record(runner.config, &record);
             }
-            if runner.config.verbosity >= 2 || outcome.failure() {
+            if runner.config.verbose || outcome.failure() {
                 writeln!(
                     runner.config.stdout,
                     "{}",
@@ -2142,6 +2533,9 @@ pub async fn run_file(runner: &mut Runner<'_>, filename: &Path) -> Result<Outcom
 
 pub async fn rewrite_file(runner: &mut Runner<'_>, filename: &Path) -> Result<(), anyhow::Error> {
     runner.reset_database().await?;
+    // `replace` directives are scoped to a single file; clear any registered by
+    // a previous file so they do not leak into this one.
+    runner.replacements.clear();
 
     let mut file = OpenOptions::new().read(true).write(true).open(filename)?;
 
@@ -2902,5 +3296,52 @@ fn test_mutate() {
     for (sql, expected) in cases {
         let stmts = mutate(sql);
         assert_eq!(expected, stmts, "sql: {sql}");
+    }
+}
+
+#[mz_ore::test]
+fn test_strip_crdb_table_items() {
+    let cases = vec![
+        (
+            "CREATE TABLE t (a INT, INDEX foo (a), b INT)",
+            Some("CREATE TABLE t (a INT, b INT)"),
+        ),
+        (
+            "CREATE TABLE t (a INT, INDEX(a))",
+            Some("CREATE TABLE t (a INT)"),
+        ),
+        (
+            "CREATE TABLE t (a INT, UNIQUE INDEX foo (a), INVERTED INDEX bar (a))",
+            Some("CREATE TABLE t (a INT)"),
+        ),
+        (
+            "CREATE TABLE t (k INT, v STRING, FAMILY \"primary\" (k, v))",
+            Some("CREATE TABLE t (k INT, v STRING)"),
+        ),
+        // Partial and expression indexes have nested clauses.
+        (
+            "CREATE TABLE t (a INT, INDEX (a) WHERE a = 0, INDEX ((a + 1)))",
+            Some("CREATE TABLE t (a INT)"),
+        ),
+        // Constraints are kept.
+        (
+            "CREATE TABLE t (a INT, UNIQUE (a), CHECK (a > 0))",
+            Some("CREATE TABLE t (a INT, UNIQUE (a), CHECK (a > 0))"),
+        ),
+        // Column names that merely start with a stripped keyword are kept.
+        (
+            "CREATE TABLE t (index_col INT, \"index\" INT)",
+            Some("CREATE TABLE t (index_col INT, \"index\" INT)"),
+        ),
+        // Parens inside strings do not confuse the item splitter.
+        (
+            "CREATE TABLE t (a TEXT DEFAULT 'a,(b', INDEX (a))",
+            Some("CREATE TABLE t (a TEXT DEFAULT 'a,(b')"),
+        ),
+        ("SELECT 1", None),
+    ];
+    for (sql, expected) in cases {
+        let stripped = strip_crdb_table_items(sql);
+        assert_eq!(expected.map(|e| e.to_string()), stripped, "sql: {sql}");
     }
 }

@@ -1,0 +1,111 @@
+- name: "syntax"
+  code: |
+    [WITH <cte_binding> [, ...]]
+    SELECT [ALL | DISTINCT [ON ( <col_ref> [, ...] )]]
+      <target_elem> [, ...]
+    [FROM <table_expr> [, ...] [<join_expr>]]
+    [WHERE <expression>]
+    [GROUP BY <col_ref> [, ...]]
+    [OPTIONS ( <option> = <val> [, ...] )]
+    [HAVING <expression>]
+    [ORDER BY <col_ref> [ASC | DESC] [NULLS FIRST | NULLS LAST] [, ...]]
+    [LIMIT <expression>]
+    [OFFSET <integer>]
+    [{UNION | INTERSECT | EXCEPT} [ALL | DISTINCT] <another_select_stmt>]
+  syntax_elements:
+    - name: "**WITH** `<cte_binding>` [, ...]"
+      description: |
+        Optional. [Common table expressions](#common-table-expressions-ctes) (CTEs) for this query. See [Regular CTEs](#regular-ctes) for details.
+    - name: "**ALL** | **DISTINCT** [**ON** ( `<col_ref>` [, ...] )]"
+      description: |
+        Optional. Specifies which rows to return:
+
+        | Option | Description |
+        |--------|-------------|
+        | `ALL` | Return all rows from query (default). |
+        | `DISTINCT` | <a id="select-distinct"></a>Return only distinct values. |
+        | `DISTINCT ON ( <col_ref> [, ...] )` | <a id="select-distinct-on"></a>Return only the first row with a distinct value for `<col_ref>`. If an `ORDER BY` clause is also present, then `DISTINCT ON` will respect that ordering when choosing which row to return for each distinct value. You should start the `ORDER BY` clause with the same `<col_ref>` as the `DISTINCT ON` clause. |
+    - name: "`<target_elem>` [, ...]"
+      description: |
+        The columns or expressions to return. Can include column names, functions, or expressions.
+    - name: "**FROM** `<table_expr>` [, ...]"
+      description: |
+        The tables you want to read from. These can be table names, other `SELECT` statements, [Common Table Expressions](#common-table-expressions-ctes) (CTEs), or [table function calls](/sql/functions/table-functions).
+    - name: "`<join_expr>`"
+      description: |
+        Optional. A join expression to combine table expressions. For more details, see the [`JOIN` documentation](/sql/select/join/).
+    - name: "**WHERE** `<expression>`"
+      description: |
+        Optional. Filter tuples by `<expression>`.
+    - name: "**GROUP BY** `<col_ref>` [, ...]"
+      description: |
+        Optional. Group aggregations by `<col_ref>`. Column references may be the name of an output column, the ordinal number of an output column, or an arbitrary expression of only input columns.
+    - name: "**OPTIONS** ( `<option>` = `<val>` [, ...] )"
+      description: |
+        Optional. Specify one or more [query hints](#query-hints). Valid hints:
+
+        | Hint | Value type | Description |
+        |------|------------|-------------|
+        | `AGGREGATE INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in an aggregation. Materialize can render `min` and `max` expressions more efficiently with this information. |
+        | `DISTINCT ON INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in a `DISTINCT ON` expression. Materialize can render [Top K patterns](/transform-data/idiomatic-materialize-sql/top-k/) based on `DISTINCT ON` more efficiently with this information. |
+        | `LIMIT INPUT GROUP SIZE` | `uint8` | How many rows will be given as a group to a `LIMIT` restriction. Materialize can render [Top K patterns](/transform-data/idiomatic-materialize-sql/top-k/) based on `LIMIT` more efficiently with this information. |
+    - name: "**HAVING** `<expression>`"
+      description: |
+        Optional. Filter aggregations by `<expression>`.
+    - name: "**ORDER BY** `<col_ref>` [**ASC** | **DESC**] [**NULLS FIRST** | **NULLS LAST**] [, ...]"
+      description: |
+        Optional. Sort results in either `ASC` (default) or `DESC` order. Use the `NULLS FIRST` and `NULLS LAST` options to determine whether nulls appear before or after non-null values in the sort ordering (default: `NULLS LAST` for `ASC`, `NULLS FIRST` for `DESC`). Column references may be the name of an output column, the ordinal number of an output column, or an arbitrary expression of only input columns.
+    - name: "**LIMIT** `<expression>`"
+      description: |
+        Optional. Limit the number of returned results to `<expression>`.
+    - name: "**OFFSET** `<integer>`"
+      description: |
+        Optional. Skip the first `<integer>` number of rows.
+    - name: "**UNION** [**ALL** | **DISTINCT**] `<another_select_stmt>`"
+      description: |
+        Optional. Records present in `select_stmt` or `another_select_stmt`. `DISTINCT` returns only unique rows from these results (implied default). With `ALL` specified, each record occurs a number of times equal to the sum of the times it occurs in each input statement.
+    - name: "**INTERSECT** [**ALL** | **DISTINCT**] `<another_select_stmt>`"
+      description: |
+        Optional. Records present in both `select_stmt` and `another_select_stmt`. `DISTINCT` returns only unique rows from these results (implied default). With `ALL` specified, each record occurs a number of times equal to the lesser of the times it occurs in each input statement.
+    - name: "**EXCEPT** [**ALL** | **DISTINCT**] `<another_select_stmt>`"
+      description: |
+        Optional. Records present in `select_stmt` but not in `another_select_stmt`. `DISTINCT` returns only unique rows from these results (implied default). With `ALL` specified, each record occurs a number of times equal to the times it occurs in `select_stmt` less the times it occurs in `another_select_stmt`, or not at all if the former is greater than latter.
+
+- name: "syntax-with-ctes"
+  code: |
+    WITH <cte_ident> [( <col_ident> [, ...] )] AS ( <select_stmt> )
+      [, <cte_ident> [( <col_ident> [, ...] )] AS ( <select_stmt> ) [, ...]]
+    <select_stmt>
+  syntax_elements:
+    - name: "`<cte_ident>`"
+      description: |
+        The name of the common table expression (CTE).
+    - name: "( `<col_ident>` [, ...] )"
+      description: |
+        Optional. Rename the CTE's columns to the list of identifiers. The number of identifiers must match the number of columns returned by the CTE's `select_stmt`.
+    - name: "**AS** ( `<select_stmt>` )"
+      description: |
+        The `SELECT` statement that defines the CTE. Any `cte_ident` alias can be referenced in subsequent `cte_binding` definitions and in the final `select_stmt`.
+
+- name: "syntax-recursive-ctes"
+  code: |
+    WITH MUTUALLY RECURSIVE
+      [((RETURN AT | ERROR AT) RECURSION LIMIT <limit>)]
+      <cte_ident> ( <col_ident> <col_type> [, ...] ) AS ( <select_stmt> )
+      [, <cte_ident> ( <col_ident> <col_type> [, ...] ) AS ( <select_stmt> ) [, ...]]
+    <select_stmt>
+  syntax_elements:
+    - name: "**(RETURN AT | ERROR AT) RECURSION LIMIT** `<limit>`"
+      description: |
+        Optional. Control the recursion behavior:
+
+        | Option | Description |
+        |--------|-------------|
+        | `RETURN AT RECURSION LIMIT <limit>` | Stop the fixpoint computation after `<limit>` iterations and use the current values computed for each recursive CTE binding in the `select_stmt`. Useful when debugging and validating the correctness of recursive queries. |
+        | `ERROR AT RECURSION LIMIT <limit>` | Stop the fixpoint computation after `<limit>` iterations and fail the query with an error. A good safeguard against accidentally running a non-terminating dataflow in production clusters. |
+    - name: "`<cte_ident>` ( `<col_ident>` `<col_type>` [, ...] )"
+      description: |
+        A binding that gives the SQL fragment defined under `select_stmt` a `cte_ident` alias. Unlike regular CTEs, a recursive CTE binding must explicitly state its type as a comma-separated list of (`col_ident` `col_type`) pairs. This alias can be used in the same binding or in all other (preceding and subsequent) bindings in the enclosing recursive CTE block.
+    - name: "**AS** ( `<select_stmt>` )"
+      description: |
+        The `SELECT` statement that defines the recursive CTE. Any `cte_ident` alias can be referenced in all `recursive_cte_binding` definitions that live under the same block, as well as in the final `select_stmt` for that block.

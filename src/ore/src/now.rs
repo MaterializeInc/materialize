@@ -30,6 +30,15 @@ use uuid::{NoContext, Uuid};
 /// A type representing the number of milliseconds since the Unix epoch.
 pub type EpochMillis = u64;
 
+/// A timestamp that denotes a point in wall-clock time.
+///
+/// Implement this only for types whose values are milliseconds since the Unix
+/// epoch, so that they compare meaningfully against a [`NowFn`].
+pub trait AsEpochMillis {
+    /// The timestamp as milliseconds since the Unix epoch.
+    fn as_epoch_millis(&self) -> EpochMillis;
+}
+
 /// Converts epoch milliseconds to a DateTime.
 #[cfg(feature = "chrono")]
 // TODO(benesch): rewrite to avoid dangerous use of `as`.

@@ -24,11 +24,19 @@ This macro creates a cluster with the specified properties.
   - refresh_hydration_time_estimate (str, optional): The estimated hydration time for the cluster. Only applicable when schedule_type is 'on-refresh'.
   - ignore_existing_objects (bool, optional): Whether to ignore existing objects in the cluster. Defaults to false.
   - force_deploy_suffix (bool, optional): Whether to forcefully add a deploy suffix to the cluster name. Defaults to false.
+  - auto_scaling_strategy (dict, optional): An autoscaling strategy for the cluster,
+    e.g. {'on_hydration': {'hydration_size': '800cc', 'linger_duration': '15s'}}.
+    The cluster temporarily bursts to the hydration size while it has un-hydrated
+    objects. Only applicable when schedule_type is 'manual'.
 
   Incompatibilities:
   - replication_factor is only applicable when schedule_type is 'manual'.
   - refresh_hydration_time_estimate is only applicable when schedule_type is 'on-refresh'.
+  - auto_scaling_strategy is only applicable when schedule_type is 'manual', and
+    its hydration_size must differ from size.
 #}
+{# NOTE: new optional arguments must be appended at the end of the signature,
+   since callers may invoke this macro with positional arguments. #}
 {% macro create_cluster(
     cluster_name,
     size,
@@ -36,7 +44,8 @@ This macro creates a cluster with the specified properties.
     schedule_type=none,
     refresh_hydration_time_estimate=none,
     ignore_existing_objects=false,
-    force_deploy_suffix=false
+    force_deploy_suffix=false,
+    auto_scaling_strategy=none
 ) %}
 
     {# Input validation #}
@@ -48,70 +57,18 @@ This macro creates a cluster with the specified properties.
         {{ exceptions.raise_compiler_error("size must be provided") }}
     {% endif %}
 
+    {% if auto_scaling_strategy is not none %}
+        {% do internal_validate_auto_scaling_strategy(auto_scaling_strategy, size, schedule_type) %}
+    {% endif %}
+
     {% set deploy_cluster = adapter.generate_final_cluster_name(cluster_name, force_deploy_suffix) %}
 
     {% if cluster_exists(deploy_cluster) %}
-        {{ log("Deployment cluster " ~ deploy_cluster ~ " already exists", info=True) }}
-        {% set cluster_empty %}
-            WITH dataflows AS (
-                SELECT mz_indexes.id
-                FROM mz_indexes
-                JOIN mz_clusters ON mz_indexes.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-
-                UNION ALL
-
-                SELECT mz_materialized_views.id
-                FROM mz_materialized_views
-                JOIN mz_clusters ON mz_materialized_views.cluster_id = mz_clusters.id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-
-                UNION ALL
-
-                SELECT mz_sources.id
-                FROM mz_sources
-                JOIN mz_clusters ON mz_clusters.id = mz_sources.cluster_id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-
-                UNION ALL
-
-                SELECT mz_sinks.id
-                FROM mz_sinks
-                JOIN mz_clusters ON mz_clusters.id = mz_sinks.cluster_id
-                WHERE mz_clusters.name = {{ dbt.string_literal(deploy_cluster) }}
-            )
-
-            SELECT count(*)
-            FROM dataflows
-            WHERE id LIKE 'u%'
-        {% endset %}
-
-        {% set cluster_object_count = run_query(cluster_empty) %}
-        {% if execute %}
-            {% if cluster_object_count and cluster_object_count.columns[0] and cluster_object_count.rows[0][0] > 0 %}
-                {% if check_cluster_ci_tag(deploy_cluster) %}
-                    {{ log("Cluster " ~ deploy_cluster ~ " was already created for this pull request", info=True) }}
-                {% elif ignore_existing_objects %}
-                    {{ log("[Warning] Deployment cluster " ~ deploy_cluster ~ " is not empty", info=True) }}
-                    {{ log("[Warning] Confirm the objects it contains are expected before deployment", info=True) }}
-                {% else %}
-                    {{ exceptions.raise_compiler_error("
-                        Deployment cluster " ~ deploy_cluster ~ " already exists and is not empty.
-                        This is potentially dangerous as you may end up deploying objects to production you
-                        do not intend.
-
-                        If you are certain the objects in this cluster are supposed to exist, you can ignore this
-                        error by setting ignore_existing_objects to True.
-
-                        dbt run-operation create_cluster --args '{ignore_existing_objects: True}'
-                    ") }}
-                {% endif %}
-            {% endif %}
-        {% endif %}
+        {{ internal_check_existing_deploy_cluster(deploy_cluster, ignore_existing_objects) }}
     {% else %}
         {{ log("Creating deployment cluster " ~ deploy_cluster, info=True)}}
         {% set create_cluster_ddl %}
-            CREATE CLUSTER {{ deploy_cluster }} (
+            CREATE CLUSTER {{ adapter.quote(deploy_cluster) }} (
                 SIZE = {{ dbt.string_literal(size) }}
                 {% if replication_factor is not none and ( schedule_type == 'manual' or schedule_type is none ) %}
                     , REPLICATION FACTOR = {{ replication_factor }}
@@ -121,6 +78,9 @@ This macro creates a cluster with the specified properties.
                     {% else %}
                         , SCHEDULE = ON REFRESH
                     {% endif %}
+                {% endif %}
+                {% if auto_scaling_strategy is not none %}
+                    , {{ internal_render_auto_scaling_strategy(auto_scaling_strategy) }}
                 {% endif %}
             )
         {% endset %}

@@ -35,7 +35,7 @@ my_schema
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-schema.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-schema" %}}
 
 ## Related pages
 

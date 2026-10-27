@@ -1,0 +1,8 @@
+---
+headless: true
+---
+- Ownership of the view being altered.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the view is namespaced by
+  a schema.

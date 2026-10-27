@@ -13,7 +13,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use mz_dyncfg::{Config, ConfigSet, ConfigUpdates};
+use mz_dyncfg::{Config, ConfigSet, ConfigUpdates, ParameterScope};
 use mz_tracing::params::TracingParameters;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use tracing_subscriber::filter::Directive;
@@ -27,6 +27,7 @@ pub const SIGTERM_CONNECTION_WAIT: Config<Duration> = Config::new(
     "balancerd_sigterm_connection_wait",
     Duration::from_secs(60 * 9),
     "Duration to wait after listeners closed via SIGTERM for outstanding connections to complete.",
+    ParameterScope::Environment,
 );
 
 /// Duration to wait after SIGTERM to begin shutdown of servers.
@@ -34,6 +35,7 @@ pub const SIGTERM_LISTEN_WAIT: Config<Duration> = Config::new(
     "balancerd_sigterm_listen_wait",
     Duration::from_secs(60),
     "Duration to wait after SIGTERM to begin shutdown of servers.",
+    ParameterScope::Environment,
 );
 
 /// Whether to inject tcp proxy protocol headers to downstream http servers.
@@ -41,6 +43,51 @@ pub const INJECT_PROXY_PROTOCOL_HEADER_HTTP: Config<bool> = Config::new(
     "balancerd_inject_proxy_protocol_header_http",
     false,
     "Whether to inject tcp proxy protocol headers to downstream http servers.",
+    ParameterScope::Environment,
+);
+
+/// Maximum number of client connections to proxy at once.
+pub const MAX_CONNECTIONS: Config<u32> = Config::new(
+    "balancerd_max_connections",
+    5000,
+    "Maximum number of client connections to proxy at once, across the pgwire and HTTPS \
+    listeners. Connections beyond this are rejected. Zero disables the limit.",
+    ParameterScope::Environment,
+);
+
+/// Number of open connections at which balancerd leaves load balancer rotation.
+pub const CONNECTION_HIGH_WATERMARK: Config<usize> = Config::new(
+    "balancerd_connection_high_watermark",
+    0,
+    "Number of open connections at which balancerd reports not ready on /api/readyz, so \
+    load balancers stop sending it new connections while existing connections continue. \
+    Takes effect only when balancerd_connection_low_watermark is also non-zero, the low \
+    watermark is below the high watermark, and the high watermark is below a non-zero \
+    balancerd_max_connections. Zero disables the watermarks.",
+    ParameterScope::Environment,
+);
+
+/// Number of open connections below which balancerd returns to load balancer rotation.
+pub const CONNECTION_LOW_WATERMARK: Config<usize> = Config::new(
+    "balancerd_connection_low_watermark",
+    0,
+    "Number of open connections below which balancerd reports ready again after reaching \
+    balancerd_connection_high_watermark. Must be below the high watermark. The gap \
+    between the two keeps a balancer near the threshold from repeatedly entering and \
+    leaving load balancer rotation. Zero disables the watermarks.",
+    ParameterScope::Environment,
+);
+
+/// How long a client has to reach a resolved backend before the connection is closed.
+///
+/// Zero disables the deadline. The default allows for authentication's roughly 35-second
+/// retry budget, plus TLS negotiation and client startup.
+pub const PRE_RESOLVED_TIMEOUT: Config<Duration> = Config::new(
+    "balancerd_pre_resolved_timeout",
+    Duration::from_secs(60),
+    "How long a client has to complete the TLS handshake, the startup sequence and any credential \
+    exchange before the connection is closed. Zero disables the deadline.",
+    ParameterScope::Environment,
 );
 
 /// Sets the filter to apply to stderr logging.
@@ -48,6 +95,7 @@ pub const LOGGING_FILTER: Config<&str> = Config::new(
     "balancerd_log_filter",
     "info",
     "Sets the filter to apply to stderr logging.",
+    ParameterScope::Environment,
 );
 
 /// Sets the filter to apply to OpenTelemetry-backed distributed tracing.
@@ -55,6 +103,7 @@ pub const OPENTELEMETRY_FILTER: Config<&str> = Config::new(
     "balancerd_opentelemetry_filter",
     "info",
     "Sets the filter to apply to OpenTelemetry-backed distributed tracing.",
+    ParameterScope::Environment,
 );
 
 /// Sets additional default directives to apply to stderr logging.
@@ -66,6 +115,7 @@ pub const LOGGING_FILTER_DEFAULTS: Config<fn() -> String> = Config::new(
     "Sets additional default directives to apply to stderr logging. \
     These apply to all variations of `log_filter`. Directives other than \
     `module=off` are likely incorrect. Comma separated list.",
+    ParameterScope::Environment,
 );
 
 /// Sets additional default directives to apply to OpenTelemetry-backed
@@ -79,6 +129,7 @@ pub const OPENTELEMETRY_FILTER_DEFAULTS: Config<fn() -> String> = Config::new(
     distributed tracing. \
     These apply to all variations of `opentelemetry_filter`. Directives other than \
     `module=off` are likely incorrect. Comma separated list.",
+    ParameterScope::Environment,
 );
 
 /// Sets additional default directives to apply to sentry logging. \
@@ -90,6 +141,7 @@ pub const SENTRY_FILTERS: Config<fn() -> String> = Config::new(
     "Sets additional default directives to apply to sentry logging. \
     These apply on top of a default `info` directive. Directives other than \
     `module=off` are likely incorrect. Comma separated list.",
+    ParameterScope::Environment,
 );
 
 /// Adds the full set of all balancer `Config`s.
@@ -98,6 +150,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SIGTERM_CONNECTION_WAIT)
         .add(&SIGTERM_LISTEN_WAIT)
         .add(&INJECT_PROXY_PROTOCOL_HEADER_HTTP)
+        .add(&MAX_CONNECTIONS)
+        .add(&CONNECTION_HIGH_WATERMARK)
+        .add(&CONNECTION_LOW_WATERMARK)
+        .add(&PRE_RESOLVED_TIMEOUT)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)
         .add(&LOGGING_FILTER_DEFAULTS)
@@ -123,6 +179,26 @@ pub(crate) fn set_defaults(
             config_updates.add_dynamic(
                 INJECT_PROXY_PROTOCOL_HEADER_HTTP.name(),
                 mz_dyncfg::ConfigVal::Bool(bool::from_str(v)?),
+            )
+        } else if k.as_str() == MAX_CONNECTIONS.name() {
+            config_updates.add_dynamic(
+                MAX_CONNECTIONS.name(),
+                mz_dyncfg::ConfigVal::U32(u32::from_str(v)?),
+            )
+        } else if k.as_str() == CONNECTION_HIGH_WATERMARK.name() {
+            config_updates.add_dynamic(
+                CONNECTION_HIGH_WATERMARK.name(),
+                mz_dyncfg::ConfigVal::Usize(usize::from_str(v)?),
+            )
+        } else if k.as_str() == CONNECTION_LOW_WATERMARK.name() {
+            config_updates.add_dynamic(
+                CONNECTION_LOW_WATERMARK.name(),
+                mz_dyncfg::ConfigVal::Usize(usize::from_str(v)?),
+            )
+        } else if k.as_str() == PRE_RESOLVED_TIMEOUT.name() {
+            config_updates.add_dynamic(
+                PRE_RESOLVED_TIMEOUT.name(),
+                mz_dyncfg::ConfigVal::Duration(humantime::parse_duration(v)?),
             )
         } else {
             return Err(anyhow!("Invalid default config value {k}"));

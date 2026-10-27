@@ -20,8 +20,8 @@ pub use column_names::{ColumnName, ColumnNames};
 pub use common::{Derived, DerivedBuilder, DerivedView};
 pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
+pub use repr_types::ReprRelationType;
 pub use subtree::SubtreeSize;
-pub use types::SqlRelationType;
 pub use unique_keys::UniqueKeys;
 
 /// An analysis that can be applied bottom-up to a `MirRelationExpr`.
@@ -549,12 +549,12 @@ mod arity {
 }
 
 /// Expression types
-mod types {
+mod repr_types {
 
     use super::{Analysis, Derived, Lattice};
     use itertools::Itertools;
     use mz_expr::MirRelationExpr;
-    use mz_repr::SqlColumnType;
+    use mz_repr::ReprColumnType;
 
     /// Analysis that determines the type of relation expressions.
     ///
@@ -567,10 +567,10 @@ mod types {
     /// The analysis will panic if an expression is not well typed (i.e. if `try_col_with_input_cols`
     /// returns an error).
     #[derive(Debug)]
-    pub struct SqlRelationType;
+    pub struct ReprRelationType;
 
-    impl Analysis for SqlRelationType {
-        type Value = Option<Vec<SqlColumnType>>;
+    impl Analysis for ReprRelationType {
+        type Value = Option<Vec<ReprColumnType>>;
 
         fn derive(
             &self,
@@ -592,7 +592,7 @@ mod types {
                     typ,
                     ..
                 } => {
-                    let mut result = typ.column_types.clone();
+                    let mut result = typ.column_types.iter().cloned().collect_vec();
                     if let Some(o) = depends.bindings().get(i) {
                         if let Some(t) = results.get(*o) {
                             if let Some(rec_typ) = t {
@@ -623,9 +623,11 @@ mod types {
                     // Every expression with inputs should have non-`None` inputs at this point.
                     let input_cols = offsets.into_iter().rev().map(|o| {
                         o.as_ref()
-                            .expect("SqlRelationType analysis discovered type-less expression")
+                            .expect("ReprRelationType analysis discovered type-less expression")
                     });
-                    Some(expr.try_col_with_input_cols(input_cols).unwrap())
+
+                    let repr_typ = expr.try_col_with_input_cols(input_cols).unwrap();
+                    Some(repr_typ)
                 }
             }
         }
@@ -637,14 +639,14 @@ mod types {
 
     struct RTLattice;
 
-    impl Lattice<Option<Vec<SqlColumnType>>> for RTLattice {
-        fn top(&self) -> Option<Vec<SqlColumnType>> {
+    impl Lattice<Option<Vec<ReprColumnType>>> for RTLattice {
+        fn top(&self) -> Option<Vec<ReprColumnType>> {
             None
         }
         fn meet_assign(
             &self,
-            a: &mut Option<Vec<SqlColumnType>>,
-            b: Option<Vec<SqlColumnType>>,
+            a: &mut Option<Vec<ReprColumnType>>,
+            b: Option<Vec<ReprColumnType>>,
         ) -> bool {
             match (a, b) {
                 (_, None) => false,
@@ -856,7 +858,8 @@ mod non_negative {
                             let mut children = depends.children_of_rev(index, 2);
                             let _negate = children.next().unwrap();
                             let base_id = children.next().unwrap();
-                            debug_assert_eq!(children.next(), None);
+                            let extra = children.next();
+                            mz_ore::soft_assert_none_no_log!(extra);
                             if results[base_id] && is_superset_of(&*base, &*input) {
                                 return true;
                             }
@@ -948,10 +951,9 @@ mod column_names {
     use std::sync::Arc;
 
     use super::Analysis;
-    use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr, TableFunc};
+    use mz_expr::{AggregateFunc, Columns, Id, MirRelationExpr, MirScalarExpr, TableFunc};
     use mz_repr::explain::ExprHumanizer;
-    use mz_repr::{GlobalId, UNKNOWN_COLUMN_NAME};
-    use mz_sql::ORDINALITY_COL_NAME;
+    use mz_repr::{GlobalId, ORDINALITY_COL_NAME, UNKNOWN_COLUMN_NAME};
 
     /// An abstract type denoting an inferred column name.
     #[derive(Debug, Clone)]
@@ -1259,7 +1261,7 @@ mod explain {
                 builder.require(super::NonNegative);
             }
             if context.config.types {
-                builder.require(super::SqlRelationType);
+                builder.require(super::ReprRelationType);
             }
             if context.config.arity {
                 builder.require(super::Arity);
@@ -1305,7 +1307,7 @@ mod explain {
             if config.subtree_size {
                 for (expr, subtree_size) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::SubtreeSize>().into_iter(),
+                    &*derived.results::<super::SubtreeSize>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.subtree_size = Some(*subtree_size);
@@ -1314,7 +1316,7 @@ mod explain {
             if config.non_negative {
                 for (expr, non_negative) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::NonNegative>().into_iter(),
+                    &*derived.results::<super::NonNegative>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.non_negative = Some(*non_negative);
@@ -1322,10 +1324,9 @@ mod explain {
             }
 
             if config.arity {
-                for (expr, arity) in std::iter::zip(
-                    subtree_refs.iter(),
-                    derived.results::<super::Arity>().into_iter(),
-                ) {
+                for (expr, arity) in
+                    std::iter::zip(subtree_refs.iter(), &*derived.results::<super::Arity>())
+                {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.arity = Some(*arity);
                 }
@@ -1334,7 +1335,7 @@ mod explain {
             if config.types {
                 for (expr, types) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::SqlRelationType>().into_iter(),
+                    &*derived.results::<super::ReprRelationType>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.types = Some(types.clone());
@@ -1344,7 +1345,7 @@ mod explain {
             if config.keys {
                 for (expr, keys) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::UniqueKeys>().into_iter(),
+                    &*derived.results::<super::UniqueKeys>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.keys = Some(keys.clone());
@@ -1354,7 +1355,7 @@ mod explain {
             if config.cardinality {
                 for (expr, card) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::Cardinality>().into_iter(),
+                    &*derived.results::<super::Cardinality>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.cardinality = Some(card.to_string());
@@ -1364,7 +1365,7 @@ mod explain {
             if config.column_names || config.humanized_exprs {
                 for (expr, column_names) in std::iter::zip(
                     subtree_refs.iter(),
-                    derived.results::<super::ColumnNames>().into_iter(),
+                    &*derived.results::<super::ColumnNames>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
                     let value = column_names
@@ -1376,10 +1377,9 @@ mod explain {
             }
 
             if config.equivalences {
-                for (expr, equivs) in std::iter::zip(
-                    subtree_refs.iter(),
-                    derived.results::<Equivalences>().into_iter(),
-                ) {
+                for (expr, equivs) in
+                    std::iter::zip(subtree_refs.iter(), &*derived.results::<Equivalences>())
+                {
                     let analyses = annotations.entry(expr).or_default();
                     analyses.equivalences = Some(match equivs.as_ref() {
                         Some(equivs) => HumanizedEquivalenceClasses {
@@ -1410,6 +1410,7 @@ mod cardinality {
     use mz_repr::GlobalId;
 
     use ordered_float::OrderedFloat;
+    use tracing::{error, warn};
 
     use super::{Analysis, Arity, SubtreeSize, UniqueKeys};
 
@@ -1455,12 +1456,15 @@ mod cardinality {
             match self {
                 CardinalityEstimate::Estimate(OrderedFloat(f)) => {
                     let rounded = f.ceil();
-                    let flattened = usize::cast_from(
-                        u64::try_cast_from(rounded)
-                            .expect("positive and representable cardinality estimate"),
-                    );
 
-                    Some(flattened)
+                    if !rounded.is_normal() || rounded < 0.0 {
+                        warn!(
+                            "ignoring denormalized or negative cardinality estimate {f} rounded to {rounded}"
+                        );
+                    }
+
+                    // if we can't cast, the value is unknown
+                    u64::try_cast_from(rounded).map(usize::cast_from)
                 }
                 CardinalityEstimate::Unknown => None,
             }
@@ -1545,6 +1549,7 @@ mod cardinality {
 
         fn div(self, rhs: f64) -> Self::Output {
             use CardinalityEstimate::*;
+
             if let Estimate(lhs) = self {
                 Estimate(lhs / OrderedFloat(rhs))
             } else {
@@ -1589,6 +1594,11 @@ mod cardinality {
         fn flat_map(&self, tf: &TableFunc, input: CardinalityEstimate) -> CardinalityEstimate {
             match tf {
                 TableFunc::Wrap { types, width } => {
+                    // DBZ is harmless (produces inf, empty estimate), but still a broken invariant
+                    if *width == 0 {
+                        error!("cardinality estimation encountered TableFunc::Wrap with width 0");
+                    }
+
                     input * (f64::cast_lossy(types.len()) / f64::cast_lossy(*width))
                 }
                 _ => {
@@ -1663,11 +1673,11 @@ mod cardinality {
                     }
                 }
                 MirScalarExpr::CallVariadic { func, exprs } => match func {
-                    VariadicFunc::And => exprs
+                    VariadicFunc::And(_) => exprs
                         .iter()
                         .map(|expr| self.predicate(expr, unique_columns))
                         .product(),
-                    VariadicFunc::Or => {
+                    VariadicFunc::Or(_) => {
                         // TODO(mgree): BETWEEN will get compiled down to an AND of appropriate bounds---we could try to detect it and be clever
 
                         // F(expr1 OR expr2) = F(expr1) + F(expr2) - F(expr1) * F(expr2), but generalized
@@ -1713,7 +1723,7 @@ mod cardinality {
             let mut estimate = input;
             for expr in predicates {
                 let selectivity = self.predicate(expr, &unique_columns);
-                debug_assert!(
+                mz_ore::soft_assert_no_log!(
                     OrderedFloat(0.0) <= selectivity && selectivity <= OrderedFloat(1.0),
                     "predicate selectivity {selectivity} should be in the range [0,1]"
                 );
@@ -1799,8 +1809,10 @@ mod cardinality {
         ) -> CardinalityEstimate {
             // TODO(mgree): if no `group_key` is present, we can do way better
 
-            if let Some(group_size) = expected_group_size {
-                input / f64::cast_lossy(*group_size)
+            if let Some(expected_group_size) = expected_group_size {
+                // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
+                let group_size = u64::max(*expected_group_size, 1);
+                input / f64::cast_lossy(group_size)
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(1.0)
             } else {
@@ -1822,8 +1834,10 @@ mod cardinality {
                 .and_then(|l| l.as_literal_int64())
                 .map_or(1, |l| std::cmp::max(0, l));
 
-            if let Some(group_size) = expected_group_size {
-                input * (f64::cast_lossy(k) / f64::cast_lossy(*group_size))
+            if let Some(expected_group_size) = expected_group_size {
+                // if expected group size is 0, treat it as 1 (to avoid DBZ/+inf estimates)
+                let group_size = u64::max(*expected_group_size, 1);
+                input * (f64::cast_lossy(k) / f64::cast_lossy(group_size))
             } else if group_key.is_empty() {
                 CardinalityEstimate::from(f64::cast_lossy(k))
             } else {

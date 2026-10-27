@@ -29,9 +29,7 @@ class CreateManagedCluster(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE create_managed_cluster1_table (f1 INTEGER);
                 > CREATE TABLE create_managed_cluster2_table (f1 INTEGER);
 
@@ -58,9 +56,7 @@ class CreateManagedCluster(Check):
 
                 > DROP TABLE create_managed_cluster1_table CASCADE;
                 > DROP TABLE create_managed_cluster2_table CASCADE;
-           """
-            )
-        )
+           """))
 
 
 class DropManagedCluster(Check):
@@ -98,9 +94,7 @@ class DropManagedCluster(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET cluster=drop_managed_cluster1
 
                 > SET cluster=drop_managed_cluster2
@@ -118,6 +112,4 @@ class DropManagedCluster(Check):
 
                 ! SELECT * FROM drop_managed_cluster2_view;
                 contains: unknown catalog item 'drop_managed_cluster2_view'
-           """
-            )
-        )
+           """))

@@ -18,9 +18,10 @@ use std::iter;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use itertools::{Either, Itertools};
+use chrono::DateTime;
+use itertools::Itertools;
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
-use mz_adapter_types::dyncfgs::ENABLE_MULTI_REPLICA_SOURCES;
+use mz_arrow_util::builder::ArrowBuilder;
 use mz_auth::password::Password;
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
@@ -28,11 +29,12 @@ use mz_interchange::avro::{AvroSchemaGenerator, DocTarget};
 use mz_ore::cast::{CastFrom, TryCastFrom};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
-use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
+use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
@@ -53,13 +55,13 @@ use mz_sql_parser::ast::{
     AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
     AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
-    ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
-    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
-    ConnectionOption, ConnectionOptionName, ContinualTaskOption, ContinualTaskOptionName,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
-    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
-    CreateContinualTaskStatement, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
+    ClusterAutoScalingStrategyOptionValue, ClusterFeature, ClusterFeatureName, ClusterOption,
+    ClusterOptionName, ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType,
+    CommentStatement, ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement,
+    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
+    CreateConnectionStatement, CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateMetricSinkOption, CreateMetricSinkOptionName,
+    CreateMetricSinkStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
     CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
@@ -69,26 +71,27 @@ use mz_sql_parser::ast::{
     CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
     DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
-    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
+    FormatSpecifier, GlueAvroOption, GlueAvroOptionName, IcebergSinkConfigOption, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
+    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
+    NetworkPolicyRuleOptionName, OnHydrationOptionValue, PgConfigOption, PgConfigOptionName,
+    ProtobufSchema, QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue,
+    RefreshOptionValue, ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute,
+    SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption,
+    SqlServerConfigOptionName, Statement, TableConstraint, TableFromSourceColumns,
+    TableFromSourceOption, TableFromSourceOptionName, TableOption, TableOptionName,
+    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value,
+    ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
-use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
+use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
     IcebergSinkConnection, KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType,
-    SinkEnvelope, StorageSinkConnection,
+    SinkEnvelope, StorageSinkConnection, iceberg_type_overrides,
 };
 use mz_storage_types::sources::encoding::{
     AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding, RegexEncoding,
@@ -120,6 +123,7 @@ use mz_storage_types::sources::{
     SourceExportDetails, SourceExportStatementDetails, SqlServerSourceConnection,
     SqlServerSourceExtras, Timeline,
 };
+use mz_storage_types::wire_format::WireFormat;
 use prost::Message;
 
 use crate::ast::display::AstDisplay;
@@ -137,8 +141,7 @@ use crate::names::{
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::query::{
-    CteDesc, ExprContext, QueryLifetime, cast_relation, plan_expr, scalar_type_from_catalog,
-    scalar_type_from_sql,
+    ExprContext, QueryLifetime, TypeResolutionBudget, plan_expr, scalar_type_from_sql,
 };
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
@@ -151,22 +154,25 @@ use crate::plan::{
     AlterMaterializedViewApplyReplacementPlan, AlterNetworkPolicyPlan, AlterNoopPlan,
     AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
     AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
-    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan,
-    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
-    ConnectionDetails, CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
-    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan,
-    CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
-    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
-    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
-    DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index, MaterializedView, NetworkPolicyRule,
-    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice,
-    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
-    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
-    WebhookValidation, literal, plan_utils, query, transform_ast,
+    AlterSourceTimestampIntervalPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
+    AlterSystemSetPlan, AlterTablePlan, AutoScalingStrategy, ClusterSchedule, CommentPlan,
+    ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
+    CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan, CreateNetworkPolicyPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
+    DropOwnedPlan, HirRelationExpr, Index, MaterializedView, MetricSink, NetworkPolicyRule,
+    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, OnHydration, Plan, PlanClusterOption,
+    PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
+    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation, literal, plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
-    self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
-    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
+    self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
+    ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS,
+    ENABLE_METRIC_SINK, ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
+    VarInput,
 };
 use crate::{names, parse};
 
@@ -177,6 +183,9 @@ mod connection;
 // The real max is probably higher than this, but it's easier to relax a constraint than make it
 // more strict.
 const MAX_NUM_COLUMNS: usize = 256;
+
+const MAX_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 static MANAGED_REPLICA_PATTERN: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"^r(\d)+$").unwrap());
@@ -340,7 +349,7 @@ pub fn plan_create_table(
                     }
                 }
                 ColumnOption::Versioned { action, version } => {
-                    let version = RelationVersion::from(*version);
+                    let version = normalize::relation_version(*version);
                     versioned = true;
 
                     let name = normalize::column_name(c.name.clone());
@@ -564,13 +573,6 @@ pub fn plan_create_webhook_source(
     // We will rewrite the cluster if one is not provided, so we must use the `in_cluster` value
     // we plan to normalize when we canonicalize the create statement.
     let in_cluster = source_sink_cluster_config(scx, &mut stmt.in_cluster)?;
-    let enable_multi_replica_sources =
-        ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs());
-    if !enable_multi_replica_sources {
-        if in_cluster.replica_ids().len() > 1 {
-            sql_bail!("cannot create webhook source in cluster with more than one replica")
-        }
-    }
     let create_sql =
         normalize::create_statement(scx, Statement::CreateWebhookSource(stmt.clone()))?;
 
@@ -893,18 +895,23 @@ pub fn plan_create_source(
 
     let timestamp_interval = match timestamp_interval {
         Some(duration) => {
-            let min = scx.catalog.system_vars().min_timestamp_interval();
-            let max = scx.catalog.system_vars().max_timestamp_interval();
-            if duration < min || duration > max {
-                return Err(PlanError::InvalidTimestampInterval {
-                    min,
-                    max,
-                    requested: duration,
-                });
+            // Only validate bounds for new statements (pcx is Some), not during
+            // catalog deserialization (pcx is None). Previously persisted sources
+            // may have intervals that no longer fall within the current bounds.
+            if scx.pcx.is_some() {
+                let min = scx.catalog.system_vars().min_timestamp_interval();
+                let max = scx.catalog.system_vars().max_timestamp_interval();
+                if duration < min || duration > max {
+                    return Err(PlanError::InvalidTimestampInterval {
+                        min,
+                        max,
+                        requested: duration,
+                    });
+                }
             }
             duration
         }
-        None => scx.catalog.config().timestamp_interval,
+        None => scx.catalog.system_vars().default_timestamp_interval(),
     };
 
     let (desc, data_source) = match progress_subsource {
@@ -1112,7 +1119,7 @@ fn plan_mysql_source_connection(
     } = options.clone().try_into()?;
     let details = details
         .as_ref()
-        .ok_or_else(|| sql_err!("internal error: MySQL source missing details"))?;
+        .ok_or_else(|| internal_err!("MySQL source missing details"))?;
     let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
     let details = ProtoMySqlSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
     let details = MySqlSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
@@ -1139,7 +1146,7 @@ fn plan_sqlserver_source_connection(
     let SqlServerConfigOptionExtracted { details, .. } = options.clone().try_into()?;
     let details = details
         .as_ref()
-        .ok_or_else(|| sql_err!("internal error: SQL Server source missing details"))?;
+        .ok_or_else(|| internal_err!("SQL Server source missing details"))?;
     let extras = hex::decode(details)
         .map_err(|e| sql_err!("{e}"))
         .and_then(|raw| ProtoSqlServerSourceExtras::decode(&*raw).map_err(|e| sql_err!("{e}")))
@@ -1172,7 +1179,7 @@ fn plan_postgres_source_connection(
     } = options.clone().try_into()?;
     let details = details
         .as_ref()
-        .ok_or_else(|| sql_err!("internal error: Postgres source missing details"))?;
+        .ok_or_else(|| internal_err!("Postgres source missing details"))?;
     let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
     let details =
         ProtoPostgresSourcePublicationDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
@@ -1181,7 +1188,8 @@ fn plan_postgres_source_connection(
     Ok(PostgresSourceConnection {
         connection: connection_item.id(),
         connection_id: connection_item.id(),
-        publication: publication.expect("validated exists during purification"),
+        // Validated during purification.
+        publication: publication.ok_or_else(|| internal_err!("PUBLICATION option is required"))?,
         publication_details,
     })
 }
@@ -1207,7 +1215,8 @@ fn plan_kafka_source_connection(
         start_offset,
         seen: _,
     }: KafkaSourceConfigOptionExtracted = options.clone().try_into()?;
-    let topic = topic.expect("validated exists during purification");
+    // Validated during purification.
+    let topic = topic.ok_or_else(|| internal_err!("TOPIC option is required"))?;
     let mut start_offsets = BTreeMap::new();
     if let Some(offsets) = start_offset {
         for (part, offset) in offsets.iter().enumerate() {
@@ -1221,6 +1230,11 @@ fn plan_kafka_source_connection(
         // This is a librdkafka-enforced restriction that, if violated,
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
+    }
+    if topic_metadata_refresh_interval < Duration::from_secs(1) {
+        // This is a librdkafka-enforced restriction that, if violated,
+        // would result in a runtime error for the source.
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
     }
     let metadata_columns = include_metadata
         .into_iter()
@@ -1605,10 +1619,11 @@ pub fn plan_create_subsource(
     // creating the AST for subsources as a response to CREATE SOURCE
     // statements, so this would fire in integration testing if we failed to
     // uphold it.
-    assert!(
-        progress ^ (external_reference.is_some() && of_source.is_some()),
-        "CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option"
-    );
+    if !(progress ^ (external_reference.is_some() && of_source.is_some())) {
+        bail_internal!(
+            "CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option"
+        );
+    }
 
     let desc = plan_source_export_desc(scx, name, columns, constraints)?;
 
@@ -1626,32 +1641,39 @@ pub fn plan_create_subsource(
         // This is a subsource with the "natural" dependency order, i.e. it is
         // not a legacy subsource with the inverted structure.
         let ingestion_id = *source_reference.item_id();
-        let external_reference = external_reference.unwrap();
+        let external_reference = external_reference.ok_or_else(|| {
+            sql_err!("CREATE SUBSOURCE with REFERENCES requires EXTERNAL REFERENCE option")
+        })?;
 
         // Decode the details option stored on the subsource statement, which contains information
         // created during the purification process.
         let details = details
             .as_ref()
-            .ok_or_else(|| sql_err!("internal error: source-export subsource missing details"))?;
+            .ok_or_else(|| internal_err!("source-export subsource missing details"))?;
         let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
         let details =
             ProtoSourceExportStatementDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
         let details =
             SourceExportStatementDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
         let details = match details {
-            SourceExportStatementDetails::Postgres { table } => {
-                SourceExportDetails::Postgres(PostgresSourceExportDetails {
-                    column_casts: crate::pure::postgres::generate_column_casts(
-                        scx,
-                        &table,
-                        &text_columns,
-                    )?,
-                    table,
-                })
-            }
+            SourceExportStatementDetails::Postgres {
+                table,
+                cast_oid_full_range,
+                initial_lsn,
+            } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
+                column_casts: crate::pure::postgres::generate_column_casts(
+                    scx,
+                    &table,
+                    &text_columns,
+                    cast_oid_full_range,
+                )?,
+                table,
+                initial_lsn,
+            }),
             SourceExportStatementDetails::MySql {
                 table,
                 initial_gtid_set,
+                binlog_full_metadata,
             } => SourceExportDetails::MySql(MySqlSourceExportDetails {
                 table,
                 initial_gtid_set,
@@ -1660,6 +1682,7 @@ pub fn plan_create_subsource(
                     .into_iter()
                     .map(|c| c.into_string())
                     .collect(),
+                binlog_full_metadata,
             }),
             SourceExportStatementDetails::SqlServer {
                 table,
@@ -1698,7 +1721,7 @@ pub fn plan_create_subsource(
     } else if progress {
         DataSourceDesc::Progress
     } else {
-        panic!("subsources must specify one of `external_reference`, `progress`, or `references`")
+        sql_bail!("CREATE SUBSOURCE must specify one of PROGRESS or REFERENCES option")
     };
 
     let if_not_exists = *if_not_exists;
@@ -1727,6 +1750,9 @@ generate_extracted_config!(
     TableFromSourceOption,
     (TextColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
+    (ExcludeConstraints, Vec::<String>, Default(vec![])),
+    (ExcludeAllConstraints, bool, Default(false)),
+    (ExcludeAllNotNullConstraints, bool, Default(false)),
     (PartitionBy, Vec<Ident>),
     (RetainHistory, OptionalDuration),
     (Details, String)
@@ -1758,6 +1784,9 @@ pub fn plan_create_table_from_source(
     let TableFromSourceOptionExtracted {
         text_columns,
         exclude_columns,
+        exclude_constraints: _,
+        exclude_all_constraints: _,
+        exclude_all_not_null_constraints: _,
         retain_history,
         partition_by,
         details,
@@ -1771,7 +1800,7 @@ pub fn plan_create_table_from_source(
     // created during the purification process.
     let details = details
         .as_ref()
-        .ok_or_else(|| sql_err!("internal error: source-export missing details"))?;
+        .ok_or_else(|| internal_err!("source-export missing details"))?;
     let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
     let details =
         ProtoSourceExportStatementDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
@@ -1796,19 +1825,24 @@ pub fn plan_create_table_from_source(
     }
 
     let details = match details {
-        SourceExportStatementDetails::Postgres { table } => {
-            SourceExportDetails::Postgres(PostgresSourceExportDetails {
-                column_casts: crate::pure::postgres::generate_column_casts(
-                    scx,
-                    &table,
-                    &text_columns,
-                )?,
-                table,
-            })
-        }
+        SourceExportStatementDetails::Postgres {
+            table,
+            cast_oid_full_range,
+            initial_lsn,
+        } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
+            column_casts: crate::pure::postgres::generate_column_casts(
+                scx,
+                &table,
+                &text_columns,
+                cast_oid_full_range,
+            )?,
+            table,
+            initial_lsn,
+        }),
         SourceExportStatementDetails::MySql {
             table,
             initial_gtid_set,
+            binlog_full_metadata,
         } => SourceExportDetails::MySql(MySqlSourceExportDetails {
             table,
             initial_gtid_set,
@@ -1817,6 +1851,7 @@ pub fn plan_create_table_from_source(
                 .into_iter()
                 .map(|c| c.into_string())
                 .collect(),
+            binlog_full_metadata,
         }),
         SourceExportStatementDetails::SqlServer {
             table,
@@ -1901,7 +1936,10 @@ pub fn plan_create_table_from_source(
         }
     };
 
-    let source_connection = &source_item.source_desc()?.expect("is source").connection;
+    let source_connection = &source_item
+        .source_desc()?
+        .ok_or_else(|| sql_err!("item is not a source"))?
+        .connection;
 
     // Some source-types (e.g. postgres, mysql, multi-output load-gen sources) define a value_schema
     // during purification and define the `columns` and `constraints` fields for the statement,
@@ -1911,7 +1949,7 @@ pub fn plan_create_table_from_source(
         if matches!(columns, TableFromSourceColumns::Defined(_)) || !constraints.is_empty() {
             let columns = match columns {
                 TableFromSourceColumns::Defined(columns) => columns,
-                _ => unreachable!(),
+                _ => bail_internal!("expected column definitions to be present"),
             };
             let desc = plan_source_export_desc(scx, name, columns, constraints)?;
             (None, desc)
@@ -1965,9 +2003,10 @@ pub fn plan_create_table_from_source(
 
     let data_source = DataSourceDesc::IngestionExport {
         ingestion_id,
+        // Populated during purification.
         external_reference: external_reference
             .as_ref()
-            .expect("populated in purification")
+            .ok_or_else(|| sql_err!("EXTERNAL REFERENCE is required"))?
             .clone(),
         details,
         data_config: SourceExportDataConfig { envelope, encoding },
@@ -2277,12 +2316,30 @@ fn source_sink_cluster_config<'a, 'ctx>(
 
 generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default(true)));
 
+// `SchemaName` is source-only (a source reads one value schema by name). The
+// `Key`/`Value`-prefixed options are sink-only. Which options are valid in
+// which context is enforced by the source purifier and the sink planner.
+generate_extracted_config!(
+    GlueAvroOption,
+    (SchemaName, String),
+    (KeySchemaName, String),
+    (ValueSchemaName, String),
+    (KeyCompatibilityLevel, String),
+    (ValueCompatibilityLevel, String)
+);
+
 #[derive(Debug)]
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
-    pub csr_connection: Option<<ReferencedConnection as ConnectionAccess>::Csr>,
-    pub confluent_wire_format: bool,
+    /// Reference schemas for the key schema, in dependency order.
+    pub key_reference_schemas: Vec<String>,
+    /// Reference schemas for the value schema, in dependency order.
+    pub value_reference_schemas: Vec<String>,
+    /// Wire-format dispatch and the registry connection to fetch writer
+    /// schemas from. Built directly by each `AvroSchema` variant rather
+    /// than reconstructed from a (csr_connection, bool) pair downstream.
+    pub wire_format: WireFormat<ReferencedConnection>,
 }
 
 fn get_encoding_inner(
@@ -2295,8 +2352,9 @@ fn get_encoding_inner(
             let Schema {
                 key_schema,
                 value_schema,
-                csr_connection,
-                confluent_wire_format,
+                key_reference_schemas,
+                value_reference_schemas,
+                wire_format,
             } = match schema {
                 // TODO(jldlaughlin): we need a way to pass in primary key information
                 // when building a source from a string or file.
@@ -2308,12 +2366,17 @@ fn get_encoding_inner(
                         confluent_wire_format,
                         ..
                     } = with_options.clone().try_into()?;
-
+                    let wire_format = if confluent_wire_format {
+                        WireFormat::Confluent { registry: None }
+                    } else {
+                        WireFormat::None
+                    };
                     Schema {
                         key_schema: None,
                         value_schema: schema.clone(),
-                        csr_connection: None,
-                        confluent_wire_format,
+                        key_reference_schemas: vec![],
+                        value_reference_schemas: vec![],
+                        wire_format,
                     }
                 }
                 AvroSchema::Csr {
@@ -2330,7 +2393,7 @@ fn get_encoding_inner(
                         Connection::Csr(_) => item.id(),
                         _ => {
                             sql_bail!(
-                                "{} is not a schema registry connection",
+                                "{} is not a Confluent Schema Registry connection",
                                 scx.catalog
                                     .resolve_full_name(item.name())
                                     .to_string()
@@ -2343,11 +2406,50 @@ fn get_encoding_inner(
                         Schema {
                             key_schema: seed.key_schema.clone(),
                             value_schema: seed.value_schema.clone(),
-                            csr_connection: Some(csr_connection),
-                            confluent_wire_format: true,
+                            key_reference_schemas: seed.key_reference_schemas.clone(),
+                            value_reference_schemas: seed.value_reference_schemas.clone(),
+                            wire_format: WireFormat::Confluent {
+                                registry: Some(csr_connection),
+                            },
                         }
                     } else {
-                        unreachable!("CSR seed resolution should already have been called: Avro")
+                        sql_bail!("Avro CSR seed resolution has not been performed")
+                    }
+                }
+                AvroSchema::Glue {
+                    connection,
+                    with_options: _,
+                    seed,
+                } => {
+                    let item = scx.get_item_by_resolved_name(connection)?;
+                    let glue_connection = match item.connection()? {
+                        Connection::GlueSchemaRegistry(_) => item.id(),
+                        _ => {
+                            sql_bail!(
+                                "{} is not an AWS Glue Schema Registry connection",
+                                scx.catalog
+                                    .resolve_full_name(item.name())
+                                    .to_string()
+                                    .quoted()
+                            )
+                        }
+                    };
+
+                    // `SCHEMA NAME` requiredness is enforced during
+                    // purification, which also populates `seed`. By the time
+                    // planning runs the option is guaranteed present.
+                    let Some(seed) = seed else {
+                        sql_bail!("Avro Glue seed resolution has not been performed");
+                    };
+
+                    Schema {
+                        key_schema: None,
+                        value_schema: seed.value_schema.clone(),
+                        key_reference_schemas: vec![],
+                        value_reference_schemas: vec![],
+                        wire_format: WireFormat::Glue {
+                            registry: Some(glue_connection),
+                        },
                     }
                 }
             };
@@ -2356,20 +2458,20 @@ fn get_encoding_inner(
                 return Ok(SourceDataEncoding {
                     key: Some(DataEncoding::Avro(AvroEncoding {
                         schema: key_schema,
-                        csr_connection: csr_connection.clone(),
-                        confluent_wire_format,
+                        reference_schemas: key_reference_schemas,
+                        wire_format: wire_format.clone(),
                     })),
                     value: DataEncoding::Avro(AvroEncoding {
                         schema: value_schema,
-                        csr_connection,
-                        confluent_wire_format,
+                        reference_schemas: value_reference_schemas,
+                        wire_format,
                     }),
                 });
             } else {
                 DataEncoding::Avro(AvroEncoding {
                     schema: value_schema,
-                    csr_connection,
-                    confluent_wire_format,
+                    reference_schemas: value_reference_schemas,
+                    wire_format,
                 })
             }
         }
@@ -2421,7 +2523,7 @@ fn get_encoding_inner(
                     }
                     value
                 } else {
-                    unreachable!("CSR seed resolution should already have been called: Proto")
+                    sql_bail!("Protobuf CSR seed resolution has not been performed")
                 }
             }
             ProtobufSchema::InlineSchema {
@@ -2582,7 +2684,8 @@ pub fn plan_view(
         scx.allocate_qualified_name(normalize::unresolved_item_name(name.to_owned())?)?
     };
 
-    plan_utils::maybe_rename_columns(
+    plan_utils::maybe_rename_columns_exact(
+        scx.catalog,
         format!("view {}", scx.catalog.resolve_full_name(&name)),
         &mut desc,
         columns,
@@ -2662,6 +2765,8 @@ pub fn plan_create_view(
         })
         .unwrap_or_default();
 
+    validate_view_dependencies(scx, &view.dependencies.0)?;
+
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
     let partial_name = PartialItemName::from(full_name.clone());
@@ -2688,16 +2793,28 @@ pub fn plan_create_view(
     }))
 }
 
+/// Validate the dependencies of a (materialized) view.
+fn validate_view_dependencies(
+    scx: &StatementContext,
+    dependencies: &BTreeSet<CatalogItemId>,
+) -> Result<(), PlanError> {
+    for id in dependencies {
+        let item = scx.catalog.get_item(id);
+        if item.replacement_target().is_some() {
+            let name = scx.catalog.minimal_qualification(item.name());
+            return Err(PlanError::InvalidDependency {
+                name: name.to_string(),
+                item_type: format!("replacement {}", item.item_type()),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 pub fn describe_create_materialized_view(
     _: &StatementContext,
     _: CreateMaterializedViewStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn describe_create_continual_task(
-    _: &StatementContext,
-    _: CreateContinualTaskStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     Ok(StatementDesc::new(None))
 }
@@ -2716,6 +2833,18 @@ pub fn describe_alter_network_policy(
     Ok(StatementDesc::new(None))
 }
 
+/// Rejects times that are too large.
+fn check_refresh_time(option: &str, ts: Timestamp) -> Result<(), PlanError> {
+    let renderable = i64::try_from(ts)
+        .ok()
+        .and_then(DateTime::from_timestamp_millis)
+        .is_some_and(|dt| CheckedTimestamp::try_from(dt).is_ok());
+    if !renderable {
+        sql_bail!("{option} time too large: {ts}");
+    }
+    Ok(())
+}
+
 pub fn plan_create_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateMaterializedViewStatement<Aug>,
@@ -2726,6 +2855,23 @@ pub fn plan_create_materialized_view(
         id: cluster_id,
         print_name: None,
     });
+
+    let target_replica = match &stmt.in_cluster_replica {
+        Some(replica_name) => {
+            scx.require_feature_flag(&ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS)?;
+
+            let cluster = scx.catalog.get_cluster(cluster_id);
+            let replica_id = cluster
+                .replica_ids()
+                .get(replica_name.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    CatalogError::UnknownClusterReplica(replica_name.as_str().to_string())
+                })?;
+            Some(replica_id)
+        }
+        None => None,
+    };
 
     let create_sql =
         normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
@@ -2750,7 +2896,8 @@ pub fn plan_create_materialized_view(
         ));
     }
 
-    plan_utils::maybe_rename_columns(
+    plan_utils::maybe_rename_columns_exact(
+        scx.catalog,
         format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
         &mut desc,
         &stmt.columns,
@@ -2783,7 +2930,7 @@ pub fn plan_create_materialized_view(
                 }
                 RefreshOptionValue::AtCreation => {
                     soft_panic_or_log!("REFRESH AT CREATION should have been purified away");
-                    sql_bail!("INTERNAL ERROR: REFRESH AT CREATION should have been purified away")
+                    bail_internal!("REFRESH AT CREATION should have been purified away")
                 }
                 RefreshOptionValue::At(RefreshAtOptionValue { mut time }) => {
                     transform_ast::transform(scx, &mut time)?; // Desugar the expression
@@ -2806,6 +2953,7 @@ pub fn plan_create_materialized_view(
                     let timestamp = hir
                         .into_literal_mz_timestamp()
                         .ok_or_else(|| PlanError::InvalidRefreshAt)?;
+                    check_refresh_time("REFRESH AT", timestamp)?;
                     refresh_schedule.ats.push(timestamp);
                 }
                 RefreshOptionValue::Every(RefreshEveryOptionValue {
@@ -2824,8 +2972,17 @@ pub fn plan_create_materialized_view(
                         sql_bail!("REFRESH interval must not involve units larger than days");
                     }
                     let interval = interval.duration()?;
-                    if u64::try_from(interval.as_millis()).is_err() {
+                    // `Interval::from_duration` (needed to unparse the interval, e.g. for
+                    // `mz_materialized_view_refresh_strategies`) requires the micros to fit
+                    // in an i64, which is a tighter bound than `Duration::duration` enforces.
+                    // Reject too-large intervals here to avoid panicking later.
+                    if u64::try_from(interval.as_millis()).is_err()
+                        || Interval::from_duration(&interval).is_err()
+                    {
                         sql_bail!("REFRESH interval too large");
+                    }
+                    if interval.as_micros() < 1000 {
+                        sql_bail!("REFRESH interval must be at least 1 ms")
                     }
 
                     let mut aligned_to = match aligned_to {
@@ -2862,6 +3019,7 @@ pub fn plan_create_materialized_view(
                     let aligned_to_const = aligned_to_hir
                         .into_literal_mz_timestamp()
                         .ok_or_else(|| PlanError::InvalidRefreshEveryAlignedTo)?;
+                    check_refresh_time("REFRESH EVERY ... ALIGNED TO", aligned_to_const)?;
 
                     refresh_schedule.everies.push(RefreshEvery {
                         interval,
@@ -2970,7 +3128,7 @@ pub fn plan_create_materialized_view(
 
     // Validate the replacement target, if one is given.
     let mut replacement_target = None;
-    if let Some(target_name) = &stmt.replacing {
+    if let Some(target_name) = &stmt.replacement_for {
         scx.require_feature_flag(&vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS)?;
 
         let target = scx.get_item_by_resolved_name(target_name)?;
@@ -2989,15 +3147,35 @@ pub fn plan_create_materialized_view(
             );
         }
 
-        if !dependencies.insert(target.id()) {
-            sql_bail!(
-                "cannot replace {} because it is also a dependency",
-                scx.catalog.minimal_qualification(target.name()),
-            );
+        // Check for dependency cycles.
+        for dependent in scx.catalog.item_dependents(target.id()) {
+            if let ObjectId::Item(id) = dependent
+                && dependencies.contains(&id)
+            {
+                sql_bail!(
+                    "replacement would cause {} to depend on itself",
+                    scx.catalog.minimal_qualification(target.name()),
+                );
+            }
+        }
+
+        dependencies.insert(target.id());
+
+        for use_id in target.used_by() {
+            let use_item = scx.get_item(use_id);
+            if use_item.replacement_target() == Some(target.id()) {
+                sql_bail!(
+                    "cannot replace {} because it already has a replacement: {}",
+                    scx.catalog.minimal_qualification(target.name()),
+                    scx.catalog.minimal_qualification(use_item.name()),
+                );
+            }
         }
 
         replacement_target = Some(target.id());
     }
+
+    validate_view_dependencies(scx, &dependencies)?;
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -3022,6 +3200,7 @@ pub fn plan_create_materialized_view(
             column_names,
             replacement_target,
             cluster_id,
+            target_replica,
             non_null_assertions,
             compaction_window,
             refresh_schedule,
@@ -3041,305 +3220,6 @@ generate_extracted_config!(
     (RetainHistory, OptionalDuration),
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
-
-pub fn plan_create_continual_task(
-    scx: &StatementContext,
-    mut stmt: CreateContinualTaskStatement<Aug>,
-) -> Result<Plan, PlanError> {
-    match &stmt.sugar {
-        None => scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_CREATE)?,
-        Some(ast::CreateContinualTaskSugar::Transform { .. }) => {
-            scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_TRANSFORM)?
-        }
-        Some(ast::CreateContinualTaskSugar::Retain { .. }) => {
-            scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_RETAIN)?
-        }
-    };
-    let cluster_id = match &stmt.in_cluster {
-        None => scx.catalog.resolve_cluster(None)?.id(),
-        Some(in_cluster) => in_cluster.id,
-    };
-    stmt.in_cluster = Some(ResolvedClusterName {
-        id: cluster_id,
-        print_name: None,
-    });
-
-    let create_sql =
-        normalize::create_statement(scx, Statement::CreateContinualTask(stmt.clone()))?;
-
-    let ContinualTaskOptionExtracted { snapshot, seen: _ } = stmt.with_options.try_into()?;
-
-    // It seems desirable for a CT that e.g. simply filters the input to keep
-    // the same nullability. So, start by assuming all columns are non-nullable,
-    // and then make them nullable below if any of the exprs plan them as
-    // nullable.
-    let mut desc = match stmt.columns {
-        None => None,
-        Some(columns) => {
-            let mut desc_columns = Vec::with_capacity(columns.capacity());
-            for col in columns.iter() {
-                desc_columns.push((
-                    normalize::column_name(col.name.clone()),
-                    SqlColumnType {
-                        scalar_type: scalar_type_from_sql(scx, &col.data_type)?,
-                        nullable: false,
-                    },
-                ));
-            }
-            Some(RelationDesc::from_names_and_types(desc_columns))
-        }
-    };
-    let input = scx.get_item_by_resolved_name(&stmt.input)?;
-    match input.item_type() {
-        // Input must be a thing directly backed by a persist shard, so we can
-        // use a persist listen to efficiently rehydrate.
-        CatalogItemType::ContinualTask
-        | CatalogItemType::Table
-        | CatalogItemType::MaterializedView
-        | CatalogItemType::Source => {}
-        CatalogItemType::Sink
-        | CatalogItemType::View
-        | CatalogItemType::Index
-        | CatalogItemType::Type
-        | CatalogItemType::Func
-        | CatalogItemType::Secret
-        | CatalogItemType::Connection => {
-            sql_bail!(
-                "CONTINUAL TASK cannot use {} as an input",
-                input.item_type()
-            );
-        }
-    }
-
-    let mut qcx = QueryContext::root(scx, QueryLifetime::MaterializedView);
-    let ct_name = stmt.name;
-    let placeholder_id = match &ct_name {
-        ResolvedItemName::ContinualTask { id, name } => {
-            let desc = match desc.as_ref().cloned() {
-                Some(x) => x,
-                None => {
-                    // The user didn't specify the CT's columns. Take a wild
-                    // guess that the CT has the same shape as the input. It's
-                    // fine if this is wrong, we'll get an error below after
-                    // planning the query.
-                    let desc = input.relation_desc().expect("item type checked above");
-                    desc.into_owned()
-                }
-            };
-            qcx.ctes.insert(
-                *id,
-                CteDesc {
-                    name: name.item.clone(),
-                    desc,
-                },
-            );
-            Some(*id)
-        }
-        _ => None,
-    };
-
-    let mut exprs = Vec::new();
-    for (idx, stmt) in stmt.stmts.iter().enumerate() {
-        let query = continual_task_query(&ct_name, stmt).ok_or_else(|| sql_err!("TODO(ct3)"))?;
-        let query::PlannedRootQuery {
-            expr,
-            desc: desc_query,
-            finishing,
-            scope: _,
-        } = query::plan_ct_query(&mut qcx, query)?;
-        // We get back a trivial finishing because we plan with a "maintained"
-        // QueryLifetime, see comment in `plan_view`.
-        assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
-            &finishing,
-            expr.arity()
-        ));
-        if expr.contains_parameters()? {
-            if expr.contains_parameters()? {
-                return Err(PlanError::ParameterNotAllowed(
-                    "continual tasks".to_string(),
-                ));
-            }
-        }
-        let expr = match desc.as_mut() {
-            None => {
-                desc = Some(desc_query);
-                expr
-            }
-            Some(desc) => {
-                // We specify the columns for DELETE, so if any columns types don't
-                // match, it's because it's an INSERT.
-                if desc_query.arity() > desc.arity() {
-                    sql_bail!(
-                        "statement {}: INSERT has more expressions than target columns",
-                        idx
-                    );
-                }
-                if desc_query.arity() < desc.arity() {
-                    sql_bail!(
-                        "statement {}: INSERT has more target columns than expressions",
-                        idx
-                    );
-                }
-                // Ensure the types of the source query match the types of the target table,
-                // installing assignment casts where necessary and possible.
-                let target_types = desc.iter_types().map(|x| &x.scalar_type);
-                let expr = cast_relation(&qcx, CastContext::Assignment, expr, target_types);
-                let expr = expr.map_err(|e| {
-                    sql_err!(
-                        "statement {}: column {} is of type {} but expression is of type {}",
-                        idx,
-                        desc.get_name(e.column).quoted(),
-                        qcx.humanize_scalar_type(&e.target_type, false),
-                        qcx.humanize_scalar_type(&e.source_type, false),
-                    )
-                })?;
-
-                // Update ct nullability as necessary. The `ne` above verified that the
-                // types are the same len.
-                let zip_types = || desc.iter_types().zip_eq(desc_query.iter_types());
-                let updated = zip_types().any(|(ct, q)| q.nullable && !ct.nullable);
-                if updated {
-                    let new_types = zip_types().map(|(ct, q)| {
-                        let mut ct = ct.clone();
-                        if q.nullable {
-                            ct.nullable = true;
-                        }
-                        ct
-                    });
-                    *desc = RelationDesc::from_names_and_types(
-                        desc.iter_names().cloned().zip_eq(new_types),
-                    );
-                }
-
-                expr
-            }
-        };
-        match stmt {
-            ast::ContinualTaskStmt::Insert(_) => exprs.push(expr),
-            ast::ContinualTaskStmt::Delete(_) => exprs.push(expr.negate()),
-        }
-    }
-    // TODO(ct3): Collect things by output and assert that there is only one (or
-    // support multiple outputs).
-    let expr = exprs
-        .into_iter()
-        .reduce(|acc, expr| acc.union(expr))
-        .ok_or_else(|| sql_err!("TODO(ct3)"))?;
-    let dependencies = expr
-        .depends_on()
-        .into_iter()
-        .map(|gid| scx.catalog.resolve_item_id(&gid))
-        .collect();
-
-    let desc = desc.ok_or_else(|| sql_err!("TODO(ct3)"))?;
-    let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
-    if let Some(dup) = column_names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.quoted());
-    }
-
-    // Check for an object in the catalog with this same name
-    let name = match &ct_name {
-        ResolvedItemName::Item { id, .. } => scx.catalog.get_item(id).name().clone(),
-        ResolvedItemName::ContinualTask { name, .. } => {
-            let name = scx.allocate_qualified_name(name.clone())?;
-            let full_name = scx.catalog.resolve_full_name(&name);
-            let partial_name = PartialItemName::from(full_name.clone());
-            // For PostgreSQL compatibility, we need to prevent creating this when there
-            // is an existing object *or* type of the same name.
-            if let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name) {
-                return Err(PlanError::ItemAlreadyExists {
-                    name: full_name.to_string(),
-                    item_type: item.item_type(),
-                });
-            }
-            name
-        }
-        ResolvedItemName::Cte { .. } => unreachable!("name should not resolve to a CTE"),
-        ResolvedItemName::Error => unreachable!("error should be returned in name resolution"),
-    };
-
-    let as_of = stmt.as_of.map(Timestamp::from);
-    Ok(Plan::CreateContinualTask(CreateContinualTaskPlan {
-        name,
-        placeholder_id,
-        desc,
-        input_id: input.global_id(),
-        with_snapshot: snapshot.unwrap_or(true),
-        continual_task: MaterializedView {
-            create_sql,
-            expr,
-            dependencies,
-            column_names,
-            replacement_target: None,
-            cluster_id,
-            non_null_assertions: Vec::new(),
-            compaction_window: None,
-            refresh_schedule: None,
-            as_of,
-        },
-    }))
-}
-
-fn continual_task_query<'a>(
-    ct_name: &ResolvedItemName,
-    stmt: &'a ast::ContinualTaskStmt<Aug>,
-) -> Option<ast::Query<Aug>> {
-    match stmt {
-        ast::ContinualTaskStmt::Insert(ast::InsertStatement {
-            table_name: _,
-            columns,
-            source,
-            returning,
-        }) => {
-            if !columns.is_empty() || !returning.is_empty() {
-                return None;
-            }
-            match source {
-                ast::InsertSource::Query(query) => Some(query.clone()),
-                ast::InsertSource::DefaultValues => None,
-            }
-        }
-        ast::ContinualTaskStmt::Delete(ast::DeleteStatement {
-            table_name: _,
-            alias,
-            using,
-            selection,
-        }) => {
-            if !using.is_empty() {
-                return None;
-            }
-            // Construct a `SELECT *` with the `DELETE` selection as a `WHERE`.
-            let from = ast::TableWithJoins {
-                relation: ast::TableFactor::Table {
-                    name: ct_name.clone(),
-                    alias: alias.clone(),
-                },
-                joins: Vec::new(),
-            };
-            let select = ast::Select {
-                from: vec![from],
-                selection: selection.clone(),
-                distinct: None,
-                projection: vec![ast::SelectItem::Wildcard],
-                group_by: Vec::new(),
-                having: None,
-                qualify: None,
-                options: Vec::new(),
-            };
-            let query = ast::Query {
-                ctes: ast::CteBlock::Simple(Vec::new()),
-                body: ast::SetExpr::Select(Box::new(select)),
-                order_by: Vec::new(),
-                limit: None,
-                offset: None,
-            };
-            // Then negate it to turn it into retractions (after planning it).
-            Some(query)
-        }
-    }
-}
-
-generate_extracted_config!(ContinualTaskOption, (Snapshot, bool));
 
 pub fn describe_create_sink(
     _: &StatementContext,
@@ -3392,6 +3272,7 @@ fn plan_sink(
         connection,
         format,
         envelope,
+        mode,
         if_not_exists,
         with_options,
     } = stmt.clone();
@@ -3401,10 +3282,33 @@ fn plan_sink(
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
-    let envelope = match envelope {
-        Some(ast::SinkEnvelope::Upsert) => SinkEnvelope::Upsert,
-        Some(ast::SinkEnvelope::Debezium) => SinkEnvelope::Debezium,
-        None => sql_bail!("ENVELOPE clause is required"),
+    let envelope = match (&connection, envelope, mode) {
+        // Kafka sinks use ENVELOPE
+        (CreateSinkConnection::Kafka { .. }, Some(ast::SinkEnvelope::Upsert), None) => {
+            SinkEnvelope::Upsert
+        }
+        (CreateSinkConnection::Kafka { .. }, Some(ast::SinkEnvelope::Debezium), None) => {
+            SinkEnvelope::Debezium
+        }
+        (CreateSinkConnection::Kafka { .. }, None, None) => {
+            sql_bail!("ENVELOPE clause is required")
+        }
+        (CreateSinkConnection::Kafka { .. }, _, Some(_)) => {
+            sql_bail!("MODE is not supported for Kafka sinks, use ENVELOPE instead")
+        }
+        // Iceberg sinks use MODE
+        (CreateSinkConnection::Iceberg { .. }, None, Some(ast::IcebergSinkMode::Upsert)) => {
+            SinkEnvelope::Upsert
+        }
+        (CreateSinkConnection::Iceberg { .. }, None, Some(ast::IcebergSinkMode::Append)) => {
+            SinkEnvelope::Append
+        }
+        (CreateSinkConnection::Iceberg { .. }, None, None) => {
+            sql_bail!("MODE clause is required")
+        }
+        (CreateSinkConnection::Iceberg { .. }, Some(_), _) => {
+            sql_bail!("ENVELOPE is not supported for Iceberg sinks, use MODE instead")
+        }
     };
 
     let from_name = &from;
@@ -3413,12 +3317,20 @@ fn plan_sink(
     {
         use CatalogItemType::*;
         match from.item_type() {
-            Table | Source | MaterializedView | ContinualTask => {}
-            Sink | View | Index | Type | Func | Secret | Connection => {
+            Table | Source | MaterializedView => {
+                if from.replacement_target().is_some() {
+                    let name = scx.catalog.minimal_qualification(from.name());
+                    return Err(PlanError::InvalidSinkFrom {
+                        name: name.to_string(),
+                        item_type: format!("replacement {}", from.item_type()),
+                    });
+                }
+            }
+            Sink | MetricSink | View | Index | Type | Func | Secret | Connection => {
                 let name = scx.catalog.minimal_qualification(from.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
-                    item_type: from.item_type(),
+                    item_type: from.item_type().to_string(),
                 });
             }
         }
@@ -3428,7 +3340,9 @@ fn plan_sink(
         bail_unsupported!("creating a sink directly on a catalog object");
     }
 
-    let desc = from.relation_desc().expect("item type checked above");
+    let desc = from
+        .relation_desc()
+        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key: Some(key), .. }
         | CreateSinkConnection::Iceberg { key: Some(key), .. } => {
@@ -3446,7 +3360,7 @@ fn plan_sink(
             }
             let indices = key_columns
                 .iter()
-                .map(|col| -> anyhow::Result<usize> {
+                .map(|col| {
                     let name_idx =
                         desc.get_by_name(col)
                             .map(|(idx, _type)| idx)
@@ -3454,11 +3368,65 @@ fn plan_sink(
                                 sql_err!("column referenced in KEY does not exist: {}", col)
                             })?;
                     if desc.get_unambiguous_name(name_idx).is_none() {
-                        sql_err!("column referenced in KEY is ambiguous: {}", col);
+                        sql_bail!("column referenced in KEY is ambiguous: {}", col);
                     }
                     Ok(name_idx)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+
+            // Iceberg equality deletes require primitive, non-float key columns.
+            // Use an allow-list so that new types are rejected by default.
+            if matches!(&connection, CreateSinkConnection::Iceberg { .. }) {
+                let cols: Vec<_> = desc.iter().collect();
+                for &idx in &indices {
+                    let (col_name, col_type) = cols[idx];
+                    let scalar = &col_type.scalar_type;
+                    let is_valid = matches!(
+                        scalar,
+                        // integers
+                        SqlScalarType::Bool
+                            | SqlScalarType::Int16
+                            | SqlScalarType::Int32
+                            | SqlScalarType::Int64
+                            | SqlScalarType::UInt16
+                            | SqlScalarType::UInt32
+                            | SqlScalarType::UInt64
+                            // decimal / numeric
+                            | SqlScalarType::Numeric { .. }
+                            // date / time
+                            | SqlScalarType::Date
+                            | SqlScalarType::Time
+                            | SqlScalarType::Timestamp { .. }
+                            | SqlScalarType::TimestampTz { .. }
+                            | SqlScalarType::Interval
+                            | SqlScalarType::MzTimestamp
+                            // string-like
+                            | SqlScalarType::String
+                            | SqlScalarType::Char { .. }
+                            | SqlScalarType::VarChar { .. }
+                            | SqlScalarType::PgLegacyChar
+                            | SqlScalarType::PgLegacyName
+                            | SqlScalarType::Bytes
+                            | SqlScalarType::Jsonb
+                            // identifiers
+                            | SqlScalarType::Uuid
+                            | SqlScalarType::Oid
+                            | SqlScalarType::RegProc
+                            | SqlScalarType::RegType
+                            | SqlScalarType::RegClass
+                            | SqlScalarType::MzAclItem
+                            | SqlScalarType::AclItem
+                            | SqlScalarType::Int2Vector
+                    );
+                    if !is_valid {
+                        return Err(PlanError::IcebergSinkUnsupportedKeyType {
+                            column: col_name.to_string(),
+                            column_type: format!("{:?}", scalar),
+                        });
+                    }
+                }
+            }
+
             let is_valid_key = desc
                 .typ()
                 .keys
@@ -3466,7 +3434,11 @@ fn plan_sink(
                 .any(|key_columns| key_columns.iter().all(|column| indices.contains(column)));
 
             if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                if key.not_enforced {
+                // Persisted sinks (pcx is None) are re-planned against the keys
+                // the running optimizer derives, which can be fewer than when
+                // the sink was created. Rejecting the key there fails catalog
+                // boot, so only new statements enforce it.
+                if key.not_enforced || scx.pcx.is_none() {
                     scx.catalog
                         .add_notice(PlanNotice::UpsertSinkKeyNotEnforced {
                             key: key_columns.clone(),
@@ -3495,6 +3467,30 @@ fn plan_sink(
         | CreateSinkConnection::Iceberg { key: None, .. } => None,
     };
 
+    if key_indices.is_some() && envelope == SinkEnvelope::Append {
+        sql_bail!("KEY is not supported for MODE APPEND Iceberg sinks");
+    }
+
+    // Reject input columns that clash with the columns MODE APPEND adds to the Iceberg table.
+    if envelope == SinkEnvelope::Append {
+        if let CreateSinkConnection::Iceberg { .. } = &connection {
+            use mz_storage_types::sinks::{
+                ICEBERG_APPEND_DIFF_COLUMN, ICEBERG_APPEND_TIMESTAMP_COLUMN,
+            };
+            for (col_name, _) in desc.iter() {
+                if col_name.as_str() == ICEBERG_APPEND_DIFF_COLUMN
+                    || col_name.as_str() == ICEBERG_APPEND_TIMESTAMP_COLUMN
+                {
+                    sql_bail!(
+                        "column {} conflicts with the system column that MODE APPEND \
+                         adds to the Iceberg table",
+                        col_name.quoted()
+                    );
+                }
+            }
+        }
+    }
+
     let headers_index = match &connection {
         CreateSinkConnection::Kafka {
             headers: Some(headers),
@@ -3503,7 +3499,7 @@ fn plan_sink(
             scx.require_feature_flag(&ENABLE_KAFKA_SINK_HEADERS)?;
 
             match envelope {
-                SinkEnvelope::Upsert => (),
+                SinkEnvelope::Upsert | SinkEnvelope::Append => (),
                 SinkEnvelope::Debezium => {
                     sql_bail!("HEADERS option is not supported with ENVELOPE DEBEZIUM")
                 }
@@ -3576,18 +3572,19 @@ fn plan_sink(
             commit_interval,
         )?,
         CreateSinkConnection::Iceberg {
-            connection,
+            catalog_connection,
             aws_connection,
             options,
             ..
         } => iceberg_sink_builder(
             scx,
-            connection,
+            catalog_connection,
             aws_connection,
             options,
             relation_key_indices,
             key_desc_and_indices,
             commit_interval,
+            &desc,
         )?,
     };
 
@@ -3714,7 +3711,7 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
                         DocOnIdentifier::Type(ResolvedItemName::Item { id, .. }) => {
                             DocTarget::Type(id)
                         }
-                        _ => unreachable!(),
+                        _ => sql_bail!("invalid DOC ON identifier"),
                     };
 
                     match doc_on.for_schema {
@@ -3753,17 +3750,21 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
 fn iceberg_sink_builder(
     scx: &StatementContext,
     catalog_connection: ResolvedItemName,
-    aws_connection: ResolvedItemName,
+    storage_connection: Option<ResolvedItemName>,
     options: Vec<IcebergSinkConfigOption<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     commit_interval: Option<Duration>,
+    desc: &RelationDesc,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
-    scx.require_feature_flag(&vars::ENABLE_ICEBERG_SINK)?;
+    // Reject types that arrow-rs's parquet writer cannot handle, before
+    // sink creation. Pass the iceberg overrides so types iceberg remaps
+    // (e.g. interval -> string) don't trip the check.
+    ArrowBuilder::validate_desc_for_parquet(desc, iceberg_type_overrides)
+        .map_err(|e| sql_err!("{}", e))?;
+
     let catalog_connection_item = scx.get_item_by_resolved_name(&catalog_connection)?;
     let catalog_connection_id = catalog_connection_item.id();
-    let aws_connection_item = scx.get_item_by_resolved_name(&aws_connection)?;
-    let aws_connection_id = aws_connection_item.id();
     if !matches!(
         catalog_connection_item.connection()?,
         Connection::IcebergCatalog(_)
@@ -3777,13 +3778,16 @@ fn iceberg_sink_builder(
         );
     };
 
-    if !matches!(aws_connection_item.connection()?, Connection::Aws(_)) {
+    let storage_connection_item = storage_connection
+        .map(|c| scx.get_item_by_resolved_name(&c))
+        .transpose()?;
+    let storage_connection_id = storage_connection_item.as_ref().map(|c| c.id());
+    if let Some(c) = &storage_connection_item
+        && !matches!(c.connection()?, Connection::Aws(_))
+    {
         sql_bail!(
             "{} is not an AWS connection",
-            scx.catalog
-                .resolve_full_name(aws_connection_item.name())
-                .to_string()
-                .quoted()
+            scx.catalog.resolve_full_name(c.name()).to_string().quoted()
         );
     }
 
@@ -3799,15 +3803,24 @@ fn iceberg_sink_builder(
     let Some(namespace) = namespace else {
         sql_bail!("Iceberg sink must specify NAMESPACE");
     };
-    if commit_interval.is_none() {
-        sql_bail!("Iceberg sink must specify COMMIT INTERVAL");
+    match commit_interval {
+        None => sql_bail!("Iceberg sink must specify COMMIT INTERVAL"),
+        // The sink truncates the interval to whole milliseconds, and a
+        // truncated interval of zero would make it mint zero-width batches in
+        // a busy loop, never committing any data. Require a full second so
+        // truncation is irrelevant, matching the TOPIC METADATA REFRESH
+        // INTERVAL minimum.
+        Some(interval) if interval < Duration::from_secs(1) => {
+            sql_bail!("COMMIT INTERVAL must be at least 1 second")
+        }
+        Some(_) => {}
     }
 
     Ok(StorageSinkConnection::Iceberg(IcebergSinkConnection {
         catalog_connection_id,
         catalog_connection: catalog_connection_id,
-        aws_connection_id,
-        aws_connection: aws_connection_id,
+        storage_connection_id,
+        storage_connection: storage_connection_id,
         table,
         namespace,
         relation_key_indices,
@@ -3875,10 +3888,14 @@ fn kafka_sink_builder(
 
     let topic_name = topic.ok_or_else(|| sql_err!("KAFKA CONNECTION must specify TOPIC"))?;
 
-    if topic_metadata_refresh_interval > Duration::from_secs(60 * 60) {
+    if topic_metadata_refresh_interval > MAX_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
         // This is a librdkafka-enforced restriction that, if violated,
         // would result in a runtime error for the source.
         sql_bail!("TOPIC METADATA REFRESH INTERVAL cannot be greater than 1 hour");
+    } else if topic_metadata_refresh_interval < MIN_KAFKA_TOPIC_METADATA_REFRESH_INTERVAL {
+        // We enforce a minimum of 1 second here to prevent excessive refreshes, and ensure that
+        // tokio::time::interval receives a valid (positive) duration.
+        sql_bail!("TOPIC METADATA REFRESH INTERVAL must be at least 1 second");
     }
 
     let assert_positive = |val: Option<i32>, name: &str| {
@@ -4001,7 +4018,129 @@ fn kafka_sink_builder(
                 } else {
                     options.value_compatibility_level
                 },
-                csr_connection,
+                // Confluent always derives the subject from the topic.
+                schema_name: None,
+                wire_format: WireFormat::Confluent {
+                    registry: Some(csr_connection),
+                },
+            })
+        }
+        Format::Avro(AvroSchema::Glue {
+            connection,
+            with_options,
+            seed,
+        }) => {
+            if seed.is_some() {
+                sql_bail!("SEED option does not make sense with sinks");
+            }
+
+            let extracted: GlueAvroOptionExtracted = with_options.try_into()?;
+            let GlueAvroOptionExtracted {
+                schema_name,
+                key_schema_name,
+                value_schema_name,
+                key_compatibility_level,
+                value_compatibility_level,
+                seen: _,
+            } = extracted;
+
+            // The singular `SCHEMA NAME` is source-only: a source reads one
+            // value schema by name, but a sink registers separate key and value
+            // schemas that must not share a name. Steer users to the per-side
+            // options instead.
+            if schema_name.is_some() {
+                sql_bail!(
+                    "SCHEMA NAME is not supported for AWS Glue Schema Registry sinks, \
+                     use KEY SCHEMA NAME and VALUE SCHEMA NAME instead"
+                );
+            }
+
+            // The `KEY`-prefixed options only apply to the key schema, so they
+            // are meaningless without a key. Mirror the CSR clause, which
+            // rejects key-side options without a corresponding KEY field rather
+            // than silently ignoring them. This is checked here rather than
+            // per-side because the key branch runs only when a key exists.
+            if key_desc_and_indices.is_none()
+                && (key_schema_name.is_some() || key_compatibility_level.is_some())
+            {
+                sql_bail!(
+                    "KEY SCHEMA NAME and KEY COMPATIBILITY LEVEL require a corresponding KEY field"
+                );
+            }
+
+            let item = scx.get_item_by_resolved_name(&connection)?;
+            let glue_connection = match item.connection()? {
+                Connection::GlueSchemaRegistry(_) => item.id(),
+                _ => {
+                    sql_bail!(
+                        "{} is not an AWS Glue Schema Registry connection",
+                        scx.catalog
+                            .resolve_full_name(item.name())
+                            .to_string()
+                            .quoted()
+                    )
+                }
+            };
+
+            // Parse the compatibility level through the CSR enum, which rejects
+            // Glue-only levels like DISABLED. `None` leaves the level unset, so
+            // a newly created schema defaults to Glue's `BACKWARD`.
+            let compatibility_level = {
+                let raw = if is_key {
+                    key_compatibility_level
+                } else {
+                    value_compatibility_level
+                };
+                raw.map(|s| {
+                    mz_ccsr::CompatibilityLevel::try_from(s.to_uppercase().as_str())
+                        .map_err(PlanError::Unstructured)
+                })
+                .transpose()?
+            };
+
+            // The schema name defaults to the topic-derived subject and can be
+            // overridden per side. The topic-derived fallback is applied in the
+            // storage layer, which knows the resolved topic name.
+            let schema_name = if is_key {
+                key_schema_name
+            } else {
+                value_schema_name
+            };
+
+            // Unlike the CSR clause, the Glue clause carries no fullname or doc
+            // options, so the schema is generated with defaults.
+            let schema = if is_key {
+                AvroSchemaGenerator::new(
+                    desc.clone(),
+                    false,
+                    Default::default(),
+                    "row",
+                    false,
+                    Some(sink_from),
+                    false,
+                )?
+                .schema()
+                .to_string()
+            } else {
+                AvroSchemaGenerator::new(
+                    desc.clone(),
+                    matches!(envelope, SinkEnvelope::Debezium),
+                    Default::default(),
+                    "envelope",
+                    false,
+                    Some(sink_from),
+                    true,
+                )?
+                .schema()
+                .to_string()
+            };
+            Ok(KafkaSinkFormatType::Avro {
+                schema,
+                compatibility_level,
+                schema_name,
+                wire_format: WireFormat::Glue {
+                    registry: Some(glue_connection),
+                },
             })
         }
         format => bail_unsupported!(format!("sink format {:?}", format)),
@@ -4012,7 +4151,7 @@ fn kafka_sink_builder(
             let mut scope = Scope::from_source(None, value_desc.iter_names());
 
             match envelope {
-                SinkEnvelope::Upsert => (),
+                SinkEnvelope::Upsert | SinkEnvelope::Append => (),
                 SinkEnvelope::Debezium => {
                     let key_indices: HashSet<_> = key_desc_and_indices
                         .as_ref()
@@ -4047,7 +4186,7 @@ fn kafka_sink_builder(
                 CastContext::Assignment,
                 &SqlScalarType::UInt64,
             )?;
-            let expr = expr.lower_uncorrelated()?;
+            let expr = expr.lower_uncorrelated(scx.catalog.system_vars())?;
 
             Some(expr)
         }
@@ -4101,6 +4240,191 @@ fn kafka_sink_builder(
     }))
 }
 
+pub fn describe_create_metric_sink(
+    _: &StatementContext,
+    _: CreateMetricSinkStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+/// The columns a metric sink reads from its source, and the type each one has to be. Order
+/// doesn't matter, and nullability isn't checked here: nulls are the operator's problem at
+/// runtime.
+const METRIC_SINK_SOURCE_COLUMNS: &[(&str, fn(&SqlScalarType) -> bool)] = &[
+    ("metric_name", |t| matches!(t, SqlScalarType::String)),
+    ("metric_type", |t| matches!(t, SqlScalarType::String)),
+    (
+        "labels",
+        |t| matches!(t, SqlScalarType::Map { value_type, .. } if matches!(**value_type, SqlScalarType::String)),
+    ),
+    ("value", |t| matches!(t, SqlScalarType::Float64)),
+    ("help", |t| matches!(t, SqlScalarType::String)),
+];
+
+generate_extracted_config!(CreateMetricSinkOption, (Prefix, String));
+
+/// The reserved namespace every metric sink prefix must start with. It confines the family names a
+/// sink publishes (`prefix + name`) to the `mz_metric_sink_` lane, which nothing else in a
+/// replica's Prometheus registry writes: platform metrics use other `mz_*` names, third-party
+/// collectors namespace away from `mz_*`, and the sink's own health gauges are
+/// `mz_compute_metric_sink_*`. Requiring the marker rather than blocklisting platform names cannot
+/// rot as new platform collectors are added.
+const METRIC_SINK_PREFIX_MARKER: &str = "mz_metric_sink_";
+
+/// The prefix reserved for the curated sinks (`mz_adapter::coord::metric_sink::CURATED`);
+/// [`validate_user_metric_sink_prefix`] keeps user prefixes clear of it.
+pub const METRIC_SINK_CURATED_PREFIX_MARKER: &str = "mz_metric_sink_curated_";
+
+/// Rejects a prefix that is not a legal start of a Prometheus metric name, or that escapes the
+/// reserved `mz_metric_sink_` lane (`METRIC_SINK_PREFIX_MARKER`). The reserved leading character
+/// is what lets a row's bare `metric_name` start with a digit or be empty. User sinks use
+/// [`validate_user_metric_sink_prefix`], which adds the curated reservation.
+pub fn validate_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
+    if prefix.is_empty() {
+        return Err(sql_err!("metric sink prefix must not be empty"));
+    }
+    let mut chars = prefix.chars();
+    let valid = match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == ':' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(sql_err!(
+            "metric sink prefix {:?} is not a valid start of a Prometheus metric name",
+            prefix
+        ));
+    }
+    if !prefix.starts_with(METRIC_SINK_PREFIX_MARKER) {
+        return Err(sql_err!(
+            "metric sink prefix {:?} must start with {:?}",
+            prefix,
+            METRIC_SINK_PREFIX_MARKER
+        ));
+    }
+    Ok(())
+}
+
+/// [`validate_metric_sink_prefix`] plus the reservation that keeps user sinks clear of the curated
+/// families ([`METRIC_SINK_CURATED_PREFIX_MARKER`]).
+///
+/// The check runs both ways so it is total: a prefix that starts with the curated prefix is
+/// rejected, and so is one the curated prefix starts with (a bare `mz_metric_sink_` plus a
+/// `curated_...` row would otherwise publish a curated family, which Prometheus merges silently).
+/// It is static rather than a catalog scan like `Coordinator::ensure_metric_sink_prefix_is_free`,
+/// because curated sinks are not catalog items.
+pub fn validate_user_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
+    validate_metric_sink_prefix(prefix)?;
+    if prefix.starts_with(METRIC_SINK_CURATED_PREFIX_MARKER)
+        || METRIC_SINK_CURATED_PREFIX_MARKER.starts_with(prefix)
+    {
+        return Err(sql_err!(
+            "metric sink prefix {:?} overlaps {:?}, which is reserved for the built-in metric sinks",
+            prefix,
+            METRIC_SINK_CURATED_PREFIX_MARKER
+        ));
+    }
+    Ok(())
+}
+
+/// Checks that `desc` exposes the canonical metric-sink columns, the contract
+/// `mz_adapter::optimize::metric_sink`'s row shaping and the compute-side operator both rely on.
+///
+/// Every metric-sink source has to pass this, whether it is the `FROM` relation of a
+/// `CREATE METRIC SINK` or the query behind a coordinator-installed curated sink.
+pub fn validate_metric_sink_desc(desc: &RelationDesc) -> Result<(), PlanError> {
+    for (name, type_ok) in METRIC_SINK_SOURCE_COLUMNS {
+        let col = ColumnName::from(*name);
+        let (_, column_type) = desc
+            .get_by_name(&col)
+            .ok_or_else(|| sql_err!("metric sink source must expose column {:?}", name))?;
+        if !type_ok(&column_type.scalar_type) {
+            return Err(sql_err!(
+                "metric sink source column {:?} is not of the required type",
+                name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Plans a metric sink over `stmt.from`, which must expose the columns in
+/// `METRIC_SINK_SOURCE_COLUMNS`.
+///
+/// Every distinct `(metric_name, labels)` becomes its own Prometheus series, so high-cardinality
+/// labels mean a lot of series. A null `value` is a gap in the exposition rather than a zero, and
+/// the series stays missing until a non-null value shows up for that same key. Use
+/// `coalesce(value, 0)` if you want zeroes instead.
+pub fn plan_create_metric_sink(
+    scx: &StatementContext,
+    mut stmt: CreateMetricSinkStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&ENABLE_METRIC_SINK)?;
+
+    let CreateMetricSinkStatement {
+        name,
+        in_cluster,
+        if_not_exists,
+        from,
+        with_options,
+    } = &mut stmt;
+
+    let if_not_exists = *if_not_exists;
+    let CreateMetricSinkOptionExtracted { prefix, seen: _ } = with_options.clone().try_into()?;
+    // Required, not defaulted. A name-derived default reintroduces the collision problem the
+    // moment the sink is renamed, and an empty one never had it solved.
+    let Some(prefix) = prefix else {
+        sql_bail!("CREATE METRIC SINK requires a PREFIX option");
+    };
+    validate_user_metric_sink_prefix(&prefix)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    let from_item = scx.get_item_by_resolved_name(from)?;
+    // `relation_desc()` returns `None` for exactly the item types a metric sink cannot read
+    // from (including `Index`, which lives on a cluster but exposes no relation description), so
+    // its `None` branch doubles as the reject filter. Fold the per-type error message in here.
+    let desc = from_item.relation_desc().ok_or_else(|| {
+        sql_err!(
+            "cannot create metric sink from {} because it is a {}",
+            scx.catalog.minimal_qualification(from_item.name()),
+            from_item.item_type(),
+        )
+    })?;
+    validate_metric_sink_desc(&desc)?;
+
+    let cluster_id = match in_cluster {
+        None => scx.resolve_cluster(None)?.id(),
+        Some(in_cluster) => in_cluster.id,
+    };
+    *in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+    let from_global_id = from_item.global_id();
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateMetricSink(stmt))?;
+
+    Ok(Plan::CreateMetricSink(CreateMetricSinkPlan {
+        name,
+        metric_sink: MetricSink {
+            create_sql,
+            from: from_global_id,
+            cluster_id,
+            prefix,
+        },
+        if_not_exists,
+    }))
+}
+
 pub fn describe_create_index(
     _: &StatementContext,
     _: CreateIndexStatement<Aug>,
@@ -4121,33 +4445,53 @@ pub fn plan_create_index(
         if_not_exists,
     } = &mut stmt;
     let on = scx.get_item_by_resolved_name(on_name)?;
-    let on_item_type = on.item_type();
 
-    if !matches!(
-        on_item_type,
-        CatalogItemType::View
-            | CatalogItemType::MaterializedView
-            | CatalogItemType::Source
-            | CatalogItemType::Table
-    ) {
-        sql_bail!(
-            "index cannot be created on {} because it is a {}",
-            on_name.full_name_str(),
-            on.item_type()
-        )
+    {
+        use CatalogItemType::*;
+        match on.item_type() {
+            Table | Source | View | MaterializedView => {
+                if on.replacement_target().is_some() {
+                    sql_bail!(
+                        "index cannot be created on {} because it is a replacement {}",
+                        on_name.full_name_str(),
+                        on.item_type(),
+                    );
+                }
+            }
+            Sink | MetricSink | Index | Type | Func | Secret | Connection => {
+                sql_bail!(
+                    "index cannot be created on {} because it is a {}",
+                    on_name.full_name_str(),
+                    on.item_type(),
+                );
+            }
+        }
     }
 
-    let on_desc = on.relation_desc().expect("item type checked above");
+    let on_desc = on
+        .relation_desc()
+        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
 
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
         None => {
             // `key_parts` is None if we're creating a "default" index.
+            // Precompute which column names are unambiguous in a single pass,
+            // avoiding the O(n * k) cost of calling get_unambiguous_name per
+            // key column.
+            let mut name_counts = BTreeMap::new();
+            for name in on_desc.iter_names() {
+                *name_counts.entry(name).or_insert(0usize) += 1;
+            }
             let key = on_desc.typ().default_key();
             key.iter()
-                .map(|i| match on_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![n.clone().into()]),
-                    _ => Expr::Value(Value::Number((i + 1).to_string())),
+                .map(|i| {
+                    let name = on_desc.get_name(*i);
+                    if name_counts.get(name).copied() == Some(1) {
+                        Expr::Identifier(vec![normalize::column_name_ident(name)])
+                    } else {
+                        Expr::Value(Value::Number((i + 1).to_string()))
+                    }
                 })
                 .collect()
         }
@@ -4269,11 +4613,19 @@ pub fn plan_create_type(
     let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
     let CreateTypeStatement { name, as_type, .. } = stmt;
 
+    // The type being created does not yet exist in the catalog, so its children
+    // (list element, map value, record fields) are validated directly. They all
+    // draw from one shared budget that also accounts for the root, so creation
+    // rejects exactly the types a later direct `scalar_type_from_catalog` call
+    // would reject. In particular a wide record whose fields are individually
+    // valid but collectively enormous is rejected here rather than materializing
+    // an unbounded type tree during sequencing.
     fn validate_data_type(
         scx: &StatementContext,
         data_type: ResolvedDataType,
         as_type: &str,
         key: &str,
+        budget: &mut TypeResolutionBudget,
     ) -> Result<(CatalogItemId, Vec<i64>), PlanError> {
         let (id, modifiers) = match data_type {
             ResolvedDataType::Named { id, modifiers, .. } => (id, modifiers),
@@ -4301,14 +4653,16 @@ pub fn plan_create_type(
                 bail_unsupported!("embedding char type in a list or map")
             }
             _ => {
-                // Validate that the modifiers are actually valid.
-                scalar_type_from_catalog(scx.catalog, id, &modifiers)?;
+                // Validate that the modifiers are actually valid, and that the
+                // referenced type resolves within the shared budget.
+                budget.resolve_child(scx.catalog, id, &modifiers)?;
 
                 Ok((id, modifiers))
             }
         }
     }
 
+    let mut budget = TypeResolutionBudget::for_root(scx.catalog);
     let inner = match as_type {
         CreateTypeAs::List { options } => {
             let CreateTypeListOptionExtracted {
@@ -4317,7 +4671,8 @@ pub fn plan_create_type(
             } = CreateTypeListOptionExtracted::try_from(options)?;
             let element_type =
                 element_type.ok_or_else(|| sql_err!("ELEMENT TYPE option is required"))?;
-            let (id, modifiers) = validate_data_type(scx, element_type, "LIST ", "ELEMENT TYPE")?;
+            let (id, modifiers) =
+                validate_data_type(scx, element_type, "LIST ", "ELEMENT TYPE", &mut budget)?;
             CatalogType::List {
                 element_reference: id,
                 element_modifiers: modifiers,
@@ -4331,9 +4686,18 @@ pub fn plan_create_type(
             } = CreateTypeMapOptionExtracted::try_from(options)?;
             let key_type = key_type.ok_or_else(|| sql_err!("KEY TYPE option is required"))?;
             let value_type = value_type.ok_or_else(|| sql_err!("VALUE TYPE option is required"))?;
-            let (key_id, key_modifiers) = validate_data_type(scx, key_type, "MAP ", "KEY TYPE")?;
+            // A map's resolved type ignores the key (map keys are always text at
+            // runtime), so it is not part of the root's materialized tree and is
+            // validated under its own budget.
+            let (key_id, key_modifiers) = validate_data_type(
+                scx,
+                key_type,
+                "MAP ",
+                "KEY TYPE",
+                &mut TypeResolutionBudget::for_root(scx.catalog),
+            )?;
             let (value_id, value_modifiers) =
-                validate_data_type(scx, value_type, "MAP ", "VALUE TYPE")?;
+                validate_data_type(scx, value_type, "MAP ", "VALUE TYPE", &mut budget)?;
             CatalogType::Map {
                 key_reference: key_id,
                 key_modifiers,
@@ -4346,7 +4710,7 @@ pub fn plan_create_type(
             for column_def in column_defs {
                 let data_type = column_def.data_type;
                 let key = ident(column_def.name.clone());
-                let (id, modifiers) = validate_data_type(scx, data_type, "", &key)?;
+                let (id, modifiers) = validate_data_type(scx, data_type, "", &key, &mut budget)?;
                 fields.push(CatalogRecordField {
                     name: ColumnName::from(key.clone()),
                     type_reference: id,
@@ -4510,12 +4874,25 @@ impl PlannedRoleVariable {
     }
 }
 
-fn plan_role_variable(variable: SetRoleVar) -> Result<PlannedRoleVariable, PlanError> {
+fn plan_role_variable(
+    scx: &StatementContext,
+    variable: SetRoleVar,
+) -> Result<PlannedRoleVariable, PlanError> {
     let plan = match variable {
-        SetRoleVar::Set { name, value } => PlannedRoleVariable::Set {
-            name: name.to_string(),
-            value: scl::plan_set_variable_to(value)?,
-        },
+        SetRoleVar::Set { name, value } => {
+            let name = name.to_string();
+            let value = scl::plan_set_variable_to(value)?;
+            // Gate feature-flagged isolation levels, matching the `SET` and
+            // connection-option paths in `SessionVars::set`.
+            if let VariableValue::Values(values) = &value {
+                vars::check_transaction_isolation_feature_flag(
+                    &name,
+                    VarInput::SqlSet(values),
+                    scx.catalog.system_vars(),
+                )?;
+            }
+            PlannedRoleVariable::Set { name, value }
+        }
         SetRoleVar::Reset { name } => PlannedRoleVariable::Reset {
             name: name.to_string(),
         },
@@ -4601,7 +4978,9 @@ pub fn plan_alter_network_policy(
     ctx.require_feature_flag(&vars::ENABLE_NETWORK_POLICIES)?;
 
     let policy_options: NetworkPolicyOptionExtracted = options.try_into()?;
-    let policy = ctx.catalog.resolve_network_policy(&name.to_string())?;
+    let policy = ctx
+        .catalog
+        .resolve_network_policy(normalize::ident_ref(&name))?;
 
     let Some(rule_defs) = policy_options.rules else {
         sql_bail!("RULES must be specified when creating network policies.");
@@ -4664,8 +5043,10 @@ pub fn describe_create_cluster(
 // to ALTER CLUSTER would always reset the value of that option to the default.
 generate_extracted_config!(
     ClusterOption,
+    (AutoScalingStrategy, ClusterAutoScalingStrategyOptionValue),
     (AvailabilityZones, Vec<String>),
     (Disk, bool),
+    (ExperimentalArrangementCompression, bool),
     (IntrospectionDebugging, bool),
     (IntrospectionInterval, OptionalDuration),
     (Managed, bool),
@@ -4706,6 +5087,11 @@ generate_extracted_config!(
     (EnableJoinPrioritizeArranged, Option<bool>, Default(None)),
     (
         EnableProjectionPushdownAfterRelationCse,
+        Option<bool>,
+        Default(None)
+    ),
+    (
+        EnableUnionCancellationAfterRelationCse,
         Option<bool>,
         Default(None)
     )
@@ -4757,10 +5143,13 @@ pub fn plan_create_cluster_inner(
         name,
         options,
         features,
+        if_not_exists,
     }: CreateClusterStatement<Aug>,
 ) -> Result<CreateClusterPlan, PlanError> {
     let ClusterOptionExtracted {
+        auto_scaling_strategy,
         availability_zones,
+        experimental_arrangement_compression,
         introspection_debugging,
         introspection_interval,
         managed,
@@ -4812,6 +5201,7 @@ pub fn plan_create_cluster_inner(
         let compute = plan_compute_replica_config(
             introspection_interval,
             introspection_debugging.unwrap_or(false),
+            experimental_arrangement_compression.unwrap_or(false),
         )?;
 
         let replication_factor = if matches!(schedule, ClusterScheduleOptionValue::Manual) {
@@ -4847,6 +5237,7 @@ pub fn plan_create_cluster_inner(
             enable_letrec_fixpoint_analysis,
             enable_join_prioritize_arranged,
             enable_projection_pushdown_after_relation_cse,
+            enable_union_cancellation_after_relation_cse,
             seen: _,
         } = ClusterFeatureExtracted::try_from(features)?;
         let optimizer_feature_overrides = OptimizerFeatureOverrides {
@@ -4857,7 +5248,24 @@ pub fn plan_create_cluster_inner(
             enable_letrec_fixpoint_analysis,
             enable_join_prioritize_arranged,
             enable_projection_pushdown_after_relation_cse,
+            enable_union_cancellation_after_relation_cse,
             ..Default::default()
+        };
+
+        // The gate applies to new DDL only: clusters are stored structurally,
+        // not as SQL, so existing configs survive a flag rollback.
+        let auto_scaling_strategy = match auto_scaling_strategy {
+            Some(value) => {
+                scx.require_feature_flag(&ENABLE_AUTO_SCALING_STRATEGY)?;
+                let strategy = plan_auto_scaling_strategy(value)?;
+                if let Some(strategy) = &strategy {
+                    let schedule_non_manual =
+                        !matches!(schedule, ClusterScheduleOptionValue::Manual);
+                    validate_auto_scaling_strategy(strategy, Some(&size), schedule_non_manual)?;
+                }
+                strategy
+            }
+            None => None,
         };
 
         let schedule = plan_cluster_schedule(schedule)?;
@@ -4871,13 +5279,18 @@ pub fn plan_create_cluster_inner(
                 compute,
                 optimizer_feature_overrides,
                 schedule,
+                auto_scaling_strategy,
             }),
             workload_class,
+            if_not_exists,
         })
     } else {
         let Some(replica_defs) = replicas else {
             sql_bail!("REPLICAS must be specified for unmanaged clusters");
         };
+        if auto_scaling_strategy.is_some() {
+            sql_bail!("AUTO SCALING STRATEGY not supported for unmanaged clusters");
+        }
         if availability_zones.is_some() {
             sql_bail!("AVAILABILITY ZONES not supported for unmanaged clusters");
         }
@@ -4889,6 +5302,9 @@ pub fn plan_create_cluster_inner(
         }
         if introspection_interval.is_some() {
             sql_bail!("INTROSPECTION INTERVAL not supported for unmanaged clusters");
+        }
+        if experimental_arrangement_compression.is_some() {
+            sql_bail!("EXPERIMENTAL ARRANGEMENT COMPRESSION not supported for unmanaged clusters");
         }
         if size.is_some() {
             sql_bail!("SIZE not supported for unmanaged clusters");
@@ -4914,19 +5330,24 @@ pub fn plan_create_cluster_inner(
             name: normalize::ident(name),
             variant: CreateClusterVariant::Unmanaged(CreateClusterUnmanagedPlan { replicas }),
             workload_class,
+            if_not_exists,
         })
     }
 }
 
 /// Convert a [`CreateClusterPlan`] into a [`CreateClusterStatement`].
 ///
-/// The reverse of [`plan_create_cluster`].
+/// The reverse of [`plan_create_cluster`], so this renders `IF NOT EXISTS`
+/// when the plan carries it. A caller that wants the cluster's canonical
+/// definition rather than a faithful reverse must pass `if_not_exists: false`,
+/// which is what `Cluster::try_to_plan` produces for `SHOW CREATE CLUSTER`.
 pub fn unplan_create_cluster(
     scx: &StatementContext,
     CreateClusterPlan {
         name,
         variant,
         workload_class,
+        if_not_exists,
     }: CreateClusterPlan,
 ) -> Result<CreateClusterStatement<Aug>, PlanError> {
     match variant {
@@ -4937,11 +5358,13 @@ pub fn unplan_create_cluster(
             compute,
             optimizer_feature_overrides,
             schedule,
+            auto_scaling_strategy,
         }) => {
             let schedule = unplan_cluster_schedule(schedule);
+            let auto_scaling_strategy = auto_scaling_strategy
+                .as_ref()
+                .map(unplan_auto_scaling_strategy);
             let OptimizerFeatureOverrides {
-                enable_guard_subquery_tablefunc: _,
-                enable_consolidate_after_union_negate: _,
                 enable_reduce_mfp_fusion: _,
                 enable_cardinality_estimates: _,
                 persist_fast_path_limit: _,
@@ -4950,13 +5373,20 @@ pub fn unplan_create_cluster(
                 enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis,
-                enable_reduce_reduction: _,
                 enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse,
+                enable_union_cancellation_after_relation_cse,
                 enable_less_reduce_in_eqprop: _,
                 enable_dequadratic_eqprop_map: _,
                 enable_eq_classes_withholding_errors: _,
                 enable_fast_path_plan_insights: _,
+                enable_cast_elimination: _,
+                enable_case_literal_transform: _,
+                enable_simplify_quantified_comparisons: _,
+                enable_simplify_from_less_existence: _,
+                enable_coalesce_case_transform: _,
+                enable_will_distinct_propagation: _,
+                enable_fixed_correlated_cte_lowering: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
@@ -4969,6 +5399,7 @@ pub fn unplan_create_cluster(
                 enable_letrec_fixpoint_analysis,
                 enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse,
+                enable_union_cancellation_after_relation_cse,
             };
             let features = features_extracted.into_values(scx.catalog);
             let availability_zones = if availability_zones.is_empty() {
@@ -4976,16 +5407,22 @@ pub fn unplan_create_cluster(
             } else {
                 Some(availability_zones)
             };
-            let (introspection_interval, introspection_debugging) =
+            let (introspection_interval, introspection_debugging, arrangement_compression) =
                 unplan_compute_replica_config(compute);
             // Replication factor cannot be explicitly specified with a refresh schedule, it's
             // always 1 or less.
             let replication_factor = match &schedule {
                 ClusterScheduleOptionValue::Manual => Some(replication_factor),
                 ClusterScheduleOptionValue::Refresh { .. } => {
-                    assert!(
+                    // A cluster with a refresh schedule is turned On/Off by the cluster scheduling
+                    // policy, so its replication factor should always be 0 or 1, and CREATE/ALTER
+                    // reject setting both a non-MANUAL schedule and a higher replication factor. If
+                    // we nevertheless find one (e.g., a cluster left in an invalid state by an
+                    // older version), log loudly rather than crashing the coordinator: the
+                    // replication factor is omitted from the rendered statement regardless.
+                    soft_assert_or_log!(
                         replication_factor <= 1,
-                        "replication factor, {replication_factor:?}, must be <= 1"
+                        "replication factor, {replication_factor:?}, must be <= 1 with a refresh schedule"
                     );
                     None
                 }
@@ -4994,8 +5431,10 @@ pub fn unplan_create_cluster(
             let options_extracted = ClusterOptionExtracted {
                 // Seen is ignored when unplanning.
                 seen: Default::default(),
+                auto_scaling_strategy,
                 availability_zones,
                 disk: None,
+                experimental_arrangement_compression: Some(arrangement_compression),
                 introspection_debugging: Some(introspection_debugging),
                 introspection_interval,
                 managed: Some(true),
@@ -5011,6 +5450,7 @@ pub fn unplan_create_cluster(
                 name,
                 options,
                 features,
+                if_not_exists,
             })
         }
         CreateClusterVariant::Unmanaged(_) => {
@@ -5026,6 +5466,7 @@ generate_extracted_config!(
     (ComputeAddresses, Vec<String>),
     (ComputectlAddresses, Vec<String>),
     (Disk, bool),
+    (ExperimentalArrangementCompression, bool, Default(false)),
     (Internal, bool, Default(false)),
     (IntrospectionDebugging, bool, Default(false)),
     (IntrospectionInterval, OptionalDuration),
@@ -5044,6 +5485,7 @@ fn plan_replica_config(
         billed_as,
         computectl_addresses,
         disk,
+        experimental_arrangement_compression,
         internal,
         introspection_debugging,
         introspection_interval,
@@ -5052,7 +5494,11 @@ fn plan_replica_config(
         ..
     }: ReplicaOptionExtracted = options.try_into()?;
 
-    let compute = plan_compute_replica_config(introspection_interval, introspection_debugging)?;
+    let compute = plan_compute_replica_config(
+        introspection_interval,
+        introspection_debugging,
+        experimental_arrangement_compression,
+    )?;
 
     match (
         size,
@@ -5134,6 +5580,7 @@ fn plan_replica_config(
 fn plan_compute_replica_config(
     introspection_interval: Option<OptionalDuration>,
     introspection_debugging: bool,
+    arrangement_compression: bool,
 ) -> Result<ComputeReplicaConfig, PlanError> {
     let introspection_interval = introspection_interval
         .map(|OptionalDuration(i)| i)
@@ -5148,22 +5595,34 @@ fn plan_compute_replica_config(
         }
         None => None,
     };
-    let compute = ComputeReplicaConfig { introspection };
+    let compute = ComputeReplicaConfig {
+        introspection,
+        arrangement_compression,
+    };
     Ok(compute)
 }
 
-/// Convert a [`ComputeReplicaConfig`] into an [`Option<OptionalDuration>`] and [`bool`].
+/// Convert a [`ComputeReplicaConfig`] into its introspection interval, introspection debugging,
+/// and arrangement compression option values.
 ///
 /// The reverse of [`plan_compute_replica_config`].
 fn unplan_compute_replica_config(
     compute_replica_config: ComputeReplicaConfig,
-) -> (Option<OptionalDuration>, bool) {
-    match compute_replica_config.introspection {
+) -> (Option<OptionalDuration>, bool, bool) {
+    let ComputeReplicaConfig {
+        introspection,
+        arrangement_compression,
+    } = compute_replica_config;
+    match introspection {
         Some(ComputeReplicaIntrospectionConfig {
             debugging,
             interval,
-        }) => (Some(OptionalDuration(Some(interval))), debugging),
-        None => (Some(OptionalDuration(None)), false),
+        }) => (
+            Some(OptionalDuration(Some(interval))),
+            debugging,
+            arrangement_compression,
+        ),
+        None => (Some(OptionalDuration(None)), false, arrangement_compression),
     }
 }
 
@@ -5230,6 +5689,85 @@ fn unplan_cluster_schedule(schedule: ClusterSchedule) -> ClusterScheduleOptionVa
     }
 }
 
+/// Convert a [`ClusterAutoScalingStrategyOptionValue`] into an
+/// [`AutoScalingStrategy`]. An empty block (no sub-policies) maps to `None`
+/// (autoscaling disabled), so an empty `AUTO SCALING STRATEGY = ()` behaves like
+/// a reset. Cross-config invariants are checked separately by
+/// [`validate_auto_scaling_strategy`].
+///
+/// The reverse of [`unplan_auto_scaling_strategy`].
+fn plan_auto_scaling_strategy(
+    value: ClusterAutoScalingStrategyOptionValue,
+) -> Result<Option<AutoScalingStrategy>, PlanError> {
+    let ClusterAutoScalingStrategyOptionValue { on_hydration } = value;
+    let Some(on_hydration) = on_hydration else {
+        // An empty block disables autoscaling.
+        return Ok(None);
+    };
+
+    let hydration_size = String::try_from_value(on_hydration.hydration_size)?;
+
+    let linger_duration = on_hydration
+        .linger_duration
+        .map(Duration::try_from_value)
+        .transpose()?;
+
+    Ok(Some(AutoScalingStrategy {
+        on_hydration: Some(OnHydration {
+            hydration_size,
+            linger_duration,
+        }),
+    }))
+}
+
+/// Validate an [`AutoScalingStrategy`] against the cluster's effective `SIZE`
+/// and `SCHEDULE`. Rejects a burst `HYDRATION SIZE` equal to the cluster `SIZE`
+/// (a no-op burst) and the `AUTO SCALING STRATEGY` + non-MANUAL `SCHEDULE`
+/// combination.
+///
+/// `cluster_size` is `None` only when the effective size is unknown at plan time
+/// (an unmanaged→managed `ALTER` that does not set `SIZE`, which fails later for
+/// the missing size); the size equality check is then skipped.
+fn validate_auto_scaling_strategy(
+    strategy: &AutoScalingStrategy,
+    cluster_size: Option<&str>,
+    schedule_non_manual: bool,
+) -> Result<(), PlanError> {
+    if let (Some(on_hydration), Some(cluster_size)) = (&strategy.on_hydration, cluster_size) {
+        if on_hydration.hydration_size == cluster_size {
+            return Err(PlanError::HydrationSizeEqualsClusterSize {
+                size: cluster_size.to_string(),
+            });
+        }
+    }
+    if schedule_non_manual {
+        sql_bail!("AUTO SCALING STRATEGY cannot be combined with a SCHEDULE other than MANUAL");
+    }
+    Ok(())
+}
+
+/// Convert an [`AutoScalingStrategy`] back into a
+/// [`ClusterAutoScalingStrategyOptionValue`] for `SHOW CREATE CLUSTER` rendering.
+///
+/// The reverse of [`plan_auto_scaling_strategy`].
+fn unplan_auto_scaling_strategy(
+    strategy: &AutoScalingStrategy,
+) -> ClusterAutoScalingStrategyOptionValue {
+    ClusterAutoScalingStrategyOptionValue {
+        on_hydration: strategy
+            .on_hydration
+            .as_ref()
+            .map(|on_hydration| OnHydrationOptionValue {
+                hydration_size: Value::String(on_hydration.hydration_size.clone()),
+                linger_duration: on_hydration.linger_duration.map(|d| {
+                    let interval = Interval::from_duration(&d)
+                        .expect("planning ensured this is convertible back to Interval");
+                    Value::Interval(literal::unplan_interval(&interval))
+                }),
+            }),
+    }
+}
+
 pub fn describe_create_cluster_replica(
     _: &StatementContext,
     _: CreateClusterReplicaStatement<Aug>,
@@ -5242,20 +5780,12 @@ pub fn plan_create_cluster_replica(
     CreateClusterReplicaStatement {
         definition: ReplicaDefinition { name, options },
         of_cluster,
+        if_not_exists,
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let cluster = scx
         .catalog
         .resolve_cluster(Some(&normalize::ident(of_cluster)))?;
-    let current_replica_count = cluster.replica_ids().iter().count();
-    if contains_single_replica_objects(scx, cluster) && current_replica_count > 0 {
-        let internal_replica_count = cluster.replicas().iter().filter(|r| r.internal()).count();
-        return Err(PlanError::CreateReplicaFailStorageObjects {
-            current_replica_count,
-            internal_replica_count,
-            hypothetical_replica_count: current_replica_count + 1,
-        });
-    }
 
     let config = plan_replica_config(scx, options)?;
 
@@ -5271,6 +5801,7 @@ pub fn plan_create_cluster_replica(
         name: normalize::ident(name),
         cluster_id: cluster.id(),
         config,
+        if_not_exists,
     }))
 }
 
@@ -5423,11 +5954,9 @@ pub fn plan_drop_objects(
         cascade,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    assert_ne!(
-        object_type,
-        mz_sql_parser::ast::ObjectType::Func,
-        "rejected in parser"
-    );
+    if object_type == mz_sql_parser::ast::ObjectType::Func {
+        bail_unsupported!("DROP FUNCTION");
+    }
     let object_type = object_type.into();
 
     let mut referenced_ids = Vec::new();
@@ -5449,8 +5978,10 @@ pub fn plan_drop_objects(
                 plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role)
             }
             UnresolvedObjectName::Item(name) => {
-                plan_drop_item(scx, object_type, if_exists, name.clone(), cascade)?
-                    .map(ObjectId::Item)
+                // Defer the dependency check until all names are resolved, so a
+                // dependent that is itself being dropped in this same statement
+                // does not block a non-cascade drop.
+                plan_drop_item_name(scx, object_type, if_exists, name.clone())?.map(ObjectId::Item)
             }
             UnresolvedObjectName::NetworkPolicy(name) => {
                 plan_drop_network_policy(scx, if_exists, name)?.map(ObjectId::NetworkPolicy)
@@ -5464,6 +5995,24 @@ pub fn plan_drop_objects(
             }),
         }
     }
+
+    // Now that the full set of explicitly-named items is known, run the
+    // non-cascade dependency check. A dependent that is itself being dropped in
+    // this statement does not block the drop, matching PostgreSQL.
+    if !cascade {
+        let dropped_items: BTreeSet<CatalogItemId> = referenced_ids
+            .iter()
+            .filter_map(|id| match id {
+                ObjectId::Item(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for id in &dropped_items {
+            let catalog_item = scx.catalog.get_item(id);
+            ensure_no_blocking_dependents(scx, object_type, catalog_item, &dropped_items)?;
+        }
+    }
+
     let drop_ids = scx.catalog.object_dependents(&referenced_ids);
 
     Ok(Plan::DropObjects(DropObjectsPlan {
@@ -5583,24 +6132,6 @@ fn plan_drop_network_policy(
     }
 }
 
-/// Returns `true` if the cluster has any object that requires a single replica.
-/// Returns `false` if the cluster has no objects.
-fn contains_single_replica_objects(scx: &StatementContext, cluster: &dyn CatalogCluster) -> bool {
-    // If this feature is enabled then all objects support multiple-replicas
-    if ENABLE_MULTI_REPLICA_SOURCES.get(scx.catalog.system_vars().dyncfgs()) {
-        false
-    } else {
-        // Othewise we check for the existence of sources or sinks
-        cluster.bound_objects().iter().any(|id| {
-            let item = scx.catalog.get_item(id);
-            matches!(
-                item.item_type(),
-                CatalogItemType::Sink | CatalogItemType::Source
-            )
-        })
-    }
-}
-
 fn plan_drop_cluster_replica(
     scx: &StatementContext,
     if_exists: bool,
@@ -5617,6 +6148,25 @@ fn plan_drop_item(
     if_exists: bool,
     name: UnresolvedItemName,
     cascade: bool,
+) -> Result<Option<CatalogItemId>, PlanError> {
+    let Some(id) = plan_drop_item_name(scx, object_type, if_exists, name)? else {
+        return Ok(None);
+    };
+    if !cascade {
+        let catalog_item = scx.catalog.get_item(&id);
+        ensure_no_blocking_dependents(scx, object_type, catalog_item, &BTreeSet::new())?;
+    }
+    Ok(Some(id))
+}
+
+/// Resolves `name` to the [`CatalogItemId`] of the item to drop, performing the
+/// system-object check but *not* the dependency check. Returns `None` if the
+/// item does not exist and `if_exists` is set.
+fn plan_drop_item_name(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    if_exists: bool,
+    name: UnresolvedItemName,
 ) -> Result<Option<CatalogItemId>, PlanError> {
     let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
         Ok(r) => r,
@@ -5640,48 +6190,76 @@ fn plan_drop_item(
                     scx.catalog.minimal_qualification(catalog_item.name()),
                 );
             }
-
-            if !cascade {
-                for id in catalog_item.used_by() {
-                    let dep = scx.catalog.get_item(id);
-                    if dependency_prevents_drop(object_type, dep) {
-                        return Err(PlanError::DependentObjectsStillExist {
-                            object_type: catalog_item.item_type().to_string(),
-                            object_name: scx
-                                .catalog
-                                .minimal_qualification(catalog_item.name())
-                                .to_string(),
-                            dependents: vec![(
-                                dep.item_type().to_string(),
-                                scx.catalog.minimal_qualification(dep.name()).to_string(),
-                            )],
-                        });
-                    }
-                }
-                // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
-                //  relies on entry. Unfortunately, we don't have that information readily available.
-            }
             Some(catalog_item.id())
         }
         None => None,
     })
 }
 
+/// Errors if dropping `catalog_item` would leave a dangling dependent, i.e. an
+/// object that depends on it and is not itself being dropped. Dependents whose
+/// ids are in `also_dropped` are ignored, since they are being dropped as part
+/// of the same statement.
+fn ensure_no_blocking_dependents(
+    scx: &StatementContext,
+    object_type: ObjectType,
+    catalog_item: &dyn CatalogItem,
+    also_dropped: &BTreeSet<CatalogItemId>,
+) -> Result<(), PlanError> {
+    for id in catalog_item.used_by() {
+        if also_dropped.contains(id) {
+            continue;
+        }
+        let dep = scx.catalog.get_item(id);
+        if dependency_prevents_drop(object_type, dep) {
+            return Err(PlanError::DependentObjectsStillExist {
+                object_type: catalog_item.item_type().to_string(),
+                object_name: scx
+                    .catalog
+                    .minimal_qualification(catalog_item.name())
+                    .to_string(),
+                dependents: vec![(
+                    dep.item_type().to_string(),
+                    scx.catalog.minimal_qualification(dep.name()).to_string(),
+                )],
+            });
+        }
+    }
+    // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
+    //  relies on entry. Unfortunately, we don't have that information readily available.
+    Ok(())
+}
+
 /// Does the dependency `dep` prevent a drop of a non-cascade query?
 fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> bool {
     match object_type {
         ObjectType::Type => true,
-        _ => match dep.item_type() {
+        ObjectType::Table
+        | ObjectType::View
+        | ObjectType::MaterializedView
+        | ObjectType::Source
+        | ObjectType::Sink
+        | ObjectType::MetricSink
+        | ObjectType::Index
+        | ObjectType::Role
+        | ObjectType::Cluster
+        | ObjectType::ClusterReplica
+        | ObjectType::Secret
+        | ObjectType::Connection
+        | ObjectType::Database
+        | ObjectType::Schema
+        | ObjectType::Func
+        | ObjectType::NetworkPolicy => match dep.item_type() {
             CatalogItemType::Func
             | CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
             | CatalogItemType::Sink
+            | CatalogItemType::MetricSink
             | CatalogItemType::Type
             | CatalogItemType::Secret
-            | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => true,
+            | CatalogItemType::Connection => true,
             CatalogItemType::Index => false,
         },
     }
@@ -5876,6 +6454,19 @@ pub fn plan_drop_owned(
         update_privilege_revokes(
             SystemObjectId::Object(database.id().into()),
             database.privileges(),
+            &role_ids,
+            &mut privilege_revokes,
+        );
+    }
+
+    // Network policies
+    for network_policy in scx.catalog.get_network_policies() {
+        if role_ids.contains(&network_policy.owner_id()) {
+            drop_ids.push(ObjectId::NetworkPolicy(network_policy.id()));
+        }
+        update_privilege_revokes(
+            SystemObjectId::Object(ObjectId::NetworkPolicy(network_policy.id())),
+            network_policy.privileges(),
             &role_ids,
             &mut privilege_revokes,
         );
@@ -6135,7 +6726,9 @@ pub fn plan_alter_cluster(
             with_options,
         } => {
             let ClusterOptionExtracted {
+                auto_scaling_strategy,
                 availability_zones,
+                experimental_arrangement_compression,
                 introspection_debugging,
                 introspection_interval,
                 managed,
@@ -6160,13 +6753,21 @@ pub fn plan_alter_cluster(
                         ClusterAlterOptionExtracted::try_from(with_options)?;
                     alter_strategy = AlterClusterPlanStrategy::try_from(alter_strategy_extracted)?;
 
-                    match alter_strategy {
-                        AlterClusterPlanStrategy::None => {}
-                        _ => {
-                            scx.require_feature_flag(
-                                &crate::session::vars::ENABLE_ZERO_DOWNTIME_CLUSTER_RECONFIGURATION,
-                            )?;
-                        }
+                    // WAIT applies to replica shape changes and RF retargets of
+                    // an in-flight reconfiguration. For an RF-only change with
+                    // nothing in flight, WAIT has no effect.
+                    if !matches!(alter_strategy, AlterClusterPlanStrategy::None)
+                        && size.is_none()
+                        && replication_factor.is_none()
+                        && availability_zones.is_none()
+                        && introspection_debugging.is_none()
+                        && introspection_interval.is_none()
+                        && experimental_arrangement_compression.is_none()
+                    {
+                        sql_bail!(
+                            "WAIT can only be used together with a SIZE, REPLICATION FACTOR, \
+                            AVAILABILITY ZONES, INTROSPECTION, or EXPERIMENTAL ARRANGEMENT COMPRESSION change"
+                        );
                     }
 
                     if replica_defs.is_some() {
@@ -6176,9 +6777,27 @@ pub fn plan_alter_cluster(
                         && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
                     {
                         scx.require_feature_flag(&ENABLE_CLUSTER_SCHEDULE_REFRESH)?;
+
+                        // A cluster with a non-MANUAL schedule is automatically turned On/Off by
+                        // the cluster scheduling policy, which means its replication factor is
+                        // always 0 or 1. If the cluster currently has a higher replication factor
+                        // and the user is not lowering it in the same statement (which would be
+                        // rejected just below), then reject the schedule change: otherwise we'd
+                        // leave the cluster in an invalid state with both a non-MANUAL schedule and
+                        // a replication factor > 1 (which would, e.g., make SHOW CREATE CLUSTER
+                        // panic).
+                        if replication_factor.is_none()
+                            && cluster.replication_factor().is_some_and(|rf| rf > 1)
+                        {
+                            sql_bail!(
+                                "SCHEDULE cannot be set to anything other than MANUAL while the \
+                                cluster's REPLICATION FACTOR is greater than 1; \
+                                set the REPLICATION FACTOR to 1 first"
+                            );
+                        }
                     }
 
-                    if let Some(replication_factor) = replication_factor {
+                    if replication_factor.is_some() {
                         if schedule.is_some()
                             && !matches!(schedule, Some(ClusterScheduleOptionValue::Manual))
                         {
@@ -6193,42 +6812,43 @@ pub fn plan_alter_cluster(
                                 );
                             }
                         }
+                    }
 
-                        let internal_replica_count =
-                            cluster.replicas().iter().filter(|r| r.internal()).count();
-                        let hypothetical_replica_count =
-                            internal_replica_count + usize::cast_from(replication_factor);
+                    if let Some(value) = auto_scaling_strategy {
+                        scx.require_feature_flag(&ENABLE_AUTO_SCALING_STRATEGY)?;
+                        let strategy = plan_auto_scaling_strategy(value)?;
+                        options.auto_scaling_strategy = AlterOptionParameter::Set(strategy);
+                    }
 
-                        // Total number of replicas running is internal replicas
-                        // + replication factor.
-                        if contains_single_replica_objects(scx, cluster)
-                            && hypothetical_replica_count > 1
-                        {
-                            return Err(PlanError::CreateReplicaFailStorageObjects {
-                                current_replica_count: cluster.replica_ids().iter().count(),
-                                internal_replica_count,
-                                hypothetical_replica_count,
-                            });
-                        }
-                    } else if alter_strategy.is_some() {
-                        // AlterClusterPlanStrategies that are not None will standup pending replicas of the new configuration
-                        // and violate the single replica for sources constraint. If there are any storage objects (sources or sinks) we should
-                        // just fail.
-                        let internal_replica_count =
-                            cluster.replicas().iter().filter(|r| r.internal()).count();
-                        let hypothetical_replica_count = internal_replica_count * 2;
-                        if contains_single_replica_objects(scx, cluster) {
-                            return Err(PlanError::CreateReplicaFailStorageObjects {
-                                current_replica_count: cluster.replica_ids().iter().count(),
-                                internal_replica_count,
-                                hypothetical_replica_count,
-                            });
-                        }
+                    // Validate against the *effective* config (the values this `ALTER`
+                    // sets, else the cluster's current ones), so an invariant cannot be
+                    // broken by changing the other side of its constraint.
+                    let effective_strategy = match &options.auto_scaling_strategy {
+                        AlterOptionParameter::Set(s) => s.clone(),
+                        AlterOptionParameter::Reset => None,
+                        AlterOptionParameter::Unchanged => cluster.auto_scaling_strategy().cloned(),
+                    };
+                    if let Some(effective_strategy) = &effective_strategy {
+                        let effective_size = size.as_deref().or_else(|| cluster.managed_size());
+                        let schedule_non_manual = match &schedule {
+                            Some(s) => !matches!(s, ClusterScheduleOptionValue::Manual),
+                            None => cluster
+                                .schedule()
+                                .is_some_and(|s| !matches!(s, ClusterSchedule::Manual)),
+                        };
+                        validate_auto_scaling_strategy(
+                            effective_strategy,
+                            effective_size,
+                            schedule_non_manual,
+                        )?;
                     }
                 }
                 false => {
-                    if !alter_strategy.is_none() {
+                    if !with_options.is_empty() {
                         sql_bail!("ALTER... WITH not supported for unmanaged clusters");
+                    }
+                    if auto_scaling_strategy.is_some() {
+                        sql_bail!("AUTO SCALING STRATEGY not supported for unmanaged clusters");
                     }
                     if availability_zones.is_some() {
                         sql_bail!("AVAILABILITY ZONES not supported for unmanaged clusters");
@@ -6241,6 +6861,11 @@ pub fn plan_alter_cluster(
                     }
                     if introspection_interval.is_some() {
                         sql_bail!("INTROSPECTION INTERVAL not supported for unmanaged clusters");
+                    }
+                    if experimental_arrangement_compression.is_some() {
+                        sql_bail!(
+                            "EXPERIMENTAL ARRANGEMENT COMPRESSION not supported for unmanaged clusters"
+                        );
                     }
                     if size.is_some() {
                         sql_bail!("SIZE not supported for unmanaged clusters");
@@ -6281,6 +6906,24 @@ pub fn plan_alter_cluster(
             }
             if let Some(replication_factor) = replication_factor {
                 options.replication_factor = AlterOptionParameter::Set(replication_factor);
+            } else if schedule
+                .as_ref()
+                .is_some_and(|s| !matches!(s, ClusterScheduleOptionValue::Manual))
+                && managed != Some(true)
+            {
+                // Setting a non-MANUAL schedule hands the replica set to the
+                // scheduler, so normalize the replication factor to 0 exactly
+                // as CREATE CLUSTER does for a scheduled cluster. Giving
+                // REPLICATION FACTOR together with a non-MANUAL SCHEDULE was
+                // rejected above, so `replication_factor` is `None` here.
+                //
+                // Not when the same statement converts an unmanaged cluster to
+                // managed: that conversion adopts the existing replicas, so the
+                // sequencer requires a replication factor matching their count
+                // and derives it when none is given. Forcing 0 would reject the
+                // conversion whenever a replica exists. The controller
+                // normalizes the adopted factor to 0 on its next tick.
+                options.replication_factor = AlterOptionParameter::Set(0);
             }
             if let Some(size) = &size {
                 options.size = AlterOptionParameter::Set(size.clone());
@@ -6295,13 +6938,21 @@ pub fn plan_alter_cluster(
             if let Some(introspection_interval) = introspection_interval {
                 options.introspection_interval = AlterOptionParameter::Set(introspection_interval);
             }
+            if let Some(experimental_arrangement_compression) = experimental_arrangement_compression
+            {
+                options.arrangement_compression =
+                    AlterOptionParameter::Set(experimental_arrangement_compression);
+            }
             if disk.is_some() {
                 // The `DISK` option is a no-op for legacy cluster sizes and was never allowed for
                 // `cc` sizes. The long term plan is to phase out the legacy sizes, at which point
                 // we'll be able to remove the `DISK` option entirely.
-                let size = size.as_deref().unwrap_or_else(|| {
-                    cluster.managed_size().expect("cluster known to be managed")
-                });
+                let size = match size.as_deref() {
+                    Some(s) => s,
+                    None => cluster
+                        .managed_size()
+                        .ok_or_else(|| sql_err!("cluster is not managed"))?,
+                };
                 if scx.catalog.is_cluster_size_cc(size) {
                     sql_bail!(
                         "DISK option not supported for modern cluster sizes because disk is always enabled"
@@ -6331,14 +6982,21 @@ pub fn plan_alter_cluster(
                 }
             }
 
+            // RESET (AUTO SCALING STRATEGY) is deliberately not feature-gated:
+            // resetting to the default must stay available after a flag
+            // rollback, or a cluster that picked up a policy while the flag was
+            // on would carry it forever (and the strategy/schedule
+            // compatibility check would then also block SCHEDULE changes).
             for option in reset_options {
                 match option {
+                    AutoScalingStrategy => options.auto_scaling_strategy = Reset,
                     AvailabilityZones => options.availability_zones = Reset,
                     Disk => scx
                         .catalog
                         .add_notice(PlanNotice::ReplicaDiskOptionDeprecated),
                     IntrospectionInterval => options.introspection_interval = Reset,
                     IntrospectionDebugging => options.introspection_debugging = Reset,
+                    ExperimentalArrangementCompression => options.arrangement_compression = Reset,
                     Managed => options.managed = Reset,
                     Replicas => options.replicas = Reset,
                     ReplicationFactor => options.replication_factor = Reset,
@@ -6380,10 +7038,21 @@ pub fn plan_alter_item_set_cluster(
     // Prevent access to `SET CLUSTER` for unsupported objects.
     match object_type {
         ObjectType::MaterializedView => {}
-        ObjectType::Index | ObjectType::Sink | ObjectType::Source => {
+        ObjectType::Index | ObjectType::Sink | ObjectType::MetricSink | ObjectType::Source => {
             bail_unsupported!(29606, format!("ALTER {object_type} SET CLUSTER"))
         }
-        _ => {
+        ObjectType::Table
+        | ObjectType::View
+        | ObjectType::Type
+        | ObjectType::Role
+        | ObjectType::Cluster
+        | ObjectType::ClusterReplica
+        | ObjectType::Secret
+        | ObjectType::Connection
+        | ObjectType::Database
+        | ObjectType::Schema
+        | ObjectType::Func
+        | ObjectType::NetworkPolicy => {
             bail_never_supported!(
                 format!("ALTER {object_type} SET CLUSTER"),
                 "sql/alter-set-cluster/",
@@ -6460,7 +7129,9 @@ pub fn plan_alter_object_rename(
             plan_alter_schema_rename(scx, name, to_item_name, if_exists)
         }
         (object_type, name) => {
-            unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
+            // The earlier dispatch + name resolution should make this
+            // combination impossible.
+            bail_internal!("invalid object type '{object_type}' for ALTER RENAME with name {name}")
         }
     }
 }
@@ -6517,6 +7188,7 @@ pub fn plan_alter_schema_swap<F>(
     scx: &mut StatementContext,
     name_a: UnresolvedSchemaName,
     name_b: Ident,
+    if_exists: bool,
     gen_temp_suffix: F,
 ) -> Result<Plan, PlanError>
 where
@@ -6536,7 +7208,19 @@ where
         sql_bail!("cannot swap schemas that are in the ambient database");
     }
 
-    let schema_a = scx.resolve_schema(name_a.clone())?;
+    let schema_a = match scx.resolve_schema(name_a.clone()) {
+        Ok(schema) => schema,
+        Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name_a.to_ast_string_simple(),
+                object_type: ObjectType::Schema,
+            });
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Schema,
+            }));
+        }
+        Err(e) => return Err(e),
+    };
 
     let db_spec = schema_a.database().clone();
     if matches!(db_spec, ResolvedDatabaseSpecifier::Ambient) {
@@ -6552,14 +7236,15 @@ where
     // Generate a temporary name we can swap schema_a to.
     //
     // 'check' returns if the temp schema name would be valid.
+    const SCHEMA_SWAP_PREFIX: &str = "mz_schema_swap_";
     let check = |temp_suffix: &str| {
-        let mut temp_name = ident!("mz_schema_swap_");
+        let mut temp_name = ident!(SCHEMA_SWAP_PREFIX);
         temp_name.append_lossy(temp_suffix);
         scx.resolve_schema_in_database(&db_spec, &temp_name)
             .is_err()
     };
     let temp_suffix = gen_temp_suffix(&check)?;
-    let name_temp = format!("mz_schema_swap_{temp_suffix}");
+    let name_temp = format!("{SCHEMA_SWAP_PREFIX}{temp_suffix}");
 
     Ok(Plan::AlterSchemaSwap(AlterSchemaSwapPlan {
         schema_a_spec: (*schema_a.database(), *schema_a.id()),
@@ -6667,16 +7352,30 @@ pub fn plan_alter_cluster_swap<F>(
     scx: &mut StatementContext,
     name_a: Ident,
     name_b: Ident,
+    if_exists: bool,
     gen_temp_suffix: F,
 ) -> Result<Plan, PlanError>
 where
     F: Fn(&dyn Fn(&str) -> bool) -> Result<String, PlanError>,
 {
-    let cluster_a = scx.resolve_cluster(Some(&name_a))?;
+    let cluster_a = match scx.resolve_cluster(Some(&name_a)) {
+        Ok(cluster) => cluster,
+        Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name_a.to_ast_string_simple(),
+                object_type: ObjectType::Cluster,
+            });
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Cluster,
+            }));
+        }
+        Err(e) => return Err(e),
+    };
     let cluster_b = scx.resolve_cluster(Some(&name_b))?;
 
+    const CLUSTER_SWAP_PREFIX: &str = "mz_cluster_swap_";
     let check = |temp_suffix: &str| {
-        let mut temp_name = ident!("mz_schema_swap_");
+        let mut temp_name = ident!(CLUSTER_SWAP_PREFIX);
         temp_name.append_lossy(temp_suffix);
         match scx.catalog.resolve_cluster(Some(temp_name.as_str())) {
             // Temp name does not exist, so we can use it.
@@ -6686,7 +7385,7 @@ where
         }
     };
     let temp_suffix = gen_temp_suffix(&check)?;
-    let name_temp = format!("mz_cluster_swap_{temp_suffix}");
+    let name_temp = format!("{CLUSTER_SWAP_PREFIX}{temp_suffix}");
 
     Ok(Plan::AlterClusterSwap(AlterClusterSwapPlan {
         id_a: cluster_a.id(),
@@ -6745,6 +7444,7 @@ pub fn plan_alter_object_swap(
 
     let AlterObjectSwapStatement {
         object_type,
+        if_exists,
         name_a,
         name_b,
     } = stmt;
@@ -6772,12 +7472,33 @@ pub fn plan_alter_object_swap(
 
     match (object_type, name_a, name_b) {
         (ObjectType::Schema, UnresolvedObjectName::Schema(name_a), name_b) => {
-            plan_alter_schema_swap(scx, name_a, name_b, gen_temp_suffix)
+            plan_alter_schema_swap(scx, name_a, name_b, if_exists, gen_temp_suffix)
         }
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name_a), name_b) => {
-            plan_alter_cluster_swap(scx, name_a, name_b, gen_temp_suffix)
+            plan_alter_cluster_swap(scx, name_a, name_b, if_exists, gen_temp_suffix)
         }
-        (object_type, _, _) => Err(PlanError::Unsupported {
+        (ObjectType::Schema | ObjectType::Cluster, _, _) => {
+            bail_internal!("name type does not match object type for ALTER SWAP")
+        }
+        (
+            ObjectType::Table
+            | ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source
+            | ObjectType::Sink
+            | ObjectType::MetricSink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Role
+            | ObjectType::ClusterReplica
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Database
+            | ObjectType::Func
+            | ObjectType::NetworkPolicy,
+            _,
+            _,
+        ) => Err(PlanError::Unsupported {
             feature: format!("ALTER {object_type} .. SWAP WITH ..."),
             discussion_no: None,
         }),
@@ -6821,7 +7542,7 @@ fn alter_retain_history(
             UnresolvedObjectName::Item(name),
         ) => name,
         (object_type, _) => {
-            sql_bail!("{object_type} does not support RETAIN HISTORY")
+            bail_unsupported!(format!("RETAIN HISTORY on {object_type}"))
         }
     };
     match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
@@ -6867,6 +7588,74 @@ fn alter_retain_history(
         None => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: name.to_ast_string_simple(),
+                object_type,
+            });
+
+            Ok(Plan::AlterNoop(AlterNoopPlan { object_type }))
+        }
+    }
+}
+
+fn alter_source_timestamp_interval(
+    scx: &StatementContext,
+    if_exists: bool,
+    source_name: UnresolvedItemName,
+    value: Option<WithOptionValue<Aug>>,
+) -> Result<Plan, PlanError> {
+    let object_type = ObjectType::Source;
+    match resolve_item_or_type(scx, object_type, source_name.clone(), if_exists)? {
+        Some(entry) => {
+            let full_name = scx.catalog.resolve_full_name(entry.name());
+            if entry.item_type() != CatalogItemType::Source {
+                sql_bail!(
+                    "\"{}\" is a {} not a {}",
+                    full_name,
+                    entry.item_type(),
+                    format!("{object_type}").to_lowercase()
+                )
+            }
+
+            match value {
+                Some(val) => {
+                    let val = match val {
+                        WithOptionValue::Value(v) => v,
+                        _ => sql_bail!("TIMESTAMP INTERVAL requires an interval value"),
+                    };
+                    let duration = Duration::try_from_value(val.clone())?;
+
+                    let min = scx.catalog.system_vars().min_timestamp_interval();
+                    let max = scx.catalog.system_vars().max_timestamp_interval();
+                    if duration < min || duration > max {
+                        return Err(PlanError::InvalidTimestampInterval {
+                            min,
+                            max,
+                            requested: duration,
+                        });
+                    }
+
+                    Ok(Plan::AlterSourceTimestampInterval(
+                        AlterSourceTimestampIntervalPlan {
+                            id: entry.id(),
+                            value: Some(val),
+                            interval: duration,
+                        },
+                    ))
+                }
+                None => {
+                    let interval = scx.catalog.system_vars().default_timestamp_interval();
+                    Ok(Plan::AlterSourceTimestampInterval(
+                        AlterSourceTimestampIntervalPlan {
+                            id: entry.id(),
+                            value: None,
+                            interval,
+                        },
+                    ))
+                }
+            }
+        }
+        None => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: source_name.to_ast_string_simple(),
                 object_type,
             });
 
@@ -6934,7 +7723,7 @@ pub fn plan_alter_connection(
         Err(_) if if_exists => {
             scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
                 name: conn_name.to_string(),
-                object_type: ObjectType::Sink,
+                object_type: ObjectType::Connection,
             });
 
             return Ok(Plan::AlterNoop(AlterNoopPlan {
@@ -6995,8 +7784,10 @@ pub fn plan_alter_connection(
     let connection_type = match connection {
         Connection::Aws(_) => CreateConnectionType::Aws,
         Connection::AwsPrivatelink(_) => CreateConnectionType::AwsPrivatelink,
+        Connection::Gcp(_) => CreateConnectionType::Gcp,
         Connection::Kafka(_) => CreateConnectionType::Kafka,
         Connection::Csr(_) => CreateConnectionType::Csr,
+        Connection::GlueSchemaRegistry(_) => CreateConnectionType::GlueSchemaRegistry,
         Connection::Postgres(_) => CreateConnectionType::Postgres,
         Connection::Ssh(_) => CreateConnectionType::Ssh,
         Connection::MySql(_) => CreateConnectionType::MySql,
@@ -7008,11 +7799,13 @@ pub fn plan_alter_connection(
     let specified_options: BTreeSet<_> = actions
         .iter()
         .map(|action: &AlterConnectionAction<Aug>| match action {
-            AlterConnectionAction::SetOption(option) => option.name.clone(),
-            AlterConnectionAction::DropOption(name) => name.clone(),
-            AlterConnectionAction::RotateKeys => unreachable!(),
+            AlterConnectionAction::SetOption(option) => Ok(option.name.clone()),
+            AlterConnectionAction::DropOption(name) => Ok(name.clone()),
+            AlterConnectionAction::RotateKeys => {
+                Err(internal_err!("RotateKeys is handled separately above"))
+            }
         })
-        .collect();
+        .collect::<Result<_, PlanError>>()?;
 
     for invalid in INALTERABLE_OPTIONS {
         if specified_options.contains(invalid) {
@@ -7022,13 +7815,20 @@ pub fn plan_alter_connection(
 
     connection::validate_options_per_connection_type(connection_type, specified_options)?;
 
-    // Partition operations into set and drop
-    let (set_options_vec, mut drop_options): (Vec<_>, BTreeSet<_>) =
-        actions.into_iter().partition_map(|action| match action {
-            AlterConnectionAction::SetOption(option) => Either::Left(option),
-            AlterConnectionAction::DropOption(name) => Either::Right(name),
-            AlterConnectionAction::RotateKeys => unreachable!(),
-        });
+    // Partition operations into set and drop.
+    let mut set_options_vec: Vec<_> = Vec::new();
+    let mut drop_options: BTreeSet<_> = BTreeSet::new();
+    for action in actions {
+        match action {
+            AlterConnectionAction::SetOption(option) => set_options_vec.push(option),
+            AlterConnectionAction::DropOption(name) => {
+                drop_options.insert(name);
+            }
+            AlterConnectionAction::RotateKeys => {
+                bail_internal!("RotateKeys is handled separately above")
+            }
+        }
+    }
 
     let set_options: BTreeMap<_, _> = set_options_vec
         .clone()
@@ -7132,40 +7932,93 @@ pub fn plan_alter_sink(
     // Always ALTER objects from their latest version.
     let item = item.at_version(RelationVersionSelector::Latest);
 
+    // First we reconstruct the original CREATE SINK statement
+    let create_sql = item.create_sql();
+    let stmts = mz_sql_parser::parser::parse_statements(create_sql)?;
+    let [stmt]: [StatementParseResult; 1] = stmts
+        .try_into()
+        .map_err(|_| internal_err!("create SQL of sink was not exactly one statement"))?;
+    let Statement::CreateSink(stmt) = stmt.ast else {
+        bail_internal!("create SQL of sink is not a CREATE SINK statement");
+    };
+    let (mut stmt, _) = crate::names::resolve(scx.catalog, stmt)?;
+
+    // Then apply the requested change to the statement
+    let mut set_options = vec![];
+    let mut reset_options = vec![];
     match action {
         AlterSinkAction::ChangeRelation(new_from) => {
-            // First we reconstruct the original CREATE SINK statement
-            let create_sql = item.create_sql();
-            let stmts = mz_sql_parser::parser::parse_statements(create_sql)?;
-            let [stmt]: [StatementParseResult; 1] = stmts
-                .try_into()
-                .expect("create sql of sink was not exactly one statement");
-            let Statement::CreateSink(stmt) = stmt.ast else {
-                unreachable!("invalid create SQL for sink item");
-            };
-
-            // Then resolve and swap the resolved from relation to the new one
-            let (mut stmt, _) = crate::names::resolve(scx.catalog, stmt)?;
             stmt.from = new_from;
-
-            // Finally re-plan the modified create sink statement to verify the new configuration is valid
-            let Plan::CreateSink(mut plan) = plan_sink(scx, stmt)? else {
-                unreachable!("invalid plan for CREATE SINK statement");
-            };
-
-            plan.sink.version += 1;
-
-            Ok(Plan::AlterSink(AlterSinkPlan {
-                item_id: item.id(),
-                global_id: item.global_id(),
-                sink: plan.sink,
-                with_snapshot: plan.with_snapshot,
-                in_cluster: plan.in_cluster,
-            }))
         }
-        AlterSinkAction::SetOptions(_) => bail_unsupported!("ALTER SINK SET options"),
-        AlterSinkAction::ResetOptions(_) => bail_unsupported!("ALTER SINK RESET option"),
+        AlterSinkAction::SetOptions(options) => {
+            for option in &options {
+                match &option.name {
+                    CreateSinkOptionName::CommitInterval => {}
+                    name => bail_unsupported!(format!(
+                        "ALTER SINK ... SET ({})",
+                        name.to_ast_string_simple()
+                    )),
+                }
+            }
+            // Setting every option to its current value would restart the
+            // sink dataflow without changing its behavior, so make it a
+            // no-op instead. The values are compared as ASTs, so spelling
+            // the same value differently (`'60s'` vs `'1m'`) still counts
+            // as a change.
+            //
+            // NOTE: This check races with other `ALTER SINK` statements,
+            // because `ALTER SINK` does not take the DDL lock. Example: the
+            // interval is '1s', we plan `SET (COMMIT INTERVAL = '1s')` as a
+            // no-op, and before we respond a concurrent `ALTER SINK` changes
+            // the interval to '2s'. We then report success even though the
+            // interval is now '2s', not the '1s' we were asked for. An alter
+            // that is not a no-op detects this in sequencing by checking the
+            // sink's version, but a no-op is never re-checked. We accept this
+            // because alters are last-writer-wins anyway.
+            if options.iter().all(|o| stmt.with_options.contains(o)) {
+                return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+            }
+            set_options = options;
+        }
+        AlterSinkAction::ResetOptions(names) => {
+            for name in &names {
+                match name {
+                    CreateSinkOptionName::CommitInterval => {}
+                    name => bail_unsupported!(format!(
+                        "ALTER SINK ... RESET ({})",
+                        name.to_ast_string_simple()
+                    )),
+                }
+                // Resetting an option that is not set would still restart the
+                // sink dataflow, so reject it instead of silently no-oping.
+                if !stmt.with_options.iter().any(|o| o.name == *name) {
+                    sql_bail!(
+                        "cannot RESET {}: option is not set",
+                        name.to_ast_string_simple()
+                    );
+                }
+            }
+            reset_options = names;
+        }
     }
+    crate::plan::apply_sink_option_edits(&mut stmt.with_options, &set_options, &reset_options);
+
+    // Finally re-plan the modified create sink statement to verify the new configuration is valid
+    let Plan::CreateSink(mut plan) = plan_sink(scx, stmt)? else {
+        bail_internal!("plan_sink did not produce a CreateSink plan");
+    };
+
+    plan.sink.version += 1;
+
+    Ok(Plan::AlterSink(AlterSinkPlan {
+        item_id: item.id(),
+        global_id: item.global_id(),
+        sink: plan.sink,
+        with_snapshot: plan.with_snapshot,
+        in_cluster: plan.in_cluster,
+        set_options,
+        reset_options,
+    }))
 }
 
 pub fn describe_alter_source(
@@ -7206,7 +8059,9 @@ pub fn plan_alter_source(
     match action {
         AlterSourceAction::SetOptions(options) => {
             let mut options = options.into_iter();
-            let option = options.next().unwrap();
+            let option = options
+                .next()
+                .ok_or_else(|| sql_err!("ALTER SOURCE SET requires at least one option"))?;
             if option.name == CreateSourceOptionName::RetainHistory {
                 if options.next().is_some() {
                     sql_bail!("RETAIN HISTORY must be only option");
@@ -7219,6 +8074,12 @@ pub fn plan_alter_source(
                     option.value,
                 );
             }
+            if option.name == CreateSourceOptionName::TimestampInterval {
+                if options.next().is_some() {
+                    sql_bail!("TIMESTAMP INTERVAL must be only option");
+                }
+                return alter_source_timestamp_interval(scx, if_exists, source_name, option.value);
+            }
             // n.b we use this statement in purification in a way that cannot be
             // planned directly.
             sql_bail!(
@@ -7228,7 +8089,9 @@ pub fn plan_alter_source(
         }
         AlterSourceAction::ResetOptions(reset) => {
             let mut options = reset.into_iter();
-            let option = options.next().unwrap();
+            let option = options
+                .next()
+                .ok_or_else(|| sql_err!("ALTER SOURCE RESET requires at least one option"))?;
             if option == CreateSourceOptionName::RetainHistory {
                 if options.next().is_some() {
                     sql_bail!("RETAIN HISTORY must be only option");
@@ -7241,6 +8104,12 @@ pub fn plan_alter_source(
                     None,
                 );
             }
+            if option == CreateSourceOptionName::TimestampInterval {
+                if options.next().is_some() {
+                    sql_bail!("TIMESTAMP INTERVAL must be only option");
+                }
+                return alter_source_timestamp_interval(scx, if_exists, source_name, None);
+            }
             sql_bail!(
                 "Cannot modify the {} of a SOURCE.",
                 option.to_ast_string_simple()
@@ -7250,10 +8119,10 @@ pub fn plan_alter_source(
             sql_bail!("ALTER SOURCE...DROP SUBSOURCE no longer supported; use DROP SOURCE")
         }
         AlterSourceAction::AddSubsources { .. } => {
-            unreachable!("ALTER SOURCE...ADD SUBSOURCE must be purified")
+            sql_bail!("ALTER SOURCE...ADD SUBSOURCE must be purified before planning")
         }
         AlterSourceAction::RefreshReferences => {
-            unreachable!("ALTER SOURCE...REFRESH REFERENCES must be purified")
+            sql_bail!("ALTER SOURCE...REFRESH REFERENCES must be purified before planning")
         }
     };
 }
@@ -7322,7 +8191,7 @@ pub fn plan_alter_role(
             PlannedAlterRoleOption::Attributes(attrs)
         }
         AlterRoleOption::Variable(variable) => {
-            let var = plan_role_variable(variable)?;
+            let var = plan_role_variable(scx, variable)?;
             PlannedAlterRoleOption::Variable(var)
         }
     };
@@ -7362,7 +8231,10 @@ pub fn plan_alter_table_add_column(
                 // Always add columns to the latest version of the item.
                 let item_name = scx.catalog.resolve_full_name(item.name());
                 let item = item.at_version(RelationVersionSelector::Latest);
-                let desc = item.relation_desc().expect("table has desc").into_owned();
+                let desc = item
+                    .relation_desc()
+                    .ok_or_else(|| sql_err!("item does not have a relation description"))?
+                    .into_owned();
                 (item.id(), item_name, desc)
             }
             None => {
@@ -7433,7 +8305,7 @@ pub fn plan_alter_materialized_view_apply_replacement(
     };
 
     let replacement = resolve_item_or_type(scx, object_type, replacement_name, false)?
-        .expect("if_exists not set");
+        .ok_or_else(|| sql_err!("replacement materialized view does not exist"))?;
 
     if replacement.replacement_target() != Some(mv.id()) {
         return Err(PlanError::InvalidReplacement {
@@ -7486,8 +8358,7 @@ pub fn plan_comment(
         | com_ty @ CommentObjectType::Connection { name }
         | com_ty @ CommentObjectType::Source { name }
         | com_ty @ CommentObjectType::Sink { name }
-        | com_ty @ CommentObjectType::Secret { name }
-        | com_ty @ CommentObjectType::ContinualTask { name } => {
+        | com_ty @ CommentObjectType::Secret { name } => {
             let item = scx.get_item_by_resolved_name(name)?;
             match (com_ty, item.item_type()) {
                 (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
@@ -7517,9 +8388,6 @@ pub fn plan_comment(
                 (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
                     (CommentObjectId::Secret(item.id()), None)
                 }
-                (CommentObjectType::ContinualTask { .. }, CatalogItemType::ContinualTask) => {
-                    (CommentObjectId::ContinualTask(item.id()), None)
-                }
                 (com_ty, cat_ty) => {
                     let expected_type = match com_ty {
                         CommentObjectType::Table { .. } => ObjectType::Table,
@@ -7531,7 +8399,7 @@ pub fn plan_comment(
                         CommentObjectType::Source { .. } => ObjectType::Source,
                         CommentObjectType::Sink { .. } => ObjectType::Sink,
                         CommentObjectType::Secret { .. } => ObjectType::Secret,
-                        _ => unreachable!("these are the only types we match on"),
+                        _ => sql_bail!("cannot comment on this object type"),
                     };
 
                     return Err(PlanError::InvalidObjectType {
@@ -7552,7 +8420,7 @@ pub fn plan_comment(
                 }
                 (CommentObjectId::Type(*id), None)
             }
-            ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
+            ResolvedDataType::Error => bail_internal!("unresolved data type"),
         },
         CommentObjectType::Column { name } => {
             let (item, pos) = scx.get_column_by_resolved_name(name)?;
@@ -7684,7 +8552,10 @@ pub(crate) fn resolve_network_policy<'a>(
     name: Ident,
     if_exists: bool,
 ) -> Result<Option<ResolvedNetworkPolicyName>, PlanError> {
-    match scx.catalog.resolve_network_policy(&name.to_string()) {
+    match scx
+        .catalog
+        .resolve_network_policy(normalize::ident_ref(&name))
+    {
         Ok(policy) => Ok(Some(ResolvedNetworkPolicyName {
             id: policy.id(),
             name: policy.name().to_string(),
@@ -7703,7 +8574,22 @@ pub(crate) fn resolve_item_or_type<'a>(
     let name = normalize::unresolved_item_name(name)?;
     let catalog_item = match object_type {
         ObjectType::Type => scx.catalog.resolve_type(&name),
-        _ => scx.catalog.resolve_item(&name),
+        ObjectType::Table
+        | ObjectType::View
+        | ObjectType::MaterializedView
+        | ObjectType::Source
+        | ObjectType::Sink
+        | ObjectType::MetricSink
+        | ObjectType::Index
+        | ObjectType::Role
+        | ObjectType::Cluster
+        | ObjectType::ClusterReplica
+        | ObjectType::Secret
+        | ObjectType::Connection
+        | ObjectType::Database
+        | ObjectType::Schema
+        | ObjectType::Func
+        | ObjectType::NetworkPolicy => scx.catalog.resolve_item(&name),
     };
 
     match catalog_item {
@@ -7736,5 +8622,30 @@ fn ensure_cluster_is_not_managed(
         })
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        METRIC_SINK_CURATED_PREFIX_MARKER, METRIC_SINK_PREFIX_MARKER,
+        validate_user_metric_sink_prefix,
+    };
+
+    #[mz_ore::test]
+    fn user_metric_sink_prefix_cannot_reach_the_curated_prefix() {
+        // Starts with the curated prefix.
+        assert!(validate_user_metric_sink_prefix(METRIC_SINK_CURATED_PREFIX_MARKER).is_err());
+        assert!(validate_user_metric_sink_prefix("mz_metric_sink_curated_x").is_err());
+        // A proper prefix of the curated prefix, which a `curated_...` row would complete.
+        assert!(validate_user_metric_sink_prefix(METRIC_SINK_PREFIX_MARKER).is_err());
+        assert!(validate_user_metric_sink_prefix("mz_metric_sink_cur").is_err());
+        // Still outside the reserved lane entirely.
+        assert!(validate_user_metric_sink_prefix("myapp_").is_err());
+        // A prefix that diverges from the curated prefix is fine, including one that merely contains
+        // the marker further along.
+        assert!(validate_user_metric_sink_prefix("mz_metric_sink_myapp_").is_ok());
+        assert!(validate_user_metric_sink_prefix("mz_metric_sink_curatex_").is_ok());
+        assert!(validate_user_metric_sink_prefix("mz_metric_sink_my_curated_").is_ok());
     }
 }

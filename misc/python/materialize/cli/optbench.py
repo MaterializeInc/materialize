@@ -300,11 +300,6 @@ def compare(
 # ---------------
 
 
-def print_df(df: pd.DataFrame) -> None:
-    with pd.option_context("display.max_rows", None, "display.max_columns", None):
-        print(df)
-
-
 def info(msg: str, fg: str = "green") -> None:
     click.secho(msg, fg=fg)
 

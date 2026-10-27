@@ -33,6 +33,8 @@ CREATE TABLE enum_type ( f1 enum1);
 INSERT INTO enum_type VALUES ('val1'), ('val2');
 ALTER TABLE enum_type REPLICA IDENTITY FULL;
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > BEGIN

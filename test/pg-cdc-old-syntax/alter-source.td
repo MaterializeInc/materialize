@@ -9,6 +9,10 @@
 
 $ set-sql-timeout duration=60s
 
+# TODO: Reenable when https://linear.app/materializeinc/issue/SS-295 is fixed
+$ skip-if
+SELECT true
+
 # IMPORTANT: The Postgres server has a custom pg_hba.conf that only
 # accepts connections from specific users. You will have to update
 # pg_hba.conf if you modify the existing user names or add new ones.
@@ -194,7 +198,7 @@ INSERT INTO table_e VALUES (3, 'three');
 3
 4
 
-> SELECT name FROM mz_materialized_views
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
 mv_e
 mv_f
 
@@ -216,7 +220,7 @@ contains:cannot drop source "table_e": still depended upon by materialized view 
 mz_source_progress    progress
 table_g               subsource
 
-> SELECT name FROM mz_materialized_views
+> SELECT name FROM mz_materialized_views WHERE id LIKE 'u%'
 
 > DROP SOURCE table_g;
 

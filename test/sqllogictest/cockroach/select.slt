@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,20 +9,18 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/select
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/select
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET unsafe_enable_table_keys = true
-----
-COMPLETE 0
 
 # SELECT with no table.
 
@@ -47,9 +45,13 @@ two four
 statement ok
 CREATE TABLE abc (a INT PRIMARY KEY, b INT, c INT)
 
-query error syntax error at or near "from"
+# Not supported by Materialize.
+onlyif cockroach
+query error at or near "from": syntax error
 SELECT FROM abc
 
+# Not supported by Materialize.
+onlyif cockroach
 query error could not parse "hello" as type bool
 SELECT * FROM abc WHERE 'hello'
 
@@ -74,7 +76,7 @@ TABLE abc
 ----
 1 2 3
 
-query error syntax error at or near "*"
+query error Expected identifier, found star
 TABLE abc.*
 
 query III colnames
@@ -160,7 +162,7 @@ NULL
 query T
 SELECT k FROM kv
 ----
-1 value hashing to 60b725f10c9c85c70d97880dfe8191b3
+a
 
 query TT
 SELECT kv.K,KV.v FROM kv
@@ -172,41 +174,51 @@ SELECT kv.* FROM kv
 ----
 a NULL
 
-# Regression tests for database-issues#7241
+# Not supported by Materialize.
+onlyif cockroach
+# Regression tests for #24169
 query TT
 SELECT test.kv.* FROM kv
 ----
 a NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT test.public.kv.* FROM kv
 ----
 a NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT test.public.kv.* FROM test.kv
 ----
 a NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query TT
 SELECT test.kv.* FROM test.public.kv
 ----
 a NULL
 
-query error no data source matches pattern: foo.\*
+query error no table named 'foo' in scope
 SELECT foo.* FROM kv
 
-query error cannot use "\*" without a FROM clause
+query error SELECT \* with no tables specified is not valid
 SELECT *
 
+# Not supported by Materialize.
+onlyif cockroach
 query error "kv.*" cannot be aliased
 SELECT kv.* AS foo FROM kv
 
-query error no data source matches pattern: bar.kv.\*
+query error no table named 'bar\.kv' in scope
 SELECT bar.kv.* FROM kv
 
-# Don't panic with invalid names (materialize#8024)
-query error cannot subscript type tuple\{char AS k, char AS v\} because it is not an array
+# Don't panic with invalid names (#8024)
+query error cannot subscript type record\(k: char\(1\),v: char\(1\)\?\)
 SELECT kv.*[1] FROM kv
 
 query T colnames
@@ -246,12 +258,14 @@ CREATE TABLE xyzw (
 statement ok
 INSERT INTO xyzw VALUES (4, 5, 6, 7), (1, 2, 3, 4)
 
-query error pq: column "x" does not exist
+query error column "x" does not exist
 SELECT * FROM xyzw LIMIT x
 
-query error pq: column "y" does not exist
+query error column "y" does not exist
 SELECT * FROM xyzw OFFSET 1 + y
 
+# Not supported by Materialize.
+onlyif cockroach
 query error argument of LIMIT must be type int, not type decimal
 SELECT * FROM xyzw LIMIT 3.3
 
@@ -260,19 +274,21 @@ SELECT * FROM xyzw ORDER BY 1 LIMIT '1'
 ----
 1 2 3 4
 
+# Not supported by Materialize.
+onlyif cockroach
 query error argument of OFFSET must be type int, not type decimal
 SELECT * FROM xyzw OFFSET 1.5
 
-query error negative value for LIMIT
+query error LIMIT must not be negative
 SELECT * FROM xyzw LIMIT -100
 
-query error negative value for OFFSET
+query error Invalid OFFSET clause: must not be negative, got \-100
 SELECT * FROM xyzw OFFSET -100
 
-query error numeric constant out of int64 range
+query error "9223372036854775808" bigint out of range
 SELECT * FROM xyzw LIMIT 9223372036854775808
 
-query error numeric constant out of int64 range
+query error Invalid OFFSET clause: "9223372036854775808" bigint out of range
 SELECT * FROM xyzw OFFSET 9223372036854775808
 
 query IIII
@@ -310,40 +326,53 @@ SELECT * FROM xyzw ORDER BY y OFFSET 1 LIMIT 1
 ----
 4 5 6 7
 
+# Not supported by Materialize.
+onlyif cockroach
 # Multiplying by zero so the result is deterministic.
 query IIII
 SELECT * FROM xyzw LIMIT (random() * 0.0)::int OFFSET (random() * 0.0)::int
 ----
 
-query error pgcode 42601 multiple LIMIT clauses not allowed
+query error pgcode 42601 multiple LIMIT/FETCH clauses not allowed
 ((SELECT a FROM t LIMIT 1)) LIMIT 1
 
 query IIII
 SELECT * FROM (SELECT * FROM xyzw LIMIT 5) OFFSET 5
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 query II rowsort
 SELECT z, y FROM xyzw@foo
 ----
 3 2
 6 5
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT z FROM test.xyzw@foo WHERE y = 5
 ----
 6
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT xyzw.y FROM test.xyzw@foo WHERE z = 3
 ----
 2
 
-query error pgcode 42P01 relation "test.unknown" does not exist
+query error pgcode 42P01 Expected end of statement, found operator "@"
 SELECT z FROM test.unknown@foo WHERE y = 5
 
-query error index "unknown" not found
+query error pgcode 42704 Expected end of statement, found operator "@"
 SELECT z FROM test.xyzw@unknown WHERE y = 5
 
+query error pgcode 42704 Expected end of statement, found operator "@"
+SELECT z FROM test.xyzw@[42] WHERE y = 5
+
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT w FROM test.xyzw@foo WHERE y = 5
 ----
@@ -383,18 +412,20 @@ NULL NULL NULL
 statement ok
 CREATE TABLE MaxIntTest (a INT PRIMARY KEY)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO MaxIntTest VALUES (9223372036854775807)
 
 query I
 SELECT a FROM MaxIntTest WHERE a = 9223372036854775807
 ----
-9223372036854775807
 
-query error no value provided for placeholder
+
+query error expected 1 parameters but got 0
 SELECT $1::int
 
-# Regression tests for materialize#22670.
+# Regression tests for #22670.
 query B
 SELECT 1 IN (1, 2)
 ----
@@ -415,6 +446,13 @@ SELECT 1 IN (NULL, 2)
 ----
 NULL
 
+# Note: The desired behavior here differs from the desired behavior of
+# NULL IN <subquery> as tested below.
+query B
+SELECT NULL IN ((1, 1))
+----
+NULL
+
 query B
 SELECT (1, NULL) IN ((1, 1))
 ----
@@ -424,6 +462,25 @@ query B
 SELECT (2, NULL) IN ((1, 1))
 ----
 false
+
+query error Expected an expression, found right parenthesis
+SELECT () IN (1,2)
+
+query error Expected an expression, found right parenthesis
+SELECT () IN ((1,2))
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT () IN (());
+----
+true
+
+query error invalid input syntax for type integer: invalid digit found in string: "string"
+SELECT ('string', NULL) IN ((1, 1))
+
+query error unequal number of entries in row expressions
+SELECT (2, 'string', NULL) IN ((1, 1))
 
 query B
 SELECT (1, 1) IN ((1, NULL))
@@ -437,103 +494,133 @@ false
 
 # Tests with a tuple coming from a subquery.
 query B
-SELECT NULL::int IN (SELECT * FROM (VALUES (1)) AS t(a))
+SELECT NULL IN (SELECT * FROM (VALUES (1)) AS t(a))
 ----
 NULL
 
 query B
-SELECT (1, NULL::int) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+SELECT (1, NULL) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
 ----
 NULL
 
+query error subquery1 has 2 columns available but 1 columns specified
+SELECT NULL IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b));
+
+query error Expected an expression, found right parenthesis
+SELECT () IN (SELECT * FROM (VALUES (1)) AS t(a))
+
+query error Expected an expression, found right parenthesis
+SELECT () IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+
+query error invalid input syntax for type integer: invalid digit found in string: "string"
+SELECT ('string', NULL) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+
+query error subquery3 has 2 columns available but 3 columns specified
+SELECT (2, 'string', NULL) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+
 query B
-SELECT (2, NULL::int) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+SELECT (2, NULL) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
 ----
 false
 
 query B
-SELECT (NULL::int, 1) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+SELECT (NULL, 1) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
 ----
 NULL
 
 query B
-SELECT (NULL::int, 2) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+SELECT (NULL, 2) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
 ----
 false
 
 query B
-SELECT (NULL::int, NULL::int) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+SELECT (NULL, NULL) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
 ----
 NULL
 
 query B
-SELECT NULL::int NOT IN (SELECT * FROM (VALUES (1)) AS t(a))
+SELECT NULL NOT IN (SELECT * FROM (VALUES (1)) AS t(a))
+----
+NULL
+
+query error subquery1 has 2 columns available but 1 columns specified
+SELECT NULL NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+
+query error Expected an expression, found right parenthesis
+SELECT () NOT IN (SELECT * FROM (VALUES (1)) AS t(a))
+
+query error Expected an expression, found right parenthesis
+SELECT () NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+
+query error invalid input syntax for type integer: invalid digit found in string: "string"
+SELECT ('string', NULL) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+
+query error subquery3 has 2 columns available but 3 columns specified
+SELECT (2, 'string', NULL) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+
+query B
+SELECT (1, NULL) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
 ----
 NULL
 
 query B
-SELECT (1, NULL::int) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
-----
-NULL
-
-query B
-SELECT (2, NULL::int) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+SELECT (2, NULL) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
 ----
 true
 
 query B
-SELECT (NULL::int, 1) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+SELECT (NULL, 1) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
 ----
 NULL
 
 query B
-SELECT (NULL::int, 2) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+SELECT (NULL, 2) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
 ----
 true
 
 query B
-SELECT (NULL::int, NULL::int) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
+SELECT (NULL, NULL) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b))
 ----
 NULL
 
 # Tests with an empty IN tuple.
 query B
-SELECT NULL::int IN (SELECT * FROM (VALUES (1)) AS t(a) WHERE a > 1)
+SELECT NULL IN (SELECT * FROM (VALUES (1)) AS t(a) WHERE a > 1)
 ----
 false
 
 query B
-SELECT (1, NULL::int) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
+SELECT (1, NULL) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
 ----
 false
 
 query B
-SELECT (NULL::int, 1) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
+SELECT (NULL, 1) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
 ----
 false
 
 query B
-SELECT (NULL::int, NULL::int) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
+SELECT (NULL, NULL) IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
 ----
 false
 
 query B
-SELECT NULL::int NOT IN (SELECT * FROM (VALUES (1)) AS t(a) WHERE a > 1)
+SELECT NULL NOT IN (SELECT * FROM (VALUES (1)) AS t(a) WHERE a > 1)
 ----
 true
 
 query B
-SELECT (1, NULL::int) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
+SELECT (1, NULL) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
 ----
 true
 
 query B
-SELECT (NULL::int, 1) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
+SELECT (NULL, 1) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
 ----
 true
 
 query B
-SELECT (NULL::int, NULL::int) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
+SELECT (NULL, NULL) NOT IN (SELECT * FROM (VALUES (1, 1)) AS t(a, b) WHERE a > 1)
 ----
 true
 
@@ -614,6 +701,8 @@ SELECT * FROM b
 2  20
 3  30
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT x FROM b WHERE rowid > 0
 ----
@@ -621,6 +710,17 @@ SELECT x FROM b WHERE rowid > 0
 2
 3
 
+# Not supported by Materialize.
+onlyif cockroach
+query I rowsort
+SELECT x FROM b WHERE b.rowid > 0
+----
+1
+2
+3
+
+# Not supported by Materialize.
+onlyif cockroach
 # ------------------------------------------------------------------------------
 # String inequality filter.
 # ------------------------------------------------------------------------------
@@ -628,6 +728,8 @@ statement ok
 CREATE TABLE c (n INT PRIMARY KEY, str STRING, INDEX str(str DESC));
 INSERT INTO c SELECT i, to_english(i) FROM generate_series(1, 10) AS g(i)
 
+# Not supported by Materialize.
+onlyif cockroach
 query IT rowsort
 SELECT * FROM c WHERE str >= 'moo'
 ----
@@ -639,12 +741,203 @@ SELECT * FROM c WHERE str >= 'moo'
 9   nine
 10  one-zero
 
+# Not supported by Materialize.
+onlyif cockroach
 # ------------------------------------------------------------------------------
 # "*" must expand to zero columns if there are zero columns to select.
 # ------------------------------------------------------------------------------
 statement ok
 CREATE TABLE nocols(x INT); ALTER TABLE nocols DROP COLUMN x
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT 1, * FROM nocols
 ----
+
+# ------------------------------------------------------------------------------
+# Wide tables can tickle edge cases.
+# ------------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE wide (id INT4 NOT NULL, a INT4, b VARCHAR(255), c INT4, d VARCHAR(255), e VARCHAR(255), f INT4, g VARCHAR(255), h VARCHAR(255), i VARCHAR(255), j VARCHAR(255), k INT4,
+                   l FLOAT4, m FLOAT8, n INT2, PRIMARY KEY (id))
+
+statement ok
+INSERT INTO wide(id, n) VALUES(0, 10)
+
+query IITITTITTTTIRRI
+SELECT * FROM wide
+----
+0  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  NULL  10
+
+# Regression test for #44203 (filter that is not folded inside the optimizer,
+# but is statically evaluated to true when building the filterNode).
+statement ok
+CREATE TABLE t44203(c0 BOOL)
+
+statement ok
+INSERT INTO t44203(c0) VALUES (false)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE VIEW v44203(c0) AS SELECT c0 FROM t44203 WHERE t44203.c0 OFFSET NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query B
+SELECT * FROM v44203 WHERE current_user() != ''
+----
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #44132 - generated column causes incorrect scan.
+statement ok
+CREATE TABLE t44132(c0 BOOL UNIQUE, c1 INT AS (NULL) STORED)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO t44132 (c0) VALUES (true)
+
+# Not supported by Materialize.
+onlyif cockroach
+query BI
+SELECT * FROM t44132 WHERE c0
+----
+true NULL
+
+# Tests for `disallow_full_table_scans`
+statement ok
+CREATE TABLE t_disallow_scans(a INT, b INT, INDEX b_idx(b), INDEX b_partial(b) WHERE a > 0);
+
+statement ok
+SELECT * FROM t_disallow_scans
+
+# First disable full scans with a hint.
+statement error unexpected character in input: \{
+SELECT * FROM t_disallow_scans@{NO_FULL_SCAN}
+
+statement error unexpected character in input: \{
+SELECT * FROM t_disallow_scans@{FORCE_INDEX=b_idx,NO_FULL_SCAN}
+
+statement error unexpected character in input: \{
+SELECT * FROM t_disallow_scans@{FORCE_INDEX=b_partial,NO_FULL_SCAN} WHERE a > 0
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SELECT * FROM t_disallow_scans@{NO_FULL_SCAN} WHERE a > 0
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SELECT * FROM t_disallow_scans@{FORCE_INDEX=b_idx,NO_FULL_SCAN} WHERE b > 0
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SELECT * FROM t_disallow_scans@{FORCE_INDEX=b_partial,NO_FULL_SCAN} WHERE a > 0 AND b = 1
+
+# Now disable full scans with the session variable.
+statement ok
+SET disallow_full_table_scans = true;
+
+# Not supported by Materialize.
+onlyif cockroach
+# Full scans are prohibited because we don't have stats on the table.
+statement error pq: query `SELECT \* FROM t_disallow_scans` contains a full table/index scan which is explicitly disallowed
+SELECT * FROM t_disallow_scans
+
+statement error Expected end of statement, found operator "@"
+SELECT * FROM t_disallow_scans@b_idx
+
+# Not supported by Materialize.
+onlyif cockroach
+# Full scans of partial indexes are allowed.
+statement ok
+SELECT * FROM t_disallow_scans@b_partial WHERE a > 0
+
+# Disable 'large_full_scan_rows' heuristic and inject the stats in order to
+# test 'disallow_full_table_scans' in isolation.
+statement ok
+SET large_full_scan_rows = 0;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t_disallow_scans INJECT STATISTICS '[
+  {
+    "columns": ["rowid"],
+    "created_at": "2021-09-15 19:38:46.017315",
+    "distinct_count": 3,
+    "null_count": 0,
+    "row_count": 3
+  },
+  {
+    "columns": ["b"],
+    "created_at": "2021-09-15 19:38:46.017315",
+    "distinct_count": 1,
+    "null_count": 0,
+    "row_count": 3
+  },
+  {
+    "columns": ["a"],
+    "created_at": "2021-09-15 19:38:46.017315",
+    "distinct_count": 3,
+    "null_count": 0,
+    "row_count": 3
+  }
+]'
+
+# Not supported by Materialize.
+onlyif cockroach
+statement error pq: query `SELECT \* FROM t_disallow_scans` contains a full table/index scan which is explicitly disallowed
+SELECT * FROM t_disallow_scans
+
+statement error Expected end of statement, found operator "@"
+SELECT * FROM t_disallow_scans@b_idx
+
+# Internal statements should still be allowed with this setting.
+statement ok
+SELECT * FROM pg_class
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SELECT * FROM crdb_internal.jobs
+
+# Tests for 'large_full_scan_rows'.
+statement ok
+SET large_full_scan_rows = 1000
+
+# These queries succeed because the full table/index scans aren't considered
+# "large".
+statement ok
+SELECT * FROM t_disallow_scans
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SELECT * FROM t_disallow_scans@b_idx
+
+statement ok
+SET large_full_scan_rows = 2
+
+# Not supported by Materialize.
+onlyif cockroach
+statement error pq: query `SELECT \* FROM t_disallow_scans` contains a full table/index scan which is explicitly disallowed
+SELECT * FROM t_disallow_scans
+
+statement error Expected end of statement, found operator "@"
+SELECT * FROM t_disallow_scans@b_idx
+
+# Cleanup
+statement ok
+SET disallow_full_table_scans = false;
+RESET large_full_scan_rows;
+
+# Regression test for #58104.
+statement ok
+SELECT * FROM pg_catalog.pg_attrdef WHERE (adnum = 1 AND adrelid = 1) OR (adbin = 'foo' AND adrelid = 2)

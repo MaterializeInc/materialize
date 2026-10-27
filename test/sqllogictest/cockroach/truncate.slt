@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,16 +9,16 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/truncate
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/truncate
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
@@ -50,7 +50,7 @@ SELECT * FROM kview
 5 6
 7 8
 
-statement error "kview" is not a table
+statement error Expected a keyword at the beginning of a statement, found identifier "truncate"
 TRUNCATE TABLE kview
 
 query II rowsort
@@ -61,22 +61,36 @@ SELECT * FROM kview
 5 6
 7 8
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 TRUNCATE TABLE kv
 
 query II
 SELECT * FROM kv
 ----
+1  2
+3  4
+5  6
+7  8
 
 query II
 SELECT * FROM kview
 ----
+1  2
+3  4
+5  6
+7  8
 
-query TT
-SELECT status, running_status FROM [SHOW JOBS] WHERE job_type = 'SCHEMA CHANGE'
+# Not supported by Materialize.
+onlyif cockroach
+query T retry
+SELECT status FROM [SHOW JOBS] WHERE job_type = 'SCHEMA CHANGE GC'
 ----
-running  waiting for GC TTL
+running
 
+# Not supported by Materialize.
+onlyif cockroach
 # Ensure that TRUNCATE works with a self referential FK.
 statement ok
 CREATE TABLE selfref (
@@ -84,87 +98,30 @@ CREATE TABLE selfref (
   Z INT REFERENCES selfref (y)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 TRUNCATE table selfref
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO selfref VALUES (1, NULL);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE selfref
 
-subtest truncate_interleave
-
-statement ok
-CREATE TABLE a (a INT PRIMARY KEY)
-
-statement ok
-CREATE TABLE b (a INT, b INT, PRIMARY KEY (a, b), UNIQUE INDEX(b)) INTERLEAVE IN PARENT a(a)
-
-statement error "a" is interleaved by table "b"
-TRUNCATE a
-
-statement ok
-TRUNCATE a CASCADE
-
-statement ok
-TRUNCATE b
-
-statement ok
-TRUNCATE b CASCADE
-
-statement ok
-CREATE TABLE c (c INT PRIMARY KEY, d INT REFERENCES b(b))
-
-statement error "b" is referenced by foreign key from table "c"
-TRUNCATE a, b
-
-statement ok
-INSERT INTO b VALUES(1, 2)
-
-statement ok
-INSERT INTO c VALUES(1, 2)
-
-statement ok
-TRUNCATE a CASCADE
-
-query II
-SELECT * FROM c
-----
-
-statement ok
-CREATE TABLE d (c INT PRIMARY KEY) INTERLEAVE IN PARENT c(c);
-
-statement ok
-TRUNCATE a, b, c, d
-
-statement error "c" is interleaved by table "d"
-TRUNCATE a, b, c
-
-statement error "c" is interleaved by table "d"
-TRUNCATE a, b, c
-
-statement ok
-INSERT INTO b VALUES(1, 2)
-
-statement ok
-INSERT INTO c VALUES(1, 2)
-
-statement ok
-INSERT INTO d VALUES (1)
-
-statement ok
-TRUNCATE a CASCADE
-
-query I
-SELECT * FROM d
-----
-
 subtest truncate_29010
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE SEQUENCE foo;
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE bar (
   id INT NOT NULL DEFAULT nextval('foo':::STRING),
@@ -173,24 +130,160 @@ CREATE TABLE bar (
   FAMILY "primary" (id, description)
 );
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 TRUNCATE bar
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP TABLE bar;
 
 subtest truncate_30547
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE tt AS SELECT 'foo'
 
-query TTT
-EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR TRUNCATE TABLE tt
-----
-truncate  ·  ·
+statement ok
+SET vectorize=on
 
+# Not supported by Materialize.
+onlyif cockroach
+query T
+EXPLAIN TRUNCATE TABLE tt
+----
+distribution: local
+vectorized: true
+·
+• truncate
+
+statement ok
+RESET vectorize
+
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that EXPLAIN did not cause the truncate to be performed.
 query T
 SELECT * FROM tt
 ----
 foo
+
+# Tests for comments getting moved during truncate.
+subtest comments
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE t (
+  x INT,
+  y INT,
+  z INT,
+  INDEX i1 (x),
+  INDEX i2 (y),
+  INDEX i3 (z)
+);
+COMMENT ON COLUMN t.x IS '''hi''); DROP TABLE t;';
+COMMENT ON COLUMN t.z IS 'comm"en"t2';
+COMMENT ON INDEX t@i2 IS 'comm''ent3';
+TRUNCATE t
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT column_name, comment FROM [SHOW COLUMNS FROM t WITH COMMENT] ORDER BY column_name
+----
+rowid  NULL
+x      'hi'); DROP TABLE t;
+y      NULL
+z      comm"en"t2
+
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT rowsort
+SELECT distinct(index_name), comment FROM [SHOW INDEXES FROM t WITH COMMENT]
+----
+t_pkey  NULL
+i1      NULL
+i2      comm'ent3
+i3      NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+# Ensure that truncate comment reasignment works when index and column IDs
+# don't all start from 1.
+statement ok
+DROP TABLE t;
+
+statement ok
+CREATE TABLE t (x INT, y INT, z INT);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t DROP COLUMN y;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t ADD COLUMN y INT;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t DROP COLUMN y;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+ALTER TABLE t ADD COLUMN y INT;
+
+statement ok
+CREATE INDEX i ON t (x);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX t@i;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE INDEX i ON t (x);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP INDEX t@i;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE INDEX i ON t (x);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+COMMENT ON COLUMN t.y IS 'hello1';
+COMMENT ON INDEX t@i IS 'hello2'
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT rowsort
+SELECT column_name, comment FROM [SHOW COLUMNS FROM t WITH COMMENT]
+----
+rowid  NULL
+x      NULL
+y      hello1
+z      NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query TT rowsort
+SELECT distinct(index_name), comment FROM [SHOW INDEXES FROM t WITH COMMENT]
+----
+t_pkey  NULL
+i       hello2

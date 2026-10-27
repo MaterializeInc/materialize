@@ -21,10 +21,7 @@ class ShrinkGrow:
     def initialize(self) -> Testdrive:
         name = self.name()
         pads = self.pads()
-        return Testdrive(
-            schemas()
-            + dedent(
-                f"""
+        return Testdrive(schemas() + dedent(f"""
                 $ kafka-create-topic topic=upsert-update-{name}
 
                 $ kafka-ingest format=avro key-format=avro topic=upsert-update-{name} key-schema=${{keyschema}} schema=${{schema}} repeat=10000
@@ -42,9 +39,7 @@ class ShrinkGrow:
                   MIN(LENGTH(f1)) AS l1, MAX(LENGTH(f1)) AS l2
                   FROM upsert_update_{name}
                   GROUP BY LEFT(f1, 1), RIGHT(f1, 1);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         name = self.name()
@@ -66,14 +61,10 @@ class ShrinkGrow:
     def validate(self) -> Testdrive:
         name = self.name()
         last_pad_length = len(self.pads()[-1])
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT * FROM upsert_update_{name}_view;
                 C C 10000 10000 10000 {last_pad_length+3} {last_pad_length+6}
-                """
-            )
-        )
+                """))
 
     def name(self) -> str:
         raise NotImplementedError

@@ -16,32 +16,23 @@ greater than `100 days`. See ['justify_days'](../../functions/justify-days), ['j
 Detail | Info
 -------|-----
 **Quick Syntax** | `INTERVAL '1' MINUTE` <br/> `INTERVAL '1-2 3 4:5:6.7'` <br/>`INTERVAL '1 year 2.3 days 4.5 seconds'`
-**Size** | 20 bytes
+**Size** | 16 bytes
 **Catalog name** | `pg_catalog.interval`
 **OID** | 1186
-**Min value** | -178956970 years -8 months -2147483648 days -2562047788:00:54.775808
-**Max value** | 178956970 years 7 months 2147483647 days 2562047788:00:54.775807
+**Min value** | -178956970 years -8 mons -2147483648 days -2562047788:00:54.775808
+**Max value** | 178956970 years 7 mons 2147483647 days 2562047788:00:54.775807
 
 ## Syntax
 
-#### INTERVAL
+{{% include-syntax file="examples/sql_types/interval" example="syntax" %}}
 
-{{< diagram "type-interval-val.svg" >}}
+### `time_expr` syntax
 
-#### `time_expr`
+{{% include-syntax file="examples/sql_types/interval" example="syntax-time-expr" %}}
 
-{{< diagram "type-interval-time-expr.svg" >}}
+### `time_unit` syntax
 
-#### `time_unit`
-
-{{< diagram "time-unit.svg" >}}
-
-Field | Use
-------|----
-_ym&lowbar;str_ | A string representing years and months in `Y-M D` format.
-_time&lowbar;str_ | A string representing hours, minutes, seconds, and nanoseconds in `H:M:S.NS` format.
-_head&lowbar;time&lowbar;unit_ | Return an interval without `time_unit`s larger than `head_time_unit`. Note that this differs from PostgreSQL's implementation, which ignores this clause.
-_tail&lowbar;time&lowbar;unit_ | 1. Return an interval without `time_unit` smaller than `tail_time_unit`.<br/><br/>2. If the final `time_expr` is only a number, treat the `time_expr` as belonging to `tail_time_unit`. This is the case of the most common `interval` format like `INTERVAL '1' MINUTE`.
+{{% include-syntax file="examples/sql_types/interval" example="syntax-time-unit" %}}
 
 ## Details
 
@@ -134,7 +125,7 @@ SELECT INTERVAL '1-2 3 4:5:6.7' AS interval_p;
 ```nofmt
             interval_f
 -----------------------------------
- 1 year 2 months 3 days 04:05:06.7
+ 1 year 2 mons 3 days 04:05:06.7
 ```
 
 ### PostgreSQL syntax
@@ -191,7 +182,7 @@ SELECT INTERVAL '1 day 2-3 4' MINUTE AS interval_w;
 ```nofmt
            interval_w
 ---------------------------------
- 2 years 3 months 1 day 00:04:00
+ 2 years 3 mons 1 day 00:04:00
 ```
 
 ### Interaction with timestamps

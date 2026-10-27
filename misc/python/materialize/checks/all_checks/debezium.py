@@ -16,9 +16,7 @@ from materialize.checks.checks import Check, externally_idempotent
 @externally_idempotent(False)
 class DebeziumPostgres(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 CREATE TABLE debezium_table (f1 TEXT, f2 INTEGER, f3 INTEGER, f4 TEXT, PRIMARY KEY (f1, f2));
                 ALTER TABLE debezium_table REPLICA IDENTITY FULL;
@@ -67,9 +65,7 @@ class DebeziumPostgres(Check):
                 > SELECT * FROM debezium_view1;
                 A 1 16000
                 B 1 16000
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -121,9 +117,7 @@ class DebeziumPostgres(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM debezium_view1;
                 A 5 16000
                 B 5 16000
@@ -147,6 +141,4 @@ class DebeziumPostgres(Check):
                 D 4 16000
                 E 3 16000
                 F 2 16000
-                """
-            )
-        )
+                """))

@@ -83,8 +83,8 @@ impl ExprHumanizer for TestCatalog {
         self.humanize_id_unqualified(id).map(|name| vec![name])
     }
 
-    fn humanize_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String {
-        DummyHumanizer.humanize_scalar_type(ty, postgres_compat)
+    fn humanize_sql_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String {
+        DummyHumanizer.humanize_sql_scalar_type(ty, postgres_compat)
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {

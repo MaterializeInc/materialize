@@ -4,11 +4,10 @@ This guide details how to run `tokio-console` with Materialize.
 
 ## Overview
 
-First, install `tokio-console`. We require support for Unix domain sockets, [which is still pending
-upstream][uds-pr], so we need to install from a fork for now.
+First, install `tokio-console`:
 
 ```text
-cargo install tokio-console --git https://github.com/MaterializeInc/tokio-console.git
+cargo install tokio-console
 ```
 
 Then run `environmentd`:
@@ -39,7 +38,6 @@ tokio-console <listen-address>
 
 This [README] has some docs on how to navigate the ui.
 
-[uds-pr]: https://github.com/tokio-rs/console/pull/388
 [README]: https://github.com/tokio-rs/console/tree/main/tokio-console
 
 ### Notes on compilation times:

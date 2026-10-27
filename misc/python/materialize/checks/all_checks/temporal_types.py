@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class TemporalTypes(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE temporal_types (date_col DATE, time_col TIME, timestamp_col TIMESTAMP, timestamptz_col TIMESTAMPTZ, interval_col INTERVAL);
             > INSERT INTO temporal_types VALUES ('2010-10-10', '10:10:10', '2010-10-10 10:10:10+00','2010-10-10 10:10:10+00', INTERVAL '0 day');
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -65,9 +61,7 @@ class TemporalTypes(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM date_view1;
                 2010-10-10 2010-10-10 10:10:10 10:10:10 "2010-10-10 10:10:10" "2010-10-10 10:10:10" "2010-10-10 10:10:10 UTC" "2010-10-10 09:10:10 UTC" 00:00:00 "1 day"
                 2011-11-11 2010-10-10 11:11:11 10:10:10 "2011-11-11 11:11:11" "2010-10-10 10:10:10" "2011-11-11 10:11:11 UTC" "2010-10-10 09:10:10 UTC" "1 day" "1 day"
@@ -77,21 +71,15 @@ class TemporalTypes(Check):
                 2010-10-10 2010-10-10 10:10:10 10:10:10 "2010-10-10 10:10:10" "2010-10-10 10:10:10" "2010-10-10 10:10:10 UTC" "2010-10-10 09:10:10 UTC" 00:00:00 "1 day"
                 2011-11-11 2010-10-10 11:11:11 10:10:10 "2011-11-11 11:11:11" "2010-10-10 10:10:10" "2011-11-11 10:11:11 UTC" "2010-10-10 09:10:10 UTC" "1 day" "1 day"
                 2012-12-12 2010-10-10 12:12:12 10:10:10 "2012-12-12 12:12:12" "2010-10-10 10:10:10" "2012-12-12 10:12:12 UTC" "2010-10-10 09:10:10 UTC" "2 days" "1 day"
-            """
-            )
-        )
+            """))
 
 
 class TemporalPrecisionTypes(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE temporal_prec_types (timestamp_prec_col TIMESTAMP(3), timestamptz_prec_col TIMESTAMPTZ(1));
             > INSERT INTO temporal_prec_types VALUES ('2010-10-10 10:10:10.123456789+00','2010-10-10 10:10:10.123456789+00');
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -123,9 +111,7 @@ class TemporalPrecisionTypes(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM date_prec_view1;
                 "2010-10-10 10:10:10.123" "2010-10-10 10:10:10.123" "2010-10-10 10:10:10.100 UTC" "2010-10-10 09:10:10.100 UTC"
                 "2011-11-11 11:11:11.235" "2010-10-10 10:10:10.123" "2011-11-11 10:11:11.200 UTC" "2010-10-10 09:10:10.100 UTC"
@@ -135,6 +121,4 @@ class TemporalPrecisionTypes(Check):
                 "2010-10-10 10:10:10.123" "2010-10-10 10:10:10.123" "2010-10-10 10:10:10.100 UTC" "2010-10-10 09:10:10.100 UTC"
                 "2011-11-11 11:11:11.235" "2010-10-10 10:10:10.123" "2011-11-11 10:11:11.200 UTC" "2010-10-10 09:10:10.100 UTC"
                 "2012-12-12 12:12:12.346" "2010-10-10 10:10:10.123" "2012-12-12 10:12:12.300 UTC" "2010-10-10 09:10:10.100 UTC"
-            """
-            )
-        )
+            """))

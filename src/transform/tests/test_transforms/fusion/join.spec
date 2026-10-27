@@ -31,7 +31,7 @@ Source defined as t1
 # --------------
 
 # Simple test: two nested joins.
-apply pipeline=fusion_join
+apply pipeline=JoinFusion
 Join on=(#3 = #4)
   Join on=(#1 = #2)
     Get x
@@ -44,7 +44,7 @@ Join on=(#1 = #2 AND #3 = #4)
   Get x
 
 # Simple test: two nested joins separated by a filter.
-apply pipeline=fusion_join
+apply pipeline=JoinFusion
 Join on=(#0 = #2)
   Get x
   Filter (#1 > 42)
@@ -59,7 +59,7 @@ Join on=(#0 = #2 = #4)
   Get y
 
 # Simple test: a join with an that has a filter.
-apply pipeline=fusion_join
+apply pipeline=JoinFusion
 Join on=(#0 = #2)
   Get x
   Filter (#1 > 42)
@@ -71,7 +71,7 @@ Join on=(#0 = #2)
     Get y
 
 # Check that filters around non-join operators are handled properly.
-apply pipeline=fusion_join
+apply pipeline=JoinFusion
 Join on=(#0 = #2 = #6)
   Get x
   Filter (#1 > 42)
@@ -90,7 +90,7 @@ Join on=(#0 = #2 = #4 = #6)
     Get y
 
 # Full-blown MFP between joins
-apply pipeline=fusion_join
+apply pipeline=JoinFusion
 Join on=((#0 + 4) = (#2 + 3) = #6)
   Get x
   Project (#0, #1, #2, #3)
@@ -116,7 +116,7 @@ Project (#0..=#7)
 
 # Full-blown MFP between joins: `Map (#1 * #3)` is referenced by a
 # Join predicate.
-apply pipeline=fusion_join
+apply pipeline=JoinFusion
 Join on=((#0 + 4) = (#2 + 3) = #6)
   Get x
   Project (#4, #0, #1, #2)

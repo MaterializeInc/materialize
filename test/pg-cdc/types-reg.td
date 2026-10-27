@@ -40,6 +40,8 @@ CREATE TABLE regproc_table (f1 REGPROC);
 ALTER TABLE regproc_table REPLICA IDENTITY FULL;
 INSERT INTO regproc_table VALUES (1::regproc),(2::regproc);
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');

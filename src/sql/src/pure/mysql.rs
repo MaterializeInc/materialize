@@ -30,7 +30,8 @@ use crate::pure::{MySqlSourcePurificationError, ResolvedItemName};
 
 use super::references::RetrievedSourceReferences;
 use super::{
-    PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport, SourceReferencePolicy,
+    FilterConstraints, PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport,
+    SourceReferencePolicy,
 };
 
 /// The name of the fake database that we use for MySQL sources
@@ -130,9 +131,10 @@ pub(super) fn generate_source_export_statement_values(
         text_columns,
         exclude_columns,
         initial_gtid_set,
+        binlog_full_metadata,
     } = purified_export.details
     else {
-        unreachable!("purified export details must be mysql")
+        bail_internal!("purified export details must be mysql");
     };
 
     // Figure out the schema of the subsource
@@ -188,6 +190,7 @@ pub(super) fn generate_source_export_statement_values(
     let details = SourceExportStatementDetails::MySql {
         table,
         initial_gtid_set,
+        binlog_full_metadata,
     };
 
     let text_columns = text_columns.map(|mut columns| {
@@ -336,9 +339,15 @@ pub(super) async fn purify_source_exports(
     requested_references: &Option<ExternalReferences>,
     text_columns: Vec<UnresolvedItemName>,
     exclude_columns: Vec<UnresolvedItemName>,
+    // NOTE: constraints may only be excluded when exactly one export is
+    // purified, as `CREATE TABLE .. FROM SOURCE` does, since constraint names
+    // are validated against that single table's keys. Enforced below.
+    filter_constraints: &FilterConstraints,
+    exclude_all_not_null_constraints: bool,
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
     reference_policy: &SourceReferencePolicy,
+    binlog_full_metadata: bool,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let requested_exports = match requested_references.as_ref() {
         Some(requested) if matches!(reference_policy, SourceReferencePolicy::NotAllowed) => {
@@ -388,6 +397,14 @@ pub(super) async fn purify_source_exports(
 
     super::validate_source_export_names(&requested_exports)?;
 
+    if filter_constraints.excludes_any() && requested_exports.len() != 1 {
+        sql_bail!(
+            "EXCLUDE CONSTRAINTS and EXCLUDE ALL CONSTRAINTS apply to exactly one table, \
+             but {} tables were referenced",
+            requested_exports.len()
+        );
+    }
+
     let text_cols_map = map_column_refs(&text_columns, MySqlConfigOptionName::TextColumns)?;
     let exclude_columns_map =
         map_column_refs(&exclude_columns, MySqlConfigOptionName::ExcludeColumns)?;
@@ -399,6 +416,22 @@ pub(super) async fn purify_source_exports(
         .map(|requested_export| {
             let table = requested_export.meta.mysql_table().expect("is mysql");
             let table_ref = table.table_ref();
+
+            if let FilterConstraints::Exclude(names) = filter_constraints {
+                let missing: Vec<_> = names
+                    .iter()
+                    .filter(|n| !table.keys.iter().any(|k| &&k.name == n))
+                    .cloned()
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(MySqlSourcePurificationError::ConstraintsNotFound {
+                        table: format!("{}.{}", table.schema_name, table.name),
+                        constraints: missing,
+                    }
+                    .into());
+                }
+            }
+
             // we are cloning the BTreeSet<&str> so we can avoid a borrow on `table` here
             let text_cols = text_cols_map.get(&table_ref).map(|s| s.clone());
             let exclude_columns = exclude_columns_map.get(&table_ref).map(|s| s.clone());
@@ -423,6 +456,47 @@ pub(super) async fn purify_source_exports(
                     )),
                     _ => err.into(),
                 })?;
+            let mut parsed_table = parsed_table;
+            match filter_constraints {
+                FilterConstraints::Exclude(names) => {
+                    parsed_table.keys.retain(|k| !names.contains(&k.name));
+                }
+                FilterConstraints::ExcludeAll => {
+                    // Marking columns as nullable allows dropping (and adding) the
+                    // NOT NULL constraint without an outage.
+                    parsed_table.keys.clear();
+                    for c in &mut parsed_table.columns {
+                        if let Some(column_type) = &mut c.column_type {
+                            column_type.nullable = true;
+                        }
+                    }
+                }
+            }
+            if exclude_all_not_null_constraints {
+                // Columns of a retained primary key stay NOT NULL. The planner
+                // declares them NOT NULL in the table's `RelationDesc`
+                // regardless of this desc, so a nullable column here would
+                // drop the decoder's NULL check and let a NULL reach persist
+                // in a column it treats as non-nullable, which panics.
+                // The reason we need this to avoid panics for MySQL sources
+                // and not for Postgres sources is because schemas are compared
+                // by name/column in MySQL. Postgres on the other hand has an OID
+                // that would differ and prevent this case.
+                let pk_cols: BTreeSet<&str> = parsed_table
+                    .keys
+                    .iter()
+                    .filter(|k| k.is_primary)
+                    .flat_map(|k| k.columns.iter().map(String::as_str))
+                    .collect();
+                for c in &mut parsed_table.columns {
+                    if pk_cols.contains(c.name.as_str()) {
+                        continue;
+                    }
+                    if let Some(column_type) = &mut c.column_type {
+                        column_type.nullable = true;
+                    }
+                }
+            }
             Ok(requested_export.change_meta(parsed_table))
         })
         .collect::<Result<Vec<_>, PlanError>>()?;
@@ -477,6 +551,7 @@ pub(super) async fn purify_source_exports(
                                 .collect()
                         }),
                         initial_gtid_set: initial_gtid_set.clone(),
+                        binlog_full_metadata,
                     },
                 },
             )
@@ -509,5 +584,54 @@ pub(super) fn references_system_schemas(requested_references: &Option<ExternalRe
             }),
         },
         None => false,
+    }
+}
+
+pub async fn ensure_binlog_full_metadata(
+    conn: &mut mz_mysql_util::MySqlConn,
+) -> Result<(), MySqlSourcePurificationError> {
+    let version = mz_mysql_util::query_sys_var(conn, "version")
+        .await
+        .map_err(|err| MySqlSourcePurificationError::InvalidConnection(err.into()))?;
+    if version_compare::compare_to(&version, "8.0.1", version_compare::Cmp::Lt).map_err(|_| {
+        MySqlSourcePurificationError::UnsupportedMySqlVersion {
+            version: version.clone(),
+        }
+    })? {
+        Err(MySqlSourcePurificationError::UnsupportedMySqlVersion { version })?;
+    }
+    let binlog_metadata_setting = mz_mysql_util::query_sys_var(conn, "binlog_row_metadata")
+        .await
+        .map_err(|err| MySqlSourcePurificationError::InvalidConnection(err.into()))?;
+    let binlog_full_metadata = binlog_metadata_setting.eq_ignore_ascii_case("FULL");
+    if !binlog_full_metadata {
+        Err(
+            MySqlSourcePurificationError::UnsupportedBinlogMetadataSetting {
+                setting: binlog_metadata_setting,
+            },
+        )
+    } else {
+        Ok(())
+    }
+}
+
+pub async fn is_binlog_full_metadata(
+    conn: &mut mz_mysql_util::MySqlConn,
+) -> Result<bool, MySqlSourcePurificationError> {
+    match ensure_binlog_full_metadata(conn).await {
+        Ok(_) => Ok(true),
+        // If we get an InvalidConnection error, we have failed to query the upstream for
+        // version or binlog format information, which is fatal to purification.
+        // Other types of errors simply indicate that binlow_row_metadata is not full for some reason.
+        Err(MySqlSourcePurificationError::InvalidConnection(err)) => {
+            Err(MySqlSourcePurificationError::InvalidConnection(err))
+        }
+        Err(err) => {
+            tracing::info!(
+                error = ?err,
+                "unable to verify MySQL binlog format, proceeding without full metadata"
+            );
+            Ok(false)
+        }
     }
 }

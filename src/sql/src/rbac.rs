@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::iter;
 use std::sync::LazyLock;
 
@@ -31,8 +31,10 @@ use crate::names::{
 };
 use crate::plan::{self, PlanKind};
 use crate::plan::{
-    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, UpdatePrivilege,
+    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, TableDataSource,
+    UpdatePrivilege,
 };
+use crate::pure::StatementSource;
 use crate::session::metadata::SessionMetadata;
 use crate::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use crate::session::vars::SystemVars;
@@ -107,6 +109,24 @@ pub static CREATE_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::ne
 });
 pub static EMPTY_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new(BTreeSet::new);
 
+/// System catalog objects exempted from `check_restrict_to_user_objects`.
+///
+/// The `mz_mcp_data_product*` views are how the MCP agent endpoint
+/// discovers data products; blocking them defeats the isolation model.
+/// `mz_show_my_cluster_privileges` is referenced by those views to null the
+/// advertised cluster unless the role has USAGE on it (it uses
+/// `mz_session_role_memberships()` rather than a `has_cluster_privilege`
+/// body that referenced `mz_roles`), and is itself useful for a restricted
+/// session to inspect its own privileges.
+static RESTRICT_TO_USER_OBJECTS_ALLOWED_OIDS: LazyLock<BTreeSet<u32>> = LazyLock::new(|| {
+    use mz_pgrepr::oid;
+    btreeset! {
+        oid::VIEW_MZ_MCP_DATA_PRODUCTS_OID,
+        oid::VIEW_MZ_MCP_DATA_PRODUCT_DETAILS_OID,
+        oid::VIEW_MZ_SHOW_MY_CLUSTER_PRIVILEGES_OID,
+    }
+});
+
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
 pub enum UnauthorizedError {
@@ -137,6 +157,9 @@ pub enum UnauthorizedError {
     /// The active role was dropped while a user was logged in.
     #[error("role {0} was concurrently dropped")]
     ConcurrentRoleDrop(RoleId),
+    /// Access to system objects is restricted by the restrict_to_user_objects session variable.
+    #[error("access to system object {object_name} is restricted")]
+    RestrictedSystemObject { object_name: String },
 }
 
 impl UnauthorizedError {
@@ -162,6 +185,11 @@ impl UnauthorizedError {
             UnauthorizedError::ConcurrentRoleDrop(_) => {
                 Some("Please disconnect and re-connect with a valid role.".into())
             }
+            UnauthorizedError::RestrictedSystemObject { .. } => Some(
+                "Access to system catalog objects is restricted for this role. \
+                Contact your administrator if you need access."
+                    .into(),
+            ),
             UnauthorizedError::Ownership { .. } | UnauthorizedError::RoleMembership { .. } => None,
         }
     }
@@ -292,6 +320,41 @@ impl Default for RbacRequirements {
     }
 }
 
+/// When `restrict_to_user_objects` is active, rejects access to system catalog objects.
+///
+/// Functions and types are allowed through because they are needed for query execution.
+/// All other system items (tables, views, sources, sinks, etc.) are blocked. This is an
+/// allow-list — new catalog item types are blocked by default.
+///
+/// See: doc/developer/design/20260508_restrict_to_user_objects.md
+fn check_restrict_to_user_objects(
+    catalog: &impl SessionCatalog,
+    session: &dyn SessionMetadata,
+    resolved_ids: &ResolvedIds,
+) -> Result<(), UnauthorizedError> {
+    if !session.restrict_to_user_objects() {
+        return Ok(());
+    }
+    for item_id in resolved_ids.items() {
+        if item_id.is_system() {
+            if let Some(item) = catalog.try_get_item(item_id) {
+                match item.item_type() {
+                    CatalogItemType::Func | CatalogItemType::Type => {}
+                    _ => {
+                        if RESTRICT_TO_USER_OBJECTS_ALLOWED_OIDS.contains(&item.oid()) {
+                            continue;
+                        }
+                        return Err(UnauthorizedError::RestrictedSystemObject {
+                            object_name: item.name().item.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Checks if a `session` is authorized to use `resolved_ids`. If not, an error is returned.
 pub fn check_usage(
     catalog: &impl SessionCatalog,
@@ -300,6 +363,9 @@ pub fn check_usage(
     item_types: &BTreeSet<CatalogItemType>,
 ) -> Result<(), UnauthorizedError> {
     rbac_check_preamble(catalog, session)?;
+
+    // See: doc/developer/design/20260508_restrict_to_user_objects.md
+    check_restrict_to_user_objects(catalog, session, resolved_ids)?;
 
     // Obtain all roles that the current session is a member of.
     let role_membership = catalog.collect_role_membership(&session.role_metadata().current_role);
@@ -333,26 +399,72 @@ pub fn check_usage(
     Ok(())
 }
 
+/// Authorizes a statement for purification, which runs before planning and so
+/// escapes the [`check_plan`] gate. `source` is the existing source the
+/// statement would drive, as resolved by [`crate::pure::statement_source`].
+///
+/// The requirements are the same ones planning enforces later, so a statement
+/// that passes here can still be rejected by [`check_plan`], never the reverse.
+pub fn check_purification(
+    catalog: &impl SessionCatalog,
+    session: &dyn SessionMetadata,
+    source: Option<StatementSource>,
+    resolved_ids: &ResolvedIds,
+) -> Result<(), UnauthorizedError> {
+    // Like `check_plan`: `validate` reads the current role's membership through
+    // the panicking `get_role`, so the concurrent-role-drop case must be turned
+    // into a clean error before anything else runs.
+    rbac_check_preamble(catalog, session)?;
+
+    let role_id = session.role_metadata().current_role;
+    let mut requirements = RbacRequirements {
+        item_usage: &CREATE_ITEM_USAGE,
+        ..Default::default()
+    };
+    match source {
+        Some(StatementSource::Altered(id)) => {
+            requirements.ownership = vec![ObjectId::Item(id)];
+        }
+        Some(StatementSource::Read(id)) => {
+            requirements.privileges = generate_read_privileges(catalog, iter::once(id), role_id);
+        }
+        // Statements that name their connection are covered by `item_usage`.
+        None => {}
+    }
+
+    let requirements = filter_requirements(catalog, session, requirements);
+    requirements.validate(catalog, session, resolved_ids)
+}
+
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
+///
+/// `sql_impl_resolved_ids` contains resolved IDs discovered inside SQL-implemented function
+/// bodies during planning. These are kept separate from `resolved_ids` because they are
+/// implementation details of the functions, not dependencies of the statement. They are
+/// only checked by the `restrict_to_user_objects` restriction.
 pub fn check_plan(
     catalog: &impl SessionCatalog,
-    // Function mapping a connection ID to an authenticated role. The roles may have been dropped concurrently.
-    // Only required for Plan::SideEffectingFunc; can be None for other plan types.
-    // TODO(peek-seq): Remove this when deleting the old peek sequencing. The logic here that uses
-    // `active_conns` is mirrored in `execute_side_effecting_func`, which is what the frontend peek
-    // sequencing uses.
-    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
+    // The authenticated role of the connection targeted by the plan, if the plan is a
+    // Plan::SideEffectingFunc that targets an existing connection. The role may have been
+    // dropped concurrently. Ignored for other plan types.
+    target_conn_role: Option<RoleId>,
     session: &dyn SessionMetadata,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
     resolved_ids: &ResolvedIds,
+    sql_impl_resolved_ids: &ResolvedIds,
 ) -> Result<(), UnauthorizedError> {
     rbac_check_preamble(catalog, session)?;
+
+    // Check sql_impl function body dependencies against restrict_to_user_objects.
+    // These are checked separately from the main resolved_ids because they are
+    // implementation details that should not affect dependency tracking.
+    check_restrict_to_user_objects(catalog, session, sql_impl_resolved_ids)?;
 
     let rbac_requirements = generate_rbac_requirements(
         catalog,
         plan,
-        active_conns,
+        target_conn_role,
         target_cluster_id,
         session.role_metadata().current_role,
     );
@@ -381,7 +493,7 @@ pub fn is_rbac_enabled_for_session(
 fn generate_rbac_requirements(
     catalog: &impl SessionCatalog,
     plan: &Plan,
-    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
+    target_conn_role: Option<RoleId>,
     target_cluster_id: Option<ClusterId>,
     role_id: RoleId,
 ) -> RbacRequirements {
@@ -459,6 +571,7 @@ fn generate_rbac_requirements(
             name: _,
             variant: _,
             workload_class: _,
+            if_not_exists: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)],
             item_usage: &CREATE_ITEM_USAGE,
@@ -468,6 +581,7 @@ fn generate_rbac_requirements(
             cluster_id,
             name: _,
             config: _,
+            if_not_exists: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*cluster_id)],
             item_usage: &CREATE_ITEM_USAGE,
@@ -560,17 +674,35 @@ fn generate_rbac_requirements(
         }
         Plan::CreateTable(plan::CreateTablePlan {
             name,
-            table: _,
+            table,
             if_not_exists: _,
-        }) => RbacRequirements {
-            privileges: vec![(
+        }) => {
+            let mut privileges = vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+            )];
+            // `CREATE TABLE ... FROM SOURCE` reads the source's data, so it
+            // requires `SELECT` on the source. `check_purification` enforces
+            // the same read requirement before purification; keep them in sync
+            // or its subset invariant inverts.
+            if let TableDataSource::DataSource {
+                desc: DataSourceDesc::IngestionExport { ingestion_id, .. },
+                timeline: _,
+            } = &table.data_source
+            {
+                privileges.extend(generate_read_privileges(
+                    catalog,
+                    iter::once(*ingestion_id),
+                    role_id,
+                ));
+            }
+            RbacRequirements {
+                privileges,
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateView(plan::CreateViewPlan {
             name,
             view: _,
@@ -598,9 +730,15 @@ fn generate_rbac_requirements(
             if_not_exists: _,
             ambiguous_columns: _,
         }) => RbacRequirements {
+            // `CREATE REPLACEMENT MATERIALIZED VIEW ... FOR <target>` requires ownership of the
+            // target, mirroring `ALTER ... APPLY REPLACEMENT` and `CREATE INDEX`, which require
+            // ownership of the item they act on. `replace` is the separate `CREATE OR REPLACE`
+            // target. Both are optional and independent, so require ownership of whichever are set.
             ownership: replace
-                .map(|id| vec![ObjectId::Item(id)])
-                .unwrap_or_default(),
+                .iter()
+                .chain(materialized_view.replacement_target.iter())
+                .map(|id| ObjectId::Item(*id))
+                .collect(),
             privileges: vec![
                 (
                     SystemObjectId::Object(name.qualifiers.clone().into()),
@@ -609,29 +747,6 @@ fn generate_rbac_requirements(
                 ),
                 (
                     SystemObjectId::Object(materialized_view.cluster_id.into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-            ],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
-        Plan::CreateContinualTask(plan::CreateContinualTaskPlan {
-            name,
-            placeholder_id: _,
-            desc: _,
-            input_id: _,
-            with_snapshot: _,
-            continual_task,
-        }) => RbacRequirements {
-            privileges: vec![
-                (
-                    SystemObjectId::Object(name.qualifiers.clone().into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-                (
-                    SystemObjectId::Object(continual_task.cluster_id.into()),
                     AclMode::CREATE,
                     role_id,
                 ),
@@ -659,6 +774,33 @@ fn generate_rbac_requirements(
                         role_id,
                     ),
                 ],
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
+        Plan::CreateMetricSink(plan::CreateMetricSinkPlan {
+            name,
+            metric_sink,
+            if_not_exists: _,
+        }) => {
+            // A metric sink republishes the FROM relation's rows on the replica's scrape
+            // endpoint, so it is an egress path for that relation's contents, exactly like
+            // CREATE SINK. The guard is therefore read privileges on the source, not
+            // ownership of it.
+            let mut privileges = vec![(
+                SystemObjectId::Object(name.qualifiers.clone().into()),
+                AclMode::CREATE,
+                role_id,
+            )];
+            let items = iter::once(metric_sink.from).map(|gid| catalog.resolve_item_id(&gid));
+            privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
+            privileges.push((
+                SystemObjectId::Object(metric_sink.cluster_id.into()),
+                AclMode::CREATE,
+                role_id,
+            ));
+            RbacRequirements {
+                privileges,
                 item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
@@ -786,7 +928,7 @@ fn generate_rbac_requirements(
             for privilege in generate_rbac_requirements(
                 catalog,
                 &Plan::Select(select_plan.clone()),
-                active_conns,
+                target_conn_role,
                 target_cluster_id,
                 role_id,
             )
@@ -1054,10 +1196,21 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::AlterSourceTimestampInterval(plan::AlterSourceTimestampIntervalPlan {
+            id,
+            value: _,
+            interval: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*id)],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::AlterConnection(plan::AlterConnectionPlan { id, action: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()
         },
+        // `check_purification` enforces the same ownership requirement before
+        // purification; keep them in sync or its subset invariant inverts.
         Plan::AlterSource(plan::AlterSourcePlan {
             item_id,
             ingestion_id: _,
@@ -1073,6 +1226,8 @@ fn generate_rbac_requirements(
             sink,
             with_snapshot: _,
             in_cluster,
+            set_options: _,
+            reset_options: _,
         }) => {
             let items = iter::once(sink.from).map(|gid| catalog.resolve_item_id(&gid));
             let mut privileges = generate_read_privileges(catalog, items, role_id);
@@ -1187,29 +1342,49 @@ fn generate_rbac_requirements(
         }) => match option {
             // Only superusers can alter the superuserness of a role.
             plan::PlannedAlterRoleOption::Attributes(attributes)
-                if attributes.superuser.unwrap_or(false) =>
+                if attributes.superuser.is_some() =>
             {
                 RbacRequirements {
                     superuser_action: Some("alter superuser role".to_string()),
                     ..Default::default()
                 }
             }
-            // Roles are allowed to change their own password.
-            plan::PlannedAlterRoleOption::Attributes(attributes)
-                if attributes.password.is_some() && role_id == *id =>
-            {
-                RbacRequirements::default()
-            }
+            // Roles are allowed to change their own password, but only if
+            // password is the sole attribute being changed.
+            plan::PlannedAlterRoleOption::Attributes(plan::PlannedRoleAttributes {
+                password,
+                // scram_iterations and nopassword are password-related, so
+                // they're fine to change alongside the password.
+                scram_iterations: _,
+                nopassword: _,
+                // superuser is already handled by the match arm above, so it
+                // will always be None here.
+                superuser: None,
+                inherit: None,
+                login: None,
+            }) if password.is_some() && role_id == *id => RbacRequirements::default(),
             // But no one elses...
             plan::PlannedAlterRoleOption::Attributes(attributes)
-                if attributes.password.is_some() =>
+                if attributes.password.is_some() && role_id != *id =>
             {
                 RbacRequirements {
                     superuser_action: Some("alter password of role".to_string()),
                     ..Default::default()
                 }
             }
-            // Roles are allowed to change their own variables.
+            // restrict_to_user_objects can only be set by superuser.
+            // SECURITY: This must use case-insensitive comparison because
+            // var.name() comes from Ident::to_string() which preserves the
+            // original casing for quoted identifiers.
+            plan::PlannedAlterRoleOption::Variable(var)
+                if var.name().eq_ignore_ascii_case("restrict_to_user_objects") =>
+            {
+                RbacRequirements {
+                    superuser_action: Some("set restrict_to_user_objects".to_string()),
+                    ..Default::default()
+                }
+            }
+            // Roles are allowed to change their own other variables.
             plan::PlannedAlterRoleOption::Variable(_) if role_id == *id => {
                 RbacRequirements::default()
             }
@@ -1475,12 +1650,14 @@ fn generate_rbac_requirements(
         },
         Plan::SideEffectingFunc(func) => {
             let role_membership = match func {
-                SideEffectingFunc::PgCancelBackend { connection_id } => active_conns
-                    .expect("active_conns is required for Plan::SideEffectingFunc")(
-                    *connection_id
-                )
-                .map(|x| [x].into())
-                .unwrap_or_default(),
+                // A `NULL` argument cancels no connection (the function returns
+                // `NULL`), so there is no role membership to require.
+                SideEffectingFunc::PgCancelBackend {
+                    connection_id: None,
+                } => BTreeSet::new(),
+                SideEffectingFunc::PgCancelBackend {
+                    connection_id: Some(_),
+                } => target_conn_role.map(|x| [x].into()).unwrap_or_default(),
             };
             RbacRequirements {
                 role_membership,
@@ -1660,9 +1837,11 @@ fn generate_read_privileges_inner(
     seen: &mut BTreeSet<(ObjectId, RoleId)>,
 ) -> Vec<(SystemObjectId, AclMode, RoleId)> {
     let mut privileges = Vec::new();
-    let mut views = Vec::new();
 
-    for id in ids {
+    // Iterative worklist traversal rather than recursion. View dependency
+    // chains are user controlled and can be arbitrarily deep.
+    let mut queue: VecDeque<(CatalogItemId, RoleId)> = ids.map(|id| (id, role_id)).collect();
+    while let Some((id, role_id)) = queue.pop_front() {
         if seen.insert((id.into(), role_id)) {
             let item = catalog.get_item(&id);
             let schema_id: ObjectId = item.name().qualifiers.clone().into();
@@ -1670,11 +1849,10 @@ fn generate_read_privileges_inner(
                 privileges.push((SystemObjectId::Object(schema_id), AclMode::USAGE, role_id))
             }
             match item.item_type() {
-                CatalogItemType::View
-                | CatalogItemType::MaterializedView
-                | CatalogItemType::ContinualTask => {
+                CatalogItemType::View | CatalogItemType::MaterializedView => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
-                    views.push((item.references().items().copied(), item.owner_id()));
+                    let view_owner = item.owner_id();
+                    queue.extend(item.references().items().map(|id| (*id, view_owner)));
                 }
                 CatalogItemType::Table | CatalogItemType::Source => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
@@ -1682,15 +1860,12 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id));
                 }
-                CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
+                CatalogItemType::Sink
+                | CatalogItemType::MetricSink
+                | CatalogItemType::Index
+                | CatalogItemType::Func => {}
             }
         }
-    }
-
-    for (view_ids, view_owner) in views {
-        privileges.extend_from_slice(&generate_read_privileges_inner(
-            catalog, view_ids, view_owner, seen,
-        ));
     }
 
     privileges
@@ -1802,6 +1977,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::MaterializedView) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::MetricSink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Index) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
@@ -1813,7 +1989,6 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Database) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
-        SystemObjectType::Object(ObjectType::ContinualTask) => AclMode::SELECT,
         SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
@@ -1831,10 +2006,10 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
-        | ObjectType::Source
-        | ObjectType::ContinualTask => AclMode::SELECT,
+        | ObjectType::Source => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink
+        | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster

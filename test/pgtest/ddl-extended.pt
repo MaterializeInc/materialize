@@ -38,7 +38,7 @@ BindComplete
 CommandComplete {"tag":"CREATE TABLE"}
 ParseComplete
 BindComplete
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"XX000"},{"typ":"M","value":"division by zero"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22012"},{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"I"}
 
 send

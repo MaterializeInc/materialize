@@ -14,9 +14,7 @@ from materialize.checks.checks import Check
 
 class SwapSchema(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE SCHEMA swap_me1;
             > CREATE SCHEMA swap_me2;
             > CREATE SCHEMA swap_me3;
@@ -31,9 +29,7 @@ class SwapSchema(Check):
             > INSERT INTO swap_me2.t2 VALUES (2);
             > INSERT INTO swap_me3.t3 VALUES (3);
             > INSERT INTO swap_me4.t4 VALUES (4);
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -49,9 +45,7 @@ class SwapSchema(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SHOW SCHEMAS LIKE 'swap_me%';
                 swap_me1 ""
                 swap_me2 ""
@@ -77,6 +71,4 @@ class SwapSchema(Check):
 
                 > SELECT * FROM t3;
                 3
-                """
-            )
-        )
+                """))

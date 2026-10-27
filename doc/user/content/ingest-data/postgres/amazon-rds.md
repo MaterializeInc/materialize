@@ -23,7 +23,7 @@ to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 ## Before you begin
 
-{{% postgres-direct/before-you-begin %}}
+{{% include-from-yaml data="ingest_postgres" name="before-you-begin" %}}
 
 ## A. Configure Amazon RDS
 
@@ -97,7 +97,7 @@ As a first step, you need to make sure logical replication is enabled.
 
 ### 2. Create a publication and a replication user
 
-{{% postgres-direct/create-a-publication-aws %}}
+{{% include-from-yaml data="ingest_postgres" name="create-a-publication-aws" %}}
 
 ## B. (Optional) Configure network security
 
@@ -129,7 +129,7 @@ to connect:
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](/console/), or your preferred SQL
+1. In the [SQL Shell](/developer-tools/console/), or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -162,84 +162,7 @@ configuration of AWS resources for a PrivateLink connection. For more details,
 see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
 {{</ note >}}
 
-1. Get the IP address of your RDS instance. You'll need this address to register
-   your RDS instance as the target for the network load balancer in the next
-   step.
-
-    To get the IP address of your RDS instance:
-
-    1. Select your database in the RDS Console.
-
-    1. Find your RDS endpoint under **Connectivity & security**.
-
-    1. Use the `dig` or `nslooklup` command to find the IP address that the
-    endpoint resolves to:
-
-       ```sh
-       dig +short <RDS_ENDPOINT>
-       ```
-
-1. [Create a dedicated target group for your RDS instance](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html).
-
-    - Choose the **IP addresses** type.
-
-    - Set the protocol and port to **TCP** and **5432**.
-
-    - Choose the same VPC as your RDS instance.
-
-    - Use the IP address from the previous step to register your RDS instance as
-      the target.
-
-    **Warning:** The IP address of your RDS instance can change without notice.
-      For this reason, it's best to set up automation to regularly check the IP
-      of the instance and update your target group accordingly. You can use a
-      lambda function to automate this process - see Materialize's
-      [Terraform module for AWS PrivateLink](https://github.com/MaterializeInc/terraform-aws-rds-privatelink/blob/main/lambda_function.py)
-      for an example. Another approach is to [configure an EC2 instance as an
-      RDS router](https://aws.amazon.com/blogs/database/how-to-use-amazon-rds-and-amazon-aurora-with-a-static-ip-address/)
-      for your network load balancer.
-
-1. [Create a network load balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html).
-
-    - For **Network mapping**, choose the same VPC as your RDS instance and
-      select all of the availability zones and subnets that you RDS instance is
-      in.
-
-    - For **Listeners and routing**, set the protocol and port to **TCP**
-      and **5432** and select the target group you created in the previous
-      step.
-
-1. In the security group of your RDS instance, [allow traffic from the network load balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
-
-    If [client IP preservation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/load-balancer-target-groups.html#client-ip-preservation)
-    is disabled, the easiest approach is to add an inbound rule with the VPC
-    CIDR of the network load balancer. If you don't want to grant access to the
-    entire VPC CIDR, you can add inbound rules for the private IP addresses of
-    the load balancer subnets.
-
-    - To find the VPC CIDR, go to your network load balancer and look
-      under **Network mapping**.
-    - To find the private IP addresses of the load balancer subnets, go
-      to **Network Interfaces**, search for the name of the network load
-      balancer, and look on the **Details** tab for each matching network
-      interface.
-
-1. [Create a VPC endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html).
-
-    - For **Load balancer type**, choose **Network** and then select the network
-      load balancer you created in the previous step.
-
-    - After creating the VPC endpoint service, note its **Service name**. You'll
-      use this service name when connecting Materialize later.
-
-    **Remarks**: By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests),
-      while still strictly managing who can view your endpoint via IAM,
-      Materialze will be able to seamlessly recreate and migrate endpoints as
-      we work to stabilize this feature.
-
-1. Go back to the target group you created for the network load balancer and
-   make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)
-   are reporting the targets as healthy.
+{{< include-headless-with file="/headless/privatelink/privatelink-aws-rds-aurora-setup" instance="RDS" endpoint="RDS_ENDPOINT" port="5432" >}}
 
 {{< /tab >}}
 
@@ -272,7 +195,7 @@ configuration of resources for an SSH tunnel. For more details, see the
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
     1. In the [Materialize console's SQL
-       Shell](/console/), or your preferred SQL client
+       Shell](/developer-tools/console/), or your preferred SQL client
        connected to Materialize, get the static egress IP addresses for the
        Materialize region you are running in:
 
@@ -302,8 +225,7 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 {{< tab "Self-Managed">}}
 
-{{% include-md
-file="shared-content/self-managed/configure-network-security-intro.md" %}}
+{{% include-headless "/headless/self-managed-deployments/configure-network-security-intro" %}}
 
 {{< tabs >}}
 
@@ -373,7 +295,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
-{{% postgres-direct/create-a-cluster %}}
+{{% include-from-yaml data="ingest_postgres" name="create-a-cluster" %}}
 
 ### 2. Create a connection
 
@@ -496,17 +418,21 @@ your networking configuration.
 
 ### 4. Monitor the ingestion status
 
-{{% postgres-direct/check-the-ingestion-status %}}
+{{% include-from-yaml data="ingest_postgres" name="check-the-ingestion-status" %}}
 
 ### 5. Right-size the cluster
 
-{{% postgres-direct/right-size-the-cluster %}}
+{{% include-from-yaml data="ingest_postgres" name="right-size-the-cluster" %}}
 
 ## D. Explore your data
 
-{{% postgres-direct/next-steps %}}
+{{% include-from-yaml data="ingest_postgres" name="next-steps" %}}
 
 ## Considerations
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}

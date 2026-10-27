@@ -167,37 +167,37 @@ SELECT date_trunc(field, TIMESTAMP '2019-11-26 15:56:46.241150') FROM date_trunc
 query T
 SELECT date_trunc('microseconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:59:12.123457
+1234 years 11 mons 23 days 23:59:12.123457
 
 query T
 SELECT date_trunc('milliseconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:59:12.123
+1234 years 11 mons 23 days 23:59:12.123
 
 query T
 SELECT date_trunc('milliseconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:59:12.123
+1234 years 11 mons 23 days 23:59:12.123
 
 query T
 SELECT date_trunc('seconds',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:59:12
+1234 years 11 mons 23 days 23:59:12
 
 query T
 SELECT date_trunc('minutes',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:59:00
+1234 years 11 mons 23 days 23:59:00
 
 query T
 SELECT date_trunc('hours',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days 23:00:00
+1234 years 11 mons 23 days 23:00:00
 
 query T
 SELECT date_trunc('days',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months 23 days
+1234 years 11 mons 23 days
 
 query error unit 'weeks' not recognized
 SELECT date_trunc('weeks',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
@@ -205,7 +205,7 @@ SELECT date_trunc('weeks',  INTERVAL '1234 years 11 months 23 days 23:59:12.1234
 query T
 SELECT date_trunc('months',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
 ----
-1234 years 11 months
+1234 years 11 mons
 
 query T
 SELECT date_trunc('years',  INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS t;
@@ -825,7 +825,7 @@ SELECT materialize.pg_catalog.abs(1)
 ----
 1
 
-query error db error: ERROR: function "mz_catalog\.abs" does not exist
+query error function "mz_catalog\.abs" does not exist
 SELECT mz_catalog.abs(1)
 
 query error unknown database 'noexist'
@@ -844,7 +844,7 @@ SELECT pg_catalog.mod(7, 4)
 ----
 3
 
-query error db error: ERROR: function "mz_catalog\.mod" does not exist
+query error function "mz_catalog\.mod" does not exist
 SELECT mz_catalog.mod(7, 4)
 
 query error unknown database 'noexist'
@@ -955,7 +955,7 @@ SELECT array_upper(NULL::text[], 1)
 NULL
 
 # TODO(fix)
-query error db error: ERROR: could not determine polymorphic type because input has type unknown
+query error could not determine polymorphic type because input has type unknown
 SELECT array_upper(NULL, 1)
 
 query I
@@ -1023,7 +1023,7 @@ SELECT upper('ALREADYUP')
 ----
 ALREADYUP
 
-query error db error: ERROR: function upper\(numeric\) does not exist
+query error function upper\(numeric\) does not exist
 SELECT upper(2.2)
 
 query T
@@ -1036,7 +1036,7 @@ SELECT lower('alreadylow')
 ----
 alreadylow
 
-query error db error: ERROR: function lower\(interval\) does not exist
+query error function lower\(interval\) does not exist
 SELECT lower('1ms'::interval)
 
 # Test trigonometric functions.
@@ -1680,6 +1680,48 @@ SELECT pg_stat_get_numscans('pg_views'::regclass::oid)
 ----
 -1
 
+# mz_sleep (src/expr/src/scalar/func/impls/float64.rs) must reject inputs that are not a
+# valid `Duration` with a clean evaluation error. `Duration::from_secs_f64` panics on
+# negative, NaN, infinite, and oversized-finite values, and the unary-eval path is not
+# wrapped in catch_unwind, so an unvalidated argument would crash the evaluating worker.
+statement error cannot sleep for -1 seconds
+SELECT mz_unsafe.mz_sleep(-1.0)
+
+statement error cannot sleep for NaN seconds
+SELECT mz_unsafe.mz_sleep('NaN'::float8)
+
+statement error cannot sleep for Infinity seconds
+SELECT mz_unsafe.mz_sleep('inf'::float8)
+
+statement error cannot sleep for 1e\+300 seconds
+SELECT mz_unsafe.mz_sleep('1e300'::float8)
+
+# mz_all/mz_any back the ALL/ANY subquery operators, whose rewrite always feeds
+# them a boolean comparison. They render as accumulable reduces whose accumulator
+# only accepts boolean datums, so a non-boolean argument used to crash a compute
+# worker with "Invalid argument to AggregateFunc::Any" (database-issues#9298).
+# The Bool parameter turns this into a clean plan-time error instead, for the
+# plain aggregate, the windowed aggregate, and the grouped forms alike.
+statement error function mz_unsafe\.mz_any\(integer\) does not exist
+SELECT mz_unsafe.mz_any(a) FROM (VALUES (1), (2)) AS t (a)
+
+statement error function mz_unsafe\.mz_all\(integer\) does not exist
+SELECT mz_unsafe.mz_all(a) FROM (VALUES (1), (2)) AS t (a)
+
+statement error function mz_unsafe\.mz_any\(integer\) does not exist
+SELECT mz_unsafe.mz_any(a) OVER (ORDER BY a) FROM (VALUES (1), (2)) AS t (a)
+
+# The boolean form that the ALL/ANY subquery rewrite depends on still works.
+query B
+SELECT mz_unsafe.mz_any(a) FROM (VALUES (false), (true)) AS t (a)
+----
+true
+
+query B
+SELECT mz_unsafe.mz_all(a) FROM (VALUES (false), (true)) AS t (a)
+----
+false
+
 # mz_unsafe functions can't be executed with the enable_unsafe_functions flag turned off
 
 simple conn=mz_system,user=mz_system
@@ -1703,7 +1745,7 @@ statement ok
 INSERT INTO dangerous_table (a) VALUES (1)
 
 statement error executing potentially dangerous functions is not supported
-SELECT mz_unsafe.mz_any(a) FROM dangerous_table
+SELECT mz_unsafe.mz_any(a > 0) FROM dangerous_table
 
 statement error executing potentially dangerous functions is not supported
 INSERT INTO dangerous_table (b) VALUES (mz_unsafe.mz_panic('hello'))
@@ -1727,3 +1769,49 @@ SELECT textrecv()
 
 query error cannot call function with arguments of type internal
 SELECT textrecv('abc')
+
+# `mz_internal.parse_catalog_item_references` extracts the catalog item
+# references from a stored `create_sql` string.
+
+query T
+SELECT mz_internal.parse_catalog_item_references('CREATE VIEW "materialize"."public"."v" AS SELECT "pg_catalog"."abs"("a"::[s20 AS "pg_catalog"."int4"]) FROM [u1 AS "materialize"."public"."t"]')
+----
+{"ids":["s20","u1"],"named_funcs":[{"name":"abs","schema":"pg_catalog"}],"named_relations":[],"named_types":[]}
+
+# Name-based relation references never appear in stored SQL, which prints
+# relations as id references. Reporting them keeps a statement that violates
+# that from silently losing its dependency edges.
+query T
+SELECT mz_internal.parse_catalog_item_references('CREATE VIEW "materialize"."public"."v" AS SELECT * FROM "mz_catalog"."mz_tables"')
+----
+{"ids":[],"named_funcs":[],"named_relations":[{"name":"mz_tables","schema":"mz_catalog"}],"named_types":[]}
+
+query error invalid catalog JSON: failed to parse create_sql
+SELECT mz_internal.parse_catalog_item_references('NOT SQL')
+
+# mz_uptime() folds to the same literal at every occurrence in a transaction. The
+# INTERSECT lowering duplicates its left input and relies on both copies being
+# identical, so differing literals produced negative multiplicities.
+query IR
+SELECT count(*), sum(c1) FROM (
+  (SELECT mz_uptime() AS c0, 1 AS c1 FROM mz_catalog.mz_types)
+  INTERSECT ALL (SELECT INTERVAL '3' MINUTE, 1 FROM mz_catalog.mz_types)
+  INTERSECT ALL (SELECT INTERVAL '4' MINUTE, 1 FROM mz_catalog.mz_types)) x
+----
+0 NULL
+
+query TI
+(SELECT mz_uptime() AS c0, 1 AS c1 FROM mz_catalog.mz_types)
+INTERSECT ALL (SELECT INTERVAL '3' MINUTE AS c0, 1 AS c1 FROM mz_catalog.mz_types)
+INTERSECT     (SELECT INTERVAL '4' MINUTE AS c0, 1 AS c1 FROM mz_catalog.mz_types)
+----
+
+query B
+SELECT mz_uptime() = mz_uptime()
+----
+true
+
+query B
+SELECT mz_uptime() = now() - pg_postmaster_start_time()
+----
+true

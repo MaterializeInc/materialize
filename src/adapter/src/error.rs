@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::num::TryFromIntError;
@@ -16,23 +16,27 @@ use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
-use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing};
-use mz_compute_client::controller::instance::PeekError;
+
 use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::ClusterId;
 use mz_expr::EvalError;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ErrorResponse, Severity};
+use mz_repr::adt::array::InvalidArrayError;
+use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
-use mz_repr::{NotNullViolation, Timestamp};
+use mz_repr::strconv::{ParseError, ParseErrorKind};
+use mz_repr::{ColumnDiff, ColumnName, KeyDiff, NotNullViolation, RelationDescDiff, Timestamp};
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
 use mz_storage_types::connections::ConnectionValidationError;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::errors::CollectionMissing;
+use mz_storage_types::errors::{CollectionMissing, DataflowError};
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
@@ -40,6 +44,7 @@ use tokio_postgres::error::SqlState;
 
 use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
+use crate::peek_client::CollectionLookupError;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -64,6 +69,8 @@ pub enum AdapterError {
     DuplicateCursor(String),
     /// An error while evaluating an expression.
     Eval(EvalError),
+    /// An error produced while executing a dataflow.
+    Dataflow(Box<DataflowError>),
     /// An error occurred while planning the statement.
     Explain(ExplainError),
     /// The ID allocator exhausted all valid IDs.
@@ -99,15 +106,52 @@ pub enum AdapterError {
         expected: Vec<String>,
     },
     /// The selection value for a table mutation operation refers to an invalid object.
-    InvalidTableMutationSelection,
+    InvalidTableMutationSelection {
+        /// The full name of the problematic object, such as a source or source-backed table.
+        object_name: String,
+        /// Human-readable type of the object, such as "source-backed table".
+        object_type: String,
+    },
+    /// A read-then-write statement's read set has more transitive dependencies
+    /// than validation is willing to walk.
+    ReadThenWriteDependencyLimitExceeded {
+        /// The configured maximum number of dependencies.
+        max_rw_dependencies: usize,
+    },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
+    /// An error occurred while decoding COPY data.
+    CopyFormatError(String),
     /// Transaction cluster was dropped in the middle of a transaction.
     ConcurrentClusterDrop,
     /// A dependency was dropped while sequencing a statement.
     ConcurrentDependencyDrop {
         dependency_kind: &'static str,
         dependency_id: String,
+    },
+    /// A dependency's definition changed while a statement was being sequenced.
+    /// Raised by `PlanValidity::check` when a dependency's `create_sql` hash no
+    /// longer matches what we captured at plan time, and by
+    /// `Coordinator::stage_group_commit` when a table's `RelationDesc` no longer
+    /// matches the rows a staged write packed against it.
+    ConcurrentDependencyMutation {
+        dependency_id: String,
+    },
+    /// A frontend read-then-write exhausted its OCC retry budget.
+    ///
+    /// The statement is retryable: every attempt was refused before anything
+    /// was appended, so nothing it intended has been committed.
+    ReadThenWriteContention,
+    /// The write timestamp ran past what the write timeline may be advanced to,
+    /// so nothing was appended. See `coord::timeline::write_ts_upper_bound` for
+    /// the bound and why exceeding it is not recoverable.
+    ///
+    /// The timestamp comes from the timeline's oracle, so reaching this means the
+    /// oracle has run away from the wall clock rather than that the statement
+    /// asked for anything unusual.
+    ReadThenWriteTimestampTooFarAhead {
+        target_timestamp: mz_repr::Timestamp,
+        limit: mz_repr::Timestamp,
     },
     CollectionUnreadable {
         id: String,
@@ -149,10 +193,23 @@ pub enum AdapterError {
     },
     /// Result size of a query is too large.
     ResultSize(String),
+    /// A `SUBSCRIBE` (or `COPY (SUBSCRIBE ...) TO STDOUT`) buffered more bytes in
+    /// environmentd than its budget allows because the client was not reading
+    /// fast enough. The subscribe is retired rather than let one slow client
+    /// grow the shared process's memory without bound.
+    SubscribeFellBehind {
+        /// Bytes buffered when the budget was exceeded.
+        buffered_bytes: usize,
+        /// The `subscribe_max_buffered_bytes` budget that was exceeded.
+        max_buffered_bytes: usize,
+    },
+    /// A query exceeded the configured compute peek row iteration limit.
+    PeekRowIterationLimitExceeded {
+        /// The configured per-worker limit.
+        limit: usize,
+    },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
-    /// The current transaction had the wrong set of write locks.
-    WrongSetOfLocks,
     /// Waiting on a query timed out.
     ///
     /// Note this differs slightly from PG's implementation/semantics.
@@ -209,16 +266,15 @@ pub enum AdapterError {
     DDLOnlyTransaction,
     /// Another session modified the Catalog while this transaction was open.
     DDLTransactionRace,
-    /// Used to prevent us from durably committing state while a DDL transaction is open, should
-    /// never be returned to the user.
-    TransactionDryRun {
-        /// New operations that were run in the transaction.
-        new_ops: Vec<crate::catalog::Op>,
-        /// New resulting `CatalogState`.
-        new_state: crate::catalog::CatalogState,
+    /// A conditional cluster-config write failed its precondition: the cluster's
+    /// managed config changed between when the write was conditioned and when it
+    /// was applied. Produced by `Op::CheckClusterState`, never by SQL DDL, so it
+    /// does not reach a SQL client.
+    ClusterStateChanged {
+        cluster_id: ClusterId,
     },
     /// An error occurred in the storage layer
-    Storage(mz_storage_types::controller::StorageError<mz_repr::Timestamp>),
+    Storage(mz_storage_types::controller::StorageError),
     /// An error occurred in the compute layer
     Compute(anyhow::Error),
     /// An error in the orchestrator layer
@@ -247,14 +303,60 @@ pub enum AdapterError {
     UnreadableSinkCollection,
     /// User sessions have been blocked.
     UserSessionsDisallowed,
-    /// This use session has been deneid by a NetworkPolicy.
+    /// This use session has been denied by a NetworkPolicy.
     NetworkPolicyDenied(NetworkPolicyError),
     /// Something attempted a write (to catalog, storage, tables, etc.) while in
     /// read-only mode.
     ReadOnly,
     AlterClusterTimeout,
-    AlterClusterWhilePendingReplicas,
+    /// Another `ALTER CLUSTER` replaced the target this statement was waiting
+    /// for before it became realized.
+    AlterClusterSuperseded,
+    /// The cluster controller could not provision a reconfiguration target
+    /// within the environment's resource limits.
+    AlterClusterResourceExhausted,
+    /// Attempt to convert a cluster to unmanaged while a graceful
+    /// reconfiguration is in progress.
+    AlterClusterUnmanagedWhileReconfiguring,
+    /// Attempt to convert a cluster to unmanaged while a hydration burst is in
+    /// flight.
+    AlterClusterUnmanagedWhileBursting,
+    /// Attempt to change a cluster's schedule while a graceful reconfiguration
+    /// is in progress.
+    AlterClusterScheduleWhileReconfiguring,
+    /// Attempt to use `WAIT` on an `ALTER` of a scheduled (non-`MANUAL`)
+    /// cluster, whose replica set the controller reshapes in the background.
+    AlterClusterWaitOnScheduledCluster,
     AuthenticationError(AuthenticationError),
+    /// Schema of a replacement is incompatible with the target.
+    ReplacementSchemaMismatch(RelationDescDiff),
+    /// Attempt to replace a sealed materialized view.
+    ReplaceMaterializedViewSealed {
+        name: String,
+    },
+    /// Could not find a valid timestamp satisfying all constraints.
+    ImpossibleTimestampConstraints {
+        constraints: String,
+    },
+    /// OIDC group-to-role sync failed and strict mode is enabled.
+    OidcGroupSyncFailed(String),
+    /// Returned when bounded staleness was selected but the input frontiers lag
+    /// further than the bound permits, so no timestamp in the no-wait window is
+    /// at most `bound` stale.
+    BoundedStalenessExceeded {
+        bound: std::time::Duration,
+        gap_ms: u64,
+        slowest_input: Option<mz_repr::GlobalId>,
+    },
+    /// A write was attempted in a session whose isolation level is bounded
+    /// staleness. Bounded staleness is read-only.
+    BoundedStalenessReadOnly,
+    /// `real_time_recency = on` and bounded staleness were both requested in
+    /// the same session; they are mutually exclusive.
+    BoundedStalenessRealTimeRecencyConflict,
+    /// A bounded-staleness query touched a timeline whose timestamps are not
+    /// the `EpochMilliseconds` wall-clock timeline.
+    BoundedStalenessTimelineUnsupported,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -267,6 +369,175 @@ pub enum AuthenticationError {
     RoleNotFound,
     #[error("password is required")]
     PasswordRequired,
+}
+
+/// Maps a parse/cast [`ParseError`] to the appropriate `DATA_EXCEPTION` (class
+/// 22) SQLSTATE. Out-of-range values map to overflow codes and malformed input
+/// maps to invalid-representation codes, in both cases distinguishing datetime
+/// types from everything else, matching PostgreSQL.
+fn parse_error_code(err: &ParseError) -> SqlState {
+    let is_datetime = matches!(
+        &*err.type_name,
+        "date" | "time" | "timestamp" | "timestamp with time zone" | "interval"
+    );
+    match (err.kind, is_datetime) {
+        (ParseErrorKind::OutOfRange, true) => SqlState::DATETIME_FIELD_OVERFLOW,
+        (ParseErrorKind::OutOfRange, false) => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+        (ParseErrorKind::InvalidInputSyntax, true) => SqlState::INVALID_DATETIME_FORMAT,
+        (ParseErrorKind::InvalidInputSyntax, false) => SqlState::INVALID_TEXT_REPRESENTATION,
+    }
+}
+
+/// Maps an [`EvalError`] to the appropriate SQLSTATE.
+///
+/// Historically every `EvalError` fell through to `INTERNAL_ERROR` (`XX000`),
+/// but the overwhelming majority are user-facing data exceptions (class 22) or
+/// other well-defined conditions, not internal errors. This match is
+/// deliberately exhaustive — with no wildcard — so that adding a new
+/// `EvalError` variant is a compile error until it is assigned a code, and we
+/// never silently regress to `XX000`. Codes are chosen to match PostgreSQL
+/// where an equivalent error exists.
+fn eval_error_code(err: &EvalError) -> SqlState {
+    match err {
+        // Division and mathematical domain errors.
+        EvalError::DivisionByZero => SqlState::DIVISION_BY_ZERO,
+        EvalError::NegSqrt | EvalError::ComplexOutOfRange(_) => {
+            SqlState::INVALID_ARGUMENT_FOR_POWER_FUNCTION
+        }
+        EvalError::InfinityOutOfDomain(_)
+        | EvalError::NegativeOutOfDomain(_)
+        | EvalError::ZeroOutOfDomain(_)
+        | EvalError::OutOfDomain(..)
+        | EvalError::Undefined(_) => SqlState::INVALID_PARAMETER_VALUE,
+
+        // Out-of-range numeric, integer, and float values.
+        EvalError::FloatOverflow
+        | EvalError::FloatUnderflow
+        | EvalError::NumericFieldOverflow
+        | EvalError::Float32OutOfRange(_)
+        | EvalError::Float64OutOfRange(_)
+        | EvalError::Int16OutOfRange(_)
+        | EvalError::Int32OutOfRange(_)
+        | EvalError::Int64OutOfRange(_)
+        | EvalError::UInt16OutOfRange(_)
+        | EvalError::UInt32OutOfRange(_)
+        | EvalError::UInt64OutOfRange(_)
+        | EvalError::OidOutOfRange(_)
+        | EvalError::MzTimestampOutOfRange(_)
+        | EvalError::MzTimestampStepOverflow
+        | EvalError::CharOutOfRange => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+
+        // Out-of-range datetime and interval values.
+        EvalError::DateOutOfRange
+        | EvalError::TimestampOutOfRange
+        | EvalError::TimestampCannotBeNan
+        | EvalError::DateBinOutOfRange(_)
+        | EvalError::DateDiffOverflow { .. } => SqlState::DATETIME_FIELD_OVERFLOW,
+        EvalError::IntervalOutOfRange(_) => SqlState::INTERVAL_FIELD_OVERFLOW,
+
+        // Parse/cast failures, plus other malformed textual/encoded input.
+        EvalError::Parse(e) => parse_error_code(e),
+        EvalError::ParseHex(_)
+        | EvalError::InvalidBase64Equals
+        | EvalError::InvalidBase64Symbol(_)
+        | EvalError::InvalidBase64EndSequence => SqlState::INVALID_TEXT_REPRESENTATION,
+        EvalError::InvalidByteSequence { .. } => SqlState::CHARACTER_NOT_IN_REPERTOIRE,
+        EvalError::CharacterNotValidForEncoding(_) | EvalError::CharacterTooLargeForEncoding(_) => {
+            SqlState::PROGRAM_LIMIT_EXCEEDED
+        }
+
+        // Invalid argument values.
+        EvalError::InvalidTimezone(_)
+        | EvalError::InvalidTimezoneInterval
+        | EvalError::InvalidTimezoneConversion
+        | EvalError::InvalidIanaTimezoneId(_)
+        | EvalError::InvalidLayer { .. }
+        | EvalError::InvalidEncodingName(_)
+        | EvalError::InvalidHashAlgorithm(_)
+        | EvalError::InvalidDatePart(_)
+        | EvalError::InvalidParameterValue(_)
+        | EvalError::InvalidJsonbCast { .. }
+        | EvalError::UnknownUnits(_)
+        | EvalError::UnsupportedUnits(..)
+        | EvalError::InvalidIdentifier { .. }
+        | EvalError::InvalidRoleId(_)
+        | EvalError::InvalidPrivileges(_)
+        | EvalError::NegLimit => SqlState::INVALID_PARAMETER_VALUE,
+
+        // Regular expressions.
+        EvalError::InvalidRegex(_) | EvalError::InvalidRegexFlag(_) => {
+            SqlState::INVALID_REGULAR_EXPRESSION
+        }
+
+        // LIKE escape sequences.
+        EvalError::UnterminatedLikeEscapeSequence | EvalError::LikeEscapeTooLong => {
+            SqlState::INVALID_ESCAPE_SEQUENCE
+        }
+
+        // NULL values where they are not permitted.
+        EvalError::KeyCannotBeNull
+        | EvalError::MustNotBeNull(_)
+        | EvalError::AclArrayNullElement
+        | EvalError::MzAclArrayNullElement => SqlState::NULL_VALUE_NOT_ALLOWED,
+
+        // Array subscript/dimension errors.
+        EvalError::IndexOutOfRange { .. }
+        | EvalError::ArrayFillWrongArraySubscripts
+        | EvalError::IncompatibleArrayDimensions { .. } => SqlState::ARRAY_SUBSCRIPT_ERROR,
+        EvalError::InvalidArray(e) => match e {
+            InvalidArrayError::TooManyDimensions(_) => SqlState::PROGRAM_LIMIT_EXCEEDED,
+            InvalidArrayError::WrongCardinality { .. } => SqlState::ARRAY_SUBSCRIPT_ERROR,
+        },
+
+        // Range errors.
+        EvalError::InvalidRange(e) => match e {
+            InvalidRangeError::CanonicalizationOverflow(_) => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+            InvalidRangeError::MisorderedRangeBounds
+            | InvalidRangeError::InvalidRangeBoundFlags
+            | InvalidRangeError::NullRangeBoundFlags
+            | InvalidRangeError::DiscontiguousUnion
+            | InvalidRangeError::DiscontiguousDifference
+            | InvalidRangeError::InvalidRangeData => SqlState::DATA_EXCEPTION,
+        },
+
+        // Cardinality violations from scalar subqueries.
+        EvalError::MultipleRowsFromSubquery | EvalError::NegativeRowsFromSubquery => {
+            SqlState::CARDINALITY_VIOLATION
+        }
+
+        // Length, size, and resource limits.
+        EvalError::StringValueTooLong { .. } => SqlState::STRING_DATA_RIGHT_TRUNCATION,
+        EvalError::LikePatternTooLong
+        | EvalError::LengthTooLarge
+        | EvalError::TempStorageBudgetExceeded
+        | EvalError::NullCharacterNotPermitted
+        | EvalError::MaxArraySizeExceeded(_)
+        | EvalError::LetRecLimitExceeded(_) => SqlState::PROGRAM_LIMIT_EXCEEDED,
+
+        // Unsupported features.
+        EvalError::Unsupported { .. }
+        | EvalError::MultidimensionalArrayRemovalNotSupported
+        | EvalError::MultiDimensionalArraySearch => SqlState::FEATURE_NOT_SUPPORTED,
+
+        // User-raised errors (e.g. `error_if_null`).
+        EvalError::IfNullError(_) => SqlState::DATA_EXCEPTION,
+
+        // Genuinely internal errors.
+        EvalError::Internal(_)
+        | EvalError::InvalidCatalogJson(_)
+        | EvalError::TypeFromOid(_)
+        | EvalError::PrettyError(_)
+        | EvalError::RedactError(_) => SqlState::INTERNAL_ERROR,
+    }
+}
+
+fn dataflow_error_code(error: &DataflowError) -> SqlState {
+    match error {
+        DataflowError::EvalError(error) => eval_error_code(error),
+        DataflowError::DecodeError(_)
+        | DataflowError::SourceError(_)
+        | DataflowError::EnvelopeError(_) => SqlState::INTERNAL_ERROR,
+    }
 }
 
 impl AdapterError {
@@ -293,9 +564,13 @@ impl AdapterError {
         match self {
             AdapterError::AmbiguousSystemColumnReference => {
                 Some("This is a current limitation in Materialize".into())
-            },
+            }
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),
+            AdapterError::Dataflow(e) => match &**e {
+                DataflowError::EvalError(e) => e.detail(),
+                _ => None,
+            },
             AdapterError::RelationOutsideTimeDomain { relations, names } => Some(format!(
                 "The following relations in the query are outside the transaction's time domain:\n{}\n{}",
                 relations
@@ -320,6 +595,26 @@ impl AdapterError {
                 specify size via SIZE option."
                     .into(),
             ),
+            AdapterError::InvalidTableMutationSelection {
+                object_name,
+                object_type,
+            } => Some(format!(
+                "{object_type} '{}' may not be used in this operation; \
+                     every relation leaf in the selection must be a writable user table",
+                object_name.quoted()
+            )),
+            AdapterError::ReadThenWriteDependencyLimitExceeded {
+                max_rw_dependencies,
+            } => Some(format!(
+                "The read set transitively depends on more than {max_rw_dependencies} \
+                     objects. Reduce the number of dependencies, or raise the \
+                     read_then_write_max_dependencies system parameter."
+            )),
+            AdapterError::PeekRowIterationLimitExceeded { limit } => Some(format!(
+                "The query attempted to examine more than {limit} rows on a single compute \
+                 worker. This limit prevents long-running SELECT queries from delaying other \
+                 work on the cluster."
+            )),
             AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
@@ -336,19 +631,24 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
-            AdapterError::DependentObject(dependent_objects) => {
-                Some(dependent_objects
+            AdapterError::DependentObject(dependent_objects) => Some(
+                dependent_objects
                     .iter()
-                    .map(|(role_name, err_msgs)| err_msgs
-                        .iter()
-                        .map(|err_msg| format!("{role_name}: {err_msg}"))
-                        .join("\n"))
-                    .join("\n"))
-            },
-            AdapterError::Storage(storage_error) => {
-                storage_error.source().map(|source_error| source_error.to_string_with_causes())
-            }
-            AdapterError::ReadOnlyTransaction => Some("SELECT queries cannot be combined with other query types, including SUBSCRIBE.".into()),
+                    .map(|(role_name, err_msgs)| {
+                        err_msgs
+                            .iter()
+                            .map(|err_msg| format!("{role_name}: {err_msg}"))
+                            .join("\n")
+                    })
+                    .join("\n"),
+            ),
+            AdapterError::Storage(storage_error) => storage_error
+                .source()
+                .map(|source_error| source_error.to_string_with_causes()),
+            AdapterError::ReadOnlyTransaction => Some(
+                "SELECT queries cannot be combined with other query types, including SUBSCRIBE."
+                    .into(),
+            ),
             AdapterError::InvalidAlter(_, e) => e.detail(),
             AdapterError::Optimizer(e) => e.detail(),
             AdapterError::ConnectionValidation(e) => e.detail(),
@@ -356,30 +656,125 @@ impl AdapterError {
                 Some(format!(
                     "The specified last refresh is at {}, while the earliest possible time to compute the materialized \
                     view is {}.",
-                    last_refresh,
-                    earliest_possible,
+                    last_refresh, earliest_possible,
                 ))
             }
-            AdapterError::UnallowedOnCluster { cluster, .. } => (cluster == MZ_CATALOG_SERVER_CLUSTER.name).then(||
-                format!("The transaction is executing on the {cluster} cluster, maybe having been routed there by the first statement in the transaction.")
-            ),
+            AdapterError::UnallowedOnCluster { cluster, .. } => {
+                (cluster == MZ_CATALOG_SERVER_CLUSTER.name).then(|| {
+                    format!(
+                        "The transaction is executing on the \
+                        {cluster} cluster, maybe having been routed \
+                        there by the first statement in the transaction."
+                    )
+                })
+            }
             AdapterError::InputNotReadableAtRefreshAtTime(oracle_read_ts, least_valid_read) => {
                 Some(format!(
                     "The requested REFRESH AT time is {}, \
                     but not all input collections are readable earlier than [{}].",
                     oracle_read_ts,
                     if least_valid_read.len() == 1 {
-                        format!("{}", least_valid_read.as_option().expect("antichain contains exactly 1 timestamp"))
+                        format!(
+                            "{}",
+                            least_valid_read
+                                .as_option()
+                                .expect("antichain contains exactly 1 timestamp")
+                        )
                     } else {
                         // This can't occur currently
                         format!("{:?}", least_valid_read)
                     }
                 ))
             }
-            AdapterError::RtrTimeout(name) => Some(format!("{name} failed to ingest data up to the real-time recency point")),
-            AdapterError::RtrDropFailure(name) => Some(format!("{name} dropped before ingesting data to the real-time recency point")),
-            AdapterError::UserSessionsDisallowed => Some("Your organization has been blocked. Please contact support.".to_string()),
-            AdapterError::NetworkPolicyDenied(reason)=> Some(format!("{reason}.")),
+            AdapterError::RtrTimeout(name) => Some(format!(
+                "{name} failed to ingest data up to the real-time recency point"
+            )),
+            AdapterError::RtrDropFailure(name) => Some(format!(
+                "{name} dropped before ingesting data to the real-time recency point"
+            )),
+            AdapterError::UserSessionsDisallowed => {
+                Some("Your organization has been blocked. Please contact support.".to_string())
+            }
+            AdapterError::NetworkPolicyDenied(reason) => Some(format!("{reason}.")),
+            AdapterError::ReplacementSchemaMismatch(diff) => {
+                let mut lines: Vec<_> = diff.column_diffs.iter().map(|(idx, diff)| {
+                    let pos = idx + 1;
+                    match diff {
+                        ColumnDiff::Missing { name } => {
+                            let name = name.as_str().quoted();
+                            format!("missing column {name} at position {pos}")
+                        }
+                        ColumnDiff::Extra { name } => {
+                            let name = name.as_str().quoted();
+                            format!("extra column {name} at position {pos}")
+                        }
+                        ColumnDiff::TypeMismatch { name, left, right } => {
+                            let name = name.as_str().quoted();
+                            format!("column {name} at position {pos}: type mismatch (target: {left:?}, replacement: {right:?})")
+                        }
+                        ColumnDiff::NullabilityMismatch { name, left, right } => {
+                            let name = name.as_str().quoted();
+                            let left = if *left { "NULL" } else { "NOT NULL" };
+                            let right = if *right { "NULL" } else { "NOT NULL" };
+                            format!("column {name} at position {pos}: nullability mismatch (target: {left}, replacement: {right})")
+                        }
+                        ColumnDiff::NameMismatch { left, right } => {
+                            let left = left.as_str().quoted();
+                            let right = right.as_str().quoted();
+                            format!("column at position {pos}: name mismatch (target: {left}, replacement: {right})")
+                        }
+                    }
+                }).collect();
+
+                if let Some(KeyDiff { left, right }) = &diff.key_diff {
+                    let format_keys = |keys: &BTreeSet<Vec<ColumnName>>| {
+                        if keys.is_empty() {
+                            "(none)".to_string()
+                        } else {
+                            keys.iter()
+                                .map(|key| {
+                                    let cols = key.iter().map(|c| c.as_str()).join(", ");
+                                    format!("{{{cols}}}")
+                                })
+                                .join(", ")
+                        }
+                    };
+                    lines.push(format!(
+                        "keys differ (target: {}, replacement: {})",
+                        format_keys(left),
+                        format_keys(right)
+                    ));
+                }
+                Some(lines.join("\n"))
+            }
+            AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
+                "The materialized view's contents are final for all future times, so they can \
+                 no longer be changed. See \
+                 https://materialize.com/docs/sql/alter-materialized-view/#troubleshooting"
+                    .into(),
+            ),
+            AdapterError::ImpossibleTimestampConstraints { constraints } => {
+                Some(format!("Constraints:\n{}", constraints))
+            }
+            AdapterError::BoundedStalenessExceeded {
+                gap_ms,
+                slowest_input,
+                ..
+            } => {
+                let mut detail = format!(
+                    "Freshest available timestamp is {}ms older than the bound.",
+                    gap_ms,
+                );
+                if let Some(id) = slowest_input {
+                    detail.push_str(&format!(" Slowest input: {}.", id));
+                }
+                Some(detail)
+            }
+            AdapterError::BoundedStalenessTimelineUnsupported => Some(
+                "This query touches a timeline other than the EpochMilliseconds wall-clock \
+                 timeline."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -394,6 +789,36 @@ impl AdapterError {
             ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::Eval(e) => e.hint(),
+            AdapterError::SubscribeFellBehind { .. } => Some(
+                "The client is not reading results fast enough. Use a client that reads output \
+                without buffering, or raise the subscribe_max_buffered_bytes system variable."
+                    .to_string(),
+            ),
+            AdapterError::Dataflow(e) => match &**e {
+                DataflowError::EvalError(e) => e.hint(),
+                DataflowError::SourceError(e) => e.hint.as_ref().map(|hint| hint.to_string()),
+                _ => None,
+            },
+            AdapterError::AlterClusterUnmanagedWhileReconfiguring => Some(
+                "Cancel the reconfiguration by altering the cluster back to its current \
+                configuration, or wait for it to settle, then convert."
+                    .to_string(),
+            ),
+            AdapterError::AlterClusterUnmanagedWhileBursting => Some(
+                "Remove the strategy with ALTER CLUSTER ... RESET (AUTO SCALING STRATEGY), \
+                or wait for the burst to wind down, then convert."
+                    .to_string(),
+            ),
+            AdapterError::AlterClusterScheduleWhileReconfiguring => Some(
+                "Cancel the reconfiguration by altering the cluster back to its current \
+                configuration, or wait for it to settle, then change the schedule."
+                    .to_string(),
+            ),
+            AdapterError::AlterClusterWaitOnScheduledCluster => Some(
+                "The scheduler reshapes a scheduled cluster's replicas in the background. \
+                Run the ALTER without a WAIT option, or set SCHEDULE = MANUAL first."
+                    .to_string(),
+            ),
             AdapterError::InvalidClusterReplicaAz { expected, az: _ } => {
                 Some(if expected.is_empty() {
                     "No availability zones configured; do not specify AVAILABILITY ZONE".into()
@@ -432,6 +857,13 @@ impl AdapterError {
                  statement_timeout = '120s'`."
                     .into(),
             ),
+            AdapterError::PeekRowIterationLimitExceeded { .. } => Some(
+                "Reduce the number of rows the query must examine, for example by querying an \
+                 indexed, more selective result. Queries with `LIMIT` and no `ORDER BY` can also \
+                 stop early. To permit this query, increase \
+                 `compute_peek_row_iteration_limit`."
+                    .into(),
+            ),
             AdapterError::PlanError(e) => e.hint(),
             AdapterError::UnallowedOnCluster { cluster, .. } => {
                 (cluster != MZ_CATALOG_SERVER_CLUSTER.name).then(||
@@ -450,18 +882,45 @@ impl AdapterError {
             AdapterError::AlterClusterTimeout => Some(
                 "Consider increasing the timeout duration in the alter cluster statement.".into(),
             ),
+            AdapterError::AlterClusterSuperseded => Some(
+                "Retry the ALTER CLUSTER statement if its target is still desired.".into(),
+            ),
+            AdapterError::AlterClusterResourceExhausted => Some(
+                "Reduce the target resource use, or inspect \
+                 mz_internal.mz_cluster_reconfigurations for the retained outcome."
+                    .into(),
+            ),
             AdapterError::DDLTransactionRace => Some(
                 "Currently, DDL transactions fail when any other DDL happens concurrently, \
                  even on unrelated schemas/clusters.".into()
             ),
+            AdapterError::ConcurrentDependencyMutation { .. } => Some(
+                "Another session modified one of this statement's dependencies before \
+                 it could commit. Retry the statement.".into()
+            ),
+            AdapterError::ReadThenWriteContention => Some(
+                "Concurrent writes to the target table kept this statement from \
+                 committing. Retry the statement, or lower the write concurrency.".into()
+            ),
+            AdapterError::ReadThenWriteTimestampTooFarAhead { .. } => Some(
+                "The write timestamp this statement would have committed at is far ahead of \
+                 the wall clock. Committing there would keep writes and strict-serializable \
+                 reads on this timeline from proceeding until the clock caught up.".into()
+            ),
             AdapterError::CollectionUnreadable { .. } => Some(
                 "This could be because the collection has recently been dropped.".into()
+            ),
+            AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
+                "Create a new materialized view with the new definition instead.".into()
             ),
             _ => None,
         }
     }
 
     pub fn code(&self) -> SqlState {
+        // We define this up here to make sure `AdapterError::` and `OptimizerError::` act the same way.
+        const RECURSION_LIMIT_ERROR_CODE: SqlState = SqlState::INTERNAL_ERROR;
+
         // TODO(benesch): we should only use `SqlState::INTERNAL_ERROR` for
         // those errors that are truly internal errors. At the moment we have
         // a various classes of uncategorized errors that use this error code
@@ -486,17 +945,12 @@ impl AdapterError {
             },
             AdapterError::ChangedPlan(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
-            AdapterError::Eval(EvalError::CharacterNotValidForEncoding(_)) => {
-                SqlState::PROGRAM_LIMIT_EXCEEDED
-            }
-            AdapterError::Eval(EvalError::CharacterTooLargeForEncoding(_)) => {
-                SqlState::PROGRAM_LIMIT_EXCEEDED
-            }
-            AdapterError::Eval(EvalError::LengthTooLarge) => SqlState::PROGRAM_LIMIT_EXCEEDED,
-            AdapterError::Eval(EvalError::NullCharacterNotPermitted) => {
-                SqlState::PROGRAM_LIMIT_EXCEEDED
-            }
-            AdapterError::Eval(_) => SqlState::INTERNAL_ERROR,
+            // Evaluation errors are almost all user-facing data exceptions, not
+            // internal errors. `eval_error_code` matches every variant
+            // exhaustively so the catch-all `INTERNAL_ERROR` no longer applies
+            // to errors that are really the user's fault. See SQL-326.
+            AdapterError::Eval(e) => eval_error_code(e),
+            AdapterError::Dataflow(e) => dataflow_error_code(e),
             AdapterError::Explain(_) => SqlState::INTERNAL_ERROR,
             AdapterError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             AdapterError::Internal(_) => SqlState::INTERNAL_ERROR,
@@ -507,10 +961,26 @@ impl AdapterError {
             AdapterError::InvalidSetCluster => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::InvalidStorageClusterSize { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::SourceOrSinkSizeRequired { .. } => SqlState::FEATURE_NOT_SUPPORTED,
-            AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::InvalidTableMutationSelection { .. } => {
+                SqlState::INVALID_TRANSACTION_STATE
+            }
+            AdapterError::ReadThenWriteDependencyLimitExceeded { .. } => {
+                SqlState::PROGRAM_LIMIT_EXCEEDED
+            }
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
+            AdapterError::CopyFormatError(_) => SqlState::BAD_COPY_FILE_FORMAT,
             AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConcurrentDependencyDrop { .. } => SqlState::UNDEFINED_OBJECT,
+            AdapterError::ConcurrentDependencyMutation { .. } => {
+                SqlState::T_R_SERIALIZATION_FAILURE
+            }
+            AdapterError::ReadThenWriteContention => SqlState::T_R_SERIALIZATION_FAILURE,
+            AdapterError::ReadThenWriteTimestampTooFarAhead { .. } => {
+                // An invariant violation in the environment rather than a property of
+                // the statement: the write timeline has run away from the wall clock.
+                // Nothing the client sends can produce or avoid it.
+                SqlState::INTERNAL_ERROR
+            }
             AdapterError::CollectionUnreadable { .. } => SqlState::NO_DATA_FOUND,
             AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
@@ -526,21 +996,28 @@ impl AdapterError {
             AdapterError::PlanError(PlanError::ParameterNotAllowed(_)) => {
                 SqlState::UNDEFINED_PARAMETER
             }
+            // `PlanError::Unsupported` is raised (via `bail_unsupported!`) only for
+            // genuinely unsupported features, so it maps to PostgreSQL's
+            // feature-not-supported code rather than internal-error. See SQL-326.
+            AdapterError::PlanError(PlanError::Unsupported { .. }) => {
+                SqlState::FEATURE_NOT_SUPPORTED
+            }
             AdapterError::PlanError(_) => SqlState::INTERNAL_ERROR,
             AdapterError::PreparedStatementExists(_) => SqlState::DUPLICATE_PSTATEMENT,
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::SingleStatementTransaction => SqlState::INVALID_TRANSACTION_STATE,
-            AdapterError::WrongSetOfLocks => SqlState::LOCK_NOT_AVAILABLE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
             AdapterError::Canceled => SqlState::QUERY_CANCELED,
             AdapterError::IdleInTransactionSessionTimeout => {
                 SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT
             }
-            AdapterError::RecursionLimit(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::RecursionLimit(_) => RECURSION_LIMIT_ERROR_CODE,
             AdapterError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
+            AdapterError::SubscribeFellBehind { .. } => SqlState::OUT_OF_MEMORY,
+            AdapterError::PeekRowIterationLimitExceeded { .. } => SqlState::PROGRAM_LIMIT_EXCEEDED,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Optimizer(e) => match e {
@@ -556,10 +1033,11 @@ impl AdapterError {
                 OptimizerError::PlanError(PlanError::ParameterNotAllowed(_)) => {
                     SqlState::UNDEFINED_PARAMETER
                 }
-                OptimizerError::PlanError(_) => SqlState::INTERNAL_ERROR,
-                OptimizerError::RecursionLimitError(e) => {
-                    AdapterError::RecursionLimit(e.clone()).code() // Delegate to outer
+                OptimizerError::PlanError(PlanError::Unsupported { .. }) => {
+                    SqlState::FEATURE_NOT_SUPPORTED
                 }
+                OptimizerError::PlanError(_) => SqlState::INTERNAL_ERROR,
+                OptimizerError::RecursionLimitError(_) => RECURSION_LIMIT_ERROR_CODE,
                 OptimizerError::Internal(s) => {
                     AdapterError::Internal(s.clone()).code() // Delegate to outer
                 }
@@ -570,6 +1048,7 @@ impl AdapterError {
                 OptimizerError::UnmaterializableFunction(_) => SqlState::FEATURE_NOT_SUPPORTED,
                 OptimizerError::UncallableFunction { .. } => SqlState::FEATURE_NOT_SUPPORTED,
                 OptimizerError::UnsupportedTemporalExpression(_) => SqlState::FEATURE_NOT_SUPPORTED,
+                OptimizerError::RestrictedFunction(_) => SqlState::INSUFFICIENT_PRIVILEGE,
                 // This should be handled by peek optimization, so it's an internal error if it
                 // reaches the user.
                 OptimizerError::InternalUnsafeMfpPlan(_) => SqlState::INTERNAL_ERROR,
@@ -588,7 +1067,7 @@ impl AdapterError {
             AdapterError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             AdapterError::UntargetedLogRead { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::DDLTransactionRace => SqlState::T_R_SERIALIZATION_FAILURE,
-            AdapterError::TransactionDryRun { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
+            AdapterError::ClusterStateChanged { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction", "single table write transaction", or "ddl only
             // transaction" are not things in Postgres. This error code is the generic "bad txn
@@ -613,11 +1092,31 @@ impl AdapterError {
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
-            AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
+            AdapterError::AlterClusterSuperseded => SqlState::QUERY_CANCELED,
+            AdapterError::AlterClusterResourceExhausted => SqlState::INSUFFICIENT_RESOURCES,
+            AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
+            AdapterError::AlterClusterUnmanagedWhileBursting => SqlState::OBJECT_IN_USE,
+            AdapterError::AlterClusterScheduleWhileReconfiguring => SqlState::OBJECT_IN_USE,
+            AdapterError::AlterClusterWaitOnScheduledCluster => SqlState::FEATURE_NOT_SUPPORTED,
+            AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::AuthenticationError(AuthenticationError::InvalidCredentials) => {
                 SqlState::INVALID_PASSWORD
             }
             AdapterError::AuthenticationError(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            AdapterError::ReplaceMaterializedViewSealed { .. } => {
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE
+            }
+            // similar to AbsurdSubscribeBounds
+            AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::DATA_EXCEPTION,
+            AdapterError::OidcGroupSyncFailed(_) => SqlState::INTERNAL_ERROR,
+            AdapterError::BoundedStalenessExceeded { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
+            // Matches ReadOnlyTransaction/ReadOnly: a write was rejected
+            // because the session is effectively read-only.
+            AdapterError::BoundedStalenessReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
+            AdapterError::BoundedStalenessRealTimeRecencyConflict => {
+                SqlState::FEATURE_NOT_SUPPORTED
+            }
+            AdapterError::BoundedStalenessTimelineUnsupported => SqlState::FEATURE_NOT_SUPPORTED,
         }
     }
 
@@ -630,12 +1129,7 @@ impl AdapterError {
     // is appropriate, so we want to make the conversion target explicit at the call site.
     // For example, maybe we get an `InstanceMissing` if the user specifies a non-existing cluster,
     // in which case `ConcurrentDependencyDrop` would not be appropriate.
-    pub fn concurrent_dependency_drop_from_instance_missing(e: InstanceMissing) -> Self {
-        AdapterError::ConcurrentDependencyDrop {
-            dependency_kind: "cluster",
-            dependency_id: e.0.to_string(),
-        }
-    }
+
     pub fn concurrent_dependency_drop_from_collection_missing(e: CollectionMissing) -> Self {
         AdapterError::ConcurrentDependencyDrop {
             dependency_kind: "collection",
@@ -643,6 +1137,7 @@ impl AdapterError {
         }
     }
 
+    /// Maps a lookup error of the session task's compute instance clients.
     pub fn concurrent_dependency_drop_from_collection_lookup_error(
         e: CollectionLookupError,
         compute_instance: ComputeInstanceId,
@@ -665,21 +1160,81 @@ impl AdapterError {
         }
     }
 
-    pub fn concurrent_dependency_drop_from_peek_error(
-        e: PeekError,
+    /// Maps a collection lookup error of the compute controller.
+    pub fn concurrent_dependency_drop_from_compute_lookup_error(
+        e: compute_error::CollectionLookupError,
+    ) -> Self {
+        match e {
+            compute_error::CollectionLookupError::InstanceMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "cluster",
+                    dependency_id: id.to_string(),
+                }
+            }
+            compute_error::CollectionLookupError::CollectionMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "collection",
+                    dependency_id: id.to_string(),
+                }
+            }
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_instance_peek_error(
+        e: mz_compute_client::controller::instance_client::PeekError,
         compute_instance: ComputeInstanceId,
     ) -> AdapterError {
+        use mz_compute_client::controller::instance_client::PeekError::*;
         match e {
-            PeekError::ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "replica",
                 dependency_id: id.to_string(),
             },
-            PeekError::InstanceShutDown => AdapterError::ConcurrentDependencyDrop {
+            InstanceShutDown => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "cluster",
                 dependency_id: compute_instance.to_string(),
             },
-            e @ PeekError::ReadHoldIdMismatch(_) => AdapterError::internal("peek error", e),
-            e @ PeekError::ReadHoldInsufficient(_) => AdapterError::internal("peek error", e),
+            e @ ReadHoldIdMismatch(_) => AdapterError::internal("instance peek error", e),
+            e @ ReadHoldInsufficient(_) => AdapterError::internal("instance peek error", e),
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_collection_update_error(
+        e: compute_error::CollectionUpdateError,
+    ) -> Self {
+        use compute_error::CollectionUpdateError::*;
+        match e {
+            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_peek_error(
+        e: mz_compute_client::controller::error::PeekError,
+    ) -> AdapterError {
+        use mz_compute_client::controller::error::PeekError::*;
+        match e {
+            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            e @ (ReadHoldIdMismatch(_) | SinceViolation(_)) => {
+                AdapterError::internal("peek error", e)
+            }
         }
     }
 
@@ -711,11 +1266,10 @@ impl fmt::Display for AdapterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             AdapterError::AbsurdSubscribeBounds { as_of, up_to } => {
-                assert!(up_to < as_of);
                 write!(
                     f,
-                    r#"subscription lower ("as of") bound is beyond its upper ("up to") bound: {} < {}"#,
-                    up_to, as_of
+                    "subscription lower bound (`AS OF`) is greater than its upper bound (`UP TO`): \
+                     {as_of} > {up_to}",
                 )
             }
             AdapterError::AmbiguousSystemColumnReference => {
@@ -731,6 +1285,7 @@ impl fmt::Display for AdapterError {
                 write!(f, "cursor {} already exists", name.quoted())
             }
             AdapterError::Eval(e) => e.fmt(f),
+            AdapterError::Dataflow(e) => e.fmt(f),
             AdapterError::Explain(e) => e.fmt(f),
             AdapterError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
             AdapterError::Internal(e) => write!(f, "internal error: {}", e),
@@ -757,12 +1312,36 @@ impl fmt::Display for AdapterError {
             AdapterError::SourceOrSinkSizeRequired { .. } => {
                 write!(f, "must specify either cluster or size option")
             }
-            AdapterError::InvalidTableMutationSelection => {
-                f.write_str("invalid selection: operation may only refer to user-defined tables")
+            AdapterError::InvalidTableMutationSelection { .. } => {
+                write!(
+                    f,
+                    "invalid selection: every relation leaf must be a writable user table"
+                )
+            }
+            AdapterError::ReadThenWriteDependencyLimitExceeded {
+                max_rw_dependencies,
+            } => {
+                write!(
+                    f,
+                    "selection has too many transitive dependencies to validate (limit {max_rw_dependencies})"
+                )
+            }
+            AdapterError::PeekRowIterationLimitExceeded { limit } => {
+                write!(
+                    f,
+                    "query exceeded the configured row iteration limit of {limit} rows"
+                )
+            }
+            AdapterError::ReplaceMaterializedViewSealed { name } => {
+                write!(
+                    f,
+                    "materialized view {name} is sealed and thus cannot be replaced"
+                )
             }
             AdapterError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
             }
+            AdapterError::CopyFormatError(e) => write!(f, "{e}"),
             AdapterError::ConcurrentClusterDrop => {
                 write!(f, "the transaction's active cluster has been dropped")
             }
@@ -771,6 +1350,28 @@ impl fmt::Display for AdapterError {
                 dependency_id,
             } => {
                 write!(f, "{dependency_kind} '{dependency_id}' was dropped")
+            }
+            AdapterError::ConcurrentDependencyMutation { dependency_id } => {
+                write!(
+                    f,
+                    "catalog item '{dependency_id}' was concurrently modified"
+                )
+            }
+            AdapterError::ReadThenWriteContention => {
+                write!(
+                    f,
+                    "read-then-write exceeded maximum retry attempts under contention"
+                )
+            }
+            AdapterError::ReadThenWriteTimestampTooFarAhead {
+                target_timestamp,
+                limit,
+            } => {
+                write!(
+                    f,
+                    "read-then-write would have to commit at {target_timestamp}, past the \
+                     highest timestamp the write timeline may be advanced to ({limit})"
+                )
             }
             AdapterError::CollectionUnreadable { id } => {
                 write!(f, "collection '{id}' is not readable at any timestamp")
@@ -799,9 +1400,6 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ReadWriteUnavailable => {
                 f.write_str("transaction read-write mode must be set before any query")
-            }
-            AdapterError::WrongSetOfLocks => {
-                write!(f, "internal error, wrong set of locks acquired")
             }
             AdapterError::StatementTimeout => {
                 write!(f, "canceling statement due to statement timeout")
@@ -836,6 +1434,20 @@ impl fmt::Display for AdapterError {
                 )
             }
             AdapterError::ResultSize(e) => write!(f, "{e}"),
+            AdapterError::SubscribeFellBehind {
+                buffered_bytes,
+                max_buffered_bytes,
+            } => {
+                use bytesize::ByteSize;
+                let buffered = u64::cast_from(*buffered_bytes);
+                let max = u64::cast_from(*max_buffered_bytes);
+                write!(
+                    f,
+                    "SUBSCRIBE fell behind: the client did not read results fast enough, so its backlog reached {}, exceeding the {} budget",
+                    ByteSize::b(buffered),
+                    ByteSize::b(max),
+                )
+            }
             AdapterError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
             }
@@ -890,7 +1502,9 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLTransactionRace => f.write_str(
                 "another session modified the catalog while this DDL transaction was open",
             ),
-            AdapterError::TransactionDryRun { .. } => f.write_str("transaction dry run"),
+            AdapterError::ClusterStateChanged { cluster_id } => {
+                write!(f, "cluster {cluster_id} was concurrently modified")
+            }
             AdapterError::Storage(e) => e.fmt(f),
             AdapterError::Compute(e) => e.fmt(f),
             AdapterError::Orchestrator(e) => e.fmt(f),
@@ -942,6 +1556,18 @@ impl fmt::Display for AdapterError {
             AdapterError::AlterClusterTimeout => {
                 write!(f, "canceling statement, provided timeout lapsed")
             }
+            AdapterError::AlterClusterSuperseded => {
+                write!(
+                    f,
+                    "cluster reconfiguration was superseded by another ALTER CLUSTER"
+                )
+            }
+            AdapterError::AlterClusterResourceExhausted => {
+                write!(
+                    f,
+                    "cluster reconfiguration could not provision its target within the available resource limits"
+                )
+            }
             AdapterError::AuthenticationError(e) => {
                 write!(f, "authentication error {e}")
             }
@@ -955,8 +1581,54 @@ impl fmt::Display for AdapterError {
                 }
                 Ok(())
             }
-            AdapterError::AlterClusterWhilePendingReplicas => {
-                write!(f, "cannot alter clusters with pending updates")
+            AdapterError::AlterClusterUnmanagedWhileReconfiguring => {
+                write!(
+                    f,
+                    "cannot convert cluster to unmanaged while a reconfiguration is in progress"
+                )
+            }
+            AdapterError::AlterClusterUnmanagedWhileBursting => {
+                write!(
+                    f,
+                    "cannot convert cluster to unmanaged while a hydration burst is in progress"
+                )
+            }
+            AdapterError::AlterClusterScheduleWhileReconfiguring => {
+                write!(
+                    f,
+                    "cannot change the cluster schedule while a reconfiguration is in progress"
+                )
+            }
+            AdapterError::AlterClusterWaitOnScheduledCluster => {
+                write!(
+                    f,
+                    "WAIT is not supported when the cluster SCHEDULE is not MANUAL"
+                )
+            }
+            AdapterError::ReplacementSchemaMismatch(_) => {
+                write!(f, "replacement schema differs from target schema")
+            }
+            AdapterError::ImpossibleTimestampConstraints { .. } => {
+                write!(f, "could not find a valid timestamp for the query")
+            }
+            AdapterError::OidcGroupSyncFailed(msg) => {
+                write!(f, "OIDC group-to-role sync failed: {msg}")
+            }
+            AdapterError::BoundedStalenessExceeded { bound, .. } => {
+                write!(
+                    f,
+                    "cannot serve query under bounded staleness {}",
+                    humantime::format_duration(*bound),
+                )
+            }
+            AdapterError::BoundedStalenessReadOnly => {
+                f.write_str("writes are not permitted under bounded staleness isolation")
+            }
+            AdapterError::BoundedStalenessRealTimeRecencyConflict => {
+                f.write_str("real_time_recency cannot be combined with bounded staleness isolation")
+            }
+            AdapterError::BoundedStalenessTimelineUnsupported => {
+                f.write_str("bounded staleness isolation requires the EpochMilliseconds timeline")
             }
         }
     }
@@ -1007,6 +1679,23 @@ impl From<EvalError> for AdapterError {
     }
 }
 
+impl From<mz_compute_client::protocol::response::PeekError> for AdapterError {
+    fn from(error: mz_compute_client::protocol::response::PeekError) -> Self {
+        use mz_compute_client::protocol::response::PeekError;
+
+        match error {
+            PeekError::Dataflow(error) => AdapterError::Dataflow(error),
+            PeekError::Unstructured(error) => AdapterError::Unstructured(anyhow::Error::msg(error)),
+            PeekError::RowIterationLimitExceeded { limit } => {
+                AdapterError::PeekRowIterationLimitExceeded { limit }
+            }
+            error @ PeekError::ResultExceedsMaxSize { .. } => {
+                AdapterError::ResultSize(error.to_string())
+            }
+        }
+    }
+}
+
 impl From<ExplainError> for AdapterError {
     fn from(e: ExplainError) -> AdapterError {
         match e {
@@ -1040,6 +1729,11 @@ impl From<OptimizerError> for AdapterError {
             EvalError(e) => Self::Eval(e),
             InternalUnsafeMfpPlan(e) => Self::Internal(e),
             Internal(e) => Self::Internal(e),
+            RestrictedFunction(func) => {
+                Self::Unauthorized(mz_sql::rbac::UnauthorizedError::RestrictedSystemObject {
+                    object_name: format!("function {func}"),
+                })
+            }
             e => Self::Optimizer(e),
         }
     }
@@ -1063,8 +1757,8 @@ impl From<oneshot::error::RecvError> for AdapterError {
     }
 }
 
-impl From<StorageError<mz_repr::Timestamp>> for AdapterError {
-    fn from(e: StorageError<mz_repr::Timestamp>) -> Self {
+impl From<StorageError> for AdapterError {
+    fn from(e: StorageError) -> Self {
         AdapterError::Storage(e)
     }
 }
@@ -1136,3 +1830,64 @@ impl From<ConnectionValidationError> for AdapterError {
 }
 
 impl Error for AdapterError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn alter_cluster_resource_exhausted_is_specific() {
+        let error = AdapterError::AlterClusterResourceExhausted;
+        assert_eq!(error.code(), SqlState::INSUFFICIENT_RESOURCES);
+        assert_eq!(
+            error.hint().as_deref(),
+            Some(
+                "Reduce the target resource use, or inspect \
+                 mz_internal.mz_cluster_reconfigurations for the retained outcome."
+            )
+        );
+        assert_eq!(
+            error.to_string(),
+            "cluster reconfiguration could not provision its target within the available resource limits"
+        );
+    }
+
+    #[mz_ore::test]
+    fn peek_row_iteration_limit_error_is_user_facing() {
+        let response = AdapterError::PeekRowIterationLimitExceeded { limit: 1000 }
+            .into_response(Severity::Error);
+
+        assert_eq!(response.code, SqlState::PROGRAM_LIMIT_EXCEEDED);
+        assert_eq!(
+            response.message,
+            "query exceeded the configured row iteration limit of 1000 rows"
+        );
+        assert_eq!(
+            response.detail.as_deref(),
+            Some(
+                "The query attempted to examine more than 1000 rows on a single compute worker. \
+                 This limit prevents long-running SELECT queries from delaying other work on the \
+                 cluster."
+            )
+        );
+        assert!(
+            response
+                .hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("compute_peek_row_iteration_limit"))
+        );
+    }
+
+    #[mz_ore::test]
+    fn structured_dataflow_error_preserves_message_and_code() {
+        use mz_compute_client::protocol::response::PeekError;
+
+        let dataflow_error = DataflowError::from(EvalError::DivisionByZero);
+        let expected_message = dataflow_error.to_string();
+        let response =
+            AdapterError::from(PeekError::from(dataflow_error)).into_response(Severity::Error);
+
+        assert_eq!(response.code, SqlState::DIVISION_BY_ZERO);
+        assert_eq!(response.message, expected_message);
+    }
+}

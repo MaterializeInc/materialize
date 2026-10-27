@@ -13,6 +13,9 @@ $ set-arg-default default-replica-size=scale=1,workers=1
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000
 ALTER SYSTEM SET storage_statistics_interval = 2000
+# The controller reconciles a replica-set change asynchronously; drive the tick
+# down so the replica-drop wait below converges quickly.
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
 
 $ set keyschema={
     "type": "record",
@@ -141,6 +144,17 @@ SELECT cr.id
   LIMIT 1
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
+
+# The controller reconciles RF asynchronously and would otherwise coalesce this
+# 1->0->1 cycle into a no-op (no new replica generation). Wait for the drop to
+# actually land so the RF=1 below creates a new replica distinct from old_replica_id
+# (the "previous replica" generation the null-stat rows below depend on). The old
+# replica's stats persist in mz_source_statistics after it is dropped.
+> SELECT count(*)
+  FROM mz_clusters c
+  JOIN mz_cluster_replicas cr ON c.id = cr.cluster_id
+  WHERE c.name = 'stats_cluster'
+0
 
 $ kafka-ingest format=avro topic=upsert key-format=avro key-schema=${keyschema} schema=${schema}
 {"key": "mammalmore"} {"f1":"moose", "f2": 100}

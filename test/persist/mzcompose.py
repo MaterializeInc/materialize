@@ -12,6 +12,7 @@ Maelstrom test against the Persist subsystem.
 """
 
 import argparse
+import os
 
 from materialize.mzcompose.composition import (
     Composition,
@@ -26,7 +27,11 @@ SERVICES = [
     PostgresMetadata(),
     Service(
         "maelstrom-persist",
-        {"mzbuild": "maelstrom-persist", "volumes": ["./maelstrom:/store"]},
+        {
+            "mzbuild": "maelstrom-persist",
+            "volumes": ["./maelstrom:/store"],
+            "propagate_uid_gid": True,
+        },
     ),
 ]
 
@@ -62,7 +67,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    (c.path / "maelstrom").mkdir(mode=0o777, exist_ok=True)
+    p = c.path / "maelstrom"
+    p.mkdir(exist_ok=True)
+    os.chmod(p, 0o777)
 
     if args.consensus == "mem":
         consensus_uri = "mem://consensus"
@@ -101,6 +108,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         *([f"--blob-uri={blob_uri}"] if blob_uri else []),
         *([f"--consensus-uri={consensus_uri}"] if consensus_uri else []),
         *([f"--unreliability={args.unreliability}"] if args.unreliability else []),
+        # READ COMMITTED consensus is only safe against vanilla Postgres. On
+        # CockroachDB the CRDB_* queries require SERIALIZABLE, so enabling it
+        # there panics.
+        *(["--consensus-read-committed"] if args.consensus == "postgres" else []),
     )
 
     # TODO: Reenable this when we un-break MaelstromConsensus

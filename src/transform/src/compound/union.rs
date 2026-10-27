@@ -16,7 +16,7 @@ use std::iter;
 
 use mz_expr::MirRelationExpr;
 use mz_expr::visit::Visit;
-use mz_repr::SqlRelationType;
+use mz_repr::ReprRelationType;
 
 use crate::TransformCtx;
 
@@ -39,7 +39,7 @@ impl crate::Transform for UnionNegateFusion {
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        relation.visit_mut_post(&mut Self::action)?;
+        relation.visit_mut_post(&mut Self::action);
         mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
@@ -88,7 +88,7 @@ impl UnionNegateFusion {
                 // A valid relation type is only needed for empty unions, but an existing union
                 // is guaranteed to be non-empty given that it always has at least a base branch.
                 assert!(!new_inputs.is_empty());
-                *relation = MirRelationExpr::union_many(new_inputs, SqlRelationType::empty());
+                *relation = MirRelationExpr::union_many(new_inputs, ReprRelationType::empty());
             }
         }
     }

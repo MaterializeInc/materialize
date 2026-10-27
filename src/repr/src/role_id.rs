@@ -12,9 +12,8 @@ use std::mem::size_of;
 use std::str::FromStr;
 
 use anyhow::{Error, anyhow};
-use columnation::{Columnation, CopyRegion};
-use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +30,6 @@ const PUBLIC_BYTE: u8 = b'p';
 
 /// The identifier for a role.
 #[derive(
-    Arbitrary,
     Clone,
     Copy,
     Debug,
@@ -41,9 +39,9 @@ const PUBLIC_BYTE: u8 = b'p';
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect,
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum RoleId {
     System(u64),
     /// Like system roles, these are roles built into the system. However, they are grantable to
@@ -196,10 +194,6 @@ impl RustType<ProtoRoleId> for RoleId {
             None => Err(TryFromProtoError::missing_field("ProtoRoleId::kind")),
         }
     }
-}
-
-impl Columnation for RoleId {
-    type InnerRegion = CopyRegion<RoleId>;
 }
 
 #[mz_ore::test]

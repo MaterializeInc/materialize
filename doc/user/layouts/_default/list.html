@@ -1,7 +1,10 @@
 {{ define "main"}}
 
 {{ if not (.Params.disable_h1) }}
-  <h1>{{.Title}}</h1>
+  <div class="title-row">
+    <h1>{{.Title}}</h1>
+    <a class="btn-ghost" href="{{ partial "markdown-url.html" (dict "page" .) }}">View as Markdown</a>
+  </div>
 {{ end }}
 
 {{ .Content }}

@@ -15,9 +15,16 @@
 
 //! Stack management utilities.
 
+#[cfg(feature = "tracing")]
+use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::error::Error;
 use std::fmt;
+#[cfg(feature = "tracing")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(feature = "tracing")]
+use tracing::error;
 
 /// The red zone is the amount of stack space that must be available on the
 /// current stack in order for [`maybe_grow`] to call the supplied closure
@@ -239,7 +246,7 @@ impl RecursionGuard {
             *depth += 1;
             Ok(())
         } else {
-            Err(RecursionLimitError { limit: self.limit })
+            Err(RecursionLimitError::new(self.limit))
         }
     }
 
@@ -249,15 +256,41 @@ impl RecursionGuard {
 }
 
 /// A [`RecursionGuard`]'s recursion limit was reached.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RecursionLimitError {
     limit: usize,
-    // todo: add backtrace (say, bottom 20 frames) once `std::backtrace` stabilizes in Rust 1.65
+    id: Option<u64>,
+}
+
+impl RecursionLimitError {
+    /// Emits a backtrace of the too-deep recursion to logs
+    /// and produces
+    pub fn new(limit: usize) -> Self {
+        #[cfg(feature = "tracing")]
+        let id = {
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+
+            let backtrace = Backtrace::force_capture().to_string();
+            error!(backtrace = %backtrace, "recursion limit error (backtrace id #{id})");
+
+            Some(id)
+        };
+        #[cfg(not(feature = "tracing"))]
+        let id = None;
+
+        RecursionLimitError { limit, id }
+    }
 }
 
 impl fmt::Display for RecursionLimitError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "exceeded recursion limit of {}", self.limit)
+        let RecursionLimitError { limit, id } = self;
+        write!(f, "exceeded recursion limit of {limit}",)?;
+        if let Some(id) = id {
+            write!(f, " (backtrace id #{id} in logs)")?;
+        }
+        writeln!(f)
     }
 }
 

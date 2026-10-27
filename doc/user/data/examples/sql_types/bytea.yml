@@ -1,0 +1,15 @@
+- name: "syntax-hex"
+  code: |
+    '\x<binary_string>'
+  syntax_elements:
+    - name: "`'\\x<binary_string>'`"
+      description: |
+        A hex-formatted binary string. The string is preceded by `\x` followed by hexadecimal digits. In some cases, the initial backslash may need to be escaped by doubling it (`\\`).
+
+- name: "syntax-escape"
+  code: |
+    '\<binary_string>'
+  syntax_elements:
+    - name: "`'\\<binary_string>'`"
+      description: |
+        An escape-formatted binary string. The string is preceded by `\`. Octet values can be escaped by converting them into their three-digit octal values and preceding them with backslashes; the backslash itself can be escaped as a double backslash. Certain values must be escaped: zero octet (`\000`), single quote (`\047` or `''''`), backslash (`\134` or `\\`), and non-printable octets (`\xxx` where `xxx` is the octal value).

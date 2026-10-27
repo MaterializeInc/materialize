@@ -223,6 +223,25 @@ with v as (select mz_now() < '3000-01-01') select * from v;
 ----
 true
 
+# Regression test for SQL-332: `mz_now()` as the direct argument of a value
+# window function (e.g. `first_value`/`last_value`) must still be recognized as
+# temporal, so that the query gets a timestamp near the current time.
+query B
+SELECT first_value(mz_now()) OVER () < '3000-01-01';
+----
+true
+
+query B
+SELECT last_value(mz_now()) OVER () < '3000-01-01';
+----
+true
+
+# Same for `mz_now()` as the direct argument of an aggregate window function.
+query B
+SELECT max(mz_now()) OVER () < '3000-01-01';
+----
+true
+
 # Make sure that we find temporal expressions also in referenced views.
 statement ok
 create view v as select mz_now() as x;
@@ -237,7 +256,7 @@ SELECT *
 FROM events
 WHERE insert_ts + 30 >= mz_now();
 
-query error db error: ERROR: WHERE clause error: operator does not exist: mz_timestamp \- integer
+query error WHERE clause error: operator does not exist: mz_timestamp \- integer
 SELECT *
 FROM events
 WHERE insert_ts >= mz_now() - 30;
@@ -262,12 +281,12 @@ WHERE ts + INTERVAL '30' minutes >= mz_now();
 statement ok
 SELECT * FROM mv1;
 
-query error db error: ERROR: WHERE clause error: operator does not exist: mz_timestamp \- interval
+query error WHERE clause error: operator does not exist: mz_timestamp \- interval
 SELECT *
 FROM t2
 WHERE ts >= mz_now() - INTERVAL '30' minutes;
 
-query error db error: ERROR: WHERE clause error: operator does not exist: mz_timestamp \- interval
+query error WHERE clause error: operator does not exist: mz_timestamp \- interval
 CREATE MATERIALIZED VIEW mv_err AS
 SELECT *
 FROM t2
@@ -280,7 +299,7 @@ WHERE
   ts + INTERVAL '30' minutes >= mz_now()
   OR ts IS NULL;
 
-query error db error: ERROR: Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+query error Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
 CREATE MATERIALIZED VIEW mv_err AS
 SELECT *
 FROM t2
@@ -300,14 +319,14 @@ WHERE
 statement ok
 SELECT * FROM v_one_off;
 
-query error db error: ERROR: Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+query error Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
 CREATE DEFAULT INDEX ON v_one_off;
 
-query error db error: ERROR: Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+query error Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
 CREATE MATERIALIZED VIEW mv_err AS
 SELECT * FROM v_one_off;
 
-query error db error: ERROR: Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+query error Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#0\{ts\}\) IS NULL OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
 SUBSCRIBE v_one_off;
 
 # This view will work also in maintained dataflows.
@@ -355,7 +374,7 @@ SELECT * FROM mv3;
 
 # UNION ALL workaround for OR
 
-query error db error: ERROR: Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#1\{x\} = 7\) OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
+query error Unsupported temporal predicate\. Note: `mz_now\(\)` must be directly compared to a non\-temporal expression of mz_timestamp\-castable type\. Expression found: \(\(#1\{x\} = 7\) OR \(timestamp_to_mz_timestamp\(\(#0\{ts\} \+ 00:30:00\)\) >= mz_now\(\)\)\)
 CREATE MATERIALIZED VIEW mv_err AS
 SELECT *
 FROM t2

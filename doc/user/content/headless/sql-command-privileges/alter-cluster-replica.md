@@ -1,0 +1,7 @@
+---
+headless: true
+---
+- Ownership of the cluster replica.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing cluster.

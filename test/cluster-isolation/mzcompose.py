@@ -25,12 +25,10 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.ui import UIError
 from materialize.util import selected_by_name
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     # We use mz_panic() in some test scenarios, so environmentd must stay up.
@@ -112,7 +110,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    c.up("zookeeper", "kafka", "schema-registry")
+    c.up("kafka", "schema-registry")
     for id, disruption in enumerate(selected_by_name(args.disruptions, disruptions)):
         run_test(c, disruption, id)
 
@@ -279,8 +277,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             user="mz_system",
         )
 
-        c.sql(
-            """
+        c.sql("""
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
@@ -288,11 +285,9 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
                 COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
                 COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
             ));
-            """
-        )
+            """)
 
-        c.sql(
-            """
+        c.sql("""
             DROP CLUSTER IF EXISTS cluster2 CASCADE;
             CREATE CLUSTER cluster2 REPLICAS (replica1 (
                 STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
@@ -300,8 +295,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
                 COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
                 COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
             ));
-            """
-        )
+            """)
 
         populate(c)
 

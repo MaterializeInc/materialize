@@ -43,8 +43,7 @@ that could lock them out of the system.
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/alter-network-policy.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-network-policy" %}}
 
 ## Examples
 

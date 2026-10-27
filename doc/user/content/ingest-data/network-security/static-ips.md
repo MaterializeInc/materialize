@@ -53,7 +53,7 @@ SELECT * FROM mz_egress_ips;
 ```
 
 As an alternative, you can also submit an HTTP request to Materialize's
-[SQL API](/integrations/http-api/) querying the [`mz_egress_ips`](/sql/system-catalog/mz_catalog/#mz_egress_ips)
+[SQL API](/serve-results/http-api/) querying the [`mz_egress_ips`](/sql/system-catalog/mz_catalog/#mz_egress_ips)
 system catalog table. In the request, specify the username, app password, and
 host for your Materialize region:
 

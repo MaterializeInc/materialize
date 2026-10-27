@@ -13,7 +13,7 @@ use anyhow::bail;
 use k8s_openapi::{
     api::core::v1::ResourceRequirements, apimachinery::pkg::apis::meta::v1::Condition,
 };
-use kube::CustomResource;
+use kube::{CustomResource, Resource, ResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -42,7 +42,14 @@ pub mod v1alpha1 {
     }
 
     #[derive(
-        CustomResource, Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema,
+        CustomResource,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Deserialize,
+        Serialize,
+        JsonSchema
     )]
     #[serde(rename_all = "camelCase")]
     #[kube(
@@ -59,10 +66,17 @@ pub mod v1alpha1 {
     pub struct BalancerSpec {
         /// The balancerd image to run.
         pub balancerd_image_ref: String,
+        /// The name of an externally managed ConfigMap in this namespace containing
+        /// dynamic configuration as a JSON object in `config.json`.
+        pub configmap_name: Option<String>,
         // Resource requirements for the balancerd pod
         pub resource_requirements: Option<ResourceRequirements>,
         // Number of balancerd pods to create
         pub replicas: Option<i32>,
+        /// Leave the balancerd Deployment's replica count to an external
+        /// autoscaler, such as a HorizontalPodAutoscaler. `replicas` then only
+        /// seeds the count when the Deployment is first created.
+        pub externally_scaled: Option<bool>,
         // The configuration for generating an x509 certificate using cert-manager for balancerd
         // to present to incoming connections.
         // The dns_names and issuer_ref fields are required.
@@ -94,11 +108,26 @@ pub mod v1alpha1 {
             &self.status.as_ref().unwrap().resource_id
         }
 
+        pub fn namespace(&self) -> String {
+            self.meta().namespace.clone().unwrap()
+        }
+
         pub fn deployment_name(&self) -> String {
             self.name_prefixed("balancerd")
         }
 
-        pub fn replicas(&self) -> i32 {
+        /// The replica count to apply, or `None` if replicas are externally scaled.
+        pub fn replicas(&self) -> Option<i32> {
+            if self.spec.externally_scaled.unwrap_or(false) {
+                None
+            } else {
+                Some(self.initial_replicas())
+            }
+        }
+
+        /// The replica count to create the Deployment with. When externally
+        /// scaled, the autoscaler owns the count from then on.
+        pub fn initial_replicas(&self) -> i32 {
             self.spec.replicas.unwrap_or(2)
         }
 
@@ -152,11 +181,23 @@ pub mod v1alpha1 {
         fn default_labels(&self) -> BTreeMap<String, String> {
             BTreeMap::from_iter([
                 (
+                    "materialize.cloud/organization-name".to_owned(),
+                    self.name_unchecked(),
+                ),
+                (
+                    "materialize.cloud/organization-namespace".to_owned(),
+                    self.namespace(),
+                ),
+                (
                     "materialize.cloud/mz-resource-id".to_owned(),
                     self.resource_id().to_owned(),
                 ),
                 ("materialize.cloud/app".to_owned(), "balancerd".to_owned()),
             ])
+        }
+
+        fn app_name(&self) -> Option<&str> {
+            Some("balancerd")
         }
     }
 }

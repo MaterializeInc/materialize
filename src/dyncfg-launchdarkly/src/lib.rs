@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use hyper_tls::HttpsConnector;
+use launchdarkly_sdk_transport::HttpTransport;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
@@ -50,13 +50,28 @@ where
         let _ = dyn_into_flag(entry.val())?;
     }
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
+        // The 300s streaming read timeout must stay above LaunchDarkly's
+        // streaming heartbeat interval (roughly 3 minutes per LD's
+        // documentation), or a healthy idle stream would trip the timeout and
+        // reconnect spuriously. The same constant lives in the adapter's
+        // `SystemParameterFrontend`.
+        //
+        // NOTE: `HyperTransport` auto-detects the `HTTP_PROXY`/`HTTPS_PROXY`/
+        // `NO_PROXY` env vars and routes through a configured proxy. No
+        // exposure today (balancerd's cloud pods set no proxy vars), but worth
+        // knowing if proxy vars ever appear on a pod.
+        let transport = https_transport(Duration::from_secs(10), Duration::from_secs(300))
+            .expect("failed to create HTTPS transport");
+
+        let mut data_source = ld::StreamingDataSourceBuilder::new();
+        data_source.transport(transport.clone());
+
+        let mut event_processor = ld::EventProcessorBuilder::new();
+        event_processor.transport(transport);
+
         let config = ld::ConfigBuilder::new(key)
-            .event_processor(
-                ld::EventProcessorBuilder::new().https_connector(HttpsConnector::new()),
-            )
-            .data_source(
-                ld::StreamingDataSourceBuilder::new().https_connector(HttpsConnector::new()),
-            )
+            .data_source(&data_source)
+            .event_processor(&event_processor)
             .build()
             .expect("valid config");
         let client = ld::Client::build(config)?;
@@ -65,7 +80,7 @@ where
             let max_backoff = Duration::from_secs(60);
             let mut backoff = Duration::from_secs(5);
 
-            // TODO(materialize#32030): fix retry logic
+            // TODO(materialize#38055): fix retry logic
             loop {
                 match client.wait_for_initialization(config_sync_timeout).await {
                     Some(true) => break,
@@ -100,6 +115,32 @@ where
         synced.sync_loop(config_sync_loop_interval),
     );
     Ok(())
+}
+
+/// Builds a LaunchDarkly [`HttpTransport`] whose TLS runs on the aws-lc-rs rustls provider,
+/// trusting the platform's native root certificates.
+///
+/// Use this instead of `HyperTransport::builder().build_https()`, which hardcodes the `ring`
+/// provider. Like `build_https`, the connector also accepts plain `http` URIs, which a relay
+/// proxy or test mock may use.
+///
+/// NOTE: `HyperTransport` still honors `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`, but only for
+/// proxies reached over plain HTTP. TLS to the proxy itself requires a transport crate feature
+/// that would pull `ring` back in.
+pub fn https_transport(
+    connect_timeout: Duration,
+    read_timeout: Duration,
+) -> Result<impl HttpTransport, std::io::Error> {
+    let connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_provider_and_native_roots(rustls::crypto::aws_lc_rs::default_provider())?
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .build();
+    launchdarkly_sdk_transport::HyperTransport::builder()
+        .connect_timeout(connect_timeout)
+        .read_timeout(read_timeout)
+        .build_with_connector(connector)
 }
 
 fn ld_ctx<F>(build_info: &'static BuildInfo, ctx_builder: F) -> Result<ld::Context, anyhow::Error>
@@ -183,7 +224,13 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
                 (ConfigVal::F64(_), ld::FlagValue::Number(flag)) => ConfigVal::F64(flag),
                 (ConfigVal::String(_), ld::FlagValue::Str(flag)) => ConfigVal::String(flag),
                 (ConfigVal::Duration(_), ld::FlagValue::Str(flag)) => {
-                    ConfigVal::Duration(humantime::parse_duration(&flag)?)
+                    match humantime::parse_duration(&flag) {
+                        Ok(d) => ConfigVal::Duration(d),
+                        Err(e) => {
+                            tracing::warn!("failed to parse Duration for {}: {}", entry.name(), e);
+                            continue;
+                        }
+                    }
                 }
                 (ConfigVal::Json(_), ld::FlagValue::Json(flag)) => ConfigVal::Json(flag),
 
@@ -196,10 +243,11 @@ impl<F: Fn(&ConfigUpdates, &ConfigSet) + Send> SyncedConfigSet<F> {
                 | (ConfigVal::Duration(_), _)
                 | (ConfigVal::Json(_), _)
                 | (ConfigVal::OptUsize(_), _)
-                | (ConfigVal::String(_), _) => anyhow::bail!(
-                    "LD flag cannot be cast to the ConfigVal for {}",
-                    entry.name()
-                ),
+                | (ConfigVal::String(_), _)
+                | (ConfigVal::OptString(_), _) => {
+                    tracing::warn!("LD flag type mismatch for {}", entry.name());
+                    continue;
+                }
             };
             tracing::debug!(
                 "updating config value {} from {:?} to {:?}",
@@ -228,6 +276,9 @@ fn dyn_into_flag(val: ConfigVal) -> Result<ld::FlagValue, anyhow::Error> {
         ConfigVal::OptUsize(_) => anyhow::bail!("OptUsize None cannot be converted to a FlagValue"),
         ConfigVal::F64(v) => ld::FlagValue::Number(v),
         ConfigVal::String(v) => ld::FlagValue::Str(v),
+        ConfigVal::OptString(_) => {
+            anyhow::bail!("OptString None cannot be converted to a FlagValue")
+        }
         ConfigVal::Duration(v) => ld::FlagValue::Str(humantime::format_duration(v).to_string()),
         ConfigVal::Json(v) => ld::FlagValue::Json(v),
     })

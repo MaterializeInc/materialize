@@ -13,8 +13,7 @@ use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use mz_catalog::memory::objects::Cluster;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::dataflows::{DataflowDescription, LirDataflowDescription};
 use mz_expr::explain::ExplainContext;
 use mz_expr::{MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::collections::CollectionExt;
@@ -66,6 +65,7 @@ impl OptimizerTrace {
     /// the prefix of the given `path` if `path` is present, or it will
     /// accumulate all [`TraceEntry`] instances otherwise.
     pub fn new(filter: Option<SmallVec<[NamedPlan; 4]>>) -> OptimizerTrace {
+        let filter = filter.map(|named| named.iter().map(NamedPlan::path).collect());
         let filter = || filter.clone();
         if let Some(global_subscriber) = mz_ore::tracing::GLOBAL_SUBSCRIBER.get() {
             let subscriber = Arc::clone(global_subscriber)
@@ -78,7 +78,7 @@ impl OptimizerTrace {
                 .with(PlanTrace::<HirRelationExpr>::new(filter()))
                 .with(PlanTrace::<MirRelationExpr>::new(filter()))
                 .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter()))
-                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter()))
+                .with(PlanTrace::<LirDataflowDescription>::new(filter()))
                 // Don't filter for FastPathPlan entries (there can be at most one).
                 .with(PlanTrace::<FastPathPlan>::new(None))
                 .with(PlanTrace::<UsedIndexes>::new(None))
@@ -103,7 +103,7 @@ impl OptimizerTrace {
                 .with(PlanTrace::<HirRelationExpr>::new(filter()))
                 .with(PlanTrace::<MirRelationExpr>::new(filter()))
                 .with(PlanTrace::<DataflowDescription<OptimizedMirRelationExpr>>::new(filter()))
-                .with(PlanTrace::<DataflowDescription<Plan>>::new(filter()))
+                .with(PlanTrace::<LirDataflowDescription>::new(filter()))
                 .with(PlanTrace::<FastPathPlan>::new(None))
                 .with(PlanTrace::<UsedIndexes>::new(None))
                 .with(tracing::level_filters::LevelFilter::TRACE);
@@ -388,7 +388,7 @@ impl OptimizerTrace {
                 &format,
                 &mut context,
             )?,
-            self.collect_explainable_entries::<DataflowDescription<Plan>>(&format, &mut context)?,
+            self.collect_explainable_entries::<LirDataflowDescription>(&format, &mut context)?,
             self.collect_explainable_entries::<FastPathPlan>(&format, &mut context)?,
         ));
 
@@ -447,7 +447,7 @@ impl OptimizerTrace {
                     context.duration = entry.full_duration;
 
                     // Try to find the UsedIndexes instance for this entry.
-                    let used_indexes = used_indexes_trace.map(|t| t.used_indexes_for(&entry.path));
+                    let used_indexes = used_indexes_trace.map(|t| used_indexes_for(t, &entry.path));
 
                     // Render the EXPLAIN output string for this entry.
                     let plan = if let Some(mut used_indexes) = used_indexes {
@@ -527,4 +527,27 @@ impl<T> TraceEntries<T> {
         let index = self.0.iter().position(|entry| entry.path == path);
         index.map(|index| self.0.remove(index))
     }
+}
+
+/// Get the [`UsedIndexes`] corresponding to the given `plan_path`.
+///
+/// Note that the path under which a `UsedIndexes` entry is traced might
+/// differ from the path of the `plan_path` of the plan that needs it.
+fn used_indexes_for(trace: &PlanTrace<UsedIndexes>, plan_path: &str) -> UsedIndexes {
+    // Compute the path from which we are going to lookup the `UsedIndexes`
+    // instance from the requested path.
+    let path = match NamedPlan::of_path(plan_path) {
+        Some(NamedPlan::Global) => Some(NamedPlan::Global),
+        Some(NamedPlan::Physical) => Some(NamedPlan::Global),
+        Some(NamedPlan::FastPath) => Some(NamedPlan::FastPath),
+        _ => None,
+    };
+    // Find the `TraceEntry` wrapping the `UsedIndexes` instance.
+    let entry = match path {
+        Some(path) => trace.find(path.path()),
+        None => None,
+    };
+    // Either return the `UsedIndexes` wrapped by the found entry or a
+    // default `UsedIndexes` instance if such entry was not found.
+    entry.map_or_else(Default::default, |e| e.plan)
 }

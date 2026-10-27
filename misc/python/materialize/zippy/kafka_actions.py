@@ -12,8 +12,6 @@ import string
 import threading
 from textwrap import dedent
 
-import numpy as np
-
 from materialize.mzcompose.composition import Composition
 from materialize.zippy.framework import (
     Action,
@@ -53,20 +51,6 @@ class KafkaStart(Action):
 
     def run(self, c: Composition, state: State) -> None:
         c.up("redpanda")
-
-
-class KafkaStop(Action):
-    """Stop the Kafka instance."""
-
-    @classmethod
-    def requires(cls) -> set[type[Capability]]:
-        return {KafkaRunning}
-
-    def withholds(self) -> set[type[Capability]]:
-        return {KafkaRunning}
-
-    def run(self, c: Composition, state: State) -> None:
-        c.kill("redpanda")
 
 
 class CreateTopicParameterized(ActionFactory):
@@ -120,14 +104,11 @@ class CreateTopic(Action):
 
     def run(self, c: Composition, state: State) -> None:
         c.testdrive(
-            SCHEMA
-            + dedent(
-                f"""
+            SCHEMA + dedent(f"""
                 $ kafka-create-topic topic={self.topic.name} partitions={self.topic.partitions}
                 $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} repeat=1
                 {{"key": 0}} {{"f1": 0, "pad": ""}}
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -142,8 +123,10 @@ class Ingest(Action):
     def __init__(self, capabilities: Capabilities) -> None:
         self.topic = random.choice(capabilities.get(TopicExists))
         self.delta = random.randint(1, 10000)
-        # This gives 67% pads of up to 10 bytes, 25% of up to 100 bytes and outliers up to 256 bytes
-        self.pad = min(np.random.zipf(1.6, 1)[0], 256) * random.choice(
+        # Heavy-tailed pad sizes: mostly up to 10 bytes, some up to 100 bytes
+        # and outliers up to 256 bytes. int(paretovariate(0.6)) approximates a
+        # zipf(1.6) sample while staying reproducible under random.seed().
+        self.pad = min(int(random.paretovariate(0.6)), 256) * random.choice(
             string.ascii_letters
         )
         super().__init__(capabilities)
@@ -164,15 +147,23 @@ class KafkaInsert(Ingest):
         assert self.topic.watermarks.max >= 0
         assert self.topic.watermarks.min >= 0
 
-        testdrive_str = SCHEMA + dedent(
-            f"""
+        testdrive_str = SCHEMA + dedent(f"""
             $ kafka-ingest format=avro key-format=avro topic={self.topic.name} schema=${{schema}} key-schema=${{keyschema}} start-iteration={prev_max + 1} repeat={self.delta}
             {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}, "pad" : "{self.pad}"}}
-            """
-        )
+            """)
 
         if self.parallel():
-            threading.Thread(target=c.testdrive, args=[testdrive_str]).start()
+            mz_service = state.mz_service
+
+            def ingest() -> None:
+                try:
+                    c.testdrive(testdrive_str, mz_service=mz_service)
+                except Exception as e:
+                    state.background_errors.append(e)
+
+            thread = threading.Thread(target=ingest)
+            thread.start()
+            state.background_threads.append(thread)
         else:
             c.testdrive(testdrive_str, mz_service=state.mz_service)
 
@@ -201,13 +192,10 @@ class KafkaUpsertFromHead(Ingest):
 
         if actual_delta > 0:
             c.testdrive(
-                SCHEMA
-                + dedent(
-                    f"""
+                SCHEMA + dedent(f"""
                     $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={start} repeat={actual_delta}
                     {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}, "pad": "{self.pad}"}}
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -230,13 +218,10 @@ class KafkaDeleteFromHead(Ingest):
 
         if actual_delta > 0:
             c.testdrive(
-                SCHEMA
-                + dedent(
-                    f"""
+                SCHEMA + dedent(f"""
                     $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={self.topic.watermarks.max + 1} repeat={actual_delta}
                     {{"key": ${{kafka-ingest.iteration}}}}
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -254,13 +239,10 @@ class KafkaUpsertFromTail(Ingest):
 
         if actual_delta > 0:
             c.testdrive(
-                SCHEMA
-                + dedent(
-                    f"""
+                SCHEMA + dedent(f"""
                     $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={tail} repeat={actual_delta}
                     {{"key": ${{kafka-ingest.iteration}}}} {{"f1": ${{kafka-ingest.iteration}}, "pad": "{self.pad}"}}
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -282,12 +264,9 @@ class KafkaDeleteFromTail(Ingest):
 
         if actual_delta > 0:
             c.testdrive(
-                SCHEMA
-                + dedent(
-                    f"""
+                SCHEMA + dedent(f"""
                    $ kafka-ingest format=avro topic={self.topic.name} key-format=avro key-schema=${{keyschema}} schema=${{schema}} start-iteration={prev_min} repeat={actual_delta}
                    {{"key": ${{kafka-ingest.iteration}}}}
-                   """
-                ),
+                   """),
                 mz_service=state.mz_service,
             )

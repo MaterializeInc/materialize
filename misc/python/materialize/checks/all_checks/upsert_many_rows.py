@@ -23,10 +23,7 @@ class UpsertManyRows(Check):
         return self.base_version >= MzVersion.parse_mz("v0.146.0")
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
-            + dedent(
-                """
+        return Testdrive(dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD) + dedent("""
                 $ kafka-create-topic topic=upsert-many-rows
                 $ kafka-ingest format=avro key-format=avro topic=upsert-many-rows key-schema=${keyschema} schema=${schema} repeat=1000000
                 {"key1": "A${kafka-ingest.iteration}"} {"f1": "X"}
@@ -43,9 +40,7 @@ class UpsertManyRows(Check):
                   SELECT f1, COUNT(*) AS count_rows, COUNT(DISTINCT key1) AS count_keys
                   FROM upsert_many_rows
                   GROUP BY f1
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -77,11 +72,7 @@ class UpsertManyRows(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM upsert_many_rows_view
                 Z 2000000 2000000
-                """
-            )
-        )
+                """))

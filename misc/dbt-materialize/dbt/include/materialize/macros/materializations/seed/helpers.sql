@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro materialize__reset_csv_table(model, full_refresh, old_relation, agate_table, cluster) %}
+{% macro materialize__reset_csv_table(model, full_refresh, old_relation, agate_table) %}
     {% set sql = "" %}
     -- Allow setting a cluster configuration for seeds in `dbt_project.yml` or
     -- a .yml file in the seed target path. If no cluster is configured, use

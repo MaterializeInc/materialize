@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,23 +9,23 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/select_search_path
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/select_search_path
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
 # Test that pg_catalog tables are accessible without qualifying table/view
 # names.
 
-query T
+query TTTTIT
 SHOW TABLES
 ----
 
@@ -33,7 +33,7 @@ SHOW TABLES
 query I
 SELECT count(DISTINCT(1)) FROM pg_attrdef
 ----
-0
+1
 
 query I
 SELECT count(DISTINCT(1)) FROM pg_attribute
@@ -59,12 +59,16 @@ SELECT count(DISTINCT(1)) FROM pg_tables
 statement ok
 CREATE DATABASE t1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t1.numbers (n INTEGER)
 
 statement ok
 CREATE DATABASE t2
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t2.words (w TEXT)
 
@@ -74,12 +78,14 @@ CREATE TABLE t2.words (w TEXT)
 statement ok
 SET DATABASE = t1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT count(*) FROM numbers
 ----
 0
 
-query error pq: relation "words" does not exist
+query error unknown catalog item 'words'
 SELECT count(*) FROM words
 
 # There's no table with default values in t1.
@@ -114,9 +120,11 @@ SELECT count(DISTINCT(1)) FROM pg_tables
 statement ok
 SET DATABASE = t2
 
-query error pq: relation "numbers" does not exist
+query error unknown catalog item 'numbers'
 SELECT count(*) FROM numbers
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT count(*) FROM words
 ----

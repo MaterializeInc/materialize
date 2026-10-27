@@ -23,10 +23,8 @@ use tokio::io::AsyncRead;
 /// According to folks from Fivetran, checking if a column name is prefixed with a specific
 /// string is enough to determine if it's a system column.
 ///
-/// See: <https://materializeinc.slack.com/archives/C060KAR4802/p1706557379061899>
-///
 /// ```
-/// use mz_fivetran_destination::utils;
+/// use fivetran_destination::utils;
 ///
 /// // Needs to be prefixed with '_fivetran_' to be considered a system column.
 /// assert!(!utils::is_system_column("timestamp"));
@@ -118,7 +116,7 @@ pub fn to_fivetran_type(ty: Type) -> Result<(DataType, Option<DataTypeParams>), 
 /// for characters that need to be escaped.
 ///
 /// ```
-/// use mz_fivetran_destination::utils::escape_options;
+/// use fivetran_destination::utils::escape_options;
 ///
 /// assert_eq!(escape_options("foo"), "foo");
 /// assert_eq!(escape_options("name with space"), r#"name\ with\ space"#);
@@ -248,7 +246,7 @@ where
 
 /// An adapter that implements [`tokio::io::AsyncWrite`] for a [`tokio_postgres::CopyInSink`].
 ///
-/// Note: [`tokio_util`] has a similar adapter which we largely derive this implementation from
+/// Note: `tokio_util` has a similar adapter which we largely derive this implementation from
 /// [1]. The reason we don't use it is because of a higher ranked lifetime error which this adapter
 /// works around lifetime issues by using an owned [`bytes::Bytes`] instead of a `&[u8]`.
 ///

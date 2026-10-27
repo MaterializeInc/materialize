@@ -9,6 +9,7 @@
 
 
 from dataclasses import dataclass
+from typing import Any
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Sleep, Validate
 from materialize.checks.checks import Check
@@ -32,6 +33,7 @@ from materialize.version_list import (
     get_compatible_upgrade_from_versions,
     get_published_minor_mz_versions,
     get_self_managed_versions,
+    keep_latest_patch_per_minor,
 )
 
 # late initialization
@@ -44,11 +46,12 @@ def get_minor_versions() -> list[MzVersion]:
     global _minor_versions
     if _minor_versions is None:
         current_version = MzVersion.parse_cargo()
-        _minor_versions = [
-            v
-            for v in get_published_minor_mz_versions(exclude_current_minor_version=True)
-            if v < current_version
-        ]
+        _minor_versions = get_published_minor_mz_versions(
+            exclude_current_minor_version=True,
+            limit=4,
+            max_version=current_version,
+            include_release_candidates=True,
+        )
     return _minor_versions
 
 
@@ -93,8 +96,21 @@ def start_mz_read_only(
 class UpgradeEntireMzFromLatestSelfManaged(Scenario):
     """Upgrade the entire Mz instance from the last Self-Managed version without any intermediate steps. This makes sure our Self-Managed releases for self-managed Materialize stay upgradable."""
 
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
+        **kwargs: Any,
+    ):
+        self._self_managed_versions = get_self_managed_versions(
+            max_version=MzVersion.parse_cargo()
+        )
+        super().__init__(checks, executor, features, seed, **kwargs)
+
     def base_version(self) -> MzVersion:
-        return get_self_managed_versions()[-1]
+        return self._self_managed_versions[-1]
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
@@ -127,12 +143,25 @@ class UpgradeEntireMzFromLatestSelfManaged(Scenario):
 class UpgradeEntireMzFromPreviousSelfManaged(Scenario):
     """Upgrade the entire Mz instance through the last two Self-Managed versions. This makes sure our Self-Managed releases for self-managed Materialize stay upgradable."""
 
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
+        **kwargs: Any,
+    ):
+        self._self_managed_versions = get_self_managed_versions(
+            max_version=MzVersion.parse_cargo()
+        )
+        super().__init__(checks, executor, features, seed, **kwargs)
+
     def base_version(self) -> MzVersion:
-        return get_self_managed_versions()[-2]
+        return self._self_managed_versions[-2]
 
     def actions(self) -> list[Action]:
         print(
-            f"Upgrading from tag {self.base_version()} through {get_self_managed_versions()[-1]}"
+            f"Upgrading from tag {self.base_version()} through {self._self_managed_versions[-1]}"
         )
         return [
             StartMz(
@@ -144,7 +173,7 @@ class UpgradeEntireMzFromPreviousSelfManaged(Scenario):
             KillMz(
                 capture_logs=True
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
-            StartMz(self, tag=get_self_managed_versions()[-1]),
+            StartMz(self, tag=self._self_managed_versions[-1]),
             Manipulate(self, phase=2),
             KillMz(
                 capture_logs=True
@@ -248,9 +277,10 @@ class UpgradeEntireMzFourVersions(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
         self.minor_versions = get_minor_versions()
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
         return self.minor_versions[3]
@@ -288,6 +318,69 @@ class UpgradeEntireMzFourVersions(Scenario):
                 tag=None,
             ),
             Validate(self),
+            KillMz(),
+            StartMz(
+                self,
+                tag=None,
+            ),
+            Validate(self),
+        ]
+
+
+class UpgradeV80Migration(Scenario):
+    """Test upgrade v26.17.1 (catalog 80) -> v26.18.0 (catalog 81, buggy v80_to_v81) -> v26.24.0 (catalog 83, partial fix in v82_to_v83) -> current (catalog 84, full fix in v83_to_v84)"""
+
+    def base_version(self) -> MzVersion:
+        return MzVersion.parse_mz("v26.17.1")
+
+    def actions(self) -> list[Action]:
+        print(
+            "Upgrade path: v26.17.1 -> initialize -> v26.18.0 -> manipulate#1 -> restart -> manipulate#2 -> v26.24.0 (v82_to_v83) -> current (v83_to_v84) -> restart -> validate"
+        )
+        # The factor-0 override below only applies to the boots that pass it, but
+        # it is durable: the cluster row is seeded once and a later boot honors the
+        # row rather than its own flag. So mz_system has no replica for the whole
+        # run, including the final unoverridden boots. Nothing here needs one,
+        # since the checks peek as `materialize` on `quickstart` and the mz_system
+        # connection only issues DDL. A check that peeked at a non-catalog object
+        # as `mz_system` would hang, and would need this override lifted.
+        return [
+            StartMz(
+                self,
+                tag=self.base_version(),
+                soft_assertions=False,
+                builtin_system_cluster_replication_factor=0,
+            ),
+            Initialize(self),
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=MzVersion.parse_mz("v26.18.0"),
+                soft_assertions=False,
+                builtin_system_cluster_replication_factor=0,
+            ),
+            Manipulate(self, phase=1),
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=MzVersion.parse_mz("v26.18.0"),
+                soft_assertions=False,
+                builtin_system_cluster_replication_factor=0,
+            ),
+            Manipulate(self, phase=2),
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=MzVersion.parse_mz("v26.24.0"),
+                soft_assertions=False,
+                builtin_system_cluster_replication_factor=0,
+            ),
+            KillMz(capture_logs=True),
+            StartMz(
+                self,
+                tag=None,
+                soft_assertions=False,
+            ),
             KillMz(),
             StartMz(
                 self,
@@ -414,7 +507,8 @@ class PreflightCheckContinue(Scenario):
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
             start_mz_read_only(self, tag=None, deploy_generation=1),
             WaitReadyMz(),
-            PromoteMz(),
+            # KillMz above already removed the previous generation.
+            PromoteMz(retire_mz_service=None),
             Manipulate(self, phase=2),
             Validate(self),
             # A second restart while already on the new version
@@ -559,9 +653,10 @@ def upgrade_service_actions(
             system_parameter_defaults=service_info.system_parameter_defaults,
         ),
         WaitReadyMz(service_info.service_name),
-        PromoteMz(service_info.service_name),
-        # Cleanup the previous service
-        KillMz(capture_logs=True, mz_service=previous_service_info.service_name),
+        PromoteMz(
+            service_info.service_name,
+            retire_mz_service=previous_service_info.service_name,
+        ),
     ]
 
 
@@ -587,9 +682,14 @@ class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
-        self.self_managed_versions = get_compatible_upgrade_from_versions()
-        super().__init__(checks, executor, features, seed)
+        # Thin to one version per minor so the linear path stays within the
+        # test's time budget as releases accumulate. See keep_latest_patch_per_minor.
+        self.self_managed_versions = keep_latest_patch_per_minor(
+            get_compatible_upgrade_from_versions()
+        )
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
         return self.self_managed_versions[0]
@@ -643,9 +743,14 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
-        self.self_managed_versions = get_compatible_upgrade_from_versions()
-        super().__init__(checks, executor, features, seed)
+        # Thin to one version per minor so the linear path stays within the
+        # test's time budget as releases accumulate. See keep_latest_patch_per_minor.
+        self.self_managed_versions = keep_latest_patch_per_minor(
+            get_compatible_upgrade_from_versions()
+        )
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
         return self.self_managed_versions[0]
@@ -709,9 +814,10 @@ class SelfManagedRandomUpgradePath(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
         self.self_managed_versions = get_compatible_upgrade_from_versions()
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def _generate_random_upgrade_path(
         self,
@@ -785,11 +891,6 @@ class SelfManagedRandomUpgradePath(Scenario):
                 Manipulate(self, phase=2, mz_service=mz_services[0].service_name),
             )
 
-        if both_done_at_position == 0:
-            actions.append(
-                Validate(self, mz_service=mz_services[0].service_name),
-            )
-
         for i, service_info in enumerate[MzServiceUpgradeInfo](
             mz_services[1:], start=1
         ):
@@ -809,7 +910,7 @@ class SelfManagedRandomUpgradePath(Scenario):
                     Manipulate(self, phase=2, mz_service=service_info.service_name),
                 )
 
-            if i >= both_done_at_position:
+            if i >= both_done_at_position and service_info.version is None:
                 actions.append(
                     Validate(self, mz_service=service_info.service_name),
                 )
@@ -828,9 +929,10 @@ class SelfManagedEarliestToLatestDirectUpgrade(Scenario):
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        **kwargs: Any,
     ):
         self.self_managed_versions = get_compatible_upgrade_from_versions()
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
 
     def base_version(self) -> MzVersion:
         return self.self_managed_versions[0]

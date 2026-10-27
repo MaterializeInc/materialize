@@ -8,35 +8,34 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::bail;
+use k8s_controller::{Outcome, TraceMetadata};
 use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy, RollingUpdateDeployment},
         core::v1::{
-            Affinity, Capabilities, Container, ContainerPort, HTTPGetAction, PodSecurityContext,
-            PodSpec, PodTemplateSpec, Probe, ResourceRequirements, SeccompProfile,
-            SecretVolumeSource, SecurityContext, Service, ServicePort, ServiceSpec, Toleration,
-            Volume, VolumeMount,
+            Affinity, Capabilities, ConfigMapVolumeSource, Container, ContainerPort, HTTPGetAction,
+            KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe, ResourceRequirements,
+            SeccompProfile, SecretVolumeSource, SecurityContext, Service, ServicePort, ServiceSpec,
+            Toleration, Volume, VolumeMount,
         },
     },
     apimachinery::pkg::{
         apis::meta::v1::{Condition, LabelSelector, Time},
         util::intstr::IntOrString,
     },
+    jiff::Timestamp,
 };
 use kube::{
     Api, Client, Resource, ResourceExt,
-    api::{ObjectMeta, PostParams},
-    runtime::{
-        controller::Action,
-        reflector::{ObjectRef, Store},
-    },
+    api::{DeleteParams, ObjectMeta, Patch, PatchParams, PostParams},
+    runtime::{conditions::is_deployment_completed, controller::Action, wait::await_condition},
 };
 use maplit::btreemap;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{apply_resource, make_reflector},
+    k8s::{FIELD_MANAGER, apply_resource, get_resource, recommended_k8s_labels, replace_resource},
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -47,6 +46,11 @@ use mz_cloud_resources::crd::{
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_ore::{cli::KeyValueArg, instrument};
 
+/// The name identifying this controller in its reconciliation metrics and in
+/// the reporter of the events it publishes.
+pub const CONTROLLER_NAME: &str = "balancer";
+
+#[derive(Clone)]
 pub struct Config {
     pub enable_security_context: bool,
     pub enable_prometheus_scrape_annotations: bool,
@@ -69,28 +73,23 @@ pub struct Config {
 
 pub struct Context {
     config: Config,
-    deployments: Store<Deployment>,
 }
 
 impl Context {
-    pub async fn new(config: Config, client: Client) -> Self {
-        Self {
-            config,
-            deployments: make_reflector(client).await,
-        }
+    pub fn new(config: Config) -> Self {
+        Self { config }
     }
 
     async fn sync_deployment_status(
         &self,
         client: &Client,
         balancer: &Balancer,
-    ) -> Result<(), kube::Error> {
-        let namespace = balancer.namespace().unwrap();
+    ) -> Result<(), Error> {
+        let namespace = balancer.namespace();
         let balancer_api: Api<Balancer> = Api::namespaced(client.clone(), &namespace);
+        let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
 
-        let Some(deployment) = self
-            .deployments
-            .get(&ObjectRef::new(&balancer.deployment_name()).within(&namespace))
+        let Some(deployment) = get_resource(&deployment_api, &balancer.deployment_name()).await?
         else {
             return Ok(());
         };
@@ -125,7 +124,7 @@ impl Context {
         status.conditions = vec![Condition {
             type_: "Ready".to_string(),
             status: ready_str.to_string(),
-            last_transition_time: Time(chrono::offset::Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             message: format!(
                 "balancerd deployment is{} ready",
                 if ready { "" } else { " not" }
@@ -140,14 +139,17 @@ impl Context {
             .replace_status(
                 &balancer.name_unchecked(),
                 &PostParams::default(),
-                serde_json::to_vec(&new_balancer).unwrap(),
+                &new_balancer,
             )
             .await?;
 
         Ok(())
     }
 
-    fn create_external_certificate_object(&self, balancer: &Balancer) -> Option<Certificate> {
+    fn create_external_certificate_object(
+        &self,
+        balancer: &Balancer,
+    ) -> Result<Option<Certificate>, anyhow::Error> {
         create_certificate(
             self.config
                 .default_certificate_specs
@@ -158,8 +160,8 @@ impl Context {
             balancer.external_certificate_name(),
             balancer.external_certificate_secret_name(),
             None,
-            CertificatePrivateKeyAlgorithm::Rsa,
-            Some(4096),
+            CertificatePrivateKeyAlgorithm::Ecdsa,
+            Some(256),
         )
     }
 
@@ -270,6 +272,34 @@ impl Context {
 
         let mut volumes = Vec::new();
         let mut volume_mounts = Vec::new();
+        if let Some(name) = &balancer.spec.configmap_name {
+            volumes.push(Volume {
+                name: "dynamic-config".to_owned(),
+                config_map: Some(ConfigMapVolumeSource {
+                    name: name.clone(),
+                    // The file must exist at startup or balancerd skips the sync loop.
+                    optional: Some(false),
+                    items: Some(vec![KeyToPath {
+                        key: "config.json".to_owned(),
+                        path: "config.json".to_owned(),
+                        ..Default::default()
+                    }]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            volume_mounts.push(VolumeMount {
+                name: "dynamic-config".to_owned(),
+                // Mount the directory: subPath mounts do not receive ConfigMap updates.
+                mount_path: "/etc/balancerd".to_owned(),
+                read_only: Some(true),
+                ..Default::default()
+            });
+            args.extend([
+                "--config-sync-file-path=/etc/balancerd/config.json".to_owned(),
+                "--config-sync-loop-interval=1s".to_owned(),
+            ]);
+        }
         if issuer_ref_defined(
             &self.config.default_certificate_specs.balancerd_external,
             &balancer.spec.external_certificate_spec,
@@ -357,10 +387,13 @@ impl Context {
             ..Default::default()
         };
 
+        let match_labels = pod_template_labels.clone();
+        pod_template_labels.extend(recommended_k8s_labels(balancer.app_name()));
+
         let deployment_spec = DeploymentSpec {
-            replicas: Some(balancer.replicas()),
+            replicas: balancer.replicas(),
             selector: LabelSelector {
-                match_labels: Some(pod_template_labels.clone()),
+                match_labels: Some(match_labels),
                 ..Default::default()
             },
             strategy: Some(DeploymentStrategy {
@@ -448,6 +481,151 @@ impl Context {
             status: None,
         }
     }
+
+    /// Hands `spec.replicas` to [`REPLICAS_HANDOVER_MANAGER`] at its live value
+    /// while [`FIELD_MANAGER`] still owns it, creating the Deployment with
+    /// `initial_replicas` first if it does not exist yet.
+    ///
+    /// NOTE: Dropping a field from an apply when no other manager owns it
+    /// deletes it, which defaults the Deployment to 1 replica. An autoscaler
+    /// cannot become a co-owner first, because each of its writes triggers a
+    /// reconcile whose forced apply reclaims the field. The handover apply is
+    /// not forced, so a concurrent scale by the autoscaler conflicts and the
+    /// reconcile retries.
+    async fn release_replicas(
+        &self,
+        deployment_api: &Api<Deployment>,
+        deployment: &Deployment,
+        initial_replicas: i32,
+    ) -> Result<(), Error> {
+        let name = deployment.name_unchecked();
+        let existing = match get_resource(deployment_api, &name).await? {
+            Some(existing) => existing,
+            None => {
+                // The handover apply carries no selector or template, so it
+                // cannot create the Deployment. Create it with the initial
+                // count under FIELD_MANAGER, then hand that count over below.
+                let mut seeded = deployment.clone();
+                seeded.spec.as_mut().unwrap().replicas = Some(initial_replicas);
+                apply_resource(deployment_api, &seeded).await?
+            }
+        };
+        if !owns_replicas(&existing) {
+            return Ok(());
+        }
+        let replicas = existing.spec.and_then(|spec| spec.replicas);
+        deployment_api
+            .patch(
+                &name,
+                &PatchParams::apply(REPLICAS_HANDOVER_MANAGER),
+                &Patch::Apply(serde_json::json!({
+                    "apiVersion": "apps/v1",
+                    "kind": "Deployment",
+                    "metadata": { "name": name },
+                    "spec": { "replicas": replicas },
+                })),
+            )
+            .await?;
+        Ok(())
+    }
+
+    // TODO: remove this once everyone is upgraded to an orchestratord
+    // version with the separate balancer operator
+    async fn fix_deployment(
+        &self,
+        deployment_api: &Api<Deployment>,
+        new_deployment: &Deployment,
+    ) -> Result<(), Error> {
+        let Some(mut existing_deployment) =
+            get_resource(deployment_api, &new_deployment.name_unchecked()).await?
+        else {
+            return Ok(());
+        };
+
+        if existing_deployment.spec.as_ref().unwrap().selector
+            == new_deployment.spec.as_ref().unwrap().selector
+        {
+            return Ok(());
+        }
+
+        warn!("found existing deployment with old label selector, fixing");
+
+        // this is sufficient because the new labels are a superset of the
+        // old labels, so the existing label selector should still be valid
+        existing_deployment
+            .spec
+            .as_mut()
+            .unwrap()
+            .template
+            .metadata
+            .as_mut()
+            .unwrap()
+            .labels = new_deployment
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .metadata
+            .as_ref()
+            .unwrap()
+            .labels
+            .clone();
+
+        // using await_condition is not ideal in a controller loop, but this
+        // is very temporary and will only ever happen once, so this feels
+        // simpler than trying to introduce an entire state machine here
+        replace_resource(deployment_api, &existing_deployment).await?;
+        await_condition(
+            deployment_api.clone(),
+            &existing_deployment.name_unchecked(),
+            |deployment: Option<&Deployment>| {
+                let observed_generation = deployment
+                    .and_then(|deployment| deployment.status.as_ref())
+                    .and_then(|status| status.observed_generation)
+                    .unwrap_or(0);
+                let current_generation = deployment
+                    .and_then(|deployment| deployment.meta().generation)
+                    .unwrap_or(0);
+                let previous_generation = existing_deployment.meta().generation.unwrap_or(0);
+                observed_generation == current_generation
+                    && current_generation > previous_generation
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+        await_condition(
+            deployment_api.clone(),
+            &existing_deployment.name_unchecked(),
+            is_deployment_completed(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+        // delete the deployment but leave the pods around (via
+        // DeleteParams::orphan)
+        match kube::runtime::wait::delete::delete_and_finalize(
+            deployment_api.clone(),
+            &existing_deployment.name_unchecked(),
+            &DeleteParams::orphan(),
+        )
+        .await
+        {
+            Ok(_) => {}
+            Err(kube::runtime::wait::delete::Error::Delete(kube::Error::Api(e)))
+                if e.code == 404 =>
+            {
+                // the resource already doesn't exist
+            }
+            Err(e) => return Err(anyhow::anyhow!(e).into()),
+        }
+
+        // now, the normal apply of the new deployment (in the main loop)
+        // will take over the existing pods from the old deployment we just
+        // deleted, since we already updated the pod labels to be the same as
+        // the new label selector
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -460,8 +638,10 @@ impl k8s_controller::Context for Context {
         &self,
         client: Client,
         balancer: &Self::Resource,
+        metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         if balancer.status.is_none() {
+            let step = metadata.step("initialize_status");
             let balancer_api: Api<Balancer> =
                 Api::namespaced(client.clone(), &balancer.meta().namespace.clone().unwrap());
             let mut new_balancer = balancer.clone();
@@ -470,34 +650,182 @@ impl k8s_controller::Context for Context {
                 .replace_status(
                     &balancer.name_unchecked(),
                     &PostParams::default(),
-                    serde_json::to_vec(&new_balancer).unwrap(),
+                    &new_balancer,
                 )
                 .await?;
+            step.finish(Outcome::Completed);
             // Updating the status should trigger a reconciliation
             // which will include a status this time.
             return Ok(None);
         }
 
-        let namespace = balancer.namespace().unwrap();
+        let namespace = balancer.namespace();
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), &namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
 
-        if let Some(external_certificate) = self.create_external_certificate_object(balancer) {
+        let step = metadata.step("certificate");
+        if let Some(external_certificate) = self.create_external_certificate_object(balancer)? {
             trace!("creating new balancerd external certificate");
             apply_resource(&certificate_api, &external_certificate).await?;
+            step.finish(Outcome::Completed);
+        } else {
+            step.finish(Outcome::Skipped);
         }
 
+        let step = metadata.step("deployment");
         let deployment = self.create_deployment_object(balancer)?;
+        self.fix_deployment(&deployment_api, &deployment).await?;
+        // Must precede the apply that omits `replicas`; see `release_replicas`.
+        if balancer.replicas().is_none() {
+            self.release_replicas(&deployment_api, &deployment, balancer.initial_replicas())
+                .await?;
+        }
         trace!("creating new balancerd deployment");
         apply_resource(&deployment_api, &deployment).await?;
+        step.finish(Outcome::Completed);
 
+        let step = metadata.step("service");
         let service = self.create_service_object(balancer);
         trace!("creating new balancerd service");
         apply_resource(&service_api, &service).await?;
+        step.finish(Outcome::Completed);
 
+        let step = metadata.step("sync_status");
         self.sync_deployment_status(&client, balancer).await?;
+        step.finish(Outcome::Completed);
 
         Ok(None)
+    }
+}
+
+const REPLICAS_HANDOVER_MANAGER: &str = "orchestratord.materialize.cloud/replicas-handover";
+
+fn owns_replicas(deployment: &Deployment) -> bool {
+    deployment
+        .metadata
+        .managed_fields
+        .iter()
+        .flatten()
+        .filter(|entry| entry.manager.as_deref() == Some(FIELD_MANAGER))
+        .filter_map(|entry| entry.fields_v1.as_ref())
+        .any(|fields| fields.0.pointer("/f:spec/f:replicas").is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_cloud_resources::crd::balancer::v1alpha1::{BalancerSpec, StaticRoutingConfig};
+
+    fn test_context() -> Context {
+        Context::new(Config {
+            enable_security_context: false,
+            enable_prometheus_scrape_annotations: false,
+            image_pull_policy: KubernetesImagePullPolicy::IfNotPresent,
+            scheduler_name: None,
+            balancerd_node_selector: vec![],
+            balancerd_affinity: None,
+            balancerd_tolerations: None,
+            balancerd_default_resources: None,
+            default_certificate_specs: DefaultCertificateSpecs::default(),
+            environmentd_sql_port: 6875,
+            environmentd_http_port: 6876,
+            balancerd_sql_port: 6875,
+            balancerd_http_port: 6876,
+            balancerd_internal_http_port: 6878,
+        })
+    }
+
+    fn test_balancer(spec: BalancerSpec) -> Balancer {
+        let mut balancer = Balancer::new(
+            "test",
+            BalancerSpec {
+                static_routing: Some(StaticRoutingConfig {
+                    environmentd_namespace: "test".to_owned(),
+                    environmentd_service_name: "environmentd".to_owned(),
+                }),
+                ..spec
+            },
+        );
+        balancer.metadata.namespace = Some("test".to_owned());
+        balancer.metadata.uid = Some("test".to_owned());
+        balancer.status = Some(balancer.status());
+        balancer
+    }
+
+    #[mz_ore::test]
+    fn externally_scaled_omits_replicas() {
+        let context = test_context();
+        for (externally_scaled, expected) in [(None, Some(3)), (Some(true), None)] {
+            let balancer = test_balancer(BalancerSpec {
+                replicas: Some(3),
+                externally_scaled,
+                ..Default::default()
+            });
+            let deployment = context.create_deployment_object(&balancer).unwrap();
+            assert_eq!(deployment.spec.unwrap().replicas, expected);
+            assert_eq!(balancer.initial_replicas(), 3);
+        }
+    }
+
+    #[mz_ore::test]
+    fn owns_replicas_reads_managed_fields() {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::{FieldsV1, ManagedFieldsEntry};
+        let deployment = |manager: &str| Deployment {
+            metadata: ObjectMeta {
+                managed_fields: Some(vec![ManagedFieldsEntry {
+                    manager: Some(manager.to_owned()),
+                    fields_v1: Some(FieldsV1(
+                        serde_json::json!({ "f:spec": { "f:replicas": {} } }),
+                    )),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(owns_replicas(&deployment(FIELD_MANAGER)));
+        assert!(!owns_replicas(&deployment(REPLICAS_HANDOVER_MANAGER)));
+        assert!(!owns_replicas(&Deployment::default()));
+    }
+
+    #[mz_ore::test]
+    fn configmap_reference_controls_file_sync() {
+        let context = test_context();
+        for configmap_name in [None, Some("balancerd-settings".to_owned())] {
+            let balancer = test_balancer(BalancerSpec {
+                configmap_name: configmap_name.clone(),
+                ..Default::default()
+            });
+            let pod = context
+                .create_deployment_object(&balancer)
+                .unwrap()
+                .spec
+                .unwrap()
+                .template
+                .spec
+                .unwrap();
+            let container = &pod.containers[0];
+            let args = container.args.as_ref().unwrap();
+            let volumes = pod.volumes.as_ref().unwrap();
+            let mounts = container.volume_mounts.as_ref().unwrap();
+            if let Some(name) = configmap_name {
+                let source = volumes[0].config_map.as_ref().unwrap();
+                assert_eq!(source.name, name);
+                assert_eq!(source.optional, Some(false));
+                assert_eq!(source.items.as_ref().unwrap()[0].key, "config.json");
+                assert_eq!(mounts[0].read_only, Some(true));
+                assert!(mounts[0].sub_path.is_none());
+                assert!(args.contains(&format!(
+                    "--config-sync-file-path={}/config.json",
+                    mounts[0].mount_path
+                )));
+                assert!(args.contains(&"--config-sync-loop-interval=1s".to_owned()));
+            } else {
+                assert!(volumes.is_empty());
+                assert!(mounts.is_empty());
+                assert!(!args.iter().any(|arg| arg.starts_with("--config-sync-")));
+            }
+        }
     }
 }

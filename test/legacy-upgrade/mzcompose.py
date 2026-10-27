@@ -27,7 +27,6 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.version_list import (
     VersionsFromDocs,
     get_all_published_mz_versions,
@@ -38,10 +37,9 @@ mz_options: dict[MzVersion, str] = {}
 
 SERVICES = [
     TestCerts(),
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Postgres(),
+    Postgres(volumes=["secrets:/certs:ro"]),
     MySql(),
     Cockroach(setup_materialize=True, in_memory=True),
     # Overridden below
@@ -142,7 +140,7 @@ def get_all_and_latest_two_minor_mz_versions(
 ) -> tuple[list[MzVersion], list[MzVersion]]:
     current_version = MzVersion.parse_cargo()
     if use_versions_from_docs:
-        version_list = VersionsFromDocs(respect_released_tag=False)
+        version_list = VersionsFromDocs(respect_released_tag=False, skip_rc=True)
         all_versions = [v for v in version_list.all_versions() if v < current_version]
         tested_versions = version_list.minor_versions()[-2:]
     else:
@@ -190,7 +188,7 @@ def test_upgrade_from_version(
     print(">>> Version glob pattern: " + version_glob)
 
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "postgres", "mysql")
+    c.up("kafka", "schema-registry", "postgres", "mysql")
 
     mz_service = "materialized"
 
@@ -292,11 +290,11 @@ def test_upgrade_from_version(
                 c.await_mz_deployment_status(
                     DeploymentStatus.READY_TO_PROMOTE, mz_service
                 )
-                c.promote_mz(mz_service)
-                c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
-                mz_service = (
+                other_mz_service = (
                     "materialized2" if mz_service == "materialized" else "materialized"
                 )
+                c.promote_mz(mz_service, retire_mz_service=other_mz_service)
+                mz_service = other_mz_service
                 deploy_generation += 1
 
     print("Upgrading to final version")
@@ -320,8 +318,12 @@ def test_upgrade_from_version(
     with c.override(mz_to):
         c.up(mz_service)
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, mz_service)
-        c.promote_mz(mz_service)
-        c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
+        c.promote_mz(
+            mz_service,
+            retire_mz_service=(
+                "materialized2" if mz_service == "materialized" else "materialized"
+            ),
+        )
 
     with c.override(
         Testdrive(

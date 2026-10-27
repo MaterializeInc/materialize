@@ -127,6 +127,6 @@
     - The default cluster for `sales_report_app` is not affected.
 
     {{< tip >}}
-    {{< include-md file="shared-content/rbac-sm/alter-role-tip.md" >}}
+    {{% include-headless "/headless/rbac-sm/alter-role-tip" %}}
     {{</ tip >}}
   testable_results: false

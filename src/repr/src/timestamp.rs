@@ -14,12 +14,16 @@ use std::time::Duration;
 use dec::TryFromDecimalError;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_timely_util::temporal::BucketTimestamp;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
+use chrono::{DateTime, Utc};
+
 use crate::adt::numeric::Numeric;
+use crate::adt::timestamp::CheckedTimestamp;
 use crate::refresh_schedule::RefreshSchedule;
-use crate::strconv::parse_timestamptz;
+use crate::strconv::{ParseError, parse_timestamptz, parse_timestamptz_legacy};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
 
@@ -34,10 +38,10 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.timestamp.rs"));
     Ord,
     Hash,
     Default,
-    Arbitrary,
     bytemuck::AnyBitPattern,
     bytemuck::NoUninit,
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 #[repr(transparent)]
 pub struct Timestamp {
     /// note no `pub`.
@@ -161,16 +165,16 @@ mod columnar_timestamp {
         }
     }
 
-    impl columnar::HeapSize for Timestamp {}
-
-    impl<T: columnar::HeapSize> columnar::HeapSize for Timestamps<T> {
-        #[inline(always)]
-        fn heap_size(&self) -> (usize, usize) {
-            self.0.heap_size()
-        }
-    }
-
     impl<'a> columnar::AsBytes<'a> for Timestamps<&'a [Timestamp]> {
+        const SLICE_COUNT: usize = 1;
+        #[inline(always)]
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            mz_ore::soft_assert_no_log!(index < Self::SLICE_COUNT);
+            (
+                u64::cast_from(align_of::<Timestamp>()),
+                bytemuck::cast_slice(self.0),
+            )
+        }
         #[inline(always)]
         fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
             std::iter::once((
@@ -180,6 +184,7 @@ mod columnar_timestamp {
         }
     }
     impl<'a> columnar::FromBytes<'a> for Timestamps<&'a [Timestamp]> {
+        const SLICE_COUNT: usize = 1;
         #[inline(always)]
         fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
             Timestamps(bytemuck::cast_slice(
@@ -374,6 +379,14 @@ impl From<Timestamp> for u64 {
     }
 }
 
+// NOTE: Only timestamps of the `EpochMilliseconds` timeline are wall-clock times.
+// For other timelines the result is not meaningful.
+impl mz_ore::now::AsEpochMillis for Timestamp {
+    fn as_epoch_millis(&self) -> mz_ore::now::EpochMillis {
+        self.internal
+    }
+}
+
 impl From<Timestamp> for u128 {
     fn from(ts: Timestamp) -> Self {
         u128::from(ts.internal)
@@ -534,12 +547,29 @@ impl std::str::FromStr for Timestamp {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse_with(s, parse_timestamptz)
+    }
+}
+
+impl Timestamp {
+    /// Like the [`std::str::FromStr`] impl, but the timestamp fallback uses
+    /// the frozen legacy date parsing. Solely for the storage source cast
+    /// `CastStringToMzTimestamp` (see the stability contract in
+    /// `mz_storage_types::sources::casts`).
+    pub fn from_str_legacy(s: &str) -> Result<Self, String> {
+        Self::parse_with(s, parse_timestamptz_legacy)
+    }
+
+    fn parse_with(
+        s: &str,
+        parse_fallback: fn(&str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError>,
+    ) -> Result<Self, String> {
         Ok(Self {
             internal: s
                 .parse::<u64>()
                 .map_err(|_| "could not parse as number of milliseconds since epoch".to_string())
                 .or_else(|err_num_of_millis| {
-                    parse_timestamptz(s)
+                    parse_fallback(s)
                         .map_err(|parse_error| {
                             format!(
                                 "{}; could not parse as date and time: {}",
@@ -597,4 +627,89 @@ impl TryFrom<Numeric> for Timestamp {
 
 impl columnation::Columnation for Timestamp {
     type InnerRegion = columnation::CopyRegion<Timestamp>;
+}
+
+/// Returns whether `frontier` is at most `allowed_lag` behind `reference`.
+///
+/// The predicate is `reference <= frontier + allowed_lag`, evaluated on
+/// antichains. Timestamps that would overflow when advanced by `allowed_lag`
+/// saturate at [`Timestamp::MAX`] rather than panicking, so a frontier close to
+/// the end of the timestamp domain reads as far ahead rather than aborting the
+/// caller.
+///
+/// Note the two degenerate cases, which callers usually want to handle
+/// themselves rather than inherit:
+///
+///  * An empty `reference` is the maximum antichain, so the result is `true`
+///    only when `frontier` is empty too. It denotes completion, which a finite
+///    `frontier` cannot satisfy, regardless of the allowance.
+///  * An empty `frontier` is likewise the maximum, so the result is `true` for
+///    every `reference`.
+pub fn frontier_within_lag(
+    frontier: &timely::progress::Antichain<Timestamp>,
+    reference: &timely::progress::Antichain<Timestamp>,
+    allowed_lag: Timestamp,
+) -> bool {
+    // We cannot subtract frontiers, so bump `frontier` forward by the allowance
+    // and compare that against `reference`.
+    let bumped = timely::progress::Antichain::from_iter(frontier.iter().map(|t| {
+        t.try_step_forward_by(&allowed_lag)
+            .unwrap_or(Timestamp::MAX)
+    }));
+    timely::order::PartialOrder::less_equal(reference, &bumped)
+}
+
+#[cfg(test)]
+mod frontier_within_lag_tests {
+    use timely::progress::Antichain;
+
+    use super::{Timestamp, frontier_within_lag};
+
+    fn ac(ts: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(Timestamp::new(ts))
+    }
+
+    #[mz_ore::test]
+    fn within_and_beyond_the_allowance() {
+        // Exactly at the allowance is within it; one past it is not.
+        assert!(frontier_within_lag(&ac(100), &ac(110), Timestamp::new(10)));
+        assert!(!frontier_within_lag(&ac(100), &ac(111), Timestamp::new(10)));
+        // A frontier ahead of the reference is trivially within any allowance.
+        assert!(frontier_within_lag(&ac(200), &ac(110), Timestamp::new(0)));
+    }
+
+    #[mz_ore::test]
+    fn monotone_in_the_allowance() {
+        // Widening the allowance never turns a `true` into a `false`.
+        for lag in 0..40u64 {
+            let narrow = frontier_within_lag(&ac(100), &ac(120), Timestamp::new(lag));
+            let wide = frontier_within_lag(&ac(100), &ac(120), Timestamp::new(lag + 1));
+            assert!(wide || !narrow, "narrow={narrow} wide={wide} lag={lag}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn empty_frontiers_are_the_maximum() {
+        let empty = Antichain::new();
+        // An empty frontier is ahead of everything.
+        assert!(frontier_within_lag(
+            &empty,
+            &ac(u64::MAX),
+            Timestamp::new(0)
+        ));
+        // An empty reference is only matched by an empty frontier.
+        assert!(!frontier_within_lag(&ac(100), &empty, Timestamp::new(10)));
+        assert!(frontier_within_lag(&empty, &empty, Timestamp::new(10)));
+    }
+
+    #[mz_ore::test]
+    fn saturates_instead_of_panicking_on_overflow() {
+        // `step_forward_by` would panic here; the saturating form reads as
+        // "arbitrarily far ahead" instead.
+        assert!(frontier_within_lag(
+            &ac(u64::MAX - 1),
+            &ac(u64::MAX),
+            Timestamp::new(u64::MAX),
+        ));
+    }
 }

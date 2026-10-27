@@ -116,9 +116,9 @@ impl Consensus for MaelstromConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
+        let expected = new.seqno.previous();
         let create_if_not_exists = expected.is_none();
 
         let from = match expected {
@@ -166,7 +166,7 @@ impl Consensus for MaelstromConsensus {
         unimplemented!("TODO")
     }
 
-    async fn truncate(&self, _key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, _key: &str, _seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         unimplemented!("TODO")
     }
 }

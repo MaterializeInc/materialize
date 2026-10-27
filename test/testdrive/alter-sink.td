@@ -79,7 +79,7 @@ $ kafka-verify-data format=avro sink=materialize.public.incompatible_sink sort-m
 
 > ALTER SINK incompatible_sink SET FROM post_alter_incompatible;
 
-> SELECT st.error LIKE '%schema being registered is incompatible with an earlier schema%'
+> SELECT st.error ILIKE '%schema being registered is incompatible with an earlier schema%'
   FROM mz_sinks s JOIN mz_internal.mz_sink_statuses st ON s.id = st.id
   WHERE s.name = 'incompatible_sink';
 true
@@ -124,3 +124,70 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 
 $ kafka-verify-data format=json sink=materialize.public.sink key=false
 {"before": null, "after": {"created_post_name": "hundred", "created_post_value": 99}}
+
+# Regression test for SQL-517: a catalog change to a connection, for example a
+# GRANT, re-alters all dependent sinks, which must work off each sink's current
+# definition after ALTER SINK ... SET FROM.
+> CREATE ROLE conn_grant_role;
+
+> GRANT USAGE ON CONNECTION kafka_conn TO conn_grant_role;
+
+> INSERT INTO created_post_alter VALUES ('after-grant', 1);
+
+$ kafka-verify-data format=json sink=materialize.public.sink key=false
+{"before": null, "after": {"created_post_name": "after-grant", "created_post_value": 1}}
+
+# A SET FROM a relation of the same shape leaves the connection compatible, so
+# the GRANT below re-alters the sink without an error. It must restart the sink
+# with its current input and version, not the pre-ALTER ones, which would fence
+# the sink off. The sink has its own connection, so the GRANT re-alters only this
+# sink and the case does not depend on the sinks above.
+> CREATE CONNECTION same_shape_conn
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+
+> CREATE TABLE same_shape_a (a int);
+> CREATE TABLE same_shape_b (a int);
+
+> CREATE SINK same_shape_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM same_shape_a
+  INTO KAFKA CONNECTION same_shape_conn (TOPIC 'testdrive-alter-sink-same-shape-${testdrive.seed}')
+  FORMAT JSON
+  ENVELOPE DEBEZIUM;
+
+> INSERT INTO same_shape_a VALUES (1);
+
+$ kafka-verify-data format=json sink=materialize.public.same_shape_sink key=false
+{"before": null, "after": {"a": 1}}
+
+> ALTER SINK same_shape_sink SET FROM same_shape_b;
+
+# Wait for the altered sink to take effect, like the ALTER SINK above.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
+
+> INSERT INTO same_shape_b VALUES (2);
+
+$ kafka-verify-data format=json sink=materialize.public.same_shape_sink key=false
+{"before": null, "after": {"a": 2}}
+
+> GRANT USAGE ON CONNECTION same_shape_conn TO conn_grant_role;
+
+> INSERT INTO same_shape_b VALUES (3);
+> INSERT INTO same_shape_a VALUES (99);
+
+$ kafka-verify-data format=json sink=materialize.public.same_shape_sink key=false
+{"before": null, "after": {"a": 3}}
+
+# COMMIT INTERVAL only applies to Iceberg sinks.
+! ALTER SINK sink SET (COMMIT INTERVAL = '1s');
+contains: COMMIT INTERVAL option is not supported with KAFKA sinks
+
+! ALTER SINK sink RESET (COMMIT INTERVAL);
+contains: cannot RESET COMMIT INTERVAL: option is not set
+
+# Other sink options are not alterable.
+! ALTER SINK sink SET (SNAPSHOT = false);
+contains: ALTER SINK ... SET (SNAPSHOT) not yet supported
+
+! ALTER SINK sink RESET (SNAPSHOT);
+contains: ALTER SINK ... RESET (SNAPSHOT) not yet supported

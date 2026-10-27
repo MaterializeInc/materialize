@@ -49,10 +49,7 @@ class AlterConnectionSshChangeBase(Check):
     def initialize(self) -> Testdrive:
         i = self.index
 
-        return Testdrive(
-            schema()
-            + dedent(
-                f"""
+        return Testdrive(schema() + dedent(f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET enable_connection_validation_syntax = true
 
@@ -87,9 +84,7 @@ class AlterConnectionSshChangeBase(Check):
                   ENVELOPE DEBEZIUM;
 
                 $ kafka-verify-topic sink=materialize.public.alter_connection_sink_{i} await-value-schema=true
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         i = self.index
@@ -147,9 +142,7 @@ class AlterConnectionSshChangeBase(Check):
     def validate(self) -> Testdrive:
         i = self.index
 
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT regexp_match(create_sql, '(ssh-bastion-host|other_ssh_bastion)') FROM (SHOW CREATE CONNECTION ssh_tunnel_{i});
                 {"{other_ssh_bastion}" if self.ssh_change == SshChange.CHANGE_SSH_HOST else "{ssh-bastion-host}"}
 
@@ -195,9 +188,7 @@ class AlterConnectionSshChangeBase(Check):
                 <null> (3)
 
                 > DROP SOURCE IF EXISTS alter_connection_sink_source_{i}_src CASCADE
-                """
-            )
-        )
+                """))
 
 
 @externally_idempotent(False)
@@ -234,14 +225,10 @@ class AlterConnectionDependencyOrder(Check):
         return self.base_version >= MzVersion.parse_mz("v0.144.0-dev")
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE CONNECTION my_kafka_alter_conn TO KAFKA (BROKER 'localhost:32816') WITH (VALIDATE = false);
                 > CREATE CONNECTION other_ssh TO SSH TUNNEL (host 'foo', user 'bar', port 42) WITH (VALIDATE = false);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -257,14 +244,10 @@ class AlterConnectionDependencyOrder(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ set-from-sql var=other_ssh_id
                 SELECT id FROM mz_connections WHERE name = 'other_ssh';
 
                 > SELECT name FROM mz_connections WHERE create_sql LIKE '%[${other_ssh_id} AS %';
                 my_kafka_alter_conn
-                """
-            )
-        )
+                """))

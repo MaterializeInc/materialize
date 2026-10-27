@@ -1,6 +1,6 @@
 ---
 title: "Install on AWS"
-description: "Install Materialize on AWS using the new Terraform module."
+description: "Install Materialize on AWS using the Terraform module."
 aliases:
   - /self-hosted/install-on-aws/
   - /self-managed/v25.1/installation/install-on-aws/
@@ -16,20 +16,19 @@ menu:
 Materialize provides a set of modular [Terraform
 modules](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
 that can be used to deploy all services required for Materialize to run on AWS.
-The module is intended to provide a simple set of examples on how to deploy
-Materialize. It can be used as is or modules can be taken from the example and
-integrated with existing DevOps tooling.
+These modules serve as composable building blocks that you can integrate into
+existing DevOps workflows, either as a full set or individually.
 
 {{% self-managed/materialize-components-sentence %}} The example on this page
 deploys a complete Materialize environment on AWS using the modular Terraform
 setup from this repository.
 
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
 
 
 ## What Gets Created
@@ -49,7 +48,7 @@ This example provisions the following infrastructure:
 
 | Resource | Description |
 |----------|-------------|
-| EKS Cluster | Version 1.32 with CloudWatch logging (API, audit) |
+| EKS Cluster | Version 1.34 with CloudWatch logging (API, audit) |
 | Base Node Group | 2 nodes (t4g.medium) for Karpenter and CoreDNS |
 | Karpenter | Auto-scaling controller with two node classes: Generic nodepool (t4g.xlarge instances for general workloads) and Materialize nodepool (r7gd.2xlarge instances with swap enabled and dedicated taints to run materialize instance workloads) |
 
@@ -88,6 +87,34 @@ This example provisions the following infrastructure:
 | Instance | Single Materialize instance in the `materialize-environment` namespace |
 | Network Load Balancer | Dedicated NLB for access to Materialize {{< yaml-table data="self_managed/default_ports" >}} |
 
+### Observability
+
+On by default starting with v11.0.0 of the Materialize Terraform Modules.
+Whenever `enable_observability` is `true`,
+the following are created as well:
+
+| Resource | Description |
+|----------|-------------|
+| Monitoring stack | Grafana, Thanos, Loki, Grafana Alloy, and Alertmanager in the `monitoring` namespace, with the Materialize dashboards pre-installed |
+| S3 Buckets | Dedicated buckets for metrics and logs |
+| Grafana RDS PostgreSQL | `db.t4g.micro` instance holding Grafana's own state (users, API tokens, annotations, dashboard versions) |
+| Grafana Network Load Balancer | Internal NLB for reaching Grafana, allowlisted to `ingress_cidr_blocks` |
+
+This stack requires v10.0.0 or later of the Materialize Terraform Modules,
+which replaced an earlier Prometheus-and-Grafana pair. The Grafana database
+and load balancer were added in v10.1.0, and are both billable. Starting with
+v11.0.0, `enable_observability` defaults to `true`, so set it to `false` if you
+do not want the stack. For what the stack stores and where else it can send
+it, see [How logs and metrics are
+stored](/observability/self-managed/storage/). For reaching Grafana, see
+[Grafana](/observability/self-managed/grafana/).
+
+{{< note >}}
+Alertmanager installs with a default set of alert rules but no receiver, so no
+one is notified until you configure one. Starting with v15.0.0 of the
+Materialize Terraform Modules, you configure receivers on the `monitoring`
+module. See [Alerting](/observability/self-managed/alerting/).
+{{< /note >}}
 
 ## Prerequisites
 
@@ -114,11 +141,24 @@ An active AWS account with appropriate permissions to create:
 
 ## Getting started: Simple example
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
+
+{{< tip >}}
+
+* {{% self-managed/terraform-simple-example-tip %}}
+
+* The simple example used in this tutorial enables [Password
+authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v10.1.0/aws/examples/simple/main.tf#L518)
+for the Materialize instance. To use a different authentication method, update
+[`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v10.1.0/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind).
+See [Authentication](/security/self-managed/authentication/) for the supported
+authentication mechanisms.
+
+{{< /tip >}}
 
 ### Step 1: Set Up the Environment
 
@@ -144,24 +184,40 @@ An active AWS account with appropriate permissions to create:
 
 1. Create a `terraform.tfvars` file with the following variables:
 
-   - `name_prefix`: Prefix for all resource names (e.g., `simple-demo`)
-   - `aws_region`: AWS region for deployment (e.g., `us-east-1`)
-   - `aws_profile`: AWS CLI profile to use
-   - `license_key`: Materialize license key
-   - `tags`: Map of tags to apply to resources
+   | Variable      | Description                 |
+   | -----------   | ----------------------------|
+   | `name_prefix` | Prefix for all resource names (e.g., `simple-demo`). |
+   | `aws_region`  | AWS region for deployment (e.g., `us-east-1`). |
+   | `aws_profile` | AWS CLI profile to use. |
+   | `license_key` | Materialize license key. |
+   | `crd_version` | CRD API version to use for the Materialize instance: `v1` (default starting with Materialize Terraform Modules v4.0.0) or `v1alpha1`. |
+   | `tags`        | Map of tags to apply to resources. |
+
+   {{% include-from-yaml data="self_managed/installation"
+   name="installation-tfvars-crd-version-tip" %}}
 
    ```hcl
    name_prefix = "simple-demo"
    aws_region  = "us-east-1"
    aws_profile = "your-aws-profile"
    license_key = "your-materialize-license-key"
+   crd_version = "v1"   # Default starting with Materialize Terraform Modules v4.0.0. v1 requires Materialize v26.30+.
    tags = {
      environment = "demo"
    }
    # internal_load_balancer = false   # default = true (internal load balancer). You can set to false = public load balancer.
    # ingress_cidr_blocks = ["x.x.x.x/n", ...]
    # k8s_apiserver_authorized_networks  = ["x.x.x.x/n", ...]
+   # enable_observability = false   # default = true (install the observability stack).
+   # grafana_host = "grafana.example.com"   # Only used when enable_observability = true.
    ```
+
+   {{< note >}}
+   With `enable_observability` on, the modules also create a `db.t4g.micro`
+   RDS instance for Grafana's own state and an internal NLB to reach Grafana
+   on. Both are billable. See
+   [Grafana](/observability/self-managed/grafana/).
+   {{< /note >}}
 
    {{% include-from-yaml data="self_managed/installation"
    name="installation-tfvars-variables-optional" %}}
@@ -232,9 +288,13 @@ An active AWS account with appropriate permissions to create:
    {{% include-from-yaml data="self_managed/installation"
    name="installation-verify-status" %}}
 
+1. Check the CRD version of the Materialize manifest.
+   {{% include-from-yaml data="self_managed/crd_version_checks"
+   name="check-crd-version-tf" %}}
+
 ### Step 5: Connect to Materialize
 
-Using the `dns_name` and `external_login_password_mz_system` from the Terraform
+Using the `nlb_dns_name` and `external_login_password_mz_system` from the Terraform
 output, you can connect to Materialize via the Materialize Console or
 PostgreSQL-compatible tools/drivers using the following ports:
 
@@ -331,11 +391,12 @@ guide](/self-managed-deployments/deployment-guidelines/aws-deployment-guidelines
 
 See also:
 
+- [Configuring System
+  Parameters](/self-managed-deployments/configuration-system-parameters/)
 - [Materialize Operator
   Configuration](/self-managed-deployments/operator-configuration/)
 - [Materialize CRD Field
   Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/)
-
 
 ## Cleanup
 
@@ -344,5 +405,5 @@ See also:
 
 ## See Also
 
-
 - [Troubleshooting](/self-managed-deployments/troubleshooting/)
+- [Security](/security/self-managed/)

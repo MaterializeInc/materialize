@@ -51,9 +51,12 @@ GRANT VIEW SERVER STATE TO authorization_user_table_perms;
     PASSWORD = SECRET sql_server_pass
   );
 
-! CREATE SOURCE t1_privileges_sql_server_failure
-  FROM SQL SERVER CONNECTION sql_server_privileges_connection_table
-  FOR TABLES (dbo.t1_privileges);
+# The reference is resolved when the table is created, not when the source is,
+# so the privilege errors surface on `CREATE TABLE .. FROM SOURCE`.
+> CREATE SOURCE t1_privileges_src_table
+  FROM SQL SERVER CONNECTION sql_server_privileges_connection_table;
+
+! CREATE TABLE t1_privileges_failure FROM SOURCE t1_privileges_src_table (REFERENCE dbo.t1_privileges);
 contains:reference to dbo.t1_privileges not found in source
 
 > CREATE CONNECTION sql_server_privileges_connection_column TO SQL SERVER (
@@ -64,12 +67,12 @@ contains:reference to dbo.t1_privileges not found in source
     PASSWORD = SECRET sql_server_pass
   );
 
+> CREATE SOURCE t1_privileges_src_column
+  FROM SQL SERVER CONNECTION sql_server_privileges_connection_column;
+
 # Column exclusion has no effect on rejection for column level permissions.
-! CREATE SOURCE t1_privileges_sql_server_failure
-  FROM SQL SERVER CONNECTION sql_server_privileges_connection_column (
-    EXCLUDE COLUMNS (dbo.t1_privileges.c2)
-  )
-  FOR TABLES (dbo.t1_privileges);
+! CREATE TABLE t1_privileges_failure FROM SOURCE t1_privileges_src_column (REFERENCE dbo.t1_privileges)
+  WITH (EXCLUDE COLUMNS (c2));
 contains:insufficient permissions for tables [dbo.t1_privileges] or capture instances []
 
 > CREATE CONNECTION sql_server_privileges_connection_capture_instance TO SQL SERVER (
@@ -80,7 +83,8 @@ contains:insufficient permissions for tables [dbo.t1_privileges] or capture inst
     PASSWORD = SECRET sql_server_pass
   );
 
-! CREATE SOURCE t1_privileges_sql_server_failure
-  FROM SQL SERVER CONNECTION sql_server_privileges_connection_capture_instance
-  FOR TABLES (dbo.t1_privileges);
+> CREATE SOURCE t1_privileges_src_capture_instance
+  FROM SQL SERVER CONNECTION sql_server_privileges_connection_capture_instance;
+
+! CREATE TABLE t1_privileges_failure FROM SOURCE t1_privileges_src_capture_instance (REFERENCE dbo.t1_privileges);
 contains:insufficient permissions for tables [] or capture instances [dbo_t1_privileges]

@@ -4,9 +4,12 @@ Reproduce data for the cluster spec sheet effort.
 
 # Usage
 
-`bin/mzcompose --find cluster-spec-sheet run default`
+`bin/mzcompose --find cluster-spec-sheet run default --target=<target>`
 
 This will run all scenarios currently defined for the cluster spec sheet.
+`--target` is required: `cloud-production`, `cloud-staging`, or `docker`.
+There is deliberately no default, because the CI cleanup below destroys the
+target's region unattended.
 
 Pass `--cleanup` to disable the region after the test.
 
@@ -15,11 +18,16 @@ Pass `--cleanup` to disable the region after the test.
 
 ## Running via Buildkite
 
-The workload runs as part of the release qualification pipeline in Buildkite.
+The workload runs in the `spec-sheet` Buildkite pipeline. After a CI job
+ends, however it ends, the mzcompose plugin runs the `ci-cleanup` workflow
+with the job's arguments; for a Cloud target started with `--cleanup` it
+disables the region. A canceled or timed-out job never reaches the
+composition's own cleanup, so this is what keeps canceled runs from leaving
+regions behind.
 
 ## Running manually in Cloud
 
-To run the cloud canary test manually, you can specify either `--target=cloud-production` (which is hardcoded to aws/us-east-1) or `--target=cloud-staging` (which is hardcoded to aws/eu-west-1). For production, you need to set the environment variables `NIGHTLY_MZ_USERNAME` and `MZ_CLI_APP_PASSWORD`. For staging, you need to set the environment variables `NIGHTLY_CANARY_USERNAME` and `NIGHTLY_CANARY_APP_PASSWORD`.
+To run the cloud canary test manually, you can specify either `--target=cloud-production` (which is hardcoded to aws/us-east-1) or `--target=cloud-staging` (which is hardcoded to aws/eu-west-1). For production, you need to set the environment variables `NIGHTLY_MZ_USERNAME` and `MZ_CLI_APP_PASSWORD`. For staging, the run uses one account from the E2E database pool: set `E2E_STAGING_TEST_FRONTEGG_DATABASE_APP_PASSWORD_<n>` for the pool index `<n>` and select it with `CI_CONCURRENCY_POOL_SLOT=<n>` (outside CI, index 0 is used when the slot is unset); the username is derived from the index. Staging runs also need `BUILDKITE_COMMIT`, which selects the image version to enable.
 
 The username is an email address, the app password is a password generated in the cloud console (something like `mzp_...`).
 
@@ -27,7 +35,7 @@ Once the environment variables have been set, you can run:
 
 ```
 cd test/cluster-spec-sheet
-./mzcompose run default
+./mzcompose run default --target=cloud-production
 ```
 
 ## Running in Docker
@@ -41,24 +49,118 @@ bin/mzcompose --find cluster-spec-sheet run default --target=docker
 
 ## Scenarios
 
-There are two kinds of scenarios:
+There are four kinds of scenarios:
 - cluster scaling: These measure run times and arrangement sizes.
-- envd scaling: These measure QPS.
+- envd qps scalability: These measure QPS while varying envd's CPU allocation.
+- envd objects scalability: These measure adapter/envd latency (DDL, simple peeks) as the number of catalog objects grows.
+- cluster object limits: These find the maximum number of idle indexes / materialized views a cluster can hold while remaining fresh.
 
-Currently, the envd scaling scenarios can't be run in Production, because changing envd's CPU cores using `mz` is not allowed there. Therefore, these scenarios need to be run with `--target=cloud-staging`.
+The envd qps scalability and cluster object limits scenarios can't be run in Production: the former because changing envd's CPU cores using `mz` is not allowed there, the latter because we don't want spill-over effects to real customer environments. Both need to be run with `--target=cloud-staging` (or `--target=docker`).
 
 You can invoke only one kind of scenarios by using the group name from `SCENARIO_GROUPS`. For example:
 ```
-bin/mzcompose --find cluster-spec-sheet run default environmentd  --target=cloud-staging
+bin/mzcompose --find cluster-spec-sheet run default envd_qps_scalability  --target=cloud-staging
 ```
 or
 ```
-bin/mzcompose --find cluster-spec-sheet run default cluster
+bin/mzcompose --find cluster-spec-sheet run default cluster --target=cloud-production
+```
+or
+```
+bin/mzcompose --find cluster-spec-sheet run default envd_objects_scalability --target=cloud-production
+```
+or
+```
+bin/mzcompose --find cluster-spec-sheet run default cluster_object_limits --target=cloud-staging
 ```
 
 You can also specify a specific scenario by name.
 
 For testing just the scaffolding of the cluster spec sheet itself, you can make the run much faster by using the various scaling options, e.g.:
 ```
---scale-tpch=0.01 --scale-tpch-queries=0.01 --scale-auction=1 --max-scale=4
+--scale-tpch=0.01 --scale-tpch-queries=0.01 --scale-auction=1 --max-scale=4 --envd-objects-scalability-sizes=1,10,100 --cluster-object-limits-max=500
 ```
+
+### QPS concurrency and environmentd CPU sweep
+
+`qps_envd_strong_scaling` runs prepared indexed point lookups at
+`1,2,4,8,16,32,64,128,256,512` concurrent clients for each environmentd CPU
+allocation (`1,2,4,8,16,32`, capped by `--max-scale`). Cloud runs use 32
+single-replica `50cc` query clusters; the account's cluster limit must allow this.
+
+Each point has 5 seconds warmup and 20 seconds measurement, totaling 25 minutes
+plus connection/setup and log-flush overhead. Configure the sweep with `--qps-concurrencies`, `--qps-clusters`,
+`--qps-duration`, `--qps-warmup`, and `--qps-query-timeout`.
+`--qps-protocols=prepared,simple` also tests simple queries and doubles runtime.
+
+CSV results and `qps-logs/` JSON artifacts include latency, replica CPU, and
+load-driver saturation warnings. QPS is uploaded to the existing analytics table;
+latency and qualification details remain in artifacts.
+Plots show throughput, mean, p99, and maximum latency against concurrency, with
+one line per CPU allocation and single-client-latency ideals for throughput.
+Warnings flag possible driver or compute limits, but their absence does not
+prove sufficient headroom. Docker runs share CPU with compute and are suitable
+for functional checks, not isolated scaling measurements.
+
+### envd objects scalability scenarios
+
+The `envd_objects_scalability_tables` and `envd_objects_scalability_mvs`
+scenarios fix the measurement cluster size and vary the number of pre-existing
+catalog objects, measuring `CREATE TABLE` and `SELECT` latency at each size
+point. By default they walk the full size list (`1, 10, 100, 1000, 3000, 5000,
+10000, 20000, 30000`); the MV scenario spreads MVs across pad clusters
+at 10000 materialized views per cluster (so 30000 MVs spans 3
+single-replica clusters). Override the size list with `--envd-objects-scalability-sizes`.
+These runs are long; expect hours for the full size range, especially the MV
+scenario.
+
+### cluster object limits scenarios
+
+The `cluster_object_limits_indexes_from_persist_sources`,
+`cluster_object_limits_indexes_from_index`, and
+`cluster_object_limits_mvs_from_persist_sources` scenarios find, per cluster
+size, how many idle materializations one cluster can keep fresh. Each
+materialization is derived from a one-row base table that is never updated,
+so the only work the cluster has to do is keep advancing each
+materialization's `write_frontier` in step with the table's frontier. Once
+the cluster can't keep up, freshness collapses; we record the largest N at
+which freshness was still good.
+
+The three variants differ in topology:
+- `cluster_object_limits_indexes_from_persist_sources`: N indexed views each
+  read directly from `base_t`, i.e. one persist source per test object.
+  Dominated by persist-source breadth.
+- `cluster_object_limits_indexes_from_index`: a single root view `v_root`
+  with one index on `c` sits between `base_t` and the N test indexes. The N
+  test indexes read from `v_root`, so the optimizer imports the root index's
+  arrangement and the whole topology has one persist source regardless of N.
+  Isolates the "how many compute-only dataflows can a cluster tick" axis
+  from persist-source overhead.
+- `cluster_object_limits_mvs_from_persist_sources`: N materialized views,
+  each with its own persist source from `base_t` and its own persist sink.
+  Dominated by persist-source and persist-sink breadth.
+
+Procedure (per cluster size in `REPLICA_SCALES`, capped by `--max-scale`):
+1. (Re)create the test cluster `c` at that size, plus a one-row base table.
+2. Walk an N-list, adding objects incrementally and querying
+   `mz_internal.mz_materialization_lag` for max `local_lag` across the test
+   objects on `c`.
+3. Declare healthy if all N objects are reporting and max lag is below
+   `CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS` (default 2 s). Stop walking N on
+   the first unhealthy point (the unhealthy point is still recorded so the
+   cliff is visible).
+4. Bisect the (last_healthy, first_unhealthy) interval
+   `--cluster-object-limits-bisect-steps` times (default 4), adding or
+   dropping objects in place each step. Each bisection probe halves the
+   uncertainty around the cliff. Set to 0 to disable.
+
+The default N-list ramps geometrically up to 1000, then steps in +1000
+increments up to `--cluster-object-limits-max` (default 30000). Override
+explicitly with `--cluster-object-limits-sizes=...`. These runs are long;
+expect tens of minutes per cluster size on small replicas, longer on bigger
+ones.
+
+Results go to `*.cluster_object_limits.csv` (one row per (cluster_size, N)
+sample, with an extra `healthy` column). The analysis produces two plots per
+scenario: max-healthy-N per cluster size, and freshness lag vs N with one
+series per cluster size.

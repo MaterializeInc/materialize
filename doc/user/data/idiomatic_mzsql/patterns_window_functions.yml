@@ -1,0 +1,748 @@
+columns:
+  - column: pattern_title
+    header: " "
+  - column: syntax_idiomatic
+    header: "Idiomatic Materialize SQL Pattern"
+  - column: example_idiomatic
+    header: "Example"
+
+rows:
+
+  - name: top-k-k-ge-1
+    pattern_title: |
+      [Top-K over partition<br>(K >= 1)](/transform-data/idiomatic-materialize-sql/top-k/#for-k--1)
+
+    syntax_idiomatic: |
+      Use a subquery to
+      [SELECT DISTINCT](/sql/select/#select-distinct) on the grouping key (e.g.,
+      `fieldA`), and perform a [LATERAL](/sql/select/join/#lateral-subqueries) join
+      (by the grouping key `fieldA`) with another subquery that specifies the ordering
+      (e.g., `fieldZ [ASC|DESC]`) and the limit K.
+
+      ```mzsql
+      SELECT fieldA, fieldB, ...
+      FROM (SELECT DISTINCT fieldA FROM tableA) grp,
+           LATERAL (SELECT fieldB, ... , fieldZ FROM tableA
+              WHERE fieldA = grp.fieldA
+              ORDER BY fieldZ ... LIMIT K)   -- K is a number >= 1
+      ORDER BY fieldA, fieldZ ... ;
+      ```
+
+    syntax_anti_pattern: |
+      <red>Avoid the use of `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` for Top-K queries.</red>
+
+      ```nofmt
+      -- Anti-pattern. Avoid. --
+      SELECT fieldA, fieldB, ...
+      FROM (
+         SELECT fieldA, fieldB, ... , fieldZ,
+            ROW_NUMBER() OVER (PARTITION BY fieldA
+            ORDER BY fieldZ ... ) as rn
+         FROM tableA)
+      WHERE rn <= K     -- K is a number >= 1
+      ORDER BY fieldA, fieldZ ...;
+      ```
+
+    example_idiomatic: |
+      ```mzsql
+      SELECT order_id, item, subtotal
+      FROM (SELECT DISTINCT order_id FROM orders_view) grp,
+           LATERAL (SELECT item, subtotal FROM orders_view
+              WHERE order_id = grp.order_id
+              ORDER BY subtotal DESC LIMIT 3)
+      ORDER BY order_id, subtotal DESC;
+      ```
+
+    example_anti_pattern: |
+      <red>Avoid the use of `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` for Top-K queries.</red>
+
+      ```nofmt
+      -- Anti-pattern --
+      SELECT order_id, item, subtotal
+      FROM (
+         SELECT order_id, item, subtotal,
+            ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY subtotal DESC) as rn
+         FROM orders_view)
+      WHERE rn <= 3
+      ORDER BY order_id, subtotal DESC;
+      ```
+
+  - name: top-k-k-eq-1
+    pattern_title: |
+      [Top-K over partition<br>(K = 1)](/transform-data/idiomatic-materialize-sql/top-k/#for-k--1-1)
+
+    syntax_idiomatic: |
+      ```mzsql
+      SELECT DISTINCT ON(fieldA) fieldA, fieldB, ...
+      FROM tableA
+      ORDER BY fieldA, fieldZ ... ;
+      ```
+
+    syntax_anti_pattern: |
+      <red>Avoid the use of `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` for Top-K queries.</red>
+
+      ```nofmt
+      -- Anti-pattern. Avoid. --
+      SELECT fieldA, fieldB, ...
+      FROM (
+         SELECT fieldA, fieldB, ... , fieldZ,
+            ROW_NUMBER() OVER (PARTITION BY fieldA
+            ORDER BY fieldZ ... ) as rn
+         FROM tableA)
+      WHERE rn = 1
+      ORDER BY fieldA, fieldZ ...;
+      ```
+
+    example_idiomatic: |
+      ```mzsql
+      SELECT DISTINCT ON(order_id) order_id, item, subtotal
+      FROM orders_view
+      ORDER BY order_id, subtotal DESC;
+      ```
+
+    example_anti_pattern: |
+      <red>Avoid the use of `ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...)` for Top-K queries.</red>
+
+      ```nofmt
+      -- Anti-pattern --
+      SELECT order_id, item, subtotal
+      FROM (
+         SELECT order_id, item, subtotal,
+            ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY subtotal DESC) as rn
+         FROM orders_view)
+      WHERE rn = 1
+      ORDER BY order_id, subtotal DESC;
+      ```
+
+  - name: first-value
+    pattern_title: |
+      [First value over partition<br>order by ...](/transform-data/idiomatic-materialize-sql/first-value/)
+
+    syntax_idiomatic: |
+      Use a subquery that uses the [MIN()](/sql/functions/#min) or
+      [MAX()](/sql/functions/#max) aggregate function.
+
+      ```mzsql
+      SELECT tableA.fieldA, tableA.fieldB, minmax.Z
+       FROM tableA,
+       (SELECT fieldA,
+          MIN(fieldZ),
+          MAX(fieldZ)
+       FROM tableA
+       GROUP BY fieldA) minmax
+      WHERE tableA.fieldA = minmax.fieldA
+      ORDER BY fieldA ... ;
+      ```
+
+    syntax_anti_pattern: |
+      <red>Avoid the use of [`FIRST_VALUE() OVER (PARTITION BY ... ORDER BY ...)`
+      window function](/sql/functions/#first_value) for first value within groups
+      queries.</red>
+
+      ```nofmt
+      -- Anti-pattern. Avoid. --
+      SELECT fieldA, fieldB,
+       FIRST_VALUE(fieldZ) OVER (PARTITION BY fieldA ORDER BY ...),
+       FIRST_VALUE(fieldZ) OVER (PARTITION BY fieldA ORDER BY ... DESC)
+      FROM tableA
+      ORDER BY fieldA, ...;
+      ```
+
+    example_idiomatic: |
+      ```mzsql
+      SELECT o.order_id, minmax.lowest_price, minmax.highest_price, o.item, o.price,
+        o.price - minmax.lowest_price AS diff_lowest_price,
+        o.price - minmax.highest_price AS diff_highest_price
+      FROM orders_view o,
+            (SELECT order_id,
+               MIN(price) AS lowest_price,
+               MAX(price) AS highest_price
+            FROM orders_view
+            GROUP BY order_id) minmax
+      WHERE o.order_id = minmax.order_id
+      ORDER BY o.order_id, o.item;
+      ```
+
+    example_anti_pattern: |
+      <red>Avoid the use of [`FIRST_VALUE() OVER (PARTITION BY ... ORDER BY ...)`
+      window function](/sql/functions/#first_value) for first value within groups
+      queries.</red>
+
+      ```nofmt
+      -- Anti-pattern --
+      SELECT order_id,
+        FIRST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price) AS lowest_price,
+        FIRST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price DESC) AS highest_price,
+        item,
+        price,
+        price - FIRST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price) AS diff_lowest_price,
+        price - FIRST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price DESC) AS diff_highest_price
+      FROM orders_view
+      ORDER BY order_id, item;
+      ```
+
+    # Extra fields used by the per-topic page (first-value.md) but not the chart.
+    extra_example_idiomatic_min: |
+      ```mzsql
+      SELECT o.order_id, minmax.lowest_price, o.item, o.price,
+        o.price - minmax.lowest_price AS diff_lowest_price
+      FROM orders_view o,
+            (SELECT order_id,
+               MIN(price) AS lowest_price
+            FROM orders_view
+            GROUP BY order_id) minmax
+      WHERE o.order_id = minmax.order_id
+      ORDER BY o.order_id, o.item;
+      ```
+
+    extra_example_anti_pattern_min: |
+      <red>Avoid the use of [`FIRST_VALUE() OVER (PARTITION BY ... ORDER BY ...)`
+      window function](/sql/functions/#first_value) for first value within groups queries.</red>
+
+      ```nofmt
+      -- Anti-pattern --
+      SELECT order_id,
+        FIRST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price) AS lowest_price,
+        item,
+        price,
+        price - FIRST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price) AS diff_lowest_price
+      FROM orders_view
+      ORDER BY order_id, item;
+      ```
+
+    extra_example_idiomatic_max: |
+      ```mzsql
+      SELECT o.order_id, minmax.highest_price, o.item, o.price,
+        o.price - minmax.highest_price AS diff_highest_price
+      FROM orders_view o,
+            (SELECT order_id,
+               MAX(price) AS highest_price
+            FROM orders_view
+            GROUP BY order_id) minmax
+      WHERE o.order_id = minmax.order_id
+      ORDER BY o.order_id, o.item;
+      ```
+
+    extra_example_anti_pattern_max: |
+      <red>Avoid the use of [`FIRST_VALUE() OVER (PARTITION BY ... ORDER BY ...)`
+      window function](/sql/functions/#first_value) for first value within groups
+      queries.</red>
+
+      ```nofmt
+      -- Anti-pattern --
+      SELECT order_id,
+        FIRST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price DESC) AS highest_price,
+        item,
+        price,
+        price - FIRST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price DESC) AS diff_highest_price
+      FROM orders_view
+      ORDER BY order_id, item;
+      ```
+
+  - name: last-value
+    pattern_title: |
+      [Last value over partition<br>order by ...<br>range between unbounded preceding<br>and unbounded following](/transform-data/idiomatic-materialize-sql/last-value/)
+
+    syntax_idiomatic: |
+      Use a subquery that uses the [MIN()](/sql/functions/#min) or
+      [MAX()](/sql/functions/#max) aggregate function.
+
+      ```mzsql
+      SELECT tableA.fieldA, tableA.fieldB, minmax.Z
+       FROM tableA,
+       (SELECT fieldA,
+          MAX(fieldZ),
+          MIN(fieldZ)
+       FROM tableA
+       GROUP BY fieldA) minmax
+      WHERE tableA.fieldA = minmax.fieldA
+      ORDER BY fieldA ... ;
+      ```
+
+    syntax_anti_pattern: |
+      <red>Do not use [`LAST_VALUE() OVER (PARTITION BY ... ORDER BY ... RANGE
+      ...)` window function](/sql/functions/#last_value) for last value in each group
+      queries.</red>
+
+      {{< note >}}
+
+      Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
+      FOLLOWING`.
+
+      {{</ note >}}
+
+      ```nofmt
+      -- Unsupported --
+      SELECT fieldA, fieldB,
+        LAST_VALUE(fieldZ)
+          OVER (PARTITION BY fieldA ORDER BY fieldZ
+                RANGE BETWEEN
+                  UNBOUNDED PRECEDING AND
+                  UNBOUNDED FOLLOWING),
+        LAST_VALUE(fieldZ)
+          OVER (PARTITION BY fieldA ORDER BY fieldZ DESC
+                RANGE BETWEEN
+                  UNBOUNDED PRECEDING AND
+                  UNBOUNDED FOLLOWING)
+      FROM tableA
+      ORDER BY fieldA, ...;
+      ```
+
+    example_idiomatic: |
+      ```mzsql
+      SELECT o.order_id, minmax.lowest_price, minmax.highest_price, o.item, o.price,
+        o.price - minmax.lowest_price AS diff_lowest_price,
+        o.price - minmax.highest_price AS diff_highest_price
+      FROM orders_view o,
+            (SELECT order_id,
+               MIN(price) AS lowest_price,
+               MAX(price) AS highest_price
+            FROM orders_view
+            GROUP BY order_id) minmax
+      WHERE o.order_id = minmax.order_id
+      ORDER BY o.order_id, o.item;
+      ```
+
+    example_anti_pattern: |
+      <red>Do not use `LAST_VALUE() OVER (PARTITION BY ... ORDER BY ...)` for last
+      value within groups queries.</red>
+
+      {{< note >}}
+
+      Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
+      FOLLOWING`.
+
+      {{</ note >}}
+
+      ```nofmt
+      -- Unsupported --
+      SELECT order_id,
+        LAST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price DESC
+                RANGE BETWEEN
+                  UNBOUNDED PRECEDING AND
+                  UNBOUNDED FOLLOWING) AS lowest_price,
+        LAST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price
+                RANGE BETWEEN
+                  UNBOUNDED PRECEDING AND
+                  UNBOUNDED FOLLOWING) AS highest_price,
+        item,
+        price,
+        price - LAST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price DESC
+                RANGE BETWEEN
+                  UNBOUNDED PRECEDING AND
+                  UNBOUNDED FOLLOWING) AS diff_lowest_price,
+        price - LAST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price
+                 RANGE BETWEEN
+                  UNBOUNDED PRECEDING AND
+                  UNBOUNDED FOLLOWING) AS diff_highest_price
+      FROM orders_view
+      ORDER BY order_id, item;
+      ```
+
+    # Extra fields used by the per-topic page (last-value.md) but not the chart.
+    extra_example_idiomatic_max: |
+      ```mzsql
+      SELECT o.order_id, minmax.highest_price, o.item, o.price,
+        o.price - minmax.highest_price AS diff_highest_price
+      FROM orders_view o,
+           (SELECT order_id,
+              MAX(price) AS highest_price
+           FROM orders_view
+           GROUP BY order_id) minmax
+      WHERE o.order_id = minmax.order_id
+      ORDER BY o.order_id, o.item;
+      ```
+
+    extra_example_anti_pattern_max: |
+      <red>Do not use of `LAST_VALUE() OVER (PARTITION BY ... ORDER BY ... RANGE ...)`
+      for last value in each group queries.</red>
+
+      {{< note >}}
+
+      Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
+      FOLLOWING`.
+
+      {{</ note >}}
+
+      ```nofmt
+      -- Unsupported --
+      SELECT order_id,
+        LAST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price
+                RANGE BETWEEN
+                  UNBOUNDED PRECEDING AND
+                  UNBOUNDED FOLLOWING) AS highest_price,
+        item,
+        price,
+        price - LAST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price
+                 RANGE BETWEEN
+                  UNBOUNDED PRECEDING AND
+                  UNBOUNDED FOLLOWING) AS diff_highest_price
+      FROM orders_view
+      ORDER BY order_id, item;
+      ```
+
+    extra_example_idiomatic_min: |
+      ```mzsql
+      SELECT o.order_id, minmax.lowest_price, o.item, o.price,
+        o.price - minmax.lowest_price AS diff_lowest_price
+      FROM orders_view o,
+           (SELECT order_id,
+              MIN(price) AS lowest_price
+           FROM orders_view
+           GROUP BY order_id) minmax
+      WHERE o.order_id = minmax.order_id
+      ORDER BY o.order_id, o.item;
+      ```
+
+    extra_example_anti_pattern_min: |
+      <red>Do not use `LAST_VALUE() OVER (PARTITION BY ... ORDER BY ... RANGE ... )`
+      for last value in each group queries.</red>
+
+      {{< note >}}
+
+      Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
+      FOLLOWING`.
+
+      {{</ note >}}
+
+      ```nofmt
+      -- Unsupported --
+      SELECT order_id,
+        LAST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price DESC
+                RANGE BETWEEN
+                  UNBOUNDED PRECEDING AND
+                  UNBOUNDED FOLLOWING) AS lowest_price,
+        item,
+        price,
+        price - LAST_VALUE(price)
+          OVER (PARTITION BY order_id ORDER BY price DESC
+                RANGE BETWEEN
+                  UNBOUNDED PRECEDING AND
+                  UNBOUNDED FOLLOWING) AS diff_lowest_price
+      FROM orders_view
+      ORDER BY order_id, item;
+      ```
+
+  - name: lag
+    pattern_title: |
+      [Lag over (order by) whose ordering can be represented by some equality
+      condition.](/transform-data/idiomatic-materialize-sql/lag/)
+
+    syntax_idiomatic: |
+      ***To exclude the first row since it has no previous row***
+
+      ```mzsql
+      -- Excludes the first row in the results --
+      SELECT t1.fieldA, t2.fieldB as previous_row_value
+      FROM tableA t1, tableA t2
+      WHERE t1.fieldA = t2.fieldA + ... -- or some other operand
+      ORDER BY fieldA;
+      ```
+
+      ***To include the first row***
+
+      ```mzsql
+      -- Includes the first row in the results --
+      SELECT t1.fieldA, t2.fieldB as previous_row_value
+      FROM tableA t1
+      LEFT JOIN tableA t2
+      ON t1.fieldA = t2.fieldA + ... -- or some other operand
+      ORDER BY fieldA;
+      ```
+
+    syntax_anti_pattern: |
+      <red>Avoid the use of [`LAG(fieldZ) OVER (ORDER BY ...)`](/sql/functions/#lag)
+      window function when the order by field increases in a regular pattern.</red>
+
+      ```nofmt
+      -- Anti-pattern. Avoid. --
+      SELECT fieldA, ...
+          LAG(fieldZ) OVER (ORDER BY fieldA) as previous_row_value
+      FROM tableA;
+      ```
+
+    example_idiomatic: |
+      ***To exclude the first row since it has no previous row***
+
+      ```mzsql
+      SELECT o1.order_date, o1.daily_total,
+          o2.daily_total as previous_daily_total
+      FROM orders_daily_totals o1, orders_daily_totals o2
+      WHERE o1.order_date = o2.order_date + INTERVAL '1' DAY
+      ORDER BY order_date;
+      ```
+
+      ***To include the first row***
+
+      ```mzsql
+      SELECT o1.order_date, o1.daily_total,
+          o2.daily_total as previous_daily_total
+      FROM orders_daily_totals o1
+      LEFT JOIN orders_daily_totals o2
+      ON o1.order_date = o2.order_date + INTERVAL '1' DAY
+      ORDER BY order_date;
+      ```
+
+    example_anti_pattern: |
+      <red>Avoid the use of [`LAG() OVER (ORDER BY ...)` window
+      function](/sql/functions/#lag) to access previous row's value if the order by
+      field increases in a regular pattern.</red>
+
+      ```nofmt
+      -- Anti-pattern. Includes the first row's value. --
+      SELECT order_date, daily_total,
+          LAG(daily_total) OVER (ORDER BY order_date) as previous_daily_total
+      FROM orders_daily_totals;
+      ```
+
+    # Extra fields used by the per-topic page (lag.md) but not the chart.
+    extra_syntax_idiomatic_exclude: |
+      Use a self join that specifies an **equality match** on the lag's order by field
+      (e.g., `fieldA`). The order by field must increment in a regular pattern in
+      order to be represented by an equality condition (e.g., `WHERE t1.fieldA =
+      t2.fieldA + ...`). The
+      query *excludes* the first row in the results since it does not have a previous
+      row.
+
+      {{< important >}}
+
+      The idiomatic Materialize SQL applies only to those "lag over" queries whose
+      ordering can be represented by some **equality condition**.
+
+      {{</ important >}}
+
+      ```mzsql
+      -- Excludes the first row in the results --
+      SELECT t1.fieldA, t2.fieldB as previous_row_value
+      FROM tableA t1, tableA t2
+      WHERE t1.fieldA = t2.fieldA + ... -- or some other operand
+      ORDER BY fieldA;
+      ```
+
+    extra_syntax_idiomatic_include: |
+      Use a self [`LEFT JOIN/LEFT OUTER JOIN`](/sql/select/join/#left-outer-join)
+      (e.g., `FROM tableA t1 LEFT JOIN tableA t2`) that specifies an **equality
+      match** on the lag's order by field (e.g., `fieldA`). The order by field must
+      increment in a regular pattern in order to be represented by an equality
+      condition (e.g., `ON t1.fieldA = t2.fieldA + ...`). The
+      query *includes* the first row, returning `null` as its lag value.
+
+      {{< important >}}
+
+      The idiomatic Materialize SQL applies only to those "lag over" queries whose
+      ordering can be represented by some **equality condition**.
+
+      {{</ important >}}
+
+      ```mzsql
+      -- Includes the first row in the results --
+      SELECT t1.fieldA, t2.fieldB as previous_row_value
+      FROM tableA t1
+      LEFT JOIN tableA t2
+      ON t1.fieldA = t2.fieldA + ... -- or some other operand
+      ORDER BY fieldA;
+      ```
+
+    extra_example_idiomatic_exclude: |
+      ```mzsql
+      -- Excludes the first row in results --
+      SELECT o1.order_date, o1.daily_total,
+          o2.daily_total as previous_daily_total
+      FROM orders_daily_totals o1, orders_daily_totals o2
+      WHERE o1.order_date = o2.order_date + INTERVAL '1' DAY
+      ORDER BY order_date;
+      ```
+
+      {{< important >}}
+
+      The idiomatic Materialize SQL applies only to those "lag over" queries whose
+      ordering can be represented by some **equality condition**.
+
+      {{</ important >}}
+
+    extra_example_idiomatic_include: |
+      ```mzsql
+      -- Include the first row in results --
+      SELECT o1.order_date, o1.daily_total,
+          o2.daily_total as previous_daily_total
+      FROM orders_daily_totals o1
+      LEFT JOIN orders_daily_totals o2
+      ON o1.order_date = o2.order_date + INTERVAL '1' DAY
+      ORDER BY order_date;
+      ```
+
+      {{< important >}}
+
+      The idiomatic Materialize SQL applies only to those "lag over" queries whose
+      ordering can be represented by some **equality condition**.
+
+      {{</ important >}}
+
+  - name: lead
+    pattern_title: |
+      [Lead over (order by) whose ordering can be represented by some equality
+      condition.](/transform-data/idiomatic-materialize-sql/lead/)
+
+    syntax_idiomatic: |
+      ***To exclude the last row since it has no next row***
+
+      ```mzsql
+      -- Excludes the last row in the results --
+      SELECT t1.fieldA, t2.fieldB as next_row_value
+      FROM tableA t1, tableA t2
+      WHERE t1.fieldA = t2.fieldA - ... -- or some other operand
+      ORDER BY fieldA;
+      ```
+
+      ***To include the last row***
+
+      ```mzsql
+      -- Includes the last row in the results --
+      SELECT t1.fieldA, t2.fieldB as next_row_value
+      FROM tableA t1
+      LEFT JOIN tableA t2
+      ON t1.fieldA = t2.fieldA - ... -- or some other operand
+      ORDER BY fieldA;
+      ```
+
+    syntax_anti_pattern: |
+      <red>Avoid the use of [`LEAD(fieldZ) OVER (ORDER BY ...)`](/sql/functions/#lead)
+      window function when the order by field increases in a regular pattern.</red>
+
+      ```nofmt
+      -- Anti-pattern. Avoid. --
+      SELECT fieldA, ...
+          LEAD(fieldZ) OVER (ORDER BY fieldA) as next_row_value
+      FROM tableA;
+      ```
+
+    example_idiomatic: |
+      ***To exclude the last row since it has no next row***
+
+      ```mzsql
+      SELECT o1.order_date, o1.daily_total,
+          o2.daily_total as next_daily_total
+      FROM orders_daily_totals o1, orders_daily_totals o2
+      WHERE o1.order_date = o2.order_date - INTERVAL '1' DAY
+      ORDER BY order_date;
+      ```
+
+      ***To include the last row***
+
+      ```mzsql
+      SELECT o1.order_date, o1.daily_total,
+          o2.daily_total as next_daily_total
+      FROM orders_daily_totals o1
+      LEFT JOIN orders_daily_totals o2
+      ON o1.order_date = o2.order_date - INTERVAL '1' DAY
+      ORDER BY order_date;
+      ```
+
+    example_anti_pattern: |
+      <red>Avoid the use of [`LEAD() OVER (ORDER BY ...)` window
+      function](/sql/functions/#lead) to access next row's value if the order by
+      field increases in a regular pattern.</red>
+
+      ```nofmt
+      -- Anti-pattern. Includes the last row's value. --
+      SELECT order_date, daily_total,
+          LEAD(daily_total) OVER (ORDER BY order_date) as next_daily_total
+      FROM orders_daily_totals;
+      ```
+
+    # Extra fields used by the per-topic page (lead.md) but not the chart.
+    extra_syntax_idiomatic_exclude: |
+      Use a self join that specifies an **equality match** on the lead's order by
+      field (e.g., `fieldA`). The order by field must increment in a regular pattern
+      in order to be represented by an equality condition (e.g., `WHERE t1.fieldA =
+      t2.fieldA - ...`). The query *excludes* the last row in the results since it
+      does not have a next row.
+
+      {{< important >}}
+
+      The idiomatic Materialize SQL applies only to those "lead over" queries whose
+      ordering can be represented by some **equality condition**.
+
+      {{</ important >}}
+
+      ```mzsql
+      -- Excludes the last row in the results --
+      SELECT t1.fieldA, t2.fieldB as next_row_value
+      FROM tableA t1, tableA t2
+      WHERE t1.fieldA = t2.fieldA - ...  -- or some other operand
+      ORDER BY fieldA;
+      ```
+
+    extra_syntax_idiomatic_include: |
+      Use a self [`LEFT JOIN/LEFT OUTER JOIN`](/sql/select/join/#left-outer-join)
+      (e.g., `FROM tableA t1 LEFT JOIN tableA t2`) that specifies an **equality
+      match** on the lag's order by field (e.g., `fieldA`).  The order by field must
+      increment in a regular pattern in order to be represented by an equality
+      condition (e.g., `ON t1.fieldA = t2.fieldA - ...`). The query *includes* the
+      last row, returning `null` as its lead value.
+
+      {{< important >}}
+
+      The idiomatic Materialize SQL applies only to those "lead over" queries whose
+      ordering can be represented by some **equality condition**.
+
+      {{</ important >}}
+
+      ```mzsql
+      -- Includes the last row in the response --
+      SELECT t1.fieldA, t2.fieldB as next_row_value
+      FROM tableA t1
+      LEFT JOIN tableA t2
+      ON t1.fieldA = t2.fieldA - ... -- or some other operand
+      ORDER BY fieldA;
+      ```
+
+    extra_example_idiomatic_exclude: |
+      ```mzsql
+      -- Excludes the last row in results --
+      SELECT o1.order_date, o1.daily_total,
+          o2.daily_total as next_daily_total
+      FROM orders_daily_totals o1, orders_daily_totals o2
+      WHERE o1.order_date = o2.order_date - INTERVAL '1' DAY
+      ORDER BY order_date;
+      ```
+
+      {{< important >}}
+
+      The idiomatic Materialize SQL applies only to those "lead over" queries whose
+      ordering can be represented by some **equality condition**.
+
+      {{</ important >}}
+
+    extra_example_idiomatic_include: |
+      ```mzsql
+      -- Include the last row in the results --
+      SELECT o1.order_date, o1.daily_total,
+          o2.daily_total as next_daily_total
+      FROM orders_daily_totals o1
+      LEFT JOIN orders_daily_totals o2
+      ON o1.order_date = o2.order_date - INTERVAL '1' DAY
+      ORDER BY order_date;
+      ```
+
+      {{< important >}}
+
+      The idiomatic Materialize SQL applies only to those "lead over" queries whose
+      ordering can be represented by some **equality condition**.
+
+      {{</ important >}}

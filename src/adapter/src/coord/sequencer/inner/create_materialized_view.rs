@@ -35,6 +35,7 @@ use timely::progress::Antichain;
 use tracing::Span;
 
 use crate::ReadHolds;
+use crate::catalog::CatalogState;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
@@ -248,6 +249,7 @@ impl Coordinator {
 
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(view.cluster_id))
             .override_from(&config.features);
 
         let cardinality_stats = BTreeMap::new();
@@ -263,7 +265,7 @@ impl Coordinator {
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::LocalPlan => explain_plan(
-                view.optimized_expr.as_inner().clone(),
+                view.locally_optimized_expr.as_inner().clone(),
                 format,
                 &config,
                 &features,
@@ -328,6 +330,7 @@ impl Coordinator {
                 plan::MaterializedView {
                     expr,
                     cluster_id,
+                    target_replica,
                     refresh_schedule,
                     ..
                 },
@@ -358,8 +361,18 @@ impl Coordinator {
             });
         }
 
-        let validity =
-            PlanValidity::require_transient_revision(self.catalog().transient_revision());
+        // Track the target cluster/replica and resolved dependencies so that
+        // concurrent drops (e.g. `ALTER CLUSTER ... SET (REPLICATION FACTOR
+        // ...)` racing with the off-thread optimizer) are caught between
+        // stages instead of panicking later when the persisted SQL is
+        // re-parsed during catalog application.
+        let validity = PlanValidity::new(
+            self.catalog(),
+            resolved_ids.items().copied().collect(),
+            Some(*cluster_id),
+            *target_replica,
+            session.role_metadata().clone(),
+        );
 
         // Check whether we can read all inputs at all the REFRESH AT times.
         if let Some(refresh_schedule) = refresh_schedule {
@@ -432,8 +445,7 @@ impl Coordinator {
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
-            let id_ts = self.get_catalog_write_ts().await;
-            self.catalog().allocate_user_id(id_ts).await?
+            self.allocate_user_id().await?
         } else {
             self.allocate_transient_id()
         };
@@ -442,8 +454,9 @@ impl Coordinator {
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(*cluster_id))
             .override_from(&explain_ctx);
-        let force_non_monotonic = Default::default();
+        let optimizer_features = optimizer_config.features.clone();
 
         // Build an optimizer for this MATERIALIZED VIEW.
         let mut optimizer = optimize::materialized_view::Optimizer::new(
@@ -457,7 +470,6 @@ impl Coordinator {
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
-            force_non_monotonic,
         );
 
         let span = Span::current();
@@ -476,9 +488,11 @@ impl Coordinator {
 
                         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                         let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                        let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
+                        let global_mir_plan =
+                            optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
+                        let global_lir_plan =
+                            optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
                         Ok((local_mir_plan, global_mir_plan, global_lir_plan))
                     };
@@ -506,6 +520,7 @@ impl Coordinator {
                                     local_mir_plan,
                                     global_mir_plan,
                                     global_lir_plan,
+                                    optimizer_features,
                                 })
                             }
                         }
@@ -560,9 +575,11 @@ impl Coordinator {
                         plan::MaterializedView {
                             mut create_sql,
                             expr: raw_expr,
+                            column_names,
                             dependencies,
                             replacement_target,
                             cluster_id,
+                            target_replica,
                             non_null_assertions,
                             compaction_window,
                             refresh_schedule,
@@ -576,22 +593,32 @@ impl Coordinator {
             local_mir_plan,
             global_mir_plan,
             global_lir_plan,
+            optimizer_features,
             ..
         } = stage;
 
         // Validate the replacement target, if one is given.
-        // TODO(alter-mv): Could we do this already in planning?
         if let Some(target_id) = replacement_target {
-            let Some(target) = self.catalog().get_entry(&target_id).materialized_view() else {
+            let target_entry = self.catalog().get_entry(&target_id);
+            let Some(target) = target_entry.materialized_view() else {
                 return Err(AdapterError::internal(
                     "create materialized view",
                     "replacement target not a materialized view",
                 ));
             };
 
+            // Best-effort: the target can still seal after this check, so `APPLY REPLACEMENT`
+            // checks again.
+            if self.materialized_view_sealed(target_entry) {
+                return Err(AdapterError::ReplaceMaterializedViewSealed {
+                    name: target_entry.name().item.clone(),
+                });
+            }
+
             // For now, we don't support schema evolution for materialized views.
-            if &target.desc.latest() != global_lir_plan.desc() {
-                return Err(AdapterError::Unstructured(anyhow!("incompatible schemas")));
+            let schema_diff = target.desc.latest().diff(global_lir_plan.desc());
+            if !schema_diff.is_empty() {
+                return Err(AdapterError::ReplacementSchemaMismatch(schema_diff));
             }
         }
 
@@ -647,6 +674,8 @@ impl Coordinator {
         let desc = VersionedRelationDesc::new(global_lir_plan.desc().clone());
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
+        let local_mir_for_cache = local_mir_plan.expr();
+
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -660,17 +689,21 @@ impl Coordinator {
                 item: CatalogItem::MaterializedView(MaterializedView {
                     create_sql,
                     raw_expr: raw_expr.into(),
-                    optimized_expr: local_mir_plan.expr().into(),
+                    locally_optimized_expr: local_mir_plan.expr().into(),
                     desc,
                     collections,
                     resolved_ids,
                     dependencies,
                     replacement_target,
                     cluster_id,
+                    target_replica,
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
                     refresh_schedule: refresh_schedule.clone(),
                     initial_as_of: Some(initial_as_of.clone()),
+                    optimized_plan: None,
+                    physical_plan: None,
+                    dataflow_metainfo: None,
                 }),
                 owner_id: *ctx.session().current_role_id(),
             },
@@ -682,12 +715,57 @@ impl Coordinator {
             .take(global_lir_plan.df_meta().optimizer_notices.len())
             .collect::<Vec<_>>();
 
-        let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, ctx| {
-                Box::pin(async move {
-                    let output_desc = global_lir_plan.desc().clone();
-                    let (mut df_desc, df_meta) = global_lir_plan.unapply();
+        // Render optimizer notices before the catalog transaction. We wrap
+        // the system-session humanizer with an `ExprHumanizerExt` so that
+        // references to the to-be-created materialized view's own
+        // `global_id` in the persisted notice text resolve to its intended
+        // human-readable name.
+        //
+        // We keep `raw_df_meta` live so that on success we can emit its raw
+        // notices to the user session (rendered against the user's
+        // session-aware humanizer). We deliberately do NOT emit to the user
+        // here, so that if the catalog transaction below fails the user
+        // isn't shown confusing notices about an item that wasn't actually
+        // created.
+        let output_desc = global_lir_plan.desc().clone();
+        let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let df_meta = {
+            let system_catalog = self.catalog().for_system_session();
+            let full_name = self.catalog().resolve_full_name(&name, None);
+            let transient_items = btreemap! {
+                global_id => TransientItem::new(
+                    Some(full_name.into_parts()),
+                    Some(column_names.iter().map(|c| c.to_string()).collect()),
+                )
+            };
+            let humanizer = ExprHumanizerExt::new(transient_items, &system_catalog);
+            CatalogState::render_notices_core(
+                &humanizer,
+                (self.catalog().config().now)(),
+                &raw_df_meta,
+                notice_ids,
+                Some(global_id),
+            )
+        };
 
+        // Populate the durable expression cache before the catalog
+        // transaction and await the write. This way any other envd (or a
+        // subsequent bootstrap here) will observe the cached plans +
+        // rendered notices as soon as the item becomes visible.
+        self.catalog()
+            .cache_expressions(
+                global_id,
+                Some(local_mir_for_cache),
+                global_mir_plan.df_desc().clone(),
+                df_desc.clone(),
+                df_meta.clone(),
+                optimizer_features,
+            )
+            .await;
+
+        let transact_result = self
+            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
+                Box::pin(async move {
                     // Save plan structures.
                     coord
                         .catalog_mut()
@@ -696,9 +774,8 @@ impl Coordinator {
                         .catalog_mut()
                         .set_physical_plan(global_id, df_desc.clone());
 
-                    let notice_builtin_updates_fut = coord
-                        .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
-                        .await;
+                    let notice_builtin_updates_fut =
+                        coord.persist_dataflow_metainfo(df_meta, global_id);
 
                     df_desc.set_as_of(dataflow_as_of.clone());
                     df_desc.set_initial_as_of(initial_as_of);
@@ -742,6 +819,7 @@ impl Coordinator {
                             df_desc,
                             cluster_id,
                             notice_builtin_updates_fut,
+                            target_replica,
                         )
                         .await;
 
@@ -753,10 +831,19 @@ impl Coordinator {
             .await;
 
         match transact_result {
-            Ok(_) => Ok(ExecuteResponse::CreatedMaterializedView),
+            Ok(_) => {
+                // Only emit optimizer notices to the user now that the
+                // catalog transaction has succeeded. If the transaction had
+                // failed, emitting notices would confuse the user with
+                // information about an item that wasn't actually created.
+                self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
+                Ok(ExecuteResponse::CreatedMaterializedView)
+            }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                    mz_catalog::memory::error::ErrorKind::Sql(
+                        CatalogError::ItemAlreadyExists(_, _),
+                    ),
             })) if if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -776,7 +863,7 @@ impl Coordinator {
         &self,
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
-        read_holds: &ReadHolds<mz_repr::Timestamp>,
+        read_holds: &ReadHolds,
     ) -> Result<
         (
             Antichain<mz_repr::Timestamp>,
@@ -888,6 +975,7 @@ impl Coordinator {
 
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id))
             .override_from(&config.features);
 
         let rows = optimizer_trace
@@ -929,8 +1017,16 @@ impl Coordinator {
         // We don't have any way to "duplicate" the read hold of the actual collection, which we
         // obtain below... but the current implementation of read holds guarantees that the storage
         // holds we obtain here will not be any greater than the hold we actually want.
-        let read_holds =
-            Some(self.acquire_read_holds(&dataflow_import_id_bundle(&plan, mview.cluster_id)));
+        //
+        // We hold only the plan's storage imports, whose persist part stats the pushdown
+        // explanation reads. We must not acquire holds on the plan's compute imports: an index
+        // that the materialized view was planned against can be dropped while the view keeps
+        // running, and a dropped index no longer has a compute collection to hold.
+        let id_bundle = CollectionIdBundle {
+            storage_ids: plan.source_imports.keys().copied().collect(),
+            compute_ids: BTreeMap::new(),
+        };
+        let read_holds = Some(self.acquire_read_holds(&id_bundle));
 
         let frontiers = self
             .controller
@@ -958,11 +1054,13 @@ impl Coordinator {
             as_of,
             mz_now,
             read_holds,
-            plan.source_imports
-                .into_iter()
-                .filter_map(|(id, (source, _, _upper))| {
-                    source.arguments.operators.map(|mfp| (id, mfp))
-                }),
+            plan.source_imports.into_iter().filter_map(|(id, import)| {
+                import
+                    .desc
+                    .arguments
+                    .operators
+                    .map(|plan| (id, plan.into_map_filter_project()))
+            }),
         )
         .await
     }

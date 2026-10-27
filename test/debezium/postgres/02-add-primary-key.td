@@ -18,6 +18,7 @@ SELECT true
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_add_primary_key (f1 INTEGER);
 INSERT INTO alter_add_primary_key VALUES (123), (234);
+ANALYZE;
 
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 

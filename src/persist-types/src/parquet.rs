@@ -76,10 +76,12 @@ impl CompressionFormat {
         }
 
         match s.to_lowercase().as_str() {
-            "" => CompressionFormat::None,
-            "none" => CompressionFormat::None,
+            "" | "none" => CompressionFormat::None,
             "snappy" => CompressionFormat::Snappy,
             "lz4" => CompressionFormat::Lz4,
+            "brotli" => CompressionFormat::Brotli(CompressionLevel::default()),
+            "gzip" => CompressionFormat::Gzip(CompressionLevel::default()),
+            "zstd" => CompressionFormat::Zstd(CompressionLevel::default()),
             other => match other.split_once('-') {
                 Some(("brotli", level)) => CompressionFormat::Brotli(parse_level("brotli", level)),
                 Some(("zstd", level)) => CompressionFormat::Zstd(parse_level("zstd", level)),
@@ -133,12 +135,10 @@ impl<const MIN: i32, const MAX: i32, const DEFAULT: i32> CompressionLevel<MIN, M
     /// Try creating a [`CompressionLevel`] from the provided value, returning an error if it is
     /// outside the `MIN` and `MAX` bounds.
     pub const fn try_new(val: i32) -> Result<Self, i32> {
-        if val < MIN {
-            Err(val)
-        } else if val > MAX {
-            Err(val)
-        } else {
+        if val >= MIN && val <= MAX {
             Ok(CompressionLevel(val))
+        } else {
+            Err(val)
         }
     }
 
@@ -176,7 +176,7 @@ pub fn encode_arrays<W: Write + Send>(
         .set_compression(config.compression.into())
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_data_page_size_limit(1024 * 1024)
-        .set_max_row_group_size(usize::MAX)
+        .set_max_row_group_row_count(None)
         .build();
     let mut writer = ArrowWriter::try_new(w, Arc::clone(&schema), Some(props))?;
 
@@ -224,6 +224,9 @@ mod tests {
             ("snappy", CompressionFormat::Snappy),
             ("lz4", CompressionFormat::Lz4),
             ("lZ4", CompressionFormat::Lz4),
+            ("brotli", CompressionFormat::Brotli(Default::default())),
+            ("gzip", CompressionFormat::Gzip(Default::default())),
+            ("zstd", CompressionFormat::Zstd(Default::default())),
             ("gzip-1", CompressionFormat::Gzip(CompressionLevel(1))),
             ("GZIp-6", CompressionFormat::Gzip(CompressionLevel(6))),
             ("gzip-9", CompressionFormat::Gzip(CompressionLevel(9))),

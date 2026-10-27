@@ -26,6 +26,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.rqg import RQG
+from materialize.ui import UIError
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
 )
@@ -86,7 +87,7 @@ class Workload:
     grammar: str
     reference_implementation: ReferenceImplementation | None
     dataset: Dataset | None = None
-    duration: int = 30 * 60
+    duration: int = 20 * 60
     queries: int = 100000000
     disabled: bool = False
     threads: int = 4
@@ -331,6 +332,13 @@ class StoreOtherTag(argparse.Action):
             tag = resolve_ancestor_image_tag(
                 ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
             )
+
+            if tag is None:
+                raise UIError(
+                    f"Could not resolve --other-tag={values} to an image tag, "
+                    f"no version to compare against"
+                )
+
             print(f"Resolving --other-tag to {tag}")
         else:
             tag = str(values)

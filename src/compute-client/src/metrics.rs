@@ -21,7 +21,7 @@ use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
     CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec,
-    IntCounterVec, MetricVecExt, MetricsRegistry,
+    IntCounterVec, MetricTag, MetricVecExt, MetricVisibility, MetricsRegistry,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
@@ -82,6 +82,8 @@ impl ComputeControllerMetrics {
                 name: "mz_compute_commands_total",
                 help: "The total number of compute commands sent.",
                 var_labels: ["instance_id", "replica_id", "command_type"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Compute],
             )),
             command_message_bytes_total: metrics_registry.register(metric!(
                 name: "mz_compute_command_message_bytes_total",
@@ -147,6 +149,8 @@ impl ComputeControllerMetrics {
                 name: "mz_compute_controller_hydration_queue_size",
                 help: "The size of the compute hydration queue.",
                 var_labels: ["instance_id", "replica_id"],
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Compute],
             )),
             history_command_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_history_command_count",
@@ -168,6 +172,8 @@ impl ComputeControllerMetrics {
                 help: "A histogram of peek durations since restart.",
                 var_labels: ["instance_id", "result"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.),
+                visibility: MetricVisibility::Public,
+                tags: [MetricTag::Compute],
             )),
             connected_replica_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_connected_replica_count",
@@ -446,7 +452,7 @@ impl ReplicaMetrics {
     }
 }
 
-impl<T> transport::Metrics<ComputeCommand<T>, ComputeResponse<T>> for ReplicaMetrics {
+impl transport::Metrics<ComputeCommand, ComputeResponse> for ReplicaMetrics {
     fn bytes_sent(&mut self, len: usize) {
         self.inner
             .command_message_bytes_total
@@ -459,11 +465,11 @@ impl<T> transport::Metrics<ComputeCommand<T>, ComputeResponse<T>> for ReplicaMet
             .inc_by(u64::cast_from(len));
     }
 
-    fn message_sent(&mut self, msg: &ComputeCommand<T>) {
+    fn message_sent(&mut self, msg: &ComputeCommand) {
         self.inner.commands_total.for_command(msg).inc();
     }
 
-    fn message_received(&mut self, msg: &ComputeResponse<T>) {
+    fn message_received(&mut self, msg: &ComputeResponse) {
         self.inner.responses_total.for_response(msg).inc();
     }
 }
@@ -537,7 +543,7 @@ impl<M> CommandMetrics<M> {
     }
 
     /// TODO(database-issues#7533): Add documentation.
-    pub fn for_command<T>(&self, command: &ComputeCommand<T>) -> &M {
+    pub fn for_command(&self, command: &ComputeCommand) -> &M {
         use ComputeCommand::*;
 
         match command {
@@ -579,7 +585,7 @@ impl<M> ResponseMetrics<M> {
         }
     }
 
-    fn for_response<T>(&self, response: &ComputeResponse<T>) -> &M {
+    fn for_response(&self, response: &ComputeResponse) -> &M {
         use ComputeResponse::*;
 
         match response {

@@ -10,6 +10,6 @@
 //! SQL parsing.
 
 pub use mz_sql_parser::parser::{
-    StatementParseResult, parse_statements as parse,
+    StatementParseResult, parse_item_name_with_limit, parse_statements as parse,
     parse_statements_with_limit as parse_with_limit,
 };

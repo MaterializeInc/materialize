@@ -2,6 +2,114 @@
 
 ## Unreleased
 
+* Fix the deployment timestamp in the schema comment `deploy_promote` leaves
+  behind. It read the second row of the first column instead of the second
+  column of the only row, so every tag said `Deployment by <user> on ` with
+  nothing after it.
+
+* Fix `deploy_init` when the `CI_TAG` environment variable is set. The
+  deployment schema was tagged without passing the schema name, so the
+  operation failed with `COMMENT ON SCHEMA ""`. The deployment schema is
+  now also created with a quoted name, matching how it is dropped and how its
+  grants and default privileges are copied.
+
+* Report errors instead of failing in odd ways on a few paths:
+
+  * A malformed `indexes` config now raises a clear parse error. It used to
+    hit a `dbt_common` helper that no longer exists and crash with an
+    unhandled `AttributeError`.
+  * Incremental models and the `listagg` macro now show the explanation they
+    were written to show. Both called an exception class that dbt does not
+    expose to Jinja, so users saw a message about a `dict object` instead.
+  * `rename_relation` looked at an undefined variable to pick between a view
+    and a materialized view, which made every rename fail.
+  * `drop_relation` now errors for relation types it does not handle, rather
+    than sending an empty statement to the server.
+  * Option values in the `options` profile field are no longer mangled when
+    they contain a backslash, and non-string values no longer raise an
+    `AttributeError`.
+  * Connections that reach the adapter's version check without an
+    `mz_version` (for example, through a proxy that strips it) now get a
+    clear error instead of a crash on the missing version string.
+
+* Run unit tests on the target cluster from `profiles.yml`. The unit test
+  materialization never passed a cluster to the macro that sets it, so unit
+  test queries always ran against the session default cluster. Unit test
+  nodes do not carry the tested model's `cluster` config, so the profile
+  cluster is what applies; when none is set, the session default cluster is
+  used, as before.
+
+* Fix the cluster and schema ownership checks in `deploy_init`. Both subtracted
+  the wrong way around, so the set of objects missing ownership was always
+  empty and a role that did not own the production clusters or schemas got no
+  warning until the deployment failed later on. The checks also count
+  membership in the owning role as ownership, matching how Materialize decides
+  who may run the swap in `deploy_promote`.
+
+## 1.9.11 - 2026-07-26
+
+* Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)
+  cluster option (hydration burst), which lets a managed cluster temporarily
+  burst to a larger size while it has un-hydrated objects. The `create_cluster`
+  operation accepts a new `auto_scaling_strategy` argument, and the new
+  `alter_cluster_auto_scaling_strategy` operation sets or removes the strategy
+  on an existing cluster:
+
+  ```bash
+  dbt run-operation alter_cluster_auto_scaling_strategy --args '{cluster_name: quickstart, auto_scaling_strategy: {on_hydration: {hydration_size: "800cc", linger_duration: "15s"}}}'
+  ```
+
+  During blue/green deployments, `deploy_init` now copies the production
+  cluster's autoscaling strategy to the deployment cluster, so the deployment
+  environment bursts to the configured hydration size while it hydrates ahead
+  of the cutover.
+
+## 1.9.10 - 2026-05-20
+
+* Support unmanaged clusters in `deploy_init`. The deployment cluster
+  is now created by cloning the production cluster's replicas (including
+  `SIZE` and `AVAILABILITY ZONE`).
+
+## 1.9.9 - 2026-05-18
+
+* Add support for the `partition_by` configuration in materialized views,
+  which declares the internal storage order Materialize uses to sort the
+  underlying data into parts, enabling [filter pushdown](https://materialize.com/docs/transform-data/patterns/partition-by/#filter-pushdown)
+  for queries with selective filters on the listed columns (e.g.
+  `partition_by: ['col_a']`). See [`PARTITION BY`](https://materialize.com/docs/transform-data/patterns/partition-by/)
+  for the requirements and supported column types.
+
+* Fix a bug in the `materialized_view` materialization where combining
+  `refresh_interval`, `retain_history`, and contract constraints would emit
+  multiple `WITH (...)` blocks, producing invalid SQL. The macro now collects
+  all options and emits a single `WITH (...)` block, matching Materialize's
+  `CREATE MATERIALIZED VIEW` grammar.
+
+## 1.9.8 - 2026-05-12
+
+* Automatically retry the atomic swap transaction in `deploy_promote` when
+  it is aborted by a concurrent-DDL conflict (Materialize SQLSTATE 40001).
+  Retries are capped by the new `max_retries` argument (default: 3) and
+  each retry waits `retry_backoff` seconds (default: 1.0). Errors that are
+  not concurrent-DDL conflicts, for example, permission, syntax, or
+  missing-object errors, are raised immediately and are not retried.
+
+* Support overriding the `options` PostgreSQL connection parameter
+
+## 1.9.7 - 2026-03-16
+
+* Reduce catalog server load during
+  [blue/green deployments](https://materialize.com/docs/manage/dbt/development-workflows/#bluegreen-deployments)
+  by consolidating per-cluster readiness polling into a single query. Previously,
+  `deploy_await` issued one complex query per cluster per poll iteration; it now
+  checks all deployment clusters in a single round-trip.
+
+## 1.9.6 - 2026-03-10
+
+* Add `strict_mode` to enforce production-ready cluster and schema isolation
+  rules, and improve cluster health monitoring
+  ([#34538](https://github.com/MaterializeInc/materialize/pull/34538)).
+
 * Fix unit test failures in dbt-core by adding support for the `column_name_to_quoted`
   parameter in the unit test materialization. This parameter is required for handling
   of quoted column identifiers in unit tests

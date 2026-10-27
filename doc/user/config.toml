@@ -1,4 +1,3 @@
-languageCode = "en-us"
 title = "Materialize Documentation"
 pygmentsCodeFences = true
 pygmentsUseClasses = true
@@ -7,20 +6,27 @@ disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
-bannerMessage = "**New: Self-Managed v26!** For details, see [Release Notes](/releases/).<br>**Note**: To upgrade from v25 to v26, you must [upgrade first to v25.2.16+](https://materialize.com/docs/self-managed/v25.2/release-notes/#v25216)."
+canonicalHost = "https://materialize.com"
+bannerMessage = ""
 bannerLink = ""
 
 [frontmatter]
 publishDate = ["publishDate"]
 
+[languages]
+  [languages.en]
+    locale = "en-us" # Replaces deprecated languageCode
+    label = "English"
+    weight = 1
 #
-# Get started
+# Reader journey
 #
 
 [[menu.main]]
 identifier = "get-started"
-name = "Get started"
-weight = 5
+name = "Getting started"
+url = "/get-started/"
+weight = 10
 
 #
 # Connect sources
@@ -30,55 +36,49 @@ weight = 5
 name = "CockroachDB"
 parent = 'ingest-data'
 identifier = 'crdb'
-weight = 20
+weight = 60
 
 [[menu.main]]
 name = "Redpanda"
 parent = 'ingest-data'
 identifier = 'redpanda'
-weight = 25
+weight = 70
 
 [[menu.main]]
 identifier = "webhooks"
 name = "Webhooks"
 parent = 'ingest-data'
-weight = 30
+weight = 80
 
 [[menu.main]]
 identifier = "network-security"
 name = "Network configuration"
 parent = 'ingest-data'
-weight = 35
+weight = 85
 
 #
 # Transform data
 #
-
-[[menu.main]]
-identifier = "transform-data"
-name = "Transform data"
-weight = 12
-
 
 #
 # Reference
 #
 
 [[menu.main]]
-identifier = "reference"
-name = "Reference"
-weight = 80
+identifier = "sql"
+name = "SQL and catalog reference"
+weight = 140
 
 #
-# Releases
+# Legacy Create Source
 #
 
 [[menu.main]]
-identifier = "changelogs"
-name = "Changelog ↗️"
-parent = "releases"
-weight = 20
-url = "https://materialize.com/changelog/"
+name = "Legacy Syntax"
+parent = 'create-source'
+identifier = 'create-source-legacy'
+weight = 90
+
 
 #
 # About
@@ -87,7 +87,19 @@ url = "https://materialize.com/changelog/"
 [[menu.main]]
 identifier = "about"
 name = "About"
-weight = 90
+weight = 150
+
+[[menu.main]]
+name = "Support"
+parent = "about"
+url = "https://materialize.com/support/"
+weight = 10
+
+[[menu.main]]
+name = "Configure single sign-on"
+parent = "security-sm"
+url = "/self-managed-deployments/sso/"
+weight = 5
 
 [[menu.main]]
 name = "Materialize Cloud Security and Compliance"
@@ -100,6 +112,27 @@ name = "Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
 weight = 55
+
+#
+# Custom output format for Claude skill generation
+#
+[outputFormats.skill]
+  mediaType = "text/markdown"
+  baseName = "index"
+  isPlainText = true
+  notAlternative = true
+
+#
+# Custom output format for the llms.txt docs index
+#
+[outputFormats.llmstxt]
+  mediaType = "text/plain"
+  baseName = "llms"
+  isPlainText = true
+  notAlternative = true
+
+[outputs]
+  home = ["HTML", "RSS", "llmstxt"]
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
@@ -115,6 +148,13 @@ unsafe = true
     startLevel = 2
     endLevel = 4
 
+# hugo deploy sets each file's Content-Type from the first Hugo media type with
+# its suffix, and for ".xml" that is RSS, so the sitemap was served as
+# application/rss+xml. Matchers are tried in order; the first match wins.
+[[deployment.matchers]]
+pattern = "^(.+/)?sitemap\\.xml$"
+contentType = "application/xml"
+
 [[deployment.targets]]
 name = "production"
 url = "s3://materialize-website?region=us-east-1"
@@ -127,6 +167,3 @@ include = "docs/**"
 #
 # include = "**.html" # would only include files with ".html" suffix
 # exclude = "**.{jpg, png}" # would exclude files with ".jpg" or ".png" suffix
-
-# Avoid deleting self-managed docs which are deployed from the self-managed-docs branches.
-exclude = "docs/{self-managed/v25.2}/**"

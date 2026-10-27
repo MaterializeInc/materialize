@@ -15,10 +15,13 @@
 
 use std::{fmt, str};
 
-use mz_repr::{Datum, DatumType, RowArena, SqlColumnType};
+use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
+use crate::Eval;
+use crate::EvalError;
+use crate::scalar::func::RedactSql;
 use crate::scalar::func::impls::*;
-use crate::{EvalError, MirScalarExpr};
+use crate::scalar::func::jq::Jq;
 
 /// A description of an SQL unary function that has the ability to lazy evaluate its arguments
 // This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
@@ -27,11 +30,15 @@ pub trait LazyUnaryFunc {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError>;
 
     /// The output SqlColumnType of this function.
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType;
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType;
+
+    fn output_type(&self, input_type: ReprColumnType) -> ReprColumnType {
+        ReprColumnType::from(&self.output_sql_type(SqlColumnType::from_repr(&input_type)))
+    }
 
     /// Whether this function will produce NULL on NULL input.
     fn propagates_nulls(&self) -> bool;
@@ -95,33 +102,41 @@ pub trait LazyUnaryFunc {
     /// This property describes the behaviour of the function over ranges where the function is defined:
     /// ie. the argument and the result are non-error datums.
     fn is_monotone(&self) -> bool;
+
+    /// Returns true if the function does no actual work, but is merely a type-tracking cast.
+    fn is_eliminable_cast(&self) -> bool;
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
-pub trait EagerUnaryFunc<'a> {
-    type Input: DatumType<'a, EvalError>;
-    type Output: DatumType<'a, EvalError>;
+pub trait EagerUnaryFunc {
+    type Input<'a>: InputDatumType<'a, EvalError>;
+    type Output<'a>: OutputDatumType<'a, EvalError>;
 
-    fn call(&self, input: Self::Input) -> Self::Output;
+    fn call<'a>(&self, input: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a>;
 
     /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType;
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType;
+
+    /// The output of this function as a representation type.
+    fn output_type(&self, input_type: ReprColumnType) -> ReprColumnType {
+        ReprColumnType::from(&self.output_sql_type(SqlColumnType::from_repr(&input_type)))
+    }
 
     /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool {
         // If the input is not nullable then nulls are propagated
-        !Self::Input::nullable()
+        !Self::Input::<'_>::nullable()
     }
 
     /// Whether this function will produce NULL on non-NULL input
     fn introduces_nulls(&self) -> bool {
         // If the output is nullable then nulls can be introduced
-        Self::Output::nullable()
+        Self::Output::<'_>::nullable()
     }
 
     /// Whether this function could produce an error
     fn could_error(&self) -> bool {
-        Self::Output::fallible()
+        Self::Output::<'_>::fallible()
     }
 
     /// Whether this function preserves uniqueness
@@ -136,18 +151,22 @@ pub trait EagerUnaryFunc<'a> {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn is_eliminable_cast(&self) -> bool {
+        false
+    }
 }
 
-impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
+impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        a: &'a impl Eval,
     ) -> Result<Datum<'a>, EvalError> {
-        match T::Input::try_from_result(a.eval(datums, temp_storage)) {
+        match T::Input::<'_>::try_from_result(a.eval(datums, temp_storage)) {
             // If we can convert to the input type then we call the function
-            Ok(input) => self.call(input).into_result(temp_storage),
+            Ok(input) => self.call(input, temp_storage).into_result(temp_storage),
             // If we can't and we got a non-null datum something went wrong in the planner
             Err(Ok(datum)) if !datum.is_null() => {
                 Err(EvalError::Internal("invalid input type".into()))
@@ -157,8 +176,8 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
         }
     }
 
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        self.output_type(input_type)
+    fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType {
+        self.output_sql_type(input_type)
     }
 
     fn propagates_nulls(&self) -> bool {
@@ -183,6 +202,10 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
 
     fn is_monotone(&self) -> bool {
         self.is_monotone()
+    }
+
+    fn is_eliminable_cast(&self) -> bool {
+        self.is_eliminable_cast()
     }
 }
 
@@ -340,10 +363,10 @@ derive_unary!(
     CastStringToFloat32,
     CastStringToFloat64,
     CastStringToDate,
-    CastStringToArray,
-    CastStringToList,
-    CastStringToMap,
-    CastStringToRange,
+    CastStringToArray(E),
+    CastStringToList(E),
+    CastStringToMap(E),
+    CastStringToRange(E),
     CastStringToTime,
     CastStringToTimestamp,
     CastStringToTimestampTz,
@@ -389,17 +412,18 @@ derive_unary!(
     CastJsonbToBool,
     CastUuidToString,
     CastRecordToString,
-    CastRecord1ToRecord2,
-    CastArrayToArray,
-    CastArrayToJsonb,
+    CastRecord1ToRecord2(E),
+    CastArrayToArray(E),
+    CastArrayToJsonb(E),
     CastArrayToString,
     CastListToString,
-    CastListToJsonb,
-    CastList1ToList2,
+    CastListToJsonb(E),
+    CastList1ToList2(E),
     CastArrayToListOneDim,
     CastMapToString,
     CastInt2VectorToString,
     CastRangeToString,
+    TryCast(E),
     CeilFloat32,
     CeilFloat64,
     CeilNumeric,
@@ -417,6 +441,7 @@ derive_unary!(
     IsLikeMatch,
     IsRegexpMatch,
     RegexpMatch,
+    Jq,
     ExtractInterval,
     ExtractTime,
     ExtractTimestamp,
@@ -441,6 +466,17 @@ derive_unary!(
     JsonbTypeof,
     JsonbStripNulls,
     JsonbPretty,
+    ParseCatalogAclMode,
+    ParseCatalogAuditLogDetails,
+    ParseCatalogCreateSql,
+    ParseCatalogId,
+    ParseCatalogItemReferences,
+    ParseCatalogPrivileges,
+    ParseConnectionDetails,
+    ParseKafkaSourceDetails,
+    ParsePostgresSourceDetails,
+    ParseSourceExportDetails,
+    RedactSql,
     RoundFloat32,
     RoundFloat64,
     RoundNumeric,
@@ -514,7 +550,7 @@ derive_unary!(
     Reverse
 );
 
-impl UnaryFunc {
+impl<E> UnaryFunc<E> {
     /// If the unary_func represents "IS X", return X.
     ///
     /// A helper method for being able to print Not(IsX) as IS NOT X.
@@ -533,18 +569,20 @@ mod test {
     use itertools::Itertools;
     use mz_repr::{PropDatum, SqlScalarType};
 
-    use crate::like_pattern;
+    use crate::{MirScalarExpr, like_pattern};
 
     use super::*;
 
     #[mz_ore::test]
     fn test_could_error() {
-        for func in [
+        let funcs: [UnaryFunc; 5] = [
             UnaryFunc::IsNull(IsNull),
             UnaryFunc::CastVarCharToString(CastVarCharToString),
             UnaryFunc::Not(Not),
             UnaryFunc::IsLikeMatch(IsLikeMatch(like_pattern::compile("%hi%", false).unwrap())),
-        ] {
+            UnaryFunc::try_cast_if_fallible(CastStringToInt32),
+        ];
+        for func in funcs {
             assert!(!func.could_error())
         }
     }

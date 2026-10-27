@@ -16,7 +16,7 @@
 
     {{< note >}}
     If a query directly references a view or materialized view:
-    {{< include-md file="shared-content/rbac-sm/select-views-privileges.md" >}}
+    {{% include-headless "/headless/rbac-sm/select-views-privileges" %}}
     {{</ note >}}
 
   code: |
@@ -172,7 +172,7 @@
 
     {{< note >}}
     If a query directly references a view or materialized view:
-    {{< include-md file="shared-content/rbac-sm/select-views-privileges.md" >}}
+    {{% include-headless "/headless/rbac-sm/select-views-privileges" %}}
     {{</ note >}}
 
   code: |

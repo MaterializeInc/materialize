@@ -1,0 +1,179 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# =============================================================================
+# Initialize
+# =============================================================================
+
+# Standard MCP initialize handshake.
+mcp-agent
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-agent","version":"<VERSION>"},"instructions":"You have access to Materialize data products via MCP. Prefer indexed objects (served from memory) over unindexed materialized views (read from persistent storage). `read_data_product` automatically routes the read to the cluster recorded in the data product catalog so indexes are used; you only need to set the `cluster` parameter if you intentionally want the read to run on a different cluster (e.g. one with larger or more replicas). A null `cluster` in discovery means your role lacks USAGE on the object's index/compute cluster; `read_data_product` without an override then reads on your session's default cluster (safe: only materialized views appear this way, and they serve from persist). `get_data_product_details` returns a `hydration` object with `hydrated`, `replica_count`, and `hydrated_replica_count` fields. Reads never return partial data: a read against a not-yet-hydrated product blocks until the dataflow catches up, and may hit the request timeout. Check `hydrated` before reading: if it is false and `replica_count` is greater than 0, the dataflow is still warming up, so wait and retry; if `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added."}}
+
+# =============================================================================
+# Tools List (query tool disabled by default)
+# =============================================================================
+
+# tools/list should return get_data_products, get_data_product_details, read_data_product but NOT query.
+mcp-agent
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"get_data_products","title":"List Data Products","description":"Discover all available real-time data views (data products) that represent business entities like customers, orders, products, etc. Each data product provides fresh, queryable data with defined schemas. Use this first to see what data is available before querying specific information.","inputSchema":{"type":"object","properties":{},"required":[]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"get_data_product_details","title":"Get Data Product Details","description":"Get the complete schema and structure of a specific data product, plus a `hydration` object reporting whether the dataflow is ready across the cluster's replicas (`{hydrated, replica_count, hydrated_replica_count}`). This shows you exactly what fields are available, their types, and what data you can query. Reads never return partial data, so check `hydration` before reading: if `hydrated` is false and `replica_count` is greater than 0 the dataflow is still warming up (a read would block until it catches up, possibly hitting the request timeout), so wait and retry; if `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Exact name of the data product from get_data_products() list"}},"required":["name"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"read_data_product","title":"Read Data Product","description":"Read rows from a specific data product. Returns up to `limit` rows (default 500). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. Response limit: 1.0 MB.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Exact fully-qualified name of the data product (e.g. '\"materialize\".\"schema\".\"view_name\"')"},"limit":{"type":"integer","description":"Maximum number of rows to return (default 500)","default":500},"cluster":{"type":"string","description":"Optional override. By default, the read runs on the cluster recorded in the data product catalog (where the index or materialized view dataflow lives), so indexed reads actually hit their arrangement. A null `cluster` in discovery means your role lacks USAGE on the object's index/compute cluster; without an override, the read then runs on your session's default cluster (safe: only materialized views appear this way, and they serve from persist). Set this only to intentionally run the same read on a different cluster — e.g. one with more or larger replicas, or to compare cost/latency."}},"required":["name"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
+
+# =============================================================================
+# Notifications (no id = no response body, 202 Accepted)
+# =============================================================================
+
+# No id, so 202 with an empty body per the Streamable HTTP transport.
+mcp-agent
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+----
+202 Accepted
+
+# server/discover is only answered on 2026-07-28 with the flag on. Dual-era
+# clients probe with it and fall back to initialize on this error.
+mcp-agent
+{"jsonrpc":"2.0","id":3,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
+
+# =============================================================================
+# get_data_products - no data products configured
+# =============================================================================
+
+# With no data products set up, get_data_products returns empty array.
+mcp-agent
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_data_products","arguments":{}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[]"}],"isError":false}}
+
+# arguments is optional in the MCP spec, so omitting it works the same.
+mcp-agent
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"get_data_products"}}
+----
+200 OK
+{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[]"}],"isError":false}}
+
+# =============================================================================
+# get_data_product_details - nonexistent product
+# =============================================================================
+
+# Looking up a nonexistent data product returns an error.
+mcp-agent
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"get_data_product_details","arguments":{"name":"nonexistent_product"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":11,"error":{"code":-32602,"message":"Data product not found: nonexistent_product","data":{"error_type":"DataProductNotFound"}}}
+
+# =============================================================================
+# read_data_product - nonexistent product
+# =============================================================================
+
+# Reading a nonexistent data product returns an error.
+mcp-agent
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"read_data_product","arguments":{"name":"nonexistent_product"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":12,"error":{"code":-32602,"message":"Data product not found: nonexistent_product","data":{"error_type":"DataProductNotFound"}}}
+
+# =============================================================================
+# query tool - disabled by default
+# =============================================================================
+
+# Calling the query tool when disabled should return a ToolNotFound error.
+mcp-agent
+{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"Tool not found: query tool is not available. Use get_data_products, get_data_product_details, and read_data_product instead.","data":{"error_type":"ToolNotFound"}}}
+
+# =============================================================================
+# Developer tools on agent endpoint - wrong endpoint
+# =============================================================================
+
+# Calling query_system_catalog on agent endpoint should fail.
+mcp-agent
+{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM mz_tables"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":21,"error":{"code":-32602,"message":"Tool not found: query_system_catalog is not available on agent endpoint","data":{"error_type":"ToolNotFound"}}}
+
+# =============================================================================
+# JSON-RPC version validation
+# =============================================================================
+
+# Wrong JSON-RPC version should return InvalidRequest error.
+mcp-agent
+{"jsonrpc":"1.0","id":30,"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":30,"error":{"code":-32600,"message":"Invalid JSON-RPC version: expected 2.0","data":{"error_type":"InvalidRequest"}}}
+
+# =============================================================================
+# String id values
+# =============================================================================
+
+# String id values should be echoed back.
+mcp-agent
+{"jsonrpc":"2.0","id":"my-request-id","method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":"my-request-id","result":{"tools":[{"name":"get_data_products","title":"List Data Products","description":"Discover all available real-time data views (data products) that represent business entities like customers, orders, products, etc. Each data product provides fresh, queryable data with defined schemas. Use this first to see what data is available before querying specific information.","inputSchema":{"type":"object","properties":{},"required":[]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"get_data_product_details","title":"Get Data Product Details","description":"Get the complete schema and structure of a specific data product, plus a `hydration` object reporting whether the dataflow is ready across the cluster's replicas (`{hydrated, replica_count, hydrated_replica_count}`). This shows you exactly what fields are available, their types, and what data you can query. Reads never return partial data, so check `hydration` before reading: if `hydrated` is false and `replica_count` is greater than 0 the dataflow is still warming up (a read would block until it catches up, possibly hitting the request timeout), so wait and retry; if `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Exact name of the data product from get_data_products() list"}},"required":["name"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"read_data_product","title":"Read Data Product","description":"Read rows from a specific data product. Returns up to `limit` rows (default 500). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. Response limit: 1.0 MB.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Exact fully-qualified name of the data product (e.g. '\"materialize\".\"schema\".\"view_name\"')"},"limit":{"type":"integer","description":"Maximum number of rows to return (default 500)","default":500},"cluster":{"type":"string","description":"Optional override. By default, the read runs on the cluster recorded in the data product catalog (where the index or materialized view dataflow lives), so indexed reads actually hit their arrangement. A null `cluster` in discovery means your role lacks USAGE on the object's index/compute cluster; without an override, the read then runs on your session's default cluster (safe: only materialized views appear this way, and they serve from persist). Set this only to intentionally run the same read on a different cluster — e.g. one with more or larger replicas, or to compare cost/latency."}},"required":["name"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
+
+# An explicit null id makes a request, not a notification. MCP ids are strings
+# or numbers, so it and any other id type get -32600 with no id in the reply.
+mcp-agent
+{"jsonrpc":"2.0","id":null,"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid request: id must be a string or a number","data":{"error_type":"InvalidRequest"}}}
+
+mcp-agent
+{"jsonrpc":"2.0","id":{"a":1},"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid request: id must be a string or a number","data":{"error_type":"InvalidRequest"}}}
+
+# =============================================================================
+# HTTP method enforcement
+# =============================================================================
+
+# MCP spec 2025-11-25: GET on the POST-only endpoint returns 405.
+mcp-agent get
+----
+405 Method Not Allowed
+
+# =============================================================================
+# Origin validation (DNS rebinding defense)
+# =============================================================================
+
+# Browser-style requests with an Origin header are rejected unless the origin
+# is on the CORS allowlist (empty in this test harness). Requests without an
+# Origin header (every other test in this file) are allowed.
+mcp-agent origin
+{"jsonrpc":"2.0","id":40,"method":"tools/list"}
+----
+403 Forbidden
+
+# =============================================================================
+# read_data_product - name validation
+# =============================================================================
+
+# A data product name that does not parse as a single object name (e.g. an
+# SQL injection attempt) is rejected by validation, not interpolated into SQL.
+mcp-agent
+{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"read_data_product","arguments":{"name":"users\"; DROP TABLE users; --"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":41,"error":{"code":-32602,"message":"Query validation failed: Invalid data product name: users\"; DROP TABLE users; --. Expected a valid object name, e.g. '\"database\".\"schema\".\"name\"' or 'my_view'","data":{"error_type":"ValidationError"}}}

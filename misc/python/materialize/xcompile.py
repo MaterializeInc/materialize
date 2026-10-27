@@ -114,8 +114,9 @@ def cargo(
     }
 
     rustflags += [
-        "-Clink-arg=-Wl,--compress-debug-sections=zlib",
+        "-Clink-arg=-Wl,--compress-debug-sections=zstd",
         "-Clink-arg=-Wl,-O3",
+        "-Clink-arg=-Wl,--icf=all",
         "-Csymbol-mangling-version=v0",
         f"-Ctarget-cpu={_target_cpu}",
         f"-Ctarget-feature={_target_features}",
@@ -213,7 +214,7 @@ def _bootstrap_darwin(arch: Arch) -> None:
     # Building in Docker for Mac is painfully slow, so we install a
     # cross-compiling toolchain on the host and use that instead.
 
-    BOOTSTRAP_VERSION = "5"
+    BOOTSTRAP_VERSION = "7"
     BOOTSTRAP_FILE = MZ_ROOT / "target-xcompile" / target(arch) / ".xcompile-bootstrap"
     try:
         contents = BOOTSTRAP_FILE.read_text()
@@ -222,7 +223,14 @@ def _bootstrap_darwin(arch: Arch) -> None:
     if contents == BOOTSTRAP_VERSION:
         return
 
-    spawn.runv(["brew", "install", "lld", f"materializeinc/crosstools/{target(arch)}"])
+    spawn.runv(
+        [
+            "brew",
+            "install",
+            "lld",
+            f"materializeinc/crosstools/{target(arch)}",
+        ]
+    )
     spawn.runv(["rustup", "target", "add", target(arch)])
 
     BOOTSTRAP_FILE.parent.mkdir(parents=True, exist_ok=True)

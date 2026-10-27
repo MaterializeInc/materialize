@@ -20,31 +20,36 @@ mod codec;
 mod dyncfgs;
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use axum::response::IntoResponse;
 use axum::{Router, routing};
 use bytes::BytesMut;
-use domain::base::{Name, Rtype};
-use domain::rdata::AllRecordData;
-use domain::resolv::StubResolver;
 use futures::TryFutureExt;
 use futures::stream::BoxStream;
+use hickory_resolver::config::LookupIpStrategy;
+use hickory_resolver::lookup_ip::LookupIp;
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::proto::rr::{RData, RecordType};
+use hickory_resolver::system_conf::read_system_conf;
+use hickory_resolver::{Resolver, TokioResolver};
 use hyper::StatusCode;
 use hyper_util::rt::TokioIo;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_orchestrator_tracing::NO_SENTRY_TARGET;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
-use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
+use mz_ore::metrics::{
+    ComputedGauge, ComputedIntGauge, ComputedUIntGauge, IntCounter, IntGauge, MetricsRegistry,
+};
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::task::{JoinSetExt, spawn};
@@ -52,12 +57,14 @@ use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
 use mz_pgwire_common::{
     ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ErrorResponse, FrontendMessage,
-    FrontendStartupMessage, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, VERSION_3, decode_startup,
+    FrontendStartupMessage, MAX_STARTUP_FRAME_SIZE, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION,
+    VERSION_3, decode_startup,
 };
 use mz_server_core::{
     Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
     ReloadingTlsConfig, ServeConfig, ServeDyncfg, TlsCertConfig, TlsMode, listen,
 };
+use openssl::error::ErrorStack;
 use openssl::ssl::{NameType, Ssl, SslConnector, SslMethod, SslVerifyMode};
 use prometheus::{IntCounterVec, IntGaugeVec};
 use proxy_header::{ProxiedAddress, ProxyHeader};
@@ -70,12 +77,13 @@ use tokio_metrics::TaskMetrics;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
 use tower::Service;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 use crate::dyncfgs::{
-    INJECT_PROXY_PROTOCOL_HEADER_HTTP, SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
+    CONNECTION_HIGH_WATERMARK, CONNECTION_LOW_WATERMARK, INJECT_PROXY_PROTOCOL_HEADER_HTTP,
+    MAX_CONNECTIONS, PRE_RESOLVED_TIMEOUT, SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
     has_tracing_config_update, tracing_config,
 };
 
@@ -94,7 +102,7 @@ pub struct BalancerConfig {
     /// DNS resolver for pgwire cancellation requests
     cancellation_resolver: CancellationResolver,
     /// DNS resolver.
-    resolver: Resolver,
+    resolver: BalancerResolver,
     https_sni_addr_template: String,
     tls: Option<TlsCertConfig>,
     internal_tls: bool,
@@ -117,7 +125,7 @@ impl BalancerConfig {
         pgwire_listen_addr: SocketAddr,
         https_listen_addr: SocketAddr,
         cancellation_resolver: CancellationResolver,
-        resolver: Resolver,
+        resolver: BalancerResolver,
         https_sni_addr_template: String,
         tls: Option<TlsCertConfig>,
         internal_tls: bool,
@@ -192,9 +200,9 @@ pub struct BalancerService {
 
 impl BalancerService {
     pub async fn new(cfg: BalancerConfig) -> Result<Self, anyhow::Error> {
-        let pgwire = listen(&cfg.pgwire_listen_addr).await?;
-        let https = listen(&cfg.https_listen_addr).await?;
-        let internal_http = listen(&cfg.internal_http_listen_addr).await?;
+        let pgwire = listen(&cfg.pgwire_listen_addr)?;
+        let https = listen(&cfg.https_listen_addr)?;
+        let internal_http = listen(&cfg.internal_http_listen_addr)?;
         let metrics = BalancerMetrics::new(&cfg);
         let mut configs = ConfigSet::default();
         configs = dyncfgs::all_dyncfgs(configs);
@@ -206,7 +214,7 @@ impl BalancerService {
             cfg.config_sync_file_path.as_deref(),
         ) {
             (Some(key), None) => {
-                mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
+                let _ = mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
                     configs.clone(),
                     &BUILD_INFO,
                     |builder| {
@@ -257,11 +265,10 @@ impl BalancerService {
                     },
                 )
                 .await
-                .inspect_err(|e| warn!("LaunchDarkly sync error: {e}"))
-                .ok();
+                .inspect_err(|e| warn!("LaunchDarkly sync error: {e}"));
             }
             (None, Some(path)) => {
-                mz_dyncfg_file::sync_file_to_configset(
+                let _ = mz_dyncfg_file::sync_file_to_configset(
                     configs.clone(),
                     path,
                     cfg.config_sync_timeout,
@@ -281,8 +288,7 @@ impl BalancerService {
                 // (unlike the adapter, but it has a durable catalog). The
                 // ConfigSet defaults have been chosen to be good enough if this
                 // is the case.
-                .inspect_err(|e| warn!("File config sync error: {e}"))
-                .ok();
+                .inspect_err(|e| warn!("File config sync error: {e}"));
             }
             (Some(_), Some(_)) => panic!(
                 "must provide either config_sync_file_path or launchdarkly_sdk_key for config syncing",
@@ -314,7 +320,17 @@ impl BalancerService {
             None => (None, None),
         };
 
+        // Built once and shared by every upstream connection, since building a connector loads
+        // and parses the system CA bundle.
+        let internal_tls = self
+            .cfg
+            .internal_tls
+            .then(internal_tls_connector)
+            .transpose()
+            .context("building internal TLS connector")?;
+
         let metrics = ServerMetricsConfig::register_into(&self.cfg.metrics_registry);
+        let limiter = ConnectionLimiter::new(&self.cfg.metrics_registry, self.configs.clone());
 
         let mut set = JoinSet::new();
         let mut server_handles = Vec::new();
@@ -322,13 +338,24 @@ impl BalancerService {
         let https_addr = self.https.0.local_addr();
         let internal_http_addr = self.internal_http.0.local_addr();
 
+        // The HTTPS balancer always resolves through a TenantDnsResolver. In
+        // multi-tenant mode it shares the pgwire resolver so both listeners use
+        // one resolver. In static mode pgwire does not resolve through it, so
+        // HTTPS gets its own.
+        let shared_dns = match self.cfg.resolver.shared_dns() {
+            Some(dns) => dns,
+            None => Arc::new(TenantDnsResolver::new()?),
+        };
+
         {
             let pgwire = PgwireBalancer {
                 resolver: Arc::new(self.cfg.resolver),
                 cancellation_resolver: Arc::new(self.cfg.cancellation_resolver),
                 tls: pgwire_tls,
-                internal_tls: self.cfg.internal_tls,
+                internal_tls: internal_tls.clone(),
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
+                limiter: Arc::clone(&limiter),
+                configs: self.configs.clone(),
                 now: SYSTEM_TIME.clone(),
             };
             let (handle, stream) = self.pgwire;
@@ -354,15 +381,16 @@ impl BalancerService {
                 panic!("expected port in https_addr_template");
             };
             let port: u16 = port.parse().expect("unexpected port");
-            let resolver = StubResolver::new();
+
             let https = HttpsBalancer {
-                resolver: Arc::from(resolver),
+                resolver: shared_dns,
                 tls: https_tls,
                 resolve_template: Arc::from(addr),
                 port,
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
+                limiter: Arc::clone(&limiter),
                 configs: self.configs.clone(),
-                internal_tls: self.cfg.internal_tls,
+                internal_tls,
             };
             let (handle, stream) = self.https;
             server_handles.push(handle);
@@ -386,15 +414,27 @@ impl BalancerService {
             let router = Router::new()
                 .route(
                     "/metrics",
-                    routing::get(move || async move {
-                        mz_http_util::handle_prometheus(&self.cfg.metrics_registry).await
+                    routing::get(move |headers: axum::http::HeaderMap| async move {
+                        mz_http_util::handle_prometheus(&self.cfg.metrics_registry, headers).await
                     }),
                 )
                 .route(
                     "/api/livez",
                     routing::get(mz_http_util::handle_liveness_check),
                 )
-                .route("/api/readyz", routing::get(handle_readiness_check));
+                .route("/api/readyz", {
+                    let limiter = Arc::clone(&limiter);
+                    routing::get(move || async move {
+                        if limiter.evaluate_watermarks() {
+                            (StatusCode::OK, "ready")
+                        } else {
+                            (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "at the connection high watermark",
+                            )
+                        }
+                    })
+                });
             let internal_http = InternalHttpServer { router };
             let (handle, stream) = self.internal_http;
             server_handles.push(handle);
@@ -410,6 +450,15 @@ impl BalancerService {
                 warn!("internal_http server exited");
             });
         }
+        // Keeps `mz_balancer_connection_accepting` and config changes current between probes.
+        // Detached so that it does not keep `serve` from returning once the listeners are gone.
+        spawn(|| "connection_watermark_tick", async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tick.tick().await;
+                limiter.evaluate_watermarks();
+            }
+        });
         #[cfg(unix)]
         {
             let mut sigterm =
@@ -440,11 +489,6 @@ impl BalancerService {
     }
 }
 
-#[allow(clippy::unused_async)]
-async fn handle_readiness_check() -> impl IntoResponse {
-    (StatusCode::OK, "ready")
-}
-
 struct InternalHttpServer {
     router: Router,
 }
@@ -467,6 +511,14 @@ impl mz_server_core::Server for InternalHttpServer {
             http.serve_connection(conn, service).err_into().await
         })
     }
+}
+
+/// Builds the connector for TLS to environmentd.
+fn internal_tls_connector() -> Result<SslConnector, ErrorStack> {
+    let mut builder = SslConnector::builder(SslMethod::tls())?;
+    // environmentd doesn't yet have a cert we trust, so for now disable verification.
+    builder.set_verify(SslVerifyMode::NONE);
+    Ok(builder.build())
 }
 
 /// Wraps an IntGauge and automatically `inc`s on init and `drop`s on drop. Callers should not call
@@ -493,6 +545,8 @@ impl Drop for GaugeGuard {
 struct ServerMetricsConfig {
     connection_status: IntCounterVec,
     active_connections: IntGaugeVec,
+    pre_resolved_connections: IntGaugeVec,
+    pre_resolved_timeouts: IntCounterVec,
     tenant_connections: IntGaugeVec,
     tenant_connection_rx: IntCounterVec,
     tenant_connection_tx: IntCounterVec,
@@ -509,6 +563,16 @@ impl ServerMetricsConfig {
         let active_connections = registry.register(metric!(
             name: "mz_balancer_connection_active",
             help: "Count of currently open network connections.",
+            var_labels: ["source"],
+        ));
+        let pre_resolved_connections = registry.register(metric!(
+            name: "mz_balancer_pre_resolved_connection_active",
+            help: "Count of open network connections that have not yet resolved a backend.",
+            var_labels: ["source"],
+        ));
+        let pre_resolved_timeouts = registry.register(metric!(
+            name: "mz_balancer_pre_resolved_timeout_total",
+            help: "Count of connections closed for not resolving a backend within the pre-resolved timeout.",
             var_labels: ["source"],
         ));
         let tenant_connections = registry.register(metric!(
@@ -534,6 +598,8 @@ impl ServerMetricsConfig {
         Self {
             connection_status,
             active_connections,
+            pre_resolved_connections,
+            pre_resolved_timeouts,
             tenant_connections,
             tenant_connection_rx,
             tenant_connection_tx,
@@ -574,6 +640,19 @@ impl ServerMetrics {
             .into()
     }
 
+    fn pre_resolved_connections(&self) -> GaugeGuard {
+        self.inner
+            .pre_resolved_connections
+            .with_label_values(&[self.source])
+            .into()
+    }
+
+    fn pre_resolved_timeout(&self) -> IntCounter {
+        self.inner
+            .pre_resolved_timeouts
+            .with_label_values(&[self.source])
+    }
+
     fn tenant_connections(&self, tenant: &str) -> GaugeGuard {
         self.inner
             .tenant_connections
@@ -604,79 +683,571 @@ impl ServerMetrics {
     }
 }
 
+/// Ceiling on the number of client connections proxied at once, shared by the pgwire and HTTPS
+/// listeners.
+///
+/// balancerd's memory use scales with the number of connections it proxies. Without a ceiling it
+/// keeps accepting until the container is OOM killed, which drops every established connection.
+/// Refusing new connections instead sheds only the load we cannot serve.
+#[derive(Debug)]
+struct ConnectionLimiter {
+    configs: ConfigSet,
+    active: AtomicU32,
+    /// Whether connections are currently being refused, so that reaching and clearing the limit
+    /// are logged once each rather than once per connection.
+    limited: AtomicBool,
+    /// Whether `/api/readyz` last reported ready. Written only by `evaluate_watermarks`.
+    accepting: Arc<AtomicBool>,
+    /// Taken only by the watermark tick and `/api/readyz`, never on connection acquire or
+    /// release.
+    watermark_state: Mutex<WatermarkState>,
+    rejected: IntCounter,
+    watermark_transitions: IntCounter,
+    _limit: ComputedUIntGauge,
+    _accepting: ComputedIntGauge,
+    _high_watermark: ComputedUIntGauge,
+    _low_watermark: ComputedUIntGauge,
+}
+
+#[derive(Debug, Default)]
+struct WatermarkState {
+    out_of_rotation: bool,
+    /// The last watermark misconfiguration warned about, so it is logged once per change.
+    last_warning: Option<String>,
+}
+
+/// Validated connection watermarks, see [`configured_watermarks`].
+#[derive(Debug, Clone, Copy)]
+struct Watermarks {
+    low: usize,
+    high: usize,
+}
+
+/// The effective watermarks, `Ok(None)` when both are zero, or `Err` describing why the
+/// configured values are ignored.
+///
+/// The high watermark must be strictly below the hard limit. At the limit the pod would leave
+/// rotation exactly when it is full, which is when a load balancer that closes connections to
+/// unhealthy targets does the most damage.
+fn configured_watermarks(configs: &ConfigSet) -> Result<Option<Watermarks>, String> {
+    let low = CONNECTION_LOW_WATERMARK.get(configs);
+    let high = CONNECTION_HIGH_WATERMARK.get(configs);
+    let max = MAX_CONNECTIONS.get(configs);
+    let reason = match (low, high) {
+        (0, 0) => return Ok(None),
+        (0, _) | (_, 0) => "both watermarks must be set",
+        (low, high) if low >= high => "the low watermark must be below the high watermark",
+        _ if max == 0 => "balancerd_max_connections must be enabled",
+        (_, high) if high >= usize::cast_from(max) => {
+            "the high watermark must be below balancerd_max_connections"
+        }
+        (low, high) => return Ok(Some(Watermarks { low, high })),
+    };
+    Err(format!(
+        "{reason} (low={low}, high={high}, max_connections={max})"
+    ))
+}
+
+/// One effective watermark as a gauge value, 0 when the watermarks are off.
+fn watermark_metric(configs: &ConfigSet, pick: fn(Watermarks) -> usize) -> u64 {
+    configured_watermarks(configs)
+        .ok()
+        .flatten()
+        .map_or(0, |w| u64::cast_from(pick(w)))
+}
+
+impl ConnectionLimiter {
+    fn new(registry: &MetricsRegistry, configs: ConfigSet) -> Arc<Self> {
+        let rejected = registry.register(metric!(
+            name: "mz_balancer_connection_rejected_total",
+            help: "Count of connections refused because the connection limit was reached.",
+        ));
+        let limit = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_limit",
+                help: "Maximum number of connections proxied at once, 0 if unlimited.",
+            ),
+            {
+                let configs = configs.clone();
+                move || u64::from(MAX_CONNECTIONS.get(&configs))
+            },
+        );
+        let watermark_transitions = registry.register(metric!(
+            name: "mz_balancer_connection_watermark_transitions_total",
+            help: "Count of times balancerd left or returned to load balancer rotation because \
+            of the connection watermarks.",
+        ));
+        let accepting = Arc::new(AtomicBool::new(true));
+        let accepting_gauge: ComputedIntGauge = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_accepting",
+                help: "Whether /api/readyz reports ready: 1 in load balancer rotation, 0 out.",
+            ),
+            {
+                let accepting = Arc::clone(&accepting);
+                move || i64::from(accepting.load(Ordering::Relaxed))
+            },
+        );
+        // The metrics catalog is generated from `metric!` literals, so each gauge is spelled out.
+        let high_watermark = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_high_watermark",
+                help: "Connections at which balancerd leaves load balancer rotation, 0 if disabled.",
+            ),
+            {
+                let configs = configs.clone();
+                move || watermark_metric(&configs, |w| w.high)
+            },
+        );
+        let low_watermark = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_low_watermark",
+                help: "Connections below which balancerd returns to load balancer rotation, 0 if \
+                disabled.",
+            ),
+            {
+                let configs = configs.clone();
+                move || watermark_metric(&configs, |w| w.low)
+            },
+        );
+        Arc::new(ConnectionLimiter {
+            configs,
+            active: AtomicU32::new(0),
+            limited: AtomicBool::new(false),
+            accepting,
+            watermark_state: Mutex::new(WatermarkState::default()),
+            rejected,
+            watermark_transitions,
+            _limit: limit,
+            _accepting: accepting_gauge,
+            _high_watermark: high_watermark,
+            _low_watermark: low_watermark,
+        })
+    }
+
+    #[cfg(test)]
+    fn accepting(&self) -> bool {
+        self.accepting.load(Ordering::Relaxed)
+    }
+
+    /// Applies the watermark transitions for the current connection count and returns whether
+    /// balancerd is in load balancer rotation.
+    ///
+    /// Runs on every `/api/readyz` request and on a 1s tick, not on connection acquire or release,
+    /// so the connection path stays free of locks and dyncfg reads. Each call depends only on the
+    /// current count, configuration and state, so how often probes poll does not change the
+    /// outcome, only how soon a transition is seen.
+    ///
+    /// There is no minimum time out of rotation. How long `/api/readyz` must fail before a pod
+    /// actually leaves, and how long it must pass before it returns, is up to the health check
+    /// thresholds of whatever reads it.
+    fn evaluate_watermarks(&self) -> bool {
+        let mut state = self.watermark_state.lock().expect("lock poisoned");
+        let watermarks = self.watermarks(&mut state.last_warning);
+        let active = usize::cast_from(self.active.load(Ordering::SeqCst));
+        let accepting = match (watermarks, state.out_of_rotation) {
+            (Some(w), false) if active >= w.high => {
+                warn!(
+                    "leaving load balancer rotation: {active} active connections reached the \
+                    high watermark of {}",
+                    w.high
+                );
+                false
+            }
+            (Some(w), true) if active < w.low => {
+                info!(
+                    "returning to load balancer rotation: {active} active connections, below \
+                    the low watermark of {}",
+                    w.low
+                );
+                true
+            }
+            // Watermarks disabled or invalidated while out of rotation restore readiness at once,
+            // since off must behave as if they had never been set.
+            (None, true) => {
+                info!(
+                    "returning to load balancer rotation: connection watermarks no longer in effect"
+                );
+                true
+            }
+            _ => return !state.out_of_rotation,
+        };
+        state.out_of_rotation = !accepting;
+        self.accepting.store(accepting, Ordering::Relaxed);
+        self.watermark_transitions.inc();
+        accepting
+    }
+
+    fn watermarks(&self, last: &mut Option<String>) -> Option<Watermarks> {
+        match configured_watermarks(&self.configs) {
+            Ok(watermarks) => {
+                *last = None;
+                watermarks
+            }
+            Err(reason) => {
+                if last.as_deref() != Some(&reason) {
+                    warn!("ignoring connection watermarks: {reason}");
+                    *last = Some(reason);
+                }
+                None
+            }
+        }
+    }
+
+    /// Reserves capacity for one connection, or returns `None` if the limit has been reached, in
+    /// which case the caller must refuse the connection.
+    fn acquire(self: &Arc<Self>) -> Option<ConnectionGuard> {
+        let limit = MAX_CONNECTIONS.get(&self.configs);
+        let unlimited = limit == 0;
+        match self
+            .active
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+                (unlimited || active < limit).then(|| active + 1)
+            }) {
+            Ok(prev) => {
+                // Only clear the limited state once comfortably below the limit, so that
+                // connections churning at the ceiling do not flap the log lines.
+                if unlimited || prev + 1 <= limit - limit / 10 {
+                    if self.limited.swap(false, Ordering::Relaxed) {
+                        info!("accepting new connections again, limit is {limit}");
+                    }
+                }
+                Some(ConnectionGuard(Arc::clone(self)))
+            }
+            Err(active) => {
+                self.rejected.inc();
+                if !self.limited.swap(true, Ordering::Relaxed) {
+                    warn!(
+                        "refusing new connections: at the limit of {limit} connections \
+                        ({active} active)"
+                    );
+                }
+                None
+            }
+        }
+    }
+}
+
+/// Releases the connection reserved by [`ConnectionLimiter::acquire`] when dropped.
+struct ConnectionGuard(Arc<ConnectionLimiter>);
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Answers the client with a final message and flushes it.
+///
+/// [`FramedConn::send`] only enqueues into a buffer, so a rejection that is not flushed reaches
+/// the client as a bare socket close rather than the error it was given. Every path that answers
+/// the client and then stops has to flush, because the connection is dropped as soon as it
+/// returns.
+async fn reject<A>(conn: &mut FramedConn<A>, err: ErrorResponse) -> Result<(), io::Error>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+{
+    conn.send(err).await?;
+    conn.flush().await
+}
+
+/// Runs the pre-resolved phase under [`PRE_RESOLVED_TIMEOUT`], counting an overrun.
+///
+/// `fut` must cover TLS negotiation, startup, authentication, and backend resolution.
+/// Proxying must run after it completes, outside the deadline. A zero timeout leaves
+/// `fut` unbounded.
+async fn under_pre_resolved_timeout<F, T, E>(
+    timeout: Duration,
+    metrics: &ServerMetrics,
+    fut: F,
+) -> Result<T, E>
+where
+    F: Future<Output = Result<T, E>>,
+    E: From<io::Error>,
+{
+    if timeout.is_zero() {
+        return fut.await;
+    }
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(result) => result,
+        Err(_) => {
+            metrics.pre_resolved_timeout().inc();
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out before resolving a backend",
+            )
+            .into())
+        }
+    }
+}
+
 pub enum CancellationResolver {
     Directory(PathBuf),
     Static(String),
 }
 
 struct PgwireBalancer {
+    /// Read for [`PRE_RESOLVED_TIMEOUT`] at connection time.
+    configs: ConfigSet,
     tls: Option<ReloadingTlsConfig>,
-    internal_tls: bool,
+    internal_tls: Option<SslConnector>,
     cancellation_resolver: Arc<CancellationResolver>,
-    resolver: Arc<Resolver>,
+    resolver: Arc<BalancerResolver>,
     metrics: ServerMetrics,
+    limiter: Arc<ConnectionLimiter>,
     now: NowFn,
 }
 
 impl PgwireBalancer {
+    /// Negotiates pgwire startup and resolves a backend.
+    ///
+    /// Returns `None` after a client disconnect, a flushed rejection, or a dispatched
+    /// cancellation request.
+    async fn pre_resolve(
+        conn: Connection,
+        tls: Option<ReloadingTlsConfig>,
+        resolver: &BalancerResolver,
+        cancellation_resolver: Arc<CancellationResolver>,
+        conn_uuid: Uuid,
+        metrics: &ServerMetrics,
+    ) -> Result<
+        Option<(
+            FramedConn<Connection>,
+            ResolvedAddr,
+            BTreeMap<String, String>,
+        )>,
+        anyhow::Error,
+    > {
+        let peer_addr = conn.peer_addr();
+        let mut conn = Conn::Unencrypted(conn);
+        loop {
+            let message = decode_startup(&mut conn, MAX_STARTUP_FRAME_SIZE).await?;
+            conn = match message {
+                // Clients sometimes hang up during the startup sequence, e.g.
+                // because they receive an unacceptable response to an
+                // `SslRequest`. This is considered a graceful termination.
+                None => return Ok(None),
+
+                Some(FrontendStartupMessage::Startup {
+                    version,
+                    mut params,
+                }) => {
+                    let mut conn = FramedConn::new(conn);
+                    let rejected = SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION;
+                    let peer_addr = match peer_addr {
+                        Ok(addr) => addr.ip(),
+                        Err(e) => {
+                            error!("Invalid peer_addr {:?}", e);
+                            reject(
+                                &mut conn,
+                                ErrorResponse::fatal(rejected, "invalid peer address"),
+                            )
+                            .await?;
+                            return Ok(None);
+                        }
+                    };
+                    debug!(
+                        %conn_uuid, %peer_addr,
+                        "starting new pgwire connection in balancer",
+                    );
+                    let prev = params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
+                    if prev.is_some() {
+                        reject(
+                            &mut conn,
+                            ErrorResponse::fatal(
+                                rejected,
+                                format!("invalid parameter '{CONN_UUID_KEY}'"),
+                            ),
+                        )
+                        .await?;
+                        return Ok(None);
+                    }
+
+                    let forwarded_for = params.insert(
+                        MZ_FORWARDED_FOR_KEY.to_string(),
+                        peer_addr.to_string().clone(),
+                    );
+                    if let Some(_) = forwarded_for {
+                        reject(
+                            &mut conn,
+                            ErrorResponse::fatal(
+                                rejected,
+                                format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
+                            ),
+                        )
+                        .await?;
+                        return Ok(None);
+                    };
+
+                    let Some(resolved) = Self::resolve_destination(
+                        &mut conn,
+                        version,
+                        &params,
+                        resolver,
+                        tls.map(|tls| tls.mode),
+                        metrics,
+                    )
+                    .await?
+                    else {
+                        return Ok(None);
+                    };
+                    return Ok(Some((conn, resolved, params)));
+                }
+
+                Some(FrontendStartupMessage::CancelRequest {
+                    conn_id,
+                    secret_key,
+                }) => {
+                    spawn(|| "cancel request", async move {
+                        cancel_request(conn_id, secret_key, &cancellation_resolver).await;
+                    });
+                    // Do not wait on cancel requests to return because cancellation is best
+                    // effort.
+                    return Ok(None);
+                }
+
+                Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
+                    (Conn::Unencrypted(mut conn), Some(tls)) => {
+                        conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
+                        let mut ssl_stream = SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
+                        if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                            let _ = ssl_stream.get_mut().shutdown().await;
+                            return Err(e.into());
+                        }
+                        Conn::Ssl(ssl_stream)
+                    }
+                    (mut conn, _) => {
+                        conn.write_all(&[REJECT_ENCRYPTION]).await?;
+                        conn
+                    }
+                },
+
+                Some(FrontendStartupMessage::GssEncRequest) => {
+                    conn.write_all(&[REJECT_ENCRYPTION]).await?;
+                    conn
+                }
+            }
+        }
+    }
+
     #[mz_ore::instrument(level = "debug")]
-    async fn run<'a, A>(
+    /// Resolves a destination for the connection, or answers the client saying why it cannot.
+    ///
+    /// `Ok(None)` means the rejection has been flushed and the connection is finished.
+    async fn resolve_destination<'a, A>(
         conn: &'a mut FramedConn<A>,
         version: i32,
-        params: BTreeMap<String, String>,
-        resolver: &Resolver,
+        params: &BTreeMap<String, String>,
+        resolver: &BalancerResolver,
         tls_mode: Option<TlsMode>,
-        internal_tls: bool,
         metrics: &ServerMetrics,
-    ) -> Result<(), io::Error>
+    ) -> Result<Option<ResolvedAddr>, io::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
         if version != VERSION_3 {
-            return conn
-                .send(ErrorResponse::fatal(
+            reject(
+                conn,
+                ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
                     "server does not support the client's requested protocol version",
-                ))
-                .await;
+                ),
+            )
+            .await?;
+            return Ok(None);
         }
 
         let Some(user) = params.get("user") else {
-            return conn
-                .send(ErrorResponse::fatal(
+            reject(
+                conn,
+                ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
                     "user parameter required",
-                ))
-                .await;
+                ),
+            )
+            .await?;
+            return Ok(None);
         };
 
         if let Err(err) = conn.inner().ensure_tls_compatibility(&tls_mode) {
-            return conn.send(err).await;
+            reject(conn, err).await?;
+            return Ok(None);
         }
 
         let resolved = match resolver.resolve(conn, user, metrics).await {
             Ok(v) => v,
             Err(err) => {
-                return conn
-                    .send(ErrorResponse::fatal(
-                        SqlState::INVALID_PASSWORD,
-                        err.to_string(),
-                    ))
-                    .await;
+                let sql_state = match &err {
+                    ResolveError::InvalidPassword => SqlState::INVALID_PASSWORD,
+                    ResolveError::Client(details) => {
+                        warn!("client-caused connection failure: {details:#}");
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
+                    }
+                    ResolveError::Upstream(details) => {
+                        warn!("upstream not available: {details:#}");
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
+                    }
+                    ResolveError::Internal(details) => {
+                        error!("resolving connection destination: {details:#}");
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
+                    }
+                };
+                reject(conn, ErrorResponse::fatal(sql_state, err.to_string())).await?;
+                return Ok(None);
             }
         };
 
+        Ok(Some(resolved))
+    }
+
+    /// Proxies a resolved connection until either side closes.
+    async fn proxy<A>(
+        mut conn: FramedConn<A>,
+        resolved: ResolvedAddr,
+        params: BTreeMap<String, String>,
+        internal_tls: Option<&SslConnector>,
+        metrics: &ServerMetrics,
+    ) -> Result<(), io::Error>
+    where
+        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+    {
         let _active_guard = resolved
             .tenant
             .as_ref()
             .map(|tenant| metrics.tenant_connections(tenant));
-        let Ok(mut mz_stream) =
-            Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls).await
-        else {
-            return Ok(());
+        let mut mz_stream = match Self::init_stream(
+            &mut conn,
+            resolved.addr,
+            resolved.password,
+            params,
+            internal_tls,
+        )
+        .await
+        {
+            Ok(stream) => stream,
+            Err(e) => {
+                error!("failed to connect to upstream server: {e}");
+                return reject(
+                    &mut conn,
+                    ErrorResponse::fatal(
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                        "upstream server not available",
+                    ),
+                )
+                .await;
+            }
         };
 
-        let mut client_counter = CountingConn::new(conn.inner_mut());
+        // Proxying does not frame, so release the framing buffers rather than hold them for the
+        // life of the connection. Bytes the client sent after its last decoded message, e.g. a
+        // query pipelined behind its password, are already buffered and must go upstream first.
+        let (mut client, unread) = conn.into_parts();
+        if !unread.is_empty() {
+            mz_stream.write_all(&unread).await?;
+        }
+        drop(unread);
+
+        let mut client_counter = CountingConn::new(&mut client);
 
         // Now blindly shuffle bytes back and forth until closed.
         // TODO: Limit total memory use.
@@ -700,15 +1271,19 @@ impl PgwireBalancer {
         envd_addr: SocketAddr,
         password: Option<String>,
         params: BTreeMap<String, String>,
-        internal_tls: bool,
-    ) -> Result<Conn<TcpStream>, anyhow::Error>
+        internal_tls: Option<&SslConnector>,
+    ) -> Result<Conn<netio::Stream>, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
-        let mut mz_stream = TcpStream::connect(envd_addr).await?;
+        // NOTE: `netio::Stream::connect` sets `TCP_NODELAY`. Without it, Nagle's algorithm holds
+        // the tail of an extended-protocol batch that arrives in several reads until
+        // environmentd's delayed ACK (at least 40 ms on Linux), because environmentd responds
+        // only at `Sync`.
+        let mut mz_stream = netio::Stream::connect(envd_addr).await?;
         let mut buf = BytesMut::new();
 
-        let mut mz_stream = if internal_tls {
+        let mut mz_stream = if let Some(internal_tls) = internal_tls {
             FrontendStartupMessage::SslRequest.encode(&mut buf)?;
             mz_stream.write_all(&buf).await?;
             buf.clear();
@@ -717,14 +1292,7 @@ impl PgwireBalancer {
                 netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
             if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
                 // do a TLS handshake
-                let mut builder =
-                    SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-                // environmentd doesn't yet have a cert we trust, so for now disable verification.
-                builder.set_verify(SslVerifyMode::NONE);
-                let mut ssl = builder
-                    .build()
-                    .configure()?
-                    .into_ssl(&envd_addr.to_string())?;
+                let mut ssl = internal_tls.configure()?.into_ssl(&envd_addr.to_string())?;
                 ssl.set_connect_state();
                 Conn::Ssl(SslStream::new(ssl, mz_stream)?)
             } else {
@@ -802,115 +1370,70 @@ impl mz_server_core::Server for PgwireBalancer {
         _tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
     ) -> mz_server_core::ConnectionHandler {
         let tls = self.tls.clone();
-        let internal_tls = self.internal_tls;
+        let internal_tls = self.internal_tls.clone();
         let resolver = Arc::clone(&self.resolver);
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
+        let limiter = Arc::clone(&self.limiter);
+        let pre_resolved_timeout = PRE_RESOLVED_TIMEOUT.get(&self.configs);
         let cancellation_resolver = Arc::clone(&self.cancellation_resolver);
         let conn_uuid = epoch_to_uuid_v7(&(self.now)());
-        let peer_addr = conn.peer_addr();
         conn.uuid_handle().set(conn_uuid);
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.
             let active_guard = outer_metrics.active_connections();
             let result: Result<(), anyhow::Error> = async move {
-                let mut conn = Conn::Unencrypted(conn);
-                loop {
-                    let message = decode_startup(&mut conn).await?;
-                    conn = match message {
-                        // Clients sometimes hang up during the startup sequence, e.g.
-                        // because they receive an unacceptable response to an
-                        // `SslRequest`. This is considered a graceful termination.
-                        None => return Ok(()),
+                let Some(_conn_guard) = limiter.acquire() else {
+                    return Ok(());
+                };
+                let pre_resolved = inner_metrics.pre_resolved_connections();
 
-                        Some(FrontendStartupMessage::Startup {
-                            version,
-                            mut params,
-                        }) => {
-                            let mut conn = FramedConn::new(conn);
-                            let peer_addr = match peer_addr {
-                                Ok(addr) => addr.ip(),
-                                Err(e) => {
-                                    error!("Invalid peer_addr {:?}", e);
-                                    return Ok(conn
-                                        .send(ErrorResponse::fatal(
-                                            SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
-                                            "invalid peer address",
-                                        ))
-                                        .await?);
-                                }
-                            };
-                            debug!(%conn_uuid, %peer_addr,  "starting new pgwire connection in balancer");
-                            let prev =
-                                params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
-                            if prev.is_some() {
-                                return Ok(conn
-                                    .send(ErrorResponse::fatal(
-                                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
-                                        format!("invalid parameter '{CONN_UUID_KEY}'"),
-                                    ))
-                                    .await?);
-                            }
+                // Boxed so that startup's state, much larger than the proxying state, is freed once
+                // startup completes. Held inline, it would size the connection's task, which lives
+                // as long as the connection.
+                let destination = under_pre_resolved_timeout(
+                    pre_resolved_timeout,
+                    &inner_metrics,
+                    Box::pin(Self::pre_resolve(
+                        conn,
+                        tls,
+                        &resolver,
+                        cancellation_resolver,
+                        conn_uuid,
+                        &inner_metrics,
+                    )),
+                )
+                .await?;
 
-                            if let Some(_) = params.insert(MZ_FORWARDED_FOR_KEY.to_string(), peer_addr.to_string().clone()) {
-                                return Ok(conn
-                                    .send(ErrorResponse::fatal(
-                                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
-                                        format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
-                                    ))
-                                    .await?);
-                            };
-
-                            Self::run(
-                                &mut conn,
-                                version,
-                                params,
-                                &resolver,
-                                tls.map(|tls| tls.mode),
-                                internal_tls,
-                                &inner_metrics,
-                            )
-                            .await?;
-                            conn.flush().await?;
-                            return Ok(());
-                        }
-
-                        Some(FrontendStartupMessage::CancelRequest {
-                            conn_id,
-                            secret_key,
-                        }) => {
-                            spawn(|| "cancel request", async move {
-                                cancel_request(conn_id, secret_key, &cancellation_resolver).await;
-                            });
-                            // Do not wait on cancel requests to return because cancellation is best
-                            // effort.
-                            return Ok(());
-                        }
-
-                        Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
-                            (Conn::Unencrypted(mut conn), Some(tls)) => {
-                                conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                                let mut ssl_stream =
-                                    SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
-                                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                                    let _ = ssl_stream.get_mut().shutdown().await;
-                                    return Err(e.into());
-                                }
-                                Conn::Ssl(ssl_stream)
-                            }
-                            (mut conn, _) => {
-                                conn.write_all(&[REJECT_ENCRYPTION]).await?;
-                                conn
-                            }
-                        },
-
-                        Some(FrontendStartupMessage::GssEncRequest) => {
-                            conn.write_all(&[REJECT_ENCRYPTION]).await?;
-                            conn
-                        }
-                    }
+                let Some((conn, resolved, params)) = destination else {
+                    return Ok(());
+                };
+                drop(pre_resolved);
+                // One line per connection ties a client IP to a tenant; the metrics carry the
+                // tenant but not the IP, and flow logs see the IP but not the tenant. Skipped
+                // without a tenant (self-managed). `authenticated` is false when the tenant came
+                // from the client's SNI, which environmentd authenticates only after this point.
+                if let Some(tenant) = &resolved.tenant {
+                    info!(
+                        target: NO_SENTRY_TARGET,
+                        %conn_uuid,
+                        client_addr = params.get(MZ_FORWARDED_FOR_KEY).map_or("", String::as_str),
+                        %tenant,
+                        authenticated = resolved.password.is_some(),
+                        "pgwire connection resolved",
+                    );
                 }
+
+                PgwireBalancer::proxy(
+                    conn,
+                    resolved,
+                    params,
+                    internal_tls.as_ref(),
+                    &inner_metrics,
+                )
+                .await?;
+                Ok(())
             }
             .await;
             drop(active_guard);
@@ -1067,101 +1590,118 @@ async fn cancel_request(
     }
 }
 
+/// Writes an HTTP error response to a client and closes the connection.
+///
+/// The proxied connections are raw TCP streams, so the HTTP framing has to be written by hand.
+/// Errors are ignored: the connection is going away regardless.
+async fn send_http_error(client_stream: &mut Box<dyn ClientStream>, status: &str, body: &str) {
+    let response = format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: text/plain\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        body.len(),
+    );
+    let _ = client_stream.write_all(response.as_bytes()).await;
+    let _ = client_stream.shutdown().await;
+}
+
 struct HttpsBalancer {
-    resolver: Arc<StubResolver>,
+    resolver: Arc<TenantDnsResolver>,
     tls: Option<ReloadingSslContext>,
     resolve_template: Arc<str>,
     port: u16,
     metrics: Arc<ServerMetrics>,
+    limiter: Arc<ConnectionLimiter>,
     configs: ConfigSet,
-    internal_tls: bool,
+    internal_tls: Option<SslConnector>,
 }
 
 impl HttpsBalancer {
+    /// Negotiates TLS and resolves a backend using the client's SNI hostname.
+    async fn pre_resolve(
+        conn: Connection,
+        tls_context: Option<ReloadingSslContext>,
+        resolver: &TenantDnsResolver,
+        resolve_template: &str,
+        port: u16,
+    ) -> Result<(Box<dyn ClientStream>, ResolvedAddr, SocketAddr), anyhow::Error> {
+        let peer_addr = conn.peer_addr().context("fetching peer addr")?;
+        let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) = match tls_context
+        {
+            Some(tls_context) => {
+                let mut ssl_stream = SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
+                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                    let _ = ssl_stream.get_mut().shutdown().await;
+                    return Err(e.into());
+                }
+                let servername: Option<String> =
+                    ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
+                        match sn.split_once('.') {
+                            Some((left, _right)) => left,
+                            None => sn,
+                        }
+                        .into()
+                    });
+                debug!("Found sni servername: {servername:?} (https)");
+                (Box::new(ssl_stream), servername)
+            }
+            _ => (Box::new(conn), None),
+        };
+        let resolved =
+            Self::resolve(resolver, resolve_template, port, servername.as_deref()).await?;
+        Ok((client_stream, resolved, peer_addr))
+    }
+
     async fn resolve(
-        resolver: &StubResolver,
+        resolver: &TenantDnsResolver,
         resolve_template: &str,
         port: u16,
         servername: Option<&str>,
     ) -> Result<ResolvedAddr, anyhow::Error> {
-        let addr = match &servername {
-            Some(servername) => resolve_template.replace("{}", servername),
-            None => resolve_template.to_string(),
+        let (addr, tenant) = match servername {
+            Some(sni) => resolver.resolve_sni(resolve_template, port, sni).await?,
+            None => {
+                // Without SNI, resolve the template as is. Not expected for
+                // HTTPS in practice.
+                debug!("https hostname (no SNI): {}:{}", resolve_template, port);
+                resolver.resolve(resolve_template, port).await?
+            }
         };
-        debug!("https address: {addr}");
-
-        // When we lookup the address using SNI, we get a hostname (`3dl07g8zmj91pntk4eo9cfvwe` for
-        // example), which you convert into a different form for looking up the environment address
-        // `blncr-3dl07g8zmj91pntk4eo9cfvwe`. When you do a DNS lookup in kubernetes for
-        // `blncr-3dl07g8zmj91pntk4eo9cfvwe`, you get a CNAME response pointing at environmentd
-        // `environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local`. This
-        // is of the form `<service>.<namespace>.svc.cluster.local`. That `<namespace>` is the same
-        // as the environment name, and is based on the tenant ID. `environment-<tenant_id>-<index>`
-        // We currently only support a single environment per tenant in a region, so `<index>` is
-        // always 0. Do not rely on this ending in `-0` so in the future multiple envds are
-        // supported.
-
-        // Attempt to get a tenant.
-        let tenant = resolver.tenant(&addr).await;
-
-        // Now do the regular ip lookup, regardless of if there was a CNAME.
-        let envd_addr = lookup(&format!("{addr}:{port}")).await?;
 
         Ok(ResolvedAddr {
-            addr: envd_addr,
+            addr,
             password: None,
             tenant,
         })
     }
 }
 
-trait StubResolverExt {
-    async fn tenant(&self, addr: &str) -> Option<String>;
-}
-
-impl StubResolverExt for StubResolver {
-    /// Finds the tenant of a DNS address. Errors or lack of cname resolution here are ok, because
-    /// this is only used for metrics.
-    async fn tenant(&self, addr: &str) -> Option<String> {
-        let Ok(dname) = Name::<Vec<_>>::from_str(addr) else {
-            return None;
-        };
-        debug!("resolving tenant for {:?}", addr);
-        // Lookup the CNAME. If there's a CNAME, find the tenant.
-        let lookup = self.query((dname, Rtype::CNAME)).await;
-        if let Ok(lookup) = lookup {
-            if let Ok(answer) = lookup.answer() {
-                let res = answer.limit_to::<AllRecordData<_, _>>();
-                for record in res {
-                    let Ok(record) = record else {
-                        continue;
-                    };
-                    if record.rtype() != Rtype::CNAME {
-                        continue;
-                    }
-                    let cname = record.data();
-                    let cname = cname.to_string();
-                    debug!("cname: {cname}");
-                    return extract_tenant_from_cname(&cname);
-                }
-            }
-        }
-        None
-    }
-}
-
-/// Extracts the tenant from a CNAME.
+/// Extracts the tenant ID from an environmentd CNAME target.
+///
+/// The CNAME points at the environmentd service, of the form
+/// `<service>.<namespace>.svc.cluster.local`, e.g.
+/// `environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local`.
+/// The `<namespace>` is the environment name `environment-<tenant_id>-<index>`,
+/// where `<tenant_id>` is the tenant's UUID and `<index>` is the environment
+/// generation.
+///
+/// NOTE: `<index>` is currently always 0, since a tenant has one environment
+/// per region, but this does not rely on that so that multiple environments
+/// per tenant can be supported later.
 fn extract_tenant_from_cname(cname: &str) -> Option<String> {
     let mut parts = cname.split('.');
     let _service = parts.next();
     let Some(namespace) = parts.next() else {
         return None;
     };
-    // Trim off the starting `environmentd-`.
+    // Trim off the starting `environment-`.
     let Some((_, namespace)) = namespace.split_once('-') else {
         return None;
     };
-    // Trim off the ending `-0` (or some other number).
+    // Trim off the ending `-<index>`.
     let Some((tenant, _)) = namespace.rsplit_once('-') else {
         return None;
     };
@@ -1172,6 +1712,16 @@ fn extract_tenant_from_cname(cname: &str) -> Option<String> {
         return None;
     };
     Some(tenant.to_string())
+}
+
+/// Strips the surrounding brackets from an IPv6 host literal, e.g. `[::1]`
+/// becomes `::1`. Leaves other hosts unchanged. This lets a bracketed IPv6
+/// literal in an address template parse as an `IpAddr` and resolve, matching
+/// what `tokio::net::lookup_host` accepts.
+fn strip_ipv6_brackets(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host)
 }
 
 impl mz_server_core::Server for HttpsBalancer {
@@ -1190,43 +1740,52 @@ impl mz_server_core::Server for HttpsBalancer {
         let port = self.port;
         let inner_metrics = Arc::clone(&self.metrics);
         let outer_metrics = Arc::clone(&self.metrics);
-        let peer_addr = conn.peer_addr();
+        let limiter = Arc::clone(&self.limiter);
+        let pre_resolved_timeout = PRE_RESOLVED_TIMEOUT.get(&self.configs);
         let inject_proxy_headers = INJECT_PROXY_PROTOCOL_HEADER_HTTP.get(&self.configs);
         Box::pin(async move {
             let active_guard = inner_metrics.active_connections();
             let result: Result<_, anyhow::Error> = Box::pin(async move {
-                let peer_addr = peer_addr.context("fetching peer addr")?;
-                let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
-                    match tls_context {
-                        Some(tls_context) => {
-                            let mut ssl_stream =
-                                SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
-                            if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                                let _ = ssl_stream.get_mut().shutdown().await;
-                                return Err(e.into());
-                            }
-                            let servername: Option<String> =
-                                ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
-                                    match sn.split_once('.') {
-                                        Some((left, _right)) => left,
-                                        None => sn,
-                                    }
-                                    .into()
-                                });
-                            debug!("Found sni servername: {servername:?} (https)");
-                            (Box::new(ssl_stream), servername)
-                        }
-                        _ => (Box::new(conn), None),
-                    };
-                let resolved =
-                    Self::resolve(&resolver, &resolve_template, port, servername.as_deref())
-                        .await?;
+                let Some(_conn_guard) = limiter.acquire() else {
+                    return Ok(());
+                };
+                let pre_resolved = inner_metrics.pre_resolved_connections();
+
+                let (mut client_stream, resolved, peer_addr) = under_pre_resolved_timeout(
+                    pre_resolved_timeout,
+                    &inner_metrics,
+                    Self::pre_resolve(conn, tls_context, &resolver, &resolve_template, port),
+                )
+                .await?;
+                drop(pre_resolved);
+                // See the matching log line in the pgwire handler. The tenant always comes from
+                // SNI here, before any authentication.
+                if let Some(tenant) = &resolved.tenant {
+                    info!(
+                        target: NO_SENTRY_TARGET,
+                        client_addr = %peer_addr.ip(),
+                        %tenant,
+                        authenticated = false,
+                        "https connection resolved",
+                    );
+                }
                 let inner_active_guard = resolved
                     .tenant
                     .as_ref()
                     .map(|tenant| inner_metrics.tenant_connections(tenant));
-
-                let mut mz_stream = TcpStream::connect(resolved.addr).await?;
+                let mut mz_stream = match netio::Stream::connect(resolved.addr).await {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        error!("failed to connect to upstream server: {e}");
+                        send_http_error(
+                            &mut client_stream,
+                            "502 Bad Gateway",
+                            "upstream server not available",
+                        )
+                        .await;
+                        return Ok(());
+                    }
+                };
 
                 if inject_proxy_headers {
                     // Write the tcp proxy header
@@ -1237,14 +1796,9 @@ impl mz_server_core::Server for HttpsBalancer {
                     mz_stream.write_all(&buf[..len]).await?;
                 }
 
-                let mut mz_stream = if internal_tls {
+                let mut mz_stream = if let Some(internal_tls) = &internal_tls {
                     // do a TLS handshake
-                    let mut builder =
-                        SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-                    // environmentd doesn't yet have a cert we trust, so for now disable verification.
-                    builder.set_verify(SslVerifyMode::NONE);
-                    let mut ssl = builder
-                        .build()
+                    let mut ssl = internal_tls
                         .configure()?
                         .into_ssl(&resolved.addr.to_string())?;
                     ssl.set_connect_state();
@@ -1281,9 +1835,10 @@ impl mz_server_core::Server for HttpsBalancer {
     }
 }
 
+/// Template for constructing the destination hostname from a TLS SNI
+/// servername. `{}` is replaced with the first label of the servername.
 #[derive(Debug)]
-pub struct SniResolver {
-    pub resolver: StubResolver,
+pub struct SniTemplate {
     pub template: String,
     pub port: u16,
 }
@@ -1292,29 +1847,78 @@ trait ClientStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 
 #[derive(Debug)]
-pub enum Resolver {
+pub enum BalancerResolver {
     Static(String),
-    MultiTenant(FronteggResolver, Option<SniResolver>),
+    MultiTenant {
+        dns: Arc<TenantDnsResolver>,
+        frontegg: FronteggResolver,
+        sni: Option<SniTemplate>,
+    },
 }
 
-impl Resolver {
+/// An error resolving a connection's destination.
+///
+/// The `Display` of this error is sent to unauthenticated clients, so it must
+/// not contain internal details such as hostnames. Those belong in the source
+/// error attached to each variant, which is only logged.
+#[derive(Debug, thiserror::Error)]
+enum ResolveError {
+    #[error("invalid password")]
+    InvalidPassword,
+    /// A client protocol violation, e.g. sending the wrong message during
+    /// startup. An unauthenticated client can trigger these at will, so they
+    /// are logged at `warn!`, not `error!`, to avoid making client noise look
+    /// like server faults and spamming the error log.
+    #[error("internal error")]
+    Client(#[source] anyhow::Error),
+    /// The tenant's upstream backend could not be reached, e.g. its hostname
+    /// did not resolve. Reported to the client with a distinct, non-leaking
+    /// message rather than a generic internal error, so a down environment is
+    /// not mistaken for a balancerd bug. Logged at `warn!`: a bogus SNI reaches
+    /// this from an unauthenticated client, and a genuinely down environment is
+    /// an operational condition, not a balancerd fault.
+    #[error("upstream server not available")]
+    Upstream(#[source] anyhow::Error),
+    /// A server-side fault.
+    #[error("internal error")]
+    Internal(#[from] anyhow::Error),
+}
+
+impl From<io::Error> for ResolveError {
+    fn from(e: io::Error) -> Self {
+        ResolveError::Internal(e.into())
+    }
+}
+
+impl BalancerResolver {
+    /// Returns a clone of the shared DNS resolver if in multi-tenant mode.
+    /// This allows sharing the resolver with other components like HttpsBalancer.
+    pub fn shared_dns(&self) -> Option<Arc<TenantDnsResolver>> {
+        match self {
+            BalancerResolver::Static(_) => None,
+            BalancerResolver::MultiTenant { dns, .. } => Some(Arc::clone(dns)),
+        }
+    }
+
     async fn resolve<A>(
         &self,
         conn: &mut FramedConn<A>,
         user: &str,
         metrics: &ServerMetrics,
-    ) -> Result<ResolvedAddr, anyhow::Error>
+    ) -> Result<ResolvedAddr, ResolveError>
     where
         A: AsyncRead + AsyncWrite + Unpin,
     {
         match self {
-            Resolver::MultiTenant(
-                FronteggResolver {
-                    auth,
-                    addr_template,
-                },
-                sni_resolver,
-            ) => {
+            BalancerResolver::MultiTenant {
+                dns: dns_resolver,
+                frontegg:
+                    FronteggResolver {
+                        auth,
+                        addr_template,
+                    },
+                sni: sni_resolver,
+            } => {
                 let servername = match conn.inner() {
                     Conn::Ssl(ssl_stream) => {
                         ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
@@ -1327,23 +1931,16 @@ impl Resolver {
                     Conn::Unencrypted(_) => None,
                 };
                 let has_sni = servername.is_some();
-                // We found an SNi
-                let resolved_addr = match (servername, sni_resolver) {
-                    (
-                        Some(servername),
-                        Some(SniResolver {
-                            resolver: stub_resolver,
-                            template: sni_addr_template,
-                            port,
-                        }),
-                    ) => {
-                        let sni_addr = sni_addr_template.replace("{}", servername);
-                        let tenant = stub_resolver.tenant(&sni_addr).await;
-                        let sni_addr = format!("{sni_addr}:{port}");
-                        let addr = lookup(&sni_addr).await?;
-                        if tenant.is_some() {
-                            debug!("SNI header found for tenant {:?}", tenant);
-                        }
+                let resolved_addr = match (servername, sni_resolver.as_ref()) {
+                    (Some(servername), Some(SniTemplate { template, port })) => {
+                        // A resolution failure here means the tenant's backend
+                        // is unreachable (or the client sent a bogus SNI). Not
+                        // a server fault.
+                        let (addr, tenant) = dns_resolver
+                            .resolve_sni(template, *port, servername)
+                            .await
+                            .map_err(ResolveError::Upstream)?;
+                        debug!("pgwire SNI resolved tenant: {:?}", tenant);
                         ResolvedAddr {
                             addr,
                             password: None,
@@ -1356,30 +1953,46 @@ impl Resolver {
                         conn.flush().await?;
                         let password = match conn.recv().await? {
                             Some(FrontendMessage::Password { password }) => password,
-                            _ => anyhow::bail!("expected Password message"),
-                        };
-
-                        let auth_response = auth.authenticate(user, &password).await;
-                        let auth_session = match auth_response {
-                            Ok(auth_session) => auth_session,
-                            Err(e) => {
-                                warn!("pgwire connection failed authentication: {}", e);
-                                // TODO: fix error codes.
-                                anyhow::bail!("invalid password");
+                            _ => {
+                                return Err(ResolveError::Client(anyhow::anyhow!(
+                                    "expected Password message"
+                                )));
                             }
                         };
 
-                        let addr =
+                        // balancerd only needs the validated tenant_id to route
+                        // the connection; group extraction happens in
+                        // environmentd, so skip it here.
+                        let auth_response = auth.authenticate(user, &password, None).await;
+                        let auth_session = match auth_response {
+                            Ok((auth_session, _)) => auth_session,
+                            Err(e) => {
+                                warn!("pgwire connection failed authentication: {}", e);
+                                return Err(ResolveError::InvalidPassword);
+                            }
+                        };
+
+                        let hostname_with_port =
                             addr_template.replace("{}", &auth_session.tenant_id().to_string());
-                        let addr = lookup(&addr).await?;
-                        let tenant = Some(auth_session.tenant_id().to_string());
-                        if tenant.is_some() {
-                            debug!("SNI header NOT found for tenant {:?}", tenant);
-                        }
+                        let (hostname, port_str) = hostname_with_port
+                            .rsplit_once(':')
+                            .ok_or_else(|| anyhow::anyhow!("port required in addr_template"))?;
+                        let port: u16 = port_str.parse().with_context(|| {
+                            format!("invalid port in addr_template: {}", port_str)
+                        })?;
+                        // The tenant is already known from authentication, so
+                        // skip the CNAME lookup that resolve() would do. A
+                        // failure here means the tenant's backend is unreachable.
+                        let addr = dns_resolver
+                            .resolve_addr(hostname, port)
+                            .await
+                            .map_err(ResolveError::Upstream)?;
+                        let tenant = auth_session.tenant_id().to_string();
+                        debug!("Frontegg resolved tenant: {}", tenant);
                         ResolvedAddr {
                             addr,
                             password: Some(password),
-                            tenant,
+                            tenant: Some(tenant),
                         }
                     }
                 };
@@ -1392,8 +2005,13 @@ impl Resolver {
 
                 Ok(resolved_addr)
             }
-            Resolver::Static(addr) => {
-                let addr = lookup(addr).await?;
+            BalancerResolver::Static(addr) => {
+                // We don't want any caching here so we just use the standard
+                // tokio resolver.
+                let Some(addr) = tokio::net::lookup_host(addr).await?.next() else {
+                    return Err(anyhow::anyhow!("{addr} did not resolve to any addresses").into());
+                };
+
                 Ok(ResolvedAddr {
                     addr,
                     password: None,
@@ -1404,15 +2022,138 @@ impl Resolver {
     }
 }
 
-/// Returns the first IP address resolved from the provided hostname.
-async fn lookup(name: &str) -> Result<SocketAddr, anyhow::Error> {
-    let mut addrs = tokio::net::lookup_host(name).await?;
-    match addrs.next() {
-        Some(addr) => Ok(addr),
-        None => {
-            error!("{name} did not resolve to any addresses");
-            anyhow::bail!("internal error")
+/// Creates a resolver from the system DNS configuration.
+///
+/// Caching is delegated to the infrastructure (node-local DNS), so this
+/// resolver does no caching of its own. Fails if the system DNS configuration
+/// cannot be read. We must not fall back to hickory's default config (Google
+/// public DNS) here, that would leak internal hostnames to an external party
+/// and could not resolve them anyway.
+fn create_resolver() -> Result<TokioResolver, anyhow::Error> {
+    let (config, mut opts) = read_system_conf().context("reading system DNS configuration")?;
+    opts.cache_size = 0;
+    // Query A records first and AAAA only on failure, rather than both.
+    opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
+
+    Ok(
+        Resolver::builder_with_config(config, TokioRuntimeProvider::default())
+            .with_options(opts)
+            .build()?,
+    )
+}
+
+/// Resolves tenant hostnames for pgwire and HTTPS routing.
+///
+/// Caching is delegated to the infrastructure (node-local DNS), so every
+/// lookup issues a query. CNAMEs are resolved separately from A records only
+/// because the CNAME carries the tenant, not for caching reasons.
+#[derive(Debug)]
+pub struct TenantDnsResolver {
+    resolver: TokioResolver,
+}
+
+impl TenantDnsResolver {
+    /// Creates a new resolver. Fails if the system DNS configuration cannot be
+    /// read.
+    pub fn new() -> Result<Self, anyhow::Error> {
+        Ok(Self {
+            resolver: create_resolver()?,
+        })
+    }
+
+    /// Resolves the CNAME a hostname points at, if any.
+    async fn resolve_cname(&self, hostname: &str) -> Option<String> {
+        match self.resolver.lookup(hostname, RecordType::CNAME).await {
+            Ok(cname_response) => {
+                if let Some(cname_record) = cname_response.answers().first() {
+                    if let RData::CNAME(cname_data) = &cname_record.data {
+                        let cname = cname_data.to_string();
+                        debug!("CNAME for {}: {}", hostname, cname);
+                        return Some(cname);
+                    }
+                }
+                None
+            }
+            Err(e) => {
+                debug!("CNAME lookup failed for {}: {}", hostname, e);
+                None
+            }
         }
+    }
+
+    /// Resolves the A records for a hostname.
+    async fn resolve_a(&self, hostname: &str) -> Result<LookupIp, anyhow::Error> {
+        self.resolver
+            .lookup_ip(hostname)
+            .await
+            .with_context(|| format!("resolving A records for {}", hostname))
+    }
+
+    /// Resolves the environment address for a TLS SNI servername.
+    ///
+    /// `servername` is the first label of the SNI host, e.g.
+    /// `3dl07g8zmj91pntk4eo9cfvwe`. Substituting it into `template` (e.g.
+    /// `blncr-{}`) yields a Kubernetes hostname like
+    /// `blncr-3dl07g8zmj91pntk4eo9cfvwe`, which resolves via a CNAME to the
+    /// environmentd service, e.g.
+    /// `environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local`.
+    /// The tenant is extracted from that CNAME. See
+    /// `extract_tenant_from_cname`.
+    pub async fn resolve_sni(
+        &self,
+        template: &str,
+        port: u16,
+        servername: &str,
+    ) -> Result<(SocketAddr, Option<String>), anyhow::Error> {
+        let hostname = template.replace("{}", servername);
+        debug!("SNI hostname: {}", hostname);
+        self.resolve(&hostname, port).await
+    }
+
+    /// Resolves the address for a hostname, skipping CNAME resolution and
+    /// tenant extraction. Use when the tenant is already known.
+    async fn resolve_addr(&self, host: &str, port: u16) -> Result<SocketAddr, anyhow::Error> {
+        let host = strip_ipv6_brackets(host);
+        // IP literals need no resolution. Resolving them through hickory
+        // would walk the search domain list first when ndots is large, as it
+        // is in Kubernetes.
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return Ok(SocketAddr::new(ip, port));
+        }
+        Self::first_addr(self.resolve_a(host).await?, port)
+    }
+
+    /// Resolves the address and tenant from a hostname and port.
+    ///
+    /// The tenant is extracted from the CNAME if the hostname points at one.
+    async fn resolve(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<(SocketAddr, Option<String>), anyhow::Error> {
+        let host = strip_ipv6_brackets(host);
+        // IP literals need no resolution and carry no tenant CNAME.
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return Ok((SocketAddr::new(ip, port), None));
+        }
+
+        // The CNAME carries the tenant, so resolve it separately to extract it.
+        let (ips, tenant) = if let Some(cname) = self.resolve_cname(host).await {
+            let tenant = extract_tenant_from_cname(&cname);
+            (self.resolve_a(&cname).await?, tenant)
+        } else {
+            (self.resolve_a(host).await?, None)
+        };
+
+        Ok((Self::first_addr(ips, port)?, tenant))
+    }
+
+    /// Returns the first resolved IP as a socket address.
+    fn first_addr(ips: LookupIp, port: u16) -> Result<SocketAddr, anyhow::Error> {
+        ips.iter()
+            .next()
+            .map(|ip| SocketAddr::new(ip, port))
+            .ok_or_else(|| anyhow::anyhow!("no A records found in DNS response"))
     }
 }
 
@@ -1431,6 +2172,8 @@ struct ResolvedAddr {
 
 #[cfg(test)]
 mod tests {
+    use mz_dyncfg::ConfigUpdates;
+
     use super::*;
 
     #[mz_ore::test]
@@ -1439,6 +2182,12 @@ mod tests {
             ("", None),
             (
                 "environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
+                Some("58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"),
+            ),
+            (
+                // Trailing dot from an absolute DNS name, as returned by the
+                // resolver.
+                "environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local.",
                 Some("58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"),
             ),
             (
@@ -1485,5 +2234,161 @@ mod tests {
                 "{name} got {cname:?} expected {expect:?}"
             );
         }
+    }
+
+    #[mz_ore::test]
+    fn test_strip_ipv6_brackets() {
+        assert_eq!(strip_ipv6_brackets("[::1]"), "::1");
+        assert_eq!(strip_ipv6_brackets("[2001:db8::1]"), "2001:db8::1");
+        // Hosts without a matched bracket pair are left untouched.
+        assert_eq!(strip_ipv6_brackets("127.0.0.1"), "127.0.0.1");
+        assert_eq!(strip_ipv6_brackets("host.example.com"), "host.example.com");
+        assert_eq!(strip_ipv6_brackets("[unclosed"), "[unclosed");
+        assert_eq!(strip_ipv6_brackets("unopened]"), "unopened]");
+    }
+
+    #[mz_ore::test]
+    fn test_connection_limiter() {
+        let configs = dyncfgs::all_dyncfgs(ConfigSet::default());
+        let set_max = |max: u32| {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&MAX_CONNECTIONS, max);
+            updates.apply(&configs);
+        };
+
+        set_max(2);
+        let limiter = ConnectionLimiter::new(&MetricsRegistry::new(), configs.clone());
+        let first = limiter.acquire().expect("under the limit");
+        let second = limiter.acquire().expect("at the limit");
+        assert!(limiter.acquire().is_none());
+        assert_eq!(limiter.rejected.get(), 1);
+
+        // A connection closing frees capacity for a new one.
+        drop(second);
+        let _third = limiter.acquire().expect("capacity freed");
+        drop(first);
+
+        // Lowering the limit below the current count refuses new connections but leaves the
+        // established ones alone.
+        set_max(1);
+        assert!(limiter.acquire().is_none());
+
+        // Zero disables the limit.
+        set_max(0);
+        assert!(limiter.acquire().is_some());
+    }
+
+    /// balancerd ignores the sync error at startup, so a dyncfg type LaunchDarkly can't carry
+    /// would silently stop every balancerd flag from syncing.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    async fn test_dyncfgs_sync_from_launchdarkly() {
+        mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
+            dyncfgs::all_dyncfgs(ConfigSet::default()),
+            &BUILD_INFO,
+            |_| Ok(()),
+            None,
+            Duration::ZERO,
+            None,
+            |_, _| {},
+        )
+        .await
+        .expect("every balancerd dyncfg converts to a LaunchDarkly flag");
+    }
+
+    #[mz_ore::test]
+    fn test_connection_watermarks() {
+        let configs = dyncfgs::all_dyncfgs(ConfigSet::default());
+        let set = |low: usize, high: usize, max: u32| {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&CONNECTION_LOW_WATERMARK, low);
+            updates.add(&CONNECTION_HIGH_WATERMARK, high);
+            updates.add(&MAX_CONNECTIONS, max);
+            updates.apply(&configs);
+        };
+        let limiter = ConnectionLimiter::new(&MetricsRegistry::new(), configs.clone());
+        let _first = limiter.acquire().expect("under the limit");
+        let second = limiter.acquire().expect("under the limit");
+        let third = limiter.acquire().expect("under the limit");
+
+        // Anything short of both watermarks, ordered, below an enabled hard limit is off.
+        for (low, high, max) in [
+            (0, 0, 5),
+            (1, 0, 5),
+            (0, 3, 5),
+            (3, 3, 5),
+            (4, 3, 5),
+            (1, 5, 5),
+            (1, 3, 0),
+        ] {
+            set(low, high, max);
+            limiter.evaluate_watermarks();
+            assert!(
+                limiter.accepting(),
+                "watermarks low={low} high={high} max={max} must be ignored",
+            );
+        }
+        assert_eq!(limiter.watermark_transitions.get(), 0);
+
+        set(2, 3, 5);
+        limiter.evaluate_watermarks();
+        assert!(!limiter.accepting(), "at the high watermark");
+        assert_eq!(limiter.watermark_transitions.get(), 1);
+
+        drop(third);
+        limiter.evaluate_watermarks();
+        assert!(
+            !limiter.accepting(),
+            "between the watermarks the state is kept"
+        );
+        drop(second);
+        limiter.evaluate_watermarks();
+        assert!(
+            limiter.accepting(),
+            "below the low watermark readiness returns"
+        );
+        assert_eq!(limiter.watermark_transitions.get(), 2);
+
+        // Disabling the watermarks while out of rotation restores readiness.
+        let _fourth = limiter.acquire().expect("under the limit");
+        let _fifth = limiter.acquire().expect("under the limit");
+        limiter.evaluate_watermarks();
+        assert!(!limiter.accepting(), "at the high watermark again");
+        set(0, 0, 5);
+        limiter.evaluate_watermarks();
+        assert!(
+            limiter.accepting(),
+            "disabling the watermarks restores readiness"
+        );
+        assert_eq!(limiter.watermark_transitions.get(), 4);
+    }
+
+    /// A zero timeout disables the deadline, which is what leaves the phase unbounded.
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn test_pre_resolved_timeout_zero_disables() {
+        let metrics = ServerMetrics::new(
+            ServerMetricsConfig::register_into(&MetricsRegistry::new()),
+            "pgwire",
+        );
+
+        // Zero lets the phase run as long as it likes. The paused clock makes the hour free.
+        let slow = async {
+            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+            Ok::<(), io::Error>(())
+        };
+        assert!(
+            under_pre_resolved_timeout(Duration::ZERO, &metrics, slow)
+                .await
+                .is_ok()
+        );
+        assert_eq!(metrics.pre_resolved_timeout().get(), 0);
+
+        // Anything else bounds it, and the overrun is counted.
+        let stalled = std::future::pending::<Result<(), io::Error>>();
+        let err = under_pre_resolved_timeout(Duration::from_secs(30), &metrics, stalled)
+            .await
+            .expect_err("a phase that never finishes must be cut short");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(metrics.pre_resolved_timeout().get(), 1);
     }
 }

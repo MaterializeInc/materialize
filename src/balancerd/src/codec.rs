@@ -15,8 +15,8 @@ use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
-    Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, MAX_REQUEST_SIZE, Pgbuf,
-    parse_frame_len,
+    Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, MAX_PREAUTH_FRAME_SIZE,
+    MAX_REQUEST_SIZE, Pgbuf, parse_frame_len,
 };
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, Ready};
 use tokio_util::codec::{Decoder, Encoder, Framed};
@@ -37,6 +37,11 @@ impl From<ErrorResponse> for BackendMessage {
 }
 
 /// A connection that manages the encoding and decoding of pgwire frames.
+///
+/// This decodes at most one frame per connection, the client's credential, and
+/// is bounded by [`MAX_PREAUTH_FRAME_SIZE`] throughout. Once the destination is
+/// resolved the connection is spliced and the remaining bytes are proxied
+/// without being framed.
 pub struct FramedConn<A> {
     inner: sink::Buffer<Framed<Conn<A>, Codec>, BackendMessage>,
 }
@@ -106,6 +111,17 @@ where
     pub fn inner_mut(&mut self) -> &mut Conn<A> {
         self.inner.get_mut().get_mut()
     }
+
+    /// Releases the framing buffers, returning the connection and any bytes
+    /// read from it but not yet decoded.
+    ///
+    /// Messages sent but not flushed are lost, so callers must
+    /// [`FramedConn::flush`] first.
+    pub fn into_parts(self) -> (Conn<A>, BytesMut) {
+        let parts = self.inner.into_inner().into_parts();
+        debug_assert!(parts.write_buf.is_empty(), "unflushed messages");
+        (parts.io, parts.read_buf)
+    }
 }
 
 #[async_trait]
@@ -140,7 +156,27 @@ impl Default for Codec {
 impl Encoder<BackendMessage> for Codec {
     type Error = io::Error;
 
+    /// Encode a backend message into `dst`.
+    /// If this function returns an error result, `dst` is left unmodified.
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
+        // Record the starting position so we can truncate on error.
+        // This prevents partial messages from being left in the buffer,
+        // which could be sent to the client and cause "lost synchronization" errors.
+        let start = dst.len();
+        match self.encode_inner(msg, dst) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                dst.truncate(start);
+                Err(e)
+            }
+        }
+    }
+}
+
+impl Codec {
+    /// This is the meat of the encoding logic. It's a separate function so that errors returned by
+    /// `?` can be handled in the outer `encode` function.
+    fn encode_inner(&self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
         // Write type byte.
         let byte = match &msg {
             BackendMessage::AuthenticationCleartextPassword => b'R',
@@ -198,7 +234,7 @@ impl Encoder<BackendMessage> for Codec {
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {
             io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidData,
                 "length of encoded message does not fit into an i32",
             )
         })?;
@@ -229,7 +265,7 @@ impl Decoder for Codec {
                         return Ok(None);
                     }
                     let msg_type = src[0];
-                    let frame_len = parse_frame_len(&src[1..])?;
+                    let frame_len = parse_frame_len(&src[1..], MAX_PREAUTH_FRAME_SIZE)?;
                     src.advance(5);
                     src.reserve(frame_len);
                     self.decode_state = DecodeState::Data(msg_type, frame_len);

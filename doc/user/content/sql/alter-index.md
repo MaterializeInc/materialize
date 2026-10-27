@@ -11,10 +11,8 @@ Use `ALTER INDEX` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Rename" >}}
-
-### Rename
 
 To rename an index:
 
@@ -29,7 +27,7 @@ To rename an index:
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-index.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-index" %}}
 
 ## Related pages
 

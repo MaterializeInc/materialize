@@ -16,6 +16,14 @@ use mysql_async::prelude::Queryable;
 use crate::tunnel::MySqlConn;
 use crate::{MissingPrivilege, MySqlError, QualifiedTableRef};
 
+/// Allowlist of characters permitted in the value spliced into the
+/// `SHOW GRANTS ... USING <roles>` query. The value originates from the
+/// upstream MySQL server's `CURRENT_ROLE()` and must be conservatively
+/// validated to prevent SQL injection. Comma-separated role specs of the
+/// form `` `role`@`host` `` or `'role'@'host'` use only this character set.
+static ROLES_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^[A-Za-z0-9_.\-`'"@, \t]+$"#).expect("valid"));
+
 pub async fn validate_source_privileges(
     conn: &mut MySqlConn,
     tables: &[QualifiedTableRef<'_>],
@@ -38,7 +46,10 @@ pub async fn validate_source_privileges(
         });
 
     // Obtain the privileges for the current user using any roles that are default activated.
-    let grant_query = match roles {
+    // Validate the roles list against an allowlist before splicing it into the query: the value
+    // comes from the upstream server, and a hostile or compromised MySQL could inject SQL through
+    // it. The expected format is comma-separated role specs like `` `role`@`host` ``.
+    let grant_query = match roles.filter(|r| ROLES_PATTERN.is_match(r).unwrap_or(false)) {
         None => "SHOW GRANTS FOR CURRENT_USER()".to_string(),
         Some(roles) => format!("SHOW GRANTS FOR CURRENT_USER() USING {}", roles),
     };

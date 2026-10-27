@@ -14,10 +14,7 @@ Test the consistency of Materialize against Postgres as an oracle.
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import (
-    CockroachOrPostgresMetadata,
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.test_result import FailedTestExecutionError
 from materialize.output_consistency.execution.query_output_mode import QueryOutputMode
 from materialize.output_consistency.output_consistency_test import (
@@ -28,7 +25,6 @@ from materialize.postgres_consistency.postgres_consistency_test import (
 )
 
 SERVICES = [
-    CockroachOrPostgresMetadata(),
     Materialized(propagate_crashes=True, external_metadata_store=True),
     Postgres(),
     Mz(app_password=""),

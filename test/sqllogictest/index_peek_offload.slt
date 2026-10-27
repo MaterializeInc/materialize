@@ -1,0 +1,192 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# ---------------------------------------------------------
+# Offloading a fast-path index peek's walk.
+#
+# A peek that outruns its inline budget finishes its walk away from the timely
+# worker. Placement is all that changes, so every query below has to answer
+# exactly as it does with the offload off, and each is run both ways.
+#
+# The queries have to be served from an arrangement to reach the walk at all,
+# which is what the indexes below are for. An aggregate would build a dataflow
+# instead and never reach it.
+# ---------------------------------------------------------
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (a int, b text)
+
+statement ok
+INSERT INTO t SELECT g, 'row-' || g::text FROM generate_series(1, 200) g
+
+statement ok
+CREATE INDEX t_a_idx ON t (a)
+
+# The offload is on in the test configuration, so the baseline has to turn it
+# off rather than inherit it. Without this the queries below run offloaded and
+# the file compares the offloaded walk against itself.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_index_peek_offload TO false;
+----
+COMPLETE 0
+
+# A full scan, a literal constraint on the key, a filter the MFP rejects most
+# rows for, and a finishing that orders and truncates. With the offload off
+# these establish the answers the offloaded walk has to reproduce.
+
+query IT
+SELECT a, b FROM t WHERE b = 'row-137'
+----
+137  row-137
+
+query IT
+SELECT a, b FROM t WHERE a = 42
+----
+42  row-42
+
+query IT rowsort
+SELECT a, b FROM t WHERE a > 197
+----
+198  row-198
+199  row-199
+200  row-200
+
+query I
+SELECT a FROM t ORDER BY a DESC LIMIT 3
+----
+200
+199
+198
+
+# An error in the collection is answered from the error trace, which the walk
+# reads before it reads any rows. This one is found at the first position, so
+# the walk ends there and is answered on the worker however the budget is set.
+# What it covers is that arming the offload leaves that path alone.
+
+statement ok
+CREATE TABLE z (a int)
+
+statement ok
+INSERT INTO z VALUES (1), (0)
+
+statement ok
+CREATE VIEW z_div AS SELECT 100 / a AS x FROM z
+
+statement ok
+CREATE DEFAULT INDEX ON z_div
+
+query error division by zero
+SELECT x FROM z_div
+
+# Now the same queries with the walk offloaded. A budget of one position
+# promotes every walk here rather than only the long ones, and a granularity of
+# one makes a promoted walk yield between positions rather than running to its
+# answer in a single slice.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_index_peek_offload TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_index_peek_inline_budget TO 1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_index_peek_yield_granularity TO 1;
+----
+COMPLETE 0
+
+query IT
+SELECT a, b FROM t WHERE b = 'row-137'
+----
+137  row-137
+
+query IT
+SELECT a, b FROM t WHERE a = 42
+----
+42  row-42
+
+query IT rowsort
+SELECT a, b FROM t WHERE a > 197
+----
+198  row-198
+199  row-199
+200  row-200
+
+query I
+SELECT a FROM t ORDER BY a DESC LIMIT 3
+----
+200
+199
+198
+
+query error division by zero
+SELECT x FROM z_div
+
+# The aggregate bounds what all peeks together spend in one activation, so a
+# value below one peek's budget passes peeks over rather than answering them.
+# Such a peek is served on a later activation, which is a delay rather than a
+# different answer.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_index_peek_activation_budget TO 1;
+----
+COMPLETE 0
+
+query IT rowsort
+SELECT a, b FROM t WHERE a > 197
+----
+198  row-198
+199  row-199
+200  row-200
+
+# A fraction below one worker's share still admits one walk, so promotion is
+# paced rather than stopped.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_index_peek_permit_fraction TO 0.01;
+----
+COMPLETE 0
+
+query I
+SELECT a FROM t ORDER BY a DESC LIMIT 3
+----
+200
+199
+198
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET compute_index_peek_permit_fraction;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET compute_index_peek_activation_budget;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET compute_index_peek_yield_granularity;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET compute_index_peek_inline_budget;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_index_peek_offload;
+----
+COMPLETE 0

@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class UUID(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE uuid_table (f1 UUID, f2 UUID, f3 STRING);
             > INSERT INTO uuid_table VALUES (uuid_generate_v5('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'bar'), 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12', 'baz');
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -47,9 +43,7 @@ class UUID(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > SELECT * FROM uuid_view1;
             0b259031-4bae-587c-870a-2f641fe621fe 9ab9ba37-d48e-5c94-bb56-2ccc3129f361 64feaf9e-0633-5eba-9bca-b5f1afd6b084
             <null> <null> 64feaf9e-0633-5eba-9bca-b5f1afd6b084
@@ -59,6 +53,4 @@ class UUID(Check):
             0b259031-4bae-587c-870a-2f641fe621fe 9ab9ba37-d48e-5c94-bb56-2ccc3129f361 64feaf9e-0633-5eba-9bca-b5f1afd6b084
             <null> <null> 64feaf9e-0633-5eba-9bca-b5f1afd6b084
             <null> <null> 64feaf9e-0633-5eba-9bca-b5f1afd6b084
-            """
-            )
-        )
+            """))

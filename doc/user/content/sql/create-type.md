@@ -12,19 +12,16 @@ see [SQL Data Types: Custom types](../types/#custom-types).
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Row type" >}}
-### Row type
 {{% include-syntax file="examples/create_type" example="syntax-row" %}}
 
 {{< /tab >}}
 {{< tab "List type" >}}
-### List type
 {{% include-syntax file="examples/create_type" example="syntax-list" %}}
 
 {{< /tab >}}
 {{< tab "Map type" >}}
-### Map type
 {{% include-syntax file="examples/create_type" example="syntax-map" %}}
 
 {{< /tab >}}
@@ -125,7 +122,7 @@ custom_nested_row_type
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-type.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-type" %}}
 
 ## Related pages
 

@@ -5,7 +5,7 @@ description: "Learn about common Materialize query patterns."
 menu:
   main:
     parent: transform-data
-    weight: 20
+    weight: 40
     identifier: sql-patterns
 ---
 

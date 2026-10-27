@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 RUN apt-get update -o Acquire::Languages=none \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -qy --no-install-recommends \

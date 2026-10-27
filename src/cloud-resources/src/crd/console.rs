@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use k8s_openapi::{
     api::core::v1::ResourceRequirements, apimachinery::pkg::apis::meta::v1::Condition,
 };
-use kube::CustomResource;
+use kube::{CustomResource, Resource, ResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -39,10 +39,20 @@ pub mod v1alpha1 {
         pub namespace: String,
         /// Whether to use HTTP or HTTPS to communicate with Materialize.
         pub scheme: HttpConnectionScheme,
+        /// External DNS names balancerd serves traffic for
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub dns_names: Option<Vec<String>>,
     }
 
     #[derive(
-        CustomResource, Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema,
+        CustomResource,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Deserialize,
+        Serialize,
+        JsonSchema
     )]
     #[serde(rename_all = "camelCase")]
     #[kube(
@@ -89,6 +99,10 @@ pub mod v1alpha1 {
 
         pub fn resource_id(&self) -> &str {
             &self.status.as_ref().unwrap().resource_id
+        }
+
+        pub fn namespace(&self) -> String {
+            self.meta().namespace.clone().unwrap()
         }
 
         pub fn deployment_name(&self) -> String {
@@ -144,11 +158,23 @@ pub mod v1alpha1 {
         fn default_labels(&self) -> BTreeMap<String, String> {
             BTreeMap::from_iter([
                 (
+                    "materialize.cloud/organization-name".to_owned(),
+                    self.name_unchecked(),
+                ),
+                (
+                    "materialize.cloud/organization-namespace".to_owned(),
+                    self.namespace(),
+                ),
+                (
                     "materialize.cloud/mz-resource-id".to_owned(),
                     self.resource_id().to_owned(),
                 ),
                 ("materialize.cloud/app".to_owned(), "console".to_owned()),
             ])
+        }
+
+        fn app_name(&self) -> Option<&str> {
+            Some("console")
         }
     }
 }

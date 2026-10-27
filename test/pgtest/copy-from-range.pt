@@ -1,0 +1,110 @@
+# COPY with int4range: positive cases (valid ranges) and one negative (invalid range).
+# Invalid case: lower > upper should return an error, not panic.
+
+send
+Query {"query": "DROP TABLE IF EXISTS copy_range_t"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE copy_range_t (r int4range)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+#
+# Positive: valid ranges
+#
+
+# single valid row [1,10)
+send
+Query {"query": "COPY copy_range_t FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "[1,10)\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+# multiple valid rows
+send
+Query {"query": "COPY copy_range_t FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "[0,0)\n"
+CopyData "empty\n"
+CopyData "(,)\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+
+# verify contents
+send
+Query {"query": "SELECT r FROM copy_range_t ORDER BY r"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"r"}]}
+DataRow {"fields":["empty"]}
+DataRow {"fields":["empty"]}
+DataRow {"fields":["(,)"]}
+DataRow {"fields":["[1,10)"]}
+CommandComplete {"tag":"SELECT 4"}
+ReadyForQuery {"status":"I"}
+
+#
+# Negative: invalid range (lower > upper) should return error, not panic
+#
+
+send
+Query {"query": "COPY copy_range_t FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "[7,3)\n"
+CopyDone
+----
+
+until no_error_fields
+ReadyForQuery
+----
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}

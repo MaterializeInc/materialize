@@ -411,8 +411,7 @@ NULL  2
 1  NULL
 1  2
 
-# TODO: Reenable when database-issues#8807 is fixed
-# query T
-# SELECT CASE WHEN FALSE THEN 'short_string'::char(20) ELSE 'long_string_long_string'::char(30) END
-# ----
-# long_string_long_string
+query T
+SELECT CASE WHEN FALSE THEN 'short_string'::char(20) ELSE 'long_string_long_string'::char(30) END
+----
+long_string_long_string

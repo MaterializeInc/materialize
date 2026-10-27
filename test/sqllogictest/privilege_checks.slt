@@ -97,6 +97,70 @@ REVOKE CREATE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
+# ALTER CONNECTION must authorize secret dependencies retained from the stored
+# definition, not only dependencies named in the ALTER statement.
+
+simple conn=mz_system,user=mz_system
+CREATE SECRET alter_conn_secret AS 'secret';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION alter_conn TO CONFLUENT SCHEMA REGISTRY (URL 'https://example.com', USERNAME 'user', PASSWORD SECRET alter_conn_secret) WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CONNECTION alter_conn OWNER TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION alter_conn SET (URL 'https://example.net') WITH (VALIDATE = false);
+----
+db error: ERROR: permission denied for SECRET "materialize.public.alter_conn_secret"
+DETAIL: The 'joe' role needs USAGE privileges on SECRET "materialize.public.alter_conn_secret"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SECRET alter_conn_secret TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION alter_conn SET (URL 'https://example.net') WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SECRET alter_conn_secret FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION alter_conn RESET (USERNAME), RESET (PASSWORD) WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION alter_conn;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP SECRET alter_conn_secret;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
 # CREATE DATABASE
 
 simple conn=joe,user=joe
@@ -296,6 +360,70 @@ COMPLETE 0
 
 simple conn=mz_system,user=mz_system
 REVOKE CREATEROLE ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+# ALTER ROLE - superuser attribute changes require superuser, not just CREATEROLE.
+# Both SUPERUSER and NOSUPERUSER must be guarded.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATEROLE ON SYSTEM TO joe;
+----
+COMPLETE 0
+
+# A non-superuser with CREATEROLE cannot grant SUPERUSER.
+simple conn=joe,user=joe
+ALTER ROLE r SUPERUSER;
+----
+db error: ERROR: permission denied to alter superuser role
+DETAIL: You must be a superuser to alter superuser role
+
+# A non-superuser with CREATEROLE cannot strip NOSUPERUSER either.
+simple conn=joe,user=joe
+ALTER ROLE r NOSUPERUSER;
+----
+db error: ERROR: permission denied to alter superuser role
+DETAIL: You must be a superuser to alter superuser role
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEROLE ON SYSTEM FROM joe;
+----
+COMPLETE 0
+
+# Regression test: ALTER ROLE PASSWORD + LOGIN should not bypass CREATEROLE check.
+# The RBAC match arm for self-password-change must verify that password is the
+# ONLY attribute being changed.
+
+simple conn=joe,user=joe
+ALTER ROLE joe LOGIN;
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'joe' role needs CREATEROLE privileges on SYSTEM
+
+simple conn=joe,user=joe
+ALTER ROLE joe PASSWORD 'secret' LOGIN;
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'joe' role needs CREATEROLE privileges on SYSTEM
+
+simple conn=joe,user=joe
+ALTER ROLE joe PASSWORD 'secret' INHERIT;
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'joe' role needs CREATEROLE privileges on SYSTEM
+
+simple conn=joe,user=joe
+ALTER ROLE joe PASSWORD 'secret';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO false;
 ----
 COMPLETE 0
 
@@ -1440,16 +1568,20 @@ GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
+simple multiline,conn=joe,user=joe
 SHOW CREATE CONNECTION csr_conn;
 ----
-materialize.public.csr_conn,CREATE CONNECTION materialize.public.csr_conn TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com');
+materialize.public.csr_conn,CREATE CONNECTION materialize.public.csr_conn
+TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com');
+EOF
 COMPLETE 1
 
-simple conn=child,user=child
+simple multiline,conn=child,user=child
 SHOW CREATE CONNECTION csr_conn;
 ----
-materialize.public.csr_conn,CREATE CONNECTION materialize.public.csr_conn TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com');
+materialize.public.csr_conn,CREATE CONNECTION materialize.public.csr_conn
+TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com');
+EOF
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system
@@ -3541,8 +3673,52 @@ REVOKE USAGE ON SCHEMA mz_temp FROM PUBLIC
 db error: ERROR: cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
 
 # Disable rbac checks.
-
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
+
+# Regression tests: ALTER ... OWNER TO ... and GRANT/REVOKE retract + re-add
+# the affected catalog item via `apply_item_update`. Plans on MV / INDEX
+# items must survive, so that EXPLAIN can still show them.
+statement ok
+CREATE ROLE plan_owner_other
+
+statement ok
+CREATE TABLE t_owner_plans (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_owner_plans AS SELECT a + 1 AS b FROM t_owner_plans
+
+statement ok
+CREATE DEFAULT INDEX idx_owner_plans ON mv_owner_plans
+
+statement ok
+ALTER MATERIALIZED VIEW mv_owner_plans OWNER TO plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_owner_plans
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv_owner_plans
+
+statement ok
+ALTER INDEX idx_owner_plans OWNER TO plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR INDEX idx_owner_plans
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR INDEX idx_owner_plans
+
+statement ok
+GRANT SELECT ON mv_owner_plans TO plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_owner_plans
+
+statement ok
+REVOKE SELECT ON mv_owner_plans FROM plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_owner_plans

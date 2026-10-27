@@ -20,9 +20,13 @@ CREATE SCHEMA public;
 CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 text);
 ALTER TABLE t1 REPLICA IDENTITY FULL;
 
+CREATE TABLE big (pk SERIAL PRIMARY KEY, f2 text);
+ALTER TABLE big REPLICA IDENTITY FULL;
+INSERT INTO big (f2) SELECT 'x' FROM generate_series(1, 100);
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
-> CREATE CLUSTER storage REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+> CREATE CLUSTER storage REPLICAS (r1 (SIZE 'scale=1,workers=2'))
 
 > CREATE SECRET pgpass AS 'postgres'
 
@@ -54,7 +58,27 @@ UPDATE t1 SET f2 = CONCAT(f2, pk);
 UPDATE t1 SET f2 = CONCAT(f2, pk);
 
 # Resume the ingestion by adding a replica to the cluster.
-> CREATE CLUSTER REPLICA storage.r1 SIZE = 'scale=1,workers=1';
+> CREATE CLUSTER REPLICA storage.r1 SIZE = 'scale=1,workers=2';
 
 ! SELECT * FROM t1;
 contains:replication slot has been invalidated because it exceeded the maximum reserved size
+
+# Add a table while no replica runs, so that its snapshot starts only once the lock below is held.
+> DROP CLUSTER REPLICA storage.r1;
+
+> CREATE TABLE big FROM SOURCE mz_source (REFERENCE big);
+
+# Copying `big` blocks on this lock and would hold every export of the source at the minimum,
+# which keeps the error from committing.
+$ postgres-connect name=locker url=postgres://postgres:postgres@postgres
+$ postgres-execute connection=locker
+BEGIN;
+LOCK TABLE big IN ACCESS EXCLUSIVE MODE;
+
+> CREATE CLUSTER REPLICA storage.r1 SIZE = 'scale=1,workers=2';
+
+! SELECT * FROM big;
+contains:replication slot has been invalidated because it exceeded the maximum reserved size
+
+$ postgres-execute connection=locker
+COMMIT;

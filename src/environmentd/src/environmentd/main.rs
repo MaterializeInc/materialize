@@ -40,7 +40,7 @@ use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
-use mz_controller::ControllerConfig;
+use mz_controller::{ControllerConfig, ReplicaHttpLocator};
 use mz_frontegg_auth::{Authenticator as FronteggAuthenticator, FronteggCliArgs};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::Orchestrator;
@@ -65,9 +65,9 @@ use mz_persist_client::rpc::{
     MetricsSameProcessPubSubSender, PersistGrpcPubSubServer, PubSubClientConnection, PubSubSender,
 };
 use mz_secrets::SecretsController;
+use mz_secrets_cli::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
-use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use opentelemetry::trace::TraceContextExt;
@@ -104,6 +104,10 @@ pub struct Args {
     /// this should never be enabled in CI.
     #[clap(long, env = "ALL_FEATURES")]
     all_features: bool,
+    /// Set by the container entrypoint when it restarts environmentd after
+    /// `mz_ore::restart_in_place!`.
+    #[clap(long, env = "RESTARTED_IN_PLACE", hide = true)]
+    restarted_in_place: bool,
 
     // === Connection options. ===
     /// Path to a file containing the json-formatted configuration of our
@@ -157,8 +161,11 @@ pub struct Args {
     /// The external host name to connect to the HTTP server of this
     /// environment.
     ///
-    /// Presently used to render webhook URLs for end users in notices and the
-    /// system catalog. Not used to establish connections directly.
+    /// Used to render absolute URLs the server publishes: webhook URLs in
+    /// notices and the system catalog, and the OAuth Protected Resource
+    /// Metadata `resource`/`resource_metadata` URLs (RFC 9728). Not used to
+    /// establish connections directly. When unset, those URLs fall back to
+    /// the request's `Host` header.
     #[clap(long, env = "HTTP_HOST_NAME")]
     http_host_name: Option<String>,
     /// The URL of the Materialize console to proxy from the /internal-console
@@ -178,6 +185,9 @@ pub struct Args {
     /// Name of a non-default Kubernetes scheduler, if any.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SCHEDULER_NAME")]
     orchestrator_kubernetes_scheduler_name: Option<String>,
+    /// Name of a `PriorityClass` to assign to services, if any.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_PRIORITY_CLASS_NAME")]
+    orchestrator_kubernetes_priority_class_name: Option<String>,
     /// Annotations to apply to all services created by the Kubernetes orchestrator
     /// in the form `KEY=VALUE`.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_ANNOTATION")]
@@ -238,6 +248,9 @@ pub struct Args {
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_NAME_PREFIX")]
     orchestrator_kubernetes_name_prefix: Option<String>,
     /// Whether to enable pod metrics collection.
+    ///
+    /// Required for resource usage graphs in the console.
+    /// Requires metrics-server to be installed.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_DISABLE_POD_METRICS_COLLECTION")]
     orchestrator_kubernetes_disable_pod_metrics_collection: bool,
     /// Whether to annotate pods for prometheus service discovery.
@@ -428,6 +441,11 @@ pub struct Args {
     /// configuration parameters.
     #[clap(long, env = "LAUNCHDARKLY_SDK_KEY")]
     launchdarkly_sdk_key: Option<String>,
+    /// Overrides the LaunchDarkly streaming, polling, and events endpoints with
+    /// a single base URL, as for a relay proxy. Primarily intended for pointing
+    /// the SDK at a mock LaunchDarkly server in tests.
+    #[clap(long, env = "LAUNCHDARKLY_BASE_URI", value_name = "URL")]
+    launchdarkly_base_uri: Option<String>,
     /// A list of PARAM_NAME=KEY_NAME pairs from system parameter names to
     /// LaunchDarkly feature keys.
     ///
@@ -583,6 +601,10 @@ pub struct Args {
     /// File containing a valid Materialize license key.
     #[clap(long, env = "LICENSE_KEY")]
     license_key: Option<String>,
+    /// Root-signed intermediate certificates whose keys may also sign the
+    /// license key.
+    #[clap(long, env = "LICENSE_KEY_INTERMEDIATE_CERTS", value_delimiter = ',')]
+    license_key_intermediate_cert: Vec<String>,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -651,6 +673,15 @@ pub fn main() {
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::install_enhanced_handler();
+
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK and the
+    // Kubernetes client both build their rustls configs from the process-default
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let envd_start = Instant::now();
 
     // Configure signal handling as soon as possible. We want signals to be
@@ -661,8 +692,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let license_key = if let Some(license_key_file) = args.license_key {
         let license_key_text = std::fs::read_to_string(&license_key_file)
             .context("failed to open license key file")?;
-        let license_key = mz_license_keys::validate(license_key_text.trim())
-            .context("failed to validate license key file")?;
+        let license_key =
+            mz_license_keys::validate(license_key_text.trim(), &args.license_key_intermediate_cert)
+                .context("failed to validate license key file")?;
         if license_key.expired {
             let message = format!(
                 "The license key provided at {license_key_file} is expired! Please contact Materialize for assistance."
@@ -735,6 +767,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     runtime.block_on(mz_metrics::register_metrics_into(
         &metrics_registry,
         mz_dyncfgs::all_dyncfgs(),
+        // environmentd has no scratch directory, so it tracks no disk usage.
+        None,
     ));
 
     // Initialize fail crate for failpoint support
@@ -742,6 +776,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     // Configure connections.
     let tls = args.tls.into_config()?;
+    let frontegg_oauth_issuer_url = args.frontegg.oauth_issuer_url().map(str::to_string);
     let frontegg = FronteggAuthenticator::from_args(args.frontegg, &metrics_registry)?;
     let listeners_config: ListenersConfig = {
         let f = File::open(args.listeners_config_path)?;
@@ -779,6 +814,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         allowed_origins
     };
     let cors_allowed_origin = mz_http_util::build_cors_allowed_origin(&allowed_origins);
+    let cors_allowed_origin_list = allowed_origins.clone();
 
     // Configure controller.
     let entered = info_span!("environmentd::configure_controller").entered();
@@ -797,40 +833,44 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
             let orchestrator = Arc::new(
                 runtime
-                    .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
-                        context: args.orchestrator_kubernetes_context.clone(),
-                        scheduler_name: args.orchestrator_kubernetes_scheduler_name,
-                        service_annotations: args
-                            .orchestrator_kubernetes_service_annotation
-                            .into_iter()
-                            .map(|l| (l.key, l.value))
-                            .collect(),
-                        service_labels: args
-                            .orchestrator_kubernetes_service_label
-                            .into_iter()
-                            .map(|l| (l.key, l.value))
-                            .collect(),
-                        service_node_selector: args
-                            .orchestrator_kubernetes_service_node_selector
-                            .into_iter()
-                            .map(|l| (l.key, l.value))
-                            .collect(),
-                        service_affinity: args.orchestrator_kubernetes_service_affinity,
-                        service_tolerations: args.orchestrator_kubernetes_service_tolerations,
-                        service_account: args.orchestrator_kubernetes_service_account,
-                        image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
-                        aws_external_id_prefix: args.aws_external_id_prefix.clone(),
-                        coverage: args.orchestrator_kubernetes_coverage,
-                        ephemeral_volume_storage_class: args
-                            .orchestrator_kubernetes_ephemeral_volume_class
-                            .clone(),
-                        service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
-                        name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
-                        collect_pod_metrics: !args
-                            .orchestrator_kubernetes_disable_pod_metrics_collection,
-                        enable_prometheus_scrape_annotations: args
-                            .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
-                    }))
+                    .block_on(KubernetesOrchestrator::new(
+                        KubernetesOrchestratorConfig {
+                            context: args.orchestrator_kubernetes_context.clone(),
+                            scheduler_name: args.orchestrator_kubernetes_scheduler_name,
+                            priority_class_name: args.orchestrator_kubernetes_priority_class_name,
+                            service_annotations: args
+                                .orchestrator_kubernetes_service_annotation
+                                .into_iter()
+                                .map(|l| (l.key, l.value))
+                                .collect(),
+                            service_labels: args
+                                .orchestrator_kubernetes_service_label
+                                .into_iter()
+                                .map(|l| (l.key, l.value))
+                                .collect(),
+                            service_node_selector: args
+                                .orchestrator_kubernetes_service_node_selector
+                                .into_iter()
+                                .map(|l| (l.key, l.value))
+                                .collect(),
+                            service_affinity: args.orchestrator_kubernetes_service_affinity,
+                            service_tolerations: args.orchestrator_kubernetes_service_tolerations,
+                            service_account: args.orchestrator_kubernetes_service_account,
+                            image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
+                            aws_external_id_prefix: args.aws_external_id_prefix.clone(),
+                            coverage: args.orchestrator_kubernetes_coverage,
+                            ephemeral_volume_storage_class: args
+                                .orchestrator_kubernetes_ephemeral_volume_class
+                                .clone(),
+                            service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
+                            name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
+                            collect_pod_metrics: !args
+                                .orchestrator_kubernetes_disable_pod_metrics_collection,
+                            enable_prometheus_scrape_annotations: args
+                                .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
+                        },
+                        &metrics_registry,
+                    ))
                     .context("creating kubernetes orchestrator")?,
             );
             let secrets_controller: Arc<dyn SecretsController> = match args.secrets_controller {
@@ -1014,6 +1054,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     });
 
     let persist_clients = Arc::new(persist_clients);
+    let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
     let connection_context = ConnectionContext::from_cli_args(
         args.environment_id.to_string(),
         &args.tracing.startup_log_filter,
@@ -1023,6 +1064,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         cloud_resource_reader,
     );
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
+    let replica_http_locator = Arc::new(ReplicaHttpLocator::default());
     let controller = ControllerConfig {
         build_info: &BUILD_INFO,
         orchestrator,
@@ -1047,6 +1089,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
             secrets_reader_name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
         },
+        replica_http_locator: Arc::clone(&replica_http_locator),
     };
 
     let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(
@@ -1066,7 +1109,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let serve_start = Instant::now();
     info!("startup: envd init: serving beginning");
     let server = runtime.block_on(async {
-        let listeners = Listeners::bind(listeners_config).await?;
+        let listeners = Listeners::bind(listeners_config)?;
         let catalog_config = CatalogConfig {
             persist_clients,
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
@@ -1076,12 +1119,15 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 // Special modes.
                 unsafe_mode: args.unsafe_mode,
                 all_features: args.all_features,
+                restarted_in_place: args.restarted_in_place,
                 // Connection options.
                 tls,
                 tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
                 external_login_password_mz_system: args.external_login_password_mz_system,
                 frontegg,
+                frontegg_oauth_issuer_url,
                 cors_allowed_origin,
+                cors_allowed_origin_list,
                 egress_addresses: args.announce_egress_address,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,
@@ -1089,6 +1135,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 controller,
                 secrets_controller,
                 cloud_resource_controller,
+                system_dyncfgs,
                 // Storage options.
                 storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
                 storage_usage_retention_period: args.storage_usage_retention_period,
@@ -1101,6 +1148,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 segment_client_side: args.segment_client_side,
                 test_only_dummy_segment_client: args.test_only_dummy_segment_client,
                 launchdarkly_sdk_key: args.launchdarkly_sdk_key,
+                launchdarkly_base_uri: args.launchdarkly_base_uri,
                 launchdarkly_key_map: args
                     .launchdarkly_key_map
                     .into_iter()

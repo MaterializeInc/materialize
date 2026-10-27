@@ -6,26 +6,23 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-import re
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 
 class MaterializedViews(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE materialized_views_table (f1 STRING);
                 > INSERT INTO materialized_views_table SELECT 'T1A' || generate_series FROM generate_series(1,10000);
                 > INSERT INTO materialized_views_table SELECT 'T1B' || generate_series FROM generate_series(1,10000);
                 # Regression test for database-issues#8032.
                 > CREATE MATERIALIZED VIEW zero_arity AS SELECT;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -53,9 +50,7 @@ class MaterializedViews(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM materialized_view1
                 T1B 10000
                 T2B 10000
@@ -67,22 +62,16 @@ class MaterializedViews(Check):
                 T3B 10000
                 > SELECT 1, * FROM zero_arity
                 1
-                """
-            )
-        )
+                """))
 
 
 class MaterializedViewsAssertNotNull(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE not_null_table (x INT, y INT, z INT);
                 > INSERT INTO not_null_table VALUES (NULL, 2, 3), (4, NULL, 6), (7, 8, NULL);
                 > CREATE MATERIALIZED VIEW not_null_view1 WITH (ASSERT NOT NULL x) AS SELECT * FROM not_null_table;
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -100,8 +89,7 @@ class MaterializedViewsAssertNotNull(Check):
         ]
 
     def validate(self) -> Testdrive:
-        sql = dedent(
-            """
+        sql = dedent("""
             ! SELECT * FROM not_null_view1
             contains: column "x" must not be null
 
@@ -212,25 +200,20 @@ class MaterializedViewsAssertNotNull(Check):
 
             ! SELECT * FROM not_null_view3
             contains: column "z" must not be null
-            """
-        )
+            """)
 
         return Testdrive(sql)
 
 
 class MaterializedViewsRefresh(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE refresh_table (x INT);
                 > INSERT INTO refresh_table VALUES (1);
                 > CREATE MATERIALIZED VIEW refresh_view_2s_1 WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
                 > CREATE MATERIALIZED VIEW refresh_view_at_1 WITH (REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
                 > CREATE MATERIALIZED VIEW refresh_view_late_1 WITH (REFRESH AT mz_now()::string::int8 + 86400000) AS SELECT DISTINCT(x) FROM refresh_table;
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -252,9 +235,7 @@ class MaterializedViewsRefresh(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > INSERT INTO refresh_table VALUES (4);
 
                 > SELECT * FROM refresh_view_2s_1
@@ -287,26 +268,155 @@ class MaterializedViewsRefresh(Check):
                 2
                 3
 
-                $ set-regex match=(s\\d+|\\d{13}|[ ]{12}0|u\\d{1,3}|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)|\\(\\d+\\)) replacement=<>
+                $ set-regex match=(s\\d+|\\d{13}|[ ]{12}0|u\\d+|\\(\\d+-\\d\\d-\\d\\d\\s\\d\\d:\\d\\d:\\d\\d\\.\\d\\d\\d\\)|\\(\\d+\\)) replacement=<>
 
-                >[version<13900] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_1
-                "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_1 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n"
-                >[version>=13900] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_1
+                >[version<2601600] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_1
                 "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_1 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User<>])): [<> <>]\\n"
+                >[version>=2601600] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_1
+                "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_1 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (Storage inputs: [<>]): [<> <>]\\n"
 
-                >[version<13900] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_2
-                "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_2 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n"
-                >[version>=13900] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_2
+                >[version<2601600] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_2
                 "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_2 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User<>])): [<> <>]\\n"
+                >[version>=2601600] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_2
+                "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_2 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (Storage inputs: [<>]): [<> <>]\\n"
 
-                >[version<13900] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_3
-                "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_3 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n"
-                >[version>=13900] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_3
+                >[version<2601600] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_3
                 "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_3 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User<>])): [<> <>]\\n"
-           """
-            )
-        )
+                >[version>=2601600] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_3
+                "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_3 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (Storage inputs: [<>]): [<> <>]\\n"
+           """))
 
 
-def remove_target_cluster_from_explain(sql: str) -> str:
-    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)
+class MaterializedViewReplacement(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v26.13.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE TABLE mv_replacement_table (a INT, b INT)
+                > INSERT INTO mv_replacement_table VALUES (1, 2), (3, 4), (5, 6)
+                > CREATE MATERIALIZED VIEW mv_replacement_target AS SELECT a, b FROM mv_replacement_table
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > CREATE REPLACEMENT MATERIALIZED VIEW mv_replacement_replacement FOR mv_replacement_target AS SELECT a + b AS a, b FROM mv_replacement_table
+
+                > SELECT * FROM mv_replacement_target
+                1 2
+                3 4
+                5 6
+
+                > SELECT * FROM mv_replacement_replacement
+                3  2
+                7  4
+                11 6
+                """,
+                """
+                > ALTER MATERIALIZED VIEW mv_replacement_target APPLY REPLACEMENT mv_replacement_replacement
+
+                > SELECT * FROM mv_replacement_target
+                3  2
+                7  4
+                11 6
+
+                > INSERT INTO mv_replacement_table VALUES (10, 20)
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > SELECT * FROM mv_replacement_target
+                3  2
+                7  4
+                11 6
+                30 20
+
+                > SELECT name FROM mz_materialized_views WHERE name LIKE 'mv_replacement_%'
+                mv_replacement_target
+
+                # Verify we can still create a new replacement.
+                > CREATE REPLACEMENT MATERIALIZED VIEW mv_replacement_replacement FOR mv_replacement_target AS SELECT a * 2 AS a, b FROM mv_replacement_table
+
+                > SELECT * FROM mv_replacement_replacement
+                2  2
+                6  4
+                10 6
+                20 20
+
+                # Drop the replacement instead of applying it, to ensure
+                # `validate` remains idempotent.
+                > DROP MATERIALIZED VIEW mv_replacement_replacement
+            """))
+
+
+class MaterializedViewReplacementDropInput(Check):
+    """Applies a replacement and drops the old definition's input in the first
+    manipulate phase. The zero-downtime upgrade scenarios run that phase while
+    the next generation, built at a different version, is already booted
+    read-only, so its boot after promotion must not pair the new definition
+    with the expressions it cached before the apply. The tables retain history
+    so that a restart cannot hit CPU-95 (an input's read frontier overtaking
+    the output's write frontier).
+    """
+
+    def _can_run(self, e: Executor) -> bool:
+        # Requires an expression cache that records item versions. A
+        # generation of an earlier version that boots after the apply reuses
+        # the expressions cached for the old definition, and crash-loops on
+        # the dropped input. #38677 was cherry-picked into release-26.41, so
+        # v26.41.0 carries the fix. Only rc.1-rc.3 of that minor lack it, and
+        # the upgrade scenarios select the latest tag of each minor.
+        return self.base_version >= MzVersion.parse_mz("v26.41.0-dev")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > CREATE TABLE mv_repl_drop_input_t1 (a INT) WITH (RETAIN HISTORY FOR '1 hour')
+                > INSERT INTO mv_repl_drop_input_t1 VALUES (1)
+                > CREATE VIEW mv_repl_drop_input_v1 AS SELECT a FROM mv_repl_drop_input_t1
+                > CREATE MATERIALIZED VIEW mv_repl_drop_input_mv AS SELECT a FROM mv_repl_drop_input_v1
+                > CREATE TABLE mv_repl_drop_input_t2 (a INT) WITH (RETAIN HISTORY FOR '1 hour')
+                > INSERT INTO mv_repl_drop_input_t2 VALUES (2)
+                > CREATE VIEW mv_repl_drop_input_v2 AS SELECT a FROM mv_repl_drop_input_t2
+                > CREATE REPLACEMENT MATERIALIZED VIEW mv_repl_drop_input_rp1 FOR mv_repl_drop_input_mv AS SELECT a FROM mv_repl_drop_input_v2
+                > SELECT * FROM mv_repl_drop_input_rp1
+                2
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > ALTER MATERIALIZED VIEW mv_repl_drop_input_mv APPLY REPLACEMENT mv_repl_drop_input_rp1
+                > DROP VIEW mv_repl_drop_input_v1
+                > SELECT * FROM mv_repl_drop_input_mv
+                2
+                """,
+                """
+                > CREATE TABLE mv_repl_drop_input_t3 (a INT) WITH (RETAIN HISTORY FOR '1 hour')
+                > INSERT INTO mv_repl_drop_input_t3 VALUES (3)
+                > CREATE VIEW mv_repl_drop_input_v3 AS SELECT a FROM mv_repl_drop_input_t3
+                > CREATE REPLACEMENT MATERIALIZED VIEW mv_repl_drop_input_rp2 FOR mv_repl_drop_input_mv AS SELECT a FROM mv_repl_drop_input_v3
+                > SELECT * FROM mv_repl_drop_input_rp2
+                3
+                > ALTER MATERIALIZED VIEW mv_repl_drop_input_mv APPLY REPLACEMENT mv_repl_drop_input_rp2
+                > DROP VIEW mv_repl_drop_input_v2
+                > SELECT * FROM mv_repl_drop_input_mv
+                3
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent("""
+                > SELECT * FROM mv_repl_drop_input_mv
+                3
+
+                > SELECT name FROM mz_materialized_views WHERE name LIKE 'mv_repl_drop_input_%'
+                mv_repl_drop_input_mv
+            """))

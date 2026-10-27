@@ -16,6 +16,7 @@ CREATE TABLE concurrent_update_pk (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE concurrent_update_pk REPLICA IDENTITY FULL;
 INSERT INTO concurrent_update_pk VALUES (1, 10);
 INSERT INTO concurrent_update_pk VALUES (2, 20);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.concurrent_update_pk
 

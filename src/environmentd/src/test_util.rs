@@ -23,7 +23,7 @@ use anyhow::anyhow;
 use futures::Future;
 use futures::future::{BoxFuture, LocalBoxFuture};
 use headers::{Header, HeaderMapExt};
-use http::Uri;
+use http::{HeaderValue, Uri};
 use hyper::http::header::HeaderMap;
 use maplit::btreemap;
 use mz_adapter::TimestampExplanation;
@@ -32,6 +32,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
     CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
+use mz_adapter_types::dyncfgs::ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE;
 
 use mz_auth::password::Password;
 use mz_catalog::config::ClusterReplicaSizeMap;
@@ -40,6 +41,7 @@ use mz_dyncfg::ConfigUpdates;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
+use mz_ore::cast::CastLossy;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -49,11 +51,17 @@ use mz_ore::tracing::{
 };
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::{CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig};
+use mz_persist_client::cfg::{
+    CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig, SHARD_METRICS, ShardMetricsExport,
+};
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
+use mz_postgres_util::{
+    Sql, batch_execute as pg_batch_execute, execute as pg_execute, query_one as pg_query_one, sql,
+};
 use mz_secrets::SecretsController;
+use mz_server_core::listeners::v26_32_0::ListenersConfig;
 use mz_server_core::listeners::{
-    AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpRoutesEnabled,
+    AllowedRoles, AuthenticatorKind, HttpListenerConfig, HttpRoutesEnabled, RouteGroup,
 };
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
@@ -87,8 +95,7 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
 use crate::{
-    CatalogConfig, FronteggAuthenticator, HttpListenerConfig, ListenersConfig, SqlListenerConfig,
-    WebSocketAuth, WebSocketResponse,
+    CatalogConfig, FronteggAuthenticator, SqlListenerConfig, WebSocketAuth, WebSocketResponse,
 };
 
 pub static KAFKA_ADDRS: LazyLock<String> =
@@ -103,6 +110,12 @@ pub struct TestHarness {
     external_login_password_mz_system: Option<Password>,
     listeners_config: ListenersConfig,
     unsafe_mode: bool,
+    /// Whether the connection context carries the AWS external ID prefix and
+    /// connection role ARN. Default true, matching a cloud deployment. Set false
+    /// via [`TestHarness::without_aws_connection_context`] to model a deployment
+    /// that never configured the AWS context, where the context functions fold
+    /// to NULL.
+    aws_connection_context: bool,
     workers: usize,
     now: NowFn,
     seed: u32,
@@ -125,8 +138,10 @@ pub struct TestHarness {
     deploy_generation: u64,
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
+    cors_allowed_origins: Vec<HeaderValue>,
     metrics_registry: Option<MetricsRegistry>,
     code_version: semver::Version,
+    force_builtin_schema_migration: Option<String>,
     capture: Option<SharedStorage>,
     pub environment_id: EnvironmentId,
 }
@@ -155,38 +170,39 @@ impl Default for TestHarness {
                 ],
                 http: btreemap![
                     "external".to_owned() => HttpListenerConfig {
-                        base: BaseListenerConfig {
-                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                            authenticator_kind: AuthenticatorKind::None,
-                            allowed_roles: AllowedRoles::Normal,
-                            enable_tls: false,
-                        },
-                        routes: HttpRoutesEnabled{
-                            base: true,
-                            webhook: true,
-                            internal: false,
-                            metrics: false,
-                            profiling: false,
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        enable_tls: false,
+                        routes: HttpRoutesEnabled {
+                            base: RouteGroup::Enabled(AllowedRoles::Normal),
+                            webhook: RouteGroup::Enabled(AllowedRoles::Normal),
+                            internal: RouteGroup::Disabled,
+                            metrics: RouteGroup::Disabled,
+                            profiling: RouteGroup::Disabled,
+                            mcp_agent: RouteGroup::Disabled,
+                            mcp_developer: RouteGroup::Disabled,
+                            console_config: RouteGroup::Enabled(AllowedRoles::Normal),
                         },
                     },
                     "internal".to_owned() => HttpListenerConfig {
-                        base: BaseListenerConfig {
-                            addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                            authenticator_kind: AuthenticatorKind::None,
-                            allowed_roles: AllowedRoles::NormalAndInternal,
-                            enable_tls: false,
-                        },
-                        routes: HttpRoutesEnabled{
-                            base: true,
-                            webhook: true,
-                            internal: true,
-                            metrics: true,
-                            profiling: true,
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        enable_tls: false,
+                        routes: HttpRoutesEnabled {
+                            base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                            webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                            internal: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                            metrics: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                            profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                            mcp_agent: RouteGroup::Disabled,
+                            mcp_developer: RouteGroup::Disabled,
+                            console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         },
                     },
                 ],
             },
             unsafe_mode: false,
+            aws_connection_context: true,
             workers: 1,
             now: SYSTEM_TIME.clone(),
             seed: rand::random(),
@@ -220,17 +236,26 @@ impl Default for TestHarness {
             deploy_generation: 0,
             // This and startup_log_filter below are both (?) needed to suppress clusterd messages.
             // If we need those in the future, we might need to change both.
-            system_parameter_defaults: BTreeMap::from([(
-                "log_filter".to_string(),
-                "error".to_string(),
-            )]),
+            system_parameter_defaults: BTreeMap::from([
+                ("log_filter".to_string(), "error".to_string()),
+                (
+                    ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    SHARD_METRICS.name().to_string(),
+                    ShardMetricsExport::Summary.as_str().to_string(),
+                ),
+            ]),
             internal_console_redirect_url: None,
+            cors_allowed_origins: Vec::new(),
             metrics_registry: None,
             orchestrator_tracing_cli_args: TracingCliArgs {
                 startup_log_filter: CloneableEnvFilter::from_str("error").expect("must parse"),
                 ..Default::default()
             },
             code_version: crate::BUILD_INFO.semver_version(),
+            force_builtin_schema_migration: None,
             environment_id: EnvironmentId::for_tests(),
             capture: None,
         }
@@ -263,7 +288,7 @@ impl TestHarness {
         self,
         tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
-        let listeners = Listeners::new(&self).await?;
+        let listeners = Listeners::new(&self)?;
         listeners.serve_with_trigger(self, tls_reload_certs).await
     }
 
@@ -293,13 +318,21 @@ impl TestHarness {
             listener.enable_tls = true;
         }
         for (_, listener) in &mut self.listeners_config.http {
-            listener.base.enable_tls = true;
+            listener.enable_tls = true;
         }
         self
     }
 
     pub fn unsafe_mode(mut self) -> Self {
         self.unsafe_mode = true;
+        self
+    }
+
+    /// Models a deployment that never configured the AWS context, so the AWS
+    /// external ID prefix and connection role ARN are absent and the plan-time
+    /// AWS context functions fold to NULL.
+    pub fn without_aws_connection_context(mut self) -> Self {
+        self.aws_connection_context = false;
         self
     }
 
@@ -328,37 +361,122 @@ impl TestHarness {
             },
             http: btreemap! {
                 "external".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::Frontegg,
-                        allowed_roles: AllowedRoles::Normal,
-                        enable_tls,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: true,
-                        webhook: true,
-                        internal: false,
-                        metrics: false,
-                        profiling: false,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Frontegg,
+                    enable_tls,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::Normal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::Normal),
+                        internal: RouteGroup::Disabled,
+                        metrics: RouteGroup::Disabled,
+                        profiling: RouteGroup::Disabled,
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::Normal),
                     },
                 },
                 "internal".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::None,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls: false,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: true,
-                        webhook: true,
-                        internal: true,
-                        metrics: true,
-                        profiling: true,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    enable_tls: false,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        internal: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        metrics: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
             },
         };
+        self
+    }
+
+    pub fn with_oidc_auth(
+        mut self,
+        issuer: Option<String>,
+        authentication_claim: Option<String>,
+        expected_audiences: Option<Vec<String>>,
+        external_login_password_mz_system: Option<Password>,
+    ) -> Self {
+        let enable_tls = self.tls.is_some();
+        self.listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Oidc,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls,
+                },
+                "internal".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
+                },
+            },
+            http: btreemap! {
+                "external".to_owned() => HttpListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Oidc,
+                    enable_tls,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        internal: RouteGroup::Disabled,
+                        metrics: RouteGroup::Disabled,
+                        profiling: RouteGroup::Disabled,
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                    },
+                },
+                "internal".to_owned() => HttpListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    enable_tls: false,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        internal: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        metrics: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                    },
+                },
+            },
+        };
+
+        if let Some(issuer) = issuer {
+            self.system_parameter_defaults
+                .insert("oidc_issuer".to_string(), issuer);
+        }
+
+        if let Some(authentication_claim) = authentication_claim {
+            self.system_parameter_defaults.insert(
+                "oidc_authentication_claim".to_string(),
+                authentication_claim,
+            );
+        }
+
+        if let Some(expected_audiences) = expected_audiences {
+            self.system_parameter_defaults.insert(
+                "oidc_audience".to_string(),
+                serde_json::to_string(&expected_audiences).unwrap(),
+            );
+        }
+
+        if let Some(external_login_password_mz_system) = external_login_password_mz_system {
+            self.external_login_password_mz_system = Some(external_login_password_mz_system);
+            self.system_parameter_defaults
+                .insert("enable_password_auth".to_string(), "true".to_string());
+        }
+
         self
     }
 
@@ -376,33 +494,33 @@ impl TestHarness {
             },
             http: btreemap! {
                 "external".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::Password,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: true,
-                        webhook: true,
-                        internal: true,
-                        metrics: false,
-                        profiling: true,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Password,
+                    enable_tls,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        internal: RouteGroup::Enabled(AllowedRoles::Internal),
+                        metrics: RouteGroup::Disabled,
+                        profiling: RouteGroup::Enabled(AllowedRoles::Internal),
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
                 "metrics".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::None,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls: false,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: false,
-                        webhook: false,
-                        internal: false,
-                        metrics: true,
-                        profiling: false,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    enable_tls: false,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Disabled,
+                        webhook: RouteGroup::Disabled,
+                        internal: RouteGroup::Disabled,
+                        metrics: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        profiling: RouteGroup::Disabled,
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
             },
@@ -424,33 +542,33 @@ impl TestHarness {
             },
             http: btreemap! {
                 "external".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::Password,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: true,
-                        webhook: true,
-                        internal: true,
-                        metrics: false,
-                        profiling: true,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Password,
+                    enable_tls,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        internal: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        metrics: RouteGroup::Disabled,
+                        profiling: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
                 "metrics".to_owned() => HttpListenerConfig {
-                    base: BaseListenerConfig {
-                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-                        authenticator_kind: AuthenticatorKind::None,
-                        allowed_roles: AllowedRoles::NormalAndInternal,
-                        enable_tls: false,
-                    },
-                    routes: HttpRoutesEnabled{
-                        base: false,
-                        webhook: false,
-                        internal: false,
-                        metrics: true,
-                        profiling: false,
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    enable_tls: false,
+                    routes: HttpRoutesEnabled {
+                        base: RouteGroup::Disabled,
+                        webhook: RouteGroup::Disabled,
+                        internal: RouteGroup::Disabled,
+                        metrics: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
+                        profiling: RouteGroup::Disabled,
+                        mcp_agent: RouteGroup::Disabled,
+                        mcp_developer: RouteGroup::Disabled,
+                        console_config: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                     },
                 },
             },
@@ -504,6 +622,15 @@ impl TestHarness {
         self
     }
 
+    pub fn with_builtin_support_cluster_replication_factor(
+        mut self,
+        builtin_support_cluster_replication_factor: u32,
+    ) -> Self {
+        self.builtin_support_cluster_config.replication_factor =
+            builtin_support_cluster_replication_factor;
+        self
+    }
+
     pub fn with_builtin_catalog_server_cluster_replica_size(
         mut self,
         builtin_catalog_server_cluster_replica_size: String,
@@ -533,8 +660,37 @@ impl TestHarness {
         self
     }
 
+    pub fn with_cors_allowed_origin(mut self, origin: &'static str) -> Self {
+        self.cors_allowed_origins
+            .push(HeaderValue::from_static(origin));
+        self
+    }
+
     pub fn with_system_parameter_default(mut self, param: String, value: String) -> Self {
         self.system_parameter_defaults.insert(param, value);
+        self
+    }
+
+    pub fn with_mcp_routes(mut self, agent: bool, developer: bool) -> Self {
+        for config in self.listeners_config.http.values_mut() {
+            // Match the MCP routes to the listener's `base` policy (falling back
+            // to `NormalAndInternal` if `base` is disabled, e.g. a metrics-only
+            // listener), then enable/disable them.
+            let roles = config
+                .routes
+                .base
+                .allowed_roles()
+                .unwrap_or(AllowedRoles::NormalAndInternal);
+            let group = |enabled| {
+                if enabled {
+                    RouteGroup::Enabled(roles)
+                } else {
+                    RouteGroup::Disabled
+                }
+            };
+            config.routes.mcp_agent = group(agent);
+            config.routes.mcp_developer = group(developer);
+        }
         self
     }
 
@@ -556,6 +712,13 @@ impl TestHarness {
         self
     }
 
+    /// Forces every builtin storage collection through the given migration mechanism,
+    /// `"evolution"` or `"replacement"`.
+    pub fn with_force_builtin_schema_migration(mut self, mechanism: &str) -> Self {
+        self.force_builtin_schema_migration = Some(mechanism.into());
+        self
+    }
+
     pub fn with_capture(mut self, storage: SharedStorage) -> Self {
         self.capture = Some(storage);
         self
@@ -567,8 +730,8 @@ pub struct Listeners {
 }
 
 impl Listeners {
-    pub async fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
-        let inner = crate::Listeners::bind(config.listeners_config.clone()).await?;
+    pub fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
+        let inner = crate::Listeners::bind(config.listeners_config.clone())?;
         Ok(Listeners { inner })
     }
 
@@ -604,12 +767,18 @@ impl Listeners {
                     panic!("connection error: {}", err);
                 };
             });
-            client
-                .batch_execute(&format!(
-                    "CREATE SCHEMA IF NOT EXISTS consensus_{seed};
-                    CREATE SCHEMA IF NOT EXISTS tsoracle_{seed};"
-                ))
-                .await?;
+            let consensus_schema = sql!("consensus_{}", seed);
+            let tsoracle_schema = sql!("tsoracle_{}", seed);
+            pg_batch_execute(
+                &client,
+                sql!(
+                    "CREATE SCHEMA IF NOT EXISTS {};
+                     CREATE SCHEMA IF NOT EXISTS {};",
+                    consensus_schema,
+                    tsoracle_schema,
+                ),
+            )
+            .await?;
             (
                 format!("{cockroach_url}?options=--search_path=consensus_{seed}")
                     .parse()
@@ -674,9 +843,14 @@ impl Listeners {
         let persist_clients =
             PersistClientCache::new(persist_cfg, &metrics_registry, |_, _| persist_pubsub_client);
         let persist_clients = Arc::new(persist_clients);
+        let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
 
         let secrets_controller = Arc::clone(&orchestrator);
-        let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let mut connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        if !config.aws_connection_context {
+            connection_context.aws_external_id_prefix = None;
+            connection_context.aws_connection_role_arn = None;
+        }
         let orchestrator = Arc::new(TracingOrchestrator::new(
             orchestrator,
             config.orchestrator_tracing_cli_args,
@@ -692,7 +866,7 @@ impl Listeners {
                     endpoint: "http://fake_address_for_testing:8080".to_string(),
                     headers: http::HeaderMap::new(),
                     filter: EnvFilter::default().add_directive(Level::DEBUG.into()),
-                    resource: opentelemetry_sdk::resource::Resource::default(),
+                    resource: opentelemetry_sdk::resource::Resource::builder().build(),
                     max_batch_queue_size: 2048,
                     max_export_batch_size: 512,
                     max_concurrent_exports: 1,
@@ -740,25 +914,30 @@ impl Listeners {
                     now: config.now.clone(),
                     metrics_registry: metrics_registry.clone(),
                     persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
-                    secrets_args: mz_service::secrets::SecretsReaderCliArgs {
-                        secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                    secrets_args: mz_secrets_cli::SecretsReaderCliArgs {
+                        secrets_reader: mz_secrets_cli::SecretsControllerKind::LocalFile,
                         secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
                         secrets_reader_kubernetes_context: None,
                         secrets_reader_aws_prefix: None,
                         secrets_reader_name_prefix: None,
                     },
                     connection_context,
+                    replica_http_locator: Default::default(),
                 },
                 secrets_controller,
                 cloud_resource_controller: None,
+                system_dyncfgs,
                 tls: config.tls,
                 frontegg: config.frontegg,
+                frontegg_oauth_issuer_url: None,
                 unsafe_mode: config.unsafe_mode,
                 all_features: false,
+                restarted_in_place: false,
                 metrics_registry: metrics_registry.clone(),
                 now: config.now,
                 environment_id: config.environment_id,
-                cors_allowed_origin: AllowOrigin::list([]),
+                cors_allowed_origin: AllowOrigin::list(config.cors_allowed_origins.clone()),
+                cors_allowed_origin_list: config.cors_allowed_origins.clone(),
                 cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                 bootstrap_default_cluster_replication_factor: config
@@ -781,6 +960,7 @@ impl Listeners {
                 aws_account_id: None,
                 aws_privatelink_availability_zones: None,
                 launchdarkly_sdk_key: None,
+                launchdarkly_base_uri: None,
                 launchdarkly_key_map: Default::default(),
                 config_sync_file_path: None,
                 config_sync_timeout: Duration::from_secs(30),
@@ -792,7 +972,7 @@ impl Listeners {
                 helm_chart_version: None,
                 license_key: ValidatedLicenseKey::for_tests(),
                 external_login_password_mz_system: config.external_login_password_mz_system,
-                force_builtin_schema_migration: None,
+                force_builtin_schema_migration: config.force_builtin_schema_migration,
             })
             .await?;
 
@@ -823,10 +1003,8 @@ impl TestServer {
         let internal_client = self.connect().internal().await.unwrap();
 
         for flag in flags {
-            internal_client
-                .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
-                .await
-                .unwrap();
+            let query = sql!("ALTER SYSTEM SET {} = true;", Sql::ident(flag));
+            pg_batch_execute(&internal_client, query).await.unwrap();
         }
     }
 
@@ -834,10 +1012,8 @@ impl TestServer {
         let internal_client = self.connect().internal().await.unwrap();
 
         for flag in flags {
-            internal_client
-                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
-                .await
-                .unwrap();
+            let query = sql!("ALTER SYSTEM SET {} = false;", Sql::ident(flag));
+            pg_batch_execute(&internal_client, query).await.unwrap();
         }
     }
 
@@ -1166,9 +1342,11 @@ impl TestServerWithRuntime {
         let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
 
         for flag in flags {
-            internal_client
-                .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
-                .unwrap();
+            let query = sql!("ALTER SYSTEM SET {} = true;", Sql::ident(flag));
+            // This uses the synchronous `postgres::Client`; wrappers are async
+            // and currently only defined for tokio-postgres clients.
+            #[allow(clippy::disallowed_methods)]
+            internal_client.batch_execute(query.as_str()).unwrap();
         }
     }
 
@@ -1177,9 +1355,11 @@ impl TestServerWithRuntime {
         let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
 
         for flag in flags {
-            internal_client
-                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
-                .unwrap();
+            let query = sql!("ALTER SYSTEM SET {} = false;", Sql::ident(flag));
+            // This uses the synchronous `postgres::Client`; wrappers are async
+            // and currently only defined for tokio-postgres clients.
+            #[allow(clippy::disallowed_methods)]
+            internal_client.batch_execute(query.as_str()).unwrap();
         }
     }
 
@@ -1292,8 +1472,11 @@ pub async fn insert_with_deterministic_timestamps(
 
     let mut current_ts = get_explain_timestamp(table, &client_read).await;
 
-    let insert_query = format!("INSERT INTO {table} VALUES {values}");
+    let insert_query = format!("INSERT INTO {} VALUES {values}", Sql::ident(table));
 
+    // The `values` fragment is raw SQL text in test code and cannot currently
+    // be represented as a composable `Sql` fragment.
+    #[allow(clippy::disallowed_methods)]
     let write_future = client_write.execute(&insert_query, &[]);
     let timestamp_interval = tokio::time::interval(Duration::from_millis(1));
 
@@ -1331,7 +1514,10 @@ pub async fn try_get_explain_timestamp(
 pub async fn get_explain_timestamp_determination(
     from_suffix: &str,
     client: &Client,
-) -> Result<TimestampExplanation<mz_repr::Timestamp>, anyhow::Error> {
+) -> Result<TimestampExplanation, anyhow::Error> {
+    // `from_suffix` is a raw SQL suffix used by this test helper and cannot
+    // currently be represented as a composable `Sql` fragment.
+    #[allow(clippy::disallowed_methods)]
     let row = client
         .query_one(
             &format!("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM {from_suffix}"),
@@ -1394,66 +1580,97 @@ pub async fn create_postgres_source_with_table<'a>(
     });
 
     // Create table in Postgres with publication.
-    let _ = pg_client
-        .execute(&format!("DROP TABLE IF EXISTS {table_name};"), &[])
-        .await
-        .unwrap();
-    let _ = pg_client
-        .execute(&format!("DROP PUBLICATION IF EXISTS {source_name};"), &[])
-        .await
-        .unwrap();
-    let _ = pg_client
-        .execute(&format!("CREATE TABLE {table_name} {table_schema};"), &[])
-        .await
-        .unwrap();
+    let _ = pg_execute(
+        &pg_client,
+        sql!("DROP TABLE IF EXISTS {};", Sql::ident(table_name)),
+        &[],
+    )
+    .await
+    .unwrap();
+    let _ = pg_execute(
+        &pg_client,
+        sql!("DROP PUBLICATION IF EXISTS {};", Sql::ident(source_name)),
+        &[],
+    )
+    .await
+    .unwrap();
+    // `table_schema` is a raw schema fragment in this test helper and cannot
+    // currently be represented as a composable `Sql` fragment.
+    #[allow(clippy::disallowed_methods)]
     let _ = pg_client
         .execute(
-            &format!("ALTER TABLE {table_name} REPLICA IDENTITY FULL;"),
+            format!("CREATE TABLE {} {table_schema};", Sql::ident(table_name)).as_str(),
             &[],
         )
         .await
         .unwrap();
-    let _ = pg_client
-        .execute(
-            &format!("CREATE PUBLICATION {source_name} FOR TABLE {table_name};"),
-            &[],
-        )
-        .await
-        .unwrap();
+    let _ = pg_execute(
+        &pg_client,
+        sql!(
+            "ALTER TABLE {} REPLICA IDENTITY FULL;",
+            Sql::ident(table_name)
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
+    let _ = pg_execute(
+        &pg_client,
+        sql!(
+            "CREATE PUBLICATION {} FOR TABLE {};",
+            Sql::ident(source_name),
+            Sql::ident(table_name)
+        ),
+        &[],
+    )
+    .await
+    .unwrap();
 
     // Create postgres source in Materialize.
     let mut connection_str = format!("HOST '{host}', PORT {port}, USER {user}, DATABASE {db_name}");
     if let Some(password) = password {
         let password = std::str::from_utf8(password).unwrap();
-        mz_client
-            .batch_execute(&format!("CREATE SECRET s AS '{password}'"))
-            .await
-            .unwrap();
+        pg_batch_execute(
+            mz_client,
+            sql!("CREATE SECRET s AS {}", Sql::literal(password)),
+        )
+        .await
+        .unwrap();
         connection_str = format!("{connection_str}, PASSWORD SECRET s");
     }
+    // `connection_str` is a raw connection-option fragment generated for tests
+    // and cannot currently be represented as a composable `Sql` fragment.
+    #[allow(clippy::disallowed_methods)]
     mz_client
-        .batch_execute(&format!(
-            "CREATE CONNECTION pgconn TO POSTGRES ({connection_str})"
-        ))
+        .batch_execute(format!("CREATE CONNECTION pgconn TO POSTGRES ({connection_str})").as_str())
         .await
         .unwrap();
-    mz_client
-        .batch_execute(&format!(
-            "CREATE SOURCE {source_name}
-            FROM POSTGRES
-            CONNECTION pgconn
-            (PUBLICATION '{source_name}')"
-        ))
-        .await
-        .unwrap();
-    mz_client
-        .batch_execute(&format!(
-            "CREATE TABLE {table_name}
-            FROM SOURCE {source_name}
-            (REFERENCE {table_name});"
-        ))
-        .await
-        .unwrap();
+    pg_batch_execute(
+        mz_client,
+        sql!(
+            "CREATE SOURCE {} \
+             FROM POSTGRES \
+             CONNECTION pgconn \
+             (PUBLICATION {})",
+            Sql::ident(source_name),
+            Sql::literal(source_name),
+        ),
+    )
+    .await
+    .unwrap();
+    pg_batch_execute(
+        mz_client,
+        sql!(
+            "CREATE TABLE {} \
+             FROM SOURCE {} \
+             (REFERENCE {});",
+            Sql::ident(table_name),
+            Sql::ident(source_name),
+            Sql::ident(table_name),
+        ),
+    )
+    .await
+    .unwrap();
 
     let table_name = table_name.to_string();
     let source_name = source_name.to_string();
@@ -1461,23 +1678,30 @@ pub async fn create_postgres_source_with_table<'a>(
         pg_client,
         move |mz_client: &'a Client, pg_client: &'a Client| {
             let f: Pin<Box<dyn Future<Output = ()> + 'a>> = Box::pin(async move {
-                mz_client
-                    .batch_execute(&format!("DROP SOURCE {source_name} CASCADE;"))
-                    .await
-                    .unwrap();
-                mz_client
-                    .batch_execute("DROP CONNECTION pgconn;")
+                pg_batch_execute(
+                    mz_client,
+                    sql!("DROP SOURCE {} CASCADE;", Sql::ident(&source_name)),
+                )
+                .await
+                .unwrap();
+                pg_batch_execute(mz_client, sql!("DROP CONNECTION pgconn;"))
                     .await
                     .unwrap();
 
-                let _ = pg_client
-                    .execute(&format!("DROP PUBLICATION {source_name};"), &[])
-                    .await
-                    .unwrap();
-                let _ = pg_client
-                    .execute(&format!("DROP TABLE {table_name};"), &[])
-                    .await
-                    .unwrap();
+                let _ = pg_execute(
+                    pg_client,
+                    sql!("DROP PUBLICATION {};", Sql::ident(&source_name)),
+                    &[],
+                )
+                .await
+                .unwrap();
+                let _ = pg_execute(
+                    pg_client,
+                    sql!("DROP TABLE {};", Sql::ident(&table_name)),
+                    &[],
+                )
+                .await
+                .unwrap();
             });
             f
         },
@@ -1485,22 +1709,23 @@ pub async fn create_postgres_source_with_table<'a>(
 }
 
 pub async fn wait_for_pg_table_population(mz_client: &Client, view_name: &str, source_rows: i64) {
-    let current_isolation = mz_client
-        .query_one("SHOW transaction_isolation", &[])
+    let current_isolation = pg_query_one(mz_client, sql!("SHOW transaction_isolation"), &[])
         .await
         .unwrap()
         .get::<_, String>(0);
-    mz_client
-        .batch_execute("SET transaction_isolation = SERIALIZABLE")
+    pg_batch_execute(mz_client, sql!("SET transaction_isolation = SERIALIZABLE"))
         .await
         .unwrap();
     Retry::default()
         .retry_async(|_| async move {
-            let rows = mz_client
-                .query_one(&format!("SELECT COUNT(*) FROM {view_name};"), &[])
-                .await
-                .unwrap()
-                .get::<_, i64>(0);
+            let rows = pg_query_one(
+                mz_client,
+                sql!("SELECT COUNT(*) FROM {};", Sql::ident(view_name)),
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0);
             if rows == source_rows {
                 Ok(())
             } else {
@@ -1511,12 +1736,15 @@ pub async fn wait_for_pg_table_population(mz_client: &Client, view_name: &str, s
         })
         .await
         .unwrap();
-    mz_client
-        .batch_execute(&format!(
-            "SET transaction_isolation = '{current_isolation}'"
-        ))
-        .await
-        .unwrap();
+    pg_batch_execute(
+        mz_client,
+        sql!(
+            "SET transaction_isolation = {}",
+            Sql::literal(&current_isolation),
+        ),
+    )
+    .await
+    .unwrap();
 }
 
 // Initializes a websocket connection. Returns the init messages before the initial ReadyForQuery.
@@ -1711,4 +1939,27 @@ impl Ca {
         fs::write(&key_path, pkey.private_key_to_pem_pkcs8()?)?;
         Ok((cert_path, key_path))
     }
+}
+
+/// Sums the counter series named `name` whose labels include all of `labels`.
+///
+/// Returns 0 when no series matches, which is how a labelled counter reads
+/// before its first increment.
+pub fn get_counter_value(registry: &MetricsRegistry, name: &str, labels: &[(&str, &str)]) -> u64 {
+    let Some(family) = registry.gather().into_iter().find(|m| m.name() == name) else {
+        return 0;
+    };
+    family
+        .get_metric()
+        .iter()
+        .filter(|metric| {
+            labels.iter().all(|(name, value)| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.name() == *name && label.value() == *value)
+            })
+        })
+        .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+        .sum()
 }

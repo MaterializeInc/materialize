@@ -1,0 +1,20 @@
+[package]
+name = "mz-prometheus-protobuf"
+description = "Utilities for the prometheus crate's protobuf format."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+prometheus.workspace = true
+protobuf.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["test"] }
+
+[features]
+default = []

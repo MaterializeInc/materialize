@@ -1,0 +1,30 @@
+[package]
+name = "mz-metrics-catalog"
+description = "Generates a catalog of `metric!` definitions for the user-facing docs."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+k8s-controller = { workspace = true, features = ["prometheus"] }
+k8s-openapi.workspace = true
+mz-metrics = { path = "../metrics" }
+mz-ore = { path = "../ore", default-features = false, features = ["async"] }
+prometheus.workspace = true
+quote.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde-saphyr.workspace = true
+syn = { workspace = true, features = ["visit"] }
+walkdir.workspace = true
+
+[package.metadata.unused-deps]
+# Selects the Kubernetes API version that `k8s-controller` builds against.
+ignore = ["k8s-openapi"]
+
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }

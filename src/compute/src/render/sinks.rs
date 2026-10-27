@@ -15,30 +15,26 @@ use std::rc::Rc;
 
 use differential_dataflow::VecCollection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
+use mz_expr::EvalError;
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::PartialOrdVecExt;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe::Handle;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
-use timely::dataflow::scopes::Child;
 use timely::progress::Antichain;
 
 use crate::compute_state::SinkToken;
 use crate::logging::compute::LogDataflowErrors;
-use crate::render::context::Context;
+use crate::render::columnar::columnar_to_vec;
+use crate::render::context::{Context, distinct_errs_collection};
+use crate::render::errors::DataflowErrorSer;
 use crate::render::{RenderTimestamp, StartSignal};
 
-impl<'g, G, T> Context<Child<'g, G, T>>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    T: RenderTimestamp,
-{
+impl<'g, T: RenderTimestamp> Context<'g, T> {
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
         &self,
@@ -48,8 +44,8 @@ where
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         start_signal: StartSignal,
-        ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<mz_repr::Timestamp>,
+        outer_scope: Scope<'g, mz_repr::Timestamp>,
     ) {
         soft_assert_or_log!(
             sink.non_null_assertions.is_strictly_sorted(),
@@ -64,31 +60,33 @@ where
             }
         }
 
-        // TODO[btv] - We should determine the key and permutation to use during planning,
-        // rather than at runtime.
-        //
-        // This is basically an inlined version of the old `as_collection`.
+        // Which arrangement of the `from` collection to consume, and the MFP that reconstructs
+        // full rows from it, were decided during LIR lowering and recorded in
+        // `sink.from_arrangement`. An unarranged form takes precedence when the bundle provides
+        // one. Lowering promises one exactly when `from_arrangement` is `None`, but the renderer
+        // can produce one where lowering promised only an arrangement: a snapshot-excluded
+        // subscribe imports an index as a filtered collection instead (see `import_index`).
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
-        let (ok_collection, mut err_collection) = if let Some(collection) = &bundle.collection {
-            collection.clone()
-        } else {
-            let (key, _arrangement) = bundle
-                .arranged
-                .iter()
-                .next()
-                .expect("Invariant violated: at least one collection must be present.");
-            let unthinned_arity = sink.from_desc.arity();
-            let (permutation, thinning) = permutation_for_arrangement(key, unthinned_arity);
-            let mut mfp = MapFilterProject::new(unthinned_arity);
-            mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
-            bundle.as_collection_core(
-                mfp,
-                Some((key.clone(), None)),
-                self.until.clone(),
-                &self.config_set,
-            )
+        let (ok_collection, mut err_collection) = match (&bundle.collection, &sink.from_arrangement)
+        {
+            (Some((oks, errs)), _) => (columnar_to_vec(oks.clone()), errs.clone()),
+            (None, Some((key, mfp_plan))) => {
+                // The sink serializes rows, so decode to `Vec` here. This is the
+                // sanctioned sink leaf, the same seam as the raw-collection arm
+                // above.
+                let (oks, errs) = bundle.as_collection_core(
+                    mfp_plan.clone(),
+                    Some((key.clone(), None)),
+                    self.until.clone(),
+                );
+                (columnar_to_vec(oks), errs)
+            }
+            (None, None) => panic!(
+                "sink source {} has neither a collection nor a planned arrangement",
+                sink.from
+            ),
         };
 
         // Attach logging of dataflow errors.
@@ -96,8 +94,8 @@ where
             err_collection = err_collection.log_dataflow_errors(logger, sink_id);
         }
 
-        let mut ok_collection = ok_collection.leave();
-        let mut err_collection = err_collection.leave();
+        let mut ok_collection = ok_collection.leave(outer_scope);
+        let mut err_collection = err_collection.leave(outer_scope);
 
         // Ensure that the frontier does not advance past the expiration time, if set. Otherwise,
         // we might write down incorrect data.
@@ -122,17 +120,25 @@ where
                         let datum = iter.nth(skip).unwrap();
                         idx += skip + 1;
                         if datum.is_null() {
-                            return Err(DataflowError::EvalError(Box::new(
-                                EvalError::MustNotBeNull(
-                                    format!("column {}", from_desc.get_name(i).quoted()).into(),
-                                ),
+                            return Err(DataflowErrorSer::from(EvalError::MustNotBeNull(
+                                format!("column {}", from_desc.get_name(i).quoted()).into(),
                             )));
                         }
                     }
                     Ok(row)
                 });
             ok_collection = oks;
-            err_collection = err_collection.concat(&null_errs);
+            err_collection = err_collection.concat(null_errs);
+        }
+
+        // Normalize what the sink persists. A materialized view's error multiplicity is durable
+        // state another dataflow reads back verbatim, so leaving it at this dataflow's fan-out both
+        // multiplies across the object graph and makes the written value depend on plan shape.
+        // Placed after the null assertions so their errors, whose multiplicity follows the ok row's,
+        // are covered too. Only the persist-backed sink is re-importable: a subscribe or a one-shot
+        // copy is read once by a client, so neither pays for the arrangement.
+        if matches!(sink.connection, ComputeSinkConnection::MaterializedView(_)) {
+            err_collection = distinct_errs_collection(err_collection);
         }
 
         let region_name = match sink.connection {
@@ -140,46 +146,37 @@ where
             ComputeSinkConnection::MaterializedView(_) => {
                 format!("MaterializedViewSink({:?})", sink_id)
             }
-            ComputeSinkConnection::ContinualTask(_) => {
-                format!("ContinualTaskSink({:?})", sink_id)
-            }
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 format!("CopyToS3OneshotSink({:?})", sink_id)
             }
+            ComputeSinkConnection::MetricSink(_) => format!("MetricSink({:?})", sink_id),
         };
-        self.scope
-            .parent
-            .clone()
-            .region_named(&region_name, |inner| {
-                let sink_render = get_sink_render_for::<_>(&sink.connection);
+        outer_scope.clone().region_named(&region_name, |inner| {
+            let sink_render = get_sink_render_for(&sink.connection);
 
-                let sink_token = sink_render.render_sink(
-                    compute_state,
-                    sink,
-                    sink_id,
-                    self.as_of_frontier.clone(),
-                    start_signal,
-                    ok_collection.enter_region(inner),
-                    err_collection.enter_region(inner),
-                    ct_times.map(|x| x.enter_region(inner)),
-                    output_probe,
-                );
+            let sink_token = sink_render.render_sink(
+                compute_state,
+                sink,
+                sink_id,
+                self.as_of_frontier.clone(),
+                start_signal,
+                ok_collection.enter_region(inner),
+                err_collection.enter_region(inner),
+                output_probe,
+            );
 
-                if let Some(sink_token) = sink_token {
-                    needed_tokens.push(sink_token);
-                }
+            if let Some(sink_token) = sink_token {
+                needed_tokens.push(sink_token);
+            }
 
-                let collection = compute_state.expect_collection_mut(sink_id);
-                collection.sink_token = Some(SinkToken::new(Box::new(needed_tokens)));
-            });
+            let collection = compute_state.expect_collection_mut(sink_id);
+            collection.sink_token = Some(SinkToken::new(Box::new(needed_tokens)));
+        });
     }
 }
 
 /// A type that can be rendered as a dataflow sink.
-pub(crate) trait SinkRender<G>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+pub(crate) trait SinkRender<'scope> {
     fn render_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
@@ -187,25 +184,19 @@ where
         sink_id: GlobalId,
         as_of: Antichain<mz_repr::Timestamp>,
         start_signal: StartSignal,
-        sinked_collection: VecCollection<G, Row, Diff>,
-        err_collection: VecCollection<G, DataflowError, Diff>,
-        // TODO(ct2): Figure out a better way to smuggle this in, potentially by
-        // removing the `SinkRender` trait entirely.
-        ct_times: Option<VecCollection<G, (), Diff>>,
+        sinked_collection: VecCollection<'scope, mz_repr::Timestamp, Row, Diff>,
+        err_collection: VecCollection<'scope, mz_repr::Timestamp, DataflowErrorSer, Diff>,
         output_probe: &Handle<mz_repr::Timestamp>,
     ) -> Option<Rc<dyn Any>>;
 }
 
-fn get_sink_render_for<G>(
+fn get_sink_render_for<'scope>(
     connection: &ComputeSinkConnection<CollectionMetadata>,
-) -> Box<dyn SinkRender<G>>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) -> Box<dyn SinkRender<'scope>> {
     match connection {
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::MaterializedView(connection) => Box::new(connection.clone()),
-        ComputeSinkConnection::ContinualTask(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::CopyToS3Oneshot(connection) => Box::new(connection.clone()),
+        ComputeSinkConnection::MetricSink(connection) => Box::new(connection.clone()),
     }
 }

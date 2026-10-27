@@ -187,6 +187,7 @@ pub async fn handle_create_tenant_api_token(
         None,
         config.tenant_id,
         config.roles.clone(),
+        Vec::new(),
         config.metadata.clone(),
     );
 

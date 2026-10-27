@@ -24,16 +24,16 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::config::{AsyncSleep, Sleep};
 use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
+use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_types::region::Region;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures_util::stream::FuturesOrdered;
 use futures_util::{FutureExt, StreamExt};
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::lgbytes::MetricsRegion;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::RuntimeExt;
 use tokio::runtime::Handle as AsyncHandle;
@@ -46,14 +46,93 @@ use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
 
 /// Configuration for opening an [S3Blob].
+///
+/// NOTE: cloning shares the underlying `S3Client` and therefore its HTTP
+/// connection pool. Connection-pool isolation (as hedged gets require, see
+/// [crate::hedge]) needs a fresh [S3BlobConfig::new].
 #[derive(Clone, Debug)]
 pub struct S3BlobConfig {
     metrics: S3BlobMetrics,
     client: S3Client,
     bucket: String,
     prefix: String,
-    cfg: Arc<ConfigSet>,
-    is_cc_active: bool,
+}
+
+/// Which S3 endpoints get [`mz_aws_util::pooled_http_client`], one of the
+/// [`BlobHttpPool`] values.
+///
+/// Read on every request, so a change takes effect without reopening the blob.
+pub const BLOB_HTTP_POOL: Config<&'static str> = Config::new(
+    "persist_blob_http_pool",
+    BlobHttpPool::default().as_str(),
+    "Which S3 blob endpoints spread requests over a growing pool of HTTP clients: 'gcs' \
+    (only GCS endpoints), 'on' (every endpoint), or 'off'. Unrecognized values mean 'off'.",
+    ParameterScope::Environment,
+);
+
+/// The `max_in_flight` that [`BLOB_HTTP_POOL`]'s pool passes to
+/// [`mz_aws_util::pooled_http_client`].
+///
+/// The default matches the `MAX_CONCURRENT_STREAMS: 100` that GCS advertised in its HTTP/2
+/// settings, as observed in October 2026 with
+/// `curl -v --trace-config http/2 --http2 https://storage.googleapis.com/`.
+pub const BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT: Config<usize> = Config::new(
+    "persist_blob_http_pool_max_in_flight_per_client",
+    100,
+    "When `persist_blob_http_pool` applies, a blob request goes to a new HTTP client once every \
+    client in the pool has this many requests in flight. 0 means 1.",
+    ParameterScope::Environment,
+);
+
+/// The values of [`BLOB_HTTP_POOL`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobHttpPool {
+    /// No endpoint uses the pool.
+    Off,
+    /// Only GCS endpoints use the pool.
+    Gcs,
+    /// Every endpoint uses the pool.
+    On,
+}
+
+impl BlobHttpPool {
+    const ALL: [Self; 3] = [Self::Off, Self::Gcs, Self::On];
+
+    /// The value [`BLOB_HTTP_POOL`] defaults to.
+    pub const fn default() -> Self {
+        Self::Off
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Gcs => "gcs",
+            Self::On => "on",
+        }
+    }
+
+    /// Falls back to the default if `s` is unrecognized.
+    ///
+    /// Silent: this runs per request, so a typo would log on every request.
+    fn from_str_lossy(s: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|v| v.as_str() == s)
+            .unwrap_or_else(Self::default)
+    }
+
+    /// Reads and parses [`BLOB_HTTP_POOL`].
+    pub fn get(configs: &ConfigSet) -> Self {
+        Self::from_str_lossy(&BLOB_HTTP_POOL.get(configs))
+    }
+
+    fn use_pool(self, is_google_endpoint: bool) -> bool {
+        match self {
+            Self::Off => false,
+            Self::Gcs => is_google_endpoint,
+            Self::On => true,
+        }
+    }
 }
 
 // There is no simple way to hook into the S3 client to capture when its various timeouts
@@ -67,7 +146,7 @@ const READ_TIMEOUT_MARKER: Duration = Duration::new(444, 4444);
 
 #[derive(Debug)]
 struct MetricsSleep {
-    knobs: Box<dyn BlobKnobs>,
+    knobs: Arc<dyn BlobKnobs>,
     metrics: S3BlobMetrics,
 }
 
@@ -123,9 +202,8 @@ impl S3BlobConfig {
         credentials: Option<(String, String)>,
         knobs: Box<dyn BlobKnobs>,
         metrics: S3BlobMetrics,
-        cfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
-        let is_cc_active = knobs.is_cc_active();
+        let knobs: Arc<dyn BlobKnobs> = Arc::from(knobs);
         let mut loader = mz_aws_util::defaults();
 
         if let Some(region) = region {
@@ -149,6 +227,21 @@ impl S3BlobConfig {
                 None,
             ));
         }
+
+        let is_google = endpoint.as_deref().is_some_and(is_google_endpoint);
+        let use_pool = {
+            let knobs = Arc::clone(&knobs);
+            move || knobs.http_pool().use_pool(is_google)
+        };
+        let pool_max_in_flight = {
+            let knobs = Arc::clone(&knobs);
+            move || knobs.http_pool_max_in_flight_per_client()
+        };
+        loader = loader.http_client(mz_aws_util::switched_http_client(
+            use_pool,
+            pool_max_in_flight,
+            metrics.http_pool(),
+        ));
 
         if let Some(endpoint) = endpoint {
             loader = loader.endpoint_url(endpoint)
@@ -178,8 +271,6 @@ impl S3BlobConfig {
             client,
             bucket,
             prefix,
-            cfg,
-            is_cc_active,
         })
     }
 
@@ -273,14 +364,25 @@ impl S3BlobConfig {
             None,
             Box::new(TestBlobKnobs),
             metrics,
-            Arc::new(
-                ConfigSet::default()
-                    .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                    .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
-            ),
         )
         .await?;
         Ok(Some(config))
+    }
+
+    /// Replaces the HTTP client that [S3Blob] sends requests through, keeping
+    /// every other setting. For benchmarking alternative HTTP clients.
+    pub fn with_http_client(
+        mut self,
+        http_client: impl aws_sdk_s3::config::HttpClient + 'static,
+    ) -> Self {
+        let config = self
+            .client
+            .config()
+            .to_builder()
+            .http_client(http_client)
+            .build();
+        self.client = S3Client::from_conf(config);
+        self
     }
 
     /// Returns a clone of Self with a new v4 uuid prefix.
@@ -303,8 +405,6 @@ pub struct S3Blob {
     // Defaults to 1000 which is the current AWS max.
     max_keys: i32,
     multipart_config: MultipartConfig,
-    cfg: Arc<ConfigSet>,
-    is_cc_active: bool,
 }
 
 impl S3Blob {
@@ -317,8 +417,6 @@ impl S3Blob {
             prefix: config.prefix,
             max_keys: 1_000,
             multipart_config: MultipartConfig::default(),
-            cfg: config.cfg,
-            is_cc_active: config.is_cc_active,
         };
         // Connect before returning success. We don't particularly care about
         // what's stored in this blob (nothing writes to it, so presumably it's
@@ -331,18 +429,6 @@ impl S3Blob {
         format!("{}/{}", self.prefix, key)
     }
 }
-
-pub(crate) const ENABLE_S3_LGALLOC_CC_SIZES: Config<bool> = Config::new(
-    "persist_enable_s3_lgalloc_cc_sizes",
-    true,
-    "An incident flag to disable copying fetched s3 data into lgalloc on cc sized clusters.",
-);
-
-pub(crate) const ENABLE_S3_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
-    "persist_enable_s3_lgalloc_noncc_sizes",
-    false,
-    "A feature flag to enable copying fetched s3 data into lgalloc on non-cc sized clusters.",
-);
 
 #[async_trait]
 impl Blob for S3Blob {
@@ -381,6 +467,14 @@ impl Blob for S3Blob {
         // the headers before the full data body has completed. This gives us
         // the number of parts. We can then proceed to fetch the body of the
         // first request concurrently with the rest of the parts of the object.
+        //
+        // Not every S3-compatible store reports the part count. Its response
+        // to the first request is then indistinguishable from a single-part
+        // object's, except that `Content-Range` still carries the object's
+        // total size. The remainder is fetched by byte range in that case, and
+        // the reassembled length is checked against the total either way, so a
+        // store that misbehaves fails the get instead of handing the decoder a
+        // truncated blob.
 
         // For each header and body that we fetch, we track the fastest, and
         // any large deviations from it.
@@ -410,56 +504,74 @@ impl Blob for S3Blob {
             }
         };
 
-        // Get the remaining number of parts
-        let num_parts = match first_part.parts_count() {
-            // For a non-multipart upload, parts_count will be None. The rest of  the code works
-            // perfectly well if we just pretend this was a multipart upload of 1 part.
-            None => 1,
-            // For any positive value greater than 0, just return it.
-            Some(parts @ 1..) => parts,
+        // The object's total size comes from `Content-Range`, which s3 returns
+        // for any request that names a part. Its denominator is the length of
+        // the whole object, not of the part that was asked for, which is what
+        // makes it usable as the completeness check below. A store that put
+        // the part's length there instead would fail every multipart get.
+        let total_len = first_part
+            .content_range()
+            .and_then(parse_content_range_total);
+        let first_len = first_part
+            .content_length()
+            .and_then(|len| u64::try_from(len).ok());
+
+        let remaining: Vec<PartSelector> = match first_part.parts_count() {
+            // For a non-multipart upload, parts_count will be None, and the
+            // first request already returned the whole object. A store that
+            // does not report the count looks the same, except that the first
+            // part falls short of the total. Its remainder is fetched by byte
+            // range in chunks of the first part's size, which is the size the
+            // upload used for every part but the last.
+            None => match (first_len, total_len) {
+                (Some(first_len), Some(total_len)) if first_len < total_len => {
+                    remaining_ranges(first_len, total_len)
+                        .into_iter()
+                        .map(PartSelector::Range)
+                        .collect()
+                }
+                _ => Vec::new(),
+            },
+            Some(parts @ 1..) => (2..=parts).map(PartSelector::Number).collect(),
             // A non-positive value is invalid.
             Some(bad) => {
                 assert!(bad <= 0);
                 return Err(anyhow!("unexpected number of s3 object parts: {}", bad).into());
             }
         };
+        let num_requests = remaining.len() + 1;
 
         trace!(
-            "s3 download first header took {:?} ({num_parts} parts)",
+            "s3 download first header took {:?} ({num_requests} requests)",
             start_overall.elapsed(),
         );
 
         let mut body_futures = FuturesOrdered::new();
-        let mut first_part = Some(first_part);
+        let mut requests = vec![PartRequest::First(first_part)];
+        requests.extend(remaining.into_iter().map(PartRequest::Fetch));
 
-        // Fetch the headers of the rest of the parts. (Starting at part 2 because we already
-        // did part 1.)
-        for part_num in 1..=num_parts {
+        for request in requests {
             // Clone a handle to our MinElapsed trackers so we can give one to
             // each download task.
             let min_header_elapsed = Arc::clone(&min_header_elapsed);
             let min_body_elapsed = Arc::clone(&min_body_elapsed);
             let get_invalid_resp = self.metrics.get_invalid_resp.clone();
-            let first_part = first_part.take();
             let path = &path;
             let request_future = async move {
-                // Fetch the headers of the rest of the parts. (Using the existing headers
-                // for part 1.
-                let mut object = match first_part {
-                    Some(first_part) => {
-                        assert_eq!(part_num, 1, "only the first part should be prefetched");
-                        first_part
-                    }
-                    None => {
-                        assert_ne!(part_num, 1, "first part should be prefetched");
-                        // Request our headers.
+                let mut object = match request {
+                    // Fetched above, together with the headers that shaped
+                    // the remaining requests.
+                    PartRequest::First(object) => object,
+                    PartRequest::Fetch(selector) => {
                         let header_start = Instant::now();
-                        let object = self
-                            .client
-                            .get_object()
-                            .bucket(&self.bucket)
-                            .key(path)
-                            .part_number(part_num)
+                        let req = self.client.get_object().bucket(&self.bucket).key(path);
+                        let req = match selector {
+                            PartSelector::Number(part_num) => req.part_number(part_num),
+                            PartSelector::Range(range) => {
+                                req.range(format!("bytes={}-{}", range.start, range.end - 1))
+                            }
+                        };
+                        let object = req
                             .send()
                             .await
                             .inspect_err(|err| self.update_error_metrics("GetObject", err))
@@ -469,75 +581,41 @@ impl Blob for S3Blob {
                         object
                     }
                 };
-
                 // Request the body.
                 let body_start = Instant::now();
-                let mut body_parts: Vec<Bytes> = Vec::new();
 
-                // Get the data into lgalloc at the absolute earliest possible
-                // point without (yet) having to fork the s3 client library.
-                let enable_s3_lgalloc = if self.is_cc_active {
-                    ENABLE_S3_LGALLOC_CC_SIZES.get(&self.cfg)
-                } else {
-                    ENABLE_S3_LGALLOC_NONCC_SIZES.get(&self.cfg)
-                };
-
-                // Copy all of the bytes off the network and into a single allocation.
-                let mut buffer = match object.content_length() {
-                    Some(len @ 1..) => {
-                        let len: u64 = len.try_into().expect("positive integer");
-                        // N.B. `lgalloc` cannot reallocate so we need to make sure the initial
-                        // allocation is large enough to fit then entire blob.
-                        let buf: MetricsRegion<u8> = self
-                            .metrics
-                            .lgbytes
-                            .persist_s3
-                            .new_region(usize::cast_from(len));
-                        Some(buf)
-                    }
-                    // content-length of 0 isn't necessarily invalid.
+                // Coalesce all hyper chunks for this part into a single contiguous
+                // allocation. Pushing each SDK `Bytes` chunk separately into
+                // `SegmentedBytes` yields hundreds of segments per blob, which makes
+                // every parquet `ChunkReader::get_bytes` call O(N) and dominates CPU
+                // in `SegmentedBytes::advance`/`get_bytes` during decode. Copying
+                // also releases the hyper pool buffer so it doesn't stay pinned for
+                // the lifetime of the blob.
+                let mut buf = match object.content_length() {
+                    Some(len @ 1..) => BytesMut::with_capacity(usize::cast_from(
+                        u64::try_from(len).expect("positive integer"),
+                    )),
                     Some(len @ ..=-1) => {
-                        tracing::trace!(?len, "found invalid content-length, falling back");
+                        tracing::trace!(?len, "found invalid content-length");
                         get_invalid_resp.inc();
-                        None
+                        BytesMut::new()
                     }
-                    Some(0) | None => None,
+                    Some(0) | None => BytesMut::new(),
                 };
 
                 while let Some(data) = object.body.next().await {
                     let data = data.context("s3 get body err")?;
-                    match &mut buffer {
-                        // Write to our single allocation, if it's enabled.
-                        Some(buf) => buf.extend_from_slice(&data[..]),
-                        // Fallback to spilling into lgalloc is quick as possible.
-                        None if enable_s3_lgalloc => {
-                            body_parts.push(self.metrics.lgbytes.persist_s3.try_mmap_bytes(data));
-                        }
-                        // If all else false just heap allocate.
-                        None => {
-                            // In the CYA fallback case, make sure we skip the
-                            // memcpy to preserve the previous behavior as closely
-                            // as possible.
-                            //
-                            // TODO: Once we've validated the LgBytes path, change
-                            // this fallback path to be a heap allocated LgBytes.
-                            // Then we can remove the pub from MaybeLgBytes.
-                            body_parts.push(data);
-                        }
-                    }
-                }
-
-                // Append our single segment, if it exists.
-                if let Some(body) = buffer {
-                    // If we're writing into a single buffer we shouldn't have
-                    // pushed anything else into our segments.
-                    assert!(body_parts.is_empty());
-                    body_parts.push(body.into());
+                    buf.extend_from_slice(&data);
                 }
 
                 let body_elapsed = body_start.elapsed();
                 min_body_elapsed.observe(body_elapsed, "s3 download part body");
 
+                let body_parts = if buf.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![buf.freeze()]
+                };
                 Ok::<_, anyhow::Error>(body_parts)
             };
 
@@ -561,10 +639,26 @@ impl Blob for S3Blob {
             segments.append(&mut part_body);
         }
 
+        // A store that reports neither the part count nor a range it honors
+        // hands back less than the object. Fail the get here rather than let
+        // the decoder find out. This runs for every store, not just the ones
+        // needing the byte-range fallback, so any short read becomes a
+        // retryable error instead of a corrupt blob.
+        if let Some(total_len) = total_len {
+            let fetched_len: u64 = segments.iter().map(|s| u64::cast_from(s.len())).sum();
+            if fetched_len != total_len {
+                self.metrics.get_invalid_resp.inc();
+                return Err(anyhow!(
+                    "s3 GetObject {path} returned {fetched_len} bytes of a {total_len} byte object"
+                )
+                .into());
+            }
+        }
+
         debug!(
-            "s3 GetObject took {:?} ({} parts)",
+            "s3 GetObject took {:?} ({} requests)",
             start_overall.elapsed(),
-            num_parts
+            num_requests
         );
         Ok(Some(SegmentedBytes::from(segments)))
     }
@@ -863,14 +957,7 @@ impl S3Blob {
         let min_part_elapsed = MinElapsed::default();
         let mut parts = Vec::with_capacity(parts_len);
         for (part_num, part_fut) in part_futs.into_iter() {
-            let (this_part_elapsed, part_res) = part_fut
-                .inspect(|_| {
-                    self.metrics
-                        .error_counts
-                        .with_label_values(&["UploadPart", "AsyncSpawnError"])
-                        .inc()
-                })
-                .await;
+            let (this_part_elapsed, part_res) = part_fut.await;
             let part_res = part_res
                 .inspect_err(|err| self.update_error_metrics("UploadPart", err))
                 .context("s3 upload_part err")?;
@@ -980,6 +1067,58 @@ impl S3Blob {
     }
 }
 
+/// One request of a multi-request `get`.
+enum PartRequest {
+    /// The first part, already fetched to learn the object's shape.
+    First(GetObjectOutput),
+    /// A piece of the object still to fetch.
+    Fetch(PartSelector),
+}
+
+/// How a `GetObject` request names the piece of the object it wants.
+enum PartSelector {
+    /// A part by the number it was uploaded with.
+    Number(i32),
+    /// A byte range, for stores that do not report the part count.
+    Range(Range<u64>),
+}
+
+/// Whether `endpoint`'s host is `googleapis.com` or one of its subdomains, which
+/// covers GCS's global, regional (`storage.<region>.rep.googleapis.com`) and
+/// Private Service Connect (`*.p.googleapis.com`) endpoints.
+fn is_google_endpoint(endpoint: &str) -> bool {
+    let Ok(url) = url::Url::parse(endpoint) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.strip_suffix('.').unwrap_or(host);
+    host == "googleapis.com" || host.ends_with(".googleapis.com")
+}
+
+/// The total size in a `Content-Range` header (`bytes 0-8388607/9711660`), if
+/// the header states one.
+fn parse_content_range_total(content_range: &str) -> Option<u64> {
+    content_range.rsplit_once('/')?.1.trim().parse().ok()
+}
+
+/// Byte ranges covering `[first_len, total_len)` in chunks of `first_len`.
+///
+/// A store reporting a zero-length first part leaves no chunk size to reuse,
+/// so the whole object is fetched in a single range instead.
+fn remaining_ranges(first_len: u64, total_len: u64) -> Vec<Range<u64>> {
+    let chunk_len = if first_len == 0 { total_len } else { first_len };
+    let mut ranges = Vec::new();
+    let mut start = first_len;
+    while start < total_len {
+        let end = cmp::min(start + chunk_len, total_len);
+        ranges.push(start..end);
+        start = end;
+    }
+    ranges
+}
+
 #[derive(Clone, Debug)]
 struct MultipartConfig {
     multipart_threshold: usize,
@@ -1043,7 +1182,9 @@ impl MultipartConfig {
     }
 
     fn part_iter(&self, blob_len: usize) -> MultipartChunkIter {
-        debug_assert!(self.multipart_chunk_size >= MultipartConfig::MIN_UPLOAD_CHUNK_SIZE);
+        mz_ore::soft_assert_no_log!(
+            self.multipart_chunk_size >= MultipartConfig::MIN_UPLOAD_CHUNK_SIZE
+        );
         MultipartChunkIter::new(self.multipart_chunk_size, blob_len)
     }
 }
@@ -1147,6 +1288,63 @@ mod tests {
 
     use super::*;
 
+    #[mz_ore::test]
+    fn blob_http_pool_values() {
+        for mode in BlobHttpPool::ALL {
+            assert_eq!(BlobHttpPool::from_str_lossy(mode.as_str()), mode);
+        }
+        assert_eq!(
+            BlobHttpPool::from_str_lossy(BLOB_HTTP_POOL.default()),
+            BlobHttpPool::default()
+        );
+        assert_eq!(
+            BlobHttpPool::from_str_lossy("not_a_mode"),
+            BlobHttpPool::default()
+        );
+    }
+
+    #[mz_ore::test]
+    fn google_endpoints() {
+        assert!(is_google_endpoint("https://storage.googleapis.com"));
+        assert!(is_google_endpoint("https://STORAGE.googleapis.com/"));
+        assert!(is_google_endpoint("https://storage.googleapis.com."));
+        assert!(is_google_endpoint(
+            "https://storage.us-east1.rep.googleapis.com"
+        ));
+        assert!(is_google_endpoint("https://storage-mz.p.googleapis.com"));
+        assert!(!is_google_endpoint("https://notgoogleapis.com"));
+        assert!(!is_google_endpoint("https://googleapis.com.example.com"));
+        assert!(!is_google_endpoint("https://s3.us-east-1.amazonaws.com"));
+        assert!(!is_google_endpoint("not a url"));
+    }
+
+    #[mz_ore::test]
+    fn content_range_total() {
+        assert_eq!(
+            parse_content_range_total("bytes 0-8388607/9711660"),
+            Some(9711660)
+        );
+        assert_eq!(parse_content_range_total("bytes */42"), Some(42));
+        assert_eq!(parse_content_range_total("bytes 0-1/*"), None);
+        assert_eq!(parse_content_range_total("garbage"), None);
+    }
+
+    #[mz_ore::test]
+    fn ranges_for_unreported_parts() {
+        let mib = 1024 * 1024;
+        assert_eq!(remaining_ranges(8 * mib, 9711660), vec![8 * mib..9711660]);
+        assert_eq!(
+            remaining_ranges(8 * mib, 3 * 8 * mib + 5),
+            vec![
+                8 * mib..16 * mib,
+                16 * mib..24 * mib,
+                24 * mib..24 * mib + 5
+            ]
+        );
+        assert_eq!(remaining_ranges(8 * mib, 8 * mib), Vec::<Range<u64>>::new());
+        assert_eq!(remaining_ranges(0, 10), vec![0..10]);
+    }
+
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
@@ -1173,12 +1371,6 @@ mod tests {
                     client: config.client.clone(),
                     bucket: config.bucket.clone(),
                     prefix: format!("{}/s3_blob_impl_test/{}", config.prefix, path),
-                    cfg: Arc::new(
-                        ConfigSet::default()
-                            .add(&ENABLE_S3_LGALLOC_CC_SIZES)
-                            .add(&ENABLE_S3_LGALLOC_NONCC_SIZES),
-                    ),
-                    is_cc_active: true,
                 };
                 let mut blob = S3Blob::open(config).await?;
                 blob.max_keys = 2;
@@ -1198,6 +1390,76 @@ mod tests {
                 Some(b"foobar".to_vec().into())
             );
         }
+
+        Ok(())
+    }
+
+    /// Runs the conformance suite through [crate::hedge::HedgedBlob] with two
+    /// genuinely independent S3 clients (separate connection pools) pointed
+    /// at the same bucket/prefix, a hedge racing on every get. Ignored by
+    /// default like `s3_blob` above. When run against the external test
+    /// bucket, it is the one exercise of the real pool-isolation path.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    #[ignore] // TODO: Reenable against minio so it can run locally
+    async fn s3_blob_hedged() -> Result<(), ExternalError> {
+        use crate::hedge::{
+            BLOB_HEDGED_GET_BUDGET_RATIO, BLOB_HEDGED_GET_DELAY, BLOB_HEDGED_GET_ENABLED,
+            HedgeSibling, HedgedBlob,
+        };
+        use crate::metrics::BlobHedgeMetrics;
+        use mz_dyncfg::{ConfigSet, ConfigUpdates};
+
+        let config = match S3BlobConfig::new_for_test().await? {
+            Some(client) => client,
+            None => return Ok(()),
+        };
+        // A second client with its own connection pool. Its generated prefix
+        // is discarded below: both sides must point at the same store.
+        let sibling = match S3BlobConfig::new_for_test().await? {
+            Some(client) => client,
+            None => return Ok(()),
+        };
+
+        let cfg = crate::cfg::all_dyn_configs(ConfigSet::default());
+        let mut updates = ConfigUpdates::default();
+        updates.add(&BLOB_HEDGED_GET_ENABLED, true);
+        updates.add(&BLOB_HEDGED_GET_DELAY, Duration::ZERO);
+        updates.add(&BLOB_HEDGED_GET_BUDGET_RATIO, 1.0);
+        updates.apply(&cfg);
+        let cfg = Arc::new(cfg);
+
+        blob_impl_test(move |path| {
+            let path = path.to_owned();
+            let config = config.clone();
+            let sibling = sibling.clone();
+            let cfg = Arc::clone(&cfg);
+            async move {
+                let prefix = format!("{}/s3_blob_hedged_test/{}", config.prefix, path);
+                let primary_config = S3BlobConfig {
+                    metrics: config.metrics.clone(),
+                    client: config.client.clone(),
+                    bucket: config.bucket.clone(),
+                    prefix: prefix.clone(),
+                };
+                let hedge_config = S3BlobConfig {
+                    metrics: sibling.metrics.clone(),
+                    client: sibling.client.clone(),
+                    bucket: config.bucket.clone(),
+                    prefix,
+                };
+                let primary: Arc<dyn Blob> = Arc::new(S3Blob::open(primary_config).await?);
+                let hedge: Arc<dyn Blob> = Arc::new(S3Blob::open(hedge_config).await?);
+                Ok(HedgedBlob::new(
+                    primary,
+                    HedgeSibling::Isolated(hedge),
+                    cfg,
+                    BlobHedgeMetrics::new(&MetricsRegistry::new()),
+                ))
+            }
+        })
+        .await?;
 
         Ok(())
     }
@@ -1257,5 +1519,191 @@ mod tests {
             iter.collect::<Vec<_>>(),
             vec![(1, 0..10), (2, 10..20), (3, 20..21)]
         );
+    }
+
+    /// None of the SDK timeouts covers a response body, so a body that stops
+    /// arriving is bounded only by the SDK's stalled-stream protection (on by
+    /// default for downloads). The hedged-gets design relies on it, so these
+    /// tests pin it against a fake S3 endpoint.
+    mod stalled_body {
+        use std::net::SocketAddr;
+
+        use mz_dyncfg::{ConfigSet, ConfigUpdates};
+        use mz_ore::task::{AbortOnDropHandle, JoinSetExt};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio::task::JoinSet;
+
+        use crate::hedge::{BLOB_HEDGED_GET_ENABLED, HedgeSibling, HedgedBlob};
+        use crate::metrics::BlobHedgeMetrics;
+
+        use super::*;
+
+        const BODY_LEN: usize = 1024 * 1024;
+
+        /// The production defaults of the `persist_blob_*_timeout` configs.
+        #[derive(Debug)]
+        struct ProdKnobs;
+
+        impl BlobKnobs for ProdKnobs {
+            fn operation_timeout(&self) -> Duration {
+                Duration::from_secs(180)
+            }
+            fn operation_attempt_timeout(&self) -> Duration {
+                Duration::from_secs(90)
+            }
+            fn connect_timeout(&self) -> Duration {
+                Duration::from_secs(7)
+            }
+            fn read_timeout(&self) -> Duration {
+                Duration::from_secs(10)
+            }
+            fn is_cc_active(&self) -> bool {
+                false
+            }
+        }
+
+        /// A fake S3 endpoint on 127.0.0.1. A GET of the key `target` gets a
+        /// response head promising `BODY_LEN` bytes, then the body, or, if
+        /// `stall` is set, no body byte at all while the connection stays
+        /// open. Every other key gets a 404 NoSuchKey, which is what the health
+        /// check in `S3Blob::open` expects.
+        struct FakeS3 {
+            addr: SocketAddr,
+            _accept: AbortOnDropHandle<()>,
+        }
+
+        impl FakeS3 {
+            async fn start(stall: bool) -> FakeS3 {
+                let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+                let addr = listener.local_addr().expect("local addr");
+                let accept = mz_ore::task::spawn(|| "fake_s3_accept", async move {
+                    // Dropping this task aborts every connection handler.
+                    let mut conns = JoinSet::new();
+                    loop {
+                        let (stream, _) = listener.accept().await.expect("accept");
+                        conns.spawn_named(|| "fake_s3_conn", serve(stream, stall));
+                    }
+                })
+                .abort_on_drop();
+                FakeS3 {
+                    addr,
+                    _accept: accept,
+                }
+            }
+
+            async fn open(&self) -> S3Blob {
+                let config = S3BlobConfig::new(
+                    "bucket".into(),
+                    "prefix".into(),
+                    None,
+                    Some(format!("http://{}", self.addr)),
+                    Some("us-east-1".into()),
+                    Some(("user".into(), "pass".into())),
+                    Box::new(ProdKnobs),
+                    S3BlobMetrics::new(&MetricsRegistry::new()),
+                )
+                .await
+                .expect("config");
+                S3Blob::open(config).await.expect("open")
+            }
+        }
+
+        async fn serve(mut stream: TcpStream, stall: bool) {
+            let mut buf = Vec::new();
+            loop {
+                let head_end = loop {
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break pos;
+                    }
+                    let mut chunk = [0u8; 4096];
+                    match stream.read(&mut chunk).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    }
+                };
+                let head = String::from_utf8_lossy(&buf[..head_end]).into_owned();
+                buf.drain(..head_end + 4);
+                let path = head.split_whitespace().nth(1).unwrap_or_default();
+                if !path.contains("/target") {
+                    let body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                                <Error><Code>NoSuchKey</Code></Error>";
+                    let resp = format!(
+                        "HTTP/1.1 404 Not Found\r\n\
+                         Content-Type: application/xml\r\n\
+                         Content-Length: {}\r\n\r\n{body}",
+                        body.len()
+                    );
+                    if stream.write_all(resp.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                let mut resp = format!(
+                    "HTTP/1.1 206 Partial Content\r\n\
+                     ETag: \"etag\"\r\n\
+                     Content-Range: bytes 0-{last}/{BODY_LEN}\r\n\
+                     Content-Type: application/octet-stream\r\n\
+                     Content-Length: {BODY_LEN}\r\n\r\n",
+                    last = BODY_LEN - 1,
+                )
+                .into_bytes();
+                if !stall {
+                    resp.resize(resp.len() + BODY_LEN, b'x');
+                }
+                if stream.write_all(&resp).await.is_err() {
+                    return;
+                }
+                if stall {
+                    // Hold the connection open until the client closes it.
+                    let mut chunk = [0u8; 4096];
+                    while let Ok(n) = stream.read(&mut chunk).await {
+                        if n == 0 {
+                            return;
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+
+        #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+        async fn stalled_body_fails_the_get() {
+            let server = FakeS3::start(true).await;
+            let blob = server.open().await;
+            // The protection fires after about 6 s without a byte. The
+            // generous timeout only catches a get that hangs.
+            let res = tokio::time::timeout(Duration::from_secs(60), blob.get("target"))
+                .await
+                .expect("a stalled body must fail the get, not hang it");
+            assert!(res.is_err(), "unexpected success");
+        }
+
+        #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+        async fn hedge_rescues_stalled_body() {
+            let primary_server = FakeS3::start(true).await;
+            let sibling_server = FakeS3::start(false).await;
+            let primary: Arc<dyn Blob> = Arc::new(primary_server.open().await);
+            let sibling: Arc<dyn Blob> = Arc::new(sibling_server.open().await);
+            let cfg = crate::cfg::all_dyn_configs(ConfigSet::default());
+            let mut updates = ConfigUpdates::default();
+            updates.add(&BLOB_HEDGED_GET_ENABLED, true);
+            updates.apply(&cfg);
+            let metrics = BlobHedgeMetrics::new(&MetricsRegistry::new());
+            let blob = HedgedBlob::new(
+                primary,
+                HedgeSibling::Isolated(sibling),
+                Arc::new(cfg),
+                metrics.clone(),
+            );
+            let res = tokio::time::timeout(Duration::from_secs(60), blob.get("target"))
+                .await
+                .expect("the hedge must rescue the get");
+            let bytes = res.expect("get").expect("blob exists");
+            assert_eq!(bytes.len(), BODY_LEN);
+            assert_eq!(metrics.won.get(), 1);
+        }
     }
 }

@@ -10,6 +10,7 @@
 //! Fuses a sequence of `TopK` operators in to one `TopK` operator
 
 use mz_expr::MirRelationExpr;
+use mz_repr::ReprScalarType;
 
 use crate::TransformCtx;
 
@@ -107,7 +108,7 @@ impl TopK {
                         };
                         *limit = Some(mz_expr::MirScalarExpr::literal_ok(
                             mz_repr::Datum::Int64(new_limit),
-                            mz_repr::SqlScalarType::Int64,
+                            ReprScalarType::Int64,
                         ));
                     }
 
@@ -123,11 +124,12 @@ impl TopK {
                     // might actually be large would be bad.
                     //
                     // rust-lang/rust#70086 would allow a.zip_with(b, max) here.
-                    *inner_expected_group_size =
-                        match (&expected_group_size, &inner_expected_group_size) {
+                    let new_expected_group_size =
+                        match (&*expected_group_size, &*inner_expected_group_size) {
                             (Some(a), Some(b)) => Some(std::cmp::max(*a, *b)),
                             _ => None,
                         };
+                    *expected_group_size = new_expected_group_size;
 
                     **input = inner_input.take_dangerous();
                 } else {

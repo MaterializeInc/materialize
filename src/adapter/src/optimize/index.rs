@@ -29,21 +29,19 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mz_compute_types::dataflows::IndexDesc;
-use mz_compute_types::plan::Plan;
-use mz_repr::GlobalId;
+use mz_compute_types::plan::LirRelationExpr;
 use mz_repr::explain::trace_plan;
+use mz_repr::{GlobalId, ReprRelationType};
 use mz_sql::names::QualifiedItemName;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
-use mz_transform::reprtypecheck::{
-    SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
-};
+use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
 
 use crate::optimize::dataflows::{
-    ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle, prep_relation_expr, prep_scalar_expr,
+    ComputeInstanceSnapshot, DataflowBuilder, ExprPrep, ExprPrepMaintained,
 };
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerCatalog,
@@ -52,7 +50,7 @@ use crate::optimize::{
 
 pub struct Optimizer {
     /// A representation typechecking context to use throughout the optimizer pipeline.
-    repr_typecheck_ctx: ReprTypecheckContext,
+    typecheck_ctx: SharedTypecheckingContext,
     /// A snapshot of the catalog state.
     catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflows.
@@ -76,7 +74,7 @@ impl Optimizer {
         metrics: OptimizerMetrics,
     ) -> Self {
         Self {
-            repr_typecheck_ctx: empty_repr_context(),
+            typecheck_ctx: empty_typechecking_context(),
             catalog,
             compute_instance,
             exported_index_id,
@@ -130,10 +128,6 @@ impl GlobalLirPlan {
     pub fn df_desc(&self) -> &LirDataflowDescription {
         &self.df_desc
     }
-
-    pub fn df_meta(&self) -> &DataflowMetainfo {
-        &self.df_meta
-    }
 }
 
 impl Optimize<Index> for Optimizer {
@@ -163,13 +157,17 @@ impl Optimize<Index> for Optimizer {
             on_id: index.on,
             key: index.keys.clone(),
         };
-        df_desc.export_index(self.exported_index_id, index_desc, on_desc.typ().clone());
+        df_desc.export_index(
+            self.exported_index_id,
+            index_desc,
+            ReprRelationType::from(on_desc.typ()),
+        );
 
         // Prepare expressions in the assembled dataflow.
-        let style = ExprPrepStyle::Maintained;
+        let style = ExprPrepMaintained;
         df_desc.visit_children(
-            |r| prep_relation_expr(r, style),
-            |s| prep_scalar_expr(s, style),
+            |r| style.prep_relation_expr(r),
+            |s| style.prep_scalar_expr(s),
         )?;
 
         // Construct TransformCtx for global optimization.
@@ -178,7 +176,7 @@ impl Optimize<Index> for Optimizer {
             &df_builder,
             &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
             &self.config.features,
-            &self.repr_typecheck_ctx,
+            &self.typecheck_ctx,
             &mut df_meta,
             Some(&mut self.metrics),
         );
@@ -235,7 +233,11 @@ impl Optimize<GlobalMirPlan> for Optimizer {
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
         // - LIR ⇒ LIR transforms
-        let df_desc = Plan::finalize_dataflow(df_desc, &self.config.features)?;
+        let df_desc = LirRelationExpr::finalize_dataflow(
+            df_desc,
+            &self.config.features,
+            Some(self.metrics.lowering()),
+        )?;
 
         // Trace the pipeline output under `optimize`.
         trace_plan(&df_desc);

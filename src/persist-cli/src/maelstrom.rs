@@ -46,6 +46,15 @@ pub struct Args {
     /// unreliability.
     #[clap(long, default_value_t = 0.05)]
     unreliability: f64,
+
+    /// Enable READ COMMITTED isolation for Postgres consensus.
+    ///
+    /// Only safe against a vanilla Postgres consensus backend. On CockroachDB
+    /// the lock-free CRDB_* queries require SERIALIZABLE, so leaving this on
+    /// there panics `get_connection`. Off by default so it must be opted into
+    /// per consensus backend.
+    #[clap(long)]
+    consensus_read_committed: bool,
 }
 
 pub async fn run<S: Service + 'static>(args: Args) -> Result<(), anyhow::Error> {

@@ -18,6 +18,7 @@ documentation][user-docs].
 import argparse
 import base64
 import collections
+import fcntl
 import hashlib
 import io
 import json
@@ -45,7 +46,7 @@ import requests
 import yaml
 from requests.auth import HTTPBasicAuth
 
-from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize import MZ_ROOT, cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.docker import image_registry
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
@@ -53,25 +54,35 @@ from materialize.xcompile import Arch, target
 GHCR_PREFIX = "ghcr.io/materializeinc/"
 
 
-class RustICE(Exception):
-    pass
+class RustIncrementalBuildFailure(Exception):
+    """A build failure that corrupted incremental artifacts explain. Recovering
+    requires clearing the cargo target directories before retrying."""
 
 
-def run_and_detect_rust_ice(
-    cmd: list[str], cwd: str | Path
+class CargoRegistryFetchFailure(Exception):
+    """A crates.io fetch that failed for transport reasons. Retrying recovers,
+    and the target directories must be kept: nothing in them is corrupted."""
+
+
+def run_and_detect_retryable_build_failure(
+    cmd: list[str],
+    cwd: str | Path,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """This function is complex since it prints out each line immediately to
     stdout/stderr, but still records them at the same time so that we can scan
-    for the Rust ICE."""
+    for known retryable build failures."""
     stdout_result = io.StringIO()
     stderr_result = io.StringIO()
+    base_env = env if env is not None else os.environ
     p = subprocess.Popen(
         cmd,
+        cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
-        env={**os.environ, "CARGO_TERM_COLOR": "always", "RUSTC_COLOR": "always"},
+        env={**base_env, "CARGO_TERM_COLOR": "always", "RUSTC_COLOR": "always"},
     )
 
     sel = selectors.DefaultSelector()
@@ -120,9 +131,37 @@ def run_and_detect_rust_ice(
     stderr_contents = stderr_result.getvalue()
     stderr_result.close()
     if retcode:
-        panic_msg = "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs"
-        if panic_msg in stdout_contents or panic_msg in stderr_contents:
-            raise RustICE()
+        # Keep these signatures in sync with bin/clear-corrupted-cargo-target-dir.
+        incremental_build_failure_msgs = [
+            "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs",
+            "Found unstable fingerprints for",
+            "ld.lld: error: undefined symbol",
+            "signal: 11, SIGSEGV",
+        ]
+        registry_fetch_failure_msgs = [
+            "unable to update registry",
+        ]
+        combined = stdout_contents + stderr_contents
+        # A cached build-script binary poisoned by cargo cache corruption dies
+        # with a bare ENOENT before doing any work. Both halves are required,
+        # and the error must be the exact bare line: "failed to run custom
+        # build command" alone is any build-script bug, which a retry cannot
+        # fix, and a build script that fails on a missing file with an error
+        # context of its own produces the ENOENT in a "Caused by:" detail line
+        # instead of the bare "Error:" line.
+        custom_build_script_enoent = (
+            "failed to run custom build command" in combined
+            and any(
+                line.strip() == "Error: No such file or directory (os error 2)"
+                for line in combined.splitlines()
+            )
+        )
+        if custom_build_script_enoent or any(
+            msg in combined for msg in incremental_build_failure_msgs
+        ):
+            raise RustIncrementalBuildFailure()
+        if any(msg in combined for msg in registry_fetch_failure_msgs):
+            raise CargoRegistryFetchFailure()
 
         raise subprocess.CalledProcessError(
             retcode, p.args, output=stdout_contents, stderr=stderr_contents
@@ -216,6 +255,24 @@ class RepositoryDetails:
         # run without the ci-builder.
         return [name]
 
+    def builder(self, args: list[str]) -> list[str]:
+        """Start an invocation of `args` inside the ci-builder for the
+        configured architecture, from the repository root.
+
+        Unlike `build`, this enters the ci-builder on macOS too, so `args` can
+        rely on files that only the ci-builder image provides.
+        """
+        if "MZ_DEV_CI_BUILDER" in os.environ:
+            return args
+        return [
+            "env",
+            f"MZ_DEV_CI_BUILDER_ARCH={self.arch}",
+            "bin/ci-builder",
+            "run",
+            "stable",
+            *args,
+        ]
+
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
         return self.root / "target-xcompile" / xcompile.target(self.arch)
@@ -234,6 +291,7 @@ class RepositoryDetails:
             return path
 
 
+@cache
 def docker_images() -> set[str]:
     """List the Docker images available on the local machine."""
     return set(
@@ -284,6 +342,7 @@ def is_docker_image_pushed(name: str) -> bool:
                     "Accept": "application/vnd.docker.distribution.manifest.v2+json",
                 },
                 auth=HTTPBasicAuth(dockerhub_username, dockerhub_token),
+                timeout=10,
             )
         else:
             token = requests.get(
@@ -292,6 +351,7 @@ def is_docker_image_pushed(name: str) -> bool:
                     "service": "registry.docker.io",
                     "scope": f"repository:{image}:pull",
                 },
+                timeout=10,
             ).json()["token"]
             response = requests.head(
                 f"https://registry-1.docker.io/v2/{image}/manifests/{tag}",
@@ -299,6 +359,7 @@ def is_docker_image_pushed(name: str) -> bool:
                     "Accept": "application/vnd.docker.distribution.manifest.v2+json",
                     "Authorization": f"Bearer {token}",
                 },
+                timeout=10,
             )
 
         if response.status_code in (401, 429, 500, 502, 503, 504):
@@ -354,10 +415,12 @@ def is_ghcr_image_pushed(name: str) -> bool:
             params={
                 "scope": f"repository:{image}:pull",
             },
+            timeout=10,
         ).json()["token"]
         response = requests.head(
             f"https://ghcr.io/v2/{image}/manifests/{tag}",
             headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
         )
 
         if response.status_code in (401, 429, 500, 502, 503, 504):
@@ -383,6 +446,108 @@ def is_ghcr_image_pushed(name: str) -> bool:
                 print(name, file=f)
 
     return exists
+
+
+# Registry HTTP statuses that indicate a transient problem rather than a
+# definitive answer about visibility, so the public check retries instead of
+# concluding the image is private.
+_TRANSIENT_REGISTRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+def _get_with_retries(url: str, **kwargs: Any) -> requests.Response | None:
+    """GET `url`, retrying transient failures; returns None if all retries fail."""
+    for sleep_time in [2, 5, 10, None]:
+        try:
+            response = requests.get(url, timeout=10, **kwargs)
+        except requests.RequestException as e:
+            if sleep_time is None:
+                print(f"Error requesting {url}: {e}")
+                return None
+        else:
+            if response.status_code not in _TRANSIENT_REGISTRY_STATUSES:
+                return response
+        if sleep_time is not None:
+            time.sleep(sleep_time)
+    return None
+
+
+# These intentionally do *not* share code with `is_*_image_pushed`: those check
+# existence, authenticate when possible, and cache hits in `known-docker-images`.
+# These check *public visibility*, so they must stay anonymous (no auth
+# fallback) and uncached. They return a tri-state so callers can tell a private
+# repo (actionable) apart from a registry blip (retry the build), see
+# `_get_with_retries` returning None:
+#   True  -> definitively public
+#   False -> definitively not public (private, or repo does not exist)
+#   None  -> could not determine (transient registry/network error)
+
+
+def _json_dict_or_none(response: requests.Response) -> dict[str, Any] | None:
+    """Parse `response` as a JSON object, or None if the body isn't one.
+
+    A malformed body must read as "couldn't determine" (None), not crash the
+    caller out of the tri-state handling and fail the whole build.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def is_docker_image_public(name: str) -> bool | None:
+    """Whether the Docker Hub repository for `name` is public (tri-state).
+
+    Reads repository metadata (`is_private`) via the Hub API rather than the
+    registry, which both avoids the registry's anonymous pull-rate limit (see
+    `mz_image_tag_exists`) and is tag-independent. A 404 means the repo is
+    private or absent; transient errors yield None rather than a false "private".
+    """
+    repo = name.rsplit(":", 1)[0]
+    response = _get_with_retries(f"https://hub.docker.com/v2/repositories/{repo}/")
+    if response is None:
+        return None
+    if response.status_code == 404:
+        return False
+    if response.status_code != 200:
+        return None
+    body = _json_dict_or_none(response)
+    return None if body is None else not body.get("is_private", True)
+
+
+def is_ghcr_image_public(name: str) -> bool | None:
+    """Whether the GHCR repository for `name` is public (tri-state).
+
+    Requests an *anonymous* pull token and lists tags: a public repo authorizes
+    the anonymous client (200), a private or missing one rejects it (401/403/404).
+    Like the Docker Hub check, this is tag-independent.
+    """
+    image = name.removeprefix("ghcr.io/").rsplit(":", 1)[0]
+    token_response = _get_with_retries(
+        "https://ghcr.io/token", params={"scope": f"repository:{image}:pull"}
+    )
+    if token_response is None:
+        return None
+    if token_response.status_code in (401, 403):
+        return False
+    if token_response.status_code != 200:
+        return None
+    body = _json_dict_or_none(token_response)
+    if body is None or "token" not in body:
+        return None
+    token = body["token"]
+    response = _get_with_retries(
+        f"https://ghcr.io/v2/{image}/tags/list",
+        params={"n": 1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    if response is None:
+        return None
+    if response.status_code == 200:
+        return True
+    if response.status_code in (401, 403, 404):
+        return False
+    return None
 
 
 def chmod_x(path: Path) -> None:
@@ -455,30 +620,41 @@ class Copy(PreImage):
 
     def run(self, prep: Any) -> None:
         super().run(prep)
-        for src in self.inputs():
+        for src in self._source_files():
             dst = self.path / self.destination / src
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(self.rd.root / self.source / src, dst)
 
-    def inputs(self) -> set[str]:
+    def _source_files(self) -> set[str]:
+        """The files to copy, relative to `source`."""
         return set(git.expand_globs(self.rd.root / self.source, self.matching))
+
+    def inputs(self) -> set[str]:
+        return {str(Path(self.source) / src) for src in self._source_files()}
 
 
 class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
 
-    def inputs(self) -> set[str]:
-        inputs = {
-            "ci/builder",
-            "Cargo.toml",
-            # TODO(benesch): we could in theory fingerprint only the subset of
-            # Cargo.lock that applies to the crates at hand, but that is a
-            # *lot* of work.
-            "Cargo.lock",
-            ".cargo/config",
-        }
+    @staticmethod
+    @cache
+    def _cargo_shared_inputs() -> frozenset[str]:
+        """Resolve shared Cargo inputs once and cache the result.
 
-        return inputs
+        This expands the 'ci/builder' directory glob and filters out
+        non-existent files like '.cargo/config', avoiding repeated
+        git subprocess calls in fingerprint().
+        """
+        inputs: set[str] = set()
+        inputs |= git.expand_globs(Path("."), "ci/builder/**")
+        inputs.add("Cargo.toml")
+        inputs.add("Cargo.lock")
+        if Path(".cargo/config").exists():
+            inputs.add(".cargo/config")
+        return frozenset(inputs)
+
+    def inputs(self) -> set[str]:
+        return set(CargoPreImage._cargo_shared_inputs())
 
     def extra(self) -> str:
         # Cargo images depend on the release mode and whether
@@ -511,6 +687,9 @@ class CargoBuild(CargoPreImage):
         self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
+        self.builder_files = config.pop("builder-files", {})
+        features = config.pop("features", [])
+        self.features = features if isinstance(features, list) else [features]
 
         if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
@@ -520,6 +699,7 @@ class CargoBuild(CargoPreImage):
         rd: RepositoryDetails,
         bins: list[str],
         examples: list[str],
+        features: list[str] | None = None,
     ) -> list[str]:
         rustflags = (
             rustc_flags.coverage
@@ -533,10 +713,7 @@ class CargoBuild(CargoPreImage):
         cflags = (
             [
                 f"--target={target(rd.arch)}",
-                f"--gcc-toolchain=/opt/x-tools/{target(rd.arch)}/",
                 "-fuse-ld=lld",
-                f"--sysroot=/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/sysroot",
-                f"-L/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/lib64",
             ]
             + rustc_flags.sanitizer_cflags[rd.sanitizer]
             if rd.sanitizer != Sanitizer.none
@@ -550,15 +727,43 @@ class CargoBuild(CargoPreImage):
                 "CXXSTDLIB": "stdc++",
                 "CC": "cc",
                 "CXX": "c++",
-                "CPP": "clang-cpp-18",
+                "CPP": "clang-cpp-19",
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "PATH": "/sanshim:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
             }
             if rd.sanitizer != Sanitizer.none
             else {}
         )
+
+        # clang/lld `-22` suffixes must match the LLVM version of the rustc in
+        # rust-version (root Cargo.toml) and the apt.llvm.org release in
+        # ci/builder/Dockerfile.
+        if (
+            rd.profile == Profile.RELEASE
+            and rd.sanitizer == Sanitizer.none
+            and not rd.coverage
+        ):
+            rustflags += [
+                "-Clinker-plugin-lto",
+            ]
+            extra_env = {
+                "CC": "clang-22",
+                "CXX": "clang++-22",
+                "AR": "llvm-ar-22",
+                "RANLIB": "llvm-ranlib-22",
+                "CFLAGS": "-flto=thin",
+                "CXXFLAGS": "-flto=thin",
+                # `-static-libstdc++` is unused when clang links a C program,
+                # and jemalloc's configure runs its `strerror_r` link checks
+                # with `-Werror`. Without `-Wno-unused-command-line-argument`
+                # both checks fail and configure aborts with "cannot determine
+                # return type of strerror_r".
+                "LDFLAGS": "--ld-path=/usr/bin/ld.lld-22 -static-libstdc++ -Wno-unused-command-line-argument",
+                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
+                "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
+            }
 
         cargo_build = rd.build(
             "build", channel=None, rustflags=rustflags, extra_env=extra_env
@@ -584,14 +789,16 @@ class CargoBuild(CargoPreImage):
             cargo_build.extend(
                 ["--jobs", str(round(multiprocessing.cpu_count() * 2 / 3))]
             )
+        if features:
+            cargo_build.append(f"--features={','.join(features)}")
 
         return cargo_build
 
     @classmethod
-    def prepare_batch(cls, cargo_builds: list["PreImage"]) -> dict[str, Any]:
-        super().prepare_batch(cargo_builds)
+    def prepare_batch(cls, instances: list["PreImage"]) -> dict[str, Any]:
+        super().prepare_batch(instances)
 
-        if not cargo_builds:
+        if not instances:
             return {}
 
         # Building all binaries and examples in the same `cargo build` command
@@ -599,21 +806,25 @@ class CargoBuild(CargoPreImage):
         # meaningfully speed up builds.
 
         rd: RepositoryDetails | None = None
-        builds = cast(list[CargoBuild], cargo_builds)
+        builds = cast(list[CargoBuild], instances)
         bins = set()
         examples = set()
+        features = set()
         for build in builds:
             if not rd:
                 rd = build.rd
             bins.update(build.bins)
             examples.update(build.examples)
+            features.update(build.features)
         assert rd
 
         ui.section(f"Common build for: {', '.join(bins | examples)}")
 
-        cargo_build = cls.generate_cargo_build_command(rd, list(bins), list(examples))
+        cargo_build = cls.generate_cargo_build_command(
+            rd, list(bins), list(examples), list(features) if features else None
+        )
 
-        run_and_detect_rust_ice(cargo_build, cwd=rd.root)
+        run_and_detect_retryable_build_failure(cargo_build, cwd=rd.root)
 
         # Re-run with JSON-formatted messages and capture the output so we can
         # later analyze the build artifacts in `run`. This should be nearly
@@ -677,6 +888,14 @@ class CargoBuild(CargoPreImage):
                 self.rd.cargo_target_dir() / cargo_profile / Path("examples") / example
             )
             copy(src_path, Path("examples") / example)
+
+        for src, dst in self.builder_files.items():
+            dst_path = self.path / dst
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            spawn.runv(
+                self.rd.builder(["cp", src, str(dst_path.relative_to(self.rd.root))]),
+                cwd=self.rd.root,
+            )
 
         if self.extract:
             cargo_build_json_output = build_output["cargo"]
@@ -750,9 +969,12 @@ class Image:
 
     _DOCKERFILE_MZFROM_RE = re.compile(rb"^MZFROM\s*(\S+)")
 
+    _context_files_cache: set[str] | None
+
     def __init__(self, rd: RepositoryDetails, path: Path):
         self.rd = rd
         self.path = path
+        self._context_files_cache = None
         self.pre_images: list[PreImage] = []
         with open(self.path / "mzbuild.yml") as f:
             data = yaml.safe_load(f)
@@ -882,6 +1104,25 @@ class ResolvedImage:
         Requires that the caller has already acquired all dependencies and
         prepared all `PreImage` actions via `PreImage.prepare_batch`.
         """
+        # Use a file lock to prevent parallel mzcompose processes from
+        # racing on git clean / copy / strip for the same image directory.
+        lock_dir = self.image.rd.root / "target" / "mzbuild-locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        profile = self.image.rd.profile.name.lower()
+        lock_path = lock_dir / f"{self.image.name}-{profile}.lock"
+        with open(lock_path, "w") as lock_file:
+            ui.say(f"Acquiring lock for {self.spec()}")
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            try:
+                self._build_locked(prep, push)
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+        self.acquired = True
+        docker_images().add(self.spec())
+
+    def _build_locked(
+        self, prep: dict[type[PreImage], Any], push: bool = False
+    ) -> None:
         ui.section(f"Building {self.spec()}")
         spawn.runv(["git", "clean", "-ffdX", self.image.path])
 
@@ -920,6 +1161,14 @@ class ResolvedImage:
                 str(self.image.path),
             ]
         else:
+            # `self.spec()` may already be ghcr-qualified (MZ_GHCR), so strip the
+            # prefix before re-deriving each tag. Otherwise they double-prefix and
+            # a dependent image's `FROM self.spec()` can't resolve the local build.
+            spec = self.spec()
+            if spec.startswith(GHCR_PREFIX):
+                spec = spec.removeprefix(GHCR_PREFIX)
+            docker_tag = f"docker.io/{spec}"
+            ghcr_tag = f"{GHCR_PREFIX}{spec}"
             cmd: Sequence[str] = [
                 "docker",
                 "buildx",
@@ -929,12 +1178,12 @@ class ResolvedImage:
                 "-",
                 *(f"--build-arg={k}={v}" for k, v in build_args.items()),
                 "-t",
-                f"docker.io/{self.spec()}",
+                docker_tag,
                 "-t",
-                f"ghcr.io/materializeinc/{self.spec()}",
+                ghcr_tag,
                 f"--platform=linux/{self.image.rd.arch.go_str()}",
                 str(self.image.path),
-                *(["--push"] if push else ["--load"]),
+                "--load",
             ]
 
         if token := os.getenv("GITHUB_GHCR_TOKEN"):
@@ -952,15 +1201,39 @@ class ResolvedImage:
 
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
+        if push:
+            # Push to both registries in parallel. With the docker driver,
+            # the image is already in the local daemon after --load, so
+            # docker push is the same mechanism buildx --push uses internally.
+            pending = [docker_tag, ghcr_tag]
+            for sleep_time in [5, 10, 20, 40, 60, None]:
+                procs = [
+                    subprocess.Popen(
+                        ["docker", "push", tag],
+                        stdout=sys.stderr,
+                        stderr=sys.stderr,
+                    )
+                    for tag in pending
+                ]
+                pending = [tag for tag, proc in zip(pending, procs) if proc.wait() != 0]
+                if not pending:
+                    break
+                if sleep_time is None:
+                    raise subprocess.CalledProcessError(
+                        1, ["docker", "push", pending[0]]
+                    )
+                print(f"docker push failed for {pending}, retrying in {sleep_time}s")
+                time.sleep(sleep_time)
+
     def try_pull(self, max_retries: int) -> bool:
         """Download the image if it does not exist locally. Returns whether it was found."""
-        ui.header(f"Acquiring {self.spec()}")
         command = ["docker", "pull"]
         # --quiet skips printing the progress bar, which does not display well in CI.
         if ui.env_is_truthy("CI"):
             command.append("--quiet")
         command.append(self.spec())
         if not self.acquired:
+            ui.header(f"Acquiring {self.spec()}")
             sleep_time = 1
             for retry in range(1, max_retries + 1):
                 try:
@@ -970,6 +1243,7 @@ class ResolvedImage:
                         stdout=sys.stderr.buffer,
                     )
                     self.acquired = True
+                    docker_images().add(self.spec())
                     break
                 except subprocess.CalledProcessError:
                     if retry < max_retries:
@@ -977,30 +1251,9 @@ class ResolvedImage:
                         # happened based on error code
                         # (https://github.com/docker/cli/issues/538) and we
                         # want to print output directly to terminal.
-                        if build := os.getenv("CI_WAITING_FOR_BUILD"):
-                            for retry in range(max_retries):
-                                try:
-                                    build_status = buildkite.get_build_status(build)
-                                except subprocess.CalledProcessError:
-                                    time.sleep(sleep_time)
-                                    sleep_time = min(sleep_time * 2, 10)
-                                    break
-                                print(f"Build {build} status: {build_status}")
-                                if build_status == "failed":
-                                    print(
-                                        f"Build {build} has been marked as failed, exiting hard"
-                                    )
-                                    sys.exit(1)
-                                elif build_status == "success":
-                                    break
-                                assert (
-                                    build_status == "pending"
-                                ), f"Unknown build status {build_status}"
-                                time.sleep(1)
-                        else:
-                            print(f"Retrying in {sleep_time}s ...")
-                            time.sleep(sleep_time)
-                            sleep_time = min(sleep_time * 2, 10)
+                        print(f"Retrying in {sleep_time}s ...")
+                        time.sleep(sleep_time)
+                        sleep_time = min(sleep_time * 2, 10)
                         continue
                     else:
                         break
@@ -1018,6 +1271,21 @@ class ResolvedImage:
             ui.say(f"{spec} already exists")
             return True
         return False
+
+    def is_public(self) -> tuple[bool | None, bool | None]:
+        """Report whether the image's repo is public on (Docker Hub, GHCR).
+
+        Each element is True (public), False (private/absent), or None (could
+        not determine). Non-publishable images are reported as public on both,
+        since they are never pushed and so the check does not apply to them.
+        """
+        if not self.publish:
+            return (True, True)
+        spec = self.spec()
+        if spec.startswith(GHCR_PREFIX):
+            spec = spec.removeprefix(GHCR_PREFIX)
+        ghcr_spec = f"{GHCR_PREFIX}{spec}"
+        return (is_docker_image_public(spec), is_ghcr_image_public(ghcr_spec))
 
     def run(
         self,
@@ -1066,7 +1334,10 @@ class ResolvedImage:
             inputs: A list of input files, relative to the root of the
                 repository.
         """
-        paths = set(git.expand_globs(self.image.rd.root, f"{self.image.path}/**"))
+        if self.image._context_files_cache is not None:
+            paths = set(self.image._context_files_cache)
+        else:
+            paths = set(git.expand_globs(self.image.rd.root, f"{self.image.path}/**"))
         if not paths:
             # While we could find an `mzbuild.yml` file for this service, expland_globs didn't
             # return any files that matched this service. At the very least, the `mzbuild.yml`
@@ -1094,9 +1365,15 @@ class ResolvedImage:
         inputs via `PreImage.inputs`.
         """
         self_hash = hashlib.sha1()
-        for rel_path in sorted(
-            set(git.expand_globs(self.image.rd.root, *self.inputs()))
-        ):
+        # When inputs come from precomputed sources (crate and image context
+        # batching + resolved CargoPreImage paths), they are already individual
+        # file paths from git. Skip the expensive expand_globs subprocess calls.
+        inputs = self.inputs()
+        if self.image._context_files_cache is not None:
+            resolved_inputs = sorted(inputs)
+        else:
+            resolved_inputs = sorted(set(git.expand_globs(self.image.rd.root, *inputs)))
+        for rel_path in resolved_inputs:
             abs_path = self.image.rd.root / rel_path
             file_hash = hashlib.sha1()
             raw_file_mode = os.lstat(abs_path).st_mode
@@ -1149,7 +1426,8 @@ class DependencySet:
         The provided `dependencies` must be topologically sorted.
         """
         self._dependencies: dict[str, ResolvedImage] = {}
-        known_images = docker_images()
+        dependencies = list(dependencies)
+        known_images = docker_images() if dependencies else set()
         for d in dependencies:
             image = ResolvedImage(
                 image=d,
@@ -1180,14 +1458,10 @@ class DependencySet:
         # Only retry in CI runs since we struggle with flaky docker pulls there
         if not max_retries:
             max_retries = (
-                90
-                if os.getenv("CI_WAITING_FOR_BUILD")
-                else (
-                    5
-                    if ui.env_is_truthy("CI")
-                    and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
-                    else 1
-                )
+                5
+                if ui.env_is_truthy("CI")
+                and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
+                else 1
             )
         assert max_retries > 0
 
@@ -1212,7 +1486,7 @@ class DependencySet:
                 print(
                     f"+++ Expected builds to be available, the build probably failed, so not proceeding: {expected_deps}"
                 )
-                sys.exit(5)
+                sys.exit(128)
 
         prep = self._prepare_batch(deps_to_build)
         for dep in deps_to_build:
@@ -1256,7 +1530,7 @@ class DependencySet:
             while True:
                 if time.time() > end_time:
                     raise TimeoutError(
-                        f"Timed out in {dep.name} waiting for {[dep2.name for dep2 in dep.dependencies if dep2 not in built_deps]}"
+                        f"Timed out in {dep.name} waiting for {[dep2 for dep2 in dep.dependencies if dep2 not in built_deps]}"
                     )
                 with lock:
                     if all(dep2 in built_deps for dep2 in dep.dependencies):
@@ -1344,33 +1618,26 @@ class Repository:
         )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
-        for path, dirs, files in os.walk(self.root, topdown=True):
-            if path == str(root / "misc"):
-                dirs.remove("python")
-            # Filter out some particularly massive ignored directories to keep
-            # things snappy. Not required for correctness.
-            dirs[:] = set(dirs) - {
-                ".git",
-                ".mypy_cache",
-                "target",
-                "target-ra",
-                "target-xcompile",
-                "mzdata",
-                "node_modules",
-                "venv",
-            }
-            if "mzbuild.yml" in files:
-                image = Image(self.rd, Path(path))
+        for rel_path_s in sorted(
+            git.expand_globs(self.root, "**/mzbuild.yml", "**/mzcompose.py")
+        ):
+            rel_path = Path(rel_path_s)
+            if rel_path.parts[:2] == ("misc", "python"):
+                continue
+
+            parent = self.root / rel_path.parent
+            if rel_path.name == "mzbuild.yml":
+                image = Image(self.rd, parent)
                 if not image.name:
-                    raise ValueError(f"config at {path} missing name")
+                    raise ValueError(f"config at {parent} missing name")
                 if image.name in self.images:
                     raise ValueError(f"image {image.name} exists twice")
                 self.images[image.name] = image
-            if "mzcompose.py" in files:
-                name = Path(path).name
+            elif rel_path.name == "mzcompose.py":
+                name = parent.name
                 if name in self.compositions:
                     raise ValueError(f"composition {name} exists twice")
-                self.compositions[name] = Path(path)
+                self.compositions[name] = parent
 
         # Validate dependencies.
         for image in self.images.values():
@@ -1423,12 +1690,22 @@ class Repository:
             type=Sanitizer,
             choices=Sanitizer,
         )
+
+        def _parse_arch(s: str) -> Arch:
+            try:
+                return Arch(s)
+            except ValueError:
+                valid = ", ".join(m.value for m in Arch)
+                raise argparse.ArgumentTypeError(
+                    f"invalid arch: {s!r} (choose from {valid})"
+                )
+
         parser.add_argument(
             "--arch",
             default=Arch.host(),
             help="the CPU architecture to build for",
-            type=Arch,
-            choices=Arch,
+            type=_parse_arch,
+            metavar="{" + ",".join(m.value for m in Arch) + "}",
         )
         parser.add_argument(
             "--image-registry",
@@ -1486,6 +1763,13 @@ class Repository:
            ValueError: A circular dependency was discovered in the images
                in the repository.
         """
+        # Pre-fetch all crate input files in a single batched git call,
+        # replacing ~118 individual subprocess pairs with one pair.
+        self.rd.cargo_workspace.precompute_crate_inputs()
+        # Pre-fetch all image context files in a single batched git call,
+        # replacing ~41 individual subprocess pairs with one pair.
+        self._precompute_image_context_files()
+
         resolved = OrderedDict()
         visiting = set()
 
@@ -1505,6 +1789,48 @@ class Repository:
             visit(target_image)
 
         return DependencySet(resolved.values())
+
+    def _precompute_image_context_files(self) -> None:
+        """Pre-fetch all image context files in a single batched git call.
+
+        This replaces ~41 individual pairs of git subprocess calls (one per
+        image) with a single pair, then partitions the results by image path.
+        """
+        root = self.rd.root
+        # Use paths relative to root for git specs and partitioning, since
+        # git --relative outputs paths relative to cwd (root). Image paths
+        # may be absolute when MZ_ROOT is an absolute path.
+        image_rel_paths = sorted(
+            set(str(img.path.relative_to(root)) for img in self.images.values())
+        )
+        specs = [f"{p}/**" for p in image_rel_paths]
+
+        empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        diff_files = spawn.capture(
+            ["git", "diff", "--name-only", "-z", "--relative", empty_tree, "--"]
+            + specs,
+            cwd=root,
+        )
+        ls_files = spawn.capture(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z", "--"] + specs,
+            cwd=root,
+        )
+        all_files = set(
+            f for f in (diff_files + ls_files).split("\0") if f.strip() != ""
+        )
+
+        # Partition files by image path (longest match first for nested paths)
+        image_file_map: dict[str, set[str]] = {p: set() for p in image_rel_paths}
+        sorted_paths = sorted(image_rel_paths, key=len, reverse=True)
+        for f in all_files:
+            for ip in sorted_paths:
+                if f.startswith(ip + "/"):
+                    image_file_map[ip].add(f)
+                    break
+
+        for img in self.images.values():
+            rel = str(img.path.relative_to(root))
+            img._context_files_cache = image_file_map.get(rel, set())
 
     def __iter__(self) -> Iterator[Image]:
         return iter(self.images.values())
@@ -1532,31 +1858,41 @@ def publish_multiarch_images(
         assert len(names) == 1, "dependency sets did not contain identical images"
         name = images[0].image.docker_name(tag)
         if tag in always_push_tags or not is_docker_image_pushed(name):
-            spawn.runv(
-                [
-                    "docker",
-                    "manifest",
-                    "create",
-                    name,
-                    *(image.spec() for image in images),
-                ]
+            spawn.run_with_retries(
+                lambda: (
+                    spawn.runv(
+                        [
+                            "docker",
+                            "manifest",
+                            "create",
+                            "--amend",
+                            name,
+                            *(image.spec() for image in images),
+                        ]
+                    ),
+                    spawn.runv(["docker", "manifest", "push", name]),
+                )
             )
-            spawn.runv(["docker", "manifest", "push", name])
 
         ghcr_name = f"{GHCR_PREFIX}{name}"
         if ghcr_token and (
             tag in always_push_tags or not is_ghcr_image_pushed(ghcr_name)
         ):
-            spawn.runv(
-                [
-                    "docker",
-                    "manifest",
-                    "create",
-                    ghcr_name,
-                    *(f"{GHCR_PREFIX}{image.spec()}" for image in images),
-                ]
+            spawn.run_with_retries(
+                lambda: (
+                    spawn.runv(
+                        [
+                            "docker",
+                            "manifest",
+                            "create",
+                            "--amend",
+                            ghcr_name,
+                            *(f"{GHCR_PREFIX}{image.spec()}" for image in images),
+                        ]
+                    ),
+                    spawn.runv(["docker", "manifest", "push", ghcr_name]),
+                )
             )
-            spawn.runv(["docker", "manifest", "push", ghcr_name])
     print(f"--- Nofifying for tag {tag}")
     markdown = f"""Pushed images with Docker tag `{tag}`"""
     spawn.runv(
@@ -1565,36 +1901,6 @@ def publish_multiarch_images(
             "annotate",
             "--style=info",
             f"--context=build-tags-{tag}",
-        ],
-        stdin=markdown.encode(),
-    )
-
-
-def tag_multiarch_images(
-    new_tag: str, previous_tag: str, dependency_sets: Iterable[Iterable[ResolvedImage]]
-) -> None:
-    """Publishes a set of docker images under a given tag."""
-    for images in zip(*dependency_sets):
-        names = set(image.image.name for image in images)
-        assert len(names) == 1, "dependency sets did not contain identical images"
-        new_name = images[0].image.docker_name(new_tag)
-
-        # Doesn't have tagged images
-        if images[0].image.name == "mz":
-            continue
-
-        previous_name = images[0].image.docker_name(previous_tag)
-        spawn.runv(["docker", "pull", previous_name])
-        spawn.runv(["docker", "tag", previous_name, new_name])
-        spawn.runv(["docker", "push", new_name])
-    print(f"--- Nofifying for tag {new_tag}")
-    markdown = f"""Pushed images with Docker tag `{new_tag}`"""
-    spawn.runv(
-        [
-            "buildkite-agent",
-            "annotate",
-            "--style=info",
-            f"--context=build-tags-{new_tag}",
         ],
         stdin=markdown.encode(),
     )

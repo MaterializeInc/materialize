@@ -56,6 +56,7 @@ pub mod copy_to;
 pub mod dataflows;
 pub mod index;
 pub mod materialized_view;
+pub mod metric_sink;
 pub mod peek;
 pub mod subscribe;
 pub mod view;
@@ -65,8 +66,8 @@ use std::fmt::Debug;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::PERSIST_FAST_PATH_ORDER;
 use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::Plan;
+use mz_compute_types::dataflows::MirDataflowDescription;
+use mz_compute_types::dyncfgs::SUBSCRIBE_SNAPSHOT_OPTIMIZATION;
 use mz_controller_types::ClusterId;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
 use mz_ore::stack::RecursionLimitError;
@@ -74,19 +75,14 @@ use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::optimize::{OptimizerFeatureOverrides, OptimizerFeatures, OverrideFrom};
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::names::{FullItemName, QualifiedItemName};
-use mz_sql::plan::PlanError;
+use mz_sql::plan::{HirRelationExpr, PlanError};
 use mz_sql::session::vars::SystemVars;
 use mz_transform::{MaybeShouldPanic, TransformCtx, TransformError};
 
 // Alias types
 // -----------
 
-/// A type for a [`DataflowDescription`] backed by `Mir~` plans. Used internally
-/// by the optimizer implementations.
-type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
-/// A type for a [`DataflowDescription`] backed by `Lir~` plans. Used internally
-/// by the optimizer implementations.
-type LirDataflowDescription = DataflowDescription<Plan>;
+pub use mz_compute_types::dataflows::LirDataflowDescription;
 
 // Core API
 // --------
@@ -117,6 +113,29 @@ pub trait Optimize<From> {
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
         mz_transform::catch_unwind_optimize(|| self.optimize(plan))
     }
+}
+
+/// Runs the shared one-shot optimization pipeline for a single optimizer.
+///
+/// This factors out the (otherwise duplicated) HIR ⇒ local MIR ⇒ resolve ⇒
+/// global LIR sequence that is common to the `SELECT`/`EXPLAIN` and `COPY TO`
+/// paths. The `resolve` closure attaches the timestamp/session/stats context to
+/// the local plan; it is path-specific only in the concrete plan type it
+/// operates on.
+pub(crate) fn optimize_oneshot<O, LocalPlan, ResolvedPlan, GlobalPlan>(
+    optimizer: &mut O,
+    raw_expr: HirRelationExpr,
+    resolve: impl FnOnce(LocalPlan) -> ResolvedPlan,
+) -> Result<GlobalPlan, OptimizerError>
+where
+    O: Optimize<HirRelationExpr, To = LocalPlan> + Optimize<ResolvedPlan, To = GlobalPlan>,
+{
+    // HIR ⇒ MIR lowering and MIR optimization (local).
+    let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+    // Attach resolved context required to continue the pipeline.
+    let resolved_mir_plan = resolve(local_mir_plan);
+    // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global).
+    optimizer.catch_unwind_optimize(resolved_mir_plan)
 }
 
 // Optimizer configuration
@@ -163,6 +182,8 @@ pub struct OptimizerConfig {
     // If set, allow some additional queries down the Persist fast path when we believe
     // the orderings are compatible.
     persist_fast_path_order: bool,
+    // Enable calculating with_snapshot metadata for subscribes.
+    subscribe_snapshot_optimization: bool,
     /// Optimizer feature flags.
     pub features: OptimizerFeatures,
 }
@@ -182,6 +203,7 @@ impl From<&SystemVars> for OptimizerConfig {
             replan: None,
             no_fast_path: false,
             persist_fast_path_order: PERSIST_FAST_PATH_ORDER.get(vars.dyncfgs()),
+            subscribe_snapshot_optimization: SUBSCRIBE_SNAPSHOT_OPTIMIZATION.get(vars.dyncfgs()),
             features: OptimizerFeatures::from(vars),
         }
     }
@@ -220,7 +242,16 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
         Self {
             enable_new_outer_join_lowering: config.features.enable_new_outer_join_lowering,
             enable_variadic_left_join_lowering: config.features.enable_variadic_left_join_lowering,
-            enable_guard_subquery_tablefunc: config.features.enable_guard_subquery_tablefunc,
+            enable_cast_elimination: config.features.enable_cast_elimination,
+            enable_simplify_quantified_comparisons: config
+                .features
+                .enable_simplify_quantified_comparisons,
+            enable_fixed_correlated_cte_lowering: config
+                .features
+                .enable_fixed_correlated_cte_lowering,
+            enable_simplify_from_less_existence: config
+                .features
+                .enable_simplify_from_less_existence,
         }
     }
 }
@@ -267,6 +298,8 @@ pub enum OptimizerError {
         func: UnmaterializableFunc,
         context: &'static str,
     },
+    #[error("access to function {0} is restricted")]
+    RestrictedFunction(UnmaterializableFunc),
     #[error("{0}")]
     UnsupportedTemporalExpression(String),
     /// This is a specific kind of internal error. It's distinct from `Internal`, because we want to
@@ -289,6 +322,11 @@ impl OptimizerError {
             Self::UnmaterializableFunction(UnmaterializableFunc::CurrentTimestamp) => {
                 Some("See: https://materialize.com/docs/sql/functions/now_and_mz_now/".into())
             }
+            Self::RestrictedFunction(_) => Some(
+                "Access to system catalog objects is restricted for this role. \
+                Contact your administrator if you need access."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -334,6 +372,8 @@ fn optimize_mir_local(
     expr: MirRelationExpr,
     ctx: &mut TransformCtx,
 ) -> Result<OptimizedMirRelationExpr, OptimizerError> {
+    fail::fail_point!("optimize_mir_local");
+
     #[allow(deprecated)]
     let optimizer = mz_transform::Optimizer::logical_optimizer(ctx);
     let expr = optimizer.optimize(expr, ctx)?;

@@ -83,9 +83,7 @@ class TeleportLocalState:
         self.data[app_name] = existing
 
     def __str__(self):
-        return dedent(
-            f"""
+        return dedent(f"""
         TeleportLocalState:
             data: {self.data}
-        """
-        )
+        """)

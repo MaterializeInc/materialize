@@ -29,7 +29,8 @@ class SqlLogicTest(Service):
                 "MZ_SOFT_ASSERTIONS=1",
                 "LD_PRELOAD=libeatmydata.so",
             ]
-        environment += [
+        # Concatenate instead of appending so the caller's list is not mutated.
+        environment = environment + [
             "MZ_SYSTEM_PARAMETER_DEFAULT="
             + ";".join(
                 [

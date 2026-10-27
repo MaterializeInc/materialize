@@ -13,18 +13,17 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex};
 
 use mz_repr::namespaces::is_system_schema;
 use mz_repr::{
     CatalogItemId, ColumnIndex, RelationDesc, RelationVersionSelector, SqlColumnType, SqlScalarType,
 };
 use mz_sql_parser::ast::{
-    ColumnDef, ColumnName, ConnectionDefaultAwsPrivatelink, CreateMaterializedViewStatement,
-    RawItemName, ShowStatement, StatementKind, TableConstraint, UnresolvedDatabaseName,
-    UnresolvedSchemaName,
+    ColumnDef, ColumnName, CreateMaterializedViewStatement, RawItemName, ShowStatement,
+    StatementKind, TableConstraint, UnresolvedDatabaseName, UnresolvedSchemaName,
 };
-use mz_storage_types::connections::inline::ReferencedConnection;
-use mz_storage_types::connections::{AwsPrivatelink, Connection, SshTunnel, Tunnel};
+use mz_storage_types::connections::Connection;
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
@@ -39,7 +38,7 @@ use crate::names::{
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
-use crate::plan::{Params, Plan, PlanContext, PlanKind, query, with_options};
+use crate::plan::{Params, Plan, PlanContext, PlanKind, query};
 use crate::session::vars::FeatureFlag;
 
 mod acl;
@@ -119,6 +118,7 @@ pub fn describe(
         catalog,
         param_types: RefCell::new(param_types),
         ambiguous_columns: RefCell::new(false),
+        sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
     };
 
     let desc = match stmt {
@@ -152,6 +152,7 @@ pub fn describe(
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
         Statement::CreateSecret(stmt) => ddl::describe_create_secret(&scx, stmt)?,
         Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
+        Statement::CreateMetricSink(stmt) => ddl::describe_create_metric_sink(&scx, stmt)?,
         Statement::CreateWebhookSource(stmt) => ddl::describe_create_webhook_source(&scx, stmt)?,
         Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
         Statement::CreateSubsource(stmt) => ddl::describe_create_subsource(&scx, stmt)?,
@@ -164,7 +165,6 @@ pub fn describe(
         Statement::CreateMaterializedView(stmt) => {
             ddl::describe_create_materialized_view(&scx, stmt)?
         }
-        Statement::CreateContinualTask(stmt) => ddl::describe_create_continual_task(&scx, stmt)?,
         Statement::CreateNetworkPolicy(stmt) => ddl::describe_create_network_policy(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
@@ -195,6 +195,9 @@ pub fn describe(
         }
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
             show::describe_show_create_sink(&scx, stmt)?
+        }
+        Statement::Show(ShowStatement::ShowCreateMetricSink(stmt)) => {
+            show::describe_show_create_metric_sink(&scx, stmt)?
         }
         Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
             show::describe_show_create_source(&scx, stmt)?
@@ -257,6 +260,12 @@ pub fn describe(
             scl::describe_inspect_shard(&scx, stmt)?
         }
         Statement::ValidateConnection(stmt) => validate::describe_validate_connection(&scx, stmt)?,
+        Statement::ExecuteUnitTest(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "EXECUTE UNIT TEST statement".to_string(),
+                discussion_no: None,
+            });
+        }
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -286,7 +295,7 @@ pub fn plan(
     stmt: Statement<Aug>,
     params: &Params,
     resolved_ids: &ResolvedIds,
-) -> Result<Plan, PlanError> {
+) -> Result<(Plan, ResolvedIds), PlanError> {
     let param_types = params
         // We need the `expected_types` here, not the `actual_types`! This is because
         // `expected_types` is how the parameter expression (e.g. `$1`) looks "from the outside":
@@ -305,6 +314,7 @@ pub fn plan(
         catalog,
         param_types: RefCell::new(param_types),
         ambiguous_columns: RefCell::new(false),
+        sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
     };
 
     if resolved_ids
@@ -351,6 +361,7 @@ pub fn plan(
         Statement::CreateSchema(stmt) => ddl::plan_create_schema(scx, stmt),
         Statement::CreateSecret(stmt) => ddl::plan_create_secret(scx, stmt),
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
+        Statement::CreateMetricSink(stmt) => ddl::plan_create_metric_sink(scx, stmt),
         Statement::CreateWebhookSource(stmt) => ddl::plan_create_webhook_source(scx, stmt),
         Statement::CreateSource(stmt) => ddl::plan_create_source(scx, stmt),
         Statement::CreateSubsource(stmt) => ddl::plan_create_subsource(scx, stmt),
@@ -359,7 +370,6 @@ pub fn plan(
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
         Statement::CreateView(stmt) => ddl::plan_create_view(scx, stmt),
         Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
-        Statement::CreateContinualTask(stmt) => ddl::plan_create_continual_task(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
@@ -405,6 +415,9 @@ pub fn plan(
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
             show::plan_show_create_sink(scx, stmt).map(Plan::ShowCreate)
         }
+        Statement::Show(ShowStatement::ShowCreateMetricSink(stmt)) => {
+            show::plan_show_create_metric_sink(scx, stmt).map(Plan::ShowCreate)
+        }
         Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
             show::plan_show_create_source(scx, stmt).map(Plan::ShowCreate)
         }
@@ -444,6 +457,12 @@ pub fn plan(
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
         Statement::Show(ShowStatement::InspectShard(stmt)) => scl::plan_inspect_shard(scx, stmt),
         Statement::ValidateConnection(stmt) => validate::plan_validate_connection(scx, stmt),
+        Statement::ExecuteUnitTest(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "EXECUTE UNIT TEST statement".to_string(),
+                discussion_no: None,
+            });
+        }
     };
 
     if let Ok(plan) = &plan {
@@ -455,7 +474,17 @@ pub fn plan(
         );
     }
 
-    plan
+    // Return the plan along with any resolved IDs accumulated from sql_impl
+    // function bodies. These are kept separate from the main resolved_ids
+    // because they are implementation details of the functions, not real
+    // dependencies of the statement. They should only be used for the
+    // restrict_to_user_objects RBAC check.
+    let sql_impl_ids = scx
+        .sql_impl_resolved_ids
+        .lock()
+        .expect("planning is single-threaded")
+        .clone();
+    plan.map(|p| (p, sql_impl_ids))
 }
 
 pub fn plan_copy_from(
@@ -481,6 +510,7 @@ impl PartialEq<ObjectType> for CatalogItemType {
             (CatalogItemType::Source, ObjectType::Source)
             | (CatalogItemType::Table, ObjectType::Table)
             | (CatalogItemType::Sink, ObjectType::Sink)
+            | (CatalogItemType::MetricSink, ObjectType::MetricSink)
             | (CatalogItemType::View, ObjectType::View)
             | (CatalogItemType::MaterializedView, ObjectType::MaterializedView)
             | (CatalogItemType::Index, ObjectType::Index)
@@ -513,6 +543,16 @@ pub struct StatementContext<'a> {
     /// Whether the statement contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`. This is filled in as planning occurs.
     pub ambiguous_columns: RefCell<bool>,
+    /// Accumulates resolved IDs from SQL-implemented function bodies (`sql_impl_func`,
+    /// `sql_impl_table_func`). These are kept separate from the statement's main
+    /// `resolved_ids` because they are implementation details of the functions, not
+    /// real dependencies of the statement. They are only used for the
+    /// `restrict_to_user_objects` RBAC check.
+    ///
+    /// Uses `Arc<Mutex<_>>` so that cloned `StatementContext`s (as in `sql_impl`)
+    /// share the same underlying storage. `Arc` (vs `Rc`) is needed because
+    /// `StatementContext` must be `Send`.
+    pub sql_impl_resolved_ids: Arc<Mutex<ResolvedIds>>,
 }
 
 impl<'a> StatementContext<'a> {
@@ -525,6 +565,7 @@ impl<'a> StatementContext<'a> {
             catalog,
             param_types: Default::default(),
             ambiguous_columns: RefCell::new(false),
+            sql_impl_resolved_ids: Arc::new(Mutex::new(ResolvedIds::empty())),
         }
     }
 
@@ -541,6 +582,18 @@ impl<'a> StatementContext<'a> {
 
     pub fn pcx(&self) -> Result<&PlanContext, PlanError> {
         self.pcx.ok_or_else(|| sql_err!("no plan context"))
+    }
+
+    /// Records resolved IDs from a SQL-implemented expression body (e.g. a SHOW
+    /// command's inner query or an EXPLAIN ANALYZE query) into the accumulator
+    /// checked by `restrict_to_user_objects`. These are kept separate from the
+    /// statement's main `resolved_ids` because they are implementation details,
+    /// not real dependencies.
+    pub(crate) fn record_sql_impl_ids(&self, ids: &ResolvedIds) {
+        self.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded")
+            .extend_from(ids);
     }
 
     pub fn allocate_full_name(&self, name: PartialItemName) -> Result<FullItemName, PlanError> {
@@ -760,7 +813,6 @@ impl<'a> StatementContext<'a> {
                 Ok(self.get_item(id).at_version(*version))
             }
             ResolvedItemName::Cte { .. } => sql_bail!("non-user item"),
-            ResolvedItemName::ContinualTask { .. } => sql_bail!("non-user item"),
             ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
         }
     }
@@ -873,52 +925,14 @@ impl<'a> StatementContext<'a> {
 
     /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
     /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
-    pub fn humanize_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
-        self.catalog.humanize_scalar_type(typ, postgres_compat)
+    pub fn humanize_sql_scalar_type(&self, typ: &SqlScalarType, postgres_compat: bool) -> String {
+        self.catalog.humanize_sql_scalar_type(typ, postgres_compat)
     }
 
     /// The returned String is more detailed when the `postgres_compat` flag is not set. However,
     /// the flag should be set in, e.g., the implementation of the `pg_typeof` function.
     pub fn humanize_column_type(&self, typ: &SqlColumnType, postgres_compat: bool) -> String {
-        self.catalog.humanize_column_type(typ, postgres_compat)
-    }
-
-    pub(crate) fn build_tunnel_definition(
-        &self,
-        ssh_tunnel: Option<with_options::Object>,
-        aws_privatelink: Option<ConnectionDefaultAwsPrivatelink<Aug>>,
-    ) -> Result<Tunnel<ReferencedConnection>, PlanError> {
-        match (ssh_tunnel, aws_privatelink) {
-            (None, None) => Ok(Tunnel::Direct),
-            (Some(ssh_tunnel), None) => {
-                let id = CatalogItemId::from(ssh_tunnel);
-                let ssh_tunnel = self.catalog.get_item(&id);
-                match ssh_tunnel.connection()? {
-                    Connection::Ssh(_connection) => Ok(Tunnel::Ssh(SshTunnel {
-                        connection_id: id,
-                        connection: id,
-                    })),
-                    _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
-                }
-            }
-            (None, Some(aws_privatelink)) => {
-                let id = aws_privatelink.connection.item_id().clone();
-                let entry = self.catalog.get_item(&id);
-                match entry.connection()? {
-                    Connection::AwsPrivatelink(_) => Ok(Tunnel::AwsPrivatelink(AwsPrivatelink {
-                        connection_id: id,
-                        // By default we do not specify an availability zone for the tunnel.
-                        availability_zone: None,
-                        // We always use the port as specified by the top-level connection.
-                        port: aws_privatelink.port,
-                    })),
-                    _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
-                }
-            }
-            (Some(_), Some(_)) => {
-                sql_bail!("cannot specify both SSH TUNNEL and AWS PRIVATELINK");
-            }
-        }
+        self.catalog.humanize_sql_column_type(typ, postgres_compat)
     }
 
     pub fn relation_desc_into_table_defs(
@@ -1069,13 +1083,13 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateCluster(_) => DDL,
             Statement::CreateClusterReplica(_) => DDL,
             Statement::CreateConnection(_) => DDL,
-            Statement::CreateContinualTask(_) => DDL,
             Statement::CreateDatabase(_) => DDL,
             Statement::CreateIndex(_) => DDL,
             Statement::CreateRole(_) => DDL,
             Statement::CreateSchema(_) => DDL,
             Statement::CreateSecret(_) => DDL,
             Statement::CreateSink(_) => DDL,
+            Statement::CreateMetricSink(_) => DDL,
             Statement::CreateWebhookSource(_) => DDL,
             Statement::CreateSource(_) => DDL,
             Statement::CreateSubsource(_) => DDL,
@@ -1117,6 +1131,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Show(ShowStatement::ShowCreateCluster(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateIndex(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateSink(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateMetricSink(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateSource(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateTable(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateView(_)) => Show,
@@ -1146,6 +1161,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Raise(_) => Other,
             Statement::Show(ShowStatement::InspectShard(_)) => Other,
             Statement::ValidateConnection(_) => Other,
+            Statement::ExecuteUnitTest(_) => Other,
         }
     }
 }

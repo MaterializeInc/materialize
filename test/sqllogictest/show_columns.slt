@@ -1,0 +1,64 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test for `SHOW COLUMNS`. The mz_internal.mz_show_columns view joins
+# mz_columns against mz_comments. The join must be predicated on
+# `object_type` so that stale comment rows left over from a builtin
+# schema migration (e.g. Table -> MaterializedView) do not multiply
+# the result. See PR #36674.
+
+mode standard
+
+reset-server
+
+# Each catalog item should report exactly one row per column from
+# SHOW COLUMNS, regardless of whether it's a Table or MaterializedView.
+
+query I
+SELECT COUNT(*) FROM (SHOW COLUMNS FROM mz_sources)
+----
+15
+
+query I
+SELECT COUNT(*) FROM (SHOW COLUMNS FROM mz_tables)
+----
+9
+
+query I
+SELECT COUNT(*) FROM (SHOW COLUMNS FROM mz_secrets)
+----
+6
+
+# A user-created relation must also work.
+statement ok
+CREATE TABLE t (a int, b text)
+
+query I
+SELECT COUNT(*) FROM (SHOW COLUMNS FROM t)
+----
+2
+
+# Comments on columns should still surface in SHOW COLUMNS.
+statement ok
+COMMENT ON COLUMN t.a IS 'a_comment'
+
+query TT rowsort
+SELECT name, comment FROM (SHOW COLUMNS FROM t)
+----
+a
+a_comment
+b
+(empty)
+
+# Regression: even if mz_comments holds rows for the same id under
+# multiple object_types (which can happen after a builtin type change
+# where the catalog id is preserved), SHOW COLUMNS must still emit
+# exactly one row per column. We can't directly inject a stale row
+# from SQL (mz_comments is system-managed), but we lock in the count
+# expectations above so any reintroduction of the bug fails here.

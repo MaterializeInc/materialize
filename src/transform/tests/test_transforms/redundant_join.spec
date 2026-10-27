@@ -36,7 +36,7 @@ Source defined as t1
 #   dereferenced_projection: [#0, #1],
 #   exact: true
 # }]
-apply pipeline=redundant_join
+apply pipeline=RedundantJoin
 Get x
 ----
 Get x
@@ -47,7 +47,7 @@ Get x
 #   dereferenced_projection: [#1, #1, #0],
 #   exact: true
 # }]
-apply pipeline=redundant_join
+apply pipeline=RedundantJoin
 Project (#0, #0, #1)
   Project (#1, #0)
     Get x
@@ -62,7 +62,7 @@ Project (#0, #0, #1)
 #   dereferenced_projection: [#1, #0, _, #1 > #0]
 #   exact: true
 # }]
-apply pipeline=redundant_join
+apply pipeline=RedundantJoin
 Map (5, #0 > #1)
   Project (#1, #0)
     Get x
@@ -77,7 +77,7 @@ Map (5, (#0 > #1))
 #   dereferenced_projection: [#0, #1]
 #   exact: false
 # }]
-apply pipeline=redundant_join
+apply pipeline=RedundantJoin
 Filter #0 > 5
   Get x
 ----
@@ -95,7 +95,7 @@ Filter (#0 > 5)
 #   dereferenced_projection: [#2, #1, #0, #1, #0 > #1],
 #   exact: true
 # }]
-apply pipeline=redundant_join
+apply pipeline=RedundantJoin
 Return
   Map (#1, (#2 > #1))
     Project (#2, #1, #0)
@@ -120,7 +120,7 @@ Return
 # --------------------------
 
 # 2-way join, rhs
-apply pipeline=redundant_join
+apply pipeline=RedundantJoin
 Join on=(#0 = #2)
   Get x
   Distinct project=[#0]
@@ -132,7 +132,7 @@ Project (#0..=#2)
       Get x
 
 # 2-way join, rhs references a local binding with the same properties as above.
-apply pipeline=redundant_join
+apply pipeline=RedundantJoin
 Return
   Join on=(#0 = #2)
     Get x
@@ -157,7 +157,7 @@ Return
 #
 # This is sensitive to skipping empty projections the `is_trivial` method
 # when pruning `ProvInfo` instances.
-apply pipeline=redundant_join
+apply pipeline=RedundantJoin
 Project (#1, #2, #0)
   Map (123, 0)
     Join on=(0 = #0)
@@ -179,7 +179,7 @@ Project (#1, #2, #0)
 
 
 # Project around a LetRec (1)
-apply pipeline=redundant_join
+apply pipeline=RedundantJoin
 Return
   Get l0
 With Mutually Recursive
@@ -207,7 +207,7 @@ Return
 
 
 # Ensure that we're not double-counting in `remove_uses`.
-apply pipeline=redundant_join
+apply pipeline=RedundantJoin
 Return
   Get l1
 With Mutually Recursive

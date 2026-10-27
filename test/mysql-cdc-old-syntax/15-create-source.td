@@ -106,3 +106,9 @@ contains: unknown
 
 > SELECT * FROM baz.t2;
 5
+
+# Verify that using the new CREATE TABLE FROM SOURCE syntax fails when binlog_row_metadata is not FULL
+> CREATE SOURCE da_new FROM MYSQL CONNECTION mysqc;
+
+! CREATE TABLE t1_new FROM SOURCE da_new (REFERENCE public.t1);
+contains: binlog_row_metadata

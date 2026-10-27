@@ -13,21 +13,20 @@ Uses the frontegg-mock instead of a real frontend backend.
 """
 
 import contextlib
-import datetime
 import json
 import socket
 import ssl
 import struct
+import subprocess
 import time
 import uuid
-from collections.abc import Callable
 from textwrap import dedent
-from typing import Any
 from urllib.parse import quote
 
 import pg8000
+import psycopg
 import requests
-from pg8000.exceptions import InterfaceError
+from pg8000.exceptions import DatabaseError
 from psycopg import Cursor
 from psycopg.errors import OperationalError, ProgramLimitExceeded, ProgrammingError
 
@@ -44,6 +43,7 @@ from materialize.mzcompose.services.testdrive import Testdrive
 TENANT_ID = str(uuid.uuid4())
 ADMIN_USER = "u1@example.com"
 OTHER_USER = "u2@example.com"
+GROUP_SYNC_USER = "u3@example.com"
 ADMIN_ROLE = "MaterializePlatformAdmin"
 OTHER_ROLE = "MaterializePlatform"
 USERS = {
@@ -62,6 +62,19 @@ USERS = {
     },
     OTHER_USER: {
         "email": OTHER_USER,
+        "password": str(uuid.uuid4()),
+        "id": str(uuid.uuid4()),
+        "tenant_id": TENANT_ID,
+        "initial_api_tokens": [
+            {
+                "client_id": str(uuid.uuid4()),
+                "secret": str(uuid.uuid4()),
+            }
+        ],
+        "roles": [OTHER_ROLE],
+    },
+    GROUP_SYNC_USER: {
+        "email": GROUP_SYNC_USER,
         "password": str(uuid.uuid4()),
         "id": str(uuid.uuid4()),
         "tenant_id": TENANT_ID,
@@ -111,12 +124,19 @@ SERVICES = [
             # balancerd.
             DnsmasqEntry(
                 type="cname",
-                key="materialized",
+                key="sni.test",
                 value="environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
             ),
             DnsmasqEntry(
                 type="address",
                 key="environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
+                value=STATIC_IPS["materialized"],
+            ),
+            # An A record with no CNAME, to exercise the resolver's no-CNAME
+            # fallback path (see workflow_pgwire_with_sni_no_cname).
+            DnsmasqEntry(
+                type="address",
+                key="direct.test",
                 value=STATIC_IPS["materialized"],
             ),
         ],
@@ -133,8 +153,12 @@ SERVICES = [
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
+            # HTTPS resolves directly to materialized. The generic HTTPS tests
+            # (http, ip-forwarding) do not run dnsmasq, so this must resolve
+            # without the sni.test CNAME. Workflows that exercise SNI routing
+            # over pgwire start dnsmasq and rely on the pgwire template below.
             "--https-sni-resolver-template=materialized:6876",
-            "--pgwire-sni-resolver-template=materialized:6875",
+            "--pgwire-sni-resolver-template=sni.test:6875",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
             "--internal-tls",
@@ -182,7 +206,7 @@ SERVICES = [
         volumes_extra=[
             "secrets:/secrets",
         ],
-        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth_https.json",
+        listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth_https.json",
         networks={"balancerd": {"ipv4_address": STATIC_IPS["materialized"]}},
     ),
 ]
@@ -201,15 +225,22 @@ def grant_all_admin_user(c: Composition):
 
 
 # Assert that contains is present in balancer metrics.
+# Per-connection metrics (tx/rx) are only recorded once the proxied connection
+# closes, and there is a short delay between the client disconnecting and
+# balancerd recording them, so poll for a few seconds.
 def assert_metrics(c: Composition, contains: str):
-    result = c.exec(
-        "materialized",
-        "curl",
-        "http://balancerd:6878/metrics",
-        "-s",
-        capture=True,
-    )
-    assert contains in result.stdout
+    for _ in range(20):
+        result = c.exec(
+            "materialized",
+            "curl",
+            "http://balancerd:6878/metrics",
+            "-s",
+            capture=True,
+        )
+        if contains in result.stdout:
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"{contains!r} not found in balancerd metrics")
 
 
 def sql_cursor(
@@ -222,6 +253,29 @@ def sql_cursor(
         sslmode="require",
         startup_params=startup_params,
     )
+
+
+def sni_sql_cursor(
+    c: Composition, service="balancerd", email="u1@example.com"
+) -> Cursor:
+    """Connect so that the client sends TLS SNI, unlike sql_cursor.
+
+    libpq only sends SNI when host is a hostname, so connecting to 127.0.0.1
+    silently takes balancerd's Frontegg resolver path instead of the SNI
+    path. host=localhost supplies the SNI while hostaddr pins the TCP
+    connection to 127.0.0.1.
+    """
+    conn = psycopg.connect(
+        host="localhost",
+        hostaddr="127.0.0.1",
+        port=c.default_port(service),
+        user=email,
+        password=app_password(email),
+        dbname="materialize",
+        sslmode="require",
+    )
+    conn.autocommit = True
+    return conn.cursor()
 
 
 def pg8000_sql_cursor(
@@ -331,6 +385,36 @@ def workflow_http(c: Composition) -> None:
     # because there's no CNAME. Does docker-compose support this somehow?
 
 
+def create_proxy_protocol_v2_header(
+    client_ip: str, client_port: int, server_ip: str, server_port: int
+) -> bytes:
+    """Create a PROXY Protocol v2 header for IPv4 TCP."""
+    # Signature for Proxy Protocol v2
+    signature = b"\r\n\r\n\x00\r\nQUIT\n"
+    # Version and command (0x21 means version 2, PROXY command)
+    version_and_command = 0x21
+    # Address family and protocol (0x11 means INET (IPv4) + STREAM (TCP))
+    family_and_protocol = 0x11
+    # Source and destination address are sent as bytes.
+    src_addr = socket.inet_aton(client_ip)
+    dst_addr = socket.inet_aton(server_ip)
+    # Pack ports into 2-byte unsigned integers
+    src_port = struct.pack("!H", client_port)
+    dst_port = struct.pack("!H", server_port)
+    # Length of the address information (IPv4(4*2) + ports(1*2) = 12 bytes)
+    addr_len = struct.pack("!H", 12)
+    # Construct the final Proxy Protocol v2 header
+    return (
+        signature
+        + struct.pack("!BB", version_and_command, family_and_protocol)
+        + addr_len
+        + src_addr
+        + dst_addr
+        + src_port
+        + dst_port
+    )
+
+
 def workflow_ip_forwarding(c: Composition) -> None:
     """Test that forwarding the client IP through the balancer works over both HTTP and SQL."""
     c.up("balancerd", "frontegg-mock", "materialized")
@@ -345,18 +429,18 @@ def workflow_ip_forwarding(c: Composition) -> None:
 
     # We want to make sure the request we're making through the balancer does not use the balancers
     # ip for the sessions.
-    # https://stackoverflow.com/questions/5281341/get-local-network-interface-addresses-using-only-proc
-    balancer_ip = [
-        ip
-        for ip in c.exec(
-            "balancerd",
-            "awk",
-            r"/32 host/ { print i } {i=$2}",
-            "/proc/net/fib_trie",
-            capture=True,
-        ).stdout.split("\n")
-        if ip != "127.0.0.1"
-    ][0]
+    container_id = c.container_id("balancerd")
+    assert container_id is not None
+    balancer_ip = subprocess.check_output(
+        [
+            "docker",
+            "inspect",
+            "-f",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            container_id,
+        ],
+        text=True,
+    ).strip()
 
     r = requests.post(
         f"https://localhost:{balancer_port}/api/sql",
@@ -383,36 +467,6 @@ def workflow_ip_forwarding(c: Composition) -> None:
         session_ip != balancer_ip
     ), f"requests from ({session_ip}) proxied by balancer should not use balancer ip ({balancer_ip}) in session"
 
-    def create_proxy_protocol_v2_header(
-        client_ip: str, client_port: int, server_ip: str, server_port: int
-    ):
-        # Signature for Proxy Protocol v2
-        signature = b"\r\n\r\n\x00\r\nQUIT\n"
-        # Version and command (0x21 means version 2, PROXY command)
-        version_and_command = 0x21
-        # Address family and protocol (0x11 means INET (IPv4) + STREAM (TCP))
-        family_and_protocol = 0x11
-        # Source and destination address are sent as bytes.
-        src_addr = socket.inet_aton(client_ip)
-        dst_addr = socket.inet_aton(server_ip)
-        # Pack ports into 2-byte unsigned integers
-        src_port = struct.pack("!H", client_port)
-        dst_port = struct.pack("!H", server_port)
-        # Length of the address information (IPv4(4*2) + ports(1*2) = 12 bytes)
-        addr_len = struct.pack("!H", 12)
-        # Construct the final Proxy Protocol v2 header
-        header = (
-            signature
-            + struct.pack("!BB", version_and_command, family_and_protocol)
-            + addr_len
-            + src_addr
-            + dst_addr
-            + src_port
-            + dst_port
-        )
-
-        return header
-
     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
         sock.connect(("127.0.0.1", materialize_port))
 
@@ -428,16 +482,14 @@ def workflow_ip_forwarding(c: Composition) -> None:
         }
         json_data = json.dumps(json_data)
         content_length = len(json_data.encode())
-        http_sql_query_request = dedent(
-            f"""\
+        http_sql_query_request = dedent(f"""\
             POST /api/sql HTTP/1.1\r
             Host: 127.0.0.1:{materialize_port}\r
             Authorization: Basic {OTHER_USER}:{app_password(OTHER_USER)}\r
             Content-Type: application/json\r
             Content-Length: {content_length}\r
             \r
-            {json_data}"""
-        )
+            {json_data}""")
         sock.sendall(proxy_header + http_sql_query_request.encode())
 
         # read and parse the response
@@ -522,7 +574,12 @@ def workflow_long_query(c: Composition) -> None:
         assert (
             "server closed the connection unexpectedly" in msg
             or "EOF detected" in msg
+            or "unexpected eof while reading" in msg
             or "frame size too big" in msg
+            # pgwire reports the oversized frame itself since #38809:
+            # "frame of N bytes exceeds the M byte limit". Which of that
+            # and the connection close the client sees first is a race.
+            or "exceeds the" in msg
         )
     except:
         raise RuntimeError("execute() threw an unexpected exception")
@@ -564,29 +621,19 @@ def workflow_pgwire_param_rejection(c: Composition) -> None:
     """Parameters should be rejected"""
     c.up("balancerd", "frontegg-mock", "materialized")
 
-    def check_error(
-        message: str, f: Callable[..., Any], ExpectedError: type[Exception]
-    ):
-        try:
-            f()
-        except ExpectedError:
-            return
-        raise AssertionError(f"Expected {message} to raise {ExpectedError}")
-
     # Uses pg8000, because with psycopg/libpq only a notice is printed, and
     # catching it during the connection process is not easy:
     # NOTICE:  startup setting mz_forwarded_for not set: unrecognized configuration parameter "mz_forwarded_for"
-    check_error(
-        "connect with mz_forwarded_for param",
-        lambda: pg8000_sql_cursor(c, startup_params={"mz_forwarded_for": "1.1.1.1"}),
-        InterfaceError,
-    )
-
-    check_error(
-        "connect with mz_connection_uuid param",
-        lambda: pg8000_sql_cursor(c, startup_params={"mz_connection_uuid": "123456"}),
-        InterfaceError,
-    )
+    for param, value in [
+        ("mz_forwarded_for", "1.1.1.1"),
+        ("mz_connection_uuid", "123456"),
+    ]:
+        try:
+            pg8000_sql_cursor(c, startup_params={param: value})
+        except DatabaseError as e:
+            assert e.args[0]["M"] == f"invalid parameter '{param}'", e
+            continue
+        raise AssertionError(f"Expected connecting with {param} to be rejected")
 
 
 def workflow_balancerd_restarted(c: Composition) -> None:
@@ -609,6 +656,7 @@ def workflow_balancerd_restarted(c: Composition) -> None:
         msg = str(e)
         assert (
             "EOF detected" in msg
+            or "unexpected eof while reading" in msg
             or "failed to lookup address information: Name or service not known" in msg
         )
     except:
@@ -626,9 +674,17 @@ def workflow_mz_not_running(c: Composition) -> None:
         sql_cursor(c)
         raise RuntimeError("connect() expected to fail")
     except OperationalError as e:
+        # With Mz down, balancerd cannot reach the tenant's backend and reports
+        # it to the client as "upstream server not available" (a resolve
+        # failure and a refused connection both surface this way), without
+        # leaking the underlying DNS or connection error. The remaining strings
+        # are defensive fallbacks for client-side failures depending on how the
+        # connection drops.
         assert any(
             expected in str(e)
             for expected in [
+                "internal error",
+                "upstream server not available",
                 "No route to host",
                 "Connection timed out",
                 "failure in name resolution",
@@ -636,7 +692,7 @@ def workflow_mz_not_running(c: Composition) -> None:
                 "Name or service not known",
                 "SSL connection has been closed unexpectedly",
             ]
-        )
+        ), f"unexpected error connecting with Mz down: {e}"
     except:
         raise RuntimeError("connect() threw an unexpected exception")
 
@@ -659,9 +715,8 @@ def workflow_user(c: Composition) -> None:
                 "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
                 f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
                 f"--frontegg-admin-role={ADMIN_ROLE}",
-                "--https-sni-resolver-template=materialized:6876",
-                # We want to use the frontegg resolver in this
-                "--pgwire-sni-resolver-template=materialized:6875",
+                "--https-sni-resolver-template=sni.test:6876",
+                "--pgwire-sni-resolver-template=sni.test:6875",
                 "--tls-key=/secrets/balancerd.key",
                 "--tls-cert=/secrets/balancerd.crt",
                 "--internal-tls",
@@ -679,9 +734,11 @@ def workflow_user(c: Composition) -> None:
         ),
     ):
         c.up("balancerd", "dnsmasq", "frontegg-mock", "materialized")
-        # Metrics aren't recorded until the connection has closed
-        # Non-admin user.
-        with contextlib.closing(sql_cursor(c, email=OTHER_USER)) as cursor:
+        # Non-admin user. Close the connection, not just the cursor: the tx/rx
+        # metrics are only recorded once balancerd finishes proxying, which
+        # happens when the client connection closes.
+        cursor = sql_cursor(c, email=OTHER_USER)
+        with contextlib.closing(cursor.connection):
             try:
                 cursor.execute("DROP DATABASE materialize CASCADE")
                 raise RuntimeError("execute() expected to fail")
@@ -692,10 +749,61 @@ def workflow_user(c: Composition) -> None:
 
             cursor.execute("SELECT current_user()")
             assert OTHER_USER in str(cursor.fetchall())
-            cursor.close()
 
         assert_metrics(c, 'mz_balancer_tenant_connection_active{source="pgwire"')
         assert_metrics(c, 'mz_balancer_tenant_connection_rx{source="pgwire"')
+
+
+def workflow_max_connections(c: Composition) -> None:
+    """Test that connections beyond balancerd's limit are refused with a clear error."""
+    with c.override(
+        Balancerd(
+            command=[
+                "--startup-log-filter=debug",
+                "service",
+                "--pgwire-listen-addr=0.0.0.0:6875",
+                "--https-listen-addr=0.0.0.0:6876",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--frontegg-resolver-template=materialized:6875",
+                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+                f"--frontegg-admin-role={ADMIN_ROLE}",
+                "--https-sni-resolver-template=materialized:6876",
+                "--pgwire-sni-resolver-template=sni.test:6875",
+                "--tls-key=/secrets/balancerd.key",
+                "--tls-cert=/secrets/balancerd.crt",
+                "--internal-tls",
+                "--tls-mode=require",
+                "--default-config=balancerd_max_connections=1",
+                # Nonsensical but we don't need cancellations here
+                "--cancellation-resolver-dir=/secrets/",
+            ],
+            depends_on=["test-certs"],
+            volumes=[
+                "secrets:/secrets",
+            ],
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["balancerd"]}},
+            dns=[STATIC_IPS["dnsmasq"]],
+        ),
+    ):
+        c.up("balancerd", "dnsmasq", "frontegg-mock", "materialized")
+        cursor = sql_cursor(c)
+        with contextlib.closing(cursor.connection):
+            try:
+                sql_cursor(c)
+                raise RuntimeError("connect() expected to fail")
+            except OperationalError as e:
+                # The limit is applied at accept, before the client has sent anything, so
+                # the refusal is a closed socket rather than a pgwire error message.
+                assert "server closed the connection unexpectedly" in str(e), e
+
+            # The established connection is unaffected by the rejection.
+            cursor.execute("SELECT 'abc'")
+            assert cursor.fetchall() == [("abc",)]
+
+        # Match the line ending so that a larger count does not satisfy the assert.
+        assert_metrics(c, "mz_balancer_connection_rejected_total 1\n")
+        assert_metrics(c, "mz_balancer_connection_limit 1\n")
 
 
 def workflow_many_connections(c: Composition) -> None:
@@ -759,21 +867,268 @@ def workflow_pgwire_with_sni(c: Composition) -> None:
         "materialized",
         Service("testdrive", idle=True),
     )
-    # We're going to run this using ssl and, notably, without frontegg mock.
-    # This should mean that we need to rely on SNI to do tenant resolution
-    cursor = sql_cursor(c)
+    # The cursor must send SNI for balancerd to take the SNI resolution path,
+    # and frontegg mock is not necessarily up, so Frontegg resolution cannot
+    # be relied on as a fallback.
+    cursor = sni_sql_cursor(c)
     cursor.execute("select 1;")
+    # The tenant is extracted from the CNAME behind the SNI template (see the
+    # dnsmasq entries).
+    assert_metrics(
+        c,
+        'mz_balancer_tenant_pgwire_sni_count{has_sni="true",tenant="58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3"}',
+    )
 
 
-def retry(fn: Callable, timeout: int) -> None:
-    end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=timeout)
-    ).timestamp()
-    while time.time() < end_time:
-        try:
-            fn()
-            return
-        except:
-            pass
-        time.sleep(1)
-    fn()
+def workflow_pgwire_with_sni_no_cname(c: Composition) -> None:
+    """Like workflow_pgwire_with_sni, but the SNI templates resolve directly
+    to an A record with no CNAME, exercising the resolver's no-CNAME fallback
+    path (no tenant can be extracted, but routing must still work).
+
+    This mirrors self-managed deployments, where orchestratord points the
+    resolver templates at plain Kubernetes services that resolve to A records
+    without a CNAME. It is also the degraded path in cloud when a CNAME
+    lookup transiently fails."""
+    with c.override(
+        Balancerd(
+            command=[
+                "--startup-log-filter=debug",
+                "service",
+                "--pgwire-listen-addr=0.0.0.0:6875",
+                "--https-listen-addr=0.0.0.0:6876",
+                "--internal-http-listen-addr=0.0.0.0:6878",
+                "--frontegg-resolver-template=materialized:6875",
+                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+                f"--frontegg-admin-role={ADMIN_ROLE}",
+                "--https-sni-resolver-template=direct.test:6876",
+                "--pgwire-sni-resolver-template=direct.test:6875",
+                "--tls-key=/secrets/balancerd.key",
+                "--tls-cert=/secrets/balancerd.crt",
+                "--internal-tls",
+                "--tls-mode=require",
+                "--default-config=balancerd_inject_proxy_protocol_header_http=true",
+                # Nonsensical but we don't need cancellations here
+                "--cancellation-resolver-dir=/secrets/",
+            ],
+            depends_on=["test-certs"],
+            volumes=[
+                "secrets:/secrets",
+            ],
+            dns=[STATIC_IPS["dnsmasq"]],
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["balancerd"]}},
+        ),
+    ):
+        c.up(
+            "balancerd",
+            "dnsmasq",
+            "materialized",
+            Service("testdrive", idle=True),
+        )
+        cursor = sni_sql_cursor(c)
+        cursor.execute("select 1;")
+        # Routing worked, but with no CNAME there is no tenant to extract.
+        assert_metrics(
+            c,
+            'mz_balancer_tenant_pgwire_sni_count{has_sni="true",tenant="unknown"}',
+        )
+
+
+def workflow_split_proxy_header(c: Composition) -> None:
+    """Test that a PROXY v2 header split across TCP segments is handled correctly.
+
+    Regression test: when a PROXY v2 header arrives in multiple TCP segments
+    (e.g., due to Nagle's algorithm or network segmentation between balancerd
+    and environmentd), the server must wait for the complete header before
+    proceeding with HTTP request handling. Without the fix, the partial header
+    bytes remain in the stream and corrupt the subsequent HTTP parsing.
+    """
+    c.up("balancerd", "frontegg-mock", "materialized")
+    materialize_port = c.port("materialized", 6878)
+
+    proxy_hdr = create_proxy_protocol_v2_header("2.2.2.2", 2222, "127.0.0.1", 2222)
+    json_data = json.dumps({"query": "SELECT 42 AS answer"})
+    content_length = len(json_data.encode())
+    http_request = dedent(f"""\
+        POST /api/sql HTTP/1.1\r
+        Host: 127.0.0.1:{materialize_port}\r
+        Authorization: Basic {OTHER_USER}:{app_password(OTHER_USER)}\r
+        Content-Type: application/json\r
+        Content-Length: {content_length}\r
+        \r
+        {json_data}""").encode()
+
+    # Split the 28-byte proxy header at byte 8 (middle of the 12-byte
+    # signature). Send the first fragment, wait for the server to peek
+    # it, then send the rest along with the HTTP request.
+    split_point = 8
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.connect(("127.0.0.1", materialize_port))
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+        sock.sendall(proxy_hdr[:split_point])
+        time.sleep(0.2)
+        sock.sendall(proxy_hdr[split_point:] + http_request)
+
+        sock.settimeout(10)
+        tcp_resp = sock.recv(8192)
+        body_separator = b"\r\n\r\n"
+        resp_split = tcp_resp.split(body_separator)
+        assert (
+            len(resp_split) > 1
+        ), f"expected response with header and body, found: {resp_split}"
+        body = resp_split[1]
+        assert (
+            json.loads(body)["results"][0]["rows"][0][0] == "42"
+        ), f"unexpected response body: {body}"
+
+
+def _frontegg_curl(
+    c: Composition, method: str, path: str, body: dict | None = None
+) -> str:
+    args = [
+        "curl",
+        "-s",
+        "-X",
+        method,
+        "-H",
+        "Content-Type: application/json",
+        f"{FRONTEGG_URL}{path}",
+    ]
+    if body is not None:
+        args += ["-d", json.dumps(body)]
+    return c.exec("materialized", *args, capture=True).stdout
+
+
+def _user_is_member_of(cursor: Cursor, user: str, role: str) -> bool:
+    cursor.execute(
+        """
+        SELECT count(*) FROM mz_role_members rm
+        JOIN mz_roles r ON rm.role_id = r.id
+        JOIN mz_roles m ON rm.member = m.id
+        WHERE m.name = %s AND r.name = %s
+        """,
+        (user, role),
+    )
+    row = cursor.fetchone()
+    assert row is not None
+    return row[0] > 0
+
+
+def workflow_frontegg_group_sync_stale_groups(c: Composition) -> None:
+    """Regression: a cached Frontegg auth session must observe group
+    revocations within one refresh cycle.
+
+    Before the fix, ``AuthSessionIdent`` froze the JWT groups at first login.
+    Cache hits returned the stale value forever, so a user removed from a
+    group in the IdP kept its synced role until their session expired
+    (~24h). The fix pushes fresh groups through a `watch::channel` on every
+    refresh, so the next login that hits the cache picks them up.
+
+    This test drives short-expiry tokens so the background refresh fires
+    within seconds, then polls until the cached session's group sync
+    revokes the role — bounded by a deadline rather than a fixed sleep.
+    """
+    c.down(destroy_volumes=True)
+
+    # Refresh fires at ~0.8 * expires_in. Keep it short for fast tests, but
+    # not so short that the first login races a refresh before it finishes.
+    expires_in_secs = 5
+
+    with c.override(
+        FronteggMock(
+            issuer=FRONTEGG_URL,
+            encoding_key_file="/secrets/frontegg-mock.key",
+            decoding_key_file="/secrets/frontegg-mock.crt",
+            users=json.dumps(list(USERS.values())),
+            depends_on=["test-certs"],
+            volumes=["secrets:/secrets"],
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["frontegg-mock"]}},
+            expires_in_secs=expires_in_secs,
+        ),
+        Materialized(
+            options=[
+                "--tls-mode=require",
+                "--tls-key=/secrets/materialized.key",
+                "--tls-cert=/secrets/materialized.crt",
+                f"--frontegg-tenant={TENANT_ID}",
+                "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
+                f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
+                f"--frontegg-admin-role={ADMIN_ROLE}",
+                "--startup-log-filter=debug",
+            ],
+            sanity_restart=False,
+            depends_on=["test-certs"],
+            volumes_extra=["secrets:/secrets"],
+            listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/frontegg_https.json",
+            networks={"balancerd": {"ipv4_address": STATIC_IPS["materialized"]}},
+        ),
+    ):
+        c.up("balancerd", "frontegg-mock", "materialized")
+
+        sys_cursor = c.sql_cursor(service="materialized", port=6877, user="mz_system")
+        sys_cursor.execute("ALTER SYSTEM SET oidc_group_role_sync_enabled = true")
+        sys_cursor.execute("CREATE ROLE analytics")
+
+        # Mirror the IdP-side group: create an "analytics" group and add the
+        # user. The frontegg-mock stamps the user's group memberships into
+        # the JWT `groups` claim, which the login path then syncs to roles.
+        group = json.loads(
+            _frontegg_curl(
+                c,
+                "POST",
+                "/frontegg/identity/resources/groups/v1",
+                {"name": "analytics"},
+            )
+        )
+        group_id = group["id"]
+        _frontegg_curl(
+            c,
+            "POST",
+            f"/frontegg/identity/resources/groups/v1/{group_id}/users",
+            {"userIds": [USERS[GROUP_SYNC_USER]["id"]]},
+        )
+
+        # Hold a primer connection open for the duration of the test so the
+        # auth session's refresh task keeps a live `external_metadata_rx`
+        # receiver and never hits the zero-receiver branch that would let it
+        # exit between our polling logins.
+        with contextlib.closing(sql_cursor(c, email=GROUP_SYNC_USER)) as primer:
+            primer.execute("SELECT 1")
+            if not _user_is_member_of(sys_cursor, GROUP_SYNC_USER, "analytics"):
+                print(c.invoke("logs", "materialized", capture=True).stdout)
+                raise AssertionError(
+                    "first login should sync the analytics group → role"
+                )
+
+            # Revoke the group in the IdP.
+            _frontegg_curl(
+                c,
+                "DELETE",
+                f"/frontegg/identity/resources/groups/v1/{group_id}/users",
+                {"userIds": [USERS[GROUP_SYNC_USER]["id"]]},
+            )
+
+            # The cached session won't expire on the test's timescale; only
+            # the background refresh will pick up the IdP change. Poll new
+            # logins (which hit the cached session, see the latest groups
+            # pushed via groups_tx, and re-run sync_jwt_groups) until the
+            # role is revoked.
+            deadline = time.monotonic() + 60.0
+            last_seen_member = True
+            while time.monotonic() < deadline:
+                with contextlib.closing(sql_cursor(c, email=GROUP_SYNC_USER)) as cur:
+                    cur.execute("SELECT 1")
+                last_seen_member = _user_is_member_of(
+                    sys_cursor, GROUP_SYNC_USER, "analytics"
+                )
+                if not last_seen_member:
+                    return
+                time.sleep(0.5)
+
+            raise AssertionError(
+                "cached Frontegg session did not pick up group revocation "
+                f"within 60s (expires_in_secs={expires_in_secs}); "
+                f"last_seen_member={last_seen_member}. "
+                "the refresh task's groups_tx push regressed."
+            )

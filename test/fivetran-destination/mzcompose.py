@@ -37,7 +37,7 @@ if it exits with code zero or if `<message>` is not printed to stdout.
 For details on Testdrive, consult doc/developer/testdrive.md.
 
 For details on the Fivetran Destination Tester, which is a tool provided by
-Fivetran, consult misc/fivetran-sdk/tools/README.md.
+Fivetran, consult https://github.com/fivetran/fivetran_sdk.
 
 To invoke the test harness locally:
 
@@ -85,12 +85,24 @@ BROKEN_TESTS = []
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument("filter", nargs="?")
-    args = parser.parse_args()
+    parser.parse_args()
 
     c.up("materialized", "fivetran-destination")
 
-    for path in ROOT.iterdir():
+    for name in c.workflows:
+        if name == "default":
+            continue
+
+        with c.test_case(name):
+            c.workflow(name)
+
+
+def workflow_test_directories(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Run the directory-based Fivetran Destination Tester test cases."""
+    parser.add_argument("filter", nargs="?")
+    args = parser.parse_args()
+
+    for path in sorted(ROOT.iterdir()):
         if path.name.startswith("test-"):
             if args.filter and args.filter not in path.name:
                 print(f"Test case {path.name!r} does not match filter; skipping...")
@@ -100,6 +112,30 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 continue
             with c.test_case(path.name):
                 _run_test_case(c, path)
+
+
+def workflow_test_secret_redaction(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Verify that the fivetran-destination does not log secrets in plaintext."""
+    parser.parse_args()
+
+    _run_test_case(c, ROOT / "test-describe")
+
+    logs = c.invoke("logs", "fivetran-destination", capture=True)
+    log_output = logs.stdout
+
+    connecting_lines = [
+        line for line in log_output.splitlines() if "Connecting to Materialize" in line
+    ]
+    assert len(connecting_lines) > 0, (
+        "Expected at least one 'Connecting to Materialize' log line, "
+        "but found none in fivetran-destination logs"
+    )
+    for line in connecting_lines:
+        assert (
+            "app_password" not in line
+        ), f"app_password should not appear in log line: {line}"
 
 
 def _run_test_case(c: Composition, path: Path):

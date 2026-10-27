@@ -7,36 +7,42 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+#![recursion_limit = "256"]
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
+use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog::durable::objects::serialization::proto;
-use mz_catalog::durable::objects::{DurableType, IdAlloc};
+use mz_catalog::durable::objects::{Comment, DurableType, IdAlloc};
 use mz_catalog::durable::{
-    CatalogError, DurableCatalogError, FenceError, Item, TestCatalogStateBuilder,
-    USER_ITEM_ALLOC_KEY, test_bootstrap_args,
+    CatalogError, Database, DurableCatalogError, FenceError, Item, Metrics,
+    TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY, test_bootstrap_args,
 };
 use mz_ore::assert_ok;
 use mz_ore::collections::HashSet;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist_client::PersistClient;
-use mz_proto::RustType;
+use mz_persist_client::{PersistClient, ShardId};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};
-use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
+use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
+use mz_storage_client::controller::StorageTxn;
+use uuid::Uuid;
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
-async fn test_persist_confirm_leadership() {
+async fn test_persist_advance_upper_fencing() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
-    test_confirm_leadership(state_builder).await;
+    test_advance_upper_fencing(state_builder).await;
 }
 
-async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
+async fn test_advance_upper_fencing(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
     let mut state1 = state_builder
         .clone()
@@ -44,20 +50,21 @@ async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
-    assert_ok!(state1.confirm_leadership().await);
+        .unwrap();
+    let ts = state1.current_upper().await.step_forward();
+    assert_ok!(state1.advance_upper(ts).await);
 
     let mut state2 = state_builder
         .unwrap_build()
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
-    assert_ok!(state2.confirm_leadership().await);
+        .unwrap();
+    let ts = state2.current_upper().await.step_forward();
+    assert_ok!(state2.advance_upper(ts).await);
 
-    let err = state1.confirm_leadership().await.unwrap_err();
+    let ts = ts.step_forward();
+    let err = state1.advance_upper(ts).await.unwrap_err();
     assert!(matches!(
         err,
         CatalogError::Durable(DurableCatalogError::Fence(FenceError::Epoch { .. }))
@@ -93,11 +100,11 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     let start_id = state.get_next_id(id_type).await.unwrap();
     let commit_ts = state.current_upper().await;
+    // Allocation does not require the initial update queue to be drained.
     let ids = state.allocate_id(id_type, 3, commit_ts).await.unwrap();
     assert_eq!(ids, (start_id..(start_id + 3)).collect::<Vec<_>>());
 
@@ -115,6 +122,239 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
         name: id_type.to_string(),
         next_id: start_id + 3,
     }));
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_transaction_rejects_pending_catalog_content() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let mut state = TestCatalogStateBuilder::new(persist_client)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    let mut update_counts = Vec::new();
+    for _ in 0..2 {
+        let err = state.transaction().await.unwrap_err();
+        match err {
+            CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
+                update_count, ..
+            }) => {
+                assert!(update_count > 0);
+                update_counts.push(update_count);
+            }
+            err => panic!("unexpected error: {err:?}"),
+        }
+    }
+    assert_eq!(update_counts[0], update_counts[1]);
+
+    let updates = state.sync_to_current_updates().await.unwrap();
+    assert_eq!(updates.len(), update_counts[0]);
+
+    let txn = state.transaction().await.unwrap();
+    drop(txn);
+
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_dry_run_transaction_rejects_mem_replace_escape() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let mut dry_run_state = TestCatalogStateBuilder::new(persist_client.clone())
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let mut replacement_state = TestCatalogStateBuilder::new(persist_client)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = dry_run_state.sync_to_current_updates().await.unwrap();
+    let _ = replacement_state.sync_to_current_updates().await.unwrap();
+
+    let initial_id = dry_run_state
+        .get_next_id(USER_ITEM_ALLOC_KEY)
+        .await
+        .unwrap();
+    let initial_upper = dry_run_state.current_upper().await;
+    let snapshot = dry_run_state.snapshot().await.unwrap();
+    let mut dry_run = dry_run_state.transaction_from_snapshot(snapshot).unwrap();
+    let ids = dry_run
+        .transaction_mut()
+        .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), 1)
+        .unwrap();
+    assert_eq!(ids, vec![initial_id]);
+    let _ = dry_run.transaction_mut().get_and_commit_op_updates();
+
+    let replacement = replacement_state.transaction().await.unwrap();
+    let escaped = std::mem::replace(dry_run.transaction_mut(), replacement);
+    drop(dry_run);
+
+    let commit_ts = escaped.upper();
+    let err = escaped.commit(commit_ts).await.unwrap_err();
+    assert!(matches!(
+        err,
+        CatalogError::Durable(DurableCatalogError::DryRunTransaction)
+    ));
+    assert_eq!(dry_run_state.current_upper().await, initial_upper);
+    assert_eq!(
+        dry_run_state
+            .get_next_id(USER_ITEM_ALLOC_KEY)
+            .await
+            .unwrap(),
+        initial_id
+    );
+
+    Box::new(dry_run_state).expire().await;
+    Box::new(replacement_state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_advance_upper_at_least_semantics() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    let state_builder = state_builder.with_default_deploy_generation();
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    let upper = state.current_upper().await;
+
+    assert_ok!(state.advance_upper(upper).await);
+    assert_ok!(
+        state
+            .advance_upper(upper.step_back().unwrap_or_default())
+            .await
+    );
+    assert_eq!(state.current_upper().await, upper);
+
+    let target = upper.step_forward().step_forward();
+    assert_ok!(state.advance_upper(target).await);
+    assert_eq!(state.current_upper().await, target);
+
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_commit_rebases_over_empty_progress() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    let state_builder = state_builder.with_default_deploy_generation();
+
+    let id_type = USER_ITEM_ALLOC_KEY;
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    let commit_ts = state.current_upper().await;
+    let overtaken = commit_ts.step_forward().step_forward();
+    assert_ok!(state.advance_upper(overtaken).await);
+
+    let start_id = state.get_next_id(id_type).await.unwrap();
+    let ids = state.allocate_id(id_type, 1, commit_ts).await.unwrap();
+    assert_eq!(ids, vec![start_id]);
+
+    assert!(state.current_upper().await > overtaken);
+    let next_id = state.get_next_id(id_type).await.unwrap();
+    assert_eq!(next_id, start_id + 1);
+
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_conflicts_with_empty_progress_rebase() {
+    use mz_catalog::durable::persist_desc;
+    use mz_persist_client::Diagnostics;
+    use mz_persist_types::codec_impls::UnitSchema;
+    use mz_storage_types::sources::SourceData;
+    use timely::progress::Antichain;
+
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder =
+        TestCatalogStateBuilder::new(persist_client.clone()).with_default_deploy_generation();
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    // Exclude bootstrap updates from conflict classification below.
+    let _ = state.sync_to_current_updates().await.unwrap();
+
+    // A raw handle advances the upper without fencing, exercising upper-mismatch classification.
+    let mut raw_write = persist_client
+        .open_writer::<SourceData, (), mz_repr::Timestamp, i64>(
+            state.shard_id(),
+            Arc::new(persist_desc()),
+            Arc::new(UnitSchema::default()),
+            Diagnostics {
+                shard_name: "catalog".to_string(),
+                handle_purpose: "test concurrent empty progress".to_string(),
+            },
+        )
+        .await
+        .expect("invalid usage");
+    let empty: Vec<((SourceData, ()), mz_repr::Timestamp, i64)> = Vec::new();
+
+    let upper = state.current_upper().await;
+    let bumped = upper.step_forward().step_forward();
+    raw_write
+        .compare_and_append(
+            empty.clone(),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(bumped),
+        )
+        .await
+        .expect("invalid usage")
+        .expect("no conflict");
+
+    let txn = state.transaction().await.unwrap();
+    assert_eq!(txn.upper(), bumped);
+    drop(txn);
+
+    let target = bumped.step_forward();
+    assert_ok!(state.advance_upper(target).await);
+    assert_eq!(state.current_upper().await, target);
+
+    let id_type = USER_ITEM_ALLOC_KEY;
+    let start_id = state.get_next_id(id_type).await.unwrap();
+    let mut txn = state.transaction().await.unwrap();
+    let commit_ts = txn.upper();
+    let ids = txn.get_and_increment_id_by(id_type.to_string(), 1).unwrap();
+    assert_eq!(ids, vec![start_id]);
+    let _updates = txn.get_and_commit_op_updates();
+    raw_write
+        .compare_and_append(
+            empty,
+            Antichain::from_elem(target),
+            Antichain::from_elem(target.step_forward()),
+        )
+        .await
+        .expect("invalid usage")
+        .expect("no conflict");
+    assert_ok!(txn.commit(commit_ts).await);
+    let next_id = state.get_next_id(id_type).await.unwrap();
+    assert_eq!(next_id, start_id + 1);
+
     Box::new(state).expire().await;
 }
 
@@ -172,8 +412,7 @@ async fn test_audit_logs(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     // Drain initial updates.
     let _ = state
         .sync_to_current_updates()
@@ -216,6 +455,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             owner_id: RoleId::User(1),
             privileges: vec![],
             extra_versions: BTreeMap::new(),
+            ephemeral_owner_session: None,
         },
         Item {
             id: CatalogItemId::User(200),
@@ -227,6 +467,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             owner_id: RoleId::User(2),
             privileges: vec![],
             extra_versions: BTreeMap::new(),
+            ephemeral_owner_session: None,
         },
     ];
 
@@ -235,8 +476,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     // Drain initial updates.
     let _ = state
         .sync_to_current_updates()
@@ -254,6 +494,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             item.owner_id,
             item.privileges.clone(),
             item.extra_versions.clone(),
+            item.ephemeral_owner_session,
         )
         .unwrap();
     }
@@ -280,6 +521,196 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_ephemeral_items() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_ephemeral_items(state_builder).await;
+}
+
+/// Temporary items are durable items tagged with the UUID of the session that
+/// created them. Two properties hold them together:
+///
+/// - Name uniqueness is scoped by that tag, because every session's temporary
+///   schema shares one sentinel schema id, so without the scoping two sessions
+///   could not both hold a `tt`.
+/// - `remove_ephemeral_items` reclaims all of them and nothing else. It is what
+///   a writable catalog open uses to clean up after a crash, so an over-broad
+///   filter here would silently delete real user items.
+async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+    let session_a = Uuid::from_u128(1);
+    let session_b = Uuid::from_u128(2);
+    // The sentinel schema id that every session's temporary schema shares.
+    let temp_schema = SchemaId::User(0);
+
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    // Drain initial updates.
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+
+    let mut txn = state.transaction().await.unwrap();
+
+    let insert = |txn: &mut mz_catalog::durable::Transaction,
+                  id: u64,
+                  schema_id: SchemaId,
+                  name: &str,
+                  owner_session: Option<Uuid>| {
+        txn.insert_item(
+            CatalogItemId::User(id),
+            u32::try_from(20_000 + id).expect("small"),
+            GlobalId::User(id),
+            schema_id,
+            name,
+            format!("CREATE VIEW {name} AS SELECT 1"),
+            RoleId::User(1),
+            vec![],
+            BTreeMap::new(),
+            owner_session,
+        )
+    };
+
+    // A normal item, plus one temporary item per session sharing a name.
+    insert(&mut txn, 100, SchemaId::User(1), "keep", None).unwrap();
+    insert(&mut txn, 200, temp_schema, "tt", Some(session_a)).unwrap();
+    insert(&mut txn, 300, temp_schema, "tt", Some(session_b)).unwrap();
+
+    // A temporary item with an ALTER history: two global ids, one shard.
+    txn.insert_item(
+        CatalogItemId::User(500),
+        20_500,
+        GlobalId::User(500),
+        temp_schema,
+        "versioned",
+        "CREATE TABLE versioned (a int)".to_string(),
+        RoleId::User(1),
+        vec![],
+        BTreeMap::from([(RelationVersion::root().bump(), GlobalId::User(501))]),
+        Some(session_a),
+    )
+    .unwrap();
+
+    // Storage mappings like the ones `prepare_state` writes at CREATE, for
+    // the normal item, one plain temporary item, and both versions of the
+    // versioned one.
+    let keep_shard = ShardId::new();
+    let temp_shard = ShardId::new();
+    let versioned_shard = ShardId::new();
+    txn.insert_collection_metadata(BTreeMap::from([
+        (GlobalId::User(100), keep_shard),
+        (GlobalId::User(200), temp_shard),
+        (GlobalId::User(500), versioned_shard),
+        (GlobalId::User(501), versioned_shard),
+    ]))
+    .unwrap();
+
+    // Comments on a temporary and a non-temporary item.
+    txn.update_comment(
+        CommentObjectId::View(CatalogItemId::User(100)),
+        None,
+        Some("keep comment".into()),
+    )
+    .unwrap();
+    txn.update_comment(
+        CommentObjectId::View(CatalogItemId::User(200)),
+        None,
+        Some("temp comment".into()),
+    )
+    .unwrap();
+
+    // One session may not hold the same name twice, though.
+    let err = insert(&mut txn, 400, temp_schema, "tt", Some(session_a)).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Catalog(mz_sql::catalog::CatalogError::ItemAlreadyExists(_, ref name))
+                if name == "tt"
+        ),
+        "expected ItemAlreadyExists, got {err:?}"
+    );
+
+    txn.remove_ephemeral_items();
+
+    // Drain txn updates.
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+
+    let snapshot_items: Vec<Item> = state
+        .snapshot()
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .map(RustType::from_proto)
+        .map_ok(|(k, v)| Item::from_key_value(k, v))
+        .collect::<Result<_, _>>()
+        .unwrap();
+
+    // Nothing ephemeral survives, and the normal item is untouched.
+    assert!(
+        !snapshot_items
+            .iter()
+            .any(|item| item.ephemeral_owner_session.is_some()),
+        "ephemeral items survived: {:?}",
+        snapshot_items
+            .iter()
+            .filter(|item| item.ephemeral_owner_session.is_some())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        snapshot_items
+            .iter()
+            .any(|item| item.id == CatalogItemId::User(100) && item.name == "keep"),
+        "non-ephemeral item was removed: {snapshot_items:?}"
+    );
+
+    // Only the non-ephemeral item's comment survives.
+    let snapshot_comments: Vec<Comment> = state
+        .snapshot()
+        .await
+        .unwrap()
+        .comments
+        .into_iter()
+        .map(RustType::from_proto)
+        .map_ok(|(k, v)| Comment::from_key_value(k, v))
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        snapshot_comments
+            .iter()
+            .map(|c| c.object_id.clone())
+            .collect::<Vec<_>>(),
+        vec![CommentObjectId::View(CatalogItemId::User(100))],
+        "comments on ephemeral items survived: {snapshot_comments:?}"
+    );
+
+    // The ephemeral items' storage mappings moved to the finalization WAL,
+    // deduped to one shard per item. The non-ephemeral mapping is untouched.
+    let txn = state.transaction().await.unwrap();
+    assert_eq!(
+        txn.get_collection_metadata(),
+        BTreeMap::from([(GlobalId::User(100), keep_shard)]),
+        "ephemeral collection metadata survived"
+    );
+    assert_eq!(
+        txn.get_unfinalized_shards(),
+        BTreeSet::from([temp_shard, versioned_shard]),
+        "ephemeral shards were not enqueued for finalization"
+    );
+    drop(txn);
+
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_schemas() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -293,8 +724,7 @@ async fn test_schemas(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     // Drain initial updates.
     let _ = state
         .sync_to_current_updates()
@@ -359,16 +789,14 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     let mut savepoint_state = state_builder
         .clone()
         .unwrap_build()
         .await
         .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     let mut reader_state = state_builder
         .clone()
         .unwrap_build()
@@ -403,7 +831,7 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         let roles = writer_state.snapshot().await.unwrap().roles;
         let role = roles
             .get(&proto::RoleKey {
-                id: Some(role_id.into_proto()),
+                id: role_id.into_proto(),
             })
             .unwrap();
         assert_eq!(role_name, &role.name);
@@ -432,16 +860,14 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         // writes from writer catalogs, so it should not see the new role.
         let roles = snapshot.roles;
         let role = roles.get(&proto::RoleKey {
-            id: Some(role_id.into_proto()),
+            id: role_id.into_proto(),
         });
         assert_eq!(None, role);
 
         let dbs = snapshot.databases;
         let db = dbs
             .get(&proto::DatabaseKey {
-                id: Some(proto::DatabaseId {
-                    value: Some(proto::database_id::Value::User(db_id)),
-                }),
+                id: proto::DatabaseId::User(db_id),
             })
             .unwrap();
         assert_eq!(db_name, &db.name);
@@ -449,8 +875,290 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
 
     // Read-only catalog can successfully commit empty transaction.
     {
+        let updates = reader_state.sync_to_current_updates().await.unwrap();
+        assert!(!updates.is_empty());
         let txn = reader_state.transaction().await.unwrap();
         let commit_ts = txn.upper();
         txn.commit(commit_ts).await.unwrap();
     }
+}
+
+/// Verifies that computing next IDs from max existing catalog items gives
+/// the correct baseline for DDL detection, even when the allocator counter
+/// has been advanced far ahead by batch allocation (as IdPool does).
+///
+/// This is a regression test for the 0dt DDL detection bug where
+/// `get_next_ids()` in preflight.rs used the allocator counter instead
+/// of the max existing item ID, causing it to miss objects created from
+/// a pre-allocated ID pool.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_ddl_detection_with_batch_allocated_ids() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    let state_builder = state_builder.with_default_deploy_generation();
+
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    // Drain initial updates.
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("sync to current updates failed");
+
+    // Simulate IdPool batch allocation: reserve 500 IDs at once.
+    // This advances the allocator counter by 500, but we only create
+    // a few items using the first IDs from that batch.
+    let commit_ts = state.current_upper().await;
+    let batch_ids = state
+        .allocate_id(USER_ITEM_ALLOC_KEY, 500, commit_ts)
+        .await
+        .unwrap();
+    assert_eq!(batch_ids.len(), 500);
+    let first_id = batch_ids[0];
+
+    // The allocator counter is now far ahead.
+    let allocator_next = state.get_next_id(USER_ITEM_ALLOC_KEY).await.unwrap();
+    assert_eq!(allocator_next, first_id + 500);
+
+    // Insert only 3 items using the first IDs from the batch.
+    let mut txn = state.transaction().await.unwrap();
+    for i in 0..3u64 {
+        let id = first_id + i;
+        txn.insert_item(
+            CatalogItemId::User(id),
+            20_000 + u32::try_from(i).unwrap(),
+            GlobalId::User(id),
+            SchemaId::User(1),
+            &format!("item_{i}"),
+            format!("CREATE VIEW v{i} AS SELECT {i}"),
+            RoleId::User(1),
+            vec![],
+            BTreeMap::new(),
+            None,
+        )
+        .unwrap();
+    }
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+
+    // Now verify the two approaches to computing the next ID baseline.
+    let txn = state.transaction().await.unwrap();
+
+    // Approach used by the fix: max existing item ID + 1.
+    let max_based_next = txn
+        .get_items()
+        .filter_map(|item| match item.id {
+            CatalogItemId::User(id) => Some(id),
+            _ => None,
+        })
+        .max()
+        .map(|id| id + 1)
+        .unwrap_or(0);
+
+    // The max-based approach gives first_id + 3 (just past the 3 items).
+    assert_eq!(max_based_next, first_id + 3);
+
+    // The allocator counter is still at first_id + 500.
+    assert_eq!(allocator_next, first_id + 500);
+
+    // The gap is the bug: using the allocator counter as baseline would
+    // miss any items with IDs in [first_id .. first_id + 500) that are
+    // created after the baseline is captured.
+    assert!(
+        max_based_next < allocator_next,
+        "max-based next ({max_based_next}) must be below allocator counter \
+         ({allocator_next}) to demonstrate the batch allocation gap"
+    );
+
+    Box::new(state).expire().await;
+}
+
+/// Regression test for incident-970: quadratic consolidation during catalog sync.
+///
+/// When a reader syncs through K timestamps, apply_updates() was calling
+/// consolidate() on the entire snapshot for each timestamp, resulting in
+/// O(K * N log N) work instead of O(N log N). This test verifies that syncing
+/// through many timestamps only consolidates the snapshot a constant number of
+/// times, not once per timestamp.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_sync_consolidation_not_quadratic() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let state_builder =
+        TestCatalogStateBuilder::new(persist_client).with_default_deploy_generation();
+    // Share metrics between writer and reader so we can observe consolidation counts.
+    let state_builder = state_builder.with_metrics(Arc::clone(&metrics));
+
+    // Open a writer catalog.
+    let mut writer = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = writer.sync_to_current_updates().await.unwrap();
+
+    // Open a read-only catalog, caught up to the current upper.
+    let mut reader = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_read_only(&test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = reader.sync_to_current_updates().await.unwrap();
+
+    // Writer creates many databases, each in its own transaction at a distinct
+    // timestamp. This mirrors the incident scenario where DDL happened across
+    // many timestamps while a read-only envd was restarting.
+    let num_timestamps: u64 = 100;
+    for i in 0..num_timestamps {
+        let mut txn = writer.transaction().await.unwrap();
+        txn.insert_user_database(
+            &format!("db_{i}"),
+            RoleId::User(1),
+            Vec::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
+        let _ = txn.get_and_commit_op_updates();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
+    }
+
+    // Record the consolidation counter before the reader syncs.
+    let consolidations_before = metrics.snapshot_consolidations.get();
+
+    // Reader syncs through all timestamps. With the quadratic bug, this would
+    // call consolidate() once per timestamp (num_timestamps times). With the
+    // fix, it should consolidate only once after processing all timestamps.
+    let updates = reader.sync_to_current_updates().await.unwrap();
+    let consolidations_after = metrics.snapshot_consolidations.get();
+    let consolidations_during_sync = consolidations_after - consolidations_before;
+
+    // Verify correctness: reader received updates and can see all databases.
+    assert!(
+        !updates.is_empty(),
+        "reader should have received updates from writer"
+    );
+    let snapshot = reader.snapshot().await.unwrap();
+    for i in 0..num_timestamps {
+        let db_name = format!("db_{i}");
+        let found = snapshot.databases.values().any(|db| db.name == db_name);
+        assert!(found, "database {db_name} not found in reader snapshot");
+    }
+
+    // The key assertion: consolidation should happen O(log N) times during
+    // the sync (from the doubling strategy), NOT once per timestamp (which
+    // would be num_timestamps = 100). We allow a generous bound here.
+    assert!(
+        consolidations_during_sync < 10,
+        "sync through {num_timestamps} timestamps triggered {consolidations_during_sync} \
+         snapshot consolidations, suggesting quadratic behavior (expected < 10)"
+    );
+
+    Box::new(writer).expire().await;
+    Box::new(reader).expire().await;
+}
+
+/// Verify that the reader's snapshot stays bounded during sync catch-up, even
+/// when the writer churns the same object many times across timestamps. Without
+/// the doubling consolidation in `sync_inner`, the snapshot would grow with
+/// every retract+insert pair; with it, the snapshot stays within ~3x the live
+/// catalog size.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let state_builder = TestCatalogStateBuilder::new(persist_client)
+        .with_default_deploy_generation()
+        .with_metrics(Arc::clone(&metrics));
+
+    // Open writer, create one database to churn.
+    let mut writer = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = writer.sync_to_current_updates().await.unwrap();
+
+    let mut txn = writer.transaction().await.unwrap();
+    let (db_id, db_oid) = txn
+        .insert_user_database("churn_db", RoleId::User(1), Vec::new(), &HashSet::new())
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+
+    // Open reader, sync to current state.
+    let mut reader = state_builder
+        .unwrap_build()
+        .await
+        .open_read_only(&test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = reader.sync_to_current_updates().await.unwrap();
+    let peak_before = metrics.snapshot_max_entries.get();
+
+    // Rename the same database 200 times, each in its own transaction.
+    let num_renames: u64 = 200;
+    let mut db = Database {
+        id: db_id,
+        oid: db_oid,
+        name: "churn_db".to_string(),
+        owner_id: RoleId::User(1),
+        privileges: Vec::new(),
+    };
+    for i in 0..num_renames {
+        let mut txn = writer.transaction().await.unwrap();
+        db.name = format!("churn_db_{i}");
+        txn.update_database(db.id, db.clone()).unwrap();
+        let _ = txn.get_and_commit_op_updates();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
+    }
+
+    // Reader syncs through all 200 renames.
+    let _ = reader.sync_to_current_updates().await.unwrap();
+
+    // Verify correctness: only one database, with the final name.
+    let snapshot = reader.snapshot().await.unwrap();
+    let churn_dbs: Vec<_> = snapshot
+        .databases
+        .values()
+        .filter(|d| d.name.starts_with("churn_db"))
+        .collect();
+    assert_eq!(churn_dbs.len(), 1, "{churn_dbs:#?}");
+    assert_eq!(churn_dbs[0].name, format!("churn_db_{}", num_renames - 1));
+
+    // The key assertion: the snapshot high-water mark should stay bounded,
+    // not grow proportionally to num_renames. The doubling consolidation
+    // keeps it within ~3x the live catalog size.
+    let peak_after = metrics.snapshot_max_entries.get();
+    let peak_delta = peak_after - peak_before;
+    // With doubling consolidation, the snapshot stays bounded. Without
+    // consolidation this would grow by ~387 for 200 renames; with it, the
+    // delta should be much smaller. We use 3x to allow headroom for
+    // variance in how persist batches deliveries.
+    let bounded = peak_before * 3;
+    assert!(
+        peak_delta < bounded,
+        "peak unconsolidated snapshot grew by {peak_delta} over {num_renames} \
+         renames (peak_before={peak_before}, peak_after={peak_after}); \
+         expected < {bounded}"
+    );
+
+    Box::new(writer).expire().await;
+    Box::new(reader).expire().await;
 }

@@ -1,0 +1,26 @@
+[package]
+name = "mz-aws-glue-schema-registry"
+description = "AWS Glue Schema Registry API client."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+aws-sdk-glue.workspace = true
+aws-types.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[features]
+# Exposes constructors for injecting a mocked SDK client.
+test-util = []
+
+[dev-dependencies]
+aws-sdk-glue = { workspace = true, features = ["test-util"] }
+aws-smithy-mocks.workspace = true
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+tokio.workspace = true

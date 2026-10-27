@@ -83,22 +83,24 @@ aws_instance_cost = {
     "r8g.8xlarge": 1.885,
 }
 
-# https://www.hetzner.com/cloud/
+# Germany (FSN/NBG) / Finland (HEL), hourly prices excluding IPv4.
+# https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/
 hetzner_instance_cost = {
-    "aarch64-2cpu-4gb": 0.0059,
-    "aarch64-4cpu-8gb": 0.0101,
-    "aarch64-8cpu-16gb": 0.0202,
-    "aarch64-16cpu-32gb": 0.0395,
-    "x86-64-2cpu-4gb": 0.0060,
-    "x86-64-4cpu-8gb": 0.0113,
-    "x86-64-8cpu-16gb": 0.0273,
-    "x86-64-16cpu-32gb": 0.0540,
-    "x86-64-dedi-2cpu-8gb": 0.0200,
-    "x86-64-dedi-4cpu-16gb": 0.0392,
-    "x86-64-dedi-8cpu-32gb": 0.0777,
-    "x86-64-dedi-16cpu-64gb": 0.1546,
-    "x86-64-dedi-32cpu-128gb": 0.3085,
-    "x86-64-dedi-48cpu-192gb": 0.4623,
+    "aarch64-2cpu-4gb": 0.0096,
+    "aarch64-4cpu-8gb": 0.0168,
+    "aarch64-8cpu-16gb": 0.0336,
+    "aarch64-16cpu-32gb": 0.0657,
+    "x86-64-2cpu-4gb": 0.0312,
+    "x86-64-4cpu-8gb": 0.0569,
+    "x86-64-8cpu-16gb": 0.1114,
+    "x86-64-12cpu-24gb": 0.1610,
+    "x86-64-16cpu-32gb": 0.2083,
+    "x86-64-dedi-2cpu-8gb": 0.0689,
+    "x86-64-dedi-4cpu-16gb": 0.1378,
+    "x86-64-dedi-8cpu-32gb": 0.2219,
+    "x86-64-dedi-16cpu-64gb": 0.4423,
+    "x86-64-dedi-32cpu-128gb": 0.8550,
+    "x86-64-dedi-48cpu-192gb": 1.3678,
     "x86-64": 0,  # local experiments
 }
 

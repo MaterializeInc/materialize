@@ -94,7 +94,6 @@ fn test_proto_serialization_stability() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // not an actual test
 #[ignore]
 /// This is not a real test, it is a helper to generate encoded catalog objects
 /// for other tests. When you want to generate new encodings, then run:
@@ -104,7 +103,7 @@ fn test_proto_serialization_stability() {
 /// ```
 fn generate_missing_encodings() {
     let protos: BTreeSet<_> = read_file_names(PROTO_DIRECTORY, PROTO_EXT)
-        .filter(|name| name != "objects")
+        .filter(|name| name.starts_with("objects_v"))
         .collect();
 
     let snapshots: BTreeSet<_> = read_file_names(SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();

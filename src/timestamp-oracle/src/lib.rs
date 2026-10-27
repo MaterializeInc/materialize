@@ -18,9 +18,12 @@ use async_trait::async_trait;
 use mz_ore::now::{EpochMillis, NowFn};
 
 pub mod batching_oracle;
+pub mod config;
 pub mod metrics;
 pub mod postgres_oracle;
 pub mod retry;
+
+pub use config::TimestampOracleConfig;
 
 /// Timestamps used by writes in an Append command.
 #[derive(Debug)]

@@ -1,7 +1,16 @@
 version: 2
 updates:
+# `/test/cargo-fuzz` is deliberately absent. The fuzz crates reach the root
+# workspace through `path` dependencies, so dependabot resolves that directory to
+# the root `Cargo.toml` and proposes edits to it while owning neither the root
+# `Cargo.lock` nor the fuzz manifests. Every such PR fails `--locked` and
+# duplicates the `/` PR for the same crate. Keeping the fuzz pins equal to the
+# root is enforced by `check_fuzz_versions_mirror_root` in `bin/lint-cargo`
+# instead, so a semver-incompatible root bump has to update the affected
+# `src/*/fuzz/Cargo.toml` by hand in the same PR.
 - package-ecosystem: cargo
-  directory: /
+  directories:
+    - /
   schedule:
     interval: weekly
     day: sunday
@@ -63,6 +72,35 @@ updates:
       update-types:
         - minor
         - patch
+# The `test/terraform` roots pin the self-managed modules to a tag rather than
+# floating on `main`, so an upstream release arrives here as a PR that can
+# adapt the roots in the same change, instead of breaking the nightly overnight
+# with no PR-time signal. Pin to a tag, not a commit SHA: dependabot does not
+# reliably bump SHA refs (dependabot/dependabot-core#10787).
+- package-ecosystem: terraform
+  directories:
+    - /test/terraform/aws-temporary
+    - /test/terraform/aws-upgrade
+    - /test/terraform/aws-persistent
+    - /test/terraform/gcp-temporary
+    - /test/terraform/azure-temporary
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  # Each `module` block is its own dependency, so without a group every module
+  # sourced from the same repository gets a separate PR. The modules of one
+  # release must move together, so group all updates, including major ones,
+  # across all roots into a single PR.
+  groups:
+    terraform:
+      applies-to: version-updates
+      patterns:
+        - "*"
 - package-ecosystem: pip
   directory: /misc/dbt-materialize
   schedule:
@@ -80,13 +118,24 @@ updates:
         - minor
         - patch
 - package-ecosystem: docker
-  directory: /misc/images/ubuntu-base
+  directories:
+    - /console
+    - /console/misc/docker
+    - /misc/images/materialized-base
+    - /misc/images/debian-base
+    - /misc/images/openssh-static
+    - /misc/images/tini-static
+    - /misc/images/distroless-prod-base
+    - /misc/dbt-materialize
+    - /misc/mcp-materialize
+    - /misc/mcp-materialize-agents
+    - /ci/builder
+    - /test
   schedule:
     interval: weekly
     day: sunday
     time: "22:00"
-  cooldown:
-    default-days: 3
+  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   groups:
@@ -95,24 +144,8 @@ updates:
       update-types:
         - minor
         - patch
-- package-ecosystem: docker
-  directory: /ci/builder
-  schedule:
-    interval: weekly
-    day: sunday
-    time: "22:00"
-  cooldown:
-    default-days: 3
-  open-pull-requests-limit: 50
-  labels: [A-dependencies]
-  groups:
-    simple:
-      applies-to: version-updates
-      update-types:
-        - minor
-        - patch
-- package-ecosystem: docker
-  directory: /test
+- package-ecosystem: github-actions
+  directory: /
   schedule:
     interval: weekly
     day: sunday
@@ -182,6 +215,12 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: bundler
   directory: /test/lang/ruby
   schedule:
@@ -200,3 +239,200 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: pip
+  directory: /misc/mcp-materialize
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: pip
+  directory: /misc/mcp-materialize-agents
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: npm
+  directory: /misc/editor/vscode
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: npm
+  directory: /console/e2e-tests
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: npm
+  directory: /test/dataflow-visualizer
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: npm
+  directory: /console
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 20
+  labels: [A-dependencies]
+  # Packages that only work at matching versions share a group, so an update
+  # arrives as one PR instead of several that each fail on their own. A
+  # dependency joins the first group it matches, so the families come before
+  # `simple`. The families take major updates too, which is where they break
+  # apart. @storybook/react-vite peer-depends on vite across the storybook and
+  # vite groups, so a vite major can fail storybook until storybook catches up.
+  groups:
+    # typescript-eslint peer-depends on both typescript and eslint, so the
+    # three move together.
+    typescript-and-eslint:
+      applies-to: version-updates
+      patterns:
+        - "typescript"
+        - "typescript-eslint"
+        - "@typescript-eslint/*"
+        - "eslint"
+        - "@eslint/*"
+        - "eslint-plugin-*"
+        - "eslint-config-*"
+        - "@tanstack/eslint-plugin-query"
+        - "globals"
+    vite:
+      applies-to: version-updates
+      patterns:
+        - "vite"
+        - "vitest"
+        - "@vitest/*"
+        - "@vitejs/*"
+        - "@rolldown/*"
+        - "vite-plugin-*"
+        - "vite-tsconfig-paths"
+        - "vite-bundle-analyzer"
+        - "jsdom"
+    forms:
+      applies-to: version-updates
+      patterns:
+        - "zod"
+        - "@hookform/resolvers"
+        - "react-hook-form"
+    codemirror:
+      applies-to: version-updates
+      patterns:
+        - "codemirror"
+        - "@codemirror/*"
+        - "@codemirror-toolkit/*"
+        - "@lezer/*"
+        - "style-mod"
+    kysely:
+      applies-to: version-updates
+      patterns:
+        - "kysely"
+        - "kysely-codegen"
+    tanstack-db:
+      applies-to: version-updates
+      patterns:
+        - "@tanstack/db"
+        - "@tanstack/react-db"
+    jotai:
+      applies-to: version-updates
+      patterns:
+        - "jotai"
+        - "jotai-*"
+    visx:
+      applies-to: version-updates
+      patterns:
+        - "@visx/*"
+    emotion:
+      applies-to: version-updates
+      patterns:
+        - "@emotion/*"
+    storybook:
+      applies-to: version-updates
+      patterns:
+        - "storybook"
+        - "@storybook/*"
+    react:
+      applies-to: version-updates
+      patterns:
+        - "react"
+        - "react-dom"
+        - "@types/react"
+        - "@types/react-dom"
+    tanstack-query:
+      applies-to: version-updates
+      patterns:
+        - "@tanstack/react-query*"
+    # msw, downshift, and @frontegg/* tighten types in minor releases that
+    # existing code relies on, and @intercom/* is on 0.0.x, where any release
+    # can break. Each comes as its own PR rather than breaking the whole group.
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+      patterns:
+        - "*"
+      exclude-patterns:
+        - "msw"
+        - "downshift"
+        - "@frontegg/*"
+        - "@intercom/*"

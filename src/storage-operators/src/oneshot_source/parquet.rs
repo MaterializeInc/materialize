@@ -12,22 +12,20 @@
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{Array, RecordBatch, StructArray};
+use arrow::array::{RecordBatch, StructArray};
+use arrow_ipc::writer::StreamWriter;
 use bytes::{Bytes, BytesMut};
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use mz_ore::cast::CastFrom;
-use mz_persist_types::arrow::ProtoArrayData;
-use mz_proto::{ProtoType, RustType};
+use mz_ore::collections::CollectionExt;
 use mz_repr::RelationDesc;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::async_reader::{AsyncFileReader, MetadataFetch};
 use parquet::errors::ParquetError;
 use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
-use prost::Message;
-use serde::de::Visitor;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
 
 use crate::oneshot_source::{
@@ -76,6 +74,7 @@ impl OneshotFormat for ParquetFormat {
 
         tracing::info!(
             object = object.name(),
+            schema = ?parquet_metadata.file_metadata().schema_descr(),
             row_groups = parquet_metadata.num_row_groups(),
             "splitting Parquet object"
         );
@@ -130,10 +129,12 @@ impl OneshotFormat for ParquetFormat {
 
         let struct_array = StructArray::from(record_batch);
         let reader = mz_arrow_util::reader::ArrowReader::new(&self.desc, struct_array)
+            .inspect_err(|err| tracing::warn!("error: {err:#?}"))
             .map_err(|err| StorageErrorXKind::ParquetError(err.to_string().into()))
             .context("reader")?;
         let rows_read = reader
             .read_all(rows)
+            .inspect_err(|err| tracing::warn!("error: {err:#?}"))
             .map_err(|err| StorageErrorXKind::ParquetError(err.to_string().into()))
             .context("read_all")?;
 
@@ -234,10 +235,14 @@ impl Serialize for ParquetRowGroup {
     {
         // Note: This implementation isn't very efficient, but it should only be rarely used so
         // it's not too much of a concern.
-        let struct_array = StructArray::from(self.record_batch.clone());
-        let proto_array: ProtoArrayData = struct_array.into_data().into_proto();
-        let encoded_proto = proto_array.encode_to_vec();
-        encoded_proto.serialize(serializer)
+        let mut buf = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut buf, &self.record_batch.schema())
+            .map_err(serde::ser::Error::custom)?;
+        writer
+            .write(&self.record_batch)
+            .map_err(serde::ser::Error::custom)?;
+        writer.finish().map_err(serde::ser::Error::custom)?;
+        buf.serialize(serializer)
     }
 }
 
@@ -246,43 +251,13 @@ impl<'de> Deserialize<'de> for ParquetRowGroup {
     where
         D: serde::Deserializer<'de>,
     {
-        fn struct_array<'de: 'a, 'a, D: Deserializer<'de>>(
-            deserializer: D,
-        ) -> Result<StructArray, D::Error> {
-            struct StructArrayVisitor;
+        let bytes = <Vec<u8>>::deserialize(deserializer)?;
+        let reader = arrow_ipc::reader::StreamReader::try_new(bytes.as_slice(), None)
+            .map_err(serde::de::Error::custom)?;
 
-            impl<'a> Visitor<'a> for StructArrayVisitor {
-                type Value = StructArray;
-
-                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                    formatter.write_str("binary data")
-                }
-
-                fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-                where
-                    E: serde::de::Error,
-                {
-                    let serde_err =
-                        || serde::de::Error::invalid_value(serde::de::Unexpected::Bytes(v), &self);
-
-                    let array_data = ProtoArrayData::decode(v)
-                        .map_err(|_| serde_err())
-                        .and_then(|proto_array| proto_array.into_rust().map_err(|_| serde_err()))?;
-                    let array_ref = arrow::array::make_array(array_data);
-                    let struct_array = array_ref
-                        .as_any()
-                        .downcast_ref::<StructArray>()
-                        .ok_or_else(serde_err)?;
-
-                    Ok(struct_array.clone())
-                }
-            }
-
-            deserializer.deserialize_bytes(StructArrayVisitor)
-        }
-
-        let struct_array = struct_array(deserializer)?;
-        let record_batch = RecordBatch::from(struct_array);
+        let record_batch = reader
+            .expect_element(|| "expected exactly one record batch in IPC stream")
+            .map_err(serde::de::Error::custom)?;
 
         Ok(ParquetRowGroup { record_batch })
     }

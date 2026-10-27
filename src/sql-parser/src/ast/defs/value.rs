@@ -38,7 +38,17 @@ impl fmt::Display for ValueError {
 }
 
 /// Primitive SQL values.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub enum Value {
     /// Numeric value.
     Number(String),
@@ -87,8 +97,12 @@ impl AstDisplay for Value {
                 f.write_str("'");
             }
             Value::HexString(v) => {
+                // The lexer accepts arbitrary bytes inside `X'...'` and treats
+                // `''` as an escaped single quote. We must escape `'` on the
+                // way out so a value containing `'` round-trips through the
+                // lexer instead of closing the literal prematurely.
                 f.write_str("X'");
-                f.write_str(v);
+                f.write_node(&display::escape_single_quote_string(v));
                 f.write_str("'");
             }
             Value::Boolean(v) => f.write_str(v),
@@ -152,7 +166,18 @@ impl From<Ident> for Value {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum DateTimeField {
     Millennium,
     Century,
@@ -210,12 +235,23 @@ impl FromStr for DateTimeField {
 
 /// An intermediate value for Intervals, which tracks all data from
 /// the user, as well as the computed ParsedDateTime.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub struct IntervalValue {
     /// The raw `[value]` that was present in `INTERVAL '[value]'`
     pub value: String,
-    /// The most significant DateTimeField to propagate to Interval in
-    /// compute_interval.
+    /// The high end of the range qualifier, e.g. HOUR in `INTERVAL '...'
+    /// HOUR TO MINUTE`. Only disambiguates parsing of ambiguous time-like
+    /// parts of `value`. Fields above it are kept, as in PostgreSQL.
     pub precision_high: DateTimeField,
     /// The least significant DateTimeField to propagate to Interval in
     /// compute_interval.

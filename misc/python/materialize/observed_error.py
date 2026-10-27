@@ -30,6 +30,6 @@ class ObservedBaseError:
 
 @dataclass(unsafe_hash=True)
 class WithIssue:
-    issue_number: int
+    issue_number: int | str
     issue_url: str
     issue_title: str

@@ -269,12 +269,12 @@ impl CatalogState {
                 | CommentObjectId::MaterializedView(item_id)
                 | CommentObjectId::Source(item_id)
                 | CommentObjectId::Sink(item_id)
+                | CommentObjectId::MetricSink(item_id)
                 | CommentObjectId::Index(item_id)
                 | CommentObjectId::Func(item_id)
                 | CommentObjectId::Connection(item_id)
                 | CommentObjectId::Type(item_id)
-                | CommentObjectId::Secret(item_id)
-                | CommentObjectId::ContinualTask(item_id) => {
+                | CommentObjectId::Secret(item_id) => {
                     let entry = self.entry_by_id.get(&item_id);
                     match entry {
                         None => comment_inconsistencies
@@ -383,10 +383,7 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !referenced_entry.referenced_by().contains(id)
-                    // Continual Tasks are self referential.
-                    && (referenced_entry.id() != *id && !referenced_entry.is_continual_task())
-                {
+                if !referenced_entry.referenced_by().contains(id) && referenced_entry.id() != *id {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
@@ -403,10 +400,7 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !used_entry.used_by().contains(id)
-                    // Continual Tasks are self referential.
-                    && (used_entry.id() != *id && !used_entry.is_continual_task())
-                {
+                if !used_entry.used_by().contains(id) && used_entry.id() != *id {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
@@ -490,8 +484,16 @@ impl CatalogState {
                     });
                 }
 
-                // Make sure the items in the schema are consistent.
-                for (item_name, item_id) in &schema.items {
+                // Make sure the items in the schema are consistent. A schema
+                // holds items, types, and functions in separate maps, and the
+                // create_sql of all three must stay consistent, e.g. after a
+                // schema rename.
+                for (item_name, item_id) in schema
+                    .items
+                    .iter()
+                    .chain(schema.types.iter())
+                    .chain(schema.functions.iter())
+                {
                     let Some(entry) = self.entry_by_id.get(item_id) else {
                         item_inconsistencies.push(ItemInconsistency::NonExistentItem {
                             db_id: *db_id,

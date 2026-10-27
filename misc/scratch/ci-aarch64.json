@@ -2,7 +2,6 @@
     "name": "c8g.2xlarge as used by the CI (aarch64)",
     "launch_script": "true",
     "instance_type": "c8g.2xlarge",
-    "ami": "ami-01b9f1e7dc427266e",
     "size_gb": 128,
     "tags": {}
 }

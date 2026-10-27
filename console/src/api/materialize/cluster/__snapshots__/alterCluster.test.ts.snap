@@ -1,0 +1,20 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`queries > alterClusterNameStatement produces the expected query 1`] = `
+{
+  "parameters": [],
+  "sql": "ALTER CLUSTER "old_name" RENAME TO "prod_sources"
+",
+}
+`;
+
+exports[`queries > alterClusterSettingsStatement produces the expected query 1`] = `
+{
+  "parameters": [],
+  "sql": "ALTER CLUSTER "prod_sources" SET (
+    SIZE = '2xlarge',
+    REPLICATION FACTOR = 2
+  )
+",
+}
+`;

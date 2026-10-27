@@ -17,7 +17,7 @@
 
 use std::collections::VecDeque;
 
-use columnar::bytes::{EncodeDecode, Indexed};
+use columnar::bytes::indexed;
 use columnar::{Clear, Columnar, Len, Push};
 use timely::container::PushInto;
 use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
@@ -44,29 +44,25 @@ where
     #[inline]
     fn push_into(&mut self, item: T) {
         self.current.push(item);
-        // If there is less than 10% slop with 2MB backing allocations, mint a container.
+        // Mint a container once the serialized size reaches the ship threshold.
         use columnar::Borrow;
-        let words = Indexed::length_in_words(&self.current.borrow());
-        let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
-        if round - words < round / 10 {
-            /// Move the contents from `current` to an aligned allocation, and push it to `pending`.
-            /// The contents must fit in `round` words (u64).
+        if crate::columnar::at_serialized_capacity(&self.current.borrow()) {
+            /// Move the contents from `current` to a `Vec<u64>` allocation built via
+            /// `indexed::encode` (so no zero-init pre-pass), and push it to `pending`.
             #[cold]
-            fn outlined_align<C>(
-                current: &mut C::Container,
-                round: usize,
-                pending: &mut VecDeque<Column<C>>,
-            ) where
+            fn outlined_align<C>(current: &mut C::Container, pending: &mut VecDeque<Column<C>>)
+            where
                 C: Columnar,
             {
-                let mut alloc = crate::containers::alloc_aligned_zeroed(round);
-                let writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
-                Indexed::write(writer, &current.borrow()).unwrap();
+                use columnar::Borrow;
+                let words = indexed::length_in_words(&current.borrow());
+                let mut alloc: Vec<u64> = Vec::with_capacity(words);
+                indexed::encode(&mut alloc, &current.borrow());
                 pending.push_back(Column::Align(alloc));
                 current.clear();
             }
 
-            outlined_align(&mut self.current, round, &mut self.pending);
+            outlined_align(&mut self.current, &mut self.pending);
         }
     }
 }

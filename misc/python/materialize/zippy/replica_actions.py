@@ -27,13 +27,11 @@ class DropDefaultReplica(Action):
         # Default cluster is not owned by materialize, thus can't be dropped by
         # it if enable_rbac_checks is on.
         c.testdrive(
-            dedent(
-                """
+            dedent("""
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER CLUSTER quickstart SET (MANAGED = false)
             DROP CLUSTER REPLICA quickstart.r1
-            """
-            ),
+            """),
             mz_service=state.mz_service,
         )
 
@@ -86,12 +84,10 @@ class CreateReplica(Action):
             # Default cluster is not owned by materialize, thus can't have a replica
             # added if enable_rbac_checks is on.
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 CREATE CLUSTER REPLICA quickstart.{self.replica.name} SIZE '{self.replica.size}'
-                """
-                ),
+                """),
                 mz_service=state.mz_service,
             )
 
@@ -124,11 +120,9 @@ class DropReplica(Action):
             # Default cluster is not owned by materialize, thus can't have a replica
             # removed if enable_rbac_checks is on.
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 DROP CLUSTER REPLICA IF EXISTS quickstart.{self.replica.name}
-                """
-                ),
+                """),
                 mz_service=state.mz_service,
             )

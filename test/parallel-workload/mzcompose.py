@@ -30,6 +30,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
@@ -38,10 +39,10 @@ from materialize.mzcompose.services.sql_server import (
 )
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
 from materialize.parallel_workload.settings import (
     ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
+    COCKROACH_SCENARIOS,
     Complexity,
     Scenario,
 )
@@ -51,14 +52,18 @@ SERVICES = [
     Postgres(),
     MySql(),
     SqlServer(),
-    Zookeeper(),
+    PolarisBootstrap(),
+    Polaris(),
     Kafka(
         auto_create_topics=False,
         ports=["30123:30123"],
         allow_host_ports=True,
+        advertised_listeners=[
+            "HOST://127.0.0.1:30123",
+            "PLAINTEXT://kafka:9092",
+        ],
         environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://127.0.0.1:30123,PLAINTEXT://kafka:9092",
-            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
     ),
     SchemaRegistry(),
@@ -83,11 +88,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"--- Random seed is {args.seed}")
     service_names = [
-        "cockroach",
         "postgres",
         "mysql",
         "sql-server",
-        "zookeeper",
         "kafka",
         "schema-registry",
         # Still required for backups/s3 testing even when we use Azurite as blob store
@@ -100,11 +103,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     complexity = Complexity(args.complexity)
     sanity_restart = False
 
-    external = scenario in (
-        Scenario.ZeroDowntimeDeploy,
-        Scenario.BackupRestore,
-        Scenario.Kill,
-    )
+    external = scenario in COCKROACH_SCENARIOS
+
+    if external:
+        service_names.append("cockroach")
 
     with c.override(
         Materialized(
@@ -119,8 +121,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
         Toxiproxy(seed=random.randrange(2**63)),
     ):
-        toxiproxy_start(c)
-        c.up(*service_names)
+        toxiproxy_start(c, external)
+        c.up(
+            *service_names,
+            Service("polaris-bootstrap", idle=True),
+            Service("polaris", idle=True),
+        )
         setup_sql_server_testing(c)
 
         c.up(Service("mc", idle=True))
@@ -169,20 +175,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         #     return
 
 
-def toxiproxy_start(c: Composition) -> None:
+def toxiproxy_start(c: Composition, external: bool) -> None:
     c.up("toxiproxy")
 
     port = c.default_port("toxiproxy")
-    r = requests.post(
-        f"http://localhost:{port}/proxies",
-        json={
-            "name": "cockroach",
-            "listen": "0.0.0.0:26257",
-            "upstream": "cockroach:26257",
-            "enabled": True,
-        },
-    )
-    assert r.status_code == 201, r
+    if external:
+        r = requests.post(
+            f"http://localhost:{port}/proxies",
+            json={
+                "name": "cockroach",
+                "listen": "0.0.0.0:26257",
+                "upstream": "cockroach:26257",
+                "enabled": True,
+            },
+        )
+        assert r.status_code == 201, r
     r = requests.post(
         f"http://localhost:{port}/proxies",
         json={
@@ -203,15 +210,16 @@ def toxiproxy_start(c: Composition) -> None:
         },
     )
     assert r.status_code == 201, r
-    r = requests.post(
-        f"http://localhost:{port}/proxies/cockroach/toxics",
-        json={
-            "name": "cockroach",
-            "type": "latency",
-            "attributes": {"latency": 0, "jitter": 10},
-        },
-    )
-    assert r.status_code == 200, r
+    if external:
+        r = requests.post(
+            f"http://localhost:{port}/proxies/cockroach/toxics",
+            json={
+                "name": "cockroach",
+                "type": "latency",
+                "attributes": {"latency": 0, "jitter": 10},
+            },
+        )
+        assert r.status_code == 200, r
     r = requests.post(
         f"http://localhost:{port}/proxies/minio/toxics",
         json={

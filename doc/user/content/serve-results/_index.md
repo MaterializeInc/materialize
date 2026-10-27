@@ -4,8 +4,12 @@ description: "Serving results from Materialize"
 disable_list: true
 menus:
   main:
-    weight: 15
+    weight: 50
     identifier: 'serve-results'
+aliases:
+  - /self-managed/v25.2/serve-results/
+  - /self-managed/v25.2/serve-results/query-results/
+  - /self-managed/v25.2/serve-results/bi-tools/
 ---
 
 In Materialize, indexed views and materialized views maintain up-to-date query
@@ -16,19 +20,23 @@ To serve results, you can:
 - [Query using `SELECT` and `SUBSCRIBE`
   statements](/serve-results/query-results/)
 
+- [Understand the query lifecycle](/serve-results/query-lifecycle/)
+
 - [Use BI/data collaboration tools](/serve-results/bi-tools/)
 
-- [Sink results to to external systems](/serve-results/sink/)
+- [Sink results to external systems](/export-data/)
 
 - [Use Foreign Data Wrapper (FDW)](/serve-results/fdw/)
 
 {{< multilinkbox >}}
 {{< linkbox title="SELECT/SUBSCRIBE statements" >}}
 - [Query using `SELECT` and `SUBSCRIBE`](/serve-results/query-results/)
+- [Query lifecycle](/serve-results/query-lifecycle/)
 - [Use Foreign Data Wrapper (FDW)](/serve-results/fdw/)
 {{</ linkbox >}}
 {{< linkbox title="External BI tools" >}}
 - [Deepnote](/serve-results/bi-tools/deepnote/)
+- [Excel](/serve-results/bi-tools/excel/)
 - [Hex](/serve-results/bi-tools/hex/)
 - [Metabase](/serve-results/bi-tools/metabase/)
 - [Power BI](/serve-results/bi-tools/power-bi/)
@@ -37,10 +45,10 @@ To serve results, you can:
 {{</ linkbox >}}
 
 {{< linkbox title="Sink results" >}}
-- [Sinking results to Amazon S3](/serve-results/sink/s3/)
-- [Sinking results to Census](/serve-results/sink/census/)
-- [Sinking results to Kafka](/serve-results/sink/kafka/)
-- [Sinking results to Snowflake](/serve-results/sink/snowflake/)
+- [Sinking results to Amazon S3](/export-data/s3/)
+- [Sinking results to Census](/export-data/census/)
+- [Sinking results to Kafka](/export-data/kafka/)
+- [Sinking results to Snowflake](/export-data/snowflake/)
 {{</ linkbox >}}
 
 {{</ multilinkbox >}}

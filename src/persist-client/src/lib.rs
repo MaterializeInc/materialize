@@ -9,7 +9,13 @@
 
 //! An abstraction presenting as a durable time-varying collection (aka shard)
 
-#![warn(missing_docs, missing_debug_implementations)]
+// The `fuzzing` feature re-exports internal types (see `fuzz_exports`) that are
+// intentionally undocumented. Don't require docs/Debug for them in that
+// test-only build. The normal public API is still linted.
+#![cfg_attr(
+    not(feature = "fuzzing"),
+    warn(missing_docs, missing_debug_implementations)
+)]
 // #[track_caller] is currently a no-op on async functions, but that hopefully won't be the case
 // forever. So we already annotate those functions now and ignore the compiler warning until
 // https://github.com/rust-lang/rust/issues/87417 pans out.
@@ -27,7 +33,7 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::schema::SchemaId;
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::{IntoRustIfSome, ProtoType};
 use semver::Version;
 use timely::order::TotalOrder;
@@ -37,7 +43,7 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BATCH_DELETE_ENABLED, Batch, BatchBuilder, ProtoBatch};
 use crate::cache::{PersistClientCache, StateCache};
 use crate::cfg::PersistConfig;
-use crate::critical::{CriticalReaderId, SinceHandle};
+use crate::critical::{CriticalReaderId, Opaque, SinceHandle};
 use crate::error::InvalidUsage;
 use crate::fetch::{BatchFetcher, BatchFetcherConfig};
 use crate::internal::compact::{CompactConfig, Compactor};
@@ -72,13 +78,13 @@ pub mod iter;
 pub mod metrics {
     //! Utilities related to metrics.
     pub use crate::internal::metrics::{
-        Metrics, SinkMetrics, SinkWorkerMetrics, UpdateDelta, encode_ts_metric,
+        BackpressureMetrics, Metrics, SinkMetrics, SinkWorkerMetrics, UpdateDelta, encode_ts_metric,
     };
 }
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
 
-    use mz_dyncfg::Config;
+    use mz_dyncfg::{Config, ParameterScope};
 
     pub mod shard_source;
 
@@ -89,6 +95,7 @@ pub mod operators {
         "\
         The maximum amount of work to do in the persist_source mfp_and_decode \
         operator before yielding.",
+        ParameterScope::Environment,
     );
 }
 pub mod read;
@@ -97,6 +104,17 @@ pub mod schema;
 pub mod stats;
 pub mod usage;
 pub mod write;
+
+/// Internal durable-state types re-exported under `cfg(feature = "fuzzing")` so
+/// the fuzz crate can drive their proto round-trips (`ProtoRollup`/`ProtoStateDiff`
+/// are decoded from blob/consensus on every state load). Not part of the public
+/// API.
+#[cfg(feature = "fuzzing")]
+pub mod fuzz_exports {
+    pub use crate::internal::encoding::Rollup;
+    pub use crate::internal::state::{ProtoRollup, ProtoStateDiff};
+    pub use crate::internal::state_diff::StateDiff;
+}
 
 /// An implementation of the public crate interface.
 mod internal {
@@ -340,13 +358,11 @@ impl PersistClient {
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let reader_id = LeasedReaderId::new();
-        let heartbeat_ts = (self.cfg.now)();
         let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &reader_id,
                 &diagnostics.handle_purpose,
                 READER_LEASE_DURATION.get(&self.cfg),
-                heartbeat_ts,
                 use_critical_since,
             )
             .await;
@@ -364,8 +380,7 @@ impl PersistClient {
             Arc::clone(&self.blob),
             reader_id,
             schemas,
-            reader_state.since,
-            heartbeat_ts,
+            reader_state,
         )
         .await;
 
@@ -455,33 +470,27 @@ impl PersistClient {
     /// return a handle with its `since` frontier set to the initial value of
     /// `Antichain::from_elem(T::minimum())`.
     #[instrument(level = "debug", fields(shard = %shard_id))]
-    pub async fn open_critical_since<K, V, T, D, O>(
+    pub async fn open_critical_since<K, V, T, D>(
         &self,
         shard_id: ShardId,
         reader_id: CriticalReaderId,
+        default_opaque: Opaque,
         diagnostics: Diagnostics,
-    ) -> Result<SinceHandle<K, V, T, D, O>, InvalidUsage<T>>
+    ) -> Result<SinceHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
         D: Monoid + Codec64 + Send + Sync,
-        O: Opaque + Codec64,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let (state, maintenance) = machine
-            .register_critical_reader::<O>(&reader_id, &diagnostics.handle_purpose)
+            .register_critical_reader(&reader_id, default_opaque, &diagnostics.handle_purpose)
             .await;
         maintenance.start_performing(&machine, &gc);
-        let handle = SinceHandle::new(
-            machine,
-            gc,
-            reader_id,
-            state.since,
-            Codec64::decode(state.opaque.0),
-        );
+        let handle = SinceHandle::new(machine, gc, reader_id, state.since, state.opaque);
 
         Ok(handle)
     }
@@ -541,10 +550,14 @@ impl PersistClient {
     /// updates is very large. Individual records, however, should be small
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
+    ///
+    /// `max_runs` overrides `persist_batch_max_runs` when `Some`. With `None`, the builder honors
+    /// the configured value, as [WriteHandle::builder] does.
     #[instrument(level = "debug", fields(shard = %shard_id))]
-    pub async fn batch_builder<K, V, T, D>(
+    pub fn batch_builder<K, V, T, D>(
         &self,
         shard_id: ShardId,
+        shard_name: &str,
         write_schemas: Schemas<K, V>,
         lower: Antichain<T>,
         max_runs: Option<usize>,
@@ -556,12 +569,14 @@ impl PersistClient {
         D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let mut compact_cfg = CompactConfig::new(&self.cfg, shard_id);
-        compact_cfg.batch.max_runs = max_runs;
+        if let Some(max_runs) = max_runs {
+            compact_cfg.batch.max_runs = Some(max_runs);
+        }
         WriteHandle::builder_inner(
             &self.cfg,
             compact_cfg,
             Arc::clone(&self.metrics),
-            self.metrics.shards.shard(&shard_id, "peek_stash"),
+            self.metrics.shards.shard(&shard_id, shard_name),
             &self.metrics.user,
             Arc::clone(&self.isolated_runtime),
             Arc::clone(&self.blob),
@@ -703,6 +718,33 @@ impl PersistClient {
         Ok(machine.latest_schema())
     }
 
+    /// Fetches and returns a recent shard-global `upper`, without requiring a
+    /// [`WriteHandle`].
+    ///
+    /// Importantly, this operation is linearized with write operations, giving
+    /// the same guarantee as [`WriteHandle::fetch_recent_upper`]. It requires
+    /// fetching the latest state from consensus and is therefore a potentially
+    /// expensive operation.
+    ///
+    /// If `shard_id` has never been used before, initializes the shard and
+    /// returns an upper of `Antichain::from_elem(T::minimum())`.
+    pub async fn recent_upper<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<Antichain<T>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        Ok(machine.applier.fetch_upper(|upper| upper.clone()).await)
+    }
+
     /// Registers a schema for the given shard.
     ///
     /// Returns the new schema ID if the registration succeeds, and `None`
@@ -746,8 +788,11 @@ impl PersistClient {
     /// [backward_compatible]: mz_persist_types::schema::backward_compatible
     ///
     /// To prevent races, the caller must declare what it believes to be the
-    /// latest schema id. If this doesn't match reality,
-    /// [CaESchema::ExpectedMismatch] is returned.
+    /// latest schema id. A request that already matches the current schema
+    /// returns [CaESchema::Ok] even if `expected` is stale, so retried or
+    /// duplicated evolutions are idempotent. [CaESchema::ExpectedMismatch]
+    /// means a genuine divergence: the current schema matches neither the
+    /// request nor `expected`.
     pub async fn compare_and_evolve_schema<K, V, T, D>(
         &self,
         shard_id: ShardId,
@@ -920,7 +965,6 @@ impl PersistClient {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
-    use std::mem;
     use std::pin::Pin;
     use std::task::Context;
     use std::time::Duration;
@@ -941,6 +985,7 @@ mod tests {
     use crate::batch::BLOB_TARGET_SIZE;
     use crate::cache::PersistClientCache;
     use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
+    use crate::critical::Opaque;
     use crate::error::{CodecConcreteType, CodecMismatch, UpperMismatch};
     use crate::internal::paths::BlobKey;
     use crate::read::ListenEvent;
@@ -2007,14 +2052,12 @@ mod tests {
             .expect("client construction failed")
             .expect_open::<(), (), u64, i64>(ShardId::new())
             .await;
-        let mut read_unexpired_state = read
+        let read_unexpired_state = read
             .unexpired_state
             .take()
             .expect("handle should have unexpired state");
         read.expire().await;
-        for read_heartbeat_task in mem::take(&mut read_unexpired_state._heartbeat_tasks) {
-            let () = read_heartbeat_task.await;
-        }
+        read_unexpired_state.heartbeat_task.await
     }
 
     /// Verify that shard finalization works with empty shards, shards that have
@@ -2037,8 +2080,13 @@ mod tests {
         let () = read.downgrade_since(&Antichain::new()).await;
         let () = write.advance_upper(&Antichain::new()).await;
 
-        let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
-            .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
+        let mut since_handle: SinceHandle<(), (), u64, i64> = persist_client
+            .open_critical_since(
+                shard_id,
+                CRITICAL_SINCE,
+                Opaque::encode(&0u64),
+                Diagnostics::for_tests(),
+            )
             .await
             .expect("invalid persist usage");
 
@@ -2095,8 +2143,13 @@ mod tests {
         let () = read.downgrade_since(&Antichain::new()).await;
         let () = write.advance_upper(&Antichain::new()).await;
 
-        let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
-            .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
+        let mut since_handle: SinceHandle<(), (), u64, i64> = persist_client
+            .open_critical_since(
+                shard_id,
+                CRITICAL_SINCE,
+                Opaque::encode(&0u64),
+                Diagnostics::for_tests(),
+            )
             .await
             .expect("invalid persist usage");
 

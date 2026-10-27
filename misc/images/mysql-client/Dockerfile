@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
-RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y mysql-client && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y default-mysql-client && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENTRYPOINT ["mysql"]

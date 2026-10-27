@@ -14,35 +14,42 @@ use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
+use mz_dyncfg::ConfigSet;
+use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::scope_label::ScopeExt;
+use prometheus::IntCounter;
 use timely::ContainerBuilder;
-use timely::communication::Allocate;
 use timely::container::{ContainerBuilder as _, PushInto};
-use timely::dataflow::Scope;
-use timely::logging::{TimelyEvent, TimelyEventBuilder};
+use timely::logging::{StartStop, TimelyEvent, TimelyEventBuilder, TimelyLogger};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
 use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
-use timely::worker::AsWorker;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
+use crate::metrics::LoggingMetrics;
+use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
 ///
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
 /// retrieving logged records as well as the index of the exporting dataflow.
-pub fn initialize<A: Allocate + 'static>(
-    worker: &mut timely::worker::Worker<A>,
+pub fn initialize(
+    worker: &mut timely::worker::Worker,
     config: &LoggingConfig,
+    metrics_registry: MetricsRegistry,
+    metrics: LoggingMetrics,
+    worker_config: Rc<ConfigSet>,
+    workers_per_process: usize,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -65,6 +72,10 @@ pub fn initialize<A: Allocate + 'static>(
         d_event_queue: EventQueue::new("d"),
         c_event_queue: EventQueue::new("c"),
         shared_state: Default::default(),
+        metrics_registry,
+        metrics,
+        worker_config,
+        workers_per_process,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -89,8 +100,8 @@ pub fn initialize<A: Allocate + 'static>(
 
 pub(super) type ReachabilityEvent = (usize, Vec<(usize, usize, bool, Timestamp, Diff)>);
 
-struct LoggingContext<'a, A: Allocate> {
-    worker: &'a mut timely::worker::Worker<A>,
+struct LoggingContext<'a> {
+    worker: &'a mut timely::worker::Worker,
     config: &'a LoggingConfig,
     interval_ms: u128,
     now: Instant,
@@ -100,6 +111,10 @@ struct LoggingContext<'a, A: Allocate> {
     d_event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     c_event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    metrics_registry: MetricsRegistry,
+    metrics: LoggingMetrics,
+    worker_config: Rc<ConfigSet>,
+    workers_per_process: usize,
 }
 
 pub(crate) struct LoggingTraces {
@@ -111,69 +126,145 @@ pub(crate) struct LoggingTraces {
     pub compute_logger: super::compute::Logger,
 }
 
-impl<A: Allocate + 'static> LoggingContext<'_, A> {
+impl LoggingContext<'_> {
     fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
-        self.worker.dataflow_named("Dataflow: logging", |scope| {
-            let mut collections = BTreeMap::new();
+        let step_logger = self.step_logger();
+        self.worker.dataflow_core(
+            "Dataflow: logging",
+            step_logger,
+            Box::new(()),
+            |_, scope| {
+                let scope = scope.with_label();
 
-            let super::timely::Return {
-                collections: timely_collections,
-            } = super::timely::construct(
-                scope.clone(),
-                self.config,
-                self.t_event_queue.clone(),
-                Rc::clone(&self.shared_state),
-            );
-            collections.extend(timely_collections);
+                let mut collections = BTreeMap::new();
 
-            let super::reachability::Return {
-                collections: reachability_collections,
-            } = super::reachability::construct(
-                scope.clone(),
-                self.config,
-                self.r_event_queue.clone(),
-            );
-            collections.extend(reachability_collections);
+                let super::timely::Return {
+                    collections: timely_collections,
+                } = super::timely::construct(
+                    scope,
+                    self.config,
+                    self.t_event_queue.clone(),
+                    Rc::clone(&self.shared_state),
+                );
+                collections.extend(timely_collections);
 
-            let super::differential::Return {
-                collections: differential_collections,
-            } = super::differential::construct(
-                scope.clone(),
-                self.config,
-                self.d_event_queue.clone(),
-                Rc::clone(&self.shared_state),
-            );
-            collections.extend(differential_collections);
+                let super::reachability::Return {
+                    collections: reachability_collections,
+                } = super::reachability::construct(scope, self.config, self.r_event_queue.clone());
+                collections.extend(reachability_collections);
 
-            let super::compute::Return {
-                collections: compute_collections,
-            } = super::compute::construct(
-                scope.clone(),
-                scope.parent.clone(),
-                self.config,
-                self.c_event_queue.clone(),
-                Rc::clone(&self.shared_state),
-            );
-            collections.extend(compute_collections);
+                let super::differential::Return {
+                    collections: differential_collections,
+                } = super::differential::construct(
+                    scope,
+                    self.config,
+                    self.d_event_queue.clone(),
+                    Rc::clone(&self.shared_state),
+                );
+                collections.extend(differential_collections);
 
-            let errs = scope.scoped("logging errors", |scope| {
-                let collection: KeyCollection<_, DataflowError, Diff> =
-                    VecCollection::empty(scope).into();
-                collection
-                    .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")
-                    .trace
-            });
+                let super::compute::Return {
+                    collections: compute_collections,
+                } = super::compute::construct(
+                    scope.clone(),
+                    scope.activations(),
+                    self.config,
+                    self.c_event_queue.clone(),
+                    Rc::clone(&self.shared_state),
+                );
+                collections.extend(compute_collections);
 
-            let traces = collections
-                .into_iter()
-                .map(|(log, collection)| {
-                    let bundle = TraceBundle::new(collection.trace, errs.clone())
-                        .with_drop(collection.token);
-                    (log, bundle)
-                })
-                .collect();
-            traces
-        })
+                let super::prometheus::Return {
+                    collections: prometheus_collections,
+                } = super::prometheus::construct(
+                    scope,
+                    self.config,
+                    self.metrics_registry.clone(),
+                    self.now,
+                    self.start_offset,
+                    Rc::clone(&self.worker_config),
+                    self.workers_per_process,
+                );
+                collections.extend(prometheus_collections);
+
+                let super::resource_usage::Return {
+                    collections: resource_usage_collections,
+                } = super::resource_usage::construct(
+                    scope,
+                    self.config,
+                    self.now,
+                    self.start_offset,
+                    self.workers_per_process,
+                );
+                collections.extend(resource_usage_collections);
+
+                let errs = scope.scoped("logging errors", |scope| {
+                    let collection: KeyCollection<_, DataflowErrorSer, Diff> =
+                        VecCollection::empty(scope).into();
+                    collection
+                        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                            "Arrange logging err",
+                        )
+                        .trace
+                });
+
+                let traces = collections
+                    .into_iter()
+                    .map(|(log, collection)| {
+                        let bundle = TraceBundle::new(collection.trace, errs.clone())
+                            .with_drop(collection.token);
+                        (log, bundle)
+                    })
+                    .collect();
+                traces
+            },
+        )
+    }
+
+    /// Construct the timely logger that the worker hands to the logging dataflow itself.
+    ///
+    /// The logging dataflow's operators log nothing unless `log_logging` is set, but the worker
+    /// logs every scheduling of the dataflow as a whole to this logger, which observes the
+    /// duration of each scheduling. With `log_logging` set, returns the worker's timely logger
+    /// instead and observes nothing.
+    fn step_logger(&self) -> Option<TimelyLogger> {
+        if let Some(logger) = self.worker.logging() {
+            // Forwarding events from a second logger would re-timestamp them at flush time, and
+            // `mz_scheduling_elapsed` already covers the logging dataflow in this mode.
+            return Some(logger);
+        }
+
+        // `dataflow_core` allocates the dataflow's identifier first.
+        let dataflow_id = self.worker.peek_identifier();
+        let step_duration_seconds = self.metrics.step_duration_seconds.clone();
+        let mut started = None;
+        let logger = Logger::<TimelyEventBuilder>::new(
+            self.now,
+            self.start_offset,
+            move |_time, data: &mut Option<Vec<(Duration, TimelyEvent)>>| {
+                let Some(data) = data else { return };
+                for (time, event) in data.drain(..) {
+                    if let TimelyEvent::Schedule(schedule) = event
+                        && schedule.id == dataflow_id
+                    {
+                        match schedule.start_stop {
+                            StartStop::Start => started = Some(time),
+                            StartStop::Stop => {
+                                if let Some(start) = started.take() {
+                                    let elapsed = time.saturating_sub(start);
+                                    step_duration_seconds.observe(elapsed.as_secs_f64());
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        );
+        // The worker flushes only registered loggers at the end of each step. Unregistered,
+        // observations would wait for the logger's buffer to fill.
+        let mut register = self.worker.log_register().expect("Logging must be enabled");
+        register.insert_logger("materialize/logging-step", logger.clone());
+        Some(logger.into())
     }
 
     /// Construct a new reachability logger for timestamp type `T`.
@@ -194,9 +285,18 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
     ///
     /// Registers the timely, differential, compute, and reachability loggers.
     fn register_loggers(&self) {
-        let t_logger = self.simple_logger::<TimelyEventBuilder>(self.t_event_queue.clone());
-        let d_logger = self.simple_logger::<DifferentialEventBuilder>(self.d_event_queue.clone());
-        let c_logger = self.simple_logger::<ComputeEventBuilder>(self.c_event_queue.clone());
+        let t_logger = self.simple_logger::<TimelyEventBuilder>(
+            self.t_event_queue.clone(),
+            self.metrics.timely_records_total.clone(),
+        );
+        let d_logger = self.simple_logger::<DifferentialEventBuilder>(
+            self.d_event_queue.clone(),
+            self.metrics.differential_records_total.clone(),
+        );
+        let c_logger = self.simple_logger::<ComputeEventBuilder>(
+            self.c_event_queue.clone(),
+            self.metrics.compute_records_total.clone(),
+        );
 
         let mut register = self.worker.log_register().expect("Logging must be enabled");
         register.insert_logger("timely", t_logger);
@@ -214,9 +314,10 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
     fn simple_logger<CB: ContainerBuilder>(
         &self,
         event_queue: EventQueue<CB::Container>,
+        records_total: IntCounter,
     ) -> Logger<CB> {
         let [link] = event_queue.links;
-        let mut logger = BatchLogger::new(link, self.interval_ms);
+        let mut logger = BatchLogger::new(link, self.interval_ms, records_total);
         let activator = event_queue.activator.clone();
         Logger::new(
             self.now,
@@ -224,6 +325,13 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             move |time, data: &mut Option<CB::Container>| {
                 if let Some(data) = data.take() {
                     logger.publish_batch(data);
+                    // Count every batch towards the replay's activation threshold, so the logging
+                    // dataflow drains events in bounded chunks. Without this, the replay only
+                    // wakes once per logging interval and processes the whole interval's events
+                    // in one uninterruptible call, stalling every other dataflow on the worker.
+                    // The activator is worker-local and never unparks the thread: a threshold
+                    // crossed while flushing before a park takes effect on the next wakeup.
+                    activator.activate();
                 } else if logger.report_progress(*time) {
                     activator.activate();
                 }
@@ -238,7 +346,11 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
         T: ExtractTimestamp,
     {
         let link = Rc::clone(&self.r_event_queue.links[index]);
-        let mut logger = BatchLogger::new(link, self.interval_ms);
+        let mut logger = BatchLogger::new(
+            link,
+            self.interval_ms,
+            self.metrics.reachability_records_total.clone(),
+        );
         let mut massaged = Vec::new();
         let mut builder = ColumnBuilder::default();
         let activator = self.r_event_queue.activator.clone();
@@ -273,12 +385,16 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                     }
                     while let Some(container) = builder.extract() {
                         logger.publish_batch(std::mem::take(container));
+                        // See `simple_logger`.
+                        activator.activate();
                     }
                 }
             } else {
                 // Handle a flush
                 while let Some(container) = builder.finish() {
                     logger.publish_batch(std::mem::take(container));
+                    // See `simple_logger`.
+                    activator.activate();
                 }
 
                 if logger.report_progress(*batch_time) {

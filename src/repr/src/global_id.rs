@@ -12,9 +12,8 @@ use std::str::FromStr;
 
 use anyhow::{Error, anyhow};
 use columnar::Columnar;
-use columnation::{Columnation, CopyRegion};
-use mz_lowertest::MzReflect;
 use mz_ore::id_gen::AtomicIdGen;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +25,6 @@ use crate::CatalogItemId;
 /// One should explicitly topologically sort objects by their dependencies, rather
 /// than rely on the order of identifiers.
 #[derive(
-    Arbitrary,
     Clone,
     Copy,
     Debug,
@@ -37,9 +35,9 @@ use crate::CatalogItemId;
     Hash,
     Serialize,
     Deserialize,
-    MzReflect,
-    Columnar,
+    Columnar
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum GlobalId {
     /// System namespace.
     System(u64),
@@ -88,7 +86,7 @@ impl FromStr for GlobalId {
             return Ok(GlobalId::Explain);
         }
         let tag = s.chars().next().unwrap();
-        s = &s[1..];
+        s = &s[tag.len_utf8()..];
         let variant = match tag {
             's' => {
                 if Some('i') == s.chars().next() {
@@ -119,10 +117,6 @@ impl fmt::Display for GlobalId {
     }
 }
 
-impl Columnation for GlobalId {
-    type InnerRegion = CopyRegion<GlobalId>;
-}
-
 #[derive(Debug)]
 pub struct TransientIdGen(AtomicIdGen);
 
@@ -137,5 +131,37 @@ impl TransientIdGen {
     pub fn allocate_id(&self) -> (CatalogItemId, GlobalId) {
         let inner = self.0.allocate_id();
         (CatalogItemId::Transient(inner), GlobalId::Transient(inner))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn proptest_global_id_roundtrips() {
+        fn testcase(og: GlobalId) {
+            let s = og.to_string();
+            let rnd: GlobalId = s.parse().unwrap();
+            assert_eq!(og, rnd);
+        }
+
+        proptest!(|(id in any::<GlobalId>())| {
+            testcase(id);
+        })
+    }
+
+    #[mz_ore::test]
+    fn test_global_id_from_str_non_ascii() {
+        // Regression test for a panic on multi-byte leading characters, where
+        // slicing off a single byte landed inside a UTF-8 char boundary (SQL-195).
+        for invalid in ["ü1", "ü", "é42", "🦀7", ""] {
+            assert!(
+                invalid.parse::<GlobalId>().is_err(),
+                "expected {invalid:?} to fail to parse"
+            );
+        }
     }
 }

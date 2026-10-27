@@ -70,6 +70,10 @@ pub trait NamespacedOrchestrator: fmt::Debug + Send + Sync {
     /// Lists the identifiers of all known services.
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error>;
 
+    /// Waits for previously queued requests to be processed, not for affected
+    /// processes to start or terminate.
+    async fn flush(&self) -> Result<(), anyhow::Error>;
+
     /// Watch for status changes of all known services.
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>>;
 
@@ -93,6 +97,11 @@ pub struct ServiceEvent {
     pub service_id: String,
     pub process_id: u64,
     pub status: ServiceStatus,
+    /// Cumulative number of times the underlying process has restarted, as
+    /// reported by the orchestrator. Monotonic for the lifetime of a process,
+    /// but can reset (e.g. when a pod is recreated). Orchestrators that don't
+    /// track restarts report 0.
+    pub restart_count: u64,
     pub time: DateTime<Utc>,
 }
 
@@ -149,6 +158,7 @@ pub struct ServiceProcessMetrics {
     pub disk_bytes: Option<u64>,
     pub heap_bytes: Option<u64>,
     pub heap_limit: Option<u64>,
+    pub swap_bytes: Option<u64>,
 }
 
 /// A simple language for describing assertions about a label's existence and value.
@@ -191,6 +201,8 @@ pub struct LabelSelector {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct ServiceConfig {
+    /// Static application name (usually present in labels)
+    pub app_name: String,
     /// An opaque identifier for the executable or container image to run.
     ///
     /// Often names a container on Docker Hub or a path on the local machine.
@@ -211,6 +223,8 @@ pub struct ServiceConfig {
     pub memory_request: Option<MemoryLimit>,
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
+    /// An optional request on the CPU that the service can use.
+    pub cpu_request: Option<CpuLimit>,
     /// The number of copies of this service to run.
     pub scale: NonZero<u16>,
     /// Arbitrary key–value pairs to attach to the service in the orchestrator
@@ -246,6 +260,24 @@ pub struct ServiceConfig {
     pub disk_limit: Option<DiskLimit>,
     /// Node selector for this service.
     pub node_selector: BTreeMap<String, String>,
+}
+
+/// Get the recommended Kubernetes labels (app.kubernetes.io/*)
+/// WARNING: this is duplicated in src/orchestratord/src/k8s.rs and src/cloud-resources/src/crd.rs
+pub fn recommended_k8s_labels(app_name: String) -> BTreeMap<String, String> {
+    BTreeMap::from_iter([
+        (
+            "app.kubernetes.io/managed-by".to_owned(),
+            "materialize-operator".to_owned(),
+        ),
+        (
+            "app.kubernetes.io/part-of".to_owned(),
+            "materialize".to_owned(),
+        ),
+        ("app.kubernetes.io/name".to_owned(), app_name.to_owned()),
+        // legacy label
+        ("app".to_owned(), app_name.to_owned()),
+    ])
 }
 
 /// A named port associated with a service.
@@ -361,7 +393,7 @@ impl<'de> Deserialize<'de> for CpuLimit {
         // Note -- we just round off any precision beyond 0.001 here.
         let float = f64::deserialize(deserializer)?;
         let millicpus = (float * 1000.).round();
-        if millicpus < 0. || millicpus > (std::usize::MAX as f64) {
+        if millicpus < 0. || millicpus > (usize::MAX as f64) {
             use serde::de::Error;
             Err(D::Error::invalid_value(
                 Unexpected::Float(float),

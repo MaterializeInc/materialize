@@ -74,7 +74,10 @@ class FailedTestExecutionError(UIError):
 def try_determine_errors_from_cmd_execution(
     e: CommandFailureCausedUIError, test_context: str | None
 ) -> list[TestFailureDetails]:
-    output = e.stderr or e.stdout
+    # Combine both streams: testdrive prints each marked error to stdout and
+    # the final error report to stderr, so either stream alone is incomplete.
+    output_parts = [s for s in [e.stdout, e.stderr] if s]
+    output = "\n".join(output_parts) if output_parts else None
 
     if "running docker compose failed" in str(e):
         return [determine_error_from_docker_compose_failure(e, output, test_context)]
@@ -83,6 +86,13 @@ def try_determine_errors_from_cmd_execution(
         return []
 
     error_chunks = extract_error_chunks_from_output(output)
+
+    fallback_file_path = try_determine_error_location_from_cmd(e.cmd)
+    if fallback_file_path is not None and ":" in fallback_file_path:
+        parts = fallback_file_path.split(":")
+        fallback_file_path, fallback_line_number = parts[0], int(parts[1])
+    else:
+        fallback_line_number = None
 
     collected_errors = []
     for chunk in error_chunks:
@@ -93,13 +103,8 @@ def try_determine_errors_from_cmd_execution(
             line_number = int(match.group(2))
         else:
             # for .py files like platform checks, file_path will be a path
-            file_path = try_determine_error_location_from_cmd(e.cmd)
-            if file_path is None or ":" not in file_path:
-                line_number = None
-            else:
-                parts = file_path.split(":")
-                file_path = parts[0]
-                line_number = int(parts[1])
+            file_path = fallback_file_path
+            line_number = fallback_line_number
 
         message = (
             f"Executing {file_path if file_path is not None else 'command'} failed!"
@@ -113,10 +118,7 @@ def try_determine_errors_from_cmd_execution(
             line_number=line_number,
         )
 
-        if failure_details in collected_errors:
-            # do not add an identical error again
-            pass
-        else:
+        if failure_details not in collected_errors:
             collected_errors.append(failure_details)
 
     return collected_errors
@@ -146,15 +148,20 @@ def try_determine_error_location_from_cmd(cmd: list[str]) -> str | None:
 
 
 def extract_error_chunks_from_output(output: str) -> list[str]:
-    if "+++ !!! Error Report" not in output:
+    pos = output.find("+++ !!! Error Report")
+    if pos == -1:
         return []
 
-    error_output = output[: output.index("+++ !!! Error Report") - 1]
-    error_chunks = error_output.split("^^^ +++")
+    error_output = output[:pos]
+    # Testdrive prints "^^^ +++" *before* each error, so everything up to the
+    # first marker is regular output, not an error.
+    error_chunks = error_output.split("^^^ +++")[1:]
 
     return [chunk.strip() for chunk in error_chunks if len(chunk.strip()) > 0]
 
 
 def to_sanitized_command_str(cmd: list[str]) -> str:
-    command_str = " ".join([str(x) for x in filter_cmd(cmd)])
+    # Ensure all elements are strings (cmd may contain Path objects)
+    str_cmd = [str(x) for x in cmd]
+    command_str = " ".join(filter_cmd(str_cmd))
     return re.sub(PEM_CONTENT_RE, PEM_CONTENT_REPLACEMENT, command_str)

@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,16 +9,16 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/rename_column
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/rename_column
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
@@ -41,46 +41,56 @@ uid name  title
 1  tom   cat
 2  jerry rat
 
-statement error column name "name" already exists
+statement error Expected TO, found COLUMN
 ALTER TABLE users RENAME COLUMN title TO name
 
-statement error empty column name
+statement error pgcode 42601 Expected TO, found COLUMN
 ALTER TABLE users RENAME COLUMN title TO ""
 
-statement error pgcode 42703 column "ttle" does not exist
+statement error pgcode 42703 Expected TO, found COLUMN
 ALTER TABLE users RENAME COLUMN ttle TO species
 
-statement error pgcode 42P01 relation "uses" does not exist
+statement error pgcode 42P01 Expected TO, found COLUMN
 ALTER TABLE uses RENAME COLUMN title TO species
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE IF EXISTS uses RENAME COLUMN title TO species
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE users RENAME COLUMN uid TO id
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE users RENAME COLUMN title TO species
 
 query ITT colnames,rowsort
 SELECT * FROM users
 ----
-id name  species
-1  tom   cat
-2  jerry rat
+uid name title
+1  tom  cat
+2  jerry  rat
 
 user testuser
 
-statement error user testuser does not have CREATE privilege on relation users
+statement error Expected TO, found COLUMN
 ALTER TABLE users RENAME COLUMN name TO username
 
 user root
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 GRANT CREATE ON TABLE users TO testuser
 
 user testuser
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 ALTER TABLE users RENAME COLUMN name TO username
 
@@ -89,78 +99,159 @@ user root
 query ITT colnames,rowsort
 SELECT * FROM users
 ----
-id username  species
-1  tom       cat
-2  jerry     rat
+uid name title
+1  tom  cat
+2  jerry  rat
 
+# Not supported by Materialize.
+onlyif cockroach
 # Renaming a column updates the column names in an index.
-query TTBITTBB colnames
-SHOW INDEXES ON users
+query TTBITTTBBB colnames
+SHOW INDEXES FROM users
 ----
-table_name  index_name  non_unique  seq_in_index  column_name  direction  storing  implicit
-users       primary     false       1             id           ASC        false    false
-users       foo         true        1             username     ASC        false    false
-users       foo         true        2             species      N/A        true     false
-users       foo         true        3             id           ASC        false    true
-users       bar         false       1             id           ASC        false    false
-users       bar         false       2             username     ASC        false    false
+table_name  index_name  non_unique  seq_in_index  column_name  definition  direction  storing  implicit  visible
+users       bar         false       1             id           id          ASC        false    false     true
+users       bar         false       2             username     username    ASC        false    false     true
+users       foo         true        1             username     username    ASC        false    false     true
+users       foo         true        2             species      species     N/A        true     false     true
+users       foo         true        3             id           id          ASC        false    true      true
+users       users_pkey  false       1             id           id          ASC        false    false     true
+users       users_pkey  false       2             username     username    N/A        true     false     true
+users       users_pkey  false       3             species      species     N/A        true     false     true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW v1 AS SELECT id FROM users WHERE username = 'tom'
 
-statement error cannot rename column "id" because view "v1" depends on it
+statement error Expected TO, found COLUMN
 ALTER TABLE users RENAME COLUMN id TO uid
 
-statement error cannot rename column "username" because view "v1" depends on it
+statement error Expected TO, found COLUMN
 ALTER TABLE users RENAME COLUMN username TO name
 
-# TODO(knz): restore test after cockroach#17269 / cockroach#10083 is fixed.
+# TODO(knz): restore test after #17269 / #10083 is fixed.
 #statement ok
 #ALTER TABLE users RENAME COLUMN species TO title
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE VIEW v2 AS SELECT id from users
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP VIEW v1
 
-statement error cannot rename column "id" because view "v2" depends on it
+statement error Expected TO, found COLUMN
 ALTER TABLE users RENAME COLUMN id TO uid
 
-# TODO(knz): restore test after cockroach#17269 / cockroach#10083 is fixed.
+# TODO(knz): restore test after #17269 / #10083 is fixed.
 # statement ok
 # ALTER TABLE users RENAME COLUMN username TO name
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 DROP VIEW v2
 
+# Not supported by Materialize.
+onlyif cockroach
 query T
-SELECT column_name FROM [SHOW COLUMNS FROM users]
+SELECT column_name FROM [SHOW COLUMNS FROM users] ORDER BY column_name
 ----
 id
-username
 species
+username
 
-query TTT
-EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR ALTER TABLE users RENAME COLUMN species TO woo
+statement ok
+SET vectorize=on
+
+# Not supported by Materialize.
+onlyif cockroach
+query T
+EXPLAIN ALTER TABLE users RENAME COLUMN species TO woo
 ----
-alter table  ·  ·
+distribution: local
+vectorized: true
+·
+• alter table
 
+statement ok
+RESET vectorize
+
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that EXPLAIN did not actually rename the column
 query T
-SELECT column_name FROM [SHOW COLUMNS FROM users]
+SELECT column_name FROM [SHOW COLUMNS FROM users] ORDER BY column_name
 ----
 id
-username
 species
+username
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check that a column can be added and renamed in the same statement
 statement ok
 ALTER TABLE users RENAME COLUMN species TO species_old,
                   ADD COLUMN species STRING AS (species_old || ' woo') STORED
 
+# Not supported by Materialize.
+onlyif cockroach
 query T rowsort
 SELECT species FROM users
 ----
 cat woo
 rat woo
+
+# Test that renaming columns works inside transactions that create resources
+# which reference those columns.
+
+subtest rename_in_transaction
+
+statement ok
+CREATE TABLE foo (j INT);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+    ALTER TABLE foo ADD CONSTRAINT check_not_negative CHECK (j >= 0);
+    ALTER TABLE foo RENAME COLUMN j TO i;
+COMMIT;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+    ALTER TABLE foo ADD COLUMN k INT AS (i+1) STORED;
+    ALTER TABLE foo RENAME COLUMN i TO j;
+COMMIT;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+    ALTER TABLE foo ALTER COLUMN j SET NOT NULL;
+    ALTER TABLE foo RENAME COLUMN j TO i;
+COMMIT;
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+BEGIN;
+    CREATE INDEX ON foo(i) WHERE i > 0;
+    ALTER TABLE foo RENAME COLUMN i TO j;
+COMMIT;
+
+statement ok
+INSERT INTO foo(j) VALUES (1);
+
+# Not supported by Materialize.
+onlyif cockroach
+query II
+SELECT j, k FROM foo;
+----
+1  2

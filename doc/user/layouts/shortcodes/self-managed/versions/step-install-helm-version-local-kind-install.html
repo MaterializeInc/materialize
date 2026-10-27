@@ -3,10 +3,25 @@
 1. Install the Materialize Operator. The operator will be installed in the
    `materialize` namespace.
 
-   ```shell
+   <a name="step-enable-v1"></a>
+
+   Starting in v26.30, you can choose between CRD versions: [`v1` (which
+   provides a simplified rollout behavior and is available starting in
+   v26.30)](/self-managed-deployments/upgrading/adopting-the-v1-crd/) and
+   `v1alpha1` (default). The following enables the use of `v1` CRD version by
+   setting `operator.args.installV1CRD=true`. To use `v1` CRD requires
+   `cert-manager`, installed in an [earlier step](#install-cert-manager) in this
+   guide.
+
+   ```shell {hl_lines="5"}
    helm install my-materialize-operator materialize/materialize-operator \
        --namespace=materialize --create-namespace \
        --version {{ $operator_version }} \
        --set observability.podMetrics.enabled=true \
+       --set operator.args.installV1CRD=true \
        -f sample-values.yaml
    ```
+
+   Even if using the default `v1alpha1` CRD version, you can still enable the
+   `v1` CRD to simplify the transition to `v1` in the future. However, you can
+   also omit `--set operator.args.installV1CRD=true` if you prefer.

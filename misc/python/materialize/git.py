@@ -29,6 +29,24 @@ MATERIALIZE_REMOTE_URL = "https://github.com/MaterializeInc/materialize"
 fetched_tags_in_remotes: set[str | None] = set()
 
 
+def get_config(key: str) -> str | None:
+    """Read a git config value, returning None if unset."""
+    try:
+        return spawn.capture(["git", "config", key]).strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+def get_user_name() -> str | None:
+    """Get the configured git user.name."""
+    return get_config("user.name")
+
+
+def get_user_email() -> str | None:
+    """Get the configured git user.email."""
+    return get_config("user.email")
+
+
 def rev_count(rev: str) -> int:
     """Count the commits up to a revision.
 
@@ -40,6 +58,19 @@ def rev_count(rev: str) -> int:
             initial commit and ending with the specified commit, inclusive.
     """
     return int(spawn.capture(["git", "rev-list", "--count", rev, "--"]).strip())
+
+
+def get_first_parent_commits(rev: str, limit: int) -> list[str]:
+    """Get commit hashes along the first-parent chain starting from rev.
+
+    Returns up to `limit` commit hashes (including rev itself), following
+    only first parents (i.e., staying on the main branch).
+    """
+    return (
+        spawn.capture(["git", "rev-list", "--first-parent", f"-{limit}", rev])
+        .strip()
+        .splitlines()
+    )
 
 
 def rev_parse(rev: str, *, abbrev: bool = False) -> str:
@@ -165,8 +196,14 @@ def is_ancestor(earlier: str, later: str) -> bool:
         if token := os.getenv("GITHUB_TOKEN"):
             headers["Authorization"] = f"Bearer {token}"
 
+        # GitHub resolves the ref "HEAD" server-side to the repo's default
+        # branch, not the local checkout's HEAD. Resolve it to a concrete SHA
+        # first, otherwise e.g. compare/HEAD...main becomes main...main.
+        api_earlier = rev_parse(earlier) if earlier == "HEAD" else earlier
+        api_later = rev_parse(later) if later == "HEAD" else later
+
         resp = requests.get(
-            f"https://api.github.com/repos/materializeinc/materialize/compare/{earlier}...{later}",
+            f"https://api.github.com/repos/materializeinc/materialize/compare/{api_earlier}...{api_later}",
             headers=headers,
         )
         resp.raise_for_status()
@@ -178,7 +215,10 @@ def is_ancestor(earlier: str, later: str) -> bool:
 
         # Make sure we have an up to date view of main.
         command = ["git", "fetch"]
-        if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+        if (
+            spawn.capture(["git", "rev-parse", "--is-shallow-repository"]).strip()
+            == "true"
+        ):
             command.append("--unshallow")
         spawn.runv(command + [get_remote(), earlier, later])
 
@@ -197,16 +237,6 @@ def is_dirty() -> bool:
     return proc.returncode != 0 or idx.returncode != 0
 
 
-def first_remote_matching(pattern: str) -> str | None:
-    """Get the name of the remote that matches the pattern"""
-    remotes = spawn.capture(["git", "remote", "-v"])
-    for remote in remotes.splitlines():
-        if pattern in remote:
-            return remote.split()[0]
-
-    return None
-
-
 def describe() -> str:
     """Describe the relationship between the current commit and the most recent tag"""
     return spawn.capture(["git", "describe"]).strip()
@@ -219,7 +249,6 @@ def fetch(
     force: bool = False,
     branch: str | None = None,
     only_tags: bool = False,
-    include_submodules: bool = False,
 ) -> str:
     """Fetch from remotes"""
 
@@ -233,7 +262,7 @@ def fetch(
         raise RuntimeError("branch must not be specified if only_tags is set")
 
     command = ["git", "fetch"]
-    if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+    if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]).strip() == "true":
         command.append("--unshallow")
 
     if remote:
@@ -244,12 +273,6 @@ def fetch(
 
     if all_remotes:
         command.append("--all")
-
-    # explicitly specify both cases to be independent of the git config
-    if include_submodules:
-        command.append("--recurse-submodules")
-    else:
-        command.append("--no-recurse-submodules")
 
     fetch_tags = (
         include_tags == YesNoOnce.YES
@@ -329,7 +352,10 @@ def get_common_ancestor_commit(remote: str, branch: str) -> str:
 
         # Make sure we have an up to date view
         command = ["git", "fetch"]
-        if spawn.capture(["git", "rev-parse", "--is-shallow-repository"]) == "true":
+        if (
+            spawn.capture(["git", "rev-parse", "--is-shallow-repository"]).strip()
+            == "true"
+        ):
             command.append("--unshallow")
         spawn.runv(command + [remote, branch])
 
@@ -351,7 +377,9 @@ def contains_commit(
     return is_ancestor(commit_sha, target)
 
 
-def get_tagged_release_version(version_type: type[VERSION_TYPE]) -> VERSION_TYPE | None:
+def get_tagged_release_version(
+    version_type: type[VERSION_TYPE],
+) -> VERSION_TYPE | None:
     """
     This returns the release version if exactly this commit is tagged.
     If multiple release versions are present, the highest one will be returned.

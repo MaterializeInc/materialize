@@ -12,6 +12,7 @@ Benchmark with scenarios combining closed and open loops, can run multiple
 actions concurrently, measures various kinds of statistics.
 """
 
+import argparse
 import gc
 import os
 import time
@@ -23,7 +24,10 @@ from matplotlib.markers import MarkerStyle
 
 from materialize import MZ_ROOT, buildkite
 from materialize.docker import image_registry
-from materialize.mz_env_util import get_cloud_hostname
+from materialize.mz_env_util import (
+    connect_and_print_environment_id,
+    get_cloud_hostname,
+)
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
@@ -43,7 +47,6 @@ from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
@@ -57,7 +60,7 @@ from materialize.parallel_benchmark.framework import (
     SQLiteStore,
     State,
 )
-from materialize.parallel_benchmark.scenarios import *  # noqa: F401 F403
+from materialize.parallel_benchmark.scenarios import *  # noqa: F403
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )
@@ -95,7 +98,6 @@ REGRESSION_THRESHOLDS = {
 }
 
 SERVICES = [
-    Zookeeper(),
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
@@ -363,7 +365,7 @@ def report(
         for key, m in measurements.data.items():
             durations = [x.duration * 1000.0 for x in m]
             durations.sort()
-            (uniqu_durations, counts) = numpy.unique(durations, return_counts=True)
+            uniqu_durations, counts = numpy.unique(durations, return_counts=True)
             counts = numpy.cumsum(counts)
             plt.plot(uniqu_durations, 1 - counts / counts.max(), label=key)
         plt.legend(loc="best")  # type: ignore
@@ -410,6 +412,7 @@ def run_once(
             port=6875,
             ssl=True,
         )
+        connect_and_print_environment_id(target.host, target.user, target.password)
     elif args.canary_env:
         assert not args.mz_url
         assert not args.benchmarking_env
@@ -429,6 +432,7 @@ def run_once(
             port=6875,
             ssl=True,
         )
+        connect_and_print_environment_id(target.host, target.user, target.password)
     elif args.mz_url:
         overrides = [
             Testdrive(
@@ -439,6 +443,14 @@ def run_once(
         ]
         target = parse_pg_conn_string(args.mz_url)
     else:
+        additional_system_parameter_defaults = (
+            ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS | {"max_connections": "100000"}
+        )
+        if params is not None:
+            for param in params.split(";"):
+                param_name, param_value = param.split("=")
+                additional_system_parameter_defaults[param_name] = param_value
+
         overrides = [
             Materialized(
                 image=f"{image_registry()}/materialized:{tag}" if tag else None,
@@ -446,11 +458,9 @@ def run_once(
                 soft_assertions=False,
                 external_metadata_store=True,
                 external_blob_store=True,
-                # TODO: Better azurite support detection
-                blob_store_is_azure=args.azurite and bool(tag),
+                blob_store_is_azure=args.azurite,
                 sanity_restart=False,
-                additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
-                | {"max_connections": "100000"},
+                additional_system_parameter_defaults=additional_system_parameter_defaults,
                 metadata_store="cockroach",
             ),
             Testdrive(
@@ -458,8 +468,7 @@ def run_once(
                 seed=1,
                 metadata_store="cockroach",
                 external_blob_store=True,
-                # TODO: Better azurite support detection
-                blob_store_is_azure=args.azurite and bool(tag),
+                blob_store_is_azure=args.azurite,
             ),
         ]
         target = None
@@ -520,18 +529,34 @@ def run_once(
                 periodic_dists={pd[0]: int(pd[1]) for pd in args.periodic_dist or []},
             )
             scenario = scenario_class(c, conn_infos)
-            scenario.setup(c, conn_infos)
+            # Bound before the try, because the finally reports against it and a
+            # setup() that raises would otherwise leave it unbound, replacing
+            # the failure with an UnboundLocalError.
             start_time = time.time()
             Path(MZ_ROOT / "plots").mkdir(parents=True, exist_ok=True)
             try:
+                # Inside the try because setup() is what starts the worker
+                # threads and builds the connection pool. A failure partway
+                # through leaves those threads parked on an empty job queue,
+                # and only teardown()'s sentinels release them.
+                scenario.setup(c, conn_infos)
+                # After setup(), because this is the denominator of the reported
+                # qps. Starting the thread pool and opening the connections is
+                # harness time, and a scenario with a qps guarantee has less
+                # slack than that costs.
+                start_time = time.time()
                 if not args.benchmarking_env:
                     # Don't let the garbage collector interfere with our measurements
                     gc.disable()
                 scenario.run(c, state)
+            finally:
+                # teardown() must run even if scenario.run() raised, otherwise
+                # its worker threads (up to thread_pool_size, non-daemon) never
+                # stop and block interpreter shutdown until the CI step times
+                # out. gc.enable() likewise must be reached on the failure path.
                 scenario.teardown()
                 gc.collect()
                 gc.enable()
-            finally:
                 new_stats, new_failures = report(
                     mz_string,
                     scenario,
@@ -546,16 +571,11 @@ def run_once(
 
             if not target:
                 print(
-                    "~~~ Resetting materialized to prevent interference between scenarios"
+                    "~~~ Resetting services to prevent interference between scenarios"
                 )
-                c.kill("cockroach", "materialized", "testdrive", "minio")
-                c.rm(
-                    "cockroach",
-                    "materialized",
-                    "testdrive",
-                    "minio",
-                    destroy_volumes=True,
-                )
+                services = service_names + ["cockroach", "testdrive", "minio"]
+                c.kill(*services)
+                c.rm(*services, destroy_volumes=True)
                 c.rm_volumes("mzdata")
 
     return stats, failures
@@ -569,8 +589,10 @@ def check_regressions(
     this_stats: dict[Scenario, dict[str, Statistics]],
     other_stats: dict[Scenario, dict[str, Statistics]],
     other_tag: str | None,
-) -> list[TestFailureDetails]:
+) -> tuple[list[TestFailureDetails], set[str]]:
+    """Returns (failures, regressed_scenario_names)."""
     failures: list[TestFailureDetails] = []
+    regressed_scenario_names: set[str] = set()
 
     assert len(this_stats) == len(other_stats)
 
@@ -631,6 +653,7 @@ def check_regressions(
 
         print("\n".join(output_lines))
         if has_failed:
+            regressed_scenario_names.add(scenario_name)
             failures.append(
                 TestFailureDetails(
                     message=f"Scenario {scenario_name} regressed",
@@ -639,7 +662,7 @@ def check_regressions(
                 )
             )
 
-    return failures
+    return failures, regressed_scenario_names
 
 
 def resolve_tag(tag: str) -> str | None:
@@ -717,7 +740,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     parser.add_argument(
         "--guarantees",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
         help="Check guarantees defined by test scenarios",
     )
@@ -805,6 +828,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
     )
 
+    parser.add_argument(
+        "--runs-per-scenario",
+        type=int,
+        default=2,
+        help="Number of times to rerun a scenario that shows a regression (default: 2)",
+    )
+
     args = parser.parse_args()
 
     if args.scenario:
@@ -818,6 +848,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             scenario for scenario in all_subclasses(Scenario) if scenario.enabled
         ]
 
+    scenarios.sort(key=lambda cls: cls.__name__)
     sharded_scenarios = buildkite.shard_list(scenarios, lambda s: s.name())
 
     if not sharded_scenarios:
@@ -827,39 +858,88 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         os.remove(DB_FILE)
 
     service_names = ["materialized", "postgres", "mysql"] + (
-        ["redpanda"] if args.redpanda else ["zookeeper", "kafka", "schema-registry"]
+        ["redpanda"] if args.redpanda else ["kafka", "schema-registry"]
     )
 
-    this_stats, failures = run_once(
-        c,
-        sharded_scenarios,
-        service_names,
-        tag=None,
-        params=args.this_params,
-        args=args,
-        suffix="this",
-        sqlite_store=args.sqlite_store,
-    )
-    if args.other_tag:
-        assert not args.mz_url, "Can't set both --mz-url and --other-tag"
-        tag = resolve_tag(args.other_tag)
-        print(f"--- Running against other tag for comparison: {tag}")
-        args.guarantees = False
-        other_stats, other_failures = run_once(
+    scenarios_to_run = list(sharded_scenarios)
+    # Accumulate this_stats across retries so non-retried scenarios are not lost
+    all_this_stats: dict[Scenario, dict[str, Statistics]] = {}
+    # Accumulate non-regression failures (guarantee violations) across runs;
+    # regression failures are replaced on each retry since we rerun both sides
+    guarantee_failures: list[TestFailureDetails] = []
+    regression_failures: list[TestFailureDetails] = []
+
+    for run_index in range(args.runs_per_scenario):
+        run_number = run_index + 1
+        print(
+            f"+++ Run {run_number}/{args.runs_per_scenario} with scenarios: {', '.join([s.name() for s in scenarios_to_run])}"
+        )
+
+        retried_scenario_names = {s.name() for s in scenarios_to_run}
+
+        this_stats, this_failures = run_once(
             c,
-            sharded_scenarios,
+            scenarios_to_run,
             service_names,
-            tag=tag,
-            params=args.other_params,
+            tag=None,
+            params=args.this_params,
             args=args,
-            suffix="other",
+            suffix=f"this_run{run_number}",
             sqlite_store=args.sqlite_store,
         )
-        failures.extend(other_failures)
-        failures.extend(check_regressions(this_stats, other_stats, tag))
+        # Drop any prior-run entry for the scenarios we just ran before adding
+        # this run's. all_this_stats is keyed by scenario instance and each
+        # rerun creates a fresh instance, so without this a retried scenario
+        # would be uploaded once per attempt (including the failed first one).
+        all_this_stats = {
+            scenario: scenario_stats
+            for scenario, scenario_stats in all_this_stats.items()
+            if type(scenario).name() not in retried_scenario_names
+        }
+        all_this_stats.update(this_stats)
+        # Replace guarantee failures for retried scenarios, keep others
+        guarantee_failures = [
+            f
+            for f in guarantee_failures
+            if f.test_class_name_override not in retried_scenario_names
+        ] + this_failures
+
+        if args.other_tag:
+            assert not args.mz_url, "Can't set both --mz-url and --other-tag"
+            tag = resolve_tag(args.other_tag)
+            print(f"--- Running against other tag for comparison: {tag}")
+            guarantees_orig = args.guarantees
+            args.guarantees = False
+            other_stats, other_failures = run_once(
+                c,
+                scenarios_to_run,
+                service_names,
+                tag=tag,
+                params=args.other_params,
+                args=args,
+                suffix=f"other_run{run_number}",
+                sqlite_store=args.sqlite_store,
+            )
+            args.guarantees = guarantees_orig
+            guarantee_failures.extend(other_failures)
+            regression_failures, regressed_names = check_regressions(
+                this_stats, other_stats, tag
+            )
+
+            if regressed_names and run_number < args.runs_per_scenario:
+                scenarios_to_run = [
+                    s for s in scenarios_to_run if s.name() in regressed_names
+                ]
+                print(
+                    f"Regressions detected in: {', '.join(regressed_names)}; rerunning these scenarios."
+                )
+                continue
+        break
+
+    failures = guarantee_failures + regression_failures
 
     upload_results_to_test_analytics(
-        c, args.load_phase_duration, this_stats, not failures
+        c, args.load_phase_duration, all_this_stats, not failures
     )
 
     if failures:

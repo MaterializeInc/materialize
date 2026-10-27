@@ -37,6 +37,7 @@ pub use desc::{ProtoSqlServerColumnDesc, ProtoSqlServerTableDesc};
 use crate::cdc::Lsn;
 use crate::config::TunnelConfig;
 use crate::desc::SqlServerColumnDecodeType;
+use crate::inspect::EngineEdition;
 
 /// Higher level wrapper around a [`tiberius::Client`] that models transaction
 /// management like other database clients.
@@ -45,6 +46,9 @@ pub struct Client {
     tx: UnboundedSender<Request>,
     // The configuration used to create this client.
     config: Config,
+    // Cached engine edition of the connected instance. Immutable for the life
+    // of a connection, so we query it at most once and reuse it.
+    engine_edition: Option<EngineEdition>,
 }
 // While a Client could implement Clone, it's not obvious how multiple Clients
 // using the same SQL Server connection would interact, so ban it for now.
@@ -63,10 +67,13 @@ impl Client {
         // Setup our tunnelling and return any resources that need to be kept
         // alive for the duration of the connection.
         let (tcp, resources): (_, Option<Box<dyn Any + Send + Sync>>) = match &config.tunnel {
-            TunnelConfig::Direct => {
-                let tcp = TcpStream::connect(config.inner.get_addr())
-                    .await
-                    .context("direct")?;
+            TunnelConfig::Direct { resolved_addresses } => {
+                let tcp = if resolved_addresses.is_empty() {
+                    TcpStream::connect(config.inner.get_addr()).await
+                } else {
+                    TcpStream::connect(resolved_addresses.as_ref()).await
+                }
+                .context("direct")?;
                 (tcp, None)
             }
             TunnelConfig::Ssh {
@@ -92,21 +99,9 @@ impl Client {
                 port,
             } => {
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
-                let mut privatelink_addrs =
-                    tokio::net::lookup_host((privatelink_host.clone(), 0)).await?;
-
-                let Some(mut addr) = privatelink_addrs.next() else {
-                    return Err(SqlServerError::InvariantViolated(format!(
-                        "aws privatelink: no addresses found for host {:?}",
-                        privatelink_host
-                    )));
-                };
-
-                addr.set_port(port.clone());
-
-                let tcp = TcpStream::connect(addr)
+                let tcp = TcpStream::connect((privatelink_host.as_str(), *port))
                     .await
-                    .context(format!("aws privatelink {:?}", addr))?;
+                    .context(format!("aws privatelink {:?}", privatelink_host))?;
 
                 (tcp, None)
             }
@@ -139,7 +134,11 @@ impl Client {
         // TODO(sql_server2): Add a lot more logging here like the Postgres and MySQL clients have.
 
         Ok((
-            Client { tx, config },
+            Client {
+                tx,
+                config,
+                engine_edition: None,
+            },
             Connection {
                 rx,
                 client,
@@ -336,6 +335,17 @@ impl Client {
         }
     }
 
+    /// Returns the [`EngineEdition`] of the connected instance, querying it on
+    /// first access and caching the result for the life of this [`Client`].
+    pub async fn engine_edition(&mut self) -> Result<EngineEdition, SqlServerError> {
+        if let Some(edition) = self.engine_edition {
+            return Ok(edition);
+        }
+        let edition = crate::inspect::get_engine_edition(self).await?;
+        self.engine_edition = Some(edition);
+        Ok(edition)
+    }
+
     /// Return a [`CdcStream`] that can be used to track changes for the specified
     /// `capture_instances`.
     ///
@@ -366,7 +376,14 @@ pub struct Transaction<'a> {
 
 impl<'a> Transaction<'a> {
     async fn new(client: &'a mut Client) -> Result<Self, SqlServerError> {
-        let results = client
+        // Construct the guard *before* awaiting BEGIN to avoid a potential race where
+        // transaction is started on remote, but the transaction is cancelled before returning.
+        let tx = Transaction {
+            client,
+            closed: false,
+        };
+        let results = tx
+            .client
             .simple_query("BEGIN TRANSACTION")
             .await
             .context("begin")?;
@@ -375,10 +392,7 @@ impl<'a> Transaction<'a> {
                 "expected empty result from BEGIN TRANSACTION. Got: {results:?}"
             )))
         } else {
-            Ok(Transaction {
-                client,
-                closed: false,
-            })
+            Ok(tx)
         }
     }
 
@@ -404,7 +418,7 @@ impl<'a> Transaction<'a> {
             )))?;
         }
 
-        let stmt = format!("SAVE TRANSACTION [{savepoint_name}]");
+        let stmt = format!("SAVE TRANSACTION {}", quote_identifier(savepoint_name));
         let _result = self.client.simple_query(stmt).await?;
         Ok(())
     }
@@ -439,7 +453,9 @@ impl<'a> Transaction<'a> {
         // in SELECT using the WITH keyword.  This query does not need to return any rows to lock the table,
         // hence the 1=0, which is something short that always evaluates to false in this universe.
         let query = format!(
-            "{SET_READ_COMMITTED}\nSELECT * FROM [{schema}].[{table}] WITH (TABLOCK, HOLDLOCK) WHERE 1=0;"
+            "{SET_READ_COMMITTED}\nSELECT * FROM {schema}.{table} WITH (TABLOCK, HOLDLOCK) WHERE 1=0;",
+            schema = quote_identifier(schema),
+            table = quote_identifier(table)
         );
         let _result = self.client.simple_query(query).await?;
         Ok(())
@@ -506,10 +522,20 @@ impl<'a> Transaction<'a> {
 
 impl Drop for Transaction<'_> {
     fn drop(&mut self) {
-        // Internally the query is synchronously sent down a channel, and the response is what
-        // we await. In other words, we don't need to `.await` here for the query to be run.
         if !self.closed {
-            let _fut = self.client.simple_query("ROLLBACK TRANSACTION");
+            // Send the ROLLBACK request directly through the channel, bypassing
+            // the async `simple_query` method. We cannot `.await` in `Drop`, and
+            // merely calling an async fn without awaiting it does nothing (the
+            // future is never polled so the channel send inside never executes).
+            //
+            // We intentionally drop the response receiver since we cannot await
+            // it in a synchronous context. The Connection task will execute the
+            // ROLLBACK and discard the response when the receiver is gone.
+            let (tx, _rx) = oneshot::channel();
+            let kind = RequestKind::SimpleQuery {
+                query: "ROLLBACK TRANSACTION".to_string(),
+            };
+            let _ = self.client.tx.send(Request { tx, kind });
         }
     }
 }
@@ -880,6 +906,8 @@ pub enum SqlServerDecodeError {
     },
     #[error("found invalid data in the column '{column_name}': {error}")]
     InvalidData { column_name: String, error: String },
+    #[error("column '{column_name}' not found in CDC row")]
+    MissingColumn { column_name: String },
     #[error("can't decode {sql_server_type:?} as {mz_type:?}")]
     Unsupported {
         sql_server_type: SqlServerColumnDecodeType,
@@ -910,10 +938,14 @@ impl SqlServerDecodeError {
         }
     }
 
-    fn invalid_char(name: &str, expected_chars: usize, found_chars: usize) -> Self {
+    fn invalid_char(name: &str, max_chars: usize, found_chars: usize) -> Self {
+        // NOTE: This text is persisted verbatim in a row-level `DecodeError`.
+        // Retractions re-decode the before-image, so the string must stay
+        // byte-identical to what older sources persisted, else the `-1` fails
+        // to cancel the stored `+1` on the next UPDATE/DELETE.
         SqlServerDecodeError::InvalidData {
             column_name: name.to_string(),
-            error: format!("expected {expected_chars} chars found {found_chars}"),
+            error: format!("expected {max_chars} chars found {found_chars}"),
         }
     }
 

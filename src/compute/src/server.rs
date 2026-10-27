@@ -16,12 +16,11 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::Thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Error;
-use crossbeam_channel::SendError;
-use mz_cluster::client::{ClusterClient, ClusterSpec};
+use mz_cluster::client::{ClusterClient, ClusterSpec, GuestClusterClient};
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_client::protocol::history::ComputeCommandHistory;
@@ -29,19 +28,28 @@ use mz_compute_client::protocol::response::ComputeResponse;
 use mz_compute_client::service::ComputeClient;
 use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_rocksdb::config::SharedWriteBufferManager;
+use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
+use mz_storage::metrics::StorageMetrics;
+use mz_storage::storage_state::{StorageInstanceContext, StorageState, Worker as StorageWorker};
+use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
+use mz_storage_operators::persist::SharedBatches;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
-use timely::communication::Allocate;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
 use tracing::{info, trace, warn};
 use uuid::Uuid;
 
-use crate::command_channel;
-use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
+use crate::command_channel::{self, StorageLaneInput, UnifiedCommand};
+use crate::compute_state::{
+    ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
+};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 
 /// Caller-provided configuration for compute.
@@ -56,11 +64,77 @@ pub struct ComputeInstanceContext {
     pub connection_context: ConnectionContext,
 }
 
+/// Which of a process's compute runtimes a given runtime is.
+///
+/// A clusterd process runs a single `Solo` runtime by default. When an interactive runtime is
+/// configured, the process instead runs a `Maintenance` and an `Interactive` runtime side by side.
+/// The named roles share per-process resources (persist cache, metrics registry, log spans). The
+/// role distinguishes them so that only the globals-owning runtime runs the non-idempotent
+/// process-global initializers, and so metric series and log spans do not collide.
+///
+/// `Solo` exists so the single-runtime default stays behaviorally identical to a deployment without
+/// a second runtime: no `role` metric label, and it owns the process globals just as the sole
+/// runtime always has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComputeRuntimeRole {
+    /// The sole runtime of a single-runtime process. Owns index maintenance and the process-global
+    /// initializers.
+    Solo,
+    /// The maintenance runtime of a two-runtime process. Owns index maintenance and the
+    /// process-global initializers.
+    Maintenance,
+    /// The interactive runtime of a two-runtime process. Shares the process globals owned by
+    /// maintenance and serves reads.
+    ///
+    /// Test-only until the interactive runtime exists to construct it. It is present because the
+    /// `role` label's entire purpose is that two named roles register into one process registry
+    /// without colliding, and nothing else can express that: `Solo` registers the same metric names
+    /// with no `role` label, so prometheus rejects it alongside a named role for differing label
+    /// dimensions rather than treating it as a second series. Verifying non-collision therefore
+    /// needs a second *named* role.
+    ///
+    /// TODO: drop the `cfg` when the interactive runtime lands and constructs this.
+    #[cfg(test)]
+    Interactive,
+}
+
+impl ComputeRuntimeRole {
+    /// The `role` metric/log label for this role, or `None` for `Solo`.
+    ///
+    /// `Solo` omits the label so a single-runtime deployment registers exactly as it did before a
+    /// second runtime existed, keeping exact-match dashboards and alerts unchanged.
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            ComputeRuntimeRole::Solo => None,
+            ComputeRuntimeRole::Maintenance => Some("maintenance"),
+            #[cfg(test)]
+            ComputeRuntimeRole::Interactive => Some("interactive"),
+        }
+    }
+
+    /// Whether this role runs the non-idempotent, process-global initializers.
+    ///
+    /// `Solo` and `Maintenance` run them. An interactive runtime shares the same process and
+    /// inherits the globals maintenance installs, so re-running them would either double-apply a
+    /// non-idempotent effect or race maintenance.
+    ///
+    /// NOTE: every role a release build can construct owns the globals, so this is constantly true
+    /// outside tests. The distinction becomes load-bearing when the interactive runtime lands.
+    pub fn owns_process_globals(self) -> bool {
+        matches!(
+            self,
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance
+        )
+    }
+}
+
 /// Configures the server with compute-specific metrics.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Config {
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
+    /// Shared persist batch state.
+    pub persist_batches: SharedBatches,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -69,27 +143,155 @@ struct Config {
     pub metrics: ComputeMetrics,
     /// Other configuration for compute.
     pub context: ComputeInstanceContext,
+    /// The process-global metrics registry.
+    pub metrics_registry: MetricsRegistry,
+    /// The number of timely workers per process.
+    pub workers_per_process: usize,
+    /// Bounds how many offloaded peek walks run at once, shared by every worker this server runs.
+    ///
+    /// NOTE: per compute runtime, not global. A process running a maintenance and an interactive
+    /// runtime calls `serve` twice and admits the bound once per call.
+    pub peek_permits: Arc<PeekPermits>,
+    /// Configuration for hosting storage objects on this cluster, if enabled.
+    pub storage_guest: Option<Arc<StorageGuestConfig>>,
+}
+
+/// A per-worker channel delivering storage client connections.
+type StorageClientRx = mpsc::UnboundedReceiver<(
+    Uuid,
+    mpsc::UnboundedReceiver<StorageCommand>,
+    mpsc::UnboundedSender<StorageResponse>,
+)>;
+
+/// Configuration for hosting storage objects on the compute cluster.
+pub struct StorageGuestConfig {
+    /// Per-worker channels delivering storage client connections, indexed by local worker index.
+    client_rxs: Mutex<Vec<Option<StorageClientRx>>>,
+    /// Metrics for storage objects.
+    metrics: StorageMetrics,
+    /// Function to get wall time now.
+    now: NowFn,
+    /// Configuration for source and sink connections.
+    connection_context: ConnectionContext,
+    /// Other configuration for storage instances.
+    instance_context: StorageInstanceContext,
+    /// Shared rocksdb write buffer manager.
+    shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
 pub async fn serve(
     timely_config: TimelyConfig,
+    role: ComputeRuntimeRole,
     metrics_registry: &MetricsRegistry,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
 ) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
+    let workers_per_process = timely_config.workers;
     let config = Config {
+        persist_batches: SharedBatches::new(),
         persist_clients,
         txns_ctx,
         tracing_handle,
-        metrics: ComputeMetrics::register_with(metrics_registry),
+        metrics: ComputeMetrics::register_with(metrics_registry, role),
         context,
+        metrics_registry: metrics_registry.clone(),
+        workers_per_process,
+        peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
+        storage_guest: None,
     };
+
+    let (_worker_threads, client_builder) = serve_inner(config, timely_config).await?;
+    Ok(client_builder)
+}
+
+/// Initiates a timely dataflow computation that processes compute commands and additionally hosts
+/// storage objects, processing storage commands received over a separate client connection.
+///
+/// Returns client builders for both the compute and the storage side.
+pub async fn serve_unified(
+    timely_config: TimelyConfig,
+    role: ComputeRuntimeRole,
+    metrics_registry: &MetricsRegistry,
+    persist_clients: Arc<PersistClientCache>,
+    txns_ctx: TxnsContext,
+    tracing_handle: Arc<TracingHandle>,
+    context: ComputeInstanceContext,
+    now: NowFn,
+    storage_connection_context: ConnectionContext,
+    storage_instance_context: StorageInstanceContext,
+) -> Result<
+    (
+        impl Fn() -> Box<dyn ComputeClient> + use<>,
+        impl Fn() -> Box<dyn StorageClient> + use<>,
+    ),
+    Error,
+> {
+    let workers_per_process = timely_config.workers;
+
+    // Per-worker channels over which storage client connections are delivered.
+    let mut storage_client_txs = Vec::new();
+    let mut storage_client_rxs = Vec::new();
+    for _ in 0..workers_per_process {
+        let (tx, rx) = mpsc::unbounded_channel();
+        storage_client_txs.push(tx);
+        storage_client_rxs.push(Some(rx));
+    }
+
+    let storage_guest = StorageGuestConfig {
+        client_rxs: Mutex::new(storage_client_rxs),
+        metrics: StorageMetrics::register_with(metrics_registry),
+        now,
+        connection_context: storage_connection_context,
+        instance_context: storage_instance_context,
+        shared_rocksdb_write_buffer_manager: Default::default(),
+    };
+
+    let config = Config {
+        persist_batches: SharedBatches::new(),
+        persist_clients,
+        txns_ctx,
+        tracing_handle,
+        metrics: ComputeMetrics::register_with(metrics_registry, role),
+        context,
+        metrics_registry: metrics_registry.clone(),
+        workers_per_process,
+        peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
+        storage_guest: Some(Arc::new(storage_guest)),
+    };
+
+    let (worker_threads, compute_client_builder) = serve_inner(config, timely_config).await?;
+
+    let storage_client_txs = Arc::new(storage_client_txs);
+    let storage_client_builder = move || {
+        let client =
+            GuestClusterClient::new(Arc::clone(&storage_client_txs), worker_threads.clone());
+        let client: Box<dyn StorageClient> = Box::new(client);
+        client
+    };
+
+    Ok((compute_client_builder, storage_client_builder))
+}
+
+/// Builds the Timely cluster for the given config and returns its worker threads along with a
+/// builder for compute clients to it.
+async fn serve_inner(
+    config: Config,
+    timely_config: TimelyConfig,
+) -> Result<(Vec<Thread>, impl Fn() -> Box<dyn ComputeClient> + use<>), Error> {
+    mz_timely_util::column_pager::metrics::register(
+        &config.metrics_registry,
+        mz_timely_util::column_pager::tiered_policy(),
+    );
+    mz_timely_util::pool_config::metrics::register(&config.metrics_registry);
+    mz_cluster::client::register_exert_policy_metrics(&config.metrics_registry);
+
     let tokio_executor = tokio::runtime::Handle::current();
 
     let timely_container = config.build_cluster(timely_config, tokio_executor).await?;
+    let worker_threads = timely_container.worker_threads();
     let timely_container = Arc::new(Mutex::new(timely_container));
 
     let client_builder = move || {
@@ -98,7 +300,7 @@ pub async fn serve(
         client
     };
 
-    Ok(client_builder)
+    Ok((worker_threads, client_builder))
 }
 
 /// Error type returned on connection nonce changes.
@@ -133,20 +335,32 @@ impl CommandReceiver {
 
     /// Receive the next pending command, if any.
     ///
-    /// If the next command has a different nonce, this method instead returns an `Err`
+    /// If the next compute command has a different nonce, this method instead returns an `Err`
     /// containing the new nonce.
-    fn try_recv(&mut self) -> Result<Option<ComputeCommand>, NonceChange> {
+    fn try_recv(&mut self) -> Result<Option<WorkerCommand>, NonceChange> {
         if let Some(command) = self.stashed_command.take() {
-            return Ok(Some(command));
+            return Ok(Some(WorkerCommand::Compute(command)));
         }
-        let Some((command, nonce)) = self.inner.try_recv() else {
+        let Some(message) = self.inner.try_recv() else {
             return Ok(None);
+        };
+
+        let (command, nonce) = match message {
+            UnifiedCommand::Compute(command, nonce) => (command, nonce),
+            UnifiedCommand::Storage(command) => {
+                trace!(
+                    worker = self.worker_id,
+                    ?command,
+                    "received storage command"
+                );
+                return Ok(Some(WorkerCommand::Storage(command)));
+            }
         };
 
         trace!(worker = self.worker_id, %nonce, ?command, "received command");
 
         if Some(nonce) == self.nonce {
-            Ok(Some(command))
+            Ok(Some(WorkerCommand::Compute(command)))
         } else {
             self.nonce = Some(nonce);
             self.stashed_command = Some(command);
@@ -155,13 +369,21 @@ impl CommandReceiver {
     }
 }
 
+/// A command dispatched to the worker from the command channel.
+enum WorkerCommand {
+    /// A compute command.
+    Compute(ComputeCommand),
+    /// A storage-internal command, to be dispatched to the storage guest.
+    Storage(InternalStorageCommand),
+}
+
 /// Endpoint used by workers to send sending compute responses.
 ///
 /// Tags responses with the current nonce, allowing receivers to filter out responses intended for
 /// previous client connections.
 pub(crate) struct ResponseSender {
     /// The channel consuming responses.
-    inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>,
+    inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
     /// The ID of the Timely worker.
     worker_id: usize,
     /// The nonce identifying the current cluster protocol incarnation.
@@ -169,7 +391,11 @@ pub(crate) struct ResponseSender {
 }
 
 impl ResponseSender {
-    fn new(inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
+    /// `pub(crate)` rather than private so the peek tests can build the sender a worker holds.
+    pub(crate) fn new(
+        inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
+        worker_id: usize,
+    ) -> Self {
         Self {
             inner,
             worker_id,
@@ -178,7 +404,7 @@ impl ResponseSender {
     }
 
     /// Set the cluster protocol nonce.
-    fn set_nonce(&mut self, nonce: Uuid) {
+    pub(crate) fn set_nonce(&mut self, nonce: Uuid) {
         self.nonce = Some(nonce);
     }
 
@@ -197,9 +423,9 @@ impl ResponseSender {
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-struct Worker<'w, A: Allocate> {
+struct Worker<'w> {
     /// The underlying Timely worker.
-    timely_worker: &'w mut TimelyWorker<A>,
+    timely_worker: &'w mut TimelyWorker,
     /// The channel over which commands are received.
     command_rx: CommandReceiver,
     /// The channel over which responses are sent.
@@ -210,23 +436,96 @@ struct Worker<'w, A: Allocate> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
+    persist_batches: SharedBatches,
     /// Context necessary for rendering txn-wal operators.
     txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
+    /// The process-global metrics registry.
+    metrics_registry: MetricsRegistry,
+    /// The number of timely workers per process.
+    workers_per_process: usize,
+    /// Bounds how many offloaded peek walks run at once, shared by the workers of one `serve`
+    /// call rather than by the process.
+    peek_permits: Arc<PeekPermits>,
+    /// The hosted storage guest, if any.
+    storage: Option<StorageGuest>,
+}
+
+/// Per-worker state for hosting storage objects on the compute cluster.
+struct StorageGuest {
+    /// Channel delivering new storage client connections.
+    client_rx: StorageClientRx,
+    /// The current storage client connection, if any.
+    conn: Option<StorageConn>,
+    /// The hosted storage worker state.
+    storage_state: StorageState,
+    /// The last time storage maintenance ran.
+    last_maintenance: Instant,
+    /// The last time storage statistics were reported.
+    last_stats_time: Instant,
+}
+
+impl StorageGuest {
+    /// The longest the worker may park before the guest's next periodic duty (frontier reporting
+    /// or statistics collection) comes due, or `None` when no duty is pending.
+    ///
+    /// Mirrors the parking of storage's own server loop: the maintenance and statistics intervals
+    /// bound the park. A maintenance deadline in the past does not bound it, because maintenance
+    /// runs on the next wakeup anyway. The initial zero maintenance interval would otherwise turn
+    /// every park into a spin.
+    fn park_cap(&self) -> Option<Duration> {
+        // Periodic duties run only on a reconciled connection. Without one there is no deadline
+        // to meet, and connection and command arrivals unpark the worker.
+        let conn_serving = self
+            .conn
+            .as_ref()
+            .is_some_and(|conn| conn.reconcile_buf.is_none());
+        if !conn_serving {
+            return None;
+        }
+
+        let maintenance_interval = self.storage_state.server_maintenance_interval;
+        let stats_interval = self
+            .storage_state
+            .storage_configuration
+            .parameters
+            .statistics_collection_interval;
+
+        let next_maintenance =
+            (self.last_maintenance + maintenance_interval).checked_duration_since(Instant::now());
+        let next_stats = stats_interval.saturating_sub(self.last_stats_time.elapsed());
+        match next_maintenance {
+            Some(maintenance) => Some(maintenance.min(next_stats)),
+            None => Some(next_stats),
+        }
+    }
+}
+
+/// A storage client connection.
+struct StorageConn {
+    /// The channel over which storage commands are received.
+    command_rx: mpsc::UnboundedReceiver<StorageCommand>,
+    /// The channel over which storage responses are sent.
+    response_tx: mpsc::UnboundedSender<StorageResponse>,
+    /// Commands buffered for reconciliation, until `InitializationComplete` is received.
+    /// `None` once the connection is reconciled and serving.
+    reconcile_buf: Option<Vec<StorageCommand>>,
 }
 
 impl ClusterSpec for Config {
     type Command = ComputeCommand;
     type Response = ComputeResponse;
 
-    fn run_worker<A: Allocate + 'static>(
+    const NAME: &str = "compute";
+
+    fn run_worker(
         &self,
-        timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        timely_worker: &mut TimelyWorker,
+        client_rx: mpsc::UnboundedReceiver<(
             Uuid,
-            crossbeam_channel::Receiver<ComputeCommand>,
+            mpsc::UnboundedReceiver<ComputeCommand>,
             mpsc::UnboundedSender<ComputeResponse>,
         )>,
     ) {
@@ -237,14 +536,61 @@ impl ClusterSpec for Config {
         let worker_id = timely_worker.index();
         let metrics = self.metrics.for_worker(worker_id);
 
+        let local_index = worker_id % self.workers_per_process;
+
+        // Prepare the storage guest's inputs to the command channel, so
+        // storage-internal commands are sequenced through the same lane as compute commands.
+        let mut storage_lane_input = None;
+        let guest_setup = self.storage_guest.as_ref().map(|cfg| {
+            let storage_client_rx = cfg.client_rxs.lock().expect("poisoned")[local_index]
+                .take()
+                .expect("each worker takes its storage client_rx exactly once");
+            let (internal_tx, internal_rx) = std::sync::mpsc::channel();
+            let activator_slot = Rc::new(RefCell::new(None));
+            storage_lane_input = Some(StorageLaneInput {
+                rx: internal_rx,
+                activator_slot: Rc::clone(&activator_slot),
+            });
+            let internal_cmd_tx = InternalCommandSender::from_parts(internal_tx, activator_slot);
+            (Arc::clone(cfg), storage_client_rx, internal_cmd_tx)
+        });
+
         // Create the command channel that broadcasts commands from worker 0 to other workers. We
         // reuse this channel between client connections, to avoid bugs where different workers end
         // up creating incompatible sides of the channel dataflow after reconnects.
         // See database-issues#8964.
-        let (cmd_tx, cmd_rx) = command_channel::render(timely_worker);
-        let (resp_tx, resp_rx) = crossbeam_channel::unbounded();
+        let (cmd_tx, cmd_rx) = command_channel::render(timely_worker, storage_lane_input);
+        let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
         spawn_channel_adapter(client_rx, cmd_tx, resp_rx, worker_id);
+
+        // Create the storage guest state.
+        let storage = guest_setup.map(|(cfg, storage_client_rx, internal_cmd_tx)| {
+            let storage_state = StorageState::new_guest(
+                timely_worker.index(),
+                timely_worker.peers(),
+                internal_cmd_tx,
+                // The host dispatches internal commands from the unified command channel, so
+                // the guest reads no receiver of its own.
+                None,
+                cfg.metrics.clone(),
+                cfg.now.clone(),
+                cfg.connection_context.clone(),
+                cfg.instance_context.clone(),
+                Arc::clone(&self.persist_clients),
+                self.txns_ctx.clone(),
+                Arc::clone(&self.tracing_handle),
+                cfg.shared_rocksdb_write_buffer_manager.clone(),
+            );
+
+            StorageGuest {
+                client_rx: storage_client_rx,
+                conn: None,
+                storage_state,
+                last_maintenance: Instant::now(),
+                last_stats_time: Instant::now(),
+            }
+        });
 
         Worker {
             timely_worker,
@@ -253,9 +599,14 @@ impl ClusterSpec for Config {
             metrics,
             context: self.context.clone(),
             persist_clients: Arc::clone(&self.persist_clients),
+            persist_batches: self.persist_batches.clone(),
             txns_ctx: self.txns_ctx.clone(),
             compute_state: None,
             tracing_handle: Arc::clone(&self.tracing_handle),
+            metrics_registry: self.metrics_registry.clone(),
+            workers_per_process: self.workers_per_process,
+            peek_permits: Arc::clone(&self.peek_permits),
+            storage,
         }
         .run()
     }
@@ -305,7 +656,7 @@ fn set_core_affinity(_worker_id: usize) {
     info!("setting core affinity is not supported on macOS");
 }
 
-impl<'w, A: Allocate + 'static> Worker<'w, A> {
+impl<'w> Worker<'w> {
     /// Runs a compute worker.
     pub fn run(&mut self) {
         // The command receiver is initialized without an nonce, so receiving the first command
@@ -361,12 +712,32 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 sleep_duration = Some(next_maintenance.saturating_duration_since(now))
             };
 
+            // Do not sleep while a peek waits for its turn. Only the sweep below gives it one,
+            // and nothing else leaves an activation behind to end the park.
+            let sleep_duration = match &self.compute_state {
+                Some(state) if state.peeks_awaiting_turn() => Some(Duration::ZERO),
+                _ => sleep_duration,
+            };
+
+            // With a storage guest, cap the park duration so the guest's periodic duties run on
+            // time.
+            let sleep_duration = match self.storage.as_ref().and_then(StorageGuest::park_cap) {
+                Some(cap) => Some(sleep_duration.map_or(cap, |d| d.min(cap))),
+                None => sleep_duration,
+            };
+
             // Step the timely worker, recording the time taken.
             let timer = self.metrics.timely_step_duration_seconds.start_timer();
-            self.timely_worker.step_or_park(sleep_duration);
+            if self.storage_guest_busy() {
+                self.timely_worker.step();
+            } else {
+                self.timely_worker.step_or_park(sleep_duration);
+            }
             timer.observe_duration();
 
             self.handle_pending_commands()?;
+
+            self.process_storage_guest();
 
             if let Some(mut compute_state) = self.activate_compute() {
                 compute_state.process_peeks();
@@ -378,28 +749,204 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
     fn handle_pending_commands(&mut self) -> Result<(), NonceChange> {
         while let Some(cmd) = self.command_rx.try_recv()? {
-            self.handle_command(cmd);
+            match cmd {
+                WorkerCommand::Compute(cmd) => self.handle_command(cmd),
+                WorkerCommand::Storage(cmd) => self.handle_storage_internal_command(cmd),
+            }
         }
         Ok(())
     }
 
-    fn handle_command(&mut self, cmd: ComputeCommand) {
-        match &cmd {
-            ComputeCommand::CreateInstance(_) => {
-                self.compute_state = Some(ComputeState::new(
-                    Arc::clone(&self.persist_clients),
-                    self.txns_ctx.clone(),
-                    self.metrics.clone(),
-                    Arc::clone(&self.tracing_handle),
-                    self.context.clone(),
-                ));
+    /// Whether the storage guest has pending work that forbids parking.
+    ///
+    /// It is critical that we allow Timely to park iff there are no pending commands or async
+    /// worker responses, since those are delivered by other threads that only unpark us once, at
+    /// send time.
+    fn storage_guest_busy(&self) -> bool {
+        self.storage.as_ref().is_some_and(|guest| {
+            !guest.client_rx.is_empty()
+                || (!self.storage_commands_held()
+                    && guest
+                        .conn
+                        .as_ref()
+                        .is_some_and(|conn| !conn.command_rx.is_empty()))
+                || !guest.storage_state.async_worker.is_empty()
+        })
+    }
+
+    /// Whether the storage guest must leave external storage commands unread.
+    ///
+    /// Commands are held until compute's `CreateInstance` has initialized logging. Held commands
+    /// do not keep the worker busy. Handling `CreateInstance` releases them.
+    fn storage_commands_held(&self) -> bool {
+        // Storage commands render storage dataflows, and the loggers only observe operators
+        // created after their initialization, so a storage dataflow rendered earlier never
+        // appears in introspection. Nothing orders the storage and compute controller
+        // connections, so the storage controller can connect first. Every storage dataflow
+        // stems from an external storage command, so holding those back suffices.
+        self.compute_state.is_none()
+    }
+
+    /// Dispatch a storage-internal command from the command channel to
+    /// the storage guest. This is where all storage dataflow rendering happens.
+    fn handle_storage_internal_command(&mut self, cmd: InternalStorageCommand) {
+        let mut guest = self
+            .storage
+            .take()
+            .expect("the command channel carries storage commands only when a guest is hosted");
+
+        let mut worker = StorageWorker {
+            timely_worker: &mut *self.timely_worker,
+            client_rx: guest.client_rx,
+            storage_state: guest.storage_state,
+        };
+        worker.handle_internal_storage_command(cmd);
+
+        let StorageWorker {
+            timely_worker: _,
+            client_rx,
+            storage_state,
+        } = worker;
+        guest.client_rx = client_rx;
+        guest.storage_state = storage_state;
+        self.storage = Some(guest);
+    }
+
+    /// Process the storage guest's per-iteration duties: accept client
+    /// connections, handle external storage commands (buffering for reconciliation until
+    /// `InitializationComplete`), forward async worker responses, and report frontiers, dropped
+    /// collections, status updates, and statistics.
+    fn process_storage_guest(&mut self) {
+        let Some(mut guest) = self.storage.take() else {
+            return;
+        };
+
+        // Accept new client connections, replacing any current one. Every new connection starts
+        // with a reconciliation.
+        loop {
+            use tokio::sync::mpsc::error::TryRecvError;
+            match guest.client_rx.try_recv() {
+                Ok((_nonce, command_rx, response_tx)) => {
+                    guest.conn = Some(StorageConn {
+                        command_rx,
+                        response_tx,
+                        reconcile_buf: Some(Vec::new()),
+                    });
+                }
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
             }
-            _ => (),
+        }
+
+        let commands_held = self.storage_commands_held();
+        let mut worker = StorageWorker {
+            timely_worker: &mut *self.timely_worker,
+            client_rx: guest.client_rx,
+            storage_state: guest.storage_state,
+        };
+
+        // Handle responses from the async worker. Only worker 0 does async processing, so only
+        // worker 0 ever receives any. This must run with or without a client connection:
+        // storage-internal commands keep flowing through the command channel while the
+        // controller is away and can issue async work, and an undrained response queue keeps
+        // `storage_guest_busy` true, turning every park into a spin.
+        while let Ok(response) = worker.storage_state.async_worker.try_recv() {
+            worker.handle_async_worker_response(response);
+        }
+
+        let conn = if commands_held {
+            None
+        } else {
+            guest.conn.take()
+        };
+        let Some(mut conn) = conn else {
+            let StorageWorker {
+                timely_worker: _,
+                client_rx,
+                storage_state,
+            } = worker;
+            guest.client_rx = client_rx;
+            guest.storage_state = storage_state;
+            self.storage = Some(guest);
+            return;
+        };
+
+        // Drain external storage commands.
+        let mut disconnected = false;
+        loop {
+            use tokio::sync::mpsc::error::TryRecvError;
+            match conn.command_rx.try_recv() {
+                Ok(StorageCommand::InitializationComplete) if conn.reconcile_buf.is_some() => {
+                    let commands = conn.reconcile_buf.take().expect("checked above");
+                    worker.reconcile_commands(commands);
+                }
+                Ok(cmd) => match &mut conn.reconcile_buf {
+                    Some(buf) => buf.push(cmd),
+                    None => worker.storage_state.handle_storage_command(cmd),
+                },
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+
+        // Response-producing duties run only on a reconciled connection.
+        if conn.reconcile_buf.is_none() {
+            let maintenance_interval = worker.storage_state.server_maintenance_interval;
+            let now = Instant::now();
+            if now >= guest.last_maintenance + maintenance_interval {
+                guest.last_maintenance = now;
+                worker.report_frontier_progress(&conn.response_tx);
+            }
+
+            for id in std::mem::take(&mut worker.storage_state.dropped_ids) {
+                worker.send_storage_response(&conn.response_tx, StorageResponse::DroppedId(id));
+            }
+
+            worker.process_oneshot_ingestions(&conn.response_tx);
+            worker.report_status_updates(&conn.response_tx);
+
+            let stats_interval = worker
+                .storage_state
+                .storage_configuration
+                .parameters
+                .statistics_collection_interval;
+            if guest.last_stats_time.elapsed() >= stats_interval {
+                worker.report_storage_statistics(&conn.response_tx);
+                guest.last_stats_time = Instant::now();
+            }
+        }
+
+        let StorageWorker {
+            timely_worker: _,
+            client_rx,
+            storage_state,
+        } = worker;
+        guest.client_rx = client_rx;
+        guest.storage_state = storage_state;
+        guest.conn = (!disconnected).then_some(conn);
+        self.storage = Some(guest);
+    }
+
+    fn handle_command(&mut self, cmd: ComputeCommand) {
+        if matches!(&cmd, ComputeCommand::CreateInstance(_)) {
+            self.compute_state = Some(ComputeState::new(
+                Arc::clone(&self.persist_clients),
+                self.persist_batches.clone(),
+                self.txns_ctx.clone(),
+                self.metrics.clone(),
+                Arc::clone(&self.tracing_handle),
+                self.context.clone(),
+                self.metrics_registry.clone(),
+                self.workers_per_process,
+                Arc::clone(&self.peek_permits),
+            ));
         }
         self.activate_compute().unwrap().handle_compute_command(cmd);
     }
 
-    fn activate_compute(&mut self) -> Option<ActiveComputeState<'_, A>> {
+    fn activate_compute(&mut self) -> Option<ActiveComputeState<'_>> {
         if let Some(compute_state) = &mut self.compute_state {
             Some(ActiveComputeState {
                 timely_worker: &mut *self.timely_worker,
@@ -418,11 +965,31 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     fn recv_command(&mut self) -> Result<ComputeCommand, NonceChange> {
         loop {
             if let Some(cmd) = self.command_rx.try_recv()? {
-                return Ok(cmd);
+                match cmd {
+                    WorkerCommand::Compute(cmd) => return Ok(cmd),
+                    // Storage-internal commands are dispatched even while
+                    // waiting for compute commands (e.g. during compute reconciliation), so
+                    // storage dataflow construction keeps its lane position on all workers.
+                    WorkerCommand::Storage(cmd) => {
+                        self.handle_storage_internal_command(cmd);
+                        continue;
+                    }
+                }
             }
 
+            // Keep serving the storage guest while blocked on compute
+            // commands, and avoid unbounded parks that would stall its periodic duties.
+            self.process_storage_guest();
+            let park_cap = self.storage.as_ref().and_then(StorageGuest::park_cap);
+
             let start = Instant::now();
-            self.timely_worker.step_or_park(None);
+            if self.storage_guest_busy() {
+                self.timely_worker.step();
+            } else if let Some(cap) = park_cap {
+                self.timely_worker.step_or_park(Some(cap));
+            } else {
+                self.timely_worker.step_or_park(None);
+            }
             self.metrics
                 .timely_step_duration_seconds
                 .observe(start.elapsed().as_secs_f64());
@@ -636,8 +1203,10 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
             // All re-used dataflows should roll back any believed communicated information (e.g. frontiers)
             // so that they recommunicate that information as if from scratch.
 
-            // Remove all pending peeks.
-            for (_, peek) in std::mem::take(&mut compute_state.pending_peeks) {
+            // Remove all peeks, whether they have started or are still awaiting a turn.
+            let queued = std::mem::take(&mut compute_state.queued_peeks);
+            let pending = std::mem::take(&mut compute_state.pending_peeks);
+            for peek in queued.into_iter().map(PendingPeek::Index).chain(pending) {
                 // Log dropping the peek request.
                 if let Some(logger) = compute_state.compute_logger.as_mut() {
                     logger.log(&peek.as_log_event(false));
@@ -728,25 +1297,23 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     }
 }
 
-/// Spawn a thread to bridge between [`ClusterClient`] and [`Worker`] channels.
+/// Spawn a task to bridge between [`ClusterClient`] and [`Worker`] channels.
 ///
 /// The [`Worker`] expects a pair of persistent channels, with punctuation marking reconnects,
 /// while the [`ClusterClient`] provides a new pair of channels on each reconnect.
 fn spawn_channel_adapter(
-    client_rx: crossbeam_channel::Receiver<(
+    mut client_rx: mpsc::UnboundedReceiver<(
         Uuid,
-        crossbeam_channel::Receiver<ComputeCommand>,
+        mpsc::UnboundedReceiver<ComputeCommand>,
         mpsc::UnboundedSender<ComputeResponse>,
     )>,
     command_tx: command_channel::Sender,
-    response_rx: crossbeam_channel::Receiver<(ComputeResponse, Uuid)>,
+    mut response_rx: mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
     worker_id: usize,
 ) {
-    thread::Builder::new()
-        // "cca" stands for "compute channel adapter". We need to shorten that because Linux has a
-        // 15-character limit for thread names.
-        .name(format!("cca-{worker_id}"))
-        .spawn(move || {
+    mz_ore::task::spawn(
+        || format!("compute-channel-adapter-{worker_id}"),
+        async move {
             // To make workers aware of the individual client connections, we tag forwarded
             // commands with the client nonce. Additionally, we use the nonce to filter out
             // responses with a different nonce, which are intended for different client
@@ -765,7 +1332,7 @@ fn spawn_channel_adapter(
             // know that all stashed responses must be from the past.
             let mut stashed_responses = BTreeMap::<Uuid, Vec<ComputeResponse>>::new();
 
-            while let Ok((nonce, command_rx, response_tx)) = client_rx.recv() {
+            while let Some((nonce, mut command_rx, response_tx)) = client_rx.recv().await {
                 // Send stashed responses for this client.
                 if let Some(resps) = stashed_responses.remove(&nonce) {
                     for resp in resps {
@@ -774,13 +1341,13 @@ fn spawn_channel_adapter(
                 }
 
                 // Wait for a new response while forwarding received commands.
-                let serve_rx_channels = || loop {
-                    crossbeam_channel::select! {
-                        recv(command_rx) -> msg => match msg {
-                            Ok(cmd) => command_tx.send((cmd, nonce)),
-                            Err(_) => return Err(()),
+                let mut serve_rx_channels = async || loop {
+                    tokio::select! {
+                        msg = command_rx.recv() => match msg {
+                            Some(cmd) => command_tx.send((cmd, nonce)),
+                            None => return Err(()),
                         },
-                        recv(response_rx) -> msg => {
+                        msg = response_rx.recv() => {
                             return Ok(msg.expect("worker connected"));
                         }
                     }
@@ -788,7 +1355,7 @@ fn spawn_channel_adapter(
 
                 // Serve this connection until we see any of the channels disconnect.
                 loop {
-                    let Ok((resp, resp_nonce)) = serve_rx_channels() else {
+                    let Ok((resp, resp_nonce)) = serve_rx_channels().await else {
                         break;
                     };
 
@@ -805,6 +1372,6 @@ fn spawn_channel_adapter(
                     }
                 }
             }
-        })
-        .unwrap();
+        },
+    );
 }

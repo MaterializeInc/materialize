@@ -7,10 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM prod-base
+MZFROM openssh-static AS openssh
+
+MZFROM distroless-prod-base
 
 COPY environmentd entrypoint.sh /usr/local/bin/
+COPY --from=openssh /output/ssh /usr/bin/ssh
 
-USER materialize
-
-ENTRYPOINT ["tini", "--", "entrypoint.sh"]
+# tini reaps orphaned subprocesses and forwards signals to the whole process
+# group, including environmentd. Run entrypoint.sh through busybox `sh`
+# explicitly, as distroless has no /bin/sh.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/busybox/sh", "/usr/local/bin/entrypoint.sh"]

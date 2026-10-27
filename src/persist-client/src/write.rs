@@ -18,7 +18,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::task::RuntimeExt;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::location::Blob;
@@ -41,11 +41,14 @@ use crate::batch::{
 };
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::fetch::{
-    EncodedPart, FetchBatchFilter, FetchedPart, PartDecodeFormat, VALIDATE_PART_BOUNDS_ON_READ,
+    EncodedPart, FetchBatchFilter, FetchedPart, PartDecodeFormat, PartSource,
+    VALIDATE_PART_BOUNDS_ON_READ,
 };
 use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{Schemas, assert_code_can_read_data};
-use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
+use crate::internal::machine::{
+    CompareAndAppendRes, ExpireFn, Machine, next_listen_batch_retry_params,
+};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
 use crate::read::ReadHandle;
@@ -56,6 +59,7 @@ pub(crate) const COMBINE_INLINE_WRITES: Config<bool> = Config::new(
     "persist_write_combine_inline_writes",
     true,
     "If set, re-encode inline writes if they don't fit into the batch metadata limits.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_WRITE: Config<bool> = Config::new(
@@ -63,10 +67,21 @@ pub(crate) const VALIDATE_PART_BOUNDS_ON_WRITE: Config<bool> = Config::new(
     false,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
     for the batch being appended.",
+    ParameterScope::Environment,
 );
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
-#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct WriterId(pub(crate) [u8; 16]);
 
@@ -289,15 +304,9 @@ where
             let desc = Description::new(lower.clone(), target.clone(), since);
             let batch = HollowBatch::empty(desc);
 
-            let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
-                .compare_and_append(
-                    &batch,
-                    &self.writer_id,
-                    &self.debug_state,
-                    heartbeat_timestamp,
-                )
+                .compare_and_append(&batch, &self.writer_id, &self.debug_state)
                 .await;
 
             use CompareAndAppendRes::*;
@@ -611,7 +620,7 @@ where
             let mut key_storage = None;
             let mut val_storage = None;
             for batch in batches.iter() {
-                let () = validate_truncate_batch(
+                let bounds_truncated = validate_truncate_batch(
                     &batch.batch,
                     &desc,
                     any_batch_rewrite,
@@ -650,7 +659,7 @@ where
                             );
                             let mut fetched_part = FetchedPart::new(
                                 Arc::clone(&self.metrics),
-                                encoded_part,
+                                PartSource::Whole(encoded_part),
                                 schema_migration,
                                 FetchBatchFilter::Compaction {
                                     since: desc.since().clone(),
@@ -683,7 +692,11 @@ where
                     if start_index != 0 {
                         run_splits.push(start_index);
                     }
-                    run_metas.push(run_meta.clone());
+                    let mut run_meta = run_meta.clone();
+                    if bounds_truncated {
+                        run_meta.set_bounds_truncated();
+                    }
+                    run_metas.push(run_meta);
                 }
                 num_updates += batch.batch.len;
             }
@@ -737,15 +750,9 @@ where
                 }
             }
 
-            let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
-                .compare_and_append(
-                    &combined_batch,
-                    &self.writer_id,
-                    &self.debug_state,
-                    heartbeat_timestamp,
-                )
+                .compare_and_append(&combined_batch, &self.writer_id, &self.debug_state)
                 .await;
 
             match res {
@@ -969,12 +976,18 @@ where
     /// Blocks until the given `frontier` is less than the upper of the shard.
     pub async fn wait_for_upper_past(&mut self, frontier: &Antichain<T>) {
         let mut watch = self.machine.applier.watch();
-        let batch = self
-            .machine
-            .next_listen_batch(frontier, &mut watch, None, None)
+        self.machine
+            .wait_for_upper_past(
+                frontier,
+                &mut watch,
+                None,
+                &self.metrics.retries.next_listen_batch, // TODO: new retry metrics for these?
+                next_listen_batch_retry_params(&self.cfg),
+            )
             .await;
-        if PartialOrder::less_than(&self.upper, batch.desc.upper()) {
-            self.upper.clone_from(batch.desc.upper());
+        let upper = self.machine.applier.clone_upper();
+        if PartialOrder::less_than(&self.upper, &upper) {
+            self.upper.clone_from(&upper);
         }
         assert!(PartialOrder::less_than(frontier, &self.upper));
     }
@@ -1228,7 +1241,7 @@ mod tests {
 
         let batch = write
             .machine
-            .snapshot(&Antichain::from_elem(3))
+            .unleased_snapshot(&Antichain::from_elem(3))
             .await
             .expect("just wrote this")
             .into_element();

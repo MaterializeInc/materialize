@@ -1,0 +1,16 @@
+- name: "syntax"
+  code: |
+    EXPLAIN TIMESTAMP [AS (TEXT | JSON)]
+    FOR <select_stmt>
+  syntax_elements:
+    - name: "**AS** (`TEXT` | `JSON`)"
+      description: |
+        Optional. Specifies the output format of the explanation:
+
+        | Format | Description |
+        |--------|-------------|
+        | `TEXT` | Format the explanation output as UTF-8 text (default). |
+        | `JSON` | Format the explanation output as a JSON object. |
+    - name: "**FOR** `<select_stmt>`"
+      description: |
+        The [`SELECT`](/sql/select) statement to explain.

@@ -149,7 +149,7 @@ async fn bench_write_to_listen_one_iter(
                         Ok(()) => {}
                         Err(mpsc::error::SendError(_)) => return,
                     },
-                    _ => {}
+                    ListenEvent::Updates(_) => {}
                 }
             }
         }

@@ -292,6 +292,17 @@ ROLLBACK
 > SELECT sql FROM mz_internal.mz_recent_activity_log WHERE statement_type = 'alter_secret';
 "ALTER SECRET my_super_secret AS '<REDACTED>'"
 
+# Backstop for SQL-435: a failed secret statement must never persist its real
+# error in `error_message`, which could embed the value through some path the
+# per-site redactions don't cover. The client still receives the real error, but
+# the logged `error_message` is a fixed placeholder.
+
+! CREATE SECRET leaky_secret AS '\xNOTHEXsupersecret'
+contains: could not evaluate secret value
+
+> SELECT error_message FROM mz_internal.mz_recent_activity_log WHERE statement_type = 'create_secret' AND finished_status = 'error';
+"<error redacted for secret statement>"
+
 # Test that UPDATE redacts values.
 
 > RESET cluster

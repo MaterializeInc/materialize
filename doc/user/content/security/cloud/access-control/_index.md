@@ -9,12 +9,13 @@ aliases:
 menu:
   main:
     parent: 'security-cloud'
+    name: "Access control (role-based)"
     identifier: 'access-control'
     weight: 12
 ---
 
 {{< annotation type="Disambiguation" >}}
-{{< include-md file="shared-content/rbac-cloud/rbac-intro-disambiguation.md" >}}
+{{% include-headless "/headless/rbac-cloud/rbac-intro-disambiguation-cloud" %}}
 
 This section focuses on the database access control. For information on
 organization roles, see [Users and service
@@ -29,22 +30,28 @@ In Materialize, role-based access control (RBAC) governs access to **database
 objects** through privileges granted to [database
 roles](./manage-roles/).
 
+{{< tip >}}
+You can manage database role membership from your identity provider by
+[syncing IdP groups to database
+roles](/security/cloud/users-service-accounts/sync-idp-groups/).
+{{</ tip >}}
+
 ## Roles and privileges
 
-{{% include-md file="shared-content/rbac-cloud/db-roles.md" %}}
+{{% include-headless "/headless/rbac-cloud/db-roles" %}}
 
 ### Managing privileges
 
-{{% include-md file="shared-content/rbac-cloud/db-roles-managing-privileges.md" %}}
+{{% include-headless "/headless/rbac-cloud/db-roles-managing-privileges" %}}
 
 {{< annotation type="Disambiguation" >}}
-{{% include-md file="shared-content/rbac-cloud/grant-vs-alter-default-privilege.md"
+{{% include-headless "/headless/rbac-cloud/grant-vs-alter-default-privilege"
 %}}
 {{</ annotation >}}
 
 ### Initial privileges
 
-{{< include-md file="shared-content/rbac-cloud/db-roles-initial-privileges.md" >}}
+{{% include-headless "/headless/rbac-cloud/db-roles-initial-privileges" %}}
 
 You can modify the privileges of your organization's `PUBLIC` role as well as
 the modify default privileges for `PUBLIC`.
@@ -66,7 +73,7 @@ combining existing roles, enabling modular access control. However:
 
 - Inheritance only applies to role privileges; role attributes and parameters
   are not inherited.
-- {{% include-md file="shared-content/rbac-cloud/revoke-roles-consideration.md" %}}
+- {{% include-headless "/headless/rbac-cloud/revoke-roles-consideration" %}}
 
 ## Best practices
 

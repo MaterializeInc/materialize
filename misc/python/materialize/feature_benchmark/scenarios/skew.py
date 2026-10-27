@@ -20,8 +20,7 @@ class SkewedJoin(Scenario):
         count = 10**scale
 
         return Td(
-            dedent(
-                f"""
+            dedent(f"""
                 > DROP TABLE IF EXISTS skewed_table CASCADE;
                 > DROP TABLE IF EXISTS uniform_table CASCADE;
 
@@ -35,19 +34,16 @@ class SkewedJoin(Scenario):
 
                 # Make sure 0 is overrepresented
                 > INSERT INTO skewed_table (f1) SELECT 0 FROM generate_series(1, {count}::integer);
-                """
-            )
+                """)
             + "\n".join(
                 [
                     f"> INSERT INTO skewed_table (f1) SELECT MOD(generate_series, POW(10, {i})) FROM generate_series(1, ({count} / {scale})::integer);"
                     for i in range(floor(scale))
                 ]
             )
-            + dedent(
-                """
+            + dedent("""
                 > SELECT * FROM v1
                   /* B */
                 true
-                """
-            )
+                """)
         )

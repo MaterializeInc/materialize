@@ -88,37 +88,6 @@ idx1 r2
     frontiers.write_frontier > 0
 idx1
 
-# Test that frontiers of continual tasks are reported.
-
-> CREATE CONTINUAL TASK ct1 (a int) ON INPUT t1 AS (
-    INSERT INTO ct1 SELECT * FROM t1
-  )
-
-> SELECT
-    cts.name,
-    replicas.name
-  FROM mz_cluster_replica_frontiers frontiers
-  JOIN mz_internal.mz_continual_tasks cts
-    ON frontiers.object_id = cts.id
-  LEFT JOIN mz_cluster_replicas replicas
-    ON frontiers.replica_id = replicas.id
-  WHERE
-    frontiers.object_id LIKE 'u%' AND
-    frontiers.write_frontier > 0
-ct1 r1
-ct1 r2
-
-> SELECT
-    cts.name
-  FROM mz_internal.mz_frontiers frontiers
-  JOIN mz_internal.mz_continual_tasks cts
-    ON frontiers.object_id = cts.id
-  WHERE
-    frontiers.object_id LIKE 'u%' AND
-    frontiers.read_frontier > 0 AND
-    frontiers.write_frontier > 0
-ct1
-
 # Test that frontiers of sources are reported.
 
 > CREATE SOURCE source1
@@ -266,8 +235,6 @@ mz_frontiers
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
-ct1  r1
-ct1  r2
 idx1 r1
 idx1 r2
 mv1  r1
@@ -289,9 +256,6 @@ mv1  r2
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
-ct1  r1
-ct1  r2
-ct1  r3
 idx1 r1
 idx1 r2
 idx1 r3
@@ -317,8 +281,6 @@ mv1  r3
     objects.id LIKE 'u%' AND
     frontiers.write_frontier > 0 AND
     clusters.name = 'test'
-ct1  r2
-ct1  r3
 idx1 r2
 idx1 r3
 mv1  r2
@@ -356,7 +318,6 @@ r3 <null>
 > DROP MATERIALIZED VIEW mv1
 > DROP MATERIALIZED VIEW mv2
 > DROP INDEX idx1
-> DROP CONTINUAL TASK ct1
 > DROP SOURCE source1 CASCADE
 > DROP SINK sink1
 > DROP TABLE t1

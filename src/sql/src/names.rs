@@ -18,15 +18,13 @@ use std::sync::LazyLock;
 use anyhow::anyhow;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
-use mz_ore::assert_none;
-use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_repr::{ColumnName, RelationVersionSelector};
 use mz_sql_parser::ast::visit_mut::VisitMutNode;
-use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, RawNetworkPolicyName, Version};
+use mz_sql_parser::ast::{Expr, RawNetworkPolicyName, Version};
 use mz_sql_parser::ident;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -42,7 +40,7 @@ use crate::ast::{
     RawDataType, RawItemName, Statement, UnresolvedItemName, UnresolvedObjectName,
 };
 use crate::catalog::{
-    CatalogError, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails, SessionCatalog,
+    CatalogError, CatalogItem, CatalogItemType, CatalogTypeDetails, SessionCatalog,
 };
 use crate::normalize;
 use crate::plan::PlanError;
@@ -55,7 +53,17 @@ use crate::plan::PlanError;
 /// `FullItemName`.
 ///
 /// [`normalize::unresolved_item_name`]: crate::normalize::unresolved_item_name
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize
+)]
 pub struct FullItemName {
     /// The database name.
     pub database: RawDatabaseSpecifier,
@@ -117,7 +125,17 @@ static_assertions::assert_not_impl_any!(QualifiedItemName: fmt::Display);
 ///
 /// This is like a [`FullItemName`], but either the database or schema name may be
 /// omitted.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash
+)]
 pub struct PartialItemName {
     pub database: Option<String>,
     pub schema: Option<String>,
@@ -192,7 +210,17 @@ impl From<PartialItemName> for UnresolvedItemName {
 }
 
 /// A fully-qualified human readable name of a schema in the catalog.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub struct FullSchemaName {
     /// The database name
     pub database: RawDatabaseSpecifier,
@@ -245,7 +273,17 @@ impl fmt::Display for PartialSchemaName {
 }
 
 /// A human readable name of a database.
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum RawDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
     /// explicitly, but by omission.
@@ -274,7 +312,17 @@ impl From<Option<String>> for RawDatabaseSpecifier {
 
 /// An id of a database.
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub enum ResolvedDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
@@ -330,7 +378,18 @@ impl From<Option<DatabaseId>> for ResolvedDatabaseSpecifier {
  * their Id.
  */
 /// An id of a schema.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub enum SchemaSpecifier {
     /// A temporary schema
     Temporary,
@@ -432,10 +491,6 @@ pub enum ResolvedItemName {
         id: LocalId,
         name: String,
     },
-    ContinualTask {
-        id: LocalId,
-        name: PartialItemName,
-    },
     Error,
 }
 
@@ -444,7 +499,6 @@ impl ResolvedItemName {
         match self {
             ResolvedItemName::Item { full_name, .. } => full_name.to_string(),
             ResolvedItemName::Cte { name, .. } => name.clone(),
-            ResolvedItemName::ContinualTask { name, .. } => name.to_string(),
             ResolvedItemName::Error => "error in name resolution".to_string(),
         }
     }
@@ -494,7 +548,7 @@ impl AstDisplay for ResolvedItemName {
 
                 if *print_id {
                     if let RelationVersionSelector::Specific(version) = version {
-                        let version: Version = (*version).into();
+                        let version = normalize::ast_version(*version);
                         f.write_str(" VERSION ");
                         f.write_node(&version);
                     }
@@ -505,19 +559,6 @@ impl AstDisplay for ResolvedItemName {
                 }
             }
             ResolvedItemName::Cte { name, .. } => f.write_node(&Ident::new_unchecked(name)),
-            ResolvedItemName::ContinualTask { name, .. } => {
-                // TODO: Remove this once PartialItemName uses Ident instead of
-                // String.
-                if let Some(database) = name.database.as_ref() {
-                    f.write_node(&Ident::new_unchecked(database));
-                    f.write_str(".");
-                }
-                if let Some(schema) = name.schema.as_ref() {
-                    f.write_node(&Ident::new_unchecked(schema));
-                    f.write_str(".");
-                }
-                f.write_node(&Ident::new_unchecked(&name.item));
-            }
             ResolvedItemName::Error => {}
         }
     }
@@ -864,7 +905,17 @@ impl AstInfo for Aug {
 
 /// The identifier for a schema.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub enum SchemaId {
     User(u64),
@@ -894,27 +945,32 @@ impl FromStr for SchemaId {
     type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            return Err(PlanError::Unstructured(format!(
-                "couldn't parse SchemaId {}",
-                s
-            )));
-        }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next() {
-            Some('s') => Ok(SchemaId::System(val)),
-            Some('u') => Ok(SchemaId::User(val)),
-            _ => Err(PlanError::Unstructured(format!(
-                "couldn't parse SchemaId {}",
-                s
-            ))),
-        }
+        let err = || PlanError::Unstructured(format!("couldn't parse SchemaId {}", s));
+        // Validate the (single-byte, ASCII) tag before slicing so that a
+        // multi-byte leading character doesn't slice inside a UTF-8 boundary.
+        let variant = match s.chars().next() {
+            Some('s') => SchemaId::System,
+            Some('u') => SchemaId::User,
+            _ => return Err(err()),
+        };
+        let val: u64 = s[1..].parse().map_err(|_| err())?;
+        Ok(variant(val))
     }
 }
 
 /// The identifier for a database.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub enum DatabaseId {
     User(u64),
@@ -944,21 +1000,16 @@ impl FromStr for DatabaseId {
     type Err = PlanError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            return Err(PlanError::Unstructured(format!(
-                "couldn't parse DatabaseId {}",
-                s
-            )));
-        }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next() {
-            Some('s') => Ok(DatabaseId::System(val)),
-            Some('u') => Ok(DatabaseId::User(val)),
-            _ => Err(PlanError::Unstructured(format!(
-                "couldn't parse DatabaseId {}",
-                s
-            ))),
-        }
+        let err = || PlanError::Unstructured(format!("couldn't parse DatabaseId {}", s));
+        // Validate the (single-byte, ASCII) tag before slicing so that a
+        // multi-byte leading character doesn't slice inside a UTF-8 boundary.
+        let variant = match s.chars().next() {
+            Some('s') => DatabaseId::System,
+            Some('u') => DatabaseId::User,
+            _ => return Err(err()),
+        };
+        let val: u64 = s[1..].parse().map_err(|_| err())?;
+        Ok(variant(val))
     }
 }
 
@@ -1082,9 +1133,6 @@ impl TryFrom<ResolvedObjectName> for ObjectId {
             ResolvedObjectName::Item(name) => match name {
                 ResolvedItemName::Item { id, .. } => Ok(ObjectId::Item(id)),
                 ResolvedItemName::Cte { .. } => Err(anyhow!("CTE does not correspond to object")),
-                ResolvedItemName::ContinualTask { .. } => {
-                    Err(anyhow!("ContinualTask does not correspond to object"))
-                }
                 ResolvedItemName::Error => Err(anyhow!("error in name resolution")),
             },
             ResolvedObjectName::NetworkPolicy(name) => Ok(ObjectId::NetworkPolicy(name.id)),
@@ -1184,12 +1232,12 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::MaterializedView(item_id)
             | CommentObjectId::Source(item_id)
             | CommentObjectId::Sink(item_id)
+            | CommentObjectId::MetricSink(item_id)
             | CommentObjectId::Index(item_id)
             | CommentObjectId::Func(item_id)
             | CommentObjectId::Connection(item_id)
             | CommentObjectId::Type(item_id)
-            | CommentObjectId::Secret(item_id)
-            | CommentObjectId::ContinualTask(item_id) => ObjectId::Item(item_id),
+            | CommentObjectId::Secret(item_id) => ObjectId::Item(item_id),
             CommentObjectId::Role(id) => ObjectId::Role(id),
             CommentObjectId::Database(id) => ObjectId::Database(id),
             CommentObjectId::Schema(id) => ObjectId::Schema(id),
@@ -1232,6 +1280,12 @@ impl From<ObjectId> for SystemObjectId {
 /// well as the inner kind of object that is represented, e.g. [`CatalogItemId`] is used to
 /// identify both Tables and Views. No other kind of ID encapsulates all of this, hence this new
 /// "*Id" type.
+///
+/// New variants here also need to be added to the durable counterpart
+/// `mz_catalog_protos::objects::CommentObject` and to both CASE expressions in
+/// the `mz_internal.mz_comments` materialized view (`MZ_COMMENTS` in
+/// `mz-catalog::builtin::mz_internal`). The MV reads `CommentObject` out of
+/// `mz_catalog_raw` as serde JSON.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize)]
 pub enum CommentObjectId {
     Table(CatalogItemId),
@@ -1239,12 +1293,12 @@ pub enum CommentObjectId {
     MaterializedView(CatalogItemId),
     Source(CatalogItemId),
     Sink(CatalogItemId),
+    MetricSink(CatalogItemId),
     Index(CatalogItemId),
     Func(CatalogItemId),
     Connection(CatalogItemId),
     Type(CatalogItemId),
     Secret(CatalogItemId),
-    ContinualTask(CatalogItemId),
     Role(RoleId),
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
@@ -1274,7 +1328,11 @@ struct ItemResolutionConfig {
 pub struct NameResolver<'a> {
     catalog: &'a dyn SessionCatalog,
     ctes: BTreeMap<String, LocalId>,
-    continual_task: Option<(PartialItemName, LocalId)>,
+    /// The next `LocalId` to allocate for a CTE. Never decremented, so every
+    /// CTE in the statement gets a unique id, even when CTE names shadow each
+    /// other. Later phases (e.g., HIR lowering's `CteMap`) key CTEs by
+    /// `LocalId` and rely on this uniqueness.
+    next_cte_id: u64,
     status: Result<(), PlanError>,
     ids: BTreeMap<CatalogItemId, BTreeSet<GlobalId>>,
 }
@@ -1284,17 +1342,34 @@ impl<'a> NameResolver<'a> {
         NameResolver {
             catalog,
             ctes: BTreeMap::new(),
-            continual_task: None,
+            next_cte_id: 0,
             status: Ok(()),
             ids: BTreeMap::new(),
         }
     }
 
+    fn allocate_cte_id(&mut self) -> LocalId {
+        let id = LocalId::new(self.next_cte_id);
+        self.next_cte_id += 1;
+        id
+    }
+
     fn resolve_data_type(&mut self, data_type: RawDataType) -> Result<ResolvedDataType, PlanError> {
+        self.resolve_data_type_inner(data_type, true)
+    }
+
+    fn resolve_data_type_inner(
+        &mut self,
+        data_type: RawDataType,
+        should_insert_id: bool,
+    ) -> Result<ResolvedDataType, PlanError> {
         match data_type {
             RawDataType::Array(elem_type) => {
                 let name = elem_type.to_string();
-                match self.resolve_data_type(*elem_type)? {
+                // `T[]` recursively resolves to its element type, but we
+                // only want to insert its array type `_T` and not its element
+                // type `T`. Thus we set `should_insert_id` to `false`.
+                match self.resolve_data_type_inner(*elem_type, false)? {
                     ResolvedDataType::AnonymousList(_) | ResolvedDataType::AnonymousMap { .. } => {
                         sql_bail!("type \"{}[]\" does not exist", name)
                     }
@@ -1320,6 +1395,11 @@ impl<'a> NameResolver<'a> {
                                 );
                             }
                         };
+
+                        // We don't need to check `should_insert_id` here since we're
+                        // guaranteed to insert just one array item type for an
+                        // array. For multi-dimensional arrays, the parser always
+                        // collapses it into a 1D array.
                         self.ids.insert(array_item.id(), BTreeSet::new());
                         Ok(ResolvedDataType::Named {
                             id: array_item.id(),
@@ -1333,15 +1413,15 @@ impl<'a> NameResolver<'a> {
                 }
             }
             RawDataType::List(elem_type) => {
-                let elem_type = self.resolve_data_type(*elem_type)?;
+                let elem_type = self.resolve_data_type_inner(*elem_type, should_insert_id)?;
                 Ok(ResolvedDataType::AnonymousList(Box::new(elem_type)))
             }
             RawDataType::Map {
                 key_type,
                 value_type,
             } => {
-                let key_type = self.resolve_data_type(*key_type)?;
-                let value_type = self.resolve_data_type(*value_type)?;
+                let key_type = self.resolve_data_type_inner(*key_type, should_insert_id)?;
+                let value_type = self.resolve_data_type_inner(*value_type, should_insert_id)?;
                 Ok(ResolvedDataType::AnonymousMap {
                     key_type: Box::new(key_type),
                     value_type: Box::new(value_type),
@@ -1357,24 +1437,20 @@ impl<'a> NameResolver<'a> {
                     }
                     RawItemName::Id(id, name, version) => {
                         let id: CatalogItemId = id.parse()?;
-                        let item = self.catalog.get_item(&id);
+                        let item = match self.catalog.try_get_item(&id) {
+                            Some(item) => item,
+                            None => return Err(PlanError::InvalidId(id)),
+                        };
                         let full_name = normalize::full_name(name)?;
-                        assert_none!(version, "no support for versioning data types");
+                        if version.is_some() {
+                            sql_bail!("specifying a version for a type reference is not supported");
+                        }
 
                         (full_name, item)
                     }
                 };
-                self.ids.insert(item.id(), BTreeSet::new());
-                // If this is a named array type, then make sure to include the element reference
-                // in the resolved IDs. This helps ensure that named array types are resolved the
-                // same as an array type with the same element type. For example, `int4[]` and
-                // `_int4` should have the same set of resolved IDs.
-                if let Some(CatalogTypeDetails {
-                    typ: CatalogType::Array { element_reference },
-                    ..
-                }) = item.type_details()
-                {
-                    self.ids.insert(*element_reference, BTreeSet::new());
+                if should_insert_id {
+                    self.ids.insert(item.id(), BTreeSet::new());
                 }
                 Ok(ResolvedDataType::Named {
                     id: item.id(),
@@ -1437,14 +1513,6 @@ impl<'a> NameResolver<'a> {
                     return ResolvedItemName::Cte {
                         id: *id,
                         name: norm_name,
-                    };
-                }
-            }
-            if let Some((ct_name, ct_id)) = self.continual_task.as_ref() {
-                if *ct_name == raw_name {
-                    return ResolvedItemName::ContinualTask {
-                        id: *ct_id,
-                        name: raw_name,
                     };
                 }
             }
@@ -1543,17 +1611,28 @@ impl<'a> NameResolver<'a> {
             // If there isn't a version specified, and this item supports versioning, track the
             // latest.
             None => match item.latest_version() {
-                // Only track the version of the referenced object, if the feature is enabled.
-                Some(v) if alter_table_enabled => RelationVersionSelector::Specific(v),
+                // Only pin a version for user items, and only with the feature on. Mirrors the
+                // by-name path in `fold_item_name`. Builtins are not user-versioned, so pinning
+                // one strands the reference if the builtin is ever converted to an item type
+                // without versions.
+                Some(v) if id.is_user() && alter_table_enabled => {
+                    RelationVersionSelector::Specific(v)
+                }
                 _ => RelationVersionSelector::Latest,
             },
             // Note: Return the specific version if one is specified, even if the feature is off.
             Some(v) => {
-                let specified_version = RelationVersion::from(v);
+                let specified_version = normalize::relation_version(v);
                 match item.latest_version() {
                     Some(latest) if latest >= specified_version => {
                         RelationVersionSelector::Specific(specified_version)
                     }
+                    // A version pin on a builtin is meaningless, since builtins are not
+                    // user-versioned. Such a pin can still sit in a persisted catalog, and if the
+                    // builtin has been converted to an item type without versions it no longer
+                    // validates. Resolve to latest instead of failing catalog open. User items
+                    // keep the strict check so real out-of-range versions still error.
+                    _ if !id.is_user() => RelationVersionSelector::Latest,
                     _ => {
                         if self.status.is_ok() {
                             self.status = Err(PlanError::InvalidVersion {
@@ -1589,6 +1668,30 @@ impl<'a> NameResolver<'a> {
             version,
         }
     }
+
+    /// Resolves an item name in a `DOC ON` position (`DOC ON TYPE x`,
+    /// `DOC ON COLUMN x.c`), where the name may denote a type or a relation. Also used for `COMMENT
+    /// ON COLUMN`.
+    fn resolve_doc_on_name(&mut self, name: RawItemName) -> ResolvedItemName {
+        let mut name = self.resolve_item_name(
+            name,
+            // The name can refer to either a type or a relation.
+            //
+            // It's possible this will get simpler once database-issues#7142 is
+            // fixed. See the comment on `ItemResolutionConfig` for details.
+            ItemResolutionConfig {
+                functions: false,
+                types: true,
+                relations: true,
+            },
+        );
+        if let ResolvedItemName::Item { print_id, .. } = &mut name {
+            // These references persist in a sink's `create_sql`, so the resolved name must print
+            // its id, otherwise it can't recover it when recreating
+            *print_id = true;
+        }
+        name
+    }
 }
 
 impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
@@ -1617,11 +1720,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             CteBlock::Simple(ctes) => {
                 let mut result_ctes = Vec::<Cte<Aug>>::new();
 
-                let initial_id = self.ctes.len();
-
-                for (offset, cte) in ctes.into_iter().enumerate() {
+                for cte in ctes.into_iter() {
                     let cte_name = normalize::ident(cte.alias.name.clone());
-                    let local_id = LocalId::new(u64::cast_from(initial_id + offset));
+                    let local_id = self.allocate_cte_id();
 
                     result_ctes.push(Cte {
                         alias: cte.alias,
@@ -1637,19 +1738,18 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             CteBlock::MutuallyRecursive(MutRecBlock { options, ctes }) => {
                 let mut result_ctes = Vec::<CteMutRec<Aug>>::new();
 
-                let initial_id = self.ctes.len();
-
-                // The identifiers for each CTE will be `initial_id` plus their offset in `q.ctes`.
-                for (offset, cte) in ctes.iter().enumerate() {
+                // All bindings go into scope before any definition is walked,
+                // so that the definitions can refer to each other.
+                let mut local_ids = Vec::with_capacity(ctes.len());
+                for cte in ctes.iter() {
                     let cte_name = normalize::ident(cte.name.clone());
-                    let local_id = LocalId::new(u64::cast_from(initial_id + offset));
+                    let local_id = self.allocate_cte_id();
                     let shadowed_id = self.ctes.insert(cte_name.clone(), local_id);
                     shadowed_cte_ids.push((cte_name, shadowed_id));
+                    local_ids.push(local_id);
                 }
 
-                for (offset, cte) in ctes.into_iter().enumerate() {
-                    let local_id = LocalId::new(u64::cast_from(initial_id + offset));
-
+                for (cte, local_id) in ctes.into_iter().zip_eq(local_ids) {
                     let columns = cte
                         .columns
                         .into_iter()
@@ -1701,28 +1801,6 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         result
     }
 
-    fn fold_create_continual_task_statement(
-        &mut self,
-        stmt: CreateContinualTaskStatement<Raw>,
-    ) -> CreateContinualTaskStatement<Aug> {
-        // Insert a LocalId so that using the name of the continual task in the
-        // inserts and deletes resolves.
-        match normalize::unresolved_item_name(stmt.name.name().clone()) {
-            Ok(local_name) => {
-                assert!(self.continual_task.is_none());
-                // TODO: Assign LocalIds more robustly (e.g. something like a
-                // `self.next_local_id` field).
-                self.continual_task = Some((local_name, LocalId::new(0)));
-            }
-            Err(err) => {
-                if self.status.is_ok() {
-                    self.status = Err(err);
-                }
-            }
-        };
-        mz_sql_parser::ast::fold::fold_create_continual_task_statement(self, stmt)
-    }
-
     fn fold_cte_id(&mut self, _id: <Raw as AstInfo>::CteId) -> <Aug as AstInfo>::CteId {
         panic!("this should have been handled when walking the CTE");
     }
@@ -1744,14 +1822,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     }
 
     fn fold_column_name(&mut self, column_name: ast::ColumnName<Raw>) -> ast::ColumnName<Aug> {
-        let item_name = self.resolve_item_name(
-            column_name.relation,
-            ItemResolutionConfig {
-                functions: false,
-                types: true,
-                relations: true,
-            },
-        );
+        let item_name = self.resolve_doc_on_name(column_name.relation);
 
         match &item_name {
             ResolvedItemName::Item {
@@ -1812,9 +1883,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     column: ResolvedColumnReference::Column { name, index },
                 }
             }
-            ResolvedItemName::Cte { .. }
-            | ResolvedItemName::ContinualTask { .. }
-            | ResolvedItemName::Error => ast::ColumnName {
+            ResolvedItemName::Cte { .. } | ResolvedItemName::Error => ast::ColumnName {
                 relation: ResolvedItemName::Error,
                 column: ResolvedColumnReference::Error,
             },
@@ -1986,7 +2055,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                                 Err(PlanError::InvalidSecret(Box::new(item_name.clone())));
                         }
                     }
-                    ResolvedItemName::Cte { .. } | ResolvedItemName::ContinualTask { .. } => {
+                    ResolvedItemName::Cte { .. } => {
                         self.status = Err(PlanError::InvalidSecret(Box::new(item_name.clone())));
                     }
                     ResolvedItemName::Error => {}
@@ -1997,7 +2066,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 let item_name = self.fold_item_name(obj);
                 match &item_name {
                     ResolvedItemName::Item { .. } => {}
-                    ResolvedItemName::Cte { .. } | ResolvedItemName::ContinualTask { .. } => {
+                    ResolvedItemName::Cte { .. } => {
                         self.status = Err(PlanError::InvalidObject(Box::new(item_name.clone())));
                     }
                     ResolvedItemName::Error => {}
@@ -2017,9 +2086,15 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             ConnectionAwsPrivatelink(privatelink) => {
                 ConnectionAwsPrivatelink(self.fold_connection_default_aws_privatelink(privatelink))
             }
+            KafkaMatchingBrokerRule(x) => {
+                KafkaMatchingBrokerRule(self.fold_kafka_matching_broker_rule(x))
+            }
             RetainHistoryFor(value) => RetainHistoryFor(self.fold_value(value)),
             Refresh(refresh) => Refresh(self.fold_refresh_option_value(refresh)),
             ClusterScheduleOptionValue(value) => ClusterScheduleOptionValue(value),
+            ClusterAutoScalingStrategyOptionValue(value) => {
+                ClusterAutoScalingStrategyOptionValue(value)
+            }
             ClusterAlterStrategy(value) => {
                 ClusterAlterStrategy(self.fold_cluster_alter_option_value(value))
             }
@@ -2055,7 +2130,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         name: <Raw as AstInfo>::NetworkPolicyName,
     ) -> <Aug as AstInfo>::NetworkPolicyName {
-        match self.catalog.resolve_network_policy(&name.to_string()) {
+        let name_str = match &name {
+            RawNetworkPolicyName::Unresolved(ident) => ident.as_str(),
+            RawNetworkPolicyName::Resolved(s) => s.as_str(),
+        };
+        match self.catalog.resolve_network_policy(name_str) {
             Ok(policy) => ResolvedNetworkPolicyName {
                 id: policy.id(),
                 name: policy.name().to_string(),
@@ -2165,7 +2244,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             self.status = Err(PlanError::FromValueRequiresParen);
                         }
                     }
-                    _ => {}
+                    RawItemName::Id(..) => {}
                 }
 
                 Function {
@@ -2240,19 +2319,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     fn fold_doc_on_identifier(&mut self, node: DocOnIdentifier<Raw>) -> DocOnIdentifier<Aug> {
         match node {
             DocOnIdentifier::Column(name) => DocOnIdentifier::Column(self.fold_column_name(name)),
-            DocOnIdentifier::Type(name) => DocOnIdentifier::Type(self.resolve_item_name(
-                name,
-                // In `DOC ON TYPE ...`, the type can refer to either a type or
-                // a relation.
-                //
-                // It's possible this will get simpler once database-issues#7142 is fixed. See
-                // the comment on `ItemResolutionConfig` for details.
-                ItemResolutionConfig {
-                    functions: false,
-                    types: true,
-                    relations: true,
-                },
-            )),
+            DocOnIdentifier::Type(name) => DocOnIdentifier::Type(self.resolve_doc_on_name(name)),
         }
     }
 
@@ -2325,6 +2392,16 @@ impl ResolvedIds {
 
     pub fn remove_item(&mut self, item: &CatalogItemId) {
         self.entries.remove(item);
+    }
+
+    /// Merges all entries from `other` into `self`.
+    pub fn extend_from(&mut self, other: &ResolvedIds) {
+        for (id, gids) in &other.entries {
+            self.entries
+                .entry(*id)
+                .or_default()
+                .extend(gids.iter().copied());
+        }
     }
 
     /// Create a new [`ResolvedIds`] that contains the elements from `self`
@@ -2542,6 +2619,69 @@ impl<'ast> Visit<'ast, Raw> for IdDependencVisitor {
                     self.error = Some(e);
                 }
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn proptest_schema_id_roundtrips() {
+        fn testcase(og: SchemaId) {
+            let s = og.to_string();
+            let rnd: SchemaId = s.parse().unwrap();
+            assert_eq!(og, rnd);
+        }
+
+        proptest!(|(id in any::<SchemaId>())| {
+            testcase(id);
+        })
+    }
+
+    #[mz_ore::test]
+    fn proptest_database_id_roundtrips() {
+        fn testcase(og: DatabaseId) {
+            let s = og.to_string();
+            let rnd: DatabaseId = s.parse().unwrap();
+            assert_eq!(og, rnd);
+        }
+
+        proptest!(|(id in any::<DatabaseId>())| {
+            testcase(id);
+        })
+    }
+
+    #[mz_ore::test]
+    fn test_schema_id_from_str() {
+        assert_eq!("s5".parse::<SchemaId>().unwrap(), SchemaId::System(5));
+        assert_eq!("u5".parse::<SchemaId>().unwrap(), SchemaId::User(5));
+
+        // Regression test for a panic on multi-byte leading characters, where
+        // slicing off a single byte landed inside a UTF-8 char boundary (SQL-195).
+        for invalid in ["ü1", "ü", "é42", "🦀7", "", "x1", "s"] {
+            assert!(
+                invalid.parse::<SchemaId>().is_err(),
+                "expected {invalid:?} to fail to parse"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_database_id_from_str() {
+        assert_eq!("s5".parse::<DatabaseId>().unwrap(), DatabaseId::System(5));
+        assert_eq!("u5".parse::<DatabaseId>().unwrap(), DatabaseId::User(5));
+
+        // Regression test for a panic on multi-byte leading characters, where
+        // slicing off a single byte landed inside a UTF-8 char boundary (SQL-195).
+        for invalid in ["ü1", "ü", "é42", "🦀7", "", "x1", "u"] {
+            assert!(
+                invalid.parse::<DatabaseId>().is_err(),
+                "expected {invalid:?} to fail to parse"
+            );
         }
     }
 }

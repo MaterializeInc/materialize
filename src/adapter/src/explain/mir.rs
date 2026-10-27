@@ -16,6 +16,8 @@
 //! and consequently are not available for the default [`Explain`]
 //! implementation for [`MirRelationExpr`] in [`mz_expr`].
 
+use std::borrow::Cow;
+
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::explain::export_ids_for;
 use mz_expr::explain::{
@@ -133,8 +135,8 @@ impl<'a> Explainable<'a, DataflowDescription<OptimizedMirRelationExpr>> {
             .0
             .source_imports
             .iter_mut()
-            .map(|(id, (source_desc, _, _upper))| {
-                let op = source_desc.arguments.operators.as_ref();
+            .map(|(id, import)| {
+                let op = import.desc.arguments.operators.as_ref().map(Cow::Borrowed);
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
             .collect::<Vec<_>>();

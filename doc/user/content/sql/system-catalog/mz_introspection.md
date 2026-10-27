@@ -5,6 +5,8 @@ menu:
   main:
     parent: 'system-catalog'
     weight: 4
+aliases:
+  - /reference/system-catalog/mz_introspection/
 ---
 
 The following sections describe the available objects in the `mz_introspection`
@@ -105,7 +107,7 @@ The `mz_compute_exports` view describes the objects exported by [dataflows][data
 <!-- RELATION_SPEC mz_introspection.mz_compute_exports -->
 | Field          | Type      | Meaning                                                                                                                                                                                                                                                                                        |
 | -------------- |-----------| --------                                                                                                                                                                                                                                                                                       |
-| `export_id`    | [`text`]  | The ID of the index, materialized view, or subscription exported by the dataflow. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions`](../mz_internal#mz_subscriptions). |
+| `export_id`    | [`text`]  | The ID of the index, materialized view, or subscription exported by the dataflow. Corresponds to [`mz_catalog.mz_indexes.id`](../mz_catalog#mz_indexes), [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views), or [`mz_internal.mz_subscriptions.id`](../mz_internal#mz_subscriptions). |
 | `dataflow_id`  | [`uint8`] | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                                                                                                                                                                                                               |
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_exports_per_worker -->
@@ -150,6 +152,44 @@ The `mz_compute_operator_durations_histogram` view describes a histogram of the 
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_raw -->
+
+## `mz_cluster_prometheus_metrics`
+
+The `mz_cluster_prometheus_metrics` source exposes Prometheus metrics collected from each cluster replica process's internal metrics registry.
+Metrics are scraped periodically and presented as rows.
+Histograms are flattened into separate bucket, sum, and count rows.
+Summaries are flattened into separate quantile, sum, and count rows.
+
+<!-- RELATION_SPEC mz_introspection.mz_cluster_prometheus_metrics NO_COMMENTS -->
+| Field         | Type                   | Meaning                                                              |
+|---------------|------------------------|----------------------------------------------------------------------|
+| `process_id`  | [`uint8`]              | The ID of the process that collected the metric.                     |
+| `metric_name` | [`text`]               | The name of the Prometheus metric.                                   |
+| `metric_type` | [`text`]               | The type of the metric: `counter`, `gauge`, `histogram`, or `summary`. |
+| `labels`      | [`map`]                | The label key-value pairs associated with the metric.                |
+| `value`       | [`double precision`]   | The numeric value of the metric.                                     |
+| `help`        | [`text`]               | The help string describing the metric.                               |
+
+## `mz_cluster_replica_resource_usage`
+
+The `mz_cluster_replica_resource_usage` source reports the resource usage of each process of a
+cluster replica, as one row per measurement source and metric. Each row is what that source
+reported, without interpretation: sources measure overlapping but distinct quantities, so combining
+them into a single figure for memory usage, or for how close a replica is to its limit, is left to
+queries over this relation.
+
+The replica samples its sources every few seconds, and reports a high-water mark alongside the
+instantaneous value where one is available. For the sources and metrics that appear here, how to
+interpret them, and an example query, see [Replica resource
+usage](/observability/replica-resource-usage/).
+
+<!-- RELATION_SPEC mz_introspection.mz_cluster_replica_resource_usage NO_COMMENTS -->
+| Field        | Type      | Meaning                                                              |
+|--------------|-----------|----------------------------------------------------------------------|
+| `process_id` | [`uint8`] | The ID of the process within the replica.                            |
+| `source`     | [`text`]  | The measurement source, for example `cgroup` or `rusage`.             |
+| `metric`     | [`text`]  | What the source measured, for example `memory_current`.               |
+| `value`      | [`uint8`] | The reported value, in bytes for a size and as a count otherwise.     |
 
 ## `mz_dataflows`
 
@@ -275,19 +315,6 @@ The `mz_dataflow_operator_parents` view describes how [dataflow] operators are n
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_parents_per_worker -->
 
-## `mz_dataflow_shutdown_durations_histogram`
-
-The `mz_dataflow_shutdown_durations_histogram` view describes a histogram of the time in nanoseconds required to fully shut down dropped [dataflows][dataflow].
-
-<!-- RELATION_SPEC mz_introspection.mz_dataflow_shutdown_durations_histogram -->
-| Field          | Type        | Meaning                                                |
-| -------------- |-------------| --------                                               |
-| `duration_ns`  | [`uint8`]   | The upper bound of the bucket in nanoseconds.          |
-| `count`        | [`numeric`] | The (noncumulative) count of dataflows in this bucket. |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_shutdown_durations_histogram_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_shutdown_durations_histogram_raw -->
-
 ## `mz_expected_group_size_advice`
 
 The `mz_expected_group_size_advice` view provides advice on opportunities to set [query hints].
@@ -314,10 +341,10 @@ The `mz_mappable_objects` identifies indexes (and their underlying views) and ma
 <!-- RELATION_SPEC mz_introspection.mz_mappable_objects -->
 | Field        | Type      | Meaning
 | ------------ | --------  | -----------
-| `name`       | [`text`]  | The name of the object.
+| `name`       | [`text`]  | The name of the object. This name is unquoted, and you might need to call `quote_ident` if you want to reference the name shown here.
 | `global_id`  | [`text`]  | The global ID of the object.
 
-See [Which part of my query runs slowly or uses a lot of memory?](/transform-data/troubleshooting/#which-part-of-my-query-runs-slowly-or-uses-a-lot-of-memory) for examples of debugging with `mz_mappable_objects` and `mz_lir_mapping`.
+See [`EXPLAIN ANALYZE`](/sql/explain-analyze/) for examples of debugging with `mz_mappable_objects` and `mz_lir_mapping`.
 
 ## `mz_lir_mapping`
 
@@ -331,15 +358,15 @@ We use the range `[operator_id_start, operator_id_end)` to record this informati
 If an LIR node was implemented without any dataflow operators, `operator_id_start` will be equal to `operator_id_end`.
 
 <!-- RELATION_SPEC mz_introspection.mz_lir_mapping -->
-| Field             | Type      | Meaning
-| ---------         | --------  | -----------
-| global_id         | [`text`]  | The global ID.
-| lir_id            | [`uint8`] | The LIR node ID.
-| operator          | [`text`]  | The LIR operator, in the format `OperatorName INPUTS [OPTIONS]`.
-| parent_lir_id     | [`uint8`] | The parent of this LIR node. May be `NULL`.
-| nesting           | [`uint2`] | The nesting level of this LIR node.
-| operator_id_start | [`uint8`] | The first dataflow operator ID implementing this LIR operator (inclusive).
-| operator_id_end   | [`uint8`] | The first dataflow operator ID _after_ this LIR operator (exclusive).
+| Field               | Type      | Meaning
+| ---------           | --------  | -----------
+| `global_id`         | [`text`]  | The global ID.
+| `lir_id`            | [`uint8`] | The LIR node ID.
+| `operator`          | [`text`]  | The LIR operator, in the format `OperatorName INPUTS [OPTIONS]`.
+| `parent_lir_id`     | [`uint8`] | The parent of this LIR node. May be `NULL`.
+| `nesting`           | [`uint2`] | The nesting level of this LIR node.
+| `operator_id_start` | [`uint8`] | The first dataflow operator ID implementing this LIR operator (inclusive).
+| `operator_id_end`   | [`uint8`] | The first dataflow operator ID _after_ this LIR operator (exclusive).
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_lir_mapping_per_worker -->
 
@@ -442,6 +469,7 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`bigint`]: /sql/types/bigint
 [`bigint list`]: /sql/types/list
 [`double precision`]: /sql/types/double-precision
+[`map`]: /sql/types/map
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`numeric`]: /sql/types/numeric
 [`text`]: /sql/types/text
@@ -449,8 +477,8 @@ The `mz_scheduling_parks_histogram` view describes a histogram of [dataflow] wor
 [`uint2`]: /sql/types/uint2
 [`uint8`]: /sql/types/uint8
 [`uint8 list`]: /sql/types/list
-[arrangement]: /get-started/arrangements/#arrangements
-[dataflow]: /get-started/arrangements/#dataflows
+[arrangement]: /fundamentals/concepts/arrangements/#arrangements
+[dataflow]: /fundamentals/concepts/arrangements/#dataflows
 [`MIN`]: /sql/functions/#min
 [`MAX`]: /sql/functions/#max
 [Top K]: /transform-data/patterns/top-k

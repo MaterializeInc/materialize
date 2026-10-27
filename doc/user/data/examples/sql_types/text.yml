@@ -1,0 +1,18 @@
+- name: "syntax-standard"
+  code: |
+    '<text>'
+  syntax_elements:
+    - name: "`'<text>'`"
+      description: |
+        A standard string literal. To escape a single quote character (`'`), write two adjacent single quotes. All other characters are taken literally.
+
+- name: "syntax-escape"
+  code: |
+    [e | E] '<escapable_text>'
+  syntax_elements:
+    - name: "**[e | E]**"
+      description: |
+        Optional. Precede the string literal with `e` or `E` to create an escape string literal.
+    - name: "`'<escapable_text>'`"
+      description: |
+        An escape string literal. Follows the same rules as standard string literals, except that backslash character (`\`) starts an escape sequence. The following escape sequences are recognized: `\b` (backspace), `\f` (form feed), `\n` (newline), `\r` (carriage return), `\t` (tab), `\uXXXX` or `\UXXXXXXXX` (Unicode codepoint), `\\` (literal backslash), `\'` (alternate means of escaping single quote).

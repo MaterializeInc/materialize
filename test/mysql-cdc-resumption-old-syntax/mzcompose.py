@@ -32,16 +32,24 @@ SERVICES = [
     Alpine(),
     Mz(app_password=""),
     Materialized(default_replication_factor=2),
-    MySql(),
+    MySql(
+        additional_args=create_mysql_server_args(
+            server_id="1", is_master=True, binlog_row_metadata="minimal"
+        )
+    ),
     MySql(
         name="mysql-replica-1",
         version=MySql.DEFAULT_VERSION,
-        additional_args=create_mysql_server_args(server_id="2", is_master=False),
+        additional_args=create_mysql_server_args(
+            server_id="2", is_master=False, binlog_row_metadata="minimal"
+        ),
     ),
     MySql(
         name="mysql-replica-2",
         version=MySql.DEFAULT_VERSION,
-        additional_args=create_mysql_server_args(server_id="3", is_master=False),
+        additional_args=create_mysql_server_args(
+            server_id="3", is_master=False, binlog_row_metadata="minimal"
+        ),
     ),
     Toxiproxy(),
     Testdrive(
@@ -56,7 +64,7 @@ def workflow_default(c: Composition) -> None:
         if name == "default":
             return
 
-        # TODO(def-): Reenable when database-issues#7775 is fixed
+        # TODO(def-): Reenable when https://linear.app/materializeinc/issue/SS-312 is fixed
         if name in ("bin-log-manipulations", "short-bin-log-retention"):
             return
 
@@ -190,12 +198,16 @@ def workflow_master_changes(c: Composition) -> None:
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
-            additional_args=create_mysql_server_args(server_id="2", is_master=False),
+            additional_args=create_mysql_server_args(
+                server_id="2", is_master=False, binlog_row_metadata="minimal"
+            ),
         ),
         MySql(
             name="mysql-replica-2",
             version=MySql.DEFAULT_VERSION,
-            additional_args=create_mysql_server_args(server_id="3", is_master=False),
+            additional_args=create_mysql_server_args(
+                server_id="3", is_master=False, binlog_row_metadata="minimal"
+            ),
         ),
     ):
         initialize(c, create_source=False)
@@ -277,7 +289,9 @@ def workflow_switch_to_replica_and_kill_master(c: Composition) -> None:
         MySql(
             name="mysql-replica-1",
             version=MySql.DEFAULT_VERSION,
-            additional_args=create_mysql_server_args(server_id="2", is_master=False),
+            additional_args=create_mysql_server_args(
+                server_id="2", is_master=False, binlog_row_metadata="minimal"
+            ),
         ),
     ):
         initialize(c)
@@ -613,7 +627,7 @@ def backup_restore_mysql(c: Composition) -> None:
 
     run_testdrive_files(c, "verify-mysql-select.td")
 
-    # TODO: database-issues#7683: one of the two following commands must succeed
+    # TODO: SS-405: one of the two following commands must succeed
     # run_testdrive_files(c, "verify-rows-after-restore-t1.td")
     # run_testdrive_files(c, "verify-source-failed.td")
 

@@ -85,17 +85,27 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
             } else {
                 d.and_utc().timestamp_subsec_micros().into()
             };
-            let ts = if ts_seconds >= 0 {
-                ts_seconds + sub_part
-            } else {
-                ts_seconds - sub_part
-            };
+            let ts = ts_seconds + sub_part;
             encode_long(ts, buffer)
         }
         Value::Double(x) => buffer.extend_from_slice(&x.to_le_bytes()),
         Value::Decimal(DecimalValue { unscaled, .. }) => match schema.name {
             None => encode_bytes(unscaled, buffer),
-            Some(_) => buffer.extend(unscaled),
+            Some(_) => {
+                // Fixed-size decimal: left-pad to exact size with two's-complement
+                // sign extension (0xFF for negative, 0x00 for non-negative).
+                if let SchemaPiece::Decimal {
+                    fixed_size: Some(size),
+                    ..
+                } = schema.inner
+                {
+                    let is_negative = unscaled.first().map_or(false, |b| b & 0x80 != 0);
+                    let pad = if is_negative { 0xFFu8 } else { 0x00u8 };
+                    let start = buffer.len();
+                    buffer.resize(start + size.saturating_sub(unscaled.len()), pad);
+                }
+                buffer.extend_from_slice(unscaled);
+            }
         },
         Value::Bytes(bytes) => encode_bytes(bytes, buffer),
         Value::String(s) => match schema.inner {

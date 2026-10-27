@@ -145,8 +145,22 @@ pub enum Record<'a> {
         table_name: &'a str,
         tsv_path: &'a str,
     },
+    /// A `user` directive. Switches the session user for subsequent records,
+    /// as in CockroachDB's logic tests. The role is created if it does not
+    /// exist yet.
+    User { location: Location, user: &'a str },
     /// A `reset-server` directive
     ResetServer,
+    /// A `replace` directive. Registers a regular-expression substitution that
+    /// is applied to the actual output of every subsequent `query` before it is
+    /// compared against (or rewritten into) the expected output. Used to mask
+    /// non-deterministic tokens, e.g. a folded `mz_now()` timestamp in an
+    /// `EXPLAIN` plan. `pattern` is a validated regex; `replacement` may use the
+    /// `$1` / `${name}` capture-group syntax of the `regex` crate.
+    Replace {
+        pattern: String,
+        replacement: String,
+    },
 }
 
 /// Specifies the dialect of a sqllogictest file. Different sqllogictest runners

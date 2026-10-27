@@ -18,22 +18,16 @@ class CustomerWorkload1(Scenario):
     """Aggregation over a large non-monotonic source."""
 
     def init(self) -> Action:
-        return TdAction(
-            dedent(
-                f"""
+        return TdAction(dedent(f"""
                 > DROP TABLE IF EXISTS t1 CASCADE;
 
                 > CREATE TABLE t1 (f1 INTEGER);
 
                 > INSERT INTO t1 SELECT * FROM generate_series(1, {self.n()});
-                """
-            )
-        )
+                """))
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            dedent(
-                f"""
+        return Td(dedent(f"""
                 > DROP MATERIALIZED VIEW IF EXISTS v1;
 
                 > CREATE MATERIALIZED VIEW v1 AS SELECT MAX(f1) FROM t1
@@ -42,6 +36,4 @@ class CustomerWorkload1(Scenario):
                 > SELECT * FROM v1
                   /* B */;
                 {self.n()}
-                """
-            )
-        )
+                """))

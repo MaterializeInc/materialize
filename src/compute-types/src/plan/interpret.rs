@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! Utilities and implementations for abstract interpretation of
-//! [crate::plan::Plan] structures.
+//! [crate::plan::LirRelationExpr] structures.
 
 // Keep nested modules private (those are primary used for introducing better
 // physical separation between the API and its various implementations) and

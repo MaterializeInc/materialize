@@ -79,7 +79,10 @@ pub fn plan_alter_owner(
         (ObjectType::NetworkPolicy, UnresolvedObjectName::NetworkPolicy(name)) => {
             plan_alter_network_policy_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::Role, UnresolvedObjectName::Role(_)) => unreachable!("rejected by the parser"),
+        // The parser should have rejected this.
+        (ObjectType::Role, UnresolvedObjectName::Role(_)) => {
+            bail_internal!("cannot ALTER OWNER of a role")
+        }
         (
             object_type @ ObjectType::Cluster
             | object_type @ ObjectType::ClusterReplica
@@ -97,7 +100,8 @@ pub fn plan_alter_owner(
             | name @ UnresolvedObjectName::NetworkPolicy(_)
             | name @ UnresolvedObjectName::Role(_),
         ) => {
-            unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
+            // The parser should not have produced this combination.
+            bail_internal!("invalid object type '{object_type}' for ALTER OWNER with name {name}")
         }
         (object_type, UnresolvedObjectName::Item(name)) => {
             plan_alter_item_owner(scx, object_type, if_exists, name, new_owner.id)
@@ -252,7 +256,7 @@ fn plan_alter_network_policy_owner(
     match resolve_network_policy(scx, name.clone(), if_exists)? {
         Some(policy_id) => Ok(Plan::AlterOwner(AlterOwnerPlan {
             id: ObjectId::NetworkPolicy(policy_id.id),
-            object_type: ObjectType::Schema,
+            object_type: ObjectType::NetworkPolicy,
             new_owner,
         })),
         None => {
@@ -461,10 +465,16 @@ fn plan_update_privilege(
                         .get_items()
                         .into_iter()
                         .map(|item| item.id().into());
+                    let network_policy_ids = scx
+                        .catalog
+                        .get_network_policies()
+                        .into_iter()
+                        .map(|network_policy| ObjectId::NetworkPolicy(network_policy.id()));
                     cluster_ids
                         .chain(database_ids)
                         .chain(schema_ids)
                         .chain(item_ids)
+                        .chain(network_policy_ids)
                         .filter(|object_id| object_type_filter(object_id, &object_type, scx))
                         .filter(|object_id| object_id.is_user())
                         .collect()
@@ -500,13 +510,17 @@ fn plan_update_privilege(
                     .map(|item_id| item_id.into())
                     .filter(|object_id| object_type_filter(object_id, &object_type, scx))
                     .collect(),
-                GrantTargetSpecificationInner::Objects { names } => names
-                    .into_iter()
-                    .map(|name| {
-                        name.try_into()
-                            .expect("name resolution should handle invalid objects")
-                    })
-                    .collect(),
+                GrantTargetSpecificationInner::Objects { names } => {
+                    let mut ids = Vec::with_capacity(names.len());
+                    for name in names {
+                        ids.push(
+                            // Name resolution should have rejected invalid objects.
+                            name.try_into()
+                                .map_err(|e| internal_err!("invalid object name: {}", e))?,
+                        );
+                    }
+                    ids
+                }
             };
             let target_ids = object_ids.into_iter().map(|id| id.into()).collect();
             (SystemObjectType::Object(object_type), target_ids)
@@ -537,8 +551,6 @@ fn plan_update_privilege(
         // type is table.
         let mut reference_object_type = actual_object_type.clone();
 
-        let acl_mode = privilege_spec_to_acl_mode(scx, &privileges, actual_object_type);
-
         if let SystemObjectId::Object(ObjectId::Item(id)) = &target_id {
             let item = scx.get_item(id);
             let item_type: ObjectType = item.item_type().into();
@@ -558,6 +570,13 @@ fn plan_update_privilege(
                 });
             }
         }
+
+        // Compute the ACL mode against the reference type so that, for example,
+        // `REVOKE ALL ON TABLE <view>` expands to the full TABLE privilege set
+        // (SELECT|INSERT|UPDATE|DELETE) rather than only the privileges valid
+        // for a view on its own (SELECT).
+        let acl_mode = privilege_spec_to_acl_mode(scx, &privileges, reference_object_type);
+        let acl_from_all = matches!(privileges, PrivilegeSpecification::All);
 
         let all_object_privileges = scx.catalog.all_object_privileges(reference_object_type);
         let invalid_privileges = acl_mode.difference(all_object_privileges);
@@ -580,7 +599,7 @@ fn plan_update_privilege(
             SystemObjectId::Object(object_id) => scx
                 .catalog
                 .get_owner_id(object_id)
-                .expect("cannot revoke privileges on objects without owners"),
+                .ok_or_else(|| sql_err!("cannot revoke privileges on objects without owners"))?,
             SystemObjectId::System => scx.catalog.mz_system_role_id(),
         };
 
@@ -588,6 +607,7 @@ fn plan_update_privilege(
             acl_mode,
             target_id,
             grantor,
+            acl_from_all,
         });
     }
 
@@ -646,13 +666,14 @@ pub fn plan_alter_default_privileges(
 ) -> Result<Plan, PlanError> {
     let object_type: ObjectType = (*grant_or_revoke.object_type()).into();
     match object_type {
-        ObjectType::View
-        | ObjectType::MaterializedView
-        | ObjectType::Source
-        | ObjectType::ContinualTask => sql_bail!(
+        ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => sql_bail!(
             "{object_type}S is not valid for ALTER DEFAULT PRIVILEGES, use TABLES instead"
         ),
-        ObjectType::Sink | ObjectType::ClusterReplica | ObjectType::Role | ObjectType::Func => {
+        ObjectType::Sink
+        | ObjectType::MetricSink
+        | ObjectType::ClusterReplica
+        | ObjectType::Role
+        | ObjectType::Func => {
             sql_bail!("{object_type}S do not have privileges")
         }
         ObjectType::Cluster | ObjectType::Database
@@ -805,6 +826,12 @@ pub fn plan_reassign_owned(
     for database in scx.catalog.get_databases() {
         if old_roles.contains(&database.owner_id()) {
             reassign_ids.push(database.id().into());
+        }
+    }
+    // Network policies
+    for network_policy in scx.catalog.get_network_policies() {
+        if old_roles.contains(&network_policy.owner_id()) {
+            reassign_ids.push(ObjectId::NetworkPolicy(network_policy.id()));
         }
     }
 

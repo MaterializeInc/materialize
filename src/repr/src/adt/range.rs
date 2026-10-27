@@ -16,9 +16,9 @@ use std::hash::{Hash, Hasher};
 use bitflags::bitflags;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use dec::OrderedDecimal;
-use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 use postgres_protocol::types;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::types::{FromSql, Type as PgType};
@@ -27,11 +27,12 @@ use crate::Datum;
 use crate::adt::date::Date;
 use crate::adt::numeric::Numeric;
 use crate::adt::timestamp::CheckedTimestamp;
-use crate::scalar::DatumKind;
+use crate::scalar::{DatumKind, SqlScalarType};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.range.rs"));
 
 bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub(crate) struct InternalFlags: u8 {
         const EMPTY = 1;
         const LB_INCLUSIVE = 1 << 1;
@@ -42,6 +43,7 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub(crate) struct PgFlags: u8 {
         const EMPTY = 0b0000_0001;
         const LB_INCLUSIVE = 0b0000_0010;
@@ -63,6 +65,17 @@ bitflags! {
 pub struct Range<D> {
     /// None value represents empty range
     pub inner: Option<RangeInner<D>>,
+}
+
+impl crate::scalar::SqlContainerType for Range<Datum<'_>> {
+    fn unwrap_element_type(container: &SqlScalarType) -> &SqlScalarType {
+        container.unwrap_range_element_type()
+    }
+    fn wrap_element_type(element: SqlScalarType) -> SqlScalarType {
+        SqlScalarType::Range {
+            element_type: Box::new(element),
+        }
+    }
 }
 
 impl<D: Display> Display for Range<D> {
@@ -268,15 +281,38 @@ impl<D> Range<D> {
                 }),
         }
     }
+
+    /// Like [`into_bounds`](Self::into_bounds), but the conversion may fail.
+    ///
+    /// Use this when converting each bound with a fallible function (e.g.
+    /// `into_datum`). Callers need not reach into `Range`'s internals
+    /// (`RangeInner`, `RangeLowerBound`, `RangeUpperBound`).
+    pub fn try_into_bounds<F, O, E>(self, conv: F) -> Result<Range<O>, E>
+    where
+        F: Fn(D) -> Result<O, E>,
+    {
+        let inner = match self.inner {
+            None => None,
+            Some(RangeInner { lower, upper }) => Some(RangeInner {
+                lower: RangeLowerBound {
+                    inclusive: lower.inclusive,
+                    bound: lower.bound.map(&conv).transpose()?,
+                },
+                upper: RangeUpperBound {
+                    inclusive: upper.inclusive,
+                    bound: upper.bound.map(&conv).transpose()?,
+                },
+            }),
+        };
+        Ok(Range { inner })
+    }
 }
 
-/// Range implementations meant to work with `Range<Datum>` and `Range<DatumNested>`.
-impl<'a, B: Copy + Ord + PartialOrd + Display + Debug> Range<B>
-where
-    Datum<'a>: From<B>,
-{
+/// Range operations on `Range<Datum>` and `Range<DatumNested>`.
+impl<'a, B: Copy + Ord> Range<B> {
     pub fn contains_elem<T: RangeOps<'a>>(&self, elem: &T) -> bool
     where
+        Datum<'a>: From<B>,
         <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
     {
         match self.inner {
@@ -415,7 +451,10 @@ where
     // Function requires canonicalization so must be taken into `Range<Datum>`,
     // which can be taken back into `Range<DatumNested>` by the caller if need
     // be.
-    pub fn difference(&self, other: &Range<B>) -> Result<Range<Datum<'a>>, InvalidRangeError> {
+    pub fn difference(&self, other: &Range<B>) -> Result<Range<Datum<'a>>, InvalidRangeError>
+    where
+        Datum<'a>: From<B>,
+    {
         use std::cmp::Ordering::*;
 
         // Difference op does nothing if no overlap.
@@ -607,16 +646,14 @@ pub type RangeUpperBound<B> = RangeBound<B, true>;
 
 // Generic RangeBound implementations meant to work over `RangeBound<Datum,..>`
 // and `RangeBound<DatumNested,..>`.
-impl<'a, const UPPER: bool, B: Copy + Ord + PartialOrd + Display + Debug> RangeBound<B, UPPER>
-where
-    Datum<'a>: From<B>,
-{
+impl<'a, const UPPER: bool, B: Copy + Ord> RangeBound<B, UPPER> {
     /// Determines where `elem` lies in relation to the range bound.
     ///
     /// # Panics
     /// - If `self.bound.datum()` is not convertible to `T`.
     fn elem_cmp<T: RangeOps<'a>>(&self, elem: &T) -> Ordering
     where
+        Datum<'a>: From<B>,
         <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
     {
         match self.bound.map(|bound| <T>::unwrap_datum(bound.into())) {
@@ -629,6 +666,7 @@ where
     /// Does `elem` satisfy this bound?
     fn satisfied_by<T: RangeOps<'a>>(&self, elem: &T) -> bool
     where
+        Datum<'a>: From<B>,
         <T as TryFrom<Datum<'a>>>::Error: std::fmt::Debug,
     {
         match self.elem_cmp(elem) {
@@ -702,6 +740,7 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
             None => {
                 self.inclusive = false;
             }
+            // Valid range types are defined in typeconv.rs:validate_range_element_type
             Some(value) => match value {
                 d @ Datum::Int32(_) => self.canonicalize_inner::<i32>(d)?,
                 d @ Datum::Int64(_) => self.canonicalize_inner::<i64>(d)?,
@@ -739,8 +778,17 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
 }
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum InvalidRangeError {
     MisorderedRangeBounds,
     CanonicalizationOverflow(Box<str>),
@@ -748,6 +796,10 @@ pub enum InvalidRangeError {
     DiscontiguousUnion,
     DiscontiguousDifference,
     NullRangeBoundFlags,
+    /// The encoded range data is structurally invalid (e.g. a null bound,
+    /// bounds of inconsistent types, or the wrong number of bounds). Only
+    /// reachable by decoding untrusted/corrupted bytes.
+    InvalidRangeData,
 }
 
 impl Display for InvalidRangeError {
@@ -769,6 +821,7 @@ impl Display for InvalidRangeError {
             InvalidRangeError::NullRangeBoundFlags => {
                 f.write_str("range constructor flags argument must not be null")
             }
+            InvalidRangeError::InvalidRangeData => f.write_str("invalid range data"),
         }
     }
 }
@@ -799,6 +852,7 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
             InvalidRangeError::DiscontiguousUnion => DiscontiguousUnion(()),
             InvalidRangeError::DiscontiguousDifference => DiscontiguousDifference(()),
             InvalidRangeError::NullRangeBoundFlags => NullRangeBoundFlags(()),
+            InvalidRangeError::InvalidRangeData => InvalidRangeData(()),
         };
         ProtoInvalidRangeError { kind: Some(kind) }
     }
@@ -815,6 +869,7 @@ impl RustType<ProtoInvalidRangeError> for InvalidRangeError {
                 DiscontiguousUnion(()) => InvalidRangeError::DiscontiguousUnion,
                 DiscontiguousDifference(()) => InvalidRangeError::DiscontiguousDifference,
                 NullRangeBoundFlags(()) => InvalidRangeError::NullRangeBoundFlags,
+                InvalidRangeData(()) => InvalidRangeError::InvalidRangeData,
             }),
             None => Err(TryFromProtoError::missing_field(
                 "`ProtoInvalidRangeError::kind`",

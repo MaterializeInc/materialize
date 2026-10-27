@@ -6,7 +6,9 @@ menu:
     parent: commands
 ---
 
-`CREATE ROLE` creates a new role, which is a user account in Materialize.[^1]
+Use `CREATE ROLE` [^1] to:
+- Create functional roles (*Both Cloud and Self-Managed*).
+- Create roles with login/password/superuser privileges (*Self-Managed only*).
 
 When you connect to Materialize, you must specify the name of a valid role in
 the system.
@@ -15,11 +17,9 @@ the system.
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 
 {{< tab "Cloud" >}}
-
-### Cloud
 
 {{% include-syntax file="examples/rbac-cloud/create_roles"
 example="create-role-syntax" %}}
@@ -28,7 +28,6 @@ example="create-role-syntax" %}}
 {{% include-example file="examples/rbac-cloud/create_roles" example="create-role-details" %}}
 {{< /tab >}}
 {{< tab "Self-Managed" >}}
-### Self-Managed
 
 {{% include-syntax file="examples/rbac-sm/create_roles" example="create-role-syntax" %}}
 
@@ -46,7 +45,7 @@ Materialize will reject the statement `CREATE ROLE ... INHERIT INHERIT`.
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-role.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-role" %}}
 
 ## Examples
 

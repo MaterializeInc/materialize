@@ -21,7 +21,7 @@ use hyper_util::rt::TokioIo;
 use mz_build_info::{BuildInfo, build_info};
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_cluster_client::client::TimelyConfig;
-use mz_compute::server::ComputeInstanceContext;
+use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
 use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
@@ -32,16 +32,16 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
+use mz_secrets_cli::SecretsReaderCliArgs;
 use mz_service::emit_boot_diagnostics;
-use mz_service::grpc::GrpcServerMetrics;
-use mz_service::secrets::SecretsReaderCliArgs;
 use mz_service::transport;
+use mz_service::transport::ClusterServerMetrics;
 use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use tokio::runtime::Handle;
 use tower::Service;
-use tracing::{error, info};
+use tracing::{Instrument, debug, error, info, info_span};
 
 mod usage_metrics;
 
@@ -166,10 +166,55 @@ struct Args {
     /// affinity might degrade dataflow performance rather than improving it.
     #[clap(long)]
     worker_core_affinity: bool,
+
+    /// Host storage objects on the compute Timely cluster instead of building a separate
+    /// storage Timely cluster. The storage and compute controller protocols are served
+    /// unchanged, from the same cluster.
+    #[clap(long, env = "UNIFIED_CLUSTER")]
+    unified_cluster: bool,
+}
+
+/// The process ordinal for a StatefulSet pod, taken from the trailing
+/// `-`-delimited segment of its hostname (e.g.
+/// "mz5ncn-cluster-s1-replica-s1-gen-1-0" → "0"). This mirrors how
+/// orchestrator-kubernetes recovers the process id from pod names.
+///
+/// Returns `None` when the trailing segment is not a non-negative integer, so
+/// an unexpected hostname leaves `CLUSTERD_PROCESS` unset rather than set to a
+/// value that fails to parse as the process index.
+fn process_ordinal_from_hostname(hostname: &str) -> Option<&str> {
+    let ordinal = hostname.rsplit('-').next()?;
+    ordinal.parse::<usize>().ok().map(|_| ordinal)
 }
 
 pub fn main() {
     mz_ore::panic::install_enhanced_handler();
+
+    // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
+    // hyper-rustls, so building its client resolves the process-default rustls
+    // provider. The workspace also links rustls' `ring` feature (pulled by
+    // other hyper-rustls chains), and with both provider features enabled
+    // rustls cannot choose a default on its own and panics. The call is
+    // idempotent, so ignore the result.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Derive `CLUSTERD_PROCESS` (the process ordinal) from the pod hostname
+    // when running under Kubernetes and it was not set explicitly. The
+    // distroless image has no shell entrypoint to do this, so clusterd does it
+    // itself.
+    if std::env::var("KUBERNETES_SERVICE_HOST").is_ok()
+        && std::env::var("CLUSTERD_PROCESS").is_err()
+    {
+        if let Ok(hostname) = std::env::var("HOSTNAME") {
+            if let Some(ordinal) = process_ordinal_from_hostname(&hostname) {
+                // SAFETY: `set_var` is called before any threads are spawned.
+                // `install_enhanced_handler` above only registers a panic hook.
+                // That hook spawns a thread only on panic, which cannot happen
+                // before this call.
+                unsafe { std::env::set_var("CLUSTERD_PROCESS", ordinal) };
+            }
+        }
+    }
 
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),
@@ -223,7 +268,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     emit_boot_diagnostics!(&BUILD_INFO);
 
     mz_alloc::register_metrics_into(&metrics_registry).await;
-    mz_metrics::register_metrics_into(&metrics_registry, mz_dyncfgs::all_dyncfgs()).await;
+    mz_metrics::register_metrics_into(
+        &metrics_registry,
+        mz_dyncfgs::all_dyncfgs(),
+        args.scratch_directory.clone(),
+    )
+    .await;
 
     if let Some(heap_limit) = args.heap_limit {
         mz_compute::memory_limiter::start_limiter(heap_limit, &metrics_registry);
@@ -231,9 +281,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         info!("no heap limit announced; disabling memory limiter");
     }
 
-    let secrets_reader = args
-        .secrets
-        .load()
+    let secrets_reader = mz_secrets_loader::load(args.secrets)
         .await
         .context("loading secrets reader")?;
 
@@ -255,8 +303,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             )
             .route(
                 "/metrics",
-                routing::get(move || async move {
-                    mz_http_util::handle_prometheus(&metrics_registry).await
+                routing::get(move |headers: axum::http::HeaderMap| async move {
+                    mz_http_util::handle_prometheus(&metrics_registry, headers).await
                 }),
             )
             .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
@@ -299,8 +347,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 let (conn, remote_addr) = match listener.accept().await {
                     Ok(peer) => peer,
                     Err(error) => {
-                        error!("internal_http connection failed: {error:#}");
-                        break;
+                        // Match hyper's AddrIncoming error handling:
+                        // connection errors are per-connection and can be
+                        // skipped immediately; all other errors (e.g., EMFILE)
+                        // sleep to avoid a tight loop on resource exhaustion.
+                        if is_connection_error(&error) {
+                            debug!("accepted connection already errored: {error:#}");
+                        } else {
+                            error!("internal_http accept error: {error:#}");
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                        continue;
                     }
                 };
 
@@ -315,7 +372,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                             .serve_connection(TokioIo::new(conn), hyper_service)
                             .await
                         {
-                            error!("failed to serve internal_http connection: {error:#}");
+                            // This can happen when the client performs an unclean shutdown, so a
+                            // high severity isn't warranted. Might even downgrade this to DEBUG if
+                            // it turns out too noisy.
+                            info!("error serving internal_http connection: {error:#}");
                         }
                     },
                 );
@@ -358,12 +418,77 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
 
     let grpc_host = args.grpc_host.and_then(|h| (!h.is_empty()).then_some(h));
-    let grpc_server_metrics = GrpcServerMetrics::register_with(&metrics_registry);
+    let cluster_server_metrics = ClusterServerMetrics::register_with(&metrics_registry);
 
     let mut storage_timely_config = args.storage_timely_config;
     storage_timely_config.process = args.process;
     let mut compute_timely_config = args.compute_timely_config;
     compute_timely_config.process = args.process;
+
+    // We assume each storage worker has a corresponding compute worker that can process its logs.
+    assert_eq!(
+        storage_timely_config.workers, compute_timely_config.workers,
+        "storage and compute must have equal workers-per-process",
+    );
+
+    if args.unified_cluster {
+        info!("running with a unified timely cluster");
+
+        let (compute_client_builder, storage_client_builder) = mz_compute::server::serve_unified(
+            compute_timely_config,
+            ComputeRuntimeRole::Solo,
+            &metrics_registry,
+            persist_clients,
+            txns_ctx,
+            tracing_handle,
+            ComputeInstanceContext {
+                scratch_directory: args.scratch_directory.clone(),
+                worker_core_affinity: args.worker_core_affinity,
+                connection_context: connection_context.clone(),
+            },
+            SYSTEM_TIME.clone(),
+            connection_context,
+            StorageInstanceContext::new(args.scratch_directory, args.announce_memory_limit),
+        )
+        .await?;
+
+        info!(
+            "listening for storage controller connections on {}",
+            args.storage_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "storage_server",
+            transport::serve(
+                args.storage_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host.clone(),
+                Duration::MAX,
+                storage_client_builder,
+                cluster_server_metrics.for_server("storage"),
+            )
+            .instrument(info_span!("ctp", name = "storage")),
+        );
+
+        info!(
+            "listening for compute controller connections on {}",
+            args.compute_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "compute_server",
+            transport::serve(
+                args.compute_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host,
+                Duration::MAX,
+                compute_client_builder,
+                cluster_server_metrics.for_server("compute"),
+            )
+            .instrument(info_span!("ctp", name = "compute")),
+        );
+
+        // Block forever.
+        return future::pending().await;
+    }
 
     // Start storage server.
     let storage_client_builder = mz_storage::serve(
@@ -374,7 +499,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         Arc::clone(&tracing_handle),
         SYSTEM_TIME.clone(),
         connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
+        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit),
     )
     .await?;
     info!(
@@ -389,13 +514,15 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             grpc_host.clone(),
             Duration::MAX,
             storage_client_builder,
-            grpc_server_metrics.for_server("storage"),
-        ),
+            cluster_server_metrics.for_server("storage"),
+        )
+        .instrument(info_span!("ctp", name = "storage")),
     );
 
     // Start compute server.
     let compute_client_builder = mz_compute::server::serve(
         compute_timely_config,
+        ComputeRuntimeRole::Solo,
         &metrics_registry,
         persist_clients,
         txns_ctx,
@@ -419,12 +546,53 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             grpc_host.clone(),
             Duration::MAX,
             compute_client_builder,
-            grpc_server_metrics.for_server("compute"),
-        ),
+            cluster_server_metrics.for_server("compute"),
+        )
+        .instrument(info_span!("ctp", name = "compute")),
     );
 
-    // TODO: unify storage and compute servers to use one timely cluster.
+    // TODO: retire this two-cluster topology once the unified cluster has production mileage.
 
     // Block forever.
     future::pending().await
+}
+
+/// Per-connection errors from `accept()` that can be skipped immediately.
+/// All other errors (e.g., EMFILE/ENFILE resource exhaustion) warrant a sleep
+/// before retrying. Mirrors hyper's `AddrIncoming` classification.
+fn is_connection_error(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_process_ordinal_from_hostname() {
+        // A StatefulSet pod name ends in the process ordinal.
+        assert_eq!(
+            process_ordinal_from_hostname("mz5ncn-cluster-s1-replica-s1-gen-1-0"),
+            Some("0")
+        );
+        assert_eq!(
+            process_ordinal_from_hostname("mz5ncn-cluster-s1-replica-s1-gen-1-11"),
+            Some("11")
+        );
+        // A bare numeric hostname is its own ordinal.
+        assert_eq!(process_ordinal_from_hostname("7"), Some("7"));
+
+        // A trailing segment that is not a non-negative integer yields `None`,
+        // so `CLUSTERD_PROCESS` stays unset rather than being set to a value
+        // that fails to parse as the process index.
+        assert_eq!(process_ordinal_from_hostname("clusterd"), None);
+        assert_eq!(process_ordinal_from_hostname("replica-abc"), None);
+        assert_eq!(process_ordinal_from_hostname("replica-"), None);
+        assert_eq!(process_ordinal_from_hostname(""), None);
+    }
 }

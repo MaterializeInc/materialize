@@ -1,0 +1,6 @@
+dependencies = [
+    "mz_catalog.mz_objects",
+    "pg_catalog.pg_class",
+    "mz_internal.mz_comments",
+    "information_schema.tables",
+]

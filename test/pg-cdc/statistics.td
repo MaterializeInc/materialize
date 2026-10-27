@@ -36,6 +36,8 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
 INSERT INTO t1 VALUES ('one');
 INSERT INTO t1 VALUES ('two');
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}'
@@ -131,6 +133,17 @@ SELECT
   WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
 
 > ALTER CLUSTER stats_cluster SET (REPLICATION FACTOR 0)
+
+# The controller reconciles RF asynchronously and would otherwise coalesce this
+# 1->0->1 cycle into a no-op (the original replica never restarts). Wait for the
+# drop to actually land so the RF=1 below brings up a genuinely new replica with no
+# snapshot stats. The old replica's stats persist in mz_source_statistics after it
+# is dropped, so the "old replica" assertions below still hold.
+> SELECT count(*)
+  FROM mz_clusters c
+  JOIN mz_cluster_replicas cr ON c.id = cr.cluster_id
+  WHERE c.name = 'stats_cluster'
+0
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 VALUES ('four');

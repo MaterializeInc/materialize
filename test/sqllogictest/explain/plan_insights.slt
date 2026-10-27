@@ -1116,7 +1116,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
                                   {
                                     "Ok": {
                                       "data": [
-                                        49
+                                        48
                                       ]
                                     }
                                   },
@@ -1211,7 +1211,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR CREATE VIEW V AS SELECT 1
               "Literal": [
                 {
                   "data": [
-                    45,
+                    41,
                     1
                   ]
                 },
@@ -1272,7 +1272,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT 'abc'
               "Literal": [
                 {
                   "data": [
-                    19,
+                    14,
                     3,
                     97,
                     98,
@@ -1304,7 +1304,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT 'abc'
                       [
                         {
                           "data": [
-                            19,
+                            14,
                             3,
                             97,
                             98,
@@ -1344,7 +1344,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT 'abc'
                       [
                         {
                           "data": [
-                            19,
+                            14,
                             3,
                             97,
                             98,

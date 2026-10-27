@@ -15,6 +15,20 @@ from materialize.zippy.framework import Action, Capability, State
 from materialize.zippy.mz_capabilities import MzIsRunning
 
 
+def balancerd_service(state: State) -> Balancerd:
+    """Balancerd configured to route to the current Mz service."""
+    return Balancerd(
+        https_resolver_template=f"{state.mz_service}:6876",
+        static_resolver_addr=f"{state.mz_service}:6875",
+    )
+
+
+def restart_balancerd(c: Composition, state: State) -> None:
+    with c.override(balancerd_service(state)):
+        c.kill("balancerd")
+        c.up("balancerd")
+
+
 class BalancerdStart(Action):
     """Starts balancerd"""
 
@@ -27,12 +41,7 @@ class BalancerdStart(Action):
         return {BalancerdIsRunning}
 
     def run(self, c: Composition, state: State) -> None:
-        with c.override(
-            Balancerd(
-                https_resolver_template=f"{state.mz_service}:6876",
-                static_resolver_addr=f"{state.mz_service}:6875",
-            )
-        ):
+        with c.override(balancerd_service(state)):
             c.up("balancerd")
 
     def provides(self) -> list[Capability]:
@@ -65,11 +74,4 @@ class BalancerdRestart(Action):
         return {BalancerdIsRunning, MzIsRunning}
 
     def run(self, c: Composition, state: State) -> None:
-        with c.override(
-            Balancerd(
-                https_resolver_template=f"{state.mz_service}:6876",
-                static_resolver_addr=f"{state.mz_service}:6875",
-            )
-        ):
-            c.kill("balancerd")
-            c.up("balancerd")
+        restart_balancerd(c, state)

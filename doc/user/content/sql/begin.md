@@ -6,12 +6,19 @@ menu:
     parent: "commands"
 ---
 
-{{% txns/txn-details %}}
+{{% include-from-yaml data="txn_details" name="txn-details" %}}
 
-Materialize only supports [**read-only** transactions](#read-only-transactions)
-or [**write-only** (specifically, insert-only)
-transactions](#write-only-transactions). See [Details](#details) for more
-information.
+Materialize supports multi-statement[^ddltxn] transaction blocks for:
+- [**read-only** statements](#read-only-transactions);
+- [**write-only** (specifically, insert-only)
+  statements](#write-only-transactions);
+- [**DDL-only** statements](#ddl-only-transactions).
+
+See [Details](#details) for more information.
+
+[^ddltxn]: Materialize also supports single-statement transaction blocks for various
+`CREATE ...` statements. However, single-statement transactions do not need to
+be wrapped in an explicit transaction block.
 
 ## Syntax
 
@@ -23,17 +30,17 @@ You can specify the following optional settings for `BEGIN`:
 
 Option | Description
 -------|----------
-`ISOLATION LEVEL <level>` | *Optional*. If specified, sets the transaction [isolation level](/get-started/isolation-level).
-`READ ONLY` | <a name="begin-option-read-only"></a> *Optional*. If specified, restricts the transaction to read-only operations. If unspecified, Materialize restricts the transaction to read-only or insert-only operations based on the first statement in the transaction.
+`ISOLATION LEVEL <level>` | *Optional*. If specified, sets the transaction [isolation level](/serve-results/isolation-level).
+`READ ONLY` | <a name="begin-option-read-only"></a> *Optional*. If specified, restricts the transaction to [**read-only** statements](#read-only-transactions). If unspecified, Materialize restricts the transaction to [**read-only** statements](#read-only-transactions), [**write-only** statements](#write-only-transactions), or [**DDL-only** statements](#ddl-only-transactions) based on the first statement in the transaction.
 
 ## Details
 
-Transactions in Materialize are either [**read-only**
-transactions](#read-only-transactions) or [**write-only**
-transactions](#insert-only-transactions) as determined by either:
+Multi-statement transactions in Materialize are [**read-only**
+transactions](#read-only-transactions), [**write-only**
+transactions](#write-only-transactions), or [**DDL-only**
+transactions](#ddl-only-transactions) as determined by either:
 
 - The first statement after the `BEGIN`, or
-
 - The [`READ ONLY`](#begin-option-read-only) option is specified.
 
 ### Read-only transactions
@@ -150,7 +157,31 @@ statements.
 
 #### INSERT-only transactions
 
-{{% txns/txn-insert-only %}}
+{{% include-from-yaml data="txn_details" name="txn-insert-only" %}}
+
+### DDL-only transactions
+
+In Materialize, a DDL-only transaction block is a transaction that can contain
+multiple DDL statements. The following DDL statements are allowed in DDL-only
+transactions:
+
+- `ALTER ... RENAME` (e.g., [`ALTER TABLE ... RENAME`](/sql/alter-table/),
+  [`ALTER SCHEMA ... RENAME`](/sql/alter-schema/))
+- `ALTER ... SWAP` (e.g., [`ALTER SCHEMA ... SWAP`](/sql/alter-schema/))
+- [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/)
+- [`CREATE SOURCE`](/sql/create-source/)
+
+In practice, use DDL transaction blocks to create multiple tables from a source
+in a single transaction. On a successful [`COMMIT`](/sql/commit/), all objects
+in the transaction are created with the same timestamp.
+
+```mzsql
+BEGIN;
+CREATE TABLE items FROM SOURCE pg_source (REFERENCE public.items);
+CREATE TABLE orders FROM SOURCE pg_source (REFERENCE public.orders);
+CREATE TABLE customers FROM SOURCE pg_source (REFERENCE public.customers);
+COMMIT;
+```
 
 ## See also
 

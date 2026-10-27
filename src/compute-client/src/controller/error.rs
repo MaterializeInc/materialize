@@ -22,7 +22,6 @@ use thiserror::Error;
 
 pub use mz_storage_types::errors::CollectionMissing;
 
-use crate::controller::instance::InstanceShutDown;
 use crate::controller::{ComputeInstanceId, ReplicaId};
 
 /// The error returned by replica-targeted peeks and subscribes when the target replica
@@ -45,15 +44,12 @@ pub struct InstanceExists(pub ComputeInstanceId);
 #[error("No replicas found in cluster for target list.")]
 pub struct HydrationCheckBadTarget(pub Vec<ReplicaId>);
 
-/// Errors arising during compute collection lookup.
+/// Errors arising during compute collection frontiers lookup.
 #[derive(Error, Debug)]
 pub enum CollectionLookupError {
     /// The specified compute instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// The specified compute instance has shut down.
-    #[error("the instance has shut down")]
-    InstanceShutDown,
     /// The compute collection does not exist.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
@@ -62,12 +58,6 @@ pub enum CollectionLookupError {
 impl From<InstanceMissing> for CollectionLookupError {
     fn from(error: InstanceMissing) -> Self {
         Self::InstanceMissing(error.0)
-    }
-}
-
-impl From<InstanceShutDown> for CollectionLookupError {
-    fn from(_error: InstanceShutDown) -> Self {
-        Self::InstanceShutDown
     }
 }
 
@@ -80,10 +70,10 @@ impl From<CollectionMissing> for CollectionLookupError {
 /// Errors arising during compute replica creation.
 #[derive(Error, Debug)]
 pub enum ReplicaCreationError {
-    /// TODO(database-issues#7533): Add documentation.
+    /// The target compute instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(database-issues#7533): Add documentation.
+    /// A replica with the given ID already exists on the target instance.
     #[error("replica exists already: {0}")]
     ReplicaExists(ReplicaId),
 }
@@ -97,10 +87,10 @@ impl From<InstanceMissing> for ReplicaCreationError {
 /// Errors arising during compute replica removal.
 #[derive(Error, Debug)]
 pub enum ReplicaDropError {
-    /// TODO(database-issues#7533): Add documentation.
+    /// The target compute instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(database-issues#7533): Add documentation.
+    /// The replica to be dropped does not exist on the target instance.
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
 }
@@ -163,6 +153,9 @@ pub enum PeekError {
     /// The replica that the peek was issued against does not exist.
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
+    /// The caller-supplied read hold is for a different collection than the peek target.
+    #[error("read hold ID does not match peeked collection: {0}")]
+    ReadHoldIdMismatch(GlobalId),
     /// The read hold that was passed in is for a later time than the peek's timestamp.
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
@@ -183,10 +176,10 @@ impl From<CollectionMissing> for PeekError {
 /// Errors arising during collection updates.
 #[derive(Error, Debug)]
 pub enum CollectionUpdateError {
-    /// TODO(database-issues#7533): Add documentation.
+    /// The target compute instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(database-issues#7533): Add documentation.
+    /// The collection to be updated does not exist.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
 }
@@ -206,13 +199,13 @@ impl From<CollectionMissing> for CollectionUpdateError {
 /// Errors arising during collection read policy assignment.
 #[derive(Error, Debug)]
 pub enum ReadPolicyError {
-    /// TODO(database-issues#7533): Add documentation.
+    /// The target compute instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(database-issues#7533): Add documentation.
+    /// The collection does not exist.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
-    /// TODO(database-issues#7533): Add documentation.
+    /// The collection is write-only and does not support read policies.
     #[error("collection is write-only: {0}")]
     WriteOnlyCollection(GlobalId),
 }
@@ -232,7 +225,7 @@ impl From<CollectionMissing> for ReadPolicyError {
 /// Errors arising during orphan removal.
 #[derive(Error, Debug)]
 pub enum RemoveOrphansError {
-    /// TODO(database-issues#7533): Add documentation.
+    /// An error occurred in the orchestrator while removing orphaned replicas.
     #[error("orchestrator error: {0}")]
     OrchestratorError(anyhow::Error),
 }

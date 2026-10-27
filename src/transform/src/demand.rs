@@ -14,7 +14,7 @@ use mz_ore::assert_none;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{
-    AggregateExpr, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr,
+    AggregateExpr, AggregateFunc, Columns, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr,
     RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};

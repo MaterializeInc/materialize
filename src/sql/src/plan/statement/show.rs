@@ -16,24 +16,24 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
-use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlScalarType};
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
-    CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
-    ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
-    ShowCreateTypeStatement, ShowObjectType, SqlServerConfigOptionName, SystemObjectType,
-    UnresolvedItemName, WithOptionValue,
+    CreateSinkOptionName, CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences,
+    ObjectType, ShowCreateClusterStatement, ShowCreateConnectionStatement,
+    ShowCreateMaterializedViewStatement, ShowCreateTypeStatement, ShowObjectType,
+    SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName, WithOptionValue,
 };
 use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
 
+use crate::ast::display::escaped_string_literal;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
-    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
-    ShowObjectsStatement, ShowStatementFilter, Statement, Value,
+    SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateMetricSinkStatement,
+    ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
+    ShowCreateViewStatement, ShowObjectsStatement, ShowStatementFilter, Statement, Value,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
@@ -47,6 +47,7 @@ use crate::plan::statement::{StatementContext, StatementDesc, dml};
 use crate::plan::{
     HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan, query, transform_ast,
 };
+use crate::session::vars::ENABLE_METRIC_SINK;
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -194,6 +195,34 @@ pub fn plan_show_create_sink(
     plan_show_create_item(scx, &sink_name, CatalogItemType::Sink, redacted)
 }
 
+pub fn describe_show_create_metric_sink(
+    _: &StatementContext,
+    _: ShowCreateMetricSinkStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .finish(),
+    )))
+}
+
+pub fn plan_show_create_metric_sink(
+    scx: &StatementContext,
+    ShowCreateMetricSinkStatement {
+        metric_sink_name,
+        redacted,
+    }: ShowCreateMetricSinkStatement<Aug>,
+) -> Result<ShowCreatePlan, PlanError> {
+    scx.require_feature_flag(&ENABLE_METRIC_SINK)?;
+    plan_show_create_item(
+        scx,
+        &metric_sink_name,
+        CatalogItemType::MetricSink,
+        redacted,
+    )
+}
+
 pub fn describe_show_create_index(
     _: &StatementContext,
     _: ShowCreateIndexStatement<Aug>,
@@ -268,15 +297,12 @@ pub fn plan_show_create_type(
 
     let type_item = scx.get_item(&id);
 
-    // check if a builtin type is being accessed
     if id.is_system() {
-        // builtin types do not have a create sql
         sql_bail!("cannot show create for system type {full_name}");
     }
 
-    let name = type_item.name().item.as_ref();
+    let name = full_name.to_string();
 
-    // if custom type we make the sql human readable
     let create_sql = humanize_sql_for_show_create(
         scx.catalog,
         type_item.id(),
@@ -286,7 +312,7 @@ pub fn plan_show_create_type(
 
     Ok(ShowCreatePlan {
         id: ObjectId::Item(id),
-        row: Row::pack_slice(&[Datum::String(name), Datum::String(&create_sql)]),
+        row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
     })
 }
 
@@ -332,7 +358,7 @@ pub fn show_schemas<'a>(
             None => sql_bail!("no database specified and no active database"),
         },
         Some(ResolvedDatabaseName::Error) => {
-            unreachable!("should have been handled in name resolution")
+            bail_internal!("unresolved database name")
         }
     };
     let query = format!(
@@ -365,6 +391,16 @@ pub fn show_network_policies<'a>(
     )
 }
 
+/// Ensures that the `FROM` clause was not provided for `SHOW` commands that
+/// don't accept it. The parser is supposed to reject such cases, so this is an
+/// internal-only invariant.
+fn ensure_no_from<T>(from: Option<T>) -> Result<(), PlanError> {
+    if from.is_some() {
+        bail_internal!("FROM not supported for this SHOW command");
+    }
+    Ok(())
+}
+
 pub fn show_objects<'a>(
     scx: &'a StatementContext<'a>,
     ShowObjectsStatement {
@@ -379,18 +415,21 @@ pub fn show_objects<'a>(
         ShowObjectType::Subsource { on_source } => show_subsources(scx, from, on_source, filter),
         ShowObjectType::View => show_views(scx, from, filter),
         ShowObjectType::Sink { in_cluster } => show_sinks(scx, from, in_cluster, filter),
+        ShowObjectType::MetricSink { in_cluster } => {
+            show_metric_sinks(scx, from, in_cluster, filter)
+        }
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
         ShowObjectType::Role => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_roles(scx, filter)
         }
         ShowObjectType::Cluster => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_clusters(scx, filter)
         }
         ShowObjectType::ClusterReplica => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_cluster_replicas(scx, filter)
         }
         ShowObjectType::Secret => show_secrets(scx, from, filter),
@@ -403,30 +442,27 @@ pub fn show_objects<'a>(
             on_object,
         } => show_indexes(scx, from, on_object, in_cluster, filter),
         ShowObjectType::Database => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_databases(scx, filter)
         }
         ShowObjectType::Schema { from: db_from } => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_schemas(scx, db_from, filter)
         }
         ShowObjectType::Privileges { object_type, role } => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_privileges(scx, object_type, role, filter)
         }
         ShowObjectType::DefaultPrivileges { object_type, role } => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_default_privileges(scx, object_type, role, filter)
         }
         ShowObjectType::RoleMembership { role } => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_role_membership(scx, role, filter)
         }
-        ShowObjectType::ContinualTask { in_cluster } => {
-            show_continual_tasks(scx, from, in_cluster, filter)
-        }
         ShowObjectType::NetworkPolicy => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_network_policies(scx, filter)
         }
     }
@@ -619,6 +655,49 @@ fn show_sinks<'a>(
     )
 }
 
+/// `SHOW METRIC SINKS` reports the `FROM` relation rather than a connection or format, since a
+/// metric sink publishes into the replica's registry and has neither.
+fn show_metric_sinks<'a>(
+    scx: &'a StatementContext<'a>,
+    from: Option<ResolvedSchemaName>,
+    in_cluster: Option<ResolvedClusterName>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    // `ENABLE_METRIC_SINK` gates the DDL and these SHOW verbs, not the catalog
+    // surface. `mz_metric_sinks` is `PUBLIC_SELECT` and its rows flow into
+    // `mz_objects` unconditionally, so with the flag off both are simply empty,
+    // because no metric sink can exist yet. Gating the verbs keeps them
+    // unavailable until the feature ships while the relation stays a stable
+    // always-on shape.
+    scx.require_feature_flag(&ENABLE_METRIC_SINK)?;
+    let schema_spec = scx.resolve_optional_schema(&from)?;
+
+    let mut where_clause = format!("metric_sinks.schema_id = '{schema_spec}'");
+    if let Some(cluster) = in_cluster {
+        write!(
+            where_clause,
+            " AND metric_sinks.cluster_id = '{}'",
+            cluster.id
+        )
+        .expect("write on string cannot fail");
+    }
+
+    let query = format!(
+        "SELECT metric_sinks.name, objs.name AS relation, clusters.name AS cluster
+        FROM mz_internal.mz_metric_sinks AS metric_sinks
+        JOIN mz_catalog.mz_objects AS objs ON objs.id = metric_sinks.from_id
+        JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = metric_sinks.cluster_id
+        WHERE {where_clause}"
+    );
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "relation", "cluster"]),
+    )
+}
+
 fn show_types<'a>(
     scx: &'a StatementContext<'a>,
     from: Option<ResolvedSchemaName>,
@@ -714,14 +793,14 @@ pub fn show_columns<'a>(
         CatalogItemType::Source
         | CatalogItemType::Table
         | CatalogItemType::View
-        | CatalogItemType::MaterializedView
-        | CatalogItemType::ContinualTask => (),
+        | CatalogItemType::MaterializedView => (),
         ty @ CatalogItemType::Connection
         | ty @ CatalogItemType::Index
         | ty @ CatalogItemType::Func
         | ty @ CatalogItemType::Secret
         | ty @ CatalogItemType::Type
-        | ty @ CatalogItemType::Sink => {
+        | ty @ CatalogItemType::Sink
+        | ty @ CatalogItemType::MetricSink => {
             sql_bail!("{full_name} is a {ty} and so does not have columns");
         }
     }
@@ -739,6 +818,7 @@ pub fn show_columns<'a>(
         Some("position"),
         Some(&["name", "nullable", "type", "comment"]),
     )?;
+    scx.record_sql_impl_ids(&new_resolved_ids);
     Ok(ShowColumnsSelect {
         id: entry.id(),
         show_select,
@@ -753,13 +833,14 @@ pub fn show_clusters<'a>(
     scx: &'a StatementContext<'a>,
     filter: Option<ShowStatementFilter<Aug>>,
 ) -> Result<ShowSelect<'a>, PlanError> {
-    let query = "SELECT name, replicas, comment FROM mz_internal.mz_show_clusters".to_string();
+    let query =
+        "SELECT name, replicas, activity, comment FROM mz_internal.mz_show_clusters".to_string();
     ShowSelect::new(
         scx,
         query,
         filter,
         None,
-        Some(&["name", "replicas", "comment"]),
+        Some(&["name", "replicas", "activity", "comment"]),
     )
 }
 
@@ -812,8 +893,10 @@ pub fn show_privileges<'a>(
         ));
     }
     if let Some(role) = role {
-        let name = role.name;
-        query_filter.push(format!("CASE WHEN grantee = 'PUBLIC' THEN true ELSE pg_has_role('{name}', grantee, 'USAGE') END"));
+        let name = escaped_string_literal(&role.name);
+        query_filter.push(format!(
+            "CASE WHEN grantee = 'PUBLIC' THEN true ELSE pg_has_role({name}, grantee, 'USAGE') END"
+        ));
     }
     let query_filter = if query_filter.len() > 0 {
         format!("WHERE {}", itertools::join(query_filter, " AND "))
@@ -858,8 +941,10 @@ pub fn show_default_privileges<'a>(
         ));
     }
     if let Some(role) = role {
-        let name = role.name;
-        query_filter.push(format!("CASE WHEN grantee = 'PUBLIC' THEN true ELSE pg_has_role('{name}', grantee, 'USAGE') END"));
+        let name = escaped_string_literal(&role.name);
+        query_filter.push(format!(
+            "CASE WHEN grantee = 'PUBLIC' THEN true ELSE pg_has_role({name}, grantee, 'USAGE') END"
+        ));
     }
     let query_filter = if query_filter.len() > 0 {
         format!("WHERE {}", itertools::join(query_filter, " AND "))
@@ -896,8 +981,8 @@ pub fn show_role_membership<'a>(
 ) -> Result<ShowSelect<'a>, PlanError> {
     let mut query_filter = Vec::new();
     if let Some(role) = role {
-        let name = role.name;
-        query_filter.push(format!("pg_has_role('{name}', member, 'USAGE')"));
+        let name = escaped_string_literal(&role.name);
+        query_filter.push(format!("pg_has_role({name}, member, 'USAGE')"));
     }
     let query_filter = if query_filter.len() > 0 {
         format!("WHERE {}", itertools::join(query_filter, " AND "))
@@ -917,35 +1002,6 @@ pub fn show_role_membership<'a>(
         filter,
         None,
         Some(&["role", "member", "grantor"]),
-    )
-}
-
-fn show_continual_tasks<'a>(
-    scx: &'a StatementContext<'a>,
-    from: Option<ResolvedSchemaName>,
-    in_cluster: Option<ResolvedClusterName>,
-    filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, PlanError> {
-    let schema_spec = scx.resolve_optional_schema(&from)?;
-    let mut where_clause = format!("schema_id = '{schema_spec}'");
-
-    if let Some(cluster) = in_cluster {
-        write!(where_clause, " AND cluster_id = '{}'", cluster.id)
-            .expect("write on string cannot fail");
-    }
-
-    let query = format!(
-        "SELECT name, cluster, comment
-        FROM mz_internal.mz_show_continual_tasks
-        WHERE {where_clause}"
-    );
-
-    ShowSelect::new(
-        scx,
-        query,
-        filter,
-        None,
-        Some(&["name", "cluster", "comment"]),
     )
 }
 
@@ -973,8 +1029,13 @@ impl<'a> ShowSelect<'a> {
         order: Option<&str>,
         projection: Option<&[&str]>,
     ) -> Result<ShowSelect<'a>, PlanError> {
-        Self::new_with_resolved_ids(scx, query, filter, order, projection)
-            .map(|(show_select, _)| show_select)
+        let (show_select, new_resolved_ids) =
+            Self::new_with_resolved_ids(scx, query, filter, order, projection)?;
+        scx.sql_impl_resolved_ids
+            .lock()
+            .expect("planning is single-threaded")
+            .extend_from(&new_resolved_ids);
+        Ok(show_select)
     }
 
     fn new_with_resolved_ids(
@@ -1006,10 +1067,11 @@ impl<'a> ShowSelect<'a> {
         scx: &'a StatementContext,
         query: String,
     ) -> Result<(ShowSelect<'a>, ResolvedIds), PlanError> {
-        let stmts = parse::parse(&query).expect("ShowSelect::new called with invalid SQL");
+        let stmts = parse::parse(&query)
+            .map_err(|e| internal_err!("failed to parse generated SHOW query: {}", e))?;
         let stmt = match stmts.into_element().ast {
             Statement::Select(select) => select,
-            _ => panic!("ShowSelect::new called with non-SELECT statement"),
+            _ => bail_internal!("generated SHOW query was not a SELECT statement"),
         };
         let (mut stmt, new_resolved_ids) = names::resolve(scx.catalog, stmt)?;
         transform_ast::transform(scx, &mut stmt)?;
@@ -1070,13 +1132,24 @@ impl<'a> ShowColumnsSelect<'a> {
 
 /// Convert a SQL statement into a form that could be used as input, as well as
 /// is more amenable to human consumption.
+///
+/// Note that the bits we omit here (e.g. the internal `AS OF` of a materialized
+/// view, or the `DETAILS` of a `CREATE TABLE ... FROM SOURCE`) are not
+/// user-typeable, but remain accessible for debugging in the raw `create_sql`
+/// (and `redacted_create_sql`) column of catalog builtins like
+/// `mz_catalog.mz_materialized_views` and `mz_catalog.mz_tables`. They are not
+/// in the `definition` column, which is parsed back out of `create_sql` and only
+/// retains the inner query.
 fn humanize_sql_for_show_create(
     catalog: &dyn SessionCatalog,
     id: CatalogItemId,
     sql: &str,
     redacted: bool,
 ) -> Result<String, PlanError> {
-    use mz_sql_parser::ast::{CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName};
+    use mz_sql_parser::ast::{
+        CreateSourceConnection, MySqlConfigOptionName, PgConfigOptionName, TableFromSourceColumns,
+        TableFromSourceOptionName,
+    };
 
     let parsed = parse::parse(sql)?.into_element().ast;
     let (mut resolved, _) = names::resolve(catalog, parsed)?;
@@ -1088,7 +1161,34 @@ fn humanize_sql_for_show_create(
     match &mut resolved {
         // Strip internal `AS OF` syntax.
         Statement::CreateMaterializedView(stmt) => stmt.as_of = None,
-        Statement::CreateContinualTask(stmt) => stmt.as_of = None,
+        // Strip the internal `DETAILS` option, which is not user-typeable and
+        // does not roundtrip.
+        Statement::CreateTableFromSource(stmt) => {
+            stmt.with_options.retain_mut(|o| match o.name {
+                TableFromSourceOptionName::TextColumns => true,
+                TableFromSourceOptionName::ExcludeColumns => true,
+                TableFromSourceOptionName::ExcludeConstraints => true,
+                TableFromSourceOptionName::ExcludeAllConstraints => true,
+                TableFromSourceOptionName::ExcludeAllNotNullConstraints => true,
+                // Drop details, which does not roundtrip.
+                TableFromSourceOptionName::Details => false,
+                TableFromSourceOptionName::PartitionBy => true,
+                TableFromSourceOptionName::RetainHistory => true,
+            });
+            // The `Defined` column list and constraints are populated during
+            // purification (from the upstream schema), and `CREATE TABLE ... FROM
+            // SOURCE` rejects them as input. Omit them so the statement
+            // roundtrips; purification re-derives them from the source on replay,
+            // and the schema-affecting `TEXT COLUMNS` / `EXCLUDE COLUMNS` options
+            // are retained above so the re-derived schema matches. A user-typed
+            // `Named` column list is left intact, since it does roundtrip.
+            if matches!(stmt.columns, TableFromSourceColumns::Defined(_)) {
+                stmt.columns = TableFromSourceColumns::NotSpecified;
+            }
+            // Constraints are never valid input here (purification populates them
+            // alongside `Defined` columns), so always drop them.
+            stmt.constraints = Vec::new();
+        }
         // `CREATE SOURCE` statements should roundtrip. However, sources and
         // their subsources have a complex relationship, so we need to do a lot
         // of work to reconstruct the statement for multi-output sources.
@@ -1275,7 +1375,17 @@ fn humanize_sql_for_show_create(
                 }
             });
         }
-
+        Statement::CreateSink(stmt) => {
+            stmt.with_options.retain_mut(|o| {
+                match o.name {
+                    CreateSinkOptionName::CommitInterval => true,
+                    CreateSinkOptionName::PartitionStrategy => true,
+                    CreateSinkOptionName::Snapshot => true,
+                    // Drop version, which does not roundtrip.
+                    CreateSinkOptionName::Version => false,
+                }
+            });
+        }
         _ => (),
     }
 

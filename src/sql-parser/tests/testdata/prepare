@@ -35,6 +35,125 @@ EXECUTE a (a, 'b', 1 + 2)
 Execute(ExecuteStatement { name: Ident("a"), params: [Identifier([Ident("a")]), Value(String("b")), Op { op: Op { namespace: None, op: "+" }, expr1: Value(Number("1")), expr2: Some(Value(Number("2"))) }] })
 
 parse-statement
+EXECUTE UNIT TEST t1 FOR v MOCK a (x int4) AS (SELECT 1), MOCK b (y int4) AS (SELECT 2) EXPECTED (z int4) AS (SELECT 3)
+----
+EXECUTE UNIT TEST t1 FOR v MOCK a(x int4) AS (SELECT 1), MOCK b(y int4) AS (SELECT 2) EXPECTED (z int4) AS (SELECT 3)
+=>
+ExecuteUnitTest(ExecuteUnitTestStatement { name: Ident("t1"), target: Name(UnresolvedItemName([Ident("v")])), at_time: None, mocks: [MockViewDef { name: Name(UnresolvedItemName([Ident("a")])), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }, MockViewDef { name: Name(UnresolvedItemName([Ident("b")])), columns: [ColumnDef { name: Ident("y"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }], expected: ExpectedResultDef { columns: [ColumnDef { name: Ident("z"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("3")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+# Zero MOCK clauses — the MOCK list is optional.
+parse-statement
+EXECUTE UNIT TEST t FOR v EXPECTED (x int4) AS (SELECT 1)
+----
+EXECUTE UNIT TEST t FOR v EXPECTED (x int4) AS (SELECT 1)
+=>
+ExecuteUnitTest(ExecuteUnitTestStatement { name: Ident("t"), target: Name(UnresolvedItemName([Ident("v")])), at_time: None, mocks: [], expected: ExpectedResultDef { columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+# Single MOCK clause — no comma anywhere between the MOCK list and EXPECTED.
+parse-statement
+EXECUTE UNIT TEST t FOR v MOCK m (x int4) AS (SELECT 1) EXPECTED (y int4) AS (SELECT 2)
+----
+EXECUTE UNIT TEST t FOR v MOCK m(x int4) AS (SELECT 1) EXPECTED (y int4) AS (SELECT 2)
+=>
+ExecuteUnitTest(ExecuteUnitTestStatement { name: Ident("t"), target: Name(UnresolvedItemName([Ident("v")])), at_time: None, mocks: [MockViewDef { name: Name(UnresolvedItemName([Ident("m")])), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }], expected: ExpectedResultDef { columns: [ColumnDef { name: Ident("y"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+# AT TIME clause sits between FOR and the MOCK list.
+parse-statement
+EXECUTE UNIT TEST t FOR v AT TIME mz_now() MOCK m (x int4) AS (SELECT 1) EXPECTED (y int4) AS (SELECT 2)
+----
+EXECUTE UNIT TEST t FOR v AT TIME mz_now() MOCK m(x int4) AS (SELECT 1) EXPECTED (y int4) AS (SELECT 2)
+=>
+ExecuteUnitTest(ExecuteUnitTestStatement { name: Ident("t"), target: Name(UnresolvedItemName([Ident("v")])), at_time: Some(Function(Function { name: Name(UnresolvedItemName([Ident("mz_now")])), args: Args { args: [], order_by: [] }, filter: None, over: None, distinct: false })), mocks: [MockViewDef { name: Name(UnresolvedItemName([Ident("m")])), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }], expected: ExpectedResultDef { columns: [ColumnDef { name: Ident("y"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+# Qualified target and mock names round-trip through display.
+parse-statement
+EXECUTE UNIT TEST t FOR materialize.public.customers MOCK materialize.internal.customers (id int8, name text) AS (SELECT 1, 'a') EXPECTED (id int8, name text) AS (SELECT 1, 'a')
+----
+EXECUTE UNIT TEST t FOR materialize.public.customers MOCK materialize.internal.customers(id int8, name text) AS (SELECT 1, 'a') EXPECTED (id int8, name text) AS (SELECT 1, 'a')
+=>
+ExecuteUnitTest(ExecuteUnitTestStatement { name: Ident("t"), target: Name(UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("customers")])), at_time: None, mocks: [MockViewDef { name: Name(UnresolvedItemName([Ident("materialize"), Ident("internal"), Ident("customers")])), columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int8")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("name"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(String("a")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }], expected: ExpectedResultDef { columns: [ColumnDef { name: Ident("id"), data_type: Other { name: Name(UnresolvedItemName([Ident("int8")])), typ_mod: [] }, collation: None, options: [] }, ColumnDef { name: Ident("name"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }, Expr { expr: Value(String("a")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+# Inner queries can use VALUES / nested parens — the outer parens still match.
+parse-statement
+EXECUTE UNIT TEST t FOR v MOCK m (x int4) AS (SELECT * FROM (VALUES (1), (2)) AS sub(x)) EXPECTED (x int4) AS (SELECT * FROM (VALUES (1)) AS sub(x))
+----
+EXECUTE UNIT TEST t FOR v MOCK m(x int4) AS (SELECT * FROM (VALUES (1), (2)) AS sub (x)) EXPECTED (x int4) AS (SELECT * FROM (VALUES (1)) AS sub (x))
+=>
+ExecuteUnitTest(ExecuteUnitTestStatement { name: Ident("t"), target: Name(UnresolvedItemName([Ident("v")])), at_time: None, mocks: [MockViewDef { name: Name(UnresolvedItemName([Ident("m")])), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Values(Values([[Value(Number("1"))], [Value(Number("2"))]])), order_by: [], limit: None, offset: None }, alias: Some(TableAlias { name: Ident("sub"), columns: [Ident("x")], strict: false }) }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }], expected: ExpectedResultDef { columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Derived { lateral: false, subquery: Query { ctes: Simple([]), body: Values(Values([[Value(Number("1"))]])), order_by: [], limit: None, offset: None }, alias: Some(TableAlias { name: Ident("sub"), columns: [Ident("x")], strict: false }) }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+# Inner queries can use WITH (CTEs).
+parse-statement
+EXECUTE UNIT TEST t FOR v MOCK m (x int4) AS (WITH cte AS (SELECT 1) SELECT * FROM cte) EXPECTED (x int4) AS (SELECT 1)
+----
+EXECUTE UNIT TEST t FOR v MOCK m(x int4) AS (WITH cte AS (SELECT 1) SELECT * FROM cte) EXPECTED (x int4) AS (SELECT 1)
+=>
+ExecuteUnitTest(ExecuteUnitTestStatement { name: Ident("t"), target: Name(UnresolvedItemName([Ident("v")])), at_time: None, mocks: [MockViewDef { name: Name(UnresolvedItemName([Ident("m")])), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([Cte { alias: TableAlias { name: Ident("cte"), columns: [], strict: false }, id: (), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Name(UnresolvedItemName([Ident("cte")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } }], expected: ExpectedResultDef { columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+# Inner queries can use UNION.
+parse-statement
+EXECUTE UNIT TEST t FOR v MOCK m (x int4) AS (SELECT 1 UNION ALL SELECT 2) EXPECTED (x int4) AS (SELECT 1)
+----
+EXECUTE UNIT TEST t FOR v MOCK m(x int4) AS (SELECT 1 UNION ALL SELECT 2) EXPECTED (x int4) AS (SELECT 1)
+=>
+ExecuteUnitTest(ExecuteUnitTestStatement { name: Ident("t"), target: Name(UnresolvedItemName([Ident("v")])), at_time: None, mocks: [MockViewDef { name: Name(UnresolvedItemName([Ident("m")])), columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: SetOperation { op: Union, all: true, left: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), right: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("2")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }) }, order_by: [], limit: None, offset: None } }], expected: ExpectedResultDef { columns: [ColumnDef { name: Ident("x"), data_type: Other { name: Name(UnresolvedItemName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } })
+
+# Negative: missing comma between consecutive MOCK clauses.
+parse-statement
+EXECUTE UNIT TEST t FOR v MOCK a (x int4) AS (SELECT 1) MOCK b (y int4) AS (SELECT 2) EXPECTED (z int4) AS (SELECT 3)
+----
+error: Expected EXPECTED, found MOCK
+EXECUTE UNIT TEST t FOR v MOCK a (x int4) AS (SELECT 1) MOCK b (y int4) AS (SELECT 2) EXPECTED (z int4) AS (SELECT 3)
+                                                        ^
+
+# Negative: trailing comma after last MOCK, before EXPECTED.
+parse-statement
+EXECUTE UNIT TEST t FOR v MOCK a (x int4) AS (SELECT 1), EXPECTED (z int4) AS (SELECT 3)
+----
+error: Expected MOCK, found EXPECTED
+EXECUTE UNIT TEST t FOR v MOCK a (x int4) AS (SELECT 1), EXPECTED (z int4) AS (SELECT 3)
+                                                         ^
+
+# Negative: leading comma before first MOCK.
+parse-statement
+EXECUTE UNIT TEST t FOR v , MOCK a (x int4) AS (SELECT 1) EXPECTED (z int4) AS (SELECT 3)
+----
+error: Expected EXPECTED, found comma
+EXECUTE UNIT TEST t FOR v , MOCK a (x int4) AS (SELECT 1) EXPECTED (z int4) AS (SELECT 3)
+                          ^
+
+# Negative: missing parens around the MOCK query.
+parse-statement
+EXECUTE UNIT TEST t FOR v MOCK m (x int4) AS SELECT 1 EXPECTED (z int4) AS (SELECT 2)
+----
+error: Expected left parenthesis, found SELECT
+EXECUTE UNIT TEST t FOR v MOCK m (x int4) AS SELECT 1 EXPECTED (z int4) AS (SELECT 2)
+                                             ^
+
+# Negative: missing parens around the EXPECTED query.
+parse-statement
+EXECUTE UNIT TEST t FOR v EXPECTED (z int4) AS SELECT 1
+----
+error: Expected left parenthesis, found SELECT
+EXECUTE UNIT TEST t FOR v EXPECTED (z int4) AS SELECT 1
+                                               ^
+
+# Negative: missing FOR keyword.
+parse-statement
+EXECUTE UNIT TEST t v EXPECTED (z int4) AS (SELECT 1)
+----
+error: Expected FOR, found identifier "v"
+EXECUTE UNIT TEST t v EXPECTED (z int4) AS (SELECT 1)
+                    ^
+
+# Negative: missing EXPECTED clause.
+parse-statement
+EXECUTE UNIT TEST t FOR v MOCK m (x int4) AS (SELECT 1)
+----
+error: Expected EXPECTED, found EOF
+EXECUTE UNIT TEST t FOR v MOCK m (x int4) AS (SELECT 1)
+                                                       ^
+
+parse-statement
 DEALLOCATE a
 ----
 DEALLOCATE a

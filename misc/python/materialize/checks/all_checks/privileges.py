@@ -14,8 +14,7 @@ from materialize.checks.checks import Check
 
 class Privileges(Check):
     def _create_objects(self, i: int, expensive: bool = False) -> str:
-        s = dedent(
-            f"""
+        s = dedent(f"""
             $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
             CREATE DATABASE privilege_db{i}
             CREATE SCHEMA privilege_schema{i}
@@ -27,24 +26,27 @@ class Privileges(Check):
             CREATE VIEW privilege_v{i} AS SELECT * FROM privilege_t{i}
             CREATE MATERIALIZED VIEW privilege_mv{i} AS SELECT * FROM privilege_t{i}
             CREATE SECRET privilege_secret{i} AS 'MY_SECRET'
-            """
-        )
+            """)
         if expensive:
-            s += dedent(
-                f"""
+            s += dedent(f"""
                 $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
                 CREATE SOURCE privilege_source{i} FROM LOAD GENERATOR COUNTER
                 $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
                 CREATE SINK privilege_sink{i} FROM privilege_mv{i} INTO KAFKA CONNECTION privilege_kafka_conn{i} (TOPIC 'sink-sink-privilege{i}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION privilege_csr_conn{i} ENVELOPE DEBEZIUM
                 CREATE CLUSTER privilege_cluster{i} REPLICAS (privilege_cluster_r{i} (SIZE 'scale=1,workers=4'))
-                """
-            )
+                """)
 
         return s
 
     def _grant_privileges(self, role: str, i: int, expensive: bool = False) -> str:
-        s = dedent(
-            f"""
+        # For views, materialized views, and sources, the explicit privilege
+        # list is intentional. SQL-232 fixed `GRANT/REVOKE ALL ON TABLE
+        # <view/mv/source>` to expand to the full TABLE set (arwd) instead of
+        # only SELECT. Using `ALL PRIVILEGES` here would yield different
+        # `SHOW GRANTS` output across pre- and post-fix versions, breaking
+        # upgrade checks. Spelling out the privileges keeps the check
+        # version-stable.
+        s = dedent(f"""
             $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
             GRANT ALL PRIVILEGES ON DATABASE privilege_db{i} TO {role}
             GRANT ALL PRIVILEGES ON SCHEMA privilege_schema{i} TO {role}
@@ -52,24 +54,23 @@ class Privileges(Check):
             GRANT ALL PRIVILEGES ON CONNECTION privilege_csr_conn{i} TO {role}
             GRANT ALL PRIVILEGES ON TYPE privilege_type{i} TO {role}
             GRANT ALL PRIVILEGES ON TABLE privilege_t{i} TO {role}
-            GRANT ALL PRIVILEGES ON TABLE privilege_v{i} TO {role}
-            GRANT ALL PRIVILEGES ON TABLE privilege_mv{i} TO {role}
+            GRANT INSERT, SELECT, UPDATE, DELETE ON TABLE privilege_v{i} TO {role}
+            GRANT INSERT, SELECT, UPDATE, DELETE ON TABLE privilege_mv{i} TO {role}
             GRANT ALL PRIVILEGES ON SECRET privilege_secret{i} TO {role}
-            """
-        )
+            """)
         if expensive:
-            s += dedent(
-                f"""
-                GRANT ALL PRIVILEGES ON TABLE privilege_source{i} TO {role}
+            s += dedent(f"""
+                GRANT INSERT, SELECT, UPDATE, DELETE ON TABLE privilege_source{i} TO {role}
                 GRANT ALL PRIVILEGES ON CLUSTER privilege_cluster{i} TO {role}
-                """
-            )
+                """)
 
         return s
 
     def _revoke_privileges(self, role: str, i: int, expensive: bool = False) -> str:
-        s = dedent(
-            f"""
+        # Explicit privilege list for view/mv/source for the same reason as
+        # in `_grant_privileges` — keeps upgrade checks version-stable across
+        # the SQL-232 fix.
+        s = dedent(f"""
                 $ postgres-execute connection=postgres://materialize@${{testdrive.materialize-sql-addr}}
                 REVOKE ALL PRIVILEGES ON DATABASE privilege_db{i} FROM {role}
                 REVOKE ALL PRIVILEGES ON SCHEMA privilege_schema{i} FROM {role}
@@ -77,18 +78,15 @@ class Privileges(Check):
                 REVOKE ALL PRIVILEGES ON CONNECTION privilege_csr_conn{i} FROM {role}
                 REVOKE ALL PRIVILEGES ON TYPE privilege_type{i} FROM {role}
                 REVOKE ALL PRIVILEGES ON TABLE privilege_t{i} FROM {role}
-                REVOKE ALL PRIVILEGES ON TABLE privilege_v{i} FROM {role}
-                REVOKE ALL PRIVILEGES ON TABLE privilege_mv{i} FROM {role}
+                REVOKE INSERT, SELECT, UPDATE, DELETE ON TABLE privilege_v{i} FROM {role}
+                REVOKE INSERT, SELECT, UPDATE, DELETE ON TABLE privilege_mv{i} FROM {role}
                 REVOKE ALL PRIVILEGES ON SECRET privilege_secret{i} FROM {role}
-                """
-        )
+                """)
         if expensive:
-            s += dedent(
-                f"""
-                    REVOKE ALL PRIVILEGES ON TABLE privilege_source{i} FROM {role}
+            s += dedent(f"""
+                    REVOKE INSERT, SELECT, UPDATE, DELETE ON TABLE privilege_source{i} FROM {role}
                     REVOKE ALL PRIVILEGES ON CLUSTER privilege_cluster{i} FROM {role}
-                    """
-            )
+                    """)
 
         return s
 
@@ -123,15 +121,13 @@ class Privileges(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            dedent(
-                """
+            dedent("""
                 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 GRANT CREATEROLE ON SYSTEM TO materialize
 
                 > CREATE ROLE role_1
                 > CREATE ROLE role_2
-                """
-            )
+                """)
             + self._create_objects(1, expensive=True)
             + self._grant_privileges("role_1", 1, expensive=True)
             + self._grant_privileges("role_2", 1, expensive=True)
@@ -141,22 +137,18 @@ class Privileges(Check):
         return [
             Testdrive(s)
             for s in [
-                dedent(
-                    """
+                dedent("""
                     $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEROLE ON SYSTEM TO materialize
-                    """
-                )
+                    """)
                 + self._revoke_privileges("role_2", 1, expensive=True)
                 + self._create_objects(2)
                 + self._grant_privileges("role_1", 2)
                 + self._grant_privileges("role_2", 2),
-                dedent(
-                    """
+                dedent("""
                     $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                     GRANT CREATEROLE ON SYSTEM TO materialize
-                    """
-                )
+                    """)
                 + self._revoke_privileges("role_2", 2)
                 + self._create_objects(3)
                 + self._grant_privileges("role_1", 3)
@@ -171,8 +163,7 @@ class Privileges(Check):
             + self._grant_privileges("role_1", 4)
             + self._grant_privileges("role_2", 4)
             + self._revoke_privileges("role_2", 4)
-            + dedent(
-                """
+            + dedent("""
                 > SELECT name, unnest(privileges)::text FROM mz_databases WHERE name LIKE 'privilege_db%'
                 privilege_db1  materialize=UC/materialize
                 privilege_db2  materialize=UC/materialize
@@ -216,20 +207,20 @@ class Privileges(Check):
                 privilege_v2  materialize=r/materialize
                 privilege_v3  materialize=r/materialize
                 privilege_v4  materialize=r/materialize
-                privilege_v1  role_1=r/materialize
-                privilege_v2  role_1=r/materialize
-                privilege_v3  role_1=r/materialize
-                privilege_v4  role_1=r/materialize
+                privilege_v1  role_1=arwd/materialize
+                privilege_v2  role_1=arwd/materialize
+                privilege_v3  role_1=arwd/materialize
+                privilege_v4  role_1=arwd/materialize
 
                 > SELECT name, unnest(privileges)::text FROM mz_materialized_views WHERE name LIKE 'privilege_mv%'
                 privilege_mv1  materialize=r/materialize
                 privilege_mv2  materialize=r/materialize
                 privilege_mv3  materialize=r/materialize
                 privilege_mv4  materialize=r/materialize
-                privilege_mv1  role_1=r/materialize
-                privilege_mv2  role_1=r/materialize
-                privilege_mv3  role_1=r/materialize
-                privilege_mv4  role_1=r/materialize
+                privilege_mv1  role_1=arwd/materialize
+                privilege_mv2  role_1=arwd/materialize
+                privilege_mv3  role_1=arwd/materialize
+                privilege_mv4  role_1=arwd/materialize
 
                 > SELECT name, unnest(privileges)::text FROM mz_types WHERE name LIKE 'privilege_type%'
                 privilege_type1  =U/materialize
@@ -257,7 +248,7 @@ class Privileges(Check):
 
                 > SELECT name, unnest(privileges)::text FROM mz_sources WHERE name LIKE 'privilege_source%' AND type = 'load-generator'
                 privilege_source1 materialize=r/materialize
-                privilege_source1 role_1=r/materialize
+                privilege_source1 role_1=arwd/materialize
 
                 ! SELECT name, unnest(privileges)::text FROM mz_sinks WHERE name LIKE 'privilege_sink%'
                 contains: column "privileges" does not exist
@@ -284,7 +275,6 @@ class Privileges(Check):
                 privilege_kafka_conn2  role_1=U/materialize
                 privilege_kafka_conn3  role_1=U/materialize
                 privilege_kafka_conn4  role_1=U/materialize
-                """
-            )
+                """)
             + self._drop_objects(4)
         )

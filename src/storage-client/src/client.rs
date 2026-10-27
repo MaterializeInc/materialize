@@ -24,7 +24,7 @@ use mz_ore::assert_none;
 use mz_persist_client::batch::{BatchBuilder, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::{Codec, Codec64, StepForward};
-use mz_repr::{Diff, GlobalId, Row, TimestampManipulation};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
@@ -34,23 +34,19 @@ use mz_storage_types::sources::IngestionDescription;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use timely::PartialOrder;
-use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, MutableAntichain};
 use uuid::Uuid;
 
 use crate::statistics::{SinkStatisticsUpdate, SourceStatisticsUpdate};
 
 /// A client to a storage server.
-pub trait StorageClient<T = mz_repr::Timestamp>:
-    GenericClient<StorageCommand<T>, StorageResponse<T>>
-{
-}
+pub trait StorageClient: GenericClient<StorageCommand, StorageResponse> {}
 
-impl<C, T> StorageClient<T> for C where C: GenericClient<StorageCommand<T>, StorageResponse<T>> {}
+impl<C> StorageClient for C where C: GenericClient<StorageCommand, StorageResponse> {}
 
 #[async_trait]
-impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn StorageClient<T>> {
-    async fn send(&mut self, cmd: StorageCommand<T>) -> Result<(), anyhow::Error> {
+impl GenericClient<StorageCommand, StorageResponse> for Box<dyn StorageClient> {
+    async fn send(&mut self, cmd: StorageCommand) -> Result<(), anyhow::Error> {
         (**self).send(cmd).await
     }
 
@@ -59,7 +55,7 @@ impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn S
     /// This method is cancel safe. If `recv` is used as the event in a [`tokio::select!`]
     /// statement and some other branch completes first, it is guaranteed that no messages were
     /// received by this client.
-    async fn recv(&mut self) -> Result<Option<StorageResponse<T>>, anyhow::Error> {
+    async fn recv(&mut self) -> Result<Option<StorageResponse>, anyhow::Error> {
         // `GenericClient::recv` is required to be cancel safe.
         (**self).recv().await
     }
@@ -67,7 +63,7 @@ impl<T: Send> GenericClient<StorageCommand<T>, StorageResponse<T>> for Box<dyn S
 
 /// Commands related to the ingress and egress of collections.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum StorageCommand<T = mz_repr::Timestamp> {
+pub enum StorageCommand {
     /// Transmits connection meta information, before other commands are sent.
     Hello {
         nonce: Uuid,
@@ -89,8 +85,8 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// Enable compaction in storage-managed collections.
     ///
     /// A collection id and a frontier after which accumulations must be correct.
-    AllowCompaction(GlobalId, Antichain<T>),
-    RunSink(Box<RunSinkCommand<T>>),
+    AllowCompaction(GlobalId, Antichain<Timestamp>),
+    RunSink(Box<RunSinkCommand>),
     /// Run a dataflow which will ingest data from an external source and only __stage__ it in
     /// Persist.
     ///
@@ -108,7 +104,7 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     CancelOneshotIngestion(Uuid),
 }
 
-impl<T> StorageCommand<T> {
+impl StorageCommand {
     /// Returns whether this command instructs the installation of storage objects.
     pub fn installs_objects(&self) -> bool {
         use StorageCommand::*;
@@ -152,13 +148,23 @@ pub struct RunOneshotIngestion {
 
 /// A command that starts exporting the given sink description
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct RunSinkCommand<T> {
+pub struct RunSinkCommand {
     pub id: GlobalId,
-    pub description: StorageSinkDesc<CollectionMetadata, T>,
+    pub description: StorageSinkDesc<CollectionMetadata>,
 }
 
 /// A "kind" enum for statuses tracked by the health operator
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord
+)]
 pub enum Status {
     Starting,
     Running,
@@ -322,9 +328,9 @@ impl From<StatusUpdate> for AppendOnlyUpdate {
 
 /// Responses that the storage nature of a worker/dataflow can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum StorageResponse<T = mz_repr::Timestamp> {
+pub enum StorageResponse {
     /// A new upper frontier for the specified identifier.
-    FrontierUpper(GlobalId, Antichain<T>),
+    FrontierUpper(GlobalId, Antichain<Timestamp>),
     /// Punctuation indicates that no more responses will be transmitted for the specified id
     DroppedId(GlobalId),
     /// Batches that have been staged in Persist and maybe will be linked into a shard.
@@ -341,25 +347,27 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
 /// This helper type unifies the responses of multiple partitioned
 /// workers in order to present as a single worker.
 #[derive(Debug)]
-pub struct PartitionedStorageState<T> {
+pub struct PartitionedStorageState {
     /// Number of partitions the state machine represents.
     parts: usize,
     /// Upper frontiers for sources and sinks, both unioned across all partitions and from each
     /// individual partition.
-    uppers: BTreeMap<GlobalId, (MutableAntichain<T>, Vec<Option<Antichain<T>>>)>,
+    uppers: BTreeMap<
+        GlobalId,
+        (
+            MutableAntichain<Timestamp>,
+            Vec<Option<Antichain<Timestamp>>>,
+        ),
+    >,
     /// Staged batches from oneshot sources that will get appended by `environmentd`.
     oneshot_source_responses:
         BTreeMap<uuid::Uuid, BTreeMap<usize, Vec<Result<ProtoBatch, String>>>>,
 }
 
-impl<T> Partitionable<StorageCommand<T>, StorageResponse<T>>
-    for (StorageCommand<T>, StorageResponse<T>)
-where
-    T: timely::progress::Timestamp + Lattice,
-{
-    type PartitionedState = PartitionedStorageState<T>;
+impl Partitionable<StorageCommand, StorageResponse> for (StorageCommand, StorageResponse) {
+    type PartitionedState = PartitionedStorageState;
 
-    fn new(parts: usize) -> PartitionedStorageState<T> {
+    fn new(parts: usize) -> PartitionedStorageState {
         PartitionedStorageState {
             parts,
             uppers: BTreeMap::new(),
@@ -368,18 +376,15 @@ where
     }
 }
 
-impl<T> PartitionedStorageState<T>
-where
-    T: timely::progress::Timestamp,
-{
-    fn observe_command(&mut self, command: &StorageCommand<T>) {
+impl PartitionedStorageState {
+    fn observe_command(&mut self, command: &StorageCommand) {
         // Note that `observe_command` is quite different in `mz_compute_client`.
         // Compute (currently) only sends the command to 1 process,
         // but storage fans out to all workers, allowing the storage processes
         // to self-coordinate how commands and internal commands are ordered.
         //
         // TODO(guswynn): cluster-unification: consolidate this with compute.
-        let _ = match command {
+        match command {
             StorageCommand::Hello { .. } => {}
             StorageCommand::RunIngestion(ingestion) => {
                 self.insert_new_uppers(ingestion.description.collection_ids());
@@ -393,7 +398,7 @@ where
             | StorageCommand::AllowCompaction(_, _)
             | StorageCommand::RunOneshotIngestion(_)
             | StorageCommand::CancelOneshotIngestion { .. } => {}
-        };
+        }
     }
 
     /// Shared implementation for commands that install uppers with controllable behavior with
@@ -408,8 +413,8 @@ where
                 // TODO(guswynn): cluster-unification: fix this dangerous use of `as`, by
                 // merging the types that compute and storage use.
                 #[allow(clippy::as_conversions)]
-                frontier.update_iter(iter::once((T::minimum(), self.parts as i64)));
-                let part_frontiers = vec![Some(Antichain::from_elem(T::minimum())); self.parts];
+                frontier.update_iter(iter::once((Timestamp::MIN, self.parts as i64)));
+                let part_frontiers = vec![Some(Antichain::from_elem(Timestamp::MIN)); self.parts];
 
                 (frontier, part_frontiers)
             });
@@ -417,11 +422,8 @@ where
     }
 }
 
-impl<T> PartitionedState<StorageCommand<T>, StorageResponse<T>> for PartitionedStorageState<T>
-where
-    T: timely::progress::Timestamp + Lattice,
-{
-    fn split_command(&mut self, command: StorageCommand<T>) -> Vec<Option<StorageCommand<T>>> {
+impl PartitionedState<StorageCommand, StorageResponse> for PartitionedStorageState {
+    fn split_command(&mut self, command: StorageCommand) -> Vec<Option<StorageCommand>> {
         self.observe_command(&command);
 
         // Fan out to all processes (which will fan out to all workers).
@@ -432,8 +434,8 @@ where
     fn absorb_response(
         &mut self,
         shard_id: usize,
-        response: StorageResponse<T>,
-    ) -> Option<Result<StorageResponse<T>, anyhow::Error>> {
+        response: StorageResponse,
+    ) -> Option<Result<StorageResponse, anyhow::Error>> {
         match response {
             // Avoid multiple retractions of minimum time, to present as updates from one worker.
             StorageResponse::FrontierUpper(id, new_shard_upper) => {
@@ -446,8 +448,8 @@ where
                     Some(shard_upper) => shard_upper,
                     None => panic!("Reference to absent shard {shard_id} for collection {id}"),
                 };
-                frontier.update_iter(shard_upper.iter().map(|t| (t.clone(), -1)));
-                frontier.update_iter(new_shard_upper.iter().map(|t| (t.clone(), 1)));
+                frontier.update_iter(shard_upper.iter().map(|t| (*t, -1)));
+                frontier.update_iter(new_shard_upper.iter().map(|t| (*t, 1)));
                 shard_upper.join_assign(&new_shard_upper);
 
                 let new_upper = frontier.frontier();
@@ -524,9 +526,9 @@ where
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 /// A batch of updates to be fed to a local input
-pub struct Update<T = mz_repr::Timestamp> {
+pub struct Update {
     pub row: Row,
-    pub timestamp: T,
+    pub timestamp: Timestamp,
     pub diff: Diff,
 }
 
@@ -561,29 +563,27 @@ impl TableData {
 
 /// A collection of timestamp-less updates. As updates are added to the builder
 /// they are automatically spilled to blob storage.
-pub struct TimestamplessUpdateBuilder<K, V, T, D>
+pub struct TimestamplessUpdateBuilder<K, V, D>
 where
     K: Codec,
     V: Codec,
-    T: Timestamp + Lattice + Codec64,
     D: Codec64,
 {
-    builder: BatchBuilder<K, V, T, D>,
-    initial_ts: T,
+    builder: BatchBuilder<K, V, Timestamp, D>,
+    initial_ts: Timestamp,
 }
 
-impl<K, V, T, D> TimestamplessUpdateBuilder<K, V, T, D>
+impl<K, V, D> TimestamplessUpdateBuilder<K, V, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: TimestampManipulation + Lattice + Codec64 + Sync,
     D: Monoid + Ord + Codec64 + Send + Sync,
 {
     /// Create a new [`TimestamplessUpdateBuilder`] for the shard associated
     /// with the provided [`WriteHandle`].
-    pub fn new(handle: &WriteHandle<K, V, T, D>) -> Self {
-        let initial_ts = T::minimum();
-        let builder = handle.builder(Antichain::from_elem(initial_ts.clone()));
+    pub fn new(handle: &WriteHandle<K, V, Timestamp, D>) -> Self {
+        let initial_ts = Timestamp::MIN;
+        let builder = handle.builder(Antichain::from_elem(initial_ts));
         TimestamplessUpdateBuilder {
             builder,
             initial_ts,

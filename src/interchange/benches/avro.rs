@@ -11,7 +11,7 @@ use std::hint::black_box;
 use byteorder::{NetworkEndian, WriteBytesExt};
 use criterion::{Criterion, Throughput};
 use mz_avro::types::Value as AvroValue;
-use mz_interchange::avro::{Decoder, parse_schema};
+use mz_interchange::avro::{Decoder, WriterSchemaProvider, parse_schema};
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::date::Date;
 use tokio::runtime::Runtime;
@@ -244,7 +244,7 @@ pub fn bench_avro(c: &mut Criterion) {
   "connect.name": "tpch.tpch.lineitem.Envelope"
 }
 "#;
-    let schema = parse_schema(schema_str).unwrap();
+    let schema = parse_schema(schema_str, &[]).unwrap();
 
     fn since_epoch(days: i64) -> i32 {
         Date::from_unix_epoch(days.try_into().unwrap())
@@ -394,7 +394,13 @@ pub fn bench_avro(c: &mut Criterion) {
     buf.extend(mz_avro::to_avro_datum(&schema, record).unwrap());
     let len = u64::cast_from(buf.len());
 
-    let mut decoder = Decoder::new(schema_str, None, "avro_bench".to_string(), false).unwrap();
+    let mut decoder = Decoder::new(
+        schema_str,
+        &[],
+        WriterSchemaProvider::None,
+        "avro_bench".to_string(),
+    )
+    .unwrap();
 
     let mut bg = c.benchmark_group("avro");
     bg.throughput(Throughput::Bytes(len));

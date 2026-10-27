@@ -9,7 +9,7 @@
 
 import re
 from dataclasses import dataclass, replace
-from enum import Enum
+from enum import Enum, StrEnum
 from importlib import resources
 from pathlib import Path
 from typing import cast
@@ -45,16 +45,13 @@ class ExplainFormat(Enum):
         return "txt"
 
 
-class ExplainStage(str, Enum):
+class ExplainStage(StrEnum):
     RAW_PLAN = "RAW PLAN"
     DECORRELATED_PLAN = "DECORRELATED PLAN"
     LOCAL_PLAN = "LOCALLY OPTIMIZED PLAN"
     OPTIMIZED_PLAN = "OPTIMIZED PLAN"
     PHYSICAL_PLAN = "PHYSICAL PLAN"
     OPTIMIZER_TRACE = "OPTIMIZER TRACE"
-
-    def __str__(self):
-        return self.value
 
 
 @dataclass(frozen=True)
@@ -140,7 +137,7 @@ class ExplainOptionType(click.ParamType):
             raise ValueError(f"Bad explain option: {value}: {e!r}") from e
 
 
-class ItemType(str, Enum):
+class ItemType(StrEnum):
     CONNECTION = "connection"
     FUNCTION = "function"
     INDEX = "index"
@@ -411,7 +408,7 @@ class ArrangementSizesFile:
 def resource_path(name: str) -> Path:
     # NOTE: we have to do this cast because pyright is not comfortable with the
     # Traversable protocol.
-    return cast(Path, resources.files(__package__)) / name
+    return cast(Path, resources.files(__name__)) / name
 
 
 def info(msg: str, fg: str = "green") -> None:

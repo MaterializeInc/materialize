@@ -18,6 +18,10 @@ class Metabase(Service):
         super().__init__(
             name=name,
             config={
+                # Newer Metabase versions changed the setup API and renamed
+                # the bundled sample database, which breaks
+                # `test/metabase/smoketest`. Leaving at v0.41 until the
+                # smoketest is updated for the new API.
                 "image": "metabase/metabase:v0.41.4",
                 "ports": ["3000"],
                 "healthcheck": {

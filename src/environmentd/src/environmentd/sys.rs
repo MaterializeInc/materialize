@@ -10,7 +10,6 @@
 //! System support functions.
 
 use anyhow::Context;
-use nix::errno;
 use nix::sys::signal;
 use tracing::trace;
 
@@ -131,7 +130,7 @@ pub fn enable_termination_signal_cleanup() -> Result<(), anyhow::Error> {
 }
 
 unsafe extern "C" {
-    fn __llvm_profile_write_file() -> libc::c_int;
+    fn __llvm_profile_write_file() -> std::ffi::c_int;
 }
 
 extern "C" fn handle_sigusr2_signal(_: i32) {
@@ -149,9 +148,6 @@ extern "C" fn handle_termination_signal(signum: i32) {
     unsafe { signal::sigaction(signum.try_into().unwrap(), &action) }
         .unwrap_or_else(|_| panic!("failed to uninstall handler for {}", signum));
 
-    let ret = unsafe { libc::raise(signum) };
-    if ret == -1 {
-        let errno = errno::Errno::from_raw(errno::Errno::last_raw());
-        panic!("failed to re-raise signal {}: {}", signum, errno);
-    }
+    signal::raise(signum.try_into().unwrap())
+        .unwrap_or_else(|e| panic!("failed to re-raise signal {}: {}", signum, e));
 }

@@ -8,7 +8,7 @@ menu:
     identifier: idiomatic-materialize-appendix-example-orders
 ---
 
-The following sample data is used in the various Idiomaitc Materialize SQL
+The following sample data is used in the various Idiomatic Materialize SQL
 pages:
 
 ```mzsql

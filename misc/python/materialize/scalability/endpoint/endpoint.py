@@ -51,7 +51,7 @@ class Endpoint:
     def specified_target(self) -> str:
         return self._specified_target
 
-    def resolved_target(self) -> str:
+    def resolved_target(self) -> str | None:
         return self.specified_target()
 
     def host(self) -> str:

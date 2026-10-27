@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import re
 from random import Random
 from textwrap import dedent
 from typing import Any
@@ -35,9 +34,7 @@ class MySqlCdcBase:
         super().__init__(**kwargs)  # forward unused args to Check
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
@@ -67,9 +64,7 @@ class MySqlCdcBase:
                     USER mysql1{self.suffix},
                     PASSWORD SECRET mysqlpass1{self.suffix}
                   )
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -176,8 +171,7 @@ class MySqlCdcBase:
         ]
 
     def validate(self) -> Testdrive:
-        sql = dedent(
-            f"""
+        sql = dedent(f"""
             $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             GRANT SELECT ON mysql_source_tableA{self.suffix} TO materialize
             GRANT SELECT ON mysql_source_tableB{self.suffix} TO materialize
@@ -241,8 +235,7 @@ class MySqlCdcBase:
               - materialize.public.mysql_source_tablea{self.suffix}_primary_idx (*** full scan ***)
 
             Target cluster: quickstart
-            """
-        )
+            """)
 
         return Testdrive(sql)
 
@@ -262,9 +255,7 @@ class MySqlCdcNoWait(MySqlCdcBase, Check):
 @externally_idempotent(False)
 class MySqlCdcMzNow(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
@@ -301,9 +292,7 @@ class MySqlCdcMzNow(Check):
                 > CREATE MATERIALIZED VIEW mysql_mz_now_view AS
                   SELECT * FROM mysql_mz_now_table
                   WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '60' SECOND) * 1000)
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -339,9 +328,7 @@ class MySqlCdcMzNow(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT COUNT(*) FROM mysql_mz_now_table;
                 13
 
@@ -371,9 +358,7 @@ class MySqlCdcMzNow(Check):
                 $ mysql-execute name=mysql
                 INSERT INTO mysql_mz_now_table VALUES (NOW(), 'B3');
                 DELETE FROM mysql_mz_now_table WHERE f2 LIKE '%4%';
-                """
-            )
-        )
+                """))
 
 
 @externally_idempotent(False)
@@ -382,9 +367,7 @@ class MySqlBitType(Check):
         return self.base_version > MzVersion.parse_mz("v0.131.0-dev")
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
@@ -420,9 +403,7 @@ class MySqlBitType(Check):
                 # Return all rows
                 > CREATE MATERIALIZED VIEW mysql_bit_view AS
                   SELECT * FROM mysql_bit_table
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -446,9 +427,7 @@ class MySqlBitType(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT * FROM mysql_bit_table;
                 0 0
                 8 0
@@ -486,9 +465,7 @@ class MySqlBitType(Check):
                 30 1
                 1796 1
                 2047 0
-                """
-            )
-        )
+                """))
 
 
 @externally_idempotent(False)
@@ -497,9 +474,7 @@ class MySqlInvisibleColumn(Check):
         return self.base_version > MzVersion.parse_mz("v0.133.0-dev")
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
@@ -531,9 +506,7 @@ class MySqlInvisibleColumn(Check):
                 # Return all rows
                 > CREATE MATERIALIZED VIEW mysql_invisible_view AS
                   SELECT * FROM mysql_invisible_table
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -557,9 +530,7 @@ class MySqlInvisibleColumn(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT * FROM mysql_invisible_table;
                 1 0.1 2025-01-01 one
                 2 0.2 2025-02-02 two
@@ -587,10 +558,248 @@ class MySqlInvisibleColumn(Check):
                 1 0.1 2025-01-01 one
                 2 0.2 2025-02-02 two
                 3 0.3 2025-03-03 three
-                """
-            )
+                """))
+
+
+def _sum_range(lo: int, hi: int) -> int:
+    """Sum of the integers in [lo, hi]."""
+    return (lo + hi) * (hi - lo + 1) // 2
+
+
+@externally_idempotent(False)
+class MySqlCdcPkSnapshot(Check):
+    """Parallel PK-range snapshots across restarts and upgrades.
+
+    Tables with a single-column BIGINT and a single-column VARCHAR primary key
+    are snapshot on a multi-worker cluster, so the snapshot is split into
+    per-worker PK ranges. A source is created in each phase so the snapshot
+    runs on every version the scenario passes through. Validation asserts
+    exact counts, distinct PK counts and checksums, catching duplicated or
+    dropped ranges that a plain count can mask.
+    """
+
+    # The int table holds pk = 1..100000 with f2 = 3 * pk. Phase 1 deletes
+    # pks 1..10000, bumps f2 by 7 for pks 50001..60000 and inserts pks
+    # 100001..110000. Phase 2 deletes pks 20001..30000, bumps f2 by 11 for
+    # pks 70001..80000 and inserts pks 110001..120000.
+    INT_FINAL_COUNT = 100_000
+    INT_FINAL_SUM = (
+        3 * (_sum_range(10_001, 120_000) - _sum_range(20_001, 30_000))
+        + 7 * 10_000
+        + 11 * 10_000
+    )
+    # The text table holds pk = base-36 rendering of 1..50000 with f2 as the
+    # sequence value. Phase 1 deletes f2 1..5000 and moves f2 10001..15000 up
+    # by 1000000, phase 2 deletes f2 5001..10000 and moves f2 15001..20000 up
+    # by 1000000.
+    TEXT_FINAL_COUNT = 40_000
+    TEXT_FINAL_SUM = _sum_range(10_001, 50_000) + 1_000_000 * 10_000
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent(f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                # create the database if it does not exist yet but do not drop it
+                CREATE DATABASE IF NOT EXISTS public;
+                USE public;
+
+                CREATE USER mysql_pk_user IDENTIFIED BY 'mysql';
+                GRANT REPLICATION SLAVE ON *.* TO mysql_pk_user;
+                GRANT ALL ON public.* TO mysql_pk_user;
+
+                DROP TABLE IF EXISTS mysql_pk_ten;
+                CREATE TABLE mysql_pk_ten (f1 INTEGER);
+                INSERT INTO mysql_pk_ten VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
+
+                DROP TABLE IF EXISTS mysql_pk_int;
+                CREATE TABLE mysql_pk_int (pk BIGINT PRIMARY KEY, f2 BIGINT);
+                SET @i := 0;
+                INSERT INTO mysql_pk_int SELECT @i := @i + 1, @i * 3 FROM mysql_pk_ten a1, mysql_pk_ten a2, mysql_pk_ten a3, mysql_pk_ten a4, mysql_pk_ten a5, mysql_pk_ten a6 LIMIT 100000;
+
+                DROP TABLE IF EXISTS mysql_pk_text;
+                CREATE TABLE mysql_pk_text (pk VARCHAR(32) PRIMARY KEY, f2 BIGINT);
+                SET @j := 0;
+                INSERT INTO mysql_pk_text SELECT CONCAT('key-', LPAD(CONV(@j := @j + 1, 10, 36), 8, '0')), @j FROM mysql_pk_ten a1, mysql_pk_ten a2, mysql_pk_ten a3, mysql_pk_ten a4, mysql_pk_ten a5 LIMIT 50000;
+
+                > CREATE SECRET mysql_pk_pass AS 'mysql';
+                > CREATE CONNECTION mysql_pk_conn TO MYSQL (
+                    HOST 'mysql',
+                    USER mysql_pk_user,
+                    PASSWORD SECRET mysql_pk_pass
+                  )
+
+                # A multi-worker cluster so the snapshots split into per-worker
+                # PK ranges instead of the single-worker whole-table read.
+                > CREATE CLUSTER mysql_pk_cluster SIZE 'scale=1,workers=4', REPLICATION FACTOR 1
+
+                > CREATE SOURCE mysql_pk_source1
+                  IN CLUSTER mysql_pk_cluster
+                  FROM MYSQL CONNECTION mysql_pk_conn;
+                > CREATE TABLE mysql_pk_intA FROM SOURCE mysql_pk_source1 (REFERENCE public.mysql_pk_int);
+                > CREATE TABLE mysql_pk_textA FROM SOURCE mysql_pk_source1 (REFERENCE public.mysql_pk_text);
+
+                > CREATE DEFAULT INDEX ON mysql_pk_intA;
+
+                > SELECT COUNT(*) FROM mysql_pk_intA
+                100000
+                > SELECT COUNT(*) FROM mysql_pk_textA
+                50000
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                DELETE FROM mysql_pk_int WHERE pk BETWEEN 1 AND 10000;
+                UPDATE mysql_pk_int SET f2 = f2 + 7 WHERE pk BETWEEN 50001 AND 60000;
+                SET @i := 100000;
+                INSERT INTO mysql_pk_int SELECT @i := @i + 1, @i * 3 FROM mysql_pk_ten a1, mysql_pk_ten a2, mysql_pk_ten a3, mysql_pk_ten a4 LIMIT 10000;
+                DELETE FROM mysql_pk_text WHERE f2 BETWEEN 1 AND 5000;
+                UPDATE mysql_pk_text SET f2 = f2 + 1000000 WHERE f2 BETWEEN 10001 AND 15000;
+
+                > CREATE SOURCE mysql_pk_source2
+                  IN CLUSTER mysql_pk_cluster
+                  FROM MYSQL CONNECTION mysql_pk_conn;
+                > CREATE TABLE mysql_pk_intB FROM SOURCE mysql_pk_source2 (REFERENCE public.mysql_pk_int);
+
+                > SELECT COUNT(*) FROM mysql_pk_intB
+                100000
+                """,
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                DELETE FROM mysql_pk_int WHERE pk BETWEEN 20001 AND 30000;
+                UPDATE mysql_pk_int SET f2 = f2 + 11 WHERE pk BETWEEN 70001 AND 80000;
+                SET @i := 110000;
+                INSERT INTO mysql_pk_int SELECT @i := @i + 1, @i * 3 FROM mysql_pk_ten a1, mysql_pk_ten a2, mysql_pk_ten a3, mysql_pk_ten a4 LIMIT 10000;
+                DELETE FROM mysql_pk_text WHERE f2 BETWEEN 5001 AND 10000;
+                UPDATE mysql_pk_text SET f2 = f2 + 1000000 WHERE f2 BETWEEN 15001 AND 20000;
+
+                > CREATE SOURCE mysql_pk_source3
+                  IN CLUSTER mysql_pk_cluster
+                  FROM MYSQL CONNECTION mysql_pk_conn;
+                > CREATE TABLE mysql_pk_intC FROM SOURCE mysql_pk_source3 (REFERENCE public.mysql_pk_int);
+
+                > SELECT COUNT(*) FROM mysql_pk_intC
+                100000
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        checks = "\n".join(dedent(f"""
+                > SELECT COUNT(*), COUNT(DISTINCT pk), SUM(f2) FROM {table};
+                {self.INT_FINAL_COUNT} {self.INT_FINAL_COUNT} {self.INT_FINAL_SUM}
+                """) for table in ["mysql_pk_intA", "mysql_pk_intB", "mysql_pk_intC"])
+        return Testdrive(
+            dedent("""
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                GRANT SELECT ON mysql_pk_intA TO materialize
+                GRANT SELECT ON mysql_pk_intB TO materialize
+                GRANT SELECT ON mysql_pk_intC TO materialize
+                GRANT SELECT ON mysql_pk_textA TO materialize
+                """)
+            + checks
+            + dedent(f"""
+                > SELECT COUNT(*), COUNT(DISTINCT pk), SUM(f2) FROM mysql_pk_textA;
+                {self.TEXT_FINAL_COUNT} {self.TEXT_FINAL_COUNT} {self.TEXT_FINAL_SUM}
+
+                # The primary key information has been propagated from MySQL
+                > SELECT key FROM (SHOW INDEXES ON mysql_pk_intA);
+                {{pk}}
+                """)
         )
 
 
-def remove_target_cluster_from_explain(sql: str) -> str:
-    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)
+@externally_idempotent(False)
+class MySqlCdcPkSnapshotNoWait(Check):
+    """A large parallel PK-range snapshot that is never awaited, so restart,
+    upgrade and 0dt scenarios can interrupt it mid-flight. The re-run snapshot
+    plus replication must still converge to exact, duplicate-free contents.
+    """
+
+    # pk = 1..1000000 with f2 = 3 * pk. Phase 1 deletes pks 1..100000 and
+    # inserts pks 1000001..1050000. Phase 2 deletes pks 100001..200000 and
+    # bumps f2 by 5 for pks 500001..600000.
+    FINAL_COUNT = 850_000
+    FINAL_SUM = 3 * _sum_range(200_001, 1_050_000) + 5 * 100_000
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(dedent(f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                # create the database if it does not exist yet but do not drop it
+                CREATE DATABASE IF NOT EXISTS public;
+                USE public;
+
+                CREATE USER mysql_pk_nw_user IDENTIFIED BY 'mysql';
+                GRANT REPLICATION SLAVE ON *.* TO mysql_pk_nw_user;
+                GRANT ALL ON public.* TO mysql_pk_nw_user;
+
+                DROP TABLE IF EXISTS mysql_pk_nw_ten;
+                CREATE TABLE mysql_pk_nw_ten (f1 INTEGER);
+                INSERT INTO mysql_pk_nw_ten VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
+
+                DROP TABLE IF EXISTS mysql_pk_nowait;
+                CREATE TABLE mysql_pk_nowait (pk BIGINT PRIMARY KEY, f2 BIGINT);
+                SET @i := 0;
+                INSERT INTO mysql_pk_nowait SELECT @i := @i + 1, @i * 3 FROM mysql_pk_nw_ten a1, mysql_pk_nw_ten a2, mysql_pk_nw_ten a3, mysql_pk_nw_ten a4, mysql_pk_nw_ten a5, mysql_pk_nw_ten a6 LIMIT 1000000;
+
+                > CREATE SECRET mysql_pk_nw_pass AS 'mysql';
+                > CREATE CONNECTION mysql_pk_nw_conn TO MYSQL (
+                    HOST 'mysql',
+                    USER mysql_pk_nw_user,
+                    PASSWORD SECRET mysql_pk_nw_pass
+                  )
+
+                > CREATE CLUSTER mysql_pk_nw_cluster SIZE 'scale=1,workers=4', REPLICATION FACTOR 1
+
+                # No wait for the snapshot anywhere before validate(), so that
+                # the scenario's restarts can land while it is still running.
+                > CREATE SOURCE mysql_pk_nw_source
+                  IN CLUSTER mysql_pk_nw_cluster
+                  FROM MYSQL CONNECTION mysql_pk_nw_conn;
+                > CREATE TABLE mysql_pk_nowait FROM SOURCE mysql_pk_nw_source (REFERENCE public.mysql_pk_nowait);
+                """))
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                DELETE FROM mysql_pk_nowait WHERE pk BETWEEN 1 AND 100000;
+                SET @i := 1000000;
+                INSERT INTO mysql_pk_nowait SELECT @i := @i + 1, @i * 3 FROM mysql_pk_nw_ten a1, mysql_pk_nw_ten a2, mysql_pk_nw_ten a3, mysql_pk_nw_ten a4, mysql_pk_nw_ten a5 LIMIT 50000;
+                """,
+                f"""
+                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
+
+                $ mysql-execute name=mysql
+                USE public;
+                DELETE FROM mysql_pk_nowait WHERE pk BETWEEN 100001 AND 200000;
+                UPDATE mysql_pk_nowait SET f2 = f2 + 5 WHERE pk BETWEEN 500001 AND 600000;
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(dedent(f"""
+                $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
+                GRANT SELECT ON mysql_pk_nowait TO materialize
+
+                > SELECT COUNT(*), COUNT(DISTINCT pk), SUM(f2) FROM mysql_pk_nowait;
+                {self.FINAL_COUNT} {self.FINAL_COUNT} {self.FINAL_SUM}
+                """))

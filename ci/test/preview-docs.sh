@@ -18,14 +18,28 @@ if [[ "$BUILDKITE_PULL_REQUEST" = false ]]; then
     exit 0
 fi
 
+# Hugo 0.152.2 has a data race between pages that include the same headless
+# page, which aborts a build with "concurrent map iteration and map write"
+# (QAR-260). Rendering pages on one worker avoids it.
+# TODO: Remove this once ci/builder/Dockerfile installs Hugo 0.153.0 or later,
+# which fixed the race.
+export HUGO_NUMWORKERMULTIPLIER=1
+
 cd doc/user
-hugo --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
+
+# Build main docs to public/
+hugo --gc --environment preview --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
+
+# Build skill docs to public/markdown-docs/. --environment preview makes their
+# absolute links point at preview.materialize.com, like the HTML build above.
+hugo --config config.toml,config.skill.toml --gc --environment preview --baseURL "/materialize/$BUILDKITE_PULL_REQUEST" --disableKinds 404,sitemap,robotsTXT,taxonomy
 
 cat > config.deployment.toml <<EOF
 [[deployment.targets]]
 name = "preview"
 url = "s3://materialize-website-previews?region=us-east-1&prefix=materialize/$BUILDKITE_PULL_REQUEST/"
 EOF
+# Single deploy: public/ contains both main site and markdown-docs/
 hugo deploy --config config.toml,config.deployment.toml --force
 
 curl -fsSL \
@@ -38,3 +52,11 @@ curl -fsSL \
         \"target_url\": \"https://preview.materialize.com/materialize/$BUILDKITE_PULL_REQUEST/\",\
         \"context\": \"preview-docs\"\
     }"
+
+# Report on the preview's Markdown. The check does not fail the build.
+preview_url="https://preview.materialize.com/materialize/$BUILDKITE_PULL_REQUEST"
+
+ci_uncollapsed_heading "Checking the Markdown docs' sizes and links"
+if ! ../../ci/test/check-docs-markdown.py public/markdown-docs "$preview_url/markdown-docs/"; then
+    echo "check-docs-markdown found problems; see above. This check does not fail the build."
+fi

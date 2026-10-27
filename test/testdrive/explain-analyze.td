@@ -47,6 +47,8 @@ materialize.blue.t_idx      <XXX>        <XXX>
 
 > DROP SCHEMA green CASCADE;
 
+> SET SCHEMA = blue;
+
 # should still get output for blue!
 > EXPLAIN ANALYZE MEMORY FOR INDEX materialize.blue.t_idx;
 operator                      total_memory   total_records
@@ -66,23 +68,23 @@ materialize.blue.t_idx      <XXX>        <XXX>
 > EXPLAIN ANALYZE CPU FOR INDEX mz_internal.mz_console_cluster_utilization_overview_ind;
 operator                     total_elapsed
 -----------------------------------------
-"Arrange (#17{cluster_id})" <XXX>
+"Arrange (#20{cluster_id})" <XXX>
 "  Stream <XXX>" <null>
 "Returning Map/Filter/Project" <XXX>
 "  Union" <XXX>
-"    Read l4" <XXX>
+"    Read l5" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Consolidating Union" <XXX>
-"        Read l3" <XXX>
+"        Read l4" <XXX>
 "        Negate Diffs" <XXX>
-"          Read l4" <XXX>
-"With l4 = Differential Join %1 » %0" <XXX>
+"          Read l5" <XXX>
+"With l5 = Differential Join %1 » %0" <XXX>
 "  Arrange (#1, #0)" <XXX>
-"    Non-incremental GroupAggregate`" <XXX>
+"    Non-incremental GroupAggregate" <XXX>
 "      Arranged <XXX>" <XXX>
-"  Arrange (#0{replica_id}, #3{bucket_start})" <XXX>
-"    Stream l3" <null>
-"l3 = Differential Join %1 » %0" <XXX>
+"  Arrange (#1{replica_id}, #3{bucket_start})" <XXX>
+"    Stream l4" <null>
+"l4 = Differential Join %1 » %0" <XXX>
 "  Arrange (#0, #1)" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
@@ -90,45 +92,130 @@ operator                     total_elapsed
 "          Arranged <XXX>" <null>
 "          Arrange (#0{replica_id})" <XXX>
 "            Distinct GroupAggregate" <XXX>
-"              Read l2" <XXX>
-"  Arrange (#0, #3)" <XXX>
-"    Stream l2" <null>
-"l2 = Delta Join [%0 » %1 » %2 » %3 » %4 » %5][%1 » %0 » %2 » %3 » %4 » %5][%2 » %0 » %1 » %3 » %4 » %5][%3 » %0 » %1 » %2 » %4 » %5][%4 » %0 » %1 » %2 » %3 » %5][%5 » %0 » %1 » %2 » %3 » %4]" <XXX>
+"              Read l3" <XXX>
+"  Arrange (#1, #3)" <XXX>
+"    Stream l3" <null>
+"l3 = Delta Join [%0 » %1 » %2 » %3 » %4 » %5] [%1 » %0 » %2 » %3 » %4 » %5] [%2 » %0 » %1 » %3 » %4 » %5] [%3 » %0 » %1 » %2 » %4 » %5] [%4 » %0 » %1 » %2 » %3 » %5] [%5 » %0 » %1 » %2 » %3 » %4]" <XXX>
 "  Arrange (#0{replica_id})" <XXX>
 "    Arranged l0" <null>
-"  Arrange (#0{replica_id}, #3{bucket_start})" <XXX>
+"  Arrange (#1{replica_id}, #6{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
-"        Read l1" <XXX>
-"  Arrange (#0{replica_id}, #4{bucket_start})" <XXX>
+"        Read l2" <XXX>
+"  Arrange (#1{replica_id}, #4{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
-"        Read l1" <XXX>
-"  Arrange (#0{replica_id}, #3{bucket_start})" <XXX>
+"        Read l2" <XXX>
+"  Arrange (#1{replica_id}, #3{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
-"        Read l1" <XXX>
-"  Arrange (#0{replica_id}, #3{bucket_start})" <XXX>
+"        Read l2" <XXX>
+"  Arrange (#1{replica_id}, #3{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
-"        Read l1" <XXX>
-"  Arrange (#0{replica_id}) (#0{replica_id}, #3{bucket_start})" <XXX>
+"        Read l2" <XXX>
+"  Arrange (#1{replica_id}) (#1{replica_id}, #3{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
-"        Read l1" <XXX>
-"l1 = Differential Join %0 » %1" <XXX>
-"  Arrange (#1{replica_id})" <XXX>
-"    Map/Filter/Project" <XXX>
-"      Accumulable GroupAggregate" <XXX>
-"        Map/Filter/Project" <XXX>
-"          Delta Join [%0 » %2 » %1][%1 » %0 » %2][%2 » %0 » %1]" <XXX>
-"            Arranged <XXX>" <null>
-"            Arranged <XXX>" <null>
-"            Arrange (#0{replica_id}) (#1{size})" <XXX>
-"              Arranged l0" <XXX>
-"  Arrange (#0{replica_id})" <XXX>
-"    Arranged l0" <XXX>
+"        Read l2" <XXX>
+"l2 = Differential Join %0 » %1" <XXX>
+"  Accumulable GroupAggregate" <XXX>
+"    Read l1" <XXX>
+"  Bucketed Hierarchical GroupAggregate (buckets: 268435456 16777216 1048576 65536 4096 256 16)" <XXX>
+"    Read l1" <XXX>
+"l1 = Map/Filter/Project" <XXX>
+"  Delta Join [%0 » %2 » %1] [%1 » %0 » %2] [%2 » %0 » %1]" <XXX>
+"    Arranged <XXX>" <null>
+"    Arranged <XXX>" <null>
+"    Arrange (#0{replica_id}) (#1{size})" <XXX>
+"      Arranged l0" <XXX>
 "l0 = Distinct GroupAggregate" <XXX>
 "  Union" <XXX>
 "    Arranged <XXX>" <XXX>
 "    Arranged <XXX>" <XXX>
+
+> RESET CLUSTER
+
+# regression test for https://github.com/MaterializeInc/database-issues/issues/11260
+> DROP TABLE t;
+
+> CREATE TABLE t(x INT);
+
+> INSERT INTO t VALUES (5);
+
+> CREATE MATERIALIZED VIEW mv1 AS SELECT SUM(x) FROM t;
+
+> CREATE MATERIALIZED VIEW "Mv2" AS SELECT SUM(x) FROM t;
+
+> EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW mv1;
+"Returning Union"  <null>  <null>
+"  Unarranged Raw Stream"  <null>  <null>
+"  Map/Filter/Project"  <null>  <null>
+"    Consolidating Union"  <null>  <null>
+"      Constant (1 rows)"  <null>  <null>
+"      Negate Diffs"  <null>  <null>
+"        Arranged l0"  <null>  <null>
+"    Arranged l0"  <null>  <null>
+"With l0 = Accumulable GroupAggregate"  <XXX>  2
+"  Stream <XXX>"  <null>  <null>
+
+> EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW "Mv2";
+"Returning Union"  <null>  <null>
+"  Unarranged Raw Stream"  <null>  <null>
+"  Map/Filter/Project"  <null>  <null>
+"    Consolidating Union"  <null>  <null>
+"      Constant (1 rows)"  <null>  <null>
+"      Negate Diffs"  <null>  <null>
+"        Arranged l0"  <null>  <null>
+"    Arranged l0"  <null>  <null>
+"With l0 = Accumulable GroupAggregate"  <XXX>  2
+"  Stream <XXX>"  <null>  <null>
+
+# regression test for https://github.com/MaterializeInc/database-issues/issues/11293
+> CREATE MATERIALIZED VIEW "it's" AS SELECT SUM(x) FROM t;
+
+> EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW "it's";
+"Returning Union"  <null>  <null>
+"  Unarranged Raw Stream"  <null>  <null>
+"  Map/Filter/Project"  <null>  <null>
+"    Consolidating Union"  <null>  <null>
+"      Constant (1 rows)"  <null>  <null>
+"      Negate Diffs"  <null>  <null>
+"        Arranged l0"  <null>  <null>
+"    Arranged l0"  <null>  <null>
+"With l0 = Accumulable GroupAggregate"  <XXX>  2
+"  Stream <XXX>"  <null>  <null>
+
+# Regression test for SQL-756: EXPLAIN ANALYZE CPU counts the time of operators
+# nested in a region once. Hierarchical MIN/MAX renders inside two nested
+# regions, so double counting puts the reported total far above the time the
+# whole dataflow ran, which its root operator measures. The check is an upper
+# bound: it catches over-counting of that size, not small errors in either
+# direction.
+> CREATE TABLE cpu_t (k int, g int, v int);
+
+> INSERT INTO cpu_t SELECT x, x % 100, x FROM generate_series(1, 100000) x;
+
+> CREATE VIEW cpu_max AS SELECT g, max(v) AS m FROM cpu_t GROUP BY g;
+
+> CREATE INDEX cpu_max_idx ON cpu_max (g);
+
+> SELECT count(*) FROM cpu_max;
+100
+
+$ set-from-sql var=cpu-sql
+EXPLAIN ANALYZE CPU FOR INDEX cpu_max_idx AS SQL
+
+> CREATE TEMPORARY VIEW cpu_explained AS ${cpu-sql}
+
+> SELECT
+    (SELECT sum(extract(epoch FROM total_elapsed)) FROM cpu_explained)
+    <=
+    (SELECT sum(se.elapsed_ns) / 1e9
+     FROM mz_catalog.mz_indexes i
+     JOIN mz_introspection.mz_compute_exports ce ON ce.export_id = i.id
+     JOIN mz_introspection.mz_dataflow_addresses a
+       ON a.address = list[ce.dataflow_id]::uint8 list
+     JOIN mz_introspection.mz_scheduling_elapsed se ON se.id = a.id
+     WHERE i.name = 'cpu_max_idx');
+true

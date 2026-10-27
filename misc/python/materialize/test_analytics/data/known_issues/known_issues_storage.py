@@ -17,9 +17,10 @@ class KnownIssuesStorage(BaseDataStorage):
         self,
         issue: KnownGitHubIssue,
     ) -> None:
-        issue_str = (
-            f"{issue.info['repository_url'].split('/')[-1]}/{issue.info['number']}"
-        )
+        if issue.info.get("source") == "linear":
+            issue_str = str(issue.info["number"])
+        else:
+            issue_str = f"{issue.info['repository']['nameWithOwner'].split('/')[-1]}/{issue.info['number']}"
         sql_statements = [
             f"""
             UPDATE issue
@@ -42,4 +43,6 @@ class KnownIssuesStorage(BaseDataStorage):
             """,
         ]
 
-        self.database_connector.add_update_statements(sql_statements)
+        # The issue_id guard makes the INSERT safe to replay, and the UPDATE
+        # assigns fixed values.
+        self.database_connector.add_update_statements(sql_statements, idempotent=True)

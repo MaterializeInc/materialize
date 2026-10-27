@@ -19,8 +19,9 @@
 //!   set the value of `Config`.
 //!
 //! ```
-//! # use mz_dyncfg::{Config, ConfigSet};
-//! const FOO: Config<bool> = Config::new("foo", false, "description of foo");
+//! # use mz_dyncfg::{Config, ConfigSet, ParameterScope};
+//! const FOO: Config<bool> =
+//!     Config::new("foo", false, "description of foo", ParameterScope::Environment);
 //! fn bar(cfg: &ConfigSet) {
 //!     assert_eq!(FOO.get(&cfg), false);
 //! }
@@ -65,6 +66,114 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
+/// The scope at which a synced parameter's value may be overridden.
+///
+/// Every synced parameter declares its scope class as part of its definition.
+/// The declaration is the single source of truth for which contexts the
+/// LaunchDarkly sync loop evaluates and where the resolved value may be
+/// overridden. See `doc/developer/design/20260609_scoped_feature_flags.md`.
+///
+/// [`Environment`] is the safe declaration, and the right one when in doubt. It
+/// preserves the unscoped behavior of a single value everywhere. A finer scope
+/// *enables* divergence, so declaring one asserts that divergence is both safe
+/// and useful for this config. Getting that wrong introduces a way to break an
+/// environment that did not previously exist, while erring toward
+/// [`Environment`] only forgoes a capability. Prefer forgoing the capability.
+///
+/// Where a config is *realized* is therefore a necessary condition for a finer
+/// scope, not a sufficient one. A config qualifies for [`Replica`] only if it is
+/// realized per replica, and should be declared [`Replica`] only if it also
+/// tunes that replica process's own resource usage (memory, CPU, I/O,
+/// concurrency, timing) and cannot change what a dataflow produces, what reaches
+/// durable state, or anything externally visible. `lgalloc`, the memory limiter,
+/// the spill and pager knobs, and the timely zero-copy settings are the shape to
+/// match.
+///
+/// In particular, declare [`Environment`] for a flag selecting a different
+/// implementation or code path whose output-equivalence is an assumption rather
+/// than a guarantee. Where the assumption holds, [`Environment`] costs nothing.
+/// Where it does not, a per-replica rollout turns one bug into query results
+/// that differ by which replica served them.
+///
+/// Which contexts a config can be realized in:
+///
+/// - A config realized inside a `clusterd` process is a [`Replica`] candidate.
+///   That covers the compute and storage worker config sets and `mz_metrics`,
+///   which the per-replica dyncfg push reaches. `environmentd` may read such a
+///   config too, for its own process. That read legitimately sees the
+///   environment-wide value.
+/// - A config that `environmentd` resolves for *one specific replica*, whether
+///   it ships the value there or acts on it itself, is also a candidate. The
+///   read site has to resolve that replica's override, either with
+///   [`Config::get_with_overrides`] or from a per-replica config set. Without
+///   that, the override never takes effect and the declaration is a silent
+///   no-op.
+/// - A config realized in `environmentd` with no single replica in scope is
+///   [`Environment`]. So is every `balancerd` config. `balancerd` syncs
+///   LaunchDarkly itself, against a `balancer` context keyed by cloud provider,
+///   region and build version, and has no environment, cluster or replica
+///   beneath it to target.
+/// - A config consumed at plan time, once per cluster, is [`Cluster`].
+///
+/// NOTE: a config whose value must agree across the replicas of one cluster
+/// (because they render the same dataflow and their outputs are compared) is
+/// [`Environment`] even when it is read on `clusterd`. Per-replica divergence in
+/// *how* a dataflow is rendered is fine, in *what* it produces is not.
+///
+/// NOTE: persist configs are [`Environment`] as a class, even though the persist
+/// client runs on `clusterd` and the per-replica push reaches its config set.
+/// The same client code also runs in `environmentd`, and every copy of it acts
+/// on shared durable state. A replica-scoped persist config could never reach
+/// the `environmentd` client, so a rollout targeting replicas would leave a
+/// shard's other writer on the old value indefinitely. [`Environment`] is the
+/// only scope covering every persist client in an environment.
+///
+/// [`Cluster`]: ParameterScope::Cluster
+/// [`Environment`]: ParameterScope::Environment
+/// [`Replica`]: ParameterScope::Replica
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParameterScope {
+    /// Environment-wide only; no cluster/replica overrides. The default, so all
+    /// existing synced parameters are unchanged.
+    ///
+    /// NOTE: this names the coarsest targeting granularity, not the
+    /// `environmentd` process. A config a process other than `environmentd`
+    /// resolves for itself, with nothing finer beneath it, is `Environment`.
+    Environment,
+    /// Cluster-coherent: env-wide base plus per-cluster overrides. Evaluated
+    /// with the `cluster` context (replica-free) and resolved at plan time via
+    /// `OptimizerFeatureOverrides`. e.g. optimizer features.
+    Cluster,
+    /// Replica-local: env-wide base plus per-replica / per-size-family
+    /// overrides. Evaluated with the `replica` context and resolved at the
+    /// controller's per-replica dyncfg push. e.g. `lgalloc`, persist pager, LZ4.
+    Replica,
+}
+
+impl Default for ParameterScope {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl ParameterScope {
+    /// The scope applied to a parameter that does not declare one: environment-
+    /// wide, i.e. no cluster/replica overrides. A `const` so it can be used in
+    /// the `const` contexts (system-var constructors, the `feature_flags!`
+    /// macro) where [`Default::default`] is unavailable.
+    pub const DEFAULT: ParameterScope = ParameterScope::Environment;
+
+    /// Returns the lowercase string name of this scope, as surfaced in
+    /// documentation and introspection.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            ParameterScope::Environment => "environment",
+            ParameterScope::Cluster => "cluster",
+            ParameterScope::Replica => "replica",
+        }
+    }
+}
+
 /// A handle to a dynamically updatable configuration value.
 ///
 /// This represents a strongly-typed named config of type `T`. It may be
@@ -78,6 +187,7 @@ pub struct Config<D: ConfigDefault> {
     name: &'static str,
     desc: &'static str,
     default: D,
+    scope: ParameterScope,
 }
 
 impl<D: ConfigDefault> Config<D> {
@@ -85,6 +195,11 @@ impl<D: ConfigDefault> Config<D> {
     ///
     /// It is best practice, but not strictly required, for the name to be
     /// globally unique within a process.
+    ///
+    /// `scope` declares where the config's value may be overridden. It is a
+    /// required parameter rather than a builder step so that every new config
+    /// makes the choice deliberately. [`ParameterScope`] documents how to pick
+    /// one from the config's read sites.
     ///
     /// TODO(cfg): Add some sort of categorization of config purpose here: e.g.
     /// limited-lifetime rollout flag, CYA, magic number that we never expect to
@@ -95,11 +210,17 @@ impl<D: ConfigDefault> Config<D> {
     /// TODO(cfg): See if we can make this more Rust-y and take these params as
     /// a struct (the obvious thing hits some issues with const combined with
     /// Drop).
-    pub const fn new(name: &'static str, default: D, desc: &'static str) -> Self {
+    pub const fn new(
+        name: &'static str,
+        default: D,
+        desc: &'static str,
+        scope: ParameterScope,
+    ) -> Self {
         Config {
             name,
             default,
             desc,
+            scope,
         }
     }
 
@@ -111,6 +232,11 @@ impl<D: ConfigDefault> Config<D> {
     /// The description of this config.
     pub fn desc(&self) -> &str {
         self.desc
+    }
+
+    /// The [`ParameterScope`] of this config.
+    pub fn scope(&self) -> ParameterScope {
+        self.scope
     }
 
     /// The default value of this config.
@@ -129,6 +255,38 @@ impl<D: ConfigDefault> Config<D> {
     /// on this ordering.
     pub fn get(&self, set: &ConfigSet) -> D::ConfigType {
         D::ConfigType::from_val(self.shared(set).load())
+    }
+
+    /// Returns the value of this config within the given set, with `overrides`
+    /// layered on top.
+    ///
+    /// This is how `environmentd` must read a [`ParameterScope::Replica`] config
+    /// whose value it ships to one specific replica: the set holds the
+    /// environment-wide value and `overrides` holds that replica's scoped
+    /// overrides, which win. Reading such a config with [`Self::get`] instead
+    /// makes its scope declaration a silent no-op.
+    ///
+    /// Panics if this config was not previously registered to the set. An
+    /// override whose type does not match the config's is logged and ignored,
+    /// rather than panicking a read site that is often on a critical path.
+    pub fn get_with_overrides(
+        &self,
+        set: &ConfigSet,
+        overrides: Option<&ConfigUpdates>,
+    ) -> D::ConfigType {
+        let val = self.shared(set).load();
+        let val = match overrides.and_then(|o| o.updates.get(self.name)) {
+            None => val,
+            Some(o) if std::mem::discriminant(o) == std::mem::discriminant(&val) => o.clone(),
+            Some(o) => {
+                error!(
+                    "override {:?} for config {} does not match its type {:?}",
+                    o, self.name, val
+                );
+                val
+            }
+        };
+        D::ConfigType::from_val(val)
     }
 
     /// Returns a handle to the value of this config in the given set.
@@ -226,6 +384,7 @@ impl ConfigSet {
         let config = ConfigEntry {
             name: config.name,
             desc: config.desc,
+            scope: config.scope,
             default: default.clone(),
             val: ConfigValAtomic::from(default),
         };
@@ -251,6 +410,7 @@ impl ConfigSet {
 pub struct ConfigEntry {
     name: &'static str,
     desc: &'static str,
+    scope: ParameterScope,
     default: ConfigVal,
     val: ConfigValAtomic,
 }
@@ -266,11 +426,34 @@ impl ConfigEntry {
         self.desc
     }
 
+    /// The [`ParameterScope`] of this config.
+    pub fn scope(&self) -> ParameterScope {
+        self.scope
+    }
+
     /// The default value of this config.
     ///
     /// This value is never updated.
     pub fn default(&self) -> &ConfigVal {
         &self.default
+    }
+
+    /// Parses a string into a [`ConfigVal`] of this config's type.
+    ///
+    /// The type-erased analog of [`Config::parse_val`], dispatching on the
+    /// variant of this entry's value.
+    pub fn parse_val(&self, val: &str) -> Result<ConfigVal, String> {
+        match self.default {
+            ConfigVal::Bool(_) => <bool as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::U32(_) => <u32 as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::Usize(_) => <usize as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::OptUsize(_) => <Option<usize> as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::F64(_) => <f64 as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::String(_) => <String as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::OptString(_) => <Option<String> as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::Duration(_) => <Duration as ConfigType>::parse(val).map(Into::into),
+            ConfigVal::Json(_) => <serde_json::Value as ConfigType>::parse(val).map(Into::into),
+        }
     }
 
     /// The value of this config in the set.
@@ -327,6 +510,8 @@ pub enum ConfigVal {
     F64(f64),
     /// A `String` value.
     String(String),
+    /// An `Option<String>` value
+    OptString(Option<String>),
     /// A `Duration` value.
     Duration(Duration),
     /// A JSON value.
@@ -372,6 +557,7 @@ enum ConfigValAtomic {
     // Shared via to_bits/from_bits so we can use the atomic instead of Mutex.
     F64(Arc<AtomicU64>),
     String(Arc<RwLock<String>>),
+    OptString(Arc<RwLock<Option<String>>>),
     Duration(Arc<RwLock<Duration>>),
     Json(Arc<RwLock<serde_json::Value>>),
 }
@@ -385,6 +571,7 @@ impl From<ConfigVal> for ConfigValAtomic {
             ConfigVal::OptUsize(x) => ConfigValAtomic::OptUsize(Arc::new(RwLock::new(x))),
             ConfigVal::F64(x) => ConfigValAtomic::F64(Arc::new(AtomicU64::new(x.to_bits()))),
             ConfigVal::String(x) => ConfigValAtomic::String(Arc::new(RwLock::new(x))),
+            ConfigVal::OptString(x) => ConfigValAtomic::OptString(Arc::new(RwLock::new(x))),
             ConfigVal::Duration(x) => ConfigValAtomic::Duration(Arc::new(RwLock::new(x))),
             ConfigVal::Json(x) => ConfigValAtomic::Json(Arc::new(RwLock::new(x))),
         }
@@ -401,6 +588,9 @@ impl ConfigValAtomic {
             ConfigValAtomic::F64(x) => ConfigVal::F64(f64::from_bits(x.load(SeqCst))),
             ConfigValAtomic::String(x) => {
                 ConfigVal::String(x.read().expect("lock poisoned").clone())
+            }
+            ConfigValAtomic::OptString(x) => {
+                ConfigVal::OptString(x.read().expect("lock poisoned").clone())
             }
             ConfigValAtomic::Duration(x) => ConfigVal::Duration(*x.read().expect("lock poisoned")),
             ConfigValAtomic::Json(x) => ConfigVal::Json(x.read().expect("lock poisoned").clone()),
@@ -419,6 +609,9 @@ impl ConfigValAtomic {
             (ConfigValAtomic::String(x), ConfigVal::String(val)) => {
                 *x.write().expect("lock poisoned") = val
             }
+            (ConfigValAtomic::OptString(x), ConfigVal::OptString(val)) => {
+                *x.write().expect("lock poisoned") = val
+            }
             (ConfigValAtomic::Duration(x), ConfigVal::Duration(val)) => {
                 *x.write().expect("lock poisoned") = val
             }
@@ -431,6 +624,7 @@ impl ConfigValAtomic {
             | (ConfigValAtomic::OptUsize(_), val)
             | (ConfigValAtomic::F64(_), val)
             | (ConfigValAtomic::String(_), val)
+            | (ConfigValAtomic::OptString(_), val)
             | (ConfigValAtomic::Duration(_), val)
             | (ConfigValAtomic::Json(_), val) => {
                 panic!("attempted to store {val:?} value in {self:?} parameter")
@@ -494,6 +688,20 @@ impl ConfigUpdates {
             };
             config.val.store(val.clone());
         }
+    }
+}
+
+impl From<&ConfigSet> for ConfigUpdates {
+    /// Captures the current value of every config in the set as a dense set of
+    /// updates. Applying the result to another set seeded with the same configs
+    /// reproduces this set's values, regardless of which configs the other set
+    /// has previously had updated.
+    fn from(set: &ConfigSet) -> Self {
+        let mut updates = ConfigUpdates::default();
+        for entry in set.entries() {
+            updates.add_dynamic(entry.name(), entry.val());
+        }
+        updates
     }
 }
 
@@ -636,6 +844,33 @@ mod impls {
         }
     }
 
+    impl ConfigType for Option<String> {
+        fn from_val(val: ConfigVal) -> Self {
+            match val {
+                ConfigVal::OptString(x) => x,
+                x => panic!("expected String value got {:?}", x),
+            }
+        }
+
+        fn parse(s: &str) -> Result<Self, String> {
+            Ok(Some(s.to_string()))
+        }
+    }
+
+    impl From<Option<String>> for ConfigVal {
+        fn from(val: Option<String>) -> ConfigVal {
+            ConfigVal::OptString(val)
+        }
+    }
+
+    impl ConfigDefault for Option<&str> {
+        type ConfigType = Option<String>;
+
+        fn into_config_type(self) -> Option<String> {
+            self.map(|s| s.to_string())
+        }
+    }
+
     impl ConfigType for Duration {
         fn from_val(val: ConfigVal) -> Self {
             match val {
@@ -690,15 +925,27 @@ mod tests {
 
     use mz_ore::assert_err;
 
-    const BOOL: Config<bool> = Config::new("bool", true, "");
-    const U32: Config<u32> = Config::new("u32", 4, "");
-    const USIZE: Config<usize> = Config::new("usize", 1, "");
-    const OPT_USIZE: Config<Option<usize>> = Config::new("opt_usize", Some(2), "");
-    const F64: Config<f64> = Config::new("f64", 5.0, "");
-    const STRING: Config<&str> = Config::new("string", "a", "");
-    const DURATION: Config<Duration> = Config::new("duration", Duration::from_nanos(3), "");
-    const JSON: Config<fn() -> serde_json::Value> =
-        Config::new("json", || serde_json::json!({}), "");
+    const BOOL: Config<bool> = Config::new("bool", true, "", ParameterScope::Environment);
+    const U32: Config<u32> = Config::new("u32", 4, "", ParameterScope::Environment);
+    const USIZE: Config<usize> = Config::new("usize", 1, "", ParameterScope::Environment);
+    const OPT_USIZE: Config<Option<usize>> =
+        Config::new("opt_usize", Some(2), "", ParameterScope::Environment);
+    const F64: Config<f64> = Config::new("f64", 5.0, "", ParameterScope::Environment);
+    const STRING: Config<&str> = Config::new("string", "a", "", ParameterScope::Environment);
+    const OPT_STRING: Config<Option<&str>> =
+        Config::new("opt_string", Some("a"), "", ParameterScope::Environment);
+    const DURATION: Config<Duration> = Config::new(
+        "duration",
+        Duration::from_nanos(3),
+        "",
+        ParameterScope::Environment,
+    );
+    const JSON: Config<fn() -> serde_json::Value> = Config::new(
+        "json",
+        || serde_json::json!({}),
+        "",
+        ParameterScope::Environment,
+    );
 
     #[mz_ore::test]
     fn all_types() {
@@ -709,6 +956,7 @@ mod tests {
             .add(&OPT_USIZE)
             .add(&F64)
             .add(&STRING)
+            .add(&OPT_STRING)
             .add(&DURATION)
             .add(&JSON);
         assert_eq!(BOOL.get(&configs), true);
@@ -717,6 +965,7 @@ mod tests {
         assert_eq!(OPT_USIZE.get(&configs), Some(2));
         assert_eq!(F64.get(&configs), 5.0);
         assert_eq!(STRING.get(&configs), "a");
+        assert_eq!(OPT_STRING.get(&configs), Some("a".to_string()));
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(3));
         assert_eq!(JSON.get(&configs), serde_json::json!({}));
 
@@ -724,9 +973,10 @@ mod tests {
         updates.add(&BOOL, false);
         updates.add(&U32, 7);
         updates.add(&USIZE, 2);
-        updates.add(&OPT_USIZE, None);
+        updates.add(&OPT_USIZE, None::<usize>);
         updates.add(&F64, 8.0);
         updates.add(&STRING, "b");
+        updates.add(&OPT_STRING, None::<String>);
         updates.add(&DURATION, Duration::from_nanos(4));
         updates.add(&JSON, serde_json::json!({"a": 1}));
         updates.apply(&configs);
@@ -737,21 +987,32 @@ mod tests {
         assert_eq!(OPT_USIZE.get(&configs), None);
         assert_eq!(F64.get(&configs), 8.0);
         assert_eq!(STRING.get(&configs), "b");
+        assert_eq!(OPT_STRING.get(&configs), None);
         assert_eq!(DURATION.get(&configs), Duration::from_nanos(4));
         assert_eq!(JSON.get(&configs), serde_json::json!({"a": 1}));
     }
 
     #[mz_ore::test]
     fn fn_default() {
-        const BOOL_FN_DEFAULT: Config<fn() -> bool> = Config::new("bool", || !true, "");
+        const BOOL_FN_DEFAULT: Config<fn() -> bool> =
+            Config::new("bool", || !true, "", ParameterScope::Environment);
         const STRING_FN_DEFAULT: Config<fn() -> String> =
-            Config::new("string", || "x".repeat(3), "");
+            Config::new("string", || "x".repeat(3), "", ParameterScope::Environment);
+
+        const OPT_STRING_FN_DEFAULT: Config<fn() -> Option<String>> = Config::new(
+            "opt_string",
+            || Some("x".repeat(3)),
+            "",
+            ParameterScope::Environment,
+        );
 
         let configs = ConfigSet::default()
             .add(&BOOL_FN_DEFAULT)
-            .add(&STRING_FN_DEFAULT);
+            .add(&STRING_FN_DEFAULT)
+            .add(&OPT_STRING_FN_DEFAULT);
         assert_eq!(BOOL_FN_DEFAULT.get(&configs), false);
         assert_eq!(STRING_FN_DEFAULT.get(&configs), "xxx");
+        assert_eq!(OPT_STRING_FN_DEFAULT.get(&configs), Some("xxx".to_string()));
     }
 
     #[mz_ore::test]
@@ -781,6 +1042,28 @@ mod tests {
         assert_eq!(USIZE.get(&c1), 3);
         updates.apply(&c1);
         assert_eq!(USIZE.get(&c1), 2);
+    }
+
+    #[mz_ore::test]
+    fn get_with_overrides() {
+        let configs = ConfigSet::default().add(&USIZE).add(&STRING);
+
+        // No overrides at all, and an override map that doesn't mention the
+        // config, both resolve to the set's value.
+        assert_eq!(USIZE.get_with_overrides(&configs, None), 1);
+        let mut overrides = ConfigUpdates::default();
+        overrides.add(&STRING, "b");
+        assert_eq!(USIZE.get_with_overrides(&configs, Some(&overrides)), 1);
+
+        // An override wins over the set's value, without disturbing it.
+        overrides.add(&USIZE, 2);
+        assert_eq!(USIZE.get_with_overrides(&configs, Some(&overrides)), 2);
+        assert_eq!(USIZE.get(&configs), 1);
+
+        // An override of the wrong type is ignored rather than panicking.
+        let mut mistyped = ConfigUpdates::default();
+        mistyped.add_dynamic(USIZE.name(), ConfigVal::Bool(true));
+        assert_eq!(USIZE.get_with_overrides(&configs, Some(&mistyped)), 1);
     }
 
     #[mz_ore::test]
@@ -889,6 +1172,35 @@ mod tests {
         assert_eq!(
             STRING.parse_val("5 s"),
             Ok(ConfigVal::String("5 s".to_string()))
+        );
+
+        assert_eq!(
+            OPT_STRING.parse_val("true"),
+            Ok(ConfigVal::OptString(Some("true".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val("false"),
+            Ok(ConfigVal::OptString(Some("false".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val("66.6"),
+            Ok(ConfigVal::OptString(Some("66.6".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val("42"),
+            Ok(ConfigVal::OptString(Some("42".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val("farragut"),
+            Ok(ConfigVal::OptString(Some("farragut".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val(""),
+            Ok(ConfigVal::OptString(Some("".to_string())))
+        );
+        assert_eq!(
+            OPT_STRING.parse_val("5 s"),
+            Ok(ConfigVal::OptString(Some("5 s".to_string())))
         );
 
         assert_err!(DURATION.parse_val("true"));

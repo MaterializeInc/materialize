@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Checks that every `mz_*` metric named by the mz-release-signoff skill still
+# resolves against the generated metrics catalog, so the skill's references
+# cannot rot silently when a metric is renamed. A reference that names a metric
+# the product no longer exports is worse than no reference, because a release
+# verifier reads the resulting empty query as a healthy zero.
+#
+# Also runs the doctests in the skill's query builder, which pin the shape of
+# the expressions it emits. Both failure modes are the same one: an expression
+# that looks right and silently measures the wrong fleet.
+#
+# Names the catalog structurally cannot see are exempted one at a time in
+# .agents/skills/mz-release-signoff/scripts/metrics-allowlist.txt, with a reason.
+#
+# Example usages:
+#
+#     $ ci/test/lint-skill-metrics.sh
+
+set -euo pipefail
+
+. misc/shlib/shlib.bash
+
+ci_uncollapsed_heading "Linting mz-release-signoff metric names"
+
+try bin/pyactivate .agents/skills/mz-release-signoff/scripts/lint_metrics.py
+
+try python3 -m doctest .agents/skills/mz-release-signoff/scripts/build-range-query.py
+
+# Every way this lint breaks is a silent pass, so the extractor is tested on
+# fixtures rather than trusted because the run above exited 0.
+try bin/pyactivate -m pytest -qq .agents/skills/mz-release-signoff/scripts/lint_metrics_test.py
+
+try bin/pyactivate -m pytest -qq .agents/skills/mz-release-signoff/scripts/catalog_diff_test.py
+
+try_status_report

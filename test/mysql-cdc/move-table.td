@@ -9,7 +9,6 @@
 
 $ set-sql-timeout duration=1s
 
-
 #
 # Test move table
 #

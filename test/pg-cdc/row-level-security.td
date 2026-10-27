@@ -28,6 +28,8 @@ INSERT INTO foo (val, visible) VALUES ('a', true), ('b', false);
 
 CREATE POLICY restrict_mzuser ON foo FOR SELECT TO mz_user USING (visible = TRUE);
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE CLUSTER rls SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 1;
@@ -123,5 +125,40 @@ ALTER ROLE mz_user BYPASSRLS;
 3 c true
 
 > SELECT * FROM foo;
+1 apple true
+3 c true
+
+## Test that RLS policies applied via inherited roles are detected.
+## Previously, the check only matched policies where polroles contained the
+## exact oid of CURRENT_USER, missing policies attached to parent roles.
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP POLICY restrict_mzuser ON foo;
+DROP ROLE IF EXISTS analyst;
+CREATE ROLE analyst;
+GRANT analyst TO mz_user;
+CREATE POLICY restrict_analyst ON foo FOR SELECT TO analyst USING (visible = TRUE);
+ALTER ROLE mz_user NOBYPASSRLS;
+
+> BEGIN
+> CREATE SOURCE mz_source_inherited
+  IN CLUSTER rls
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+! CREATE TABLE foo_inherited FROM SOURCE mz_source_inherited (REFERENCE foo);
+contains:one or more tables requires BYPASSRLS
+> ROLLBACK;
+
+# BYPASSRLS on the user allows source creation even with inherited-role policies
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER ROLE mz_user BYPASSRLS;
+
+> BEGIN
+> CREATE SOURCE mz_source_inherited
+  IN CLUSTER rls
+  FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+> CREATE TABLE foo_inherited FROM SOURCE mz_source_inherited (REFERENCE foo);
+> COMMIT;
+
+> SELECT * FROM foo_inherited
 1 apple true
 3 c true

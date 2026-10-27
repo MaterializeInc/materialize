@@ -85,7 +85,7 @@ class BoundedMemoryMinimalSearchStorage(BaseDataStorage):
             ;
             """
 
-        self.database_connector.add_update_statements([sql_statement])
+        self.database_connector.add_update_statements([sql_statement], idempotent=True)
 
         if flush:
             self.database_connector.submit_update_statements()

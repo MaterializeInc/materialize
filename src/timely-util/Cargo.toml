@@ -13,36 +13,56 @@ workspace = true
 name = "reclock"
 harness = false
 
+[[bench]]
+name = "consolidating_column_builder"
+harness = false
+
+[[bench]]
+name = "columnar_merger"
+harness = false
+
+[[bench]]
+name = "columnar_merge_batcher"
+harness = false
+
+[[bench]]
+name = "column_pager"
+harness = false
+
+[[bench]]
+name = "column_borrow"
+harness = false
+
 [dependencies]
-ahash = { version = "0.8.12", default-features = false }
-bincode = "1.3.3"
-bytemuck = "1.23.1"
-columnar = "0.11.0"
-columnation = "0.1.0"
-differential-dataflow = "0.18.0"
-either = "1"
-futures-util = "0.3.31"
-lgalloc = "0.6"
-mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing"] }
-num-traits = "0.2"
-serde = { version = "1.0.219", features = ["derive"] }
-timely = "0.25.1"
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "time"] }
-tracing = "0.1.43"
-uuid = { version = "1.19.0", features = ["serde", "v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+ahash.workspace = true
+bytemuck.workspace = true
+columnar.workspace = true
+columnation.workspace = true
+differential-dataflow.workspace = true
+futures-util.workspace = true
+itertools.workspace = true
+lz4_flex.workspace = true
+mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing", "pager", "pool"] }
+num-traits.workspace = true
+serde.workspace = true
+smallvec.workspace = true
+timely.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["serde", "v4"] }
 
 # This crate is used for capturing memory usage in a unit test. It is feature
 # flagged because it replaces the global memory allocator.  Unfortunately,
 # optional dependencies are not allowed in `dev-dependencies`, so it lives here.
-allocation-counter = { version = "0", optional = true }
+allocation-counter = { workspace = true, optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.8.1" }
+criterion.workspace = true
+mz-alloc-default = { path = "../alloc-default" }
+proptest.workspace = true
+rand.workspace = true
+tempfile.workspace = true
 
 [features]
-default = ["mz-ore/default", "workspace-hack"]
+default = ["mz-ore/default"]
 count-allocations = ["allocation-counter"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]

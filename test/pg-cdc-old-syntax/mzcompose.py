@@ -31,13 +31,13 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.service import ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import (
+from materialize.mzcompose.services.metadata_store import (
     METADATA_STORE,
     CockroachOrPostgresMetadata,
-    Postgres,
 )
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
@@ -105,7 +105,9 @@ def create_postgres(
     else:
         image = f"postgres:{pg_version}"
 
-    return Postgres(image=image, extra_command=extra_command)
+    return Postgres(
+        image=image, extra_command=extra_command, volumes=["secrets:/certs:ro"]
+    )
 
 
 def get_testdrive_ssl_args(c: Composition):
@@ -147,7 +149,7 @@ SERVICES = [
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
+            "log_filter": "mz_storage::source::postgres=trace,info"
         },
         external_blob_store=True,
         default_replication_factor=2,
@@ -446,7 +448,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_metadata_store=True,
             external_blob_store=True,
             additional_system_parameter_defaults={
-                "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
+                "log_filter": "mz_storage::source::postgres=trace,info"
             },
             default_replication_factor=2,
         )
@@ -457,7 +459,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_metadata_store=True,
             external_blob_store=True,
             additional_system_parameter_defaults={
-                "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error",
+                "log_filter": "mz_storage::source::postgres=trace,info",
                 "force_source_table_syntax": "true",
             },
             default_replication_factor=2,
@@ -546,7 +548,7 @@ def workflow_migration_multi_version_upgrade(
     upgrade_args_list = generate_materialized_upgrade_args(versions)
 
     for i, upgrade_args in enumerate(upgrade_args_list):
-        log_filter = "mz_storage::source::postgres=trace,debug,info,warn,error"
+        log_filter = "mz_storage::source::postgres=trace,info"
 
         # Enable source versioning migration at the end (final version)
         enable_source_migration_arg = (

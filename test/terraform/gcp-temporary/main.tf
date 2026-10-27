@@ -99,7 +99,7 @@ locals {
 
 # 1. Configure networking infrastructure including VPC, subnets, and CIDR blocks
 module "networking" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/networking?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/networking?ref=v16.0.0"
 
   project_id = var.project_id
   region     = var.region
@@ -110,7 +110,7 @@ module "networking" {
 
 # 2. Set up Google Kubernetes Engine (GKE) cluster
 module "gke" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/gke?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/gke?ref=v16.0.0"
 
   depends_on = [module.networking]
 
@@ -127,7 +127,7 @@ module "gke" {
 
 # 2.1 Create generic node pool for system workloads
 module "generic_nodepool" {
-  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/nodepool?ref=main"
+  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/nodepool?ref=v16.0.0"
   depends_on = [module.gke]
 
   prefix                = "${var.name_prefix}-generic"
@@ -147,7 +147,7 @@ module "generic_nodepool" {
 
 # 2.2 Create Materialize-dedicated node pool with taints
 module "materialize_nodepool" {
-  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/nodepool?ref=main"
+  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/nodepool?ref=v16.0.0"
   depends_on = [module.gke]
 
   prefix                = "${var.name_prefix}-mz"
@@ -170,7 +170,7 @@ module "materialize_nodepool" {
 
 # 3. Set up PostgreSQL database instance for Materialize metadata storage
 module "database" {
-  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/database?ref=main"
+  source     = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/database?ref=v16.0.0"
   depends_on = [module.networking]
 
   databases = [local.database_config.database]
@@ -184,12 +184,14 @@ module "database" {
 
   tier = local.database_config.tier
 
+  random_instance_name = true
+
   labels = var.labels
 }
 
 # 4. Create Google Cloud Storage bucket for Materialize persistent data storage
 module "storage" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/storage?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/storage?ref=v16.0.0"
 
   project_id      = var.project_id
   region          = var.region
@@ -203,7 +205,7 @@ module "storage" {
 
 # 5. Install cert-manager for SSL certificate management and create cluster issuer
 module "cert_manager" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=v16.0.0"
 
   node_selector = local.generic_node_labels
 
@@ -214,7 +216,7 @@ module "cert_manager" {
 }
 
 module "self_signed_cluster_issuer" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=v16.0.0"
 
   name_prefix = var.name_prefix
 
@@ -225,7 +227,7 @@ module "self_signed_cluster_issuer" {
 
 # 6. Install Materialize Kubernetes operator for managing Materialize instances
 module "operator" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/operator?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//gcp/modules/operator?ref=v16.0.0"
 
   name_prefix = var.name_prefix
   region      = var.region
@@ -248,12 +250,16 @@ module "operator" {
     module.generic_nodepool,
     module.database,
     module.storage,
+    # The operator chart renders cert-manager Certificate/Issuer resources for
+    # the conversion webhook (install_v1_crd defaults to true), so cert-manager
+    # CRDs must be registered before the operator's helm_release applies.
+    module.cert_manager,
   ]
 }
 
 # 7. Deploy Materialize instance with configured backend connections
 module "materialize_instance" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/materialize-instance?ref=main"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/materialize-instance?ref=v16.0.0"
 
   instance_name        = local.materialize_instance_name
   instance_namespace   = local.materialize_instance_namespace
@@ -261,6 +267,12 @@ module "materialize_instance" {
   persist_backend_url  = local.persist_backend_url
 
   environmentd_version = var.environmentd_version
+
+  # Testdrive runs `ALTER SYSTEM RESET ALL` before each file, which would undo
+  # an `ALTER SYSTEM SET persist_blob_http_pool`.
+  environmentd_extra_args = [
+    "--system-parameter-default=persist_blob_http_pool=gcs",
+  ]
 
   # Rollout configuration
   force_rollout   = var.force_rollout

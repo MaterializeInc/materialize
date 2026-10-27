@@ -39,6 +39,7 @@ class BackupAndRestore(Action):
                 system_parameter_defaults=state.system_parameter_defaults,
                 sanity_restart=False,
                 restart="on-failure",
+                additional_system_parameter_defaults=state.additional_system_parameter_defaults,
                 metadata_store="cockroach",
                 default_replication_factor=2,
             )

@@ -1,0 +1,1550 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Render arm for `MetricSinkConnection`.
+//!
+//! A metric sink funnels every row of its source collection to one worker, folds
+//! it into a [`SinkState`], and exposes that state to the process's Prometheus registry through
+//! a [`SinkCollector`]. `SinkState` is shared between the timely operator (the sole writer) and
+//! `SinkCollector::collect` (the reader, invoked from whatever thread scrapes the registry) via
+//! `Arc<Mutex<_>>`. Both sides only ever hold the lock across a short, synchronous section: the
+//! operator has no `await` points (it is a synchronous `builder_rc` operator), and the collector
+//! only clones out the data it needs to build `MetricFamily` protos before releasing the lock.
+//!
+//! The planner (`optimize::metric_sink::shape_metric_sink_source`) does the row-wise shaping:
+//! it coalesces `labels`/`help` to their identity element and computes the `metric_kind`
+//! and `name_valid` columns `extract_row` reads below, so this module no longer parses
+//! `metric_type` strings or validates `metric_name` itself. Dedup, collision detection, and
+//! family-conflict counting stay here because they need the cross-row state of the fold.
+
+use std::any::Any;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use differential_dataflow::{Hashable, VecCollection};
+use mz_compute_types::sinks::{ComputeSinkDesc, MetricSinkConnection};
+use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::metrics::MetricsRegistry;
+use mz_repr::{ColumnName, Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, Timestamp};
+use mz_storage_types::controller::CollectionMetadata;
+use mz_timely_util::probe::{Handle, ProbeNotify};
+use prometheus::core::{Collector, Desc};
+use prometheus::proto::{
+    Counter as ProtoCounter, Gauge as ProtoGauge, LabelPair, Metric as ProtoMetric, MetricFamily,
+    MetricType,
+};
+use prometheus::{Gauge, Opts};
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::progress::Antichain;
+
+use crate::metrics::WorkerMetrics;
+use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
+use crate::render::sinks::SinkRender;
+
+impl<'scope> SinkRender<'scope> for MetricSinkConnection {
+    fn render_sink(
+        &self,
+        compute_state: &mut crate::compute_state::ComputeState,
+        sink: &ComputeSinkDesc<CollectionMetadata>,
+        sink_id: GlobalId,
+        _as_of: Antichain<Timestamp>,
+        _start_signal: StartSignal,
+        sinked_collection: VecCollection<'scope, Timestamp, Row, Diff>,
+        err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
+        output_probe: &Handle<Timestamp>,
+    ) -> Option<Rc<dyn Any>> {
+        let cols = ColumnIndices::resolve(&sink.from_desc);
+
+        let scope = sinked_collection.scope();
+        let worker_id = scope.index();
+        // The registry is process-local, so every row must land on the same worker or the
+        // series would be split across processes. Which worker is chosen doesn't matter, only
+        // that all workers agree, so hash the sink's own id.
+        //
+        // Routing by metric key instead would spread the fold across workers, but each process
+        // has its own registry, so one metric family could then be split across processes' scrape
+        // outputs. Partition-by-key is a possible future refinement.
+        let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
+
+        let ok_stream = sinked_collection
+            .inner
+            .probe_notify_with(vec![output_probe.clone()]);
+        let err_stream = err_collection.inner;
+
+        let state = Arc::new(Mutex::new(SinkState::default()));
+
+        // Only the active worker registers a collector; the `MetricsRegistry` is process-wide.
+        //
+        // NOTE: a `Desc` id collision here is expected, not a logic error, and only for curated
+        // sinks. A curated sink keys its gauges on its stable name, so every incarnation shares one
+        // `Desc` id (each still gets its own transient, boot-reused `GlobalId`). The registering
+        // worker is `sink_id.hashed() % peers`, so two incarnations usually land on different
+        // workers, and `Worker::reconcile` has no cross-worker barrier: on a restart the new one can
+        // register before the other worker drops the old. User sinks keep a durable `GlobalId`, so
+        // both incarnations hash to the same worker, which unregisters the old collector before
+        // registering the new: `Worker::reconcile` clears a non-retained dataflow's sink token
+        // (dropping this guard) before applying the replacement `CreateDataflow`, so they never
+        // collide. Registration is fallible, retried until the predecessor drops.
+        let registration = Rc::new(RefCell::new((worker_id == active_worker_id).then(|| {
+            PendingRegistration::new(
+                self.label.clone(),
+                SinkCollector::new(&self.label, Arc::clone(&state)),
+            )
+        })));
+        let registration_op = Rc::clone(&registration);
+        let registry = compute_state.metrics_registry.clone();
+        let worker_metrics = compute_state.metrics.clone();
+
+        let mut op = OperatorBuilder::new(format!("MetricSink({sink_id})"), scope.clone());
+        let mut ok_input = op.new_input(
+            ok_stream,
+            Exchange::new(move |_: &(Row, Timestamp, Diff)| u64::cast_from(active_worker_id)),
+        );
+        let mut err_input = op.new_input(
+            err_stream,
+            Exchange::new(move |_: &(DataflowErrorSer, Timestamp, Diff)| {
+                u64::cast_from(active_worker_id)
+            }),
+        );
+
+        // The frontier this worker reports to the controller. Every worker reports, not just the
+        // active one: the controller meets the per-worker frontiers, so a worker that never
+        // advanced would pin the input's since forever.
+        let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
+        let shared_frontier = Rc::clone(&sink_frontier);
+
+        let operator_info = op.operator_info();
+        op.build(move |_capabilities| {
+            let activator = scope.activator_for(operator_info.address);
+
+            // Register now, at build time, not on first activation: activation waits on the input
+            // frontier, so a sink with a slow input would publish no series until it happened to be
+            // scheduled, and a scrape in that gap sees fewer sinks than exist. A collision retries
+            // through the activation path below.
+            //
+            // NOTE: these retries ride on operator activations, so they stop if both inputs close
+            // before a collision clears (e.g. a constant-folded source): timely drops the operator
+            // closure, leaving the token holding a handle-less `PendingRegistration`, so the sink
+            // never publishes. A collision outlasting a finite source isn't expected for these
+            // curated sinks, so we accept the gap rather than pin an activation open until the
+            // handle is set.
+            if let Some(registration) = registration_op.borrow_mut().as_mut() {
+                if let Retry::Arm = registration.try_register(&registry, &worker_metrics) {
+                    activator.activate_after(REGISTRATION_RETRY_INTERVAL);
+                }
+            }
+
+            // Recycled across activations: unpacking a row into `Datum`s otherwise allocates a
+            // fresh `Vec` per row on this hot path.
+            let mut datum_vec = DatumVec::new();
+            move |frontiers| {
+                // Combined ok+err input frontier. A timestamp is closed once neither input can
+                // still produce data at it, so folding a closed time observes all of its diffs.
+                let mut frontier = Antichain::new();
+                for f in frontiers {
+                    frontier.extend(f.frontier().iter().copied());
+                }
+                // NOTE: the reported frontier is published here, before the active worker folds
+                // through it below (`st.integrate` at the end of this closure). This is only safe
+                // because the active worker must complete that fold in the same activation that
+                // observed the frontier. An early return added on the active-worker path between
+                // here and `st.integrate` would advertise progress the sink has not folded,
+                // downgrading the input's since ahead of the data actually consumed.
+                shared_frontier.borrow_mut().clone_from(&frontier);
+
+                // `registration` is `Some` only on the active worker. Scoped so the borrow ends
+                // before the fold.
+                {
+                    let mut reg = registration_op.borrow_mut();
+                    let Some(registration) = reg.as_mut() else {
+                        // Non-active worker: all input is exchanged to the active worker, so nothing
+                        // arrives here. Drain to avoid being rescheduled forever.
+                        ok_input.for_each(|_, _| {});
+                        err_input.for_each(|_, _| {});
+                        return;
+                    };
+
+                    if let Retry::Arm = registration.try_register(&registry, &worker_metrics) {
+                        // The input may be quiescent, so nothing else would reschedule us.
+                        activator.activate_after(REGISTRATION_RETRY_INTERVAL);
+                    }
+                }
+
+                let mut st = state.lock().expect("sink state mutex poisoned");
+
+                // Buffer every incoming update under its timestamp. The input is not
+                // consolidated and timely does not guarantee that all diffs at a timestamp arrive
+                // in one activation, so nothing is folded into `working` until the timestamp is
+                // closed.
+                ok_input.for_each(|_, data| {
+                    for (row, time, diff) in data.drain(..) {
+                        let datums = datum_vec.borrow_with(&row);
+                        let (name, metric_kind, name_valid, labels, value, help) =
+                            extract_row(&cols, &datums);
+                        st.stage_ok(
+                            name,
+                            metric_kind,
+                            name_valid,
+                            &labels,
+                            value,
+                            help,
+                            time,
+                            diff.into_inner(),
+                        );
+                    }
+                });
+                err_input.for_each(|_, data| {
+                    for (_err, time, diff) in data.drain(..) {
+                        st.stage_err(time, diff.into_inner());
+                    }
+                });
+
+                st.integrate(&frontier);
+                st.frontier_ms = frontier
+                    .as_option()
+                    .map(|t| u64::from(*t))
+                    .unwrap_or(u64::MAX);
+                st.publish_if_healthy();
+            }
+        });
+
+        // Report frontier updates to the `ComputeState`. A metric sink writes to the metrics
+        // registry rather than to a collection, so its "write" frontier is the input frontier it
+        // has folded through.
+        let collection = compute_state.expect_collection_mut(sink_id);
+        collection.sink_write_frontier = Some(sink_frontier);
+
+        // The guard is returned as the sink token, not kept in the operator closure. This operator
+        // has no outputs, so timely drops its closure the moment both input frontiers close (e.g. a
+        // constant-folded source), and a guard held there would unregister a still-installed sink.
+        // On the token it drops with the dataflow instead, freeing the `Desc` id for a retrying
+        // successor and letting a torn-down sink keep serving its now-frozen series until the drain.
+        //
+        // A non-active worker's guard is empty and harmless.
+        let token: Rc<dyn Any> = registration;
+        Some(token)
+    }
+}
+
+/// How long to wait before retrying a collector registration that collided.
+///
+/// Fixed, no backoff: a cross-worker `AlreadyReg` collision clears once the predecessor's dataflow
+/// is torn down, so it converges without a growing wait.
+const REGISTRATION_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How long a collision may persist before it soft-panics.
+///
+/// The retry expects a predecessor to drop within a few seconds. A collision outlasting this one
+/// isn't dropping, so soft-panic once to surface it, then keep retrying in case it clears.
+const REGISTRATION_ESCALATE_AFTER: Duration = Duration::from_secs(60);
+
+/// Whether a registration attempt left a collision the caller must arm a retry for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Retry {
+    /// Arm a retry activation [`REGISTRATION_RETRY_INTERVAL`] from now.
+    Arm,
+    /// Nothing to arm: registered, permanently abandoned, or a retry is already armed.
+    Skip,
+}
+
+/// Active-worker collector registration that tolerates a transient descriptor-id collision with an
+/// incarnation of this sink that has not been torn down yet.
+///
+/// Holds the guard once registered, so dropping this unregisters the collector.
+struct PendingRegistration {
+    /// The sink's label, for the log line on first failure.
+    label: String,
+    collector: SinkCollector,
+    handle: Option<Box<dyn Any + Send + Sync>>,
+    logged: bool,
+    /// Set once a non-collision error soft-panicked, so we stop retrying.
+    terminated: bool,
+    /// When the collision streak began, for the escalation bound.
+    first_collision: Option<Instant>,
+    /// Set once the escalation soft-panic has fired, so it fires only once.
+    escalated: bool,
+    /// Earliest instant a new attempt may run. `Some` means a retry is already armed, so
+    /// activations before it are no-ops. This paces attempts to one per
+    /// [`REGISTRATION_RETRY_INTERVAL`] regardless of how often the input reschedules the operator.
+    next_attempt: Option<Instant>,
+}
+
+impl PendingRegistration {
+    fn new(label: String, collector: SinkCollector) -> Self {
+        PendingRegistration {
+            label,
+            collector,
+            handle: None,
+            logged: false,
+            terminated: false,
+            first_collision: None,
+            escalated: false,
+            next_attempt: None,
+        }
+    }
+
+    /// Attempts to register the collector, at most once per [`REGISTRATION_RETRY_INTERVAL`].
+    ///
+    /// Returns [`Retry::Arm`] only when a fresh collision was just seen and the caller must arm a
+    /// retry activation; [`Retry::Skip`] once registered, permanently abandoned, or while a retry
+    /// armed by an earlier collision is still pending. The gate matters because a busy input
+    /// reschedules the operator far more often than the retry interval, and each bare attempt
+    /// clones the collector and takes the registry write lock.
+    ///
+    /// An `AlreadyReg` collision retries until the predecessor drops the `Desc` id; after
+    /// [`REGISTRATION_ESCALATE_AFTER`] it soft-panics once to surface a predecessor that never
+    /// drops, then keeps retrying. Any other error is a logic error, so it soft-panics and stops.
+    fn try_register(&mut self, registry: &MetricsRegistry, metrics: &WorkerMetrics) -> Retry {
+        if self.handle.is_some() || self.terminated {
+            return Retry::Skip;
+        }
+        let now = Instant::now();
+        if let Some(next) = self.next_attempt {
+            if now < next {
+                return Retry::Skip;
+            }
+        }
+        match registry.try_register_collector_with_dropper(self.collector.clone()) {
+            Ok(handle) => {
+                self.handle = Some(handle);
+                self.next_attempt = None;
+                Retry::Skip
+            }
+            Err(prometheus::Error::AlreadyReg) => {
+                metrics.inc_metric_sink_registration_retries();
+                let first = *self.first_collision.get_or_insert(now);
+                // Only the first failure logs; the counter carries the ongoing signal.
+                if !self.logged {
+                    self.logged = true;
+                    tracing::info!(
+                        sink = %self.label,
+                        "metric sink collector registration collided, retrying"
+                    );
+                }
+                if !self.escalated && now.duration_since(first) >= REGISTRATION_ESCALATE_AFTER {
+                    self.escalated = true;
+                    mz_ore::soft_panic_or_log!(
+                        "metric sink {} collector registration still colliding after {:?}; a \
+                         predecessor incarnation has not dropped its registration",
+                        self.label,
+                        REGISTRATION_ESCALATE_AFTER
+                    );
+                }
+                self.next_attempt = Some(now + REGISTRATION_RETRY_INTERVAL);
+                Retry::Arm
+            }
+            Err(err) => {
+                self.terminated = true;
+                mz_ore::soft_panic_or_log!(
+                    "metric sink {} collector registration failed: {err}",
+                    self.label
+                );
+                Retry::Skip
+            }
+        }
+    }
+}
+
+/// Column indices resolved once from the sink's source relation.
+///
+/// The source relation exposes `metric_name`, `labels`, `value`, and `help` of the required types,
+/// and `shape_metric_sink_source` adds the `metric_kind` and `name_valid` columns this reads.
+/// `resolve` panics if a column is missing. No tree caller enforces this column contract yet; the
+/// SQL planner will. `metric_name`, `value`, and the values of the `labels` map may still be
+/// `Datum::Null` (a `map[text=>text]` has no per-value nullability); the columns themselves are
+/// non-null by construction. Column position within the row is unconstrained.
+struct ColumnIndices {
+    metric_name: usize,
+    labels: usize,
+    value: usize,
+    help: usize,
+    metric_kind: usize,
+    name_valid: usize,
+}
+
+impl ColumnIndices {
+    fn resolve(desc: &RelationDesc) -> Self {
+        let idx = |name: &str| {
+            desc.get_by_name(&ColumnName::from(name))
+                .expect("column existence validated by the SQL planner")
+                .0
+        };
+        ColumnIndices {
+            metric_name: idx("metric_name"),
+            labels: idx("labels"),
+            value: idx("value"),
+            help: idx("help"),
+            metric_kind: idx("metric_kind"),
+            name_valid: idx("name_valid"),
+        }
+    }
+}
+
+/// Extracts `(metric_name, metric_kind, name_valid, sorted labels, value, help)` from one shaped
+/// source row.
+///
+/// The planner already did the row-wise shaping.
+///
+/// A null label value stays `None` rather than being coerced to a string. Neither a null nor a
+/// genuine empty-string value is a representable Prometheus label (an empty value reads as absent),
+/// so a row carrying either is skipped downstream instead of published.
+///
+/// Strings borrow from `datums`, so the caller must own what it needs
+/// (see `SinkState::stage_ok`) before the row backing `datums` is dropped.
+fn extract_row<'a>(
+    cols: &ColumnIndices,
+    datums: &[Datum<'a>],
+) -> (
+    &'a str,
+    Option<MetricKind>,
+    bool,
+    Vec<(&'a str, Option<&'a str>)>,
+    Option<f64>,
+    &'a str,
+) {
+    let metric_name = match datums[cols.metric_name] {
+        Datum::Null => "",
+        d => d.unwrap_str(),
+    };
+    let metric_kind = MetricKind::from_datum(datums[cols.metric_kind]);
+    let name_valid = matches!(datums[cols.name_valid], Datum::True);
+    let mut labels: Vec<(&str, Option<&str>)> = datums[cols.labels]
+        .unwrap_map()
+        .iter()
+        .map(|(k, v)| (k, (!v.is_null()).then(|| v.unwrap_str())))
+        .collect();
+    labels.sort();
+    let value = match datums[cols.value] {
+        Datum::Null => None,
+        d => Some(d.unwrap_float64()),
+    };
+    let help = datums[cols.help].unwrap_str();
+    (metric_name, metric_kind, name_valid, labels, value, help)
+}
+
+/// Full identity of one source row: metric name, sorted labels, value, metric kind, name
+/// validity, and help.
+///
+/// A null value is its own distinct row identity, not a stand-in for any particular number,
+/// so it is kept apart from every `Some(_)` identity rather than coerced to
+/// one. A null label value is likewise distinct from a `''` value, so `{a => NULL}` and
+/// `{a => ''}` retract only against their own inserts even though both are unpublishable.
+/// The name and labels lead the tuple so that a `BTreeMap<RowKey, _>` keeps all rows of one
+/// `(metric_name, labels)` series adjacent.
+///
+/// `metric_kind` is the planner's classification (`None` for any unsupported `metric_type`), not
+/// the raw string. Two source rows that differ only in which unsupported type they carry (e.g.
+/// `"histogram"` vs. `"summary"`) now share one identity instead of two. That only affects the
+/// granularity of the `skipped` count for rows that are never published either way.
+type RowKey = (
+    String,
+    Vec<(String, Option<String>)>,
+    Option<u64>,
+    Option<MetricKind>,
+    bool,
+    String,
+);
+
+/// Key into [`SinkState::published`]: a metric name paired with its sorted label vector.
+type PublishedKey = (String, Vec<(String, String)>);
+/// Value in [`SinkState::published`]: the series' value, kind, and help string.
+type PublishedValue = (f64, MetricKind, String);
+
+/// Working and published metric state for one metric sink.
+///
+/// Because the input is not consolidated and a timestamp's diffs may span several operator
+/// activations, incoming updates are buffered by timestamp in `pending_ok`/`pending_err` and only
+/// folded into `working` once the input frontier has closed that timestamp. `working` accumulates
+/// a signed multiplicity per full row identity, and a row is live iff its accumulated diff is
+/// positive.
+///
+/// `published` is what the collector exposes and is rebuilt from the live set of
+/// `working`.
+#[derive(Default)]
+struct SinkState {
+    /// Ok-collection updates awaiting their timestamp closing, accumulated per identity.
+    pending_ok: BTreeMap<Timestamp, BTreeMap<RowKey, i64>>,
+    /// Err-collection diffs awaiting their timestamp closing.
+    pending_err: BTreeMap<Timestamp, i64>,
+    /// Accumulated multiplicity per row identity over all closed timestamps.
+    working: BTreeMap<RowKey, i64>,
+    published: BTreeMap<PublishedKey, PublishedValue>,
+    /// Net count of live errors on the sink's input. Can rise and fall as errors are
+    /// retracted. Publication is frozen while this is nonzero.
+    errors: i64,
+    frontier_ms: u64,
+    skipped: u64,
+    conflicts: u64,
+    collisions: u64,
+    /// Count of live `(metric_name, labels)` groups whose only live rows carry a null `value`,
+    /// so the series is currently absent from `published` (a gap) rather than published as some
+    /// number.
+    null_values: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum MetricKind {
+    Gauge,
+    Counter,
+}
+
+impl MetricKind {
+    /// Recovers the classification the planner's `metric_kind` column already computed (`0` =
+    /// gauge, `1` = counter).
+    fn from_datum(d: Datum) -> Option<Self> {
+        match d {
+            Datum::Int32(0) => Some(MetricKind::Gauge),
+            Datum::Int32(1) => Some(MetricKind::Counter),
+            _ => None,
+        }
+    }
+
+    fn proto_type(self) -> MetricType {
+        match self {
+            MetricKind::Gauge => MetricType::GAUGE,
+            MetricKind::Counter => MetricType::COUNTER,
+        }
+    }
+}
+
+/// Matches Prometheus's label name grammar: `[a-zA-Z_][a-zA-Z0-9_]*`.
+///
+/// Unlike the metric-name grammar (`name_valid`, computed in MIR), this stays in Rust: it
+/// applies to every key of the `labels` map, an unbounded per-row collection that doesn't fit a
+/// scalar `Map` expression.
+fn is_valid_label_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    }
+}
+
+/// Whether a label value can be published as-is. A null (`None`) has no value to encode, and an
+/// empty string reads as absent to Prometheus, so `{a => ''}` would fold into `{}`. Both make the
+/// row that carries them unpublishable.
+fn is_publishable_label_value(value: Option<&str>) -> bool {
+    matches!(value, Some(v) if !v.is_empty())
+}
+
+impl SinkState {
+    /// Buffers one ok-collection update under its timestamp.
+    ///
+    /// `diff` follows differential dataflow sign conventions and is accumulated per full row
+    /// identity, so an un-consolidated input carrying the same identity twice sums rather than
+    /// being mistaken for a second live row. Takes borrowed strings (see `extract_row`) and owns
+    /// them only here, once, at the point the identity is committed to `pending_ok`.
+    fn stage_ok(
+        &mut self,
+        metric_name: &str,
+        metric_kind: Option<MetricKind>,
+        name_valid: bool,
+        labels: &[(&str, Option<&str>)],
+        value: Option<f64>,
+        help: &str,
+        time: Timestamp,
+        diff: i64,
+    ) {
+        let key = (
+            metric_name.to_string(),
+            labels
+                .iter()
+                .map(|&(k, v)| (k.to_string(), v.map(str::to_string)))
+                .collect(),
+            value.map(f64::to_bits),
+            metric_kind,
+            name_valid,
+            help.to_string(),
+        );
+        *self
+            .pending_ok
+            .entry(time)
+            .or_default()
+            .entry(key)
+            .or_default() += diff;
+    }
+
+    /// Buffers one err-collection diff under its timestamp.
+    fn stage_err(&mut self, time: Timestamp, diff: i64) {
+        *self.pending_err.entry(time).or_default() += diff;
+    }
+
+    /// Folds every buffered timestamp the `frontier` has closed into `working` and `errors`.
+    ///
+    /// A timestamp is closed once the combined ok+err frontier can no longer produce data at it,
+    /// which guarantees all of its diffs are already buffered. Accumulated entries that reach a
+    /// multiplicity of zero are dropped. `skipped` is recomputed here from the live set, so it
+    /// counts the input rows currently dropped for an unsupported type or invalid name.
+    fn integrate(&mut self, frontier: &Antichain<Timestamp>) {
+        let closed_ok: Vec<Timestamp> = self
+            .pending_ok
+            .keys()
+            .filter(|t| !frontier.less_equal(t))
+            .copied()
+            .collect();
+        for time in closed_ok {
+            let rows = self.pending_ok.remove(&time).expect("key from keys()");
+            for (key, diff) in rows {
+                *self.working.entry(key).or_default() += diff;
+            }
+        }
+
+        let closed_err: Vec<Timestamp> = self
+            .pending_err
+            .keys()
+            .filter(|t| !frontier.less_equal(t))
+            .copied()
+            .collect();
+        for time in closed_err {
+            self.errors += self.pending_err.remove(&time).expect("key from keys()");
+        }
+
+        self.working.retain(|_, acc| *acc != 0);
+        self.skipped = count_skipped(&self.working);
+    }
+
+    /// Rebuilds `published` and the `collisions`/`conflicts` counts from the live set of
+    /// `working`, but only while the dataflow is free of live errors. While `errors > 0`,
+    /// publication stays frozen at the last healthy snapshot. `working` keeps integrating closed
+    /// timestamps in the meantime, so the next healthy publish reflects everything that happened
+    /// during the freeze.
+    ///
+    // NOTE: this is a full O(n) rebuild over the entire live set on every healthy activation, not an
+    // incremental update. Consider revisiting with incremental maintenance if a sink's series
+    // count grows large enough for the per-activation scan to matter.
+    fn publish_if_healthy(&mut self) {
+        if self.errors == 0 {
+            let (published, collisions, null_values) = rebuild_published(&self.working);
+            self.published = published;
+            self.collisions = collisions;
+            self.null_values = null_values;
+            self.conflicts = count_conflicts(&self.published);
+        }
+    }
+}
+
+/// Counts live working rows dropped for an unsupported `metric_type`, an invalid Prometheus
+/// metric or label name, or a null or empty label value.
+fn count_skipped(working: &BTreeMap<RowKey, i64>) -> u64 {
+    let mut skipped = 0u64;
+    for ((_name, labels, _bits, metric_kind, name_valid, _help), acc) in working {
+        if *acc <= 0 {
+            continue;
+        }
+        let unsupported = metric_kind.is_none();
+        let invalid = !name_valid
+            || !labels
+                .iter()
+                .all(|(k, v)| is_publishable_label_value(v.as_deref()) && is_valid_label_name(k));
+        if unsupported || invalid {
+            skipped += 1;
+        }
+    }
+    skipped
+}
+
+/// Collapses the live, representable rows of `working` into one published entry per
+/// `(metric_name, labels)` series and counts colliding and null-suppressed series.
+///
+/// A row whose label set is not representable (an invalid label name, or a null or empty label
+/// value) is dropped here and counted by [`count_skipped`] instead.
+///
+/// A series collides when more than one distinct live non-null value exists for its
+/// `(metric_name, labels)`: a genuine conflict of two source rows, unlike an ordinary
+/// value update whose old row is retracted and new row inserted within the same closed
+/// timestamp, which leaves a single live value. When a series collides, the winner is chosen
+/// deterministically as the row with the numerically smallest value, breaking ties by metric type
+/// then help. A null `value` carries no number to compare or publish: a series whose live rows
+/// are all null-valued is absent from `published` (a gap) and counted in the returned
+/// `null_values` instead of `collisions`. A series with at least one live non-null value publishes
+/// normally and is not counted in `null_values`, even if null-valued rows are also live for it.
+fn rebuild_published(
+    working: &BTreeMap<RowKey, i64>,
+) -> (BTreeMap<PublishedKey, PublishedValue>, u64, u64) {
+    // `working` orders rows by `(name, labels, ...)`, so all rows of one series are adjacent.
+    let mut grouped: BTreeMap<PublishedKey, Vec<(Option<f64>, MetricKind, String)>> =
+        BTreeMap::new();
+    for ((name, labels, bits, metric_kind, name_valid, help), acc) in working {
+        if *acc <= 0 {
+            continue;
+        }
+        let Some(kind) = metric_kind else {
+            continue;
+        };
+        // A null or empty label value has no representable Prometheus label (an empty value reads
+        // as absent, folding `{a => ''}` into `{}`), so the whole row is unpublishable. Drop it
+        // rather than emit a series the source never had.
+        let Some(labels) = labels
+            .iter()
+            .map(|(k, v)| {
+                is_publishable_label_value(v.as_deref()).then(|| {
+                    (
+                        k.clone(),
+                        v.as_ref().expect("publishable is non-null").clone(),
+                    )
+                })
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        if !name_valid || !labels.iter().all(|(k, _)| is_valid_label_name(k)) {
+            continue;
+        }
+        grouped.entry((name.clone(), labels)).or_default().push((
+            bits.map(f64::from_bits),
+            *kind,
+            help.clone(),
+        ));
+    }
+
+    let mut published = BTreeMap::new();
+    let mut collisions = 0u64;
+    let mut null_values = 0u64;
+    for (key, candidates) in grouped {
+        let mut non_null: Vec<PublishedValue> = candidates
+            .into_iter()
+            .filter_map(|(value, kind, help)| value.map(|v| (v, kind, help)))
+            .collect();
+        if non_null.is_empty() {
+            null_values += 1;
+            continue;
+        }
+        let mut distinct: Vec<u64> = non_null.iter().map(|(v, _, _)| v.to_bits()).collect();
+        distinct.sort_unstable();
+        distinct.dedup();
+        if distinct.len() > 1 {
+            collisions += 1;
+        }
+        non_null.sort_by(|a, b| {
+            a.0.total_cmp(&b.0)
+                .then(a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+        let winner = non_null
+            .into_iter()
+            .next()
+            .expect("checked non-empty above");
+        published.insert(key, winner);
+    }
+    (published, collisions, null_values)
+}
+
+/// Counts published series whose own `metric_type`/`help` disagree with their family's winning
+/// type/help. See [`build_families`] for how the winner is chosen.
+fn count_conflicts(published: &BTreeMap<PublishedKey, PublishedValue>) -> u64 {
+    let mut conflicts = 0u64;
+    let mut winner: Option<(&str, MetricKind, &str)> = None;
+    for ((name, _labels), (_value, kind, help)) in published {
+        winner = match winner {
+            Some((n, k, h)) if n == name.as_str() => {
+                if k != *kind || h != help.as_str() {
+                    conflicts += 1;
+                }
+                Some((n, k, h))
+            }
+            _ => Some((name.as_str(), *kind, help.as_str())),
+        };
+    }
+    conflicts
+}
+
+/// Groups `published` by metric name into one `MetricFamily` per name, since Prometheus requires
+/// a single type and help string per family. Within a group, the entry with the
+/// lexicographically smallest label vector wins the family's type and help string;
+/// `BTreeMap`'s `(name, labels)` key ordering already sorts each group that way, so the
+/// first entry seen for a given name is that winner.
+///
+/// `MetricFamily.type_` and `Metric.{gauge,counter}` are protobuf wrapper types
+/// (`EnumOrUnknown`/`MessageField`).
+fn build_families(published: &BTreeMap<PublishedKey, PublishedValue>) -> Vec<MetricFamily> {
+    let mut families = Vec::new();
+    let mut group_name: Option<&str> = None;
+    let mut family: Option<MetricFamily> = None;
+    let mut family_kind = MetricKind::Gauge;
+
+    for ((name, labels), (value, kind, help)) in published {
+        if group_name != Some(name.as_str()) {
+            if let Some(f) = family.take() {
+                families.push(f);
+            }
+            let mut mf = MetricFamily::new();
+            mf.name = Some(name.clone());
+            mf.help = Some(help.clone());
+            mf.type_ = Some(kind.proto_type().into());
+            family = Some(mf);
+            family_kind = *kind;
+            group_name = Some(name.as_str());
+        }
+
+        let mut metric = ProtoMetric::new();
+        metric.label = labels
+            .iter()
+            .map(|(k, v)| {
+                let mut lp = LabelPair::new();
+                lp.name = Some(k.clone());
+                lp.value = Some(v.clone());
+                lp
+            })
+            .collect();
+        match family_kind {
+            MetricKind::Gauge => {
+                let mut g = ProtoGauge::new();
+                g.value = Some(*value);
+                metric.gauge = Some(g).into();
+            }
+            MetricKind::Counter => {
+                let mut c = ProtoCounter::new();
+                c.value = Some(*value);
+                metric.counter = Some(c).into();
+            }
+        }
+        family
+            .as_mut()
+            .expect("initialized above for the first entry of every group")
+            .metric
+            .push(metric);
+    }
+    if let Some(f) = family.take() {
+        families.push(f);
+    }
+    families
+}
+
+/// A `prometheus::core::Collector` that exposes a metric sink's [`SinkState`].
+///
+/// The companion gauges (`mz_compute_metric_sink_*`) are declared statically, each carrying a `sink`
+/// const label so that per-sink series get distinct `Desc` ids on registration. The user-defined
+/// series are entirely dynamic: their names come from the sink's source query, so they are built
+/// directly as [`MetricFamily`] protos in `collect` and are not declared via `desc`. Prometheus's
+/// registry only uses `desc` for registration-time collision detection, not to validate the
+/// output of `collect`, so this is safe.
+#[derive(Clone)]
+struct SinkCollector {
+    state: Arc<Mutex<SinkState>>,
+    frontier_gauge: Gauge,
+    errors_gauge: Gauge,
+    skipped_gauge: Gauge,
+    conflicts_gauge: Gauge,
+    collisions_gauge: Gauge,
+    null_values_gauge: Gauge,
+}
+
+impl SinkCollector {
+    fn new(label: &str, state: Arc<Mutex<SinkState>>) -> Self {
+        let gauge = |name: &str, help: &str| {
+            Gauge::with_opts(Opts::new(name, help).const_label("sink", label))
+                .expect("static metric sink companion gauge options are valid")
+        };
+        SinkCollector {
+            state,
+            frontier_gauge: gauge(
+                "mz_compute_metric_sink_frontier_ms",
+                "The metric sink's input frontier, in milliseconds since the epoch.",
+            ),
+            errors_gauge: gauge(
+                "mz_compute_metric_sink_errors",
+                "The number of live errors on the metric sink's input.",
+            ),
+            skipped_gauge: gauge(
+                "mz_compute_metric_sink_skipped",
+                "The number of input rows skipped for an unsupported metric type, an invalid name, or a null or empty label value.",
+            ),
+            conflicts_gauge: gauge(
+                "mz_compute_metric_sink_conflicts",
+                "The number of published series whose type or help disagree with their family's chosen type or help.",
+            ),
+            collisions_gauge: gauge(
+                "mz_compute_metric_sink_collisions",
+                "The number of series with more than one distinct live value for the same metric name and labels.",
+            ),
+            null_values_gauge: gauge(
+                "mz_compute_metric_sink_null_values",
+                "The number of series currently suppressed because their value is null.",
+            ),
+        }
+    }
+}
+
+impl Collector for SinkCollector {
+    fn desc(&self) -> Vec<&Desc> {
+        let mut descs = Vec::with_capacity(6);
+        descs.extend(self.frontier_gauge.desc());
+        descs.extend(self.errors_gauge.desc());
+        descs.extend(self.skipped_gauge.desc());
+        descs.extend(self.conflicts_gauge.desc());
+        descs.extend(self.collisions_gauge.desc());
+        descs.extend(self.null_values_gauge.desc());
+        descs
+    }
+
+    fn collect(&self) -> Vec<MetricFamily> {
+        let mut families = {
+            let state = self.state.lock().expect("sink state mutex poisoned");
+            self.frontier_gauge.set(f64::cast_lossy(state.frontier_ms));
+            self.errors_gauge.set(f64::cast_lossy(state.errors));
+            self.skipped_gauge.set(f64::cast_lossy(state.skipped));
+            self.conflicts_gauge.set(f64::cast_lossy(state.conflicts));
+            self.collisions_gauge.set(f64::cast_lossy(state.collisions));
+            self.null_values_gauge
+                .set(f64::cast_lossy(state.null_values));
+            build_families(&state.published)
+        };
+
+        families.extend(self.frontier_gauge.collect());
+        families.extend(self.errors_gauge.collect());
+        families.extend(self.skipped_gauge.collect());
+        families.extend(self.conflicts_gauge.collect());
+        families.extend(self.collisions_gauge.collect());
+        families.extend(self.null_values_gauge.collect());
+        families
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::metrics::ComputeMetrics;
+    use crate::server::ComputeRuntimeRole;
+
+    /// A frontier that has closed every timestamp strictly below `bound`.
+    fn frontier(bound: u64) -> Antichain<Timestamp> {
+        Antichain::from_elem(Timestamp::from(bound))
+    }
+
+    fn label_a() -> Vec<(String, String)> {
+        vec![("a".into(), "1".into())]
+    }
+
+    /// `label_a()`, borrowed: what `stage_ok` now takes (see `extract_row`).
+    const LABEL_A: &[(&str, Option<&str>)] = &[("a", Some("1"))];
+
+    fn key_m() -> PublishedKey {
+        ("m".into(), label_a())
+    }
+
+    /// Mirrors the shaped relation `shape_metric_sink_source` builds: `labels`/`help` are
+    /// non-null by construction, `metric_name`/`value` stay nullable, and `metric_kind`/
+    /// `name_valid` are the planner's computed classification columns.
+    fn shaped_desc() -> RelationDesc {
+        use mz_repr::SqlScalarType;
+
+        RelationDesc::builder()
+            .with_column("metric_name", SqlScalarType::String.nullable(true))
+            .with_column(
+                "labels",
+                SqlScalarType::Map {
+                    value_type: Box::new(SqlScalarType::String),
+                    custom_id: None,
+                }
+                .nullable(false),
+            )
+            .with_column("value", SqlScalarType::Float64.nullable(true))
+            .with_column("help", SqlScalarType::String.nullable(false))
+            .with_column("metric_kind", SqlScalarType::Int32.nullable(true))
+            .with_column("name_valid", SqlScalarType::Bool.nullable(true))
+            .finish()
+    }
+
+    /// Stages one gauge update for the `(m, {a:1})` series.
+    fn stage_m(st: &mut SinkState, value: f64, time: u64, diff: i64) {
+        st.stage_ok(
+            "m",
+            Some(MetricKind::Gauge),
+            true,
+            LABEL_A,
+            Some(value),
+            "h",
+            Timestamp::from(time),
+            diff,
+        );
+    }
+
+    /// Stages one gauge update with a null `value` for the `(m, {a:1})` series.
+    fn stage_m_null(st: &mut SinkState, time: u64, diff: i64) {
+        st.stage_ok(
+            "m",
+            Some(MetricKind::Gauge),
+            true,
+            LABEL_A,
+            None,
+            "h",
+            Timestamp::from(time),
+            diff,
+        );
+    }
+
+    #[mz_ore::test]
+    fn fold_and_publish() {
+        let mut st = SinkState::default();
+        stage_m(&mut st, 2.0, 0, 1);
+        st.integrate(&frontier(1));
+        st.publish_if_healthy();
+        assert_eq!(st.published.len(), 1);
+        assert_eq!(st.published[&key_m()].0, 2.0);
+
+        // Unsupported type (metric_kind = None) is skipped and counted.
+        st.stage_ok("h1", None, true, &[], Some(1.0), "h", Timestamp::from(1), 1);
+        st.integrate(&frontier(2));
+        assert_eq!(st.skipped, 1);
+
+        // Error freezes publication. The update at time 2 retracts the old value and inserts the
+        // new one, both fold into `working` while frozen.
+        st.errors = 1;
+        stage_m(&mut st, 2.0, 2, -1);
+        stage_m(&mut st, 9.0, 2, 1);
+        st.integrate(&frontier(3));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 2.0);
+
+        // Recovery republishes the integrated value.
+        st.errors = 0;
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 9.0);
+        assert_eq!(st.collisions, 0);
+    }
+
+    #[mz_ore::test]
+    fn value_update_split_across_activations_no_collision() {
+        let mut st = SinkState::default();
+        // Establish the series at value 5.
+        stage_m(&mut st, 5.0, 0, 1);
+        st.integrate(&frontier(1));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 5.0);
+
+        // A value update 5 -> 9 at time 1 arrives insert-first, split across two activations. The
+        // timestamp stays open until both diffs are buffered.
+        stage_m(&mut st, 9.0, 1, 1);
+        st.integrate(&frontier(1));
+        st.publish_if_healthy();
+        assert_eq!(st.collisions, 0);
+        stage_m(&mut st, 5.0, 1, -1);
+
+        // Close the timestamp: the series is present at value 9 with no collision.
+        st.integrate(&frontier(2));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 9.0);
+        assert_eq!(st.collisions, 0);
+    }
+
+    #[mz_ore::test]
+    fn duplicate_multiplicity_consolidates() {
+        let mut st = SinkState::default();
+        // The same identity at multiplicity 2 consolidates to a single live row.
+        stage_m(&mut st, 5.0, 0, 1);
+        stage_m(&mut st, 5.0, 0, 1);
+        st.integrate(&frontier(1));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 5.0);
+        assert_eq!(st.collisions, 0);
+
+        // A second, distinct live value for the same series is a genuine collision.
+        stage_m(&mut st, 7.0, 1, 1);
+        st.integrate(&frontier(2));
+        st.publish_if_healthy();
+        assert_eq!(st.collisions, 1);
+        // The smallest value wins deterministically.
+        assert_eq!(st.published[&key_m()].0, 5.0);
+    }
+
+    #[mz_ore::test]
+    fn no_publish_before_time_closed() {
+        let mut st = SinkState::default();
+        // An update at time 5 must not appear while the frontier still allows data at time 5.
+        stage_m(&mut st, 2.0, 5, 1);
+        st.integrate(&frontier(5));
+        st.publish_if_healthy();
+        assert!(st.published.is_empty());
+
+        // Once the frontier advances past time 5, the update publishes.
+        st.integrate(&frontier(6));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 2.0);
+    }
+
+    #[mz_ore::test]
+    fn null_value_gaps_series() {
+        let mut st = SinkState::default();
+        // A null-valued row for (m,{a}) at a closed time: no series, counted in null_values.
+        stage_m_null(&mut st, 1, 1);
+        st.integrate(&frontier(2));
+        st.publish_if_healthy();
+        assert!(!st.published.contains_key(&key_m()));
+        assert_eq!(st.null_values, 1);
+
+        // A later non-null value republishes the series (gap closes) and clears the count, even
+        // though the null-valued row is still live alongside it.
+        stage_m(&mut st, 5.0, 3, 1);
+        st.integrate(&frontier(4));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 5.0);
+        assert_eq!(st.null_values, 0);
+    }
+
+    #[mz_ore::test]
+    fn null_labels_become_empty() {
+        let mut st = SinkState::default();
+        // An empty label vector (the shaped relation's `{}` for a source row with no labels)
+        // keys and publishes correctly.
+        st.stage_ok(
+            "m",
+            Some(MetricKind::Gauge),
+            true,
+            &[],
+            Some(1.0),
+            "h",
+            Timestamp::from(1),
+            1,
+        );
+        st.integrate(&frontier(2));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&("m".into(), vec![])].0, 1.0);
+    }
+
+    #[mz_ore::test]
+    fn extract_row_normalizes_null_datums() {
+        let desc = shaped_desc();
+        let cols = ColumnIndices::resolve(&desc);
+
+        let mut row = Row::default();
+        {
+            let mut packer = row.packer();
+            packer.push(Datum::Null); // metric_name
+            packer.push_dict_with(|_| {}); // labels: always non-null by construction
+            packer.push(Datum::Null); // value
+            packer.push(Datum::String("")); // help: always non-null by construction
+            packer.push(Datum::Null); // metric_kind: defensively treated as unsupported
+            packer.push(Datum::Null); // name_valid: defensively treated as invalid
+        }
+
+        let datums: Vec<Datum> = row.iter().collect();
+        let (name, metric_kind, name_valid, labels, value, help) = extract_row(&cols, &datums);
+        assert_eq!(name, "");
+        assert_eq!(metric_kind, None);
+        assert!(!name_valid);
+        assert_eq!(labels, Vec::new());
+        assert_eq!(value, None);
+        assert_eq!(help, "");
+    }
+
+    /// A null map value must survive extraction as `None`; unwrapping it as a string panicked the
+    /// worker and took down the replica.
+    #[mz_ore::test]
+    fn extract_row_keeps_null_label_values() {
+        let desc = shaped_desc();
+        let cols = ColumnIndices::resolve(&desc);
+
+        let mut row = Row::default();
+        {
+            let mut packer = row.packer();
+            packer.push(Datum::String("m"));
+            packer.push_dict_with(|row| {
+                row.push(Datum::String("bad"));
+                row.push(Datum::Null);
+                row.push(Datum::String("good"));
+                row.push(Datum::String("1"));
+            });
+            packer.push(Datum::Float64(1.0.into()));
+            packer.push(Datum::String("h"));
+            packer.push(Datum::Int32(0));
+            packer.push(Datum::True);
+        }
+
+        let datums: Vec<Datum> = row.iter().collect();
+        let (_name, _metric_kind, _name_valid, labels, _value, _help) = extract_row(&cols, &datums);
+        assert_eq!(labels, vec![("bad", None), ("good", Some("1"))]);
+    }
+
+    #[mz_ore::test]
+    fn null_or_empty_label_value_skips_row() {
+        let mut st = SinkState::default();
+        // A null label value has no representable label set: publishes nothing, counts as skipped.
+        st.stage_ok(
+            "m",
+            Some(MetricKind::Gauge),
+            true,
+            &[("a", None)],
+            Some(1.0),
+            "h",
+            Timestamp::from(1),
+            1,
+        );
+        st.integrate(&frontier(2));
+        st.publish_if_healthy();
+        assert!(st.published.is_empty());
+        assert_eq!(st.skipped, 1);
+
+        // An empty label value folds to `{}` in Prometheus, so it is skipped too rather than
+        // published as a bare `{}` series. It is a distinct identity from the null row, so both
+        // stay live and count: `skipped` reaches 2, not 1.
+        st.stage_ok(
+            "m",
+            Some(MetricKind::Gauge),
+            true,
+            &[("a", Some(""))],
+            Some(1.0),
+            "h",
+            Timestamp::from(3),
+            1,
+        );
+        st.integrate(&frontier(4));
+        st.publish_if_healthy();
+        assert!(st.published.is_empty());
+        assert_eq!(st.skipped, 2);
+    }
+
+    fn pkey(name: &str, labels: &[(&str, &str)]) -> PublishedKey {
+        (
+            name.to_string(),
+            labels
+                .iter()
+                .map(|&(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        )
+    }
+
+    #[mz_ore::test]
+    fn build_families_groups_by_name_and_kind() {
+        let published: BTreeMap<PublishedKey, PublishedValue> = BTreeMap::from([
+            (
+                pkey("http_requests", &[("code", "200")]),
+                (5.0, MetricKind::Counter, "requests".to_string()),
+            ),
+            (
+                pkey("http_requests", &[("code", "500")]),
+                (2.0, MetricKind::Counter, "requests".to_string()),
+            ),
+            (
+                pkey("temp_celsius", &[]),
+                (21.5, MetricKind::Gauge, "temperature".to_string()),
+            ),
+        ]);
+
+        let families = build_families(&published);
+
+        // One family per metric name, in `BTreeMap` (name) order.
+        assert_eq!(families.len(), 2);
+
+        let requests = &families[0];
+        assert_eq!(requests.name(), "http_requests");
+        assert_eq!(requests.help(), "requests");
+        let metrics = requests.get_metric();
+        assert_eq!(metrics.len(), 2);
+        // Metrics keep the `BTreeMap` label order, and land in the counter oneof.
+        assert_eq!(metrics[0].get_label()[0].value(), "200");
+        assert_eq!(metrics[0].get_counter().value(), 5.0);
+        assert_eq!(metrics[1].get_label()[0].value(), "500");
+        assert_eq!(metrics[1].get_counter().value(), 2.0);
+
+        let temp = &families[1];
+        assert_eq!(temp.name(), "temp_celsius");
+        let temp_metrics = temp.get_metric();
+        assert_eq!(temp_metrics.len(), 1);
+        assert_eq!(temp_metrics[0].get_gauge().value(), 21.5);
+    }
+
+    #[mz_ore::test]
+    fn count_conflicts_flags_type_and_help_disagreement() {
+        // The family winner is the smallest-label entry. Here `m`'s winner is the `[a=1]` gauge with
+        // help `h1`; the other two disagree on kind, then help.
+        let published: BTreeMap<PublishedKey, PublishedValue> = BTreeMap::from([
+            (
+                pkey("m", &[("a", "1")]),
+                (1.0, MetricKind::Gauge, "h1".to_string()),
+            ),
+            (
+                pkey("m", &[("b", "2")]),
+                (2.0, MetricKind::Counter, "h1".to_string()),
+            ),
+            (
+                pkey("m", &[("c", "3")]),
+                (3.0, MetricKind::Gauge, "h2".to_string()),
+            ),
+            (
+                pkey("other", &[]),
+                (1.0, MetricKind::Gauge, "h".to_string()),
+            ),
+        ]);
+        assert_eq!(count_conflicts(&published), 2);
+
+        // A family whose entries all agree has no conflicts.
+        let consistent: BTreeMap<PublishedKey, PublishedValue> = BTreeMap::from([
+            (
+                pkey("m", &[("a", "1")]),
+                (1.0, MetricKind::Gauge, "h".to_string()),
+            ),
+            (
+                pkey("m", &[("b", "2")]),
+                (2.0, MetricKind::Gauge, "h".to_string()),
+            ),
+        ]);
+        assert_eq!(count_conflicts(&consistent), 0);
+    }
+
+    #[mz_ore::test]
+    fn err_stream_freezes_and_recovers() {
+        let mut st = SinkState::default();
+        // Establish a healthy value.
+        stage_m(&mut st, 5.0, 0, 1);
+        st.integrate(&frontier(1));
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 5.0);
+
+        // An error appears, buffered through `stage_err` (not by setting `errors` directly). A value
+        // update lands in the same window.
+        st.stage_err(Timestamp::from(1), 1);
+        stage_m(&mut st, 5.0, 1, -1);
+        stage_m(&mut st, 9.0, 1, 1);
+        st.integrate(&frontier(2));
+        assert_eq!(st.errors, 1);
+        st.publish_if_healthy();
+        // Publication frozen at the last healthy value while erroring.
+        assert_eq!(st.published[&key_m()].0, 5.0);
+
+        // The error is retracted; net errors returns to 0 and publication recovers to the value
+        // integrated during the freeze.
+        st.stage_err(Timestamp::from(2), -1);
+        st.integrate(&frontier(3));
+        assert_eq!(st.errors, 0);
+        st.publish_if_healthy();
+        assert_eq!(st.published[&key_m()].0, 9.0);
+    }
+
+    /// Sums a counter family's samples across the registry's scrape output.
+    fn counter_total(registry: &MetricsRegistry, name: &str) -> f64 {
+        registry
+            .gather()
+            .iter()
+            .filter(|family| family.name() == name)
+            .flat_map(|family| family.get_metric())
+            .map(|metric| metric.get_counter().value())
+            .sum()
+    }
+
+    /// Counts the samples of family `metric` whose `label_key` label equals `label`.
+    fn companion_gauge_count(
+        registry: &MetricsRegistry,
+        metric: &str,
+        label_key: &str,
+        label: &str,
+    ) -> usize {
+        registry
+            .gather()
+            .iter()
+            .filter(|family| family.name() == metric)
+            .flat_map(|family| family.get_metric())
+            .filter(|metric| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|l| l.name() == label_key && l.value() == label)
+            })
+            .count()
+    }
+
+    /// The register/retry/unregister ordering the operator runs on every activation, with a stand-in
+    /// for the previous incarnation of the same curated sink. Two incarnations share a `Desc` id
+    /// because a curated sink's companion gauges are keyed on its stable name, so the new one can
+    /// only register once the old one's handle drops.
+    #[mz_ore::test]
+    fn pending_registration_retries_until_predecessor_drops() {
+        const LABEL: &str = "mz_curated_example";
+        const RETRIES: &str = "mz_compute_metric_sink_registration_retries_total";
+        // A live collector emits exactly one frontier gauge, so its presence stands in for
+        // "collector registered" across the register/drop lifecycle below.
+        const FRONTIER: &str = "mz_compute_metric_sink_frontier_ms";
+        const SINK_LABEL: &str = "sink";
+
+        let registry = MetricsRegistry::new();
+        let metrics =
+            ComputeMetrics::register_with(&registry, ComputeRuntimeRole::Solo).for_worker(0);
+
+        // The predecessor: an incarnation of the same sink still registered.
+        let incumbent = registry.register_collector_with_dropper(SinkCollector::new(
+            LABEL,
+            Arc::new(Mutex::new(SinkState::default())),
+        ));
+        assert_eq!(
+            companion_gauge_count(&registry, FRONTIER, SINK_LABEL, LABEL),
+            1
+        );
+
+        let mut registration = PendingRegistration::new(
+            LABEL.to_string(),
+            SinkCollector::new(LABEL, Arc::new(Mutex::new(SinkState::default()))),
+        );
+
+        assert_eq!(registration.try_register(&registry, &metrics), Retry::Arm);
+        assert_eq!(counter_total(&registry, RETRIES), 1.0);
+        // The failed attempt registered nothing, so the incumbent is still the only series.
+        assert_eq!(
+            companion_gauge_count(&registry, FRONTIER, SINK_LABEL, LABEL),
+            1
+        );
+
+        // A retry is armed, so an activation before the interval elapses attempts nothing.
+        assert_eq!(registration.try_register(&registry, &metrics), Retry::Skip);
+        assert_eq!(counter_total(&registry, RETRIES), 1.0);
+
+        // Clearing `next_attempt` stands in for the retry interval elapsing.
+        registration.next_attempt = None;
+        assert_eq!(registration.try_register(&registry, &metrics), Retry::Arm);
+        assert_eq!(counter_total(&registry, RETRIES), 2.0);
+
+        drop(incumbent);
+        registration.next_attempt = None;
+        assert_eq!(registration.try_register(&registry, &metrics), Retry::Skip);
+        assert_eq!(counter_total(&registry, RETRIES), 2.0);
+        assert_eq!(
+            companion_gauge_count(&registry, FRONTIER, SINK_LABEL, LABEL),
+            1
+        );
+
+        // Already registered: a further activation is a no-op, not a second registration.
+        assert_eq!(registration.try_register(&registry, &metrics), Retry::Skip);
+        assert_eq!(counter_total(&registry, RETRIES), 2.0);
+
+        // Dropping the registration is what frees the `Desc` id for the next incarnation.
+        drop(registration);
+        assert_eq!(
+            companion_gauge_count(&registry, FRONTIER, SINK_LABEL, LABEL),
+            0
+        );
+    }
+
+    /// The registration follows the sink token, not the operator closure. Builds a real timely
+    /// operator with `render_sink`'s wiring (register at build time, keep only a clone of the
+    /// registration in the operator closure, return the original as the sink token) around a
+    /// constant input that closes at once. When timely retires the operator and drops its closure
+    /// the collector's series must survive, because the token still holds the registration; only
+    /// dropping the token unregisters. Building a real operator, rather than dropping an `Rc` by
+    /// hand, is what proves the closure does not carry the registering handle.
+    ///
+    /// It stops short of driving `render_sink` itself, which would need a full `ComputeState`.
+    #[mz_ore::test]
+    fn registration_survives_input_close_in_dataflow() {
+        use differential_dataflow::input::Input;
+        use timely::WorkerConfig;
+        use timely::communication::Allocator;
+        use timely::dataflow::channels::pact::Pipeline;
+        use timely::worker::Worker as TimelyWorker;
+
+        const LABEL: &str = "mz_curated_example";
+        const FRONTIER: &str = "mz_compute_metric_sink_frontier_ms";
+        const SINK_LABEL: &str = "sink";
+
+        let registry = MetricsRegistry::new();
+        let metrics =
+            ComputeMetrics::register_with(&registry, ComputeRuntimeRole::Solo).for_worker(0);
+
+        let mut worker = TimelyWorker::new(
+            WorkerConfig::default(),
+            Allocator::Thread(Default::default()),
+            Some(Instant::now()),
+        );
+
+        // `MetricsRegistry` and `WorkerMetrics` are cheap shared handles, so the clones the operator
+        // registers through and the originals the assertions scrape are the same registry.
+        let registry_op = registry.clone();
+        let metrics_op = metrics.clone();
+        let registration = worker.dataflow::<Timestamp, _, _>(move |scope| {
+            // Dropping the input handle immediately closes the input, standing in for a
+            // constant-folded source whose frontier closes as soon as the dataflow starts.
+            let (_input, collection) = scope.new_collection::<Row, Diff>();
+            let registration = Rc::new(RefCell::new(Some(PendingRegistration::new(
+                LABEL.to_string(),
+                SinkCollector::new(LABEL, Arc::new(Mutex::new(SinkState::default()))),
+            ))));
+            let registration_op = Rc::clone(&registration);
+
+            let scope_for_activator = scope.clone();
+            let mut op = OperatorBuilder::new("MetricSinkTest".to_string(), scope.clone());
+            let mut input = op.new_input(collection.inner, Pipeline);
+            let operator_info = op.operator_info();
+            op.build(move |_caps| {
+                let activator = scope_for_activator.activator_for(operator_info.address);
+                if let Some(reg) = registration_op.borrow_mut().as_mut() {
+                    if let Retry::Arm = reg.try_register(&registry_op, &metrics_op) {
+                        activator.activate_after(REGISTRATION_RETRY_INTERVAL);
+                    }
+                }
+                move |_frontiers| {
+                    input.for_each(|_, _| {});
+                }
+            });
+
+            registration
+        });
+
+        // The build-time attempt registered the collector.
+        assert_eq!(
+            companion_gauge_count(&registry, FRONTIER, SINK_LABEL, LABEL),
+            1
+        );
+
+        // Step until timely retires the operator and drops its closure, releasing its `Rc` clone.
+        for _ in 0..100 {
+            if Rc::strong_count(&registration) == 1 {
+                break;
+            }
+            worker.step();
+        }
+        assert_eq!(
+            Rc::strong_count(&registration),
+            1,
+            "the operator closure should have dropped once its input closed"
+        );
+
+        // The registration rode on the token, not the closure, so the series is still live.
+        assert_eq!(
+            companion_gauge_count(&registry, FRONTIER, SINK_LABEL, LABEL),
+            1
+        );
+
+        // Dropping the token is what unregisters.
+        drop(registration);
+        assert_eq!(
+            companion_gauge_count(&registry, FRONTIER, SINK_LABEL, LABEL),
+            0
+        );
+    }
+
+    /// Every companion gauge carries the label the collector was built with. A curated sink passes
+    /// its stable name here, so its health series stay identifiable across boots even though the
+    /// sink's `GlobalId` is transient.
+    #[mz_ore::test]
+    fn collector_labels_gauges_with_sink_label() {
+        let state = Arc::new(Mutex::new(SinkState::default()));
+        let collector = SinkCollector::new("mz_curated_example", state);
+
+        let families = collector.collect();
+        // The point is that every emitted family carries the label, so guard only that there is
+        // something to check. Pinning the exact count churns on every added gauge without telling
+        // the next reader whether they broke labelling or just added a family.
+        assert!(!families.is_empty());
+        for family in &families {
+            for metric in family.get_metric() {
+                let sink = metric
+                    .get_label()
+                    .iter()
+                    .find(|l| l.name() == "sink")
+                    .expect("sink label present");
+                assert_eq!(sink.value(), "mz_curated_example");
+            }
+        }
+    }
+}

@@ -6,6 +6,7 @@ menu:
     parent: "sql-server"
     name: "Self-hosted SQL Server"
     identifier: "sql-server-self-hosted"
+    weight: 80
 aliases:
   - /ingest-data/cdc-sql-server/
   - /self-managed/v25.1/ingest-data/cdc-sql-server/
@@ -58,7 +59,7 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](/console/), or your preferred SQL
+1. In the [SQL Shell](/developer-tools/console/), or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -110,16 +111,7 @@ option.
     If you have set up a security group for your SQL Server instance, you must
     ensure that it allows traffic on the health check port.
 
-    **Remarks**:
-
-    a. Network Load Balancers do not have associated security groups. Therefore,
-    the security groups for your targets must use IP addresses to allow
-    traffic.
-
-    b. You can't use the security groups for the clients as a source in the
-    security groups for the targets. Therefore, the security groups for your
-    targets must use the IP addresses of the clients to allow traffic. For more
-    details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
+    {{% include-from-yaml data="privatelink/create-privatelink-connections" name="nlb-security-group-remarks" %}}
 
 1. Create a VPC [endpoint
     service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html)
@@ -200,7 +192,7 @@ traffic from the bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the [SQL Shell](/console/), or your preferred
+    1. In the [SQL Shell](/developer-tools/console/), or your preferred
        SQL client connected to Materialize, get the static egress IP addresses for
        the Materialize region you are running in:
 
@@ -278,4 +270,8 @@ example="schema-changes" %}}
 
 ## Considerations
 
-{{% include-md file="shared-content/sql-server-considerations.md" %}}
+{{% include-headless "/headless/sql-server-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="sql-server" %}}

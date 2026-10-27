@@ -18,11 +18,20 @@
 
 use std::fmt;
 
-use mz_lowertest::MzReflect;
-use mz_repr::{SqlColumnType, SqlScalarType};
+use mz_repr::{ReprColumnType, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub enum UnmaterializableFunc {
     CurrentDatabase,
     CurrentSchema,
@@ -31,11 +40,11 @@ pub enum UnmaterializableFunc {
     CurrentTimestamp,
     CurrentUser,
     IsRbacEnabled,
-    MzEnvironmentId,
     MzIsSuperuser,
     MzNow,
     MzRoleOidMemberships,
     MzSessionId,
+    MzSessionRoleMemberships,
     MzUptime,
     MzVersion,
     MzVersionNum,
@@ -47,7 +56,7 @@ pub enum UnmaterializableFunc {
 }
 
 impl UnmaterializableFunc {
-    pub fn output_type(&self) -> SqlColumnType {
+    pub fn output_sql_type(&self) -> SqlColumnType {
         match self {
             UnmaterializableFunc::CurrentDatabase => SqlScalarType::String.nullable(false),
             // TODO: The `CurrentSchema` function should return `name`. This is
@@ -69,7 +78,6 @@ impl UnmaterializableFunc {
             }
             UnmaterializableFunc::CurrentUser => SqlScalarType::String.nullable(false),
             UnmaterializableFunc::IsRbacEnabled => SqlScalarType::Bool.nullable(false),
-            UnmaterializableFunc::MzEnvironmentId => SqlScalarType::String.nullable(false),
             UnmaterializableFunc::MzIsSuperuser => SqlScalarType::Bool.nullable(false),
             UnmaterializableFunc::MzNow => SqlScalarType::MzTimestamp.nullable(false),
             UnmaterializableFunc::MzRoleOidMemberships => SqlScalarType::Map {
@@ -78,6 +86,9 @@ impl UnmaterializableFunc {
             }
             .nullable(false),
             UnmaterializableFunc::MzSessionId => SqlScalarType::Uuid.nullable(false),
+            UnmaterializableFunc::MzSessionRoleMemberships => {
+                SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)
+            }
             UnmaterializableFunc::MzUptime => SqlScalarType::Interval.nullable(true),
             UnmaterializableFunc::MzVersion => SqlScalarType::String.nullable(false),
             UnmaterializableFunc::MzVersionNum => SqlScalarType::Int32.nullable(false),
@@ -94,6 +105,51 @@ impl UnmaterializableFunc {
             .nullable(false),
         }
     }
+
+    /// Computes the representation type of this unmaterializable function.
+    ///
+    /// This is a wrapper around [`Self::output_sql_type`] that converts the result to a representation type.
+    pub fn output_type(&self) -> ReprColumnType {
+        ReprColumnType::from(&self.output_sql_type())
+    }
+}
+
+impl UnmaterializableFunc {
+    /// Whether this function is relevant to user data product queries when
+    /// `restrict_to_user_objects` is active. Functions that return internal
+    /// system information (version, uptime, role hierarchy, etc.) are excluded
+    /// because they expose system internals outside the scope of data product queries.
+    ///
+    /// No wildcard arm: adding a new variant forces a compile-time decision.
+    pub fn allowed_in_restricted_session(&self) -> bool {
+        match self {
+            // Session identity and time: needed for normal query execution.
+            // MzSessionRoleMemberships returns only the current session's role
+            // chain (not the full system graph). The mz_show_my_* privilege
+            // views and user views that filter rows by role depend on it.
+            Self::CurrentDatabase
+            | Self::CurrentSchema
+            | Self::CurrentSchemasWithSystem
+            | Self::CurrentSchemasWithoutSystem
+            | Self::CurrentTimestamp
+            | Self::CurrentUser
+            | Self::SessionUser
+            | Self::MzNow
+            | Self::MzSessionId
+            | Self::MzSessionRoleMemberships => true,
+            // Session config inspection
+            Self::IsRbacEnabled | Self::ViewableVariables => true,
+            // Internal system information: not relevant to data product queries
+            Self::MzIsSuperuser
+            | Self::MzRoleOidMemberships
+            | Self::MzUptime
+            | Self::MzVersion
+            | Self::MzVersionNum
+            | Self::PgBackendPid
+            | Self::PgPostmasterStartTime
+            | Self::Version => false,
+        }
+    }
 }
 
 impl fmt::Display for UnmaterializableFunc {
@@ -108,11 +164,13 @@ impl fmt::Display for UnmaterializableFunc {
             UnmaterializableFunc::CurrentTimestamp => f.write_str("current_timestamp"),
             UnmaterializableFunc::CurrentUser => f.write_str("current_user"),
             UnmaterializableFunc::IsRbacEnabled => f.write_str("is_rbac_enabled"),
-            UnmaterializableFunc::MzEnvironmentId => f.write_str("mz_environment_id"),
             UnmaterializableFunc::MzIsSuperuser => f.write_str("mz_is_superuser"),
             UnmaterializableFunc::MzNow => f.write_str("mz_now"),
             UnmaterializableFunc::MzRoleOidMemberships => f.write_str("mz_role_oid_memberships"),
             UnmaterializableFunc::MzSessionId => f.write_str("mz_session_id"),
+            UnmaterializableFunc::MzSessionRoleMemberships => {
+                f.write_str("mz_session_role_memberships")
+            }
             UnmaterializableFunc::MzUptime => f.write_str("mz_uptime"),
             UnmaterializableFunc::MzVersion => f.write_str("mz_version"),
             UnmaterializableFunc::MzVersionNum => f.write_str("mz_version_num"),

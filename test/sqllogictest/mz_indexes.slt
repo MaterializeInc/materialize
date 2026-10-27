@@ -1,0 +1,169 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Verifies that the mz_indexes materialized view emits well-shaped rows from
+# each of its three union branches: user-created indexes, builtin indexes on
+# the mz_catalog_server cluster, and introspection-source indexes.
+
+# Stable object IDs.
+reset-server
+
+# --- user_indexes branch ------------------------------------------------------
+
+statement ok
+CREATE TABLE t (i INT)
+
+statement ok
+CREATE INDEX t_idx ON t (i)
+
+query T
+SELECT id LIKE 'u%' FROM mz_indexes WHERE name = 't_idx'
+----
+true
+
+query T
+SELECT oid > 0 FROM mz_indexes WHERE name = 't_idx'
+----
+true
+
+query T
+SELECT on_id LIKE 'u%' FROM mz_indexes WHERE name = 't_idx'
+----
+true
+
+query T
+SELECT cluster_id = (SELECT id FROM mz_clusters WHERE name = 'quickstart')
+FROM mz_indexes WHERE name = 't_idx'
+----
+true
+
+query T
+SELECT owner_id = (SELECT id FROM mz_roles WHERE name = 'materialize')
+FROM mz_indexes WHERE name = 't_idx'
+----
+true
+
+query T multiline
+SELECT create_sql FROM mz_indexes WHERE name = 't_idx'
+----
+CREATE INDEX "t_idx" IN CLUSTER [u1] ON [u1 AS "materialize"."public"."t"] ("i")
+EOF
+
+query T multiline
+SELECT redacted_create_sql FROM mz_indexes WHERE name = 't_idx'
+----
+CREATE INDEX t_idx IN CLUSTER [u1] ON [u1 AS materialize.public.t] (i)
+EOF
+
+# --- builtin_indexes branch ---------------------------------------------------
+
+# Builtin index entries must resolve cluster_id to the mz_catalog_server
+# cluster id dynamically (no hardcoded 's2' literal in the MV SQL).
+query T
+SELECT cluster_id = (SELECT id FROM mz_clusters WHERE name = 'mz_catalog_server')
+FROM mz_indexes WHERE name = 'mz_clusters_ind'
+----
+true
+
+query T
+SELECT on_id = (SELECT id FROM mz_objects
+                 WHERE name = 'mz_clusters'
+                   AND schema_id IN (SELECT id FROM mz_schemas WHERE name = 'mz_catalog'))
+FROM mz_indexes WHERE name = 'mz_clusters_ind'
+----
+true
+
+query T
+SELECT owner_id = (SELECT id FROM mz_roles WHERE name = 'mz_system')
+FROM mz_indexes WHERE name = 'mz_clusters_ind'
+----
+true
+
+# create_sql is reconstructed via string concatenation in the MV. Pin its shape
+# against an exact pattern that names the on-relation by both id and qualified
+# name and references the cluster by id.
+query T
+SELECT create_sql LIKE
+    'CREATE INDEX "mz_clusters_ind" IN CLUSTER [%] ON [% AS "mz_catalog"."mz_clusters"] ("id")'
+FROM mz_indexes WHERE name = 'mz_clusters_ind'
+----
+true
+
+# redact_sql strips quotes from non-sensitive identifiers but preserves
+# structure.
+query T
+SELECT redacted_create_sql LIKE
+    'CREATE INDEX mz_clusters_ind IN CLUSTER [%] ON [% AS mz_catalog.mz_clusters] (id)'
+FROM mz_indexes WHERE name = 'mz_clusters_ind'
+----
+true
+
+# Each builtin index in the catalog must appear exactly once — no
+# double-counting between the user_indexes and builtin_indexes branches.
+query I
+SELECT COUNT(*) FROM mz_indexes WHERE name = 'mz_clusters_ind'
+----
+1
+
+# --- introspection_source_indexes branch --------------------------------------
+
+# Introspection-source index ids are `si<n>`-prefixed.
+query T
+SELECT id LIKE 'si%'
+FROM mz_indexes
+WHERE name LIKE 'mz_compute_exports_per_worker_%_primary_idx'
+LIMIT 1
+----
+true
+
+# create_sql refers to the cluster by id and the introspection schema by name.
+query T
+SELECT create_sql LIKE
+    'CREATE INDEX "mz_compute_exports_per_worker_%_primary_idx" IN CLUSTER [%] ON "mz_introspection"."mz_compute_exports_per_worker" ("export_id", "worker_id")'
+FROM mz_indexes
+WHERE name LIKE 'mz_compute_exports_per_worker_%_primary_idx'
+LIMIT 1
+----
+true
+
+# --- coverage / non-emptiness invariants --------------------------------------
+
+# All three branches must contribute at least one row.
+query T
+SELECT (SELECT COUNT(*) FROM mz_indexes WHERE id LIKE 'u%') > 0
+----
+true
+
+query T
+SELECT (SELECT COUNT(*) FROM mz_indexes WHERE id LIKE 's%' AND id NOT LIKE 'si%') > 0
+----
+true
+
+query T
+SELECT (SELECT COUNT(*) FROM mz_indexes WHERE id LIKE 'si%') > 0
+----
+true
+
+# No row may have a NULL in any column (the MV declares ASSERT NOT NULL for all).
+query I
+SELECT COUNT(*)
+FROM mz_indexes
+WHERE id IS NULL
+   OR oid IS NULL
+   OR name IS NULL
+   OR on_id IS NULL
+   OR cluster_id IS NULL
+   OR owner_id IS NULL
+   OR create_sql IS NULL
+   OR redacted_create_sql IS NULL
+----
+0
+
+statement ok
+DROP TABLE t CASCADE

@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
 use futures_util::StreamExt;
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{HashMap, HashSet};
 use mz_ore::metrics::MetricsRegistry;
@@ -59,6 +59,7 @@ pub(crate) const PUBSUB_CLIENT_ENABLED: Config<bool> = Config::new(
     "persist_pubsub_client_enabled",
     true,
     "Whether to connect to the Persist PubSub service.",
+    ParameterScope::Environment,
 );
 
 /// For connected clients, determines whether to push state diffs to the PubSub
@@ -68,6 +69,7 @@ pub(crate) const PUBSUB_PUSH_DIFF_ENABLED: Config<bool> = Config::new(
     "persist_pubsub_push_diff_enabled",
     true,
     "Whether to push state diffs to Persist PubSub.",
+    ParameterScope::Environment,
 );
 
 /// For connected clients, determines whether to push state diffs to the PubSub
@@ -77,6 +79,7 @@ pub(crate) const PUBSUB_SAME_PROCESS_DELEGATE_ENABLED: Config<bool> = Config::ne
     "persist_pubsub_same_process_delegate_enabled",
     true,
     "Whether to push state diffs to Persist PubSub on the same process.",
+    ParameterScope::Environment,
 );
 
 /// Timeout per connection attempt to Persist PubSub service.
@@ -84,6 +87,7 @@ pub(crate) const PUBSUB_CONNECT_ATTEMPT_TIMEOUT: Config<Duration> = Config::new(
     "persist_pubsub_connect_attempt_timeout",
     Duration::from_secs(5),
     "Timeout per connection attempt to Persist PubSub service.",
+    ParameterScope::Environment,
 );
 
 /// Timeout per request attempt to Persist PubSub service.
@@ -91,6 +95,7 @@ pub(crate) const PUBSUB_REQUEST_TIMEOUT: Config<Duration> = Config::new(
     "persist_pubsub_request_timeout",
     Duration::from_secs(5),
     "Timeout per request attempt to Persist PubSub service.",
+    ParameterScope::Environment,
 );
 
 /// Maximum backoff when retrying connection establishment to Persist PubSub service.
@@ -98,6 +103,7 @@ pub(crate) const PUBSUB_CONNECT_MAX_BACKOFF: Config<Duration> = Config::new(
     "persist_pubsub_connect_max_backoff",
     Duration::from_secs(60),
     "Maximum backoff when retrying connection establishment to Persist PubSub service.",
+    ParameterScope::Environment,
 );
 
 /// Size of channel used to buffer send messages to PubSub service.
@@ -105,6 +111,7 @@ pub(crate) const PUBSUB_CLIENT_SENDER_CHANNEL_SIZE: Config<usize> = Config::new(
     "persist_pubsub_client_sender_channel_size",
     25,
     "Size of channel used to buffer send messages to PubSub service.",
+    ParameterScope::Environment,
 );
 
 /// Size of channel used to buffer received messages from PubSub service.
@@ -112,6 +119,7 @@ pub(crate) const PUBSUB_CLIENT_RECEIVER_CHANNEL_SIZE: Config<usize> = Config::ne
     "persist_pubsub_client_receiver_channel_size",
     25,
     "Size of channel used to buffer received messages from PubSub service.",
+    ParameterScope::Environment,
 );
 
 /// Size of channel used per connection to buffer broadcasted messages from PubSub server.
@@ -119,6 +127,7 @@ pub(crate) const PUBSUB_SERVER_CONNECTION_CHANNEL_SIZE: Config<usize> = Config::
     "persist_pubsub_server_connection_channel_size",
     25,
     "Size of channel used per connection to buffer broadcasted messages from PubSub server.",
+    ParameterScope::Environment,
 );
 
 /// Size of channel used by the state cache to broadcast shard state references.
@@ -126,6 +135,7 @@ pub(crate) const PUBSUB_STATE_CACHE_SHARD_REF_CHANNEL_SIZE: Config<usize> = Conf
     "persist_pubsub_state_cache_shard_ref_channel_size",
     25,
     "Size of channel used by the state cache to broadcast shard state references.",
+    ParameterScope::Environment,
 );
 
 /// Backoff after an established connection to Persist PubSub service fails.
@@ -133,7 +143,14 @@ pub(crate) const PUBSUB_RECONNECT_BACKOFF: Config<Duration> = Config::new(
     "persist_pubsub_reconnect_backoff",
     Duration::from_secs(5),
     "Backoff after an established connection to Persist PubSub service fails.",
+    ParameterScope::Environment,
 );
+
+/// Max message size, used to configure gRPC servers and clients.
+///
+/// While `max_encoding_message_size` defaults to `usize::MAX`, `max_decoding_message_size` only
+/// defaults to 4MB, so we bump it to avoid protocol errors.
+const MAX_GRPC_MESSAGE_SIZE: usize = usize::MAX;
 
 /// Top-level Trait to create a PubSubClient.
 ///
@@ -324,7 +341,7 @@ impl GrpcPubSubClient {
                 .await;
 
             let mut client = match client {
-                Ok(client) => client,
+                Ok(client) => client.max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
                 Err(err) => {
                     error!("fatal error connecting to persist pubsub: {:?}", err);
                     return;
@@ -347,32 +364,53 @@ impl GrpcPubSubClient {
                 .broadcast_recv_lagged_count
                 .clone();
 
+            // `client.pub_sub(...)` starts a hyper background task reading from the
+            // `broadcast_messages` stream, to serve the HTTP2 connection. The broadcast stream
+            // doesn't normally terminate, which means the HTTP2 connection doesn't terminate
+            // either. We set up a cancelation token to force termination and avoid a connection
+            // leak.
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
             // shard subscriptions are tracked by connection on the server, so if our
             // gRPC stream is ever swapped out, we must inform the server which shards
             // our client intended to be subscribed to.
             let broadcast_messages = async_stream::stream! {
+                let mut cancel_rx = std::pin::pin!(cancel_rx);
                 'reconnect: loop {
                     // If we have active subscriptions, resend them.
                     for id in sender.subscriptions() {
                         debug!("re-subscribing to shard: {id}");
-                        yield create_request(proto_pub_sub_message::Message::Subscribe(ProtoSubscribe {
-                            shard_id: id.into_proto(),
-                        }));
+                        let msg = proto_pub_sub_message::Message::Subscribe(
+                            ProtoSubscribe {
+                                shard_id: id.into_proto(),
+                            },
+                        );
+                        yield create_request(msg);
                     }
 
                     // Forward on messages from the broadcast channel, reconnecting if necessary.
-                    while let Some(message) = broadcast.next().await {
-                        debug!("sending pubsub message: {:?}", message);
-                        match message {
-                            Ok(message) => yield message,
-                            Err(BroadcastStreamRecvError::Lagged(i)) => {
-                                broadcast_errors.inc_by(i);
-                                continue 'reconnect;
+                    loop {
+                        tokio::select! {
+                            message = broadcast.next() => {
+                                debug!("sending pubsub message: {:?}", message);
+                                match message {
+                                    Some(Ok(message)) => yield message,
+                                    Some(Err(BroadcastStreamRecvError::Lagged(i))) => {
+                                        broadcast_errors.inc_by(i);
+                                        continue 'reconnect;
+                                    }
+                                    None => {
+                                        debug!("exhausted pubsub broadcast stream; shutting down");
+                                        return;
+                                    }
+                                }
+                            }
+                            _ = &mut cancel_rx => {
+                                debug!("pubsub broadcast stream cancelled; shutting down");
+                                return;
                             }
                         }
                     }
-                    debug!("exhausted pubsub broadcast stream; shutting down");
-                    break;
                 }
             };
             let pubsub_request =
@@ -393,6 +431,8 @@ impl GrpcPubSubClient {
                 metrics.as_ref(),
             )
             .await;
+
+            drop(cancel_tx);
 
             match stream_completed {
                 // common case: reconnect due to some transient error
@@ -1061,7 +1101,10 @@ impl PersistGrpcPubSubServer {
     pub async fn serve(self, listen_addr: SocketAddr) -> Result<(), anyhow::Error> {
         // Increase the default message decoding limit to avoid unnecessary panics
         tonic::transport::Server::builder()
-            .add_service(ProtoPersistPubSubServer::new(self).max_decoding_message_size(usize::MAX))
+            .add_service(
+                ProtoPersistPubSubServer::new(self)
+                    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
+            )
             .serve(listen_addr)
             .await?;
         Ok(())
@@ -1074,7 +1117,10 @@ impl PersistGrpcPubSubServer {
         listener: tokio_stream::wrappers::TcpListenerStream,
     ) -> Result<(), anyhow::Error> {
         tonic::transport::Server::builder()
-            .add_service(ProtoPersistPubSubServer::new(self))
+            .add_service(
+                ProtoPersistPubSubServer::new(self)
+                    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
+            )
             .serve_with_incoming(listener)
             .await?;
         Ok(())

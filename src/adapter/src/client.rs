@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -18,30 +17,36 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use futures::{Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
+use mz_auth::{Authenticated, AuthenticatorKind};
 use mz_build_info::BuildInfo;
 use mz_compute_types::ComputeInstanceId;
+use mz_expr::UnmaterializableFunc;
+use mz_expr::{CollectionPlan, RowSetFinishing};
 use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID, org_id_conn_bits};
 use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn, to_datetime};
-use mz_ore::result::ResultExt;
+use mz_ore::str::StrExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{CatalogItemId, ColumnIndex, Row, SqlScalarType};
+use mz_repr::user::InternalUserMetadata;
+use mz_repr::{CatalogItemId, ColumnIndex, SqlScalarType};
+use mz_sql::ast::ConstantVisitor;
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
+use mz_sql::plan::{MutationKind, Plan, ReadThenWritePlan};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
-use mz_sql::session::vars::{
-    CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, OwnedVarInput, SystemVars, Var,
-};
+use mz_sql::session::vars::{CLUSTER, OwnedVarInput, SystemVars, Var};
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{InsertStatement, StatementKind};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -51,16 +56,24 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{
-    AuthResponse, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response,
-    SASLChallengeResponse, SASLVerifyProofResponse,
+    CatalogDump, CatalogSnapshot, Command, CopyFromStdinWriter, ExecuteResponse, Response,
+    SASLChallengeResponse, SASLVerifyProofResponse, SuperuserAttribute,
 };
+use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
+use crate::coord::read_then_write::DependencyPolicy;
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
+use crate::frontend_read_then_write::{
+    FrontendWriteAttemptState, FrontendWriteCancellation, contains_mz_now,
+    validate_selection_dependencies,
+};
 use crate::metrics::Metrics;
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle};
-use crate::optimize::{self, Optimize};
+use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
+use crate::optimize::{self, Optimize, OptimizerError};
+use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
+    TransactionStatus,
 };
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
@@ -148,29 +161,35 @@ impl Client {
     /// Creates a new session associated with this client for the given user.
     ///
     /// It is the caller's responsibility to have authenticated the user.
-    pub fn new_session(&self, config: SessionConfig) -> Session {
+    /// We pass in an Authenticated marker as a guardrail to ensure the
+    /// user has authenticated with an authenticator before creating a session.
+    pub fn new_session(&self, config: SessionConfig, _authenticated: Authenticated) -> Session {
         // We use the system clock to determine when a session connected to Materialize. This is not
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
         Session::new(self.build_info, config, self.metrics().session_metrics())
     }
 
-    /// Preforms an authentication check for the given user.
+    /// Used by [mz_auth::AuthenticatorKind::Password]
+    /// to verify the provided user's password against the
+    /// stored credentials in the catalog.
     pub async fn authenticate(
         &self,
         user: &String,
         password: &Password,
-    ) -> Result<AuthResponse, AdapterError> {
+    ) -> Result<Authenticated, AdapterError> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::AuthenticatePassword {
             role_name: user.to_string(),
             password: Some(password.clone()),
             tx,
         });
-        let response = rx.await.expect("sender dropped")?;
-        Ok(response)
+        rx.await.expect("sender dropped")?;
+        Ok(Authenticated)
     }
 
+    /// Used by [mz_auth::AuthenticatorKind::Sasl] for SASL-SCRAM authentication.
+    /// This is used prior to [Client::verify_sasl_proof].
     pub async fn generate_sasl_challenge(
         &self,
         user: &String,
@@ -186,13 +205,15 @@ impl Client {
         Ok(response)
     }
 
+    /// Used by [mz_auth::AuthenticatorKind::Sasl] for SASL-SCRAM authentication.
+    /// This is used after [Client::generate_sasl_challenge].
     pub async fn verify_sasl_proof(
         &self,
         user: &String,
         proof: &String,
         nonce: &String,
         mock_hash: &String,
-    ) -> Result<SASLVerifyProofResponse, AdapterError> {
+    ) -> Result<(SASLVerifyProofResponse, Authenticated), AdapterError> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::AuthenticateVerifySASLProof {
             role_name: user.to_string(),
@@ -202,7 +223,17 @@ impl Client {
             tx,
         });
         let response = rx.await.expect("sender dropped")?;
-        Ok(response)
+        Ok((response, Authenticated))
+    }
+
+    /// Checks if a role exists and has the `LOGIN` attribute.
+    pub async fn role_can_login(&self, role_name: &str) -> Result<(), AdapterError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::CheckRoleCanLogin {
+            role_name: role_name.to_string(),
+            tx,
+        });
+        rx.await.expect("sender dropped")
     }
 
     /// Upgrades this client to a session client.
@@ -230,11 +261,18 @@ impl Client {
         // This guard prevents a race where the startup command finishes, but the Future returned
         // by this function is concurrently dropped, so we never create a `SessionClient` and thus
         // never cleanup the initialized Session.
-        let rx = rx.with_guard(|_| {
-            self.send(Command::Terminate {
-                conn_id: conn_id.clone(),
-                tx: None,
-            });
+        //
+        // NOTE: Terminate must only be sent for a successful startup. On a failed startup the
+        // Coordinator never registered the connection, so a Terminate for it would trip the
+        // Coordinator's "unknown connection" assertion. There is also nothing that needs
+        // cleaning up, see the invariant on `Coordinator::handle_startup_inner`.
+        let rx = rx.with_guard(|resp: Result<StartupResponse, _>| {
+            if resp.is_ok() {
+                self.send(Command::Terminate {
+                    conn_id: conn_id.clone(),
+                    tx: None,
+                });
+            }
         });
 
         self.send(Command::Startup {
@@ -265,15 +303,23 @@ impl Client {
             optimizer_metrics,
             persist_client,
             statement_logging_frontend,
+            superuser_attribute,
+            occ_write_semaphore,
+            group_commit_notifier,
+            read_only,
         } = response;
 
         let peek_client = PeekClient::new(
-            self.clone(),
+            CoordinatorClient::Session(self.clone()),
+            &catalog,
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
             persist_client,
             statement_logging_frontend,
+            occ_write_semaphore,
+            group_commit_notifier,
+            read_only,
         );
 
         let mut client = SessionClient {
@@ -283,10 +329,16 @@ impl Client {
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
             peek_client,
-            enable_frontend_peek_sequencing: false, // initialized below, once we have a ConnCatalog
         };
 
         let session = client.session();
+
+        // Apply the superuser attribute to the session's user if
+        // it exists.
+        if let SuperuserAttribute(Some(superuser)) = superuser_attribute {
+            session.apply_internal_user_metadata(InternalUserMetadata { superuser });
+        }
+
         session.initialize_role_metadata(role_id);
         let vars_mut = session.vars_mut();
         for (name, val) in session_defaults {
@@ -324,7 +376,7 @@ impl Client {
             // formats nicely in both `psql` and the console's SQL shell.
             session.add_notice(AdapterNotice::Welcome(format!(
                 "connected to Materialize v{}
-  Org ID: {}
+  Environment ID: {}
   Region: {}
   User: {}
   Cluster: {}
@@ -337,7 +389,7 @@ Issue a SQL query to get started. Need help?
   Join our Slack community: https://materialize.com/s/chat
     ",
                 session.vars().build_info().semver_version(),
-                self.environment_id.organization_id(),
+                self.environment_id,
                 self.environment_id.region(),
                 session.vars().user().name,
                 cluster_info,
@@ -415,10 +467,6 @@ Issue a SQL query to get started. Need help?
             }
         }
 
-        client.enable_frontend_peek_sequencing = ENABLE_FRONTEND_PEEK_SEQUENCING
-            .require(catalog.system_vars())
-            .is_ok();
-
         Ok(client)
     }
 
@@ -438,15 +486,19 @@ Issue a SQL query to get started. Need help?
     ) -> Result<Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send>>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
-        let session = self.new_session(SessionConfig {
-            conn_id,
-            uuid: Uuid::new_v4(),
-            user: SUPPORT_USER.name.clone(),
-            client_ip: None,
-            external_metadata_rx: None,
-            internal_user_metadata: None,
-            helm_chart_version: None,
-        });
+        let session = self.new_session(
+            SessionConfig {
+                conn_id,
+                uuid: Uuid::new_v4(),
+                user: SUPPORT_USER.name.clone(),
+                client_ip: None,
+                external_metadata_rx: None,
+                helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
+                groups: None,
+            },
+            Authenticated,
+        );
         let mut session_client = self.startup(session).await?;
 
         // Parse the SQL statement.
@@ -462,10 +514,10 @@ Issue a SQL query to get started. Need help?
             .declare(EMPTY_PORTAL.into(), stmt, sql.to_string())
             .await?;
 
-        match session_client
+        let execute_result = session_client
             .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
-            .await?
-        {
+            .await?;
+        match execute_result {
             (ExecuteResponse::SendingRowsStreaming { mut rows, .. }, _) => {
                 // We have to only drop the session client _after_ we read the
                 // result. Otherwise the peek will get cancelled right when we
@@ -525,11 +577,58 @@ Issue a SQL query to get started. Need help?
         rx.await.expect("coordinator unexpectedly gone")
     }
 
+    /// Returns a snapshot of the catalog.
+    ///
+    /// Does a Coordinator round-trip. Session-bound callers should
+    /// prefer [`SessionClient::catalog_snapshot`], which serves from the
+    /// session's snapshot cache.
+    pub async fn catalog_snapshot_expensive(&self) -> Arc<Catalog> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::CatalogSnapshot { tx });
+        let CatalogSnapshot { catalog } = rx.await.expect("coordinator unexpectedly gone");
+        catalog
+    }
+
+    /// Reconciles the coordinator's scoped feature-flag working copy towards
+    /// `overrides`. Used by the system-parameter sync loop from continuous
+    /// LaunchDarkly evaluation.
+    ///
+    /// `prune_scope` bounds which objects' rows the reconcile may remove (the
+    /// objects `overrides` was evaluated for). The sync loop passes the live
+    /// objects from its snapshot. See
+    /// [`crate::catalog::Op::UpdateScopedSystemParameters`].
+    pub async fn update_scoped_system_parameters(
+        &self,
+        overrides: ScopedParameters,
+        prune_scope: ScopedParametersScope,
+    ) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::UpdateScopedSystemParameters {
+            overrides,
+            prune_scope,
+            tx,
+        });
+        let _ = rx.await;
+    }
+
+    /// Installs (or replaces) the shared system-parameter frontend on the
+    /// coordinator, letting the create-cluster / create-replica paths resolve a
+    /// new object's scoped overrides synchronously. Sent by the sync loop each
+    /// time it (re)initializes the frontend. Fire-and-forget.
+    pub fn install_scoped_system_parameter_frontend(&self, frontend: Arc<SystemParameterFrontend>) {
+        self.send(Command::InstallScopedSystemParameterFrontend { frontend });
+    }
+
     #[instrument(level = "debug")]
-    pub(crate) fn send(&self, cmd: Command) {
+    pub(crate) fn try_send(&self, cmd: Command) -> bool {
         self.inner_cmd_tx
             .send((OpenTelemetryContext::obtain(), cmd))
-            .expect("coordinator unexpectedly gone");
+            .is_ok()
+    }
+
+    #[instrument(level = "debug")]
+    pub(crate) fn send(&self, cmd: Command) {
+        assert!(self.try_send(cmd), "coordinator unexpectedly gone");
     }
 }
 
@@ -549,11 +648,6 @@ pub struct SessionClient {
     environment_id: EnvironmentId,
     /// Client for frontend peek sequencing; populated at connection startup.
     peek_client: PeekClient,
-    /// Whether frontend peek sequencing is enabled; initialized at connection startup.
-    // TODO(peek-seq): Currently, this is initialized only at session startup. We'll be able to
-    // check the actual feature flag value at every peek (without a Coordinator call) once we'll
-    // always have a catalog snapshot at hand.
-    pub enable_frontend_peek_sequencing: bool,
 }
 
 impl SessionClient {
@@ -705,39 +799,231 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextGuard>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+        let cancel_future = cancel_future.map(|_| ()).shared();
+
+        // Owning the end-of-execution obligation in this frame is what lets
+        // cancellation report an error: the inner future can be dropped without
+        // the obligation going with it. See `ExecutionLogging`.
+        let mut logging = ExecutionLogging::adopt(outer_ctx_extra, &self.peek_client);
+
+        let result = self
+            .execute_attempts(portal_name, &mut logging, cancel_future)
+            .await;
+
+        logging.retire(&result);
+
+        result.map(|response| (response, execute_started))
+    }
+
+    /// Runs the execution paths in order of preference: frontend peek
+    /// sequencing, frontend read-then-write sequencing, and finally the
+    /// coordinator via `Command::Execute`.
+    async fn execute_attempts(
+        &mut self,
+        portal_name: String,
+        logging: &mut ExecutionLogging,
+        cancel_future: impl Future<Output = ()> + Send + Clone,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // Unroll SQL `EXECUTE <prepared> (...)` so the inner statement
+        // flows through `try_frontend_peek` /
+        // `try_frontend_read_then_write` below, rather than being
+        // re-dispatched via `Command::Execute` from the coordinator's
+        // `Plan::Execute` handler. Without this, a prepared statement
+        // would route differently from the same statement issued
+        // directly.
+        //
+        // On a successful unroll, `unroll_sql_execute` also takes over
+        // statement logging on the outer portal, so that
+        // `mz_statement_execution_history` records `EXECUTE foo (...)`
+        // rather than the inner SQL.
+        let portal_name = self.unroll_sql_execute(portal_name, logging).await?;
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
         // TODO(peek-seq): wire up cancel_future
-        let mut outer_ctx_extra = outer_ctx_extra;
-        if let Some(resp) = self
-            .try_frontend_peek(&portal_name, &mut outer_ctx_extra)
-            .await?
-        {
+        let peek_result = self.try_frontend_peek(&portal_name, logging).await?;
+        if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
-            // Frontend peek handled the execution and retired outer_ctx_extra if it existed.
-            // No additional work needed here.
-            return Ok((resp, execute_started));
-        } else {
-            debug!("frontend peek did not happen, falling back to `Command::Execute`");
-            // If we bailed out, outer_ctx_extra is still present (if it was originally).
-            // `Command::Execute` will handle it.
-            // (This is not true if we bailed out _after_ the frontend peek sequencing has already
-            // begun its own statement logging. That case would be a bug.)
+            return Ok(resp);
+        }
+        debug!("frontend peek did not happen, trying frontend read-then-write");
+
+        // Attempt read-then-write sequencing in the session task.
+        let rtw_result = self
+            .try_frontend_read_then_write_with_cancel(&portal_name, logging, cancel_future.clone())
+            .await?;
+        if let Some(resp) = rtw_result {
+            debug!("frontend read-then-write succeeded");
+            return Ok(resp);
+        }
+        debug!("frontend read-then-write did not happen, falling back to `Command::Execute`");
+
+        // No frontend path took the statement over, so the coordinator retires
+        // whatever entry we hold, or begins its own if we hold none.
+        let outer_ctx_extra = logging.release();
+        self.send_with_cancel(
+            |tx, session| Command::Execute {
+                portal_name,
+                session,
+                tx,
+                outer_ctx_extra,
+            },
+            cancel_future,
+        )
+        .await
+    }
+
+    /// If the named portal binds a SQL `EXECUTE <prepared>`, resolve the
+    /// prepared statement, install a fresh portal for the inner statement
+    /// (carrying the EXECUTE's actual parameter values), and return that
+    /// portal's name so the caller can run `try_frontend_peek` /
+    /// `try_frontend_read_then_write` against it.
+    ///
+    /// Only ever unrolls one level: the parser rejects
+    /// `PREPARE foo AS EXECUTE bar` (matching Postgres), so the inner
+    /// statement is guaranteed not to be another `EXECUTE`. A failsafe below
+    /// surfaces an internal error if that invariant is ever violated.
+    ///
+    /// When the portal does not bind an `EXECUTE`, the common case, returns the
+    /// original portal name, costing only a portal lookup.
+    async fn unroll_sql_execute(
+        &mut self,
+        portal_name: String,
+        logging: &mut ExecutionLogging,
+    ) -> Result<String, AdapterError> {
+        let (stmt, params, outer_logging, outer_lifecycle_timestamps) = {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            let portal = match session.get_portal_unverified(&portal_name) {
+                Some(p) => p,
+                // No portal: let `try_frontend_peek` /
+                // `try_frontend_read_then_write` surface the
+                // standard "missing portal" error.
+                None => return Ok(portal_name),
+            };
+            match &portal.stmt {
+                Some(stmt) => (
+                    Arc::clone(stmt),
+                    portal.parameters.clone(),
+                    Arc::clone(&portal.logging),
+                    portal.lifecycle_timestamps.clone(),
+                ),
+                None => return Ok(portal_name),
+            }
+        };
+
+        // Only EXECUTE statements need unrolling. Bail out before taking a
+        // catalog snapshot in the (overwhelmingly common) non-EXECUTE case.
+        if !matches!(&*stmt, Statement::Execute(_)) {
+            return Ok(portal_name);
         }
 
-        let response = self
-            .send_with_cancel(
-                |tx, session| Command::Execute {
-                    portal_name,
-                    session,
-                    tx,
-                    outer_ctx_extra,
-                },
-                cancel_future,
-            )
-            .await?;
-        Ok((response, execute_started))
+        let catalog = self.catalog_snapshot("unroll_sql_execute").await;
+
+        // Validate the outer EXECUTE portal against the (possibly newer)
+        // catalog: ensures the recorded portal description still matches
+        // what describing the EXECUTE would produce now.
+        {
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            Coordinator::verify_portal(&catalog, session, &portal_name)?;
+        }
+
+        // Take over the EXECUTE itself, so that a planning error below produces
+        // an errored end-event in `mz_statement_execution_history` rather than
+        // no entry at all. We pass the *outer* portal's `logging` and
+        // pgwire-bound `params` so the recorded entry shows the user-visible
+        // `EXECUTE foo (...)`, not the inner SQL. The inner statement gets its
+        // own `query_total` increment when a frontend path takes it over, or,
+        // on bailout, in the coordinator's `handle_execute`.
+        logging.take_over(
+            &self.peek_client,
+            self.session.as_mut().expect("SessionClient invariant"),
+            Some(&stmt),
+            &params,
+            &outer_logging,
+            &catalog,
+            outer_lifecycle_timestamps,
+            TakeOver::UnrolledExecute,
+        );
+
+        self.install_inner_portal_for_execute(&catalog, &stmt, &params)
+    }
+
+    /// Helper for [`Self::unroll_sql_execute`]: plans the outer
+    /// `Statement::Execute`, verifies the referenced prepared statement, and
+    /// installs a fresh portal carrying the inner statement plus the
+    /// EXECUTE's bound parameter values. Returns the new portal's name.
+    fn install_inner_portal_for_execute(
+        &mut self,
+        catalog: &Arc<Catalog>,
+        stmt: &Arc<Statement<Raw>>,
+        params: &mz_sql::plan::Params,
+    ) -> Result<String, AdapterError> {
+        use mz_sql::plan::Plan;
+
+        let execute_plan = {
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            let conn_catalog = catalog.for_session(session);
+            let (resolved_stmt, resolved_ids) =
+                mz_sql::names::resolve(&conn_catalog, (**stmt).clone())?;
+            let pcx = session.pcx();
+            let (plan, _sql_impl_ids) = mz_sql::plan::plan(
+                Some(pcx),
+                &conn_catalog,
+                resolved_stmt,
+                params,
+                &resolved_ids,
+            )?;
+            match plan {
+                Plan::Execute(plan) => plan,
+                other => {
+                    // Planning a `Statement::Execute` must yield
+                    // `Plan::Execute`. If it doesn't, the planner
+                    // contract is broken.
+                    return Err(AdapterError::Internal(format!(
+                        "planning Statement::Execute yielded unexpected plan: {:?}",
+                        mz_sql::plan::PlanKind::from(&other),
+                    )));
+                }
+            }
+        };
+
+        // Verify and install the inner portal. The new portal carries the
+        // inner prepared statement's `logging`, but the logging slot already
+        // holds the EXECUTE-level entry, so a frontend path taking the inner
+        // statement over inherits that entry instead of starting fresh from
+        // this portal.
+        let session = self.session.as_mut().expect("SessionClient invariant");
+        Coordinator::verify_prepared_statement(catalog, session, &execute_plan.name)?;
+        let ps = session
+            .get_prepared_statement_unverified(&execute_plan.name)
+            .expect("verified above");
+        let inner_stmt = ps.stmt().cloned();
+        let inner_desc = ps.desc().clone();
+        let state_revision = ps.state_revision;
+        let inner_logging = Arc::clone(ps.logging());
+
+        // Failsafe: `PREPARE foo AS EXECUTE bar` is rejected by the parser,
+        // so the resolved inner statement must not be another `EXECUTE`. If
+        // that ever changes, we'd silently skip frontend sequencing for the
+        // deeper EXECUTEs. Surface it as an internal error instead.
+        if let Some(inner) = inner_stmt.as_ref() {
+            if matches!(inner, Statement::Execute(_)) {
+                return Err(AdapterError::Internal(format!(
+                    "nested EXECUTE: prepared statement {} resolves to another EXECUTE; \
+                     parser should reject `PREPARE ... AS EXECUTE ...`",
+                    execute_plan.name.quoted(),
+                )));
+            }
+        }
+
+        session.create_new_portal(
+            inner_stmt,
+            inner_logging,
+            inner_desc,
+            execute_plan.params,
+            Vec::new(),
+            state_revision,
+        )
     }
 
     fn now(&self) -> EpochMillis {
@@ -794,26 +1080,35 @@ impl SessionClient {
         self.session = Some(session);
     }
 
-    /// Fetches the catalog.
+    /// Fetches the catalog, served from the session-side snapshot cache when
+    /// the catalog is unchanged since the cached snapshot was taken. See
+    /// [`PeekClient::catalog_snapshot`].
     #[instrument(level = "debug")]
-    pub async fn catalog_snapshot(&self, context: &str) -> Arc<Catalog> {
-        let start = std::time::Instant::now();
-        let CatalogSnapshot { catalog } = self
-            .send_without_session(|tx| Command::CatalogSnapshot { tx })
+    pub async fn catalog_snapshot(&mut self, context: &str) -> Arc<Catalog> {
+        self.peek_client.catalog_snapshot(context).await
+    }
+
+    /// Reports whether `enable_statement_arrival_logging` is on.
+    pub async fn statement_arrival_logging_enabled(&mut self) -> bool {
+        let catalog = self.catalog_snapshot("statement_arrival_logging").await;
+        catalog.system_config().enable_statement_arrival_logging()
+    }
+
+    /// Reports whether `enable_extended_protocol_implicit_transaction` is on.
+    pub async fn extended_protocol_implicit_transaction_enabled(&mut self) -> bool {
+        let catalog = self
+            .catalog_snapshot("extended_protocol_implicit_transaction")
             .await;
-        self.inner()
-            .metrics()
-            .catalog_snapshot_seconds
-            .with_label_values(&[context])
-            .observe(start.elapsed().as_secs_f64());
         catalog
+            .system_config()
+            .enable_extended_protocol_implicit_transaction()
     }
 
     /// Dumps the catalog to a JSON string.
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn dump_catalog(&self) -> Result<CatalogDump, AdapterError> {
+    pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
         let catalog = self.catalog_snapshot("dump_catalog").await;
         catalog.dump().map_err(AdapterError::from)
     }
@@ -823,7 +1118,7 @@ impl SessionClient {
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn check_catalog(&self) -> Result<(), serde_json::Value> {
+    pub async fn check_catalog(&mut self) -> Result<(), serde_json::Value> {
         let catalog = self.catalog_snapshot("check_catalog").await;
         catalog.check_consistency()
     }
@@ -861,55 +1156,49 @@ impl SessionClient {
         }
     }
 
-    /// Inserts a set of rows into the given table.
+    /// Sets up a streaming COPY FROM STDIN operation.
     ///
-    /// The rows only contain the columns positions in `columns`, so they
-    /// must be re-encoded for adding the default values for the remaining
-    /// ones.
-    pub async fn insert_rows(
+    /// Sends a command to the coordinator to create a background batch
+    /// builder task. Returns a [`CopyFromStdinWriter`] that pgwire uses
+    /// to stream decoded rows.
+    pub async fn start_copy_from_stdin(
         &mut self,
         target_id: CatalogItemId,
         target_name: String,
         columns: Vec<ColumnIndex>,
-        rows: Vec<Row>,
-        ctx_extra: ExecuteContextGuard,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        // TODO: Remove this clone once we always have the session. It's currently needed because
-        // self.session returns a mut ref, so we can't call it twice.
-        let pcx = self.session().pcx().clone();
-
-        let session_meta = self.session().meta();
-
-        let catalog = self.catalog_snapshot("insert_rows").await;
-        let conn_catalog = catalog.for_session(self.session());
-        let catalog_state = conn_catalog.state();
-
-        // Collect optimizer parameters.
-        let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
-        let prep = ExprPrepStyle::OneShot {
-            logical_time: EvalTime::NotAvailable,
-            session: &session_meta,
-            catalog_state,
-        };
-        let mut optimizer =
-            optimize::view::Optimizer::new_with_prep_no_limit(optimizer_config.clone(), None, prep);
-
-        let result: Result<_, AdapterError> = mz_sql::plan::plan_copy_from(
-            &pcx,
-            &conn_catalog,
+        row_desc: mz_repr::RelationDesc,
+        params: mz_pgcopy::CopyFormatParams<'static>,
+    ) -> Result<CopyFromStdinWriter, AdapterError> {
+        self.send(|tx, session| Command::StartCopyFromStdin {
             target_id,
             target_name,
             columns,
-            rows,
-        )
-        .err_into()
-        .and_then(|values| optimizer.optimize(values).err_into())
-        .and_then(|values| {
-            // Copied rows must always be constants.
-            Coordinator::insert_constant(&catalog, self.session(), target_id, values.into_inner())
-        });
-        self.retire_execute(ctx_extra, (&result).into());
-        result
+            row_desc,
+            params,
+            session,
+            tx,
+        })
+        .await
+    }
+
+    /// Commits staged COPY FROM STDIN batches to a table.
+    ///
+    /// Adds the pre-built persist batches to the session's transaction
+    /// operations. The actual commit happens when the transaction ends.
+    pub fn stage_copy_from_stdin_batches(
+        &mut self,
+        target_id: CatalogItemId,
+        batches: Vec<mz_persist_client::batch::ProtoBatch>,
+    ) -> Result<(), AdapterError> {
+        use crate::session::{TransactionOps, WriteOp};
+        use mz_storage_client::client::TableData;
+
+        self.session()
+            .add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+                id: target_id,
+                rows: TableData::Batches(batches.into()),
+            }]))?;
+        Ok(())
     }
 
     /// Gets the current value of all system variables.
@@ -925,6 +1214,23 @@ impl SessionClient {
         let conn_id = self.session().conn_id().clone();
         self.send_without_session(|tx| Command::SetSystemVars { vars, conn_id, tx })
             .await
+    }
+
+    /// Injects audit events into the catalog via the coordinator.
+    ///
+    /// No authorization is performed, so access to this function must be limited to internal
+    /// servers or superusers.
+    pub async fn inject_audit_events(
+        &mut self,
+        events: Vec<crate::catalog::InjectedAuditEvent>,
+    ) -> Result<(), AdapterError> {
+        let conn_id = self.session().conn_id().clone();
+        self.send_without_session(|tx| Command::InjectAuditEvents {
+            events,
+            conn_id,
+            tx,
+        })
+        .await
     }
 
     /// Terminates the client session.
@@ -978,7 +1284,7 @@ impl SessionClient {
     async fn send_with_cancel<T, F>(
         &mut self,
         f: F,
-        cancel_future: impl Future<Output = std::io::Error> + Send,
+        cancel_future: impl Future<Output = ()> + Send,
     ) -> Result<T, AdapterError>
     where
         F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
@@ -1019,16 +1325,20 @@ impl SessionClient {
             match cmd {
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::GetWebhook { .. } => typ = Some("webhook"),
-                Command::Startup { .. }
+                Command::StartCopyFromStdin { .. }
+                | Command::Startup { .. }
                 | Command::AuthenticatePassword { .. }
                 | Command::AuthenticateGetSASLChallenge { .. }
                 | Command::AuthenticateVerifySASLProof { .. }
+                | Command::CheckRoleCanLogin { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
                 | Command::PrivilegedCancelRequest { .. }
                 | Command::GetSystemVars { .. }
                 | Command::SetSystemVars { .. }
+                | Command::UpdateScopedSystemParameters { .. }
+                | Command::InstallScopedSystemParameterFrontend { .. }
                 | Command::Terminate { .. }
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }
@@ -1039,13 +1349,20 @@ impl SessionClient {
                 | Command::GetTransactionReadHoldsBundle { .. }
                 | Command::StoreTransactionReadHolds { .. }
                 | Command::ExecuteSlowPathPeek { .. }
+                | Command::ExecuteSubscribe { .. }
                 | Command::CopyToPreflight { .. }
                 | Command::ExecuteCopyTo { .. }
                 | Command::ExecuteSideEffectingFunc { .. }
+                | Command::LookupConnection { .. }
                 | Command::RegisterFrontendPeek { .. }
                 | Command::UnregisterFrontendPeek { .. }
                 | Command::ExplainTimestamp { .. }
-                | Command::FrontendStatementLogging(..) => {}
+                | Command::FrontendStatementLogging(..)
+                | Command::InjectAuditEvents { .. }
+                | Command::RegisterConnectionCancelWatch { .. }
+                | Command::CreateInternalSubscribe { .. }
+                | Command::AttemptWrite { .. }
+                | Command::DropInternalSubscribe { .. } => {}
             };
             cmd
         });
@@ -1076,7 +1393,7 @@ impl SessionClient {
                     *client_session = Some(res.session);
                     return res.result;
                 },
-                _err = &mut cancel_future, if !cancelled => {
+                _ = &mut cancel_future, if !cancelled => {
                     cancelled = true;
                     inner_client.send(Command::PrivilegedCancelRequest {
                         conn_id: conn_id.clone(),
@@ -1118,37 +1435,553 @@ impl SessionClient {
         self.timeouts.recv().await
     }
 
-    /// Returns a reference to the PeekClient used for frontend peek sequencing.
-    pub fn peek_client(&self) -> &PeekClient {
-        &self.peek_client
-    }
-
-    /// Returns a reference to the PeekClient used for frontend peek sequencing.
-    pub fn peek_client_mut(&mut self) -> &mut PeekClient {
-        &mut self.peek_client
-    }
-
     /// Attempt to sequence a peek from the session task.
     ///
-    /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` to fall back to the
-    /// Coordinator's sequencing. If it returns an error, it should be returned to the user.
-    ///
-    /// `outer_ctx_extra` is Some when we are executing as part of an outer statement, e.g., a FETCH
-    /// triggering the execution of the underlying query.
+    /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` if the statement is
+    /// not one that the frontend peek sequencing handles, in which case the Coordinator sequences
+    /// it. If it returns an error, it should be returned to the user.
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
-        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+        logging: &mut ExecutionLogging,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        if self.enable_frontend_peek_sequencing {
-            let session = self.session.as_mut().expect("SessionClient invariant");
-            self.peek_client
-                .try_frontend_peek(portal_name, session, outer_ctx_extra)
-                .await
-        } else {
-            Ok(None)
+        let session = self.session.as_mut().expect("SessionClient invariant");
+        self.peek_client
+            .try_frontend_peek(portal_name, session, logging)
+            .await
+    }
+
+    /// Whether the frontend read-then-write path could take this portal over.
+    ///
+    /// The gate is deliberately cheap, a portal lookup, because
+    /// every statement that reaches `execute_attempts` without being handled by
+    /// the peek path is tested against it. Everything expensive, including the
+    /// coordinator round-trip that registers the connection cancel watch, sits
+    /// behind it.
+    fn frontend_read_then_write_applies(&self, portal_name: &str) -> bool {
+        let session = self.session.as_ref().expect("SessionClient invariant");
+        match session.get_portal_unverified(portal_name) {
+            Some(portal) => portal
+                .stmt
+                .as_deref()
+                .is_some_and(is_read_then_write_statement),
+            None => false,
         }
     }
+
+    /// Runs frontend read-then-write while reacting to both local/session
+    /// cancellation and coordinator-issued connection cancellation.
+    ///
+    /// Returns `Ok(None)` when the statement is not eligible for this path and
+    /// the caller must fall back to the coordinator, either because
+    /// `try_frontend_read_then_write` declined it or because this wrapper did.
+    ///
+    /// Cancellation and statement timeout are never reported for a write that
+    /// may have committed. Once a write has been submitted we await its
+    /// definitive result instead of returning the cancellation.
+    async fn try_frontend_read_then_write_with_cancel(
+        &mut self,
+        portal_name: &str,
+        logging: &mut ExecutionLogging,
+        cancel_future: impl Future<Output = ()> + Send,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        // Bail out before the cancel-watch registration below, which is a
+        // synchronous round-trip through the coordinator's command loop. A
+        // statement this path will not take over must not pay for it, and must
+        // not add queueing latency for other sessions either.
+        if !self.frontend_read_then_write_applies(portal_name) {
+            return Ok(None);
+        }
+
+        let conn_id = self.session().conn_id().clone();
+        let statement_timeout = *self.session().vars().statement_timeout();
+        let inner_client = self.inner().clone();
+        let attempt_state = Arc::new(FrontendWriteAttemptState::new());
+
+        let mut cancel_future = pin::pin!(cancel_future);
+        let statement_timeout = async move {
+            if statement_timeout.is_zero() {
+                futures::future::pending::<()>().await;
+            } else {
+                tokio::time::sleep(statement_timeout).await;
+            }
+        };
+        tokio::pin!(statement_timeout);
+
+        // Registering installs a fresh channel, so this cannot observe a
+        // cancellation aimed at an earlier statement. The entry it leaves behind
+        // is replaced by the next registration and removed when a statement
+        // reaches the coordinator or the connection's state is cleared, so there
+        // is nothing to unregister here.
+        let mut connection_cancel_rx = {
+            let register =
+                self.peek_client
+                    .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
+                        conn_id: conn_id.clone(),
+                        tx,
+                    });
+            tokio::pin!(register);
+            tokio::select! {
+                rx = &mut register => rx?,
+                _ = &mut cancel_future => {
+                    inner_client.try_send(Command::PrivilegedCancelRequest {
+                        conn_id: conn_id.clone(),
+                    });
+                    return Err(AdapterError::Canceled);
+                }
+                _ = &mut statement_timeout => {
+                    inner_client.try_send(Command::PrivilegedCancelRequest {
+                        conn_id: conn_id.clone(),
+                    });
+                    return Err(AdapterError::StatementTimeout);
+                }
+            }
+        };
+        if *connection_cancel_rx.borrow() {
+            return Err(AdapterError::Canceled);
+        }
+        let connection_cancel = async move {
+            if connection_cancel_rx.wait_for(|v| *v).await.is_err() {
+                futures::future::pending::<()>().await;
+            }
+        };
+        tokio::pin!(connection_cancel);
+
+        let frontend_read_then_write =
+            self.try_frontend_read_then_write(portal_name, logging, Arc::clone(&attempt_state));
+        tokio::pin!(frontend_read_then_write);
+
+        let requested = tokio::select! {
+            response = &mut frontend_read_then_write => return response,
+            _ = &mut cancel_future => FrontendWriteCancellation::Canceled,
+            _ = &mut connection_cancel => FrontendWriteCancellation::Canceled,
+            _ = &mut statement_timeout => FrontendWriteCancellation::StatementTimeout,
+        };
+
+        attempt_state.request(requested);
+        inner_client.try_send(Command::PrivilegedCancelRequest {
+            conn_id: conn_id.clone(),
+        });
+
+        if !attempt_state.write_submitted() {
+            return Err(requested.into());
+        }
+
+        // A submitted write can already be durable. Await its definitive result
+        // rather than reporting cancellation or timeout incorrectly.
+        frontend_read_then_write.await
+    }
+
+    /// Attempt to sequence a read-then-write (DELETE/UPDATE/INSERT INTO ..
+    /// SELECT .. FROM) from the session task.
+    ///
+    /// Returns `Ok(Some(response))` if we handled the operation, or `Ok(None)`
+    /// to fall back to the Coordinator's sequencing. If it returns an error, it
+    /// should be returned to the user.
+    async fn try_frontend_read_then_write(
+        &mut self,
+        portal_name: &str,
+        logging: &mut ExecutionLogging,
+        attempt_state: Arc<FrontendWriteAttemptState>,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        let catalog = self.catalog_snapshot("try_frontend_read_then_write").await;
+
+        let stmt = {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            let portal = match session.get_portal_unverified(portal_name) {
+                Some(portal) => portal,
+                None => return Ok(None), // Portal doesn't exist, fall back
+            };
+            portal.stmt.clone()
+        };
+
+        let stmt = match stmt {
+            Some(stmt) if is_read_then_write_statement(&stmt) => stmt,
+            Some(_stmt) => {
+                return Ok(None);
+            }
+            None => {
+                return Ok(None);
+            }
+        };
+
+        // Verify and plan against one catalog snapshot. Pairing a stale plan
+        // with a newer target generation could direct a write incorrectly.
+        // A failed verification is not logged, mirroring the coordinator: the
+        // portal is what statement logging draws its record from.
+        Coordinator::verify_portal(
+            &catalog,
+            self.session.as_mut().expect("SessionClient invariant"),
+            portal_name,
+        )?;
+
+        let (params, logging_info, lifecycle_timestamps) = {
+            let portal = self
+                .session
+                .as_ref()
+                .expect("SessionClient invariant")
+                .get_portal_unverified(portal_name)
+                .expect("verified above");
+            (
+                portal.parameters.clone(),
+                Arc::clone(&portal.logging),
+                portal.lifecycle_timestamps.clone(),
+            )
+        };
+
+        // Past this point the coordinator never sees this statement, so every
+        // exit has to produce an outcome for it. The remaining `Ok(None)`
+        // bailouts are all above.
+        logging.take_over(
+            &self.peek_client,
+            self.session.as_mut().expect("SessionClient invariant"),
+            Some(&stmt),
+            &params,
+            &logging_info,
+            &catalog,
+            lifecycle_timestamps,
+            TakeOver::StatementToRun,
+        );
+
+        // Mirror the coordinator's transaction-state gate in `handle_execute`:
+        // in a multi-statement transaction (an implicit batch or an explicit
+        // block), the only DML allowed is an AST-constant INSERT without
+        // RETURNING, which joins the transaction's write ops and commits at
+        // transaction end. All other DML is prohibited because writes on this
+        // path commit immediately and cannot be rolled back at transaction
+        // end. `Failed` transactions pass through, pgwire only admits
+        // COMMIT/ROLLBACK in that state.
+        //
+        // An AST-constant source can still plan to a read, so the check on the
+        // planned selection further down narrows this.
+        {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            // `Started` does not mean "single statement" on its own. An
+            // extended-protocol pipeline keeps the transaction `Started` across
+            // statements until `Sync`, so once it holds write ops this
+            // statement runs alongside them and belongs with the
+            // multi-statement cases. Committing here would commit against a
+            // snapshot that lacks those ops, reordering this statement before
+            // writes that a later pipeline error would roll back.
+            let contains_ops = session.transaction().contains_ops();
+            match session.transaction() {
+                TransactionStatus::Default | TransactionStatus::Failed(_) => {}
+                TransactionStatus::Started(_) if !contains_ops => {}
+                TransactionStatus::Started(_)
+                | TransactionStatus::InTransactionImplicit(_)
+                | TransactionStatus::InTransaction(_) => {
+                    let constant_insert = matches!(
+                        &*stmt,
+                        Statement::Insert(InsertStatement {
+                            source, returning, ..
+                        }) if returning.is_empty() && ConstantVisitor::insert_source(source)
+                    );
+                    if !constant_insert {
+                        return Err(prohibited_in_transaction(&stmt));
+                    }
+                }
+            }
+        }
+
+        let (plan, target_cluster, resolved_ids, sql_impl_ids) = {
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            let conn_catalog = catalog.for_session(session);
+            let (stmt, resolved_ids) = mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
+            let pcx = session.pcx();
+            let (plan, sql_impl_ids) =
+                mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
+
+            let target_cluster = match session.transaction().cluster() {
+                Some(cluster_id) => crate::coord::TargetCluster::Transaction(cluster_id),
+                None => crate::coord::catalog_serving::auto_run_on_catalog_server(
+                    &conn_catalog,
+                    session,
+                    &plan,
+                ),
+            };
+
+            (plan, target_cluster, resolved_ids, sql_impl_ids)
+        };
+
+        // Reject mutations in read-only mode (e.g. during 0dt upgrades). Placed
+        // where the coordinator has it, in `sequence_plan`: after planning, so a
+        // statement that does not plan reports the planning error, and before
+        // the cluster and RBAC checks below, which the coordinator also reports
+        // second. Every sub-path from here on writes (constant INSERT and the
+        // OCC INSERT/UPDATE/DELETE), so one check covers them all.
+        if self.peek_client.read_only {
+            return Err(AdapterError::ReadOnly);
+        }
+
+        // Cluster restrictions and RBAC, mirroring the coordinator's checks
+        // in sequencer.rs. Resolution may fail if the target cluster doesn't
+        // exist. That gets reported later (with the correct error) by
+        // `validate_read_then_write`. For the purposes of these checks we
+        // treat it as "no cluster known", consistent with the coordinator.
+        let (target_cluster_id, target_cluster_name) = {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            match catalog.resolve_target_cluster(target_cluster.clone(), session) {
+                Ok(cluster) => (Some(cluster.id), Some(cluster.name.clone())),
+                Err(_) => (None, None),
+            }
+        };
+
+        // Record the cluster before the checks below can fail, so that their
+        // error rows carry it, as the coordinator's do.
+        if let (Some(logging_id), Some(cluster_id), Some(cluster_name)) =
+            (logging.id(), target_cluster_id, target_cluster_name.clone())
+        {
+            self.peek_client
+                .log_set_cluster(logging_id, cluster_id, cluster_name);
+        }
+
+        {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            let conn_catalog = catalog.for_session(session);
+            if let Some(cluster_name) = &target_cluster_name {
+                crate::coord::catalog_serving::check_cluster_restrictions(
+                    cluster_name,
+                    &conn_catalog,
+                    &plan,
+                )?;
+            }
+            if let Err(e) = mz_sql::rbac::check_plan(
+                &conn_catalog,
+                None,
+                session,
+                &plan,
+                target_cluster_id,
+                &resolved_ids,
+                &sql_impl_ids,
+            ) {
+                return Err(e.into());
+            }
+        }
+
+        // Wait for any in-flight startup builtin-table appends that this plan
+        // depends on. Mirrors the frontend_peek and coordinator sequencer
+        // paths, and is a no-op for plans that don't depend on builtin tables.
+        {
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            if let Some((_, wait_future)) =
+                crate::coord::appends::waiting_on_startup_appends(&catalog, session, &plan)
+            {
+                wait_future.await;
+            }
+        }
+
+        // `allows_writes` is only defined inside a transaction, which is also
+        // the only place it can be false: outside one the session task opens a
+        // fresh transaction with no ops. Autocommit statements therefore rely on
+        // the check in `PeekClient::frontend_read_then_write` instead.
+        {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            if session.transaction().is_in_multi_statement_transaction()
+                && !session.transaction().allows_writes()
+            {
+                return Err(AdapterError::ReadOnlyTransaction);
+            }
+            if session
+                .vars()
+                .transaction_isolation()
+                .is_bounded_staleness()
+            {
+                return Err(AdapterError::BoundedStalenessReadOnly);
+            }
+        }
+
+        // Handle ReadThenWrite plans or Insert plans.
+        let rtw_plan = match plan {
+            Plan::ReadThenWrite(rtw_plan) => rtw_plan,
+            Plan::Insert(insert_plan) => {
+                // A constant INSERT without RETURNING is a blind write, handled
+                // here through the coordinator's `insert_constant` helper, which
+                // buffers the rows as session write ops.
+                //
+                // Deciding that needs HIR lowered to MIR, because a VALUES list
+                // is planned as a `Wrap` call at the HIR level.
+                //
+                // Only take that path when the HIR names no persisted
+                // collections (no `Get` nodes on tables or MVs). The MIR
+                // optimizer can fold an MV reference into a literal when the
+                // MV's plan happens to be constant, but "plan is constant" is
+                // NOT the same as "content is visible at the current
+                // oracle_ts". A `REFRESH AT year 30000` MV has a constant plan
+                // but no durable content until the refresh fires. Folding it
+                // and blind-writing the literal would skip timestamp selection
+                // and linearization, producing data that was never observable.
+                // Preserving the HIR-level `Get` nodes routes the INSERT through
+                // the RTW path, where timestamp selection handles REFRESH and
+                // other time-dependent reads correctly.
+                let has_read_deps = !insert_plan.values.depends_on().is_empty();
+
+                if !has_read_deps {
+                    let optimized_mir = if insert_plan.values.as_const().is_some() {
+                        // Already constant at HIR level - just lower without optimization
+                        let expr = insert_plan
+                            .values
+                            .clone()
+                            .lower(catalog.system_config(), None)?;
+                        mz_expr::OptimizedMirRelationExpr(expr)
+                    } else {
+                        // Need to optimize to check if it becomes constant.
+                        // Use one-shot expression prep so unmaterializable
+                        // functions like current_user() are resolved before we
+                        // decide whether this can use the blind-write path.
+                        let optimizer_config =
+                            optimize::OptimizerConfig::from(catalog.system_config());
+                        let session = self.session.as_ref().expect("SessionClient invariant");
+                        let prep = ExprPrepOneShot {
+                            logical_time: EvalTime::NotAvailable,
+                            session,
+                            catalog_state: catalog.state(),
+                        };
+                        let mut optimizer =
+                            optimize::view::Optimizer::new_with_prep(optimizer_config, None, prep);
+                        match optimizer.optimize(insert_plan.values.clone()) {
+                            Ok(expr) => expr,
+                            Err(OptimizerError::UncallableFunction {
+                                func: UnmaterializableFunc::MzNow,
+                                ..
+                            }) => {
+                                // Preserve the established user-facing `mz_now()`
+                                // error by falling back to the RTW validator.
+                                let expr = insert_plan
+                                    .values
+                                    .clone()
+                                    .lower(catalog.system_config(), None)?;
+                                mz_expr::OptimizedMirRelationExpr(expr)
+                            }
+                            Err(e) => return Err(e.into()),
+                        }
+                    };
+
+                    let inner_mir = optimized_mir.into_inner();
+                    if inner_mir.as_const().is_some() && insert_plan.returning.is_empty() {
+                        let session = self.session.as_mut().expect("SessionClient invariant");
+                        let result = Coordinator::insert_constant(
+                            &catalog,
+                            session,
+                            insert_plan.id,
+                            inner_mir,
+                        );
+
+                        return Ok(Some(result?));
+                    }
+                }
+
+                let desc_arity = match catalog.try_get_entry(&insert_plan.id) {
+                    Some(table) => {
+                        let desc = table
+                            .relation_desc_latest()
+                            .ok_or_else(|| AdapterError::Internal("table has no desc".into()))?;
+                        desc.arity()
+                    }
+                    None => {
+                        return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                            kind: mz_catalog::memory::error::ErrorKind::Sql(
+                                mz_sql::catalog::CatalogError::UnknownItem(
+                                    insert_plan.id.to_string(),
+                                ),
+                            ),
+                        }));
+                    }
+                };
+
+                let finishing = RowSetFinishing {
+                    order_by: vec![],
+                    limit: None,
+                    offset: 0,
+                    project: (0..desc_arity).collect(),
+                };
+
+                ReadThenWritePlan {
+                    id: insert_plan.id,
+                    selection: insert_plan.values,
+                    finishing,
+                    assignments: BTreeMap::new(),
+                    kind: MutationKind::Insert,
+                    returning: insert_plan.returning,
+                }
+            }
+            _ => {
+                return Err(AdapterError::Internal(
+                    "unexpected plan type for mutation".into(),
+                ));
+            }
+        };
+
+        // The syntactic predicate for "reads persisted state", see the module
+        // docs on `frontend_read_then_write`. Inside a transaction, only a write
+        // that reads nothing can run on this path.
+        //
+        // The AST gate above is not enough to establish this. It admits
+        // INSERTs whose source is constant in the AST, and such a statement can
+        // still plan to a selection with `Get` nodes, because SQL-implemented
+        // builtins (`pg_get_viewdef`, `text` to `reg*` casts, ...) read system
+        // relations. So decide on the planned selection, and do it before we
+        // execute a dataflow for a statement we would then refuse.
+        {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            let in_transaction = session
+                .transaction()
+                .may_share_transaction_with_other_statements();
+            let depends_on = rtw_plan.selection.depends_on();
+            if in_transaction && !depends_on.is_empty() {
+                // Report the reasons that hold wherever the statement runs
+                // before the one that holds only here. A statement carrying
+                // `mz_now`, or reading a system table, never works anywhere.
+                // Answering with the transaction state names the one condition
+                // the caller could remove, which tells them to retry outside a
+                // transaction and get the same refusal again.
+                if contains_mz_now(&rtw_plan) {
+                    return Err(AdapterError::Unsupported(
+                        "calls to mz_now in write statements",
+                    ));
+                }
+                validate_selection_dependencies(&catalog, &depends_on, DependencyPolicy::UserDml)?;
+                return Err(prohibited_in_transaction(&stmt));
+            }
+        }
+
+        let session = self.session.as_mut().expect("SessionClient invariant");
+        self.peek_client
+            .frontend_read_then_write(
+                session,
+                rtw_plan,
+                target_cluster,
+                &catalog,
+                logging.id(),
+                attempt_state,
+            )
+            .await
+            .map(Some)
+    }
+}
+
+/// Whether a statement is one the frontend read-then-write path sequences.
+///
+/// These are the statement kinds that plan to a `ReadThenWrite` or an `Insert`.
+/// Note that not every one of them ends up on the OCC path: an `INSERT` whose
+/// source folds to a constant is dispatched as a blind write instead.
+fn is_read_then_write_statement(stmt: &Statement<Raw>) -> bool {
+    matches!(
+        stmt,
+        Statement::Delete(_) | Statement::Update(_) | Statement::Insert(_)
+    )
+}
+
+/// Builds the error for DML that cannot run in a transaction block, mirroring
+/// the coordinator's redaction in `handle_execute`: statements that can carry
+/// sensitive literals are redacted because the error message is persisted in
+/// `mz_statement_execution_history`.
+fn prohibited_in_transaction(stmt: &Statement<Raw>) -> AdapterError {
+    let op = if StatementKind::from(stmt).is_sensitive() {
+        stmt.to_ast_string_redacted()
+    } else {
+        stmt.to_string()
+    };
+    AdapterError::OperationProhibitsTransaction(op)
 }
 
 impl Drop for SessionClient {
@@ -1167,6 +2000,44 @@ impl Drop for SessionClient {
             }
         }
     }
+}
+
+/// Renders SQL for statement arrival logging: parsed and displayed with its
+/// literals redacted, which is the same redaction the statement log applies,
+/// and capped by [`truncate_sql_for_logging`].
+/// When the text does not parse or exceeds the statement batch size limit, a
+/// placeholder with the byte length is returned. Raw text is never returned,
+/// so a statement that crashes the parser is not captured, an accepted
+/// limitation.
+pub fn redact_sql_for_logging(sql: &str) -> String {
+    match mz_sql_parser::parser::parse_statements_with_limit(sql) {
+        Ok(Ok(stmts)) => truncate_sql_for_logging(
+            stmts
+                .into_iter()
+                .map(|stmt| stmt.ast.to_ast_string_redacted())
+                .join("; "),
+        ),
+        Ok(Err(_)) => format!("<unparseable ({} bytes)>", sql.len()),
+        Err(_) => format!("<too large ({} bytes)>", sql.len()),
+    }
+}
+
+/// The maximum length in bytes of SQL text included in a log line.
+///
+/// Loki rejects a log entry larger than 256 KiB and drops it whole. A span's
+/// fields are repeated in every event logged inside the span, twice when it is
+/// the innermost span (the JSON format writes both `span` and `spans`), so one
+/// statement can appear several times in an entry.
+const MAX_LOGGED_SQL_LEN: usize = 8 * 1024;
+
+/// Truncates SQL text to `MAX_LOGGED_SQL_LEN` bytes for a log line, noting
+/// the original length.
+pub fn truncate_sql_for_logging(sql: String) -> String {
+    if sql.len() <= MAX_LOGGED_SQL_LEN {
+        return sql;
+    }
+    let end = sql.floor_char_boundary(MAX_LOGGED_SQL_LEN);
+    format!("{}... <truncated from {} bytes>", &sql[..end], sql.len())
 }
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
@@ -1269,6 +2140,8 @@ pub struct RecordFirstRowStream {
     pub recorded_first_row_instant: Option<Instant>,
     /// Whether we have already observed the end of the underlying stream.
     pub no_more_rows: bool,
+    /// Whether the first-to-last-byte metric has already been recorded for this stream.
+    pub metric_recorded: bool,
 }
 
 impl RecordFirstRowStream {
@@ -1288,6 +2161,7 @@ impl RecordFirstRowStream {
             saw_rows: false,
             recorded_first_row_instant: None,
             no_more_rows: false,
+            metric_recorded: false,
         }
     }
 
@@ -1296,26 +2170,15 @@ impl RecordFirstRowStream {
         instance_id: Option<ComputeInstanceId>,
         strategy: Option<StatementExecutionStrategy>,
     ) -> Histogram {
-        let isolation_level = *client
-            .session
-            .as_ref()
-            .expect("session invariant")
-            .vars()
-            .transaction_isolation();
-        let instance = match instance_id {
-            Some(i) => Cow::Owned(i.to_string()),
-            None => Cow::Borrowed("none"),
-        };
-        let strategy = match strategy {
-            Some(s) => s.name(),
-            None => "none",
-        };
+        let session = client.session.as_ref().expect("session invariant");
+        let isolation_level = *session.vars().transaction_isolation();
+        let name_hint = ApplicationNameHint::from_str(session.application_name());
 
         client
             .inner()
             .metrics()
-            .time_to_first_row_seconds
-            .with_label_values(&[instance.as_ref(), isolation_level.as_str(), strategy])
+            .by_cluster
+            .time_to_first_row_seconds(instance_id, isolation_level, strategy, name_hint)
     }
 
     /// If you want to match [`RecordFirstRowStream`]'s logic but don't need
@@ -1342,5 +2205,36 @@ impl RecordFirstRowStream {
             self.no_more_rows = true;
         }
         msg
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn truncate_sql_for_logging_caps_length() {
+        let short = "SELECT 1".to_string();
+        assert_eq!(truncate_sql_for_logging(short.clone()), short);
+
+        let exact = "x".repeat(MAX_LOGGED_SQL_LEN);
+        assert_eq!(truncate_sql_for_logging(exact.clone()), exact);
+
+        // A multi-byte character straddles the cap, so the cut must move back
+        // to the previous character boundary.
+        let long = format!(
+            "{}é{}",
+            "x".repeat(MAX_LOGGED_SQL_LEN - 1),
+            "y".repeat(1000)
+        );
+        let truncated = truncate_sql_for_logging(long.clone());
+        assert_eq!(
+            truncated,
+            format!(
+                "{}... <truncated from {} bytes>",
+                "x".repeat(MAX_LOGGED_SQL_LEN - 1),
+                long.len()
+            )
+        );
     }
 }

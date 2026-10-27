@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class Rollback(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE rollback_table (f1 INTEGER);
                 > INSERT INTO rollback_table VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10);
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -51,11 +47,7 @@ class Rollback(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT COUNT(*), COUNT(f1), COUNT(DISTINCT f1), MIN(f1), MAX(f1) FROM rollback_table;
                 10 10 10 1 10
-           """
-            )
-        )
+           """))

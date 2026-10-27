@@ -1,0 +1,53 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Agent endpoint with `enable_mcp_agent_read_data_product_tool` off and the
+# `query` tool left on (its default). The sibling configurations are covered
+# in `agent` and `agent_query_tool`.
+
+# =============================================================================
+# Initialize
+# =============================================================================
+
+# With the read tool off and `query` on, the instructions must point the agent
+# at `query` for reads instead of `read_data_product`.
+mcp-agent
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-agent","version":"<VERSION>"},"instructions":"You have access to Materialize data products via MCP. Prefer indexed objects (served from memory) over unindexed materialized views (read from persistent storage). Use the `query` tool to read data products, passing the cluster from `get_data_product_details` so indexed reads hit the arrangement. If `get_data_product_details` returns a null `cluster`, your role lacks USAGE on the object's index/compute cluster; run the `query` against any cluster your role can use (the read still works, just without the index arrangement). `get_data_product_details` returns a `hydration` object with `hydrated`, `replica_count`, and `hydrated_replica_count` fields. Reads never return partial data: a read against a not-yet-hydrated product blocks until the dataflow catches up, and may hit the request timeout. Check `hydrated` before reading: if it is false and `replica_count` is greater than 0, the dataflow is still warming up, so wait and retry; if `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added."}}
+
+# =============================================================================
+# Tools List
+# =============================================================================
+
+# `read_data_product` must be absent; `query` must still be advertised.
+mcp-agent
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"get_data_products","title":"List Data Products","description":"Discover all available real-time data views (data products) that represent business entities like customers, orders, products, etc. Each data product provides fresh, queryable data with defined schemas. Use this first to see what data is available before querying specific information.","inputSchema":{"type":"object","properties":{},"required":[]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"get_data_product_details","title":"Get Data Product Details","description":"Get the complete schema and structure of a specific data product, plus a `hydration` object reporting whether the dataflow is ready across the cluster's replicas (`{hydrated, replica_count, hydrated_replica_count}`). This shows you exactly what fields are available, their types, and what data you can query. Reads never return partial data, so check `hydration` before reading: if `hydrated` is false and `replica_count` is greater than 0 the dataflow is still warming up (a read would block until it catches up, possibly hitting the request timeout), so wait and retry; if `replica_count` is 0 the cluster has no replicas and the read cannot make progress until one is added.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Exact name of the data product from get_data_products() list"}},"required":["name"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"query","title":"Query Data Products","description":"Execute SQL queries against real-time data products to retrieve current business information. Use standard PostgreSQL syntax. You can JOIN multiple data products together, but ONLY if they are all hosted on the same cluster. Always specify the cluster parameter from the data product details. This provides fresh, up-to-date results from materialized views. Response limit: 1.0 MB.","inputSchema":{"type":"object","properties":{"cluster":{"type":"string","description":"Exact cluster name from the data product details - required for query execution"},"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT statement to retrieve data. Use the fully qualified data product name exactly as provided (with double quotes). You can JOIN multiple data products, but only those on the same cluster."}},"required":["cluster","sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
+
+# =============================================================================
+# read_data_product - disabled
+# =============================================================================
+
+# Calling the disabled tool returns ToolNotFound pointing at `query`.
+mcp-agent
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"read_data_product","arguments":{"name":"some_product"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":10,"error":{"code":-32602,"message":"Tool not found: read_data_product tool is not available. Use the query tool to read data products.","data":{"error_type":"ToolNotFound"}}}
+
+# Discovery tools are unaffected by the read tool being disabled.
+mcp-agent
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"get_data_products","arguments":{}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[]"}],"isError":false}}

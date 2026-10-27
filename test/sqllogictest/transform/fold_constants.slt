@@ -159,7 +159,7 @@ DROP TABLE t2;
 
 mode cockroach
 
-statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
+statement error window function pg_catalog\.row_number requires an OVER clause
 WITH t (x) AS (VALUES ('a'), ('b'), ('c'))
 SELECT row_number() FROM t
 
@@ -3052,26 +3052,26 @@ ORDER BY f2, f3, f1, first_value
 
 # Test near-overflow behavior on offsets
 # u64::MAX FOLLOWING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
 
 # u64::MAX PRECEDING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551615 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551614 PRECEDING)
 FROM t
@@ -4166,26 +4166,26 @@ ORDER BY f2, f3, f1, last_value
 
 # Test near-overflow behavior on offsets
 # u64::MAX FOLLOWING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551615 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551614 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, last_value
 
 # u64::MAX PRECEDING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 WITH t (f1, f2, f3) AS (VALUES (1, 'a', 1), (2, 'a', 2), (2, 'a', 3), (3, 'a', 4), (4, 'b', 5), (4, 'b', 6), (1, 'c', 7), (2, 'c', 8), (3, 'c', 9), (7, 'd', 10))
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t

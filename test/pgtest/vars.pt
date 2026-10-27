@@ -70,3 +70,15 @@ ReadyForQuery
 ----
 ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22023"},{"typ":"M","value":"invalid value for parameter \"TimeZone\": \"bad\""}]}
 ReadyForQuery {"status":"I"}
+
+# SET TRANSACTION <access-mode> is unsupported and must map to 0A000
+# (feature_not_supported), not XX000 (internal_error). See SQL-326.
+send
+Query {"query": "SET TRANSACTION READ ONLY"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"0A000"},{"typ":"M","value":"SET TRANSACTION <access-mode> not yet supported"}]}
+ReadyForQuery {"status":"I"}

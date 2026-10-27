@@ -65,4 +65,8 @@ pub trait SessionMetadata: Debug + Sync {
     fn enable_session_rbac_checks(&self) -> bool {
         self.vars().enable_session_rbac_checks()
     }
+
+    fn restrict_to_user_objects(&self) -> bool {
+        self.vars().restrict_to_user_objects()
+    }
 }

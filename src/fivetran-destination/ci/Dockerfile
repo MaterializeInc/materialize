@@ -7,10 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM prod-base
+MZFROM distroless-prod-base
 
 COPY mz-fivetran-destination /usr/local/bin/
 
-USER materialize
-
-ENTRYPOINT ["tini", "--", "mz-fivetran-destination"]
+ENTRYPOINT ["mz-fivetran-destination"]

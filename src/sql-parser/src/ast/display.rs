@@ -73,9 +73,9 @@ where
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FormatMode {
     /// Simple is the normal way of printing for human consumption. Identifiers are quoted only if
-    /// necessary and sensitive information is not redacted.
+    /// necessary, and sensitive information is not redacted.
     Simple,
-    /// SimpleRedacted is like Simple, but strips out literals, e.g. strings and numbers.
+    /// SimpleRedacted is like Simple, but strips out literals, e.g., strings and numbers.
     /// This makes SQL queries be "usage data", rather than "customer data" according to our
     /// data management policy, allowing us to introspect it.
     SimpleRedacted,
@@ -209,7 +209,11 @@ pub trait WithOptionName {
     /// # WARNING
     ///
     /// Whenever implementing this trait consider very carefully whether or not
-    /// this value could contain sensitive user data.
+    /// this value could contain sensitive user data. Returning `false` disables
+    /// redaction for the value AND all of its descendants: the macro fully
+    /// un-redacts the formatter before rendering the value, so every nested
+    /// literal, sub-option, and expression underneath it prints verbatim too,
+    /// not just an immediate scalar.
     ///
     /// # Context
     /// Many statements in MZ use the format `WITH (<options>...)` to modify the

@@ -16,14 +16,10 @@ class RegexpExtract(Check):
     """The regex from regexp_extract has its own ProtoAnalyzedRegex"""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE regexp_extract_table (f1 STRING);
             > INSERT INTO regexp_extract_table VALUES ('abc');
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -41,30 +37,22 @@ class RegexpExtract(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > SELECT c1::string FROM regexp_extract_view1;
             (,,,xyz,x,yz)
             (abc,a,bc,,,)
             > SELECT c1::string FROM regexp_extract_view2;
             (,,,xyz,x,yz)
             (abc,a,bc,,,)
-            """
-            )
-        )
+            """))
 
 
 class Regex(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE regex_table (f1 STRING, f2 STRING);
             > INSERT INTO regex_table VALUES ('abc', 'abc');
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -82,9 +70,7 @@ class Regex(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > SELECT * FROM regex_view1;
             true true false false
             true true true true
@@ -94,6 +80,4 @@ class Regex(Check):
             true true false false
             true true true true
             true true true true
-            """
-            )
-        )
+            """))

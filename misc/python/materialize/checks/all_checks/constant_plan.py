@@ -14,13 +14,9 @@ from materialize.checks.checks import Check
 
 class ConstantPlan(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE constant_plan1 (f1 INT);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -36,15 +32,11 @@ class ConstantPlan(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM constant_plan_view1;
 
                 > SELECT * FROM constant_plan_view2;
                 1
                 2
                 3
-            """
-            )
-        )
+            """))

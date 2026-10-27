@@ -121,13 +121,9 @@ def run_process_with_error_information(
 
 
 def log_subprocess_error(e: subprocess.CalledProcessError) -> None:
-    LOGGER.error(
-        dedent(
-            f"""
+    LOGGER.error(dedent(f"""
                 cmd: {filter_cmd(e.cmd)}
                 returncode: {e.returncode}
                 stdout: {e.stdout}
                 stderr: {e.stderr}
-                """
-        )
-    )
+                """))

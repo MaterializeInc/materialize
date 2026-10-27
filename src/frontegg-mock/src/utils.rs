@@ -33,6 +33,7 @@ pub fn generate_access_token(
     user_id: Option<Uuid>,
     tenant_id: Uuid,
     roles: Vec<String>,
+    groups: Vec<String>,
     metadata: Option<ClaimMetadata>,
 ) -> String {
     let mut permissions = Vec::new();
@@ -43,6 +44,17 @@ pub fn generate_access_token(
     });
     permissions.sort();
     permissions.dedup();
+    // Stamp groups under the `groups` JWT claim (the default `GROUP_CLAIM`
+    // dyncfg value) via the flattened `unknown_claims` bag so the mock can
+    // exercise the dyncfg-driven group extraction path. Always emit the claim
+    // (even as `[]`) so revocation-from-all-groups produces a present-but-empty
+    // claim rather than an omitted claim, matching the semantics group sync
+    // relies on (None = no sync; Some([]) = revoke).
+    let mut unknown_claims = BTreeMap::new();
+    unknown_claims.insert(
+        "groups".to_string(),
+        serde_json::Value::Array(groups.into_iter().map(serde_json::Value::String).collect()),
+    );
     jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &Claims {
@@ -56,6 +68,7 @@ pub fn generate_access_token(
             roles,
             permissions,
             metadata,
+            unknown_claims,
         },
         &context.encoding_key,
     )
@@ -70,6 +83,21 @@ pub fn generate_refresh_token(context: &Context, target: RefreshTokenTarget) -> 
         .unwrap()
         .insert(refresh_token.clone(), target);
     refresh_token
+}
+
+pub fn get_user_groups(context: &Context, user_id: &Uuid) -> Vec<String> {
+    let user_id_str = user_id.to_string();
+    let mut groups: Vec<String> = context
+        .groups
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|g| g.users.iter().any(|u| u.id == user_id_str))
+        .map(|g| g.name.clone())
+        .collect();
+    groups.sort();
+    groups.dedup();
+    groups
 }
 
 pub fn get_user_roles(

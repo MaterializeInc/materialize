@@ -72,6 +72,10 @@ pub struct SqlCommand {
     pub expected_output: SqlOutput,
     pub expected_start: usize,
     pub expected_end: usize,
+    /// True for `?`-style commands, whose expected output is raw multiline
+    /// text rather than the `column names + ----` row format. Rewrites must
+    /// preserve that shape.
+    pub raw_output: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -200,8 +204,10 @@ fn parse_version_constraint(
     line_reader: &mut LineReader,
 ) -> Result<Option<VersionConstraint>, PosError> {
     let (pos, line) = line_reader.next().unwrap();
-    if line[1..2].to_string() != "[" {
-        line_reader.push(&line);
+    // All slicing below uses `get` because the line is arbitrary user input.
+    // A malformed constraint must produce a positioned error, not a panic.
+    if line.get(1..2) != Some("[") {
+        line_reader.push(pos, &line);
         return Ok(None);
     }
     let closed_brace_pos = match line.find(']') {
@@ -213,17 +219,18 @@ fn parse_version_constraint(
             });
         }
     };
+    let constraint = line.get(2..closed_brace_pos).unwrap_or("");
     let mut begin_version_kw = 2;
     const MIN_VERSION: i32 = 0;
     let mut min_version = MIN_VERSION;
-    if line.as_bytes()[2].is_ascii_digit() {
+    if line.as_bytes().get(2).is_some_and(|b| b.is_ascii_digit()) {
         let Some(op_pos) = line.find('<') else {
             return Err(PosError {
                 source: anyhow!("version-constraint: initial number but no '<' following"),
                 pos: Some(pos),
             });
         };
-        let min_version_str = line[2..op_pos].to_string();
+        let min_version_str = line.get(2..op_pos).unwrap_or("").to_string();
         match min_version_str.parse::<i32>() {
             Ok(mv) => min_version = mv,
             Err(_) => {
@@ -237,7 +244,7 @@ fn parse_version_constraint(
             }
         };
 
-        if line.as_bytes()[op_pos + 1] == b'=' {
+        if line.as_bytes().get(op_pos + 1) == Some(&b'=') {
             begin_version_kw = op_pos + 2;
         } else {
             begin_version_kw = op_pos + 1;
@@ -246,18 +253,17 @@ fn parse_version_constraint(
     };
 
     let version_start = begin_version_kw + "version".len();
-    if line[begin_version_kw..version_start].to_string() != "version" {
+    if line.get(begin_version_kw..version_start) != Some("version") {
         return Err(PosError {
             source: anyhow!(
-                "version-constraint: invalid property {} (found '{}', expected 'version' {begin_version_kw})",
-                &line[2..closed_brace_pos],
-                &line[begin_version_kw..version_start]
+                "version-constraint: invalid property {} (expected 'version' at offset {begin_version_kw})",
+                constraint,
             ),
             pos: Some(pos),
         });
     }
     let remainder = line[closed_brace_pos + 1..].to_string();
-    line_reader.push(&remainder);
+    line_reader.push(pos + closed_brace_pos + 1, &remainder);
     const MAX_VERSION: i32 = 9999999;
 
     if version_start >= closed_brace_pos && min_version != MIN_VERSION {
@@ -267,25 +273,35 @@ fn parse_version_constraint(
         }));
     }
 
-    let version_pos = if line.as_bytes()[version_start + 1].is_ascii_digit() {
+    let version_pos = if line
+        .as_bytes()
+        .get(version_start + 1)
+        .is_some_and(|b| b.is_ascii_digit())
+    {
         version_start + 1
     } else {
         version_start + 2
     };
-    let version = match line[version_pos..closed_brace_pos].parse::<i32>() {
+    let (Some(op), Some(version_str)) = (
+        line.get(version_start..version_pos),
+        line.get(version_pos..closed_brace_pos),
+    ) else {
+        return Err(PosError {
+            source: anyhow!("version-constraint: invalid constraint {}", constraint),
+            pos: Some(pos),
+        });
+    };
+    let version = match version_str.parse::<i32>() {
         Ok(x) => x,
         Err(_) => {
             return Err(PosError {
-                source: anyhow!(
-                    "version-constraint: invalid version number {}",
-                    &line[version_pos..closed_brace_pos]
-                ),
+                source: anyhow!("version-constraint: invalid version number {}", version_str),
                 pos: Some(pos),
             });
         }
     };
 
-    match &line[version_start..version_pos] {
+    match op {
         "=" => Ok(Some(VersionConstraint {
             min: version,
             max: version,
@@ -308,16 +324,12 @@ fn parse_version_constraint(
         })),
         ">=" | ">" => Err(PosError {
             source: anyhow!(
-                "version-constraint: found comparison operator {} with a set minimum version {min_version}",
-                &line[version_start..version_pos]
+                "version-constraint: found comparison operator {op} with a set minimum version {min_version}"
             ),
             pos: Some(pos),
         }),
         _ => Err(PosError {
-            source: anyhow!(
-                "version-constraint: unknown comparison operator {}",
-                &line[version_start..version_pos]
-            ),
+            source: anyhow!("version-constraint: unknown comparison operator {op}"),
             pos: Some(pos),
         }),
     }
@@ -326,7 +338,7 @@ fn parse_version_constraint(
 fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
     let (_, line1) = line_reader.next().unwrap();
     let query = line1[1..].trim().to_owned();
-    let expected_start = line_reader.raw_pos;
+    let expected_start = line_reader.consumed_raw_pos;
     let line2 = slurp_one(line_reader);
     let line3 = slurp_one(line_reader);
     let mut column_names = None;
@@ -353,6 +365,7 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
                         },
                         expected_start: 0,
                         expected_end: 0,
+                        raw_output: false,
                     });
                 }
                 Err(err) => {
@@ -369,7 +382,7 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
     while let Some((pos, line)) = slurp_one(line_reader) {
         expected_rows.push(split_line(pos, &line)?)
     }
-    let expected_end = line_reader.raw_pos;
+    let expected_end = line_reader.consumed_raw_pos;
     Ok(SqlCommand {
         query,
         expected_output: SqlOutput::Full {
@@ -378,12 +391,13 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
         },
         expected_start,
         expected_end,
+        raw_output: false,
     })
 }
 
 fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosError> {
     let (_, line1) = line_reader.next().unwrap();
-    let expected_start = line_reader.raw_pos;
+    let expected_start = line_reader.consumed_raw_pos;
     // This is a bit of a hack to extract the next chunk of the file with
     // blank lines intact. Ideally the `LineReader` would expose the API we
     // need directly, but that would require a large refactor.
@@ -402,7 +416,7 @@ fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosErro
     // We parsed the multiline expected_output directly using line_reader.inner
     // above.
     slurp_all(line_reader);
-    let expected_end = line_reader.raw_pos;
+    let expected_end = line_reader.consumed_raw_pos;
 
     Ok(SqlCommand {
         query: line1[1..].trim().to_owned(),
@@ -412,6 +426,7 @@ fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, PosErro
         },
         expected_start,
         expected_end,
+        raw_output: true,
     })
 }
 
@@ -559,6 +574,13 @@ pub struct LineReader<'a> {
     pos: usize,
     pos_map: BTreeMap<usize, (usize, usize)>,
     raw_pos: usize,
+    // Position one byte past the end of the most recently *consumed* line —
+    // i.e. a line returned by an external call to `next()`. `peek()` reads a
+    // line from `inner` and advances `raw_pos`, but the line is not consumed
+    // until a caller takes it via `next()`. `consumed_raw_pos` therefore lags
+    // `raw_pos` by one peeked-but-not-consumed line, which is what callers
+    // need when slicing the input string at command boundaries.
+    consumed_raw_pos: usize,
 }
 
 impl<'a> LineReader<'a> {
@@ -572,12 +594,13 @@ impl<'a> LineReader<'a> {
             pos: 0,
             pos_map,
             raw_pos: 0,
+            consumed_raw_pos: 0,
         }
     }
 
     fn peek(&mut self) -> Option<&(usize, String)> {
         if self.next.is_none() {
-            self.next = Some(self.next())
+            self.next = Some(self.read_one())
         }
         self.next.as_ref().unwrap().as_ref()
     }
@@ -587,18 +610,14 @@ impl<'a> LineReader<'a> {
         (*line, col + (pos - base_pos))
     }
 
-    fn push(&mut self, text: &String) {
-        self.next = Some(Some((0usize, text.to_string())));
+    /// Pushes `text` back so the next `next()`/`peek()` returns it. `pos` must
+    /// be the reader-space position of the first character of `text`, so that
+    /// errors reported against the pushed line map to the right location.
+    fn push(&mut self, pos: usize, text: &str) {
+        self.next = Some(Some((pos, text.to_string())));
     }
-}
 
-impl<'a> Iterator for LineReader<'a> {
-    type Item = (usize, String);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(next) = self.next.take() {
-            return next;
-        }
+    fn read_one(&mut self) -> Option<(usize, String)> {
         if self.inner.is_empty() {
             return None;
         }
@@ -648,6 +667,27 @@ impl<'a> Iterator for LineReader<'a> {
         } else {
             None
         }
+    }
+}
+
+impl<'a> Iterator for LineReader<'a> {
+    type Item = (usize, String);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = if let Some(next) = self.next.take() {
+            next
+        } else {
+            self.read_one()
+        };
+        if item.is_some() {
+            // Sync `consumed_raw_pos` with `raw_pos` only when the line is
+            // actually returned to an external caller. `peek()` advances
+            // `raw_pos` via `read_one()` without consuming, so updating
+            // `consumed_raw_pos` here keeps it pointing at the end of the most
+            // recently consumed line — even if a later line has been peeked.
+            self.consumed_raw_pos = self.raw_pos;
+        }
+        item
     }
 }
 

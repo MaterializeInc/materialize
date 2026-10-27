@@ -11,8 +11,8 @@ use std::borrow::Cow;
 use std::io;
 
 use bytes::BytesMut;
-use csv::{ByteRecord, ReaderBuilder};
 use itertools::Itertools;
+use mz_pgrepr::TextEncodeSettings;
 use mz_repr::{
     Datum, RelationDesc, Row, RowArena, RowRef, SharedRow, SqlColumnType, SqlRelationType,
     SqlScalarType,
@@ -33,7 +33,7 @@ fn encode_copy_row_binary(
     // 16-bit int of number of tuples.
     let count = i16::try_from(typ.column_types.len()).map_err(|_| {
         io::Error::new(
-            io::ErrorKind::Other,
+            io::ErrorKind::InvalidData,
             "column count does not fit into an i16",
         )
     })?;
@@ -54,7 +54,7 @@ fn encode_copy_row_binary(
                     i32::try_from(buf.len())
                         .map_err(|_| {
                             io::Error::new(
-                                io::ErrorKind::Other,
+                                io::ErrorKind::InvalidData,
                                 "field length does not fit into an i32",
                             )
                         })?
@@ -72,6 +72,7 @@ fn encode_copy_row_text(
     row: &RowRef,
     typ: &SqlRelationType,
     out: &mut Vec<u8>,
+    settings: TextEncodeSettings,
 ) -> Result<(), io::Error> {
     let null = null.as_bytes();
     let mut buf = BytesMut::new();
@@ -83,7 +84,7 @@ fn encode_copy_row_text(
             None => out.extend(null),
             Some(field) => {
                 buf.clear();
-                field.encode_text(&mut buf);
+                field.encode_text(&mut buf, settings);
                 for b in &buf {
                     match b {
                         b'\\' => out.extend(b"\\\\"),
@@ -111,6 +112,7 @@ fn encode_copy_row_csv(
     row: &RowRef,
     typ: &SqlRelationType,
     out: &mut Vec<u8>,
+    settings: TextEncodeSettings,
 ) -> Result<(), io::Error> {
     let null = null.as_bytes();
     let is_special = |c: &u8| *c == *delim || *c == *quote || *c == b'\r' || *c == b'\n';
@@ -123,7 +125,7 @@ fn encode_copy_row_csv(
             None => out.extend(null),
             Some(field) => {
                 buf.clear();
-                field.encode_text(&mut buf);
+                field.encode_text(&mut buf, settings);
                 // A field needs quoting if:
                 //   * It is the only field and the value is exactly the end
                 //     of copy marker.
@@ -319,7 +321,7 @@ impl<'a> CopyTextFormatParser<'a> {
                                         match decode_nibble(self.peek()) {
                                             Some(c) => {
                                                 self.consume_n(1);
-                                                value = value << 4 | c;
+                                                value = (value << 4) | c;
                                             }
                                             _ => break,
                                         }
@@ -337,7 +339,7 @@ impl<'a> CopyTextFormatParser<'a> {
                                 match self.peek() {
                                     Some(c @ b'0'..=b'7') => {
                                         self.consume_n(1);
-                                        value = value << 3 | (c - b'0');
+                                        value = (value << 3) | (c - b'0');
                                     }
                                     _ => break,
                                 }
@@ -477,15 +479,20 @@ pub fn decode_copy_format<'a>(
 }
 
 /// Encodes the given `Row` into bytes based on the given `CopyFormatParams`.
+///
+/// `settings` affects only the text and CSV formats. Callers that do not encode
+/// on behalf of a session, such as `COPY TO <external destination>`, which is
+/// executed in the dataflow layer, must pass [`TextEncodeSettings::STABLE`].
 pub fn encode_copy_format<'a>(
     params: &CopyFormatParams<'a>,
     row: &RowRef,
     typ: &SqlRelationType,
     out: &mut Vec<u8>,
+    settings: TextEncodeSettings,
 ) -> Result<(), io::Error> {
     match params {
-        CopyFormatParams::Text(params) => encode_copy_row_text(params, row, typ, out),
-        CopyFormatParams::Csv(params) => encode_copy_row_csv(params, row, typ, out),
+        CopyFormatParams::Text(params) => encode_copy_row_text(params, row, typ, out, settings),
+        CopyFormatParams::Csv(params) => encode_copy_row_csv(params, row, typ, out, settings),
         CopyFormatParams::Binary => encode_copy_row_binary(row, typ, out),
         CopyFormatParams::Parquet => {
             // TODO(cf2): Support Parquet over STDIN.
@@ -514,7 +521,7 @@ pub fn encode_copy_format_header<'a>(
                 };
                 desc.arity()
             ]);
-            encode_copy_row_csv(params, &header_row, &typ, out)
+            encode_copy_row_csv(params, &header_row, &typ, out, TextEncodeSettings::STABLE)
         }
         CopyFormatParams::Parquet => {
             // TODO(cf2): Support Parquet over STDIN.
@@ -557,7 +564,13 @@ pub fn decode_copy_format_text(
             let raw_value = parser.consume_raw_value()?;
             if let Some(raw_value) = raw_value {
                 match mz_pgrepr::Value::decode_text(typ, raw_value) {
-                    Ok(value) => row.push(value.into_datum(&buf, typ)),
+                    Ok(value) => {
+                        row.push(
+                            value
+                                .into_datum_decode_error(&buf, typ, "column")
+                                .map_err(|msg| io::Error::new(io::ErrorKind::InvalidData, msg))?,
+                        );
+                    }
                     Err(err) => {
                         let msg = format!("unable to decode column: {}", err);
                         return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
@@ -673,6 +686,19 @@ impl<'a> CopyCsvFormatParams<'a> {
     }
 }
 
+/// One field decoded out of a CSV record by [`decode_copy_format_csv`]:
+/// `start..end` indexes into the per-record `output` buffer (csv-core
+/// unquotes/unescapes into that buffer), and `quoted` records whether the
+/// field's first input byte was the quote character. The quote flag is what
+/// distinguishes a literal `""` (quoted empty string) from an unquoted empty
+/// field (the default NULL marker), and a quoted `"\."` data row from the bare
+/// `\.` end-of-copy marker.
+struct DecodedField {
+    start: usize,
+    end: usize,
+    quoted: bool,
+}
+
 pub fn decode_copy_format_csv(
     data: &[u8],
     column_types: &[mz_pgrepr::Type],
@@ -684,73 +710,155 @@ pub fn decode_copy_format_csv(
         header,
     }: CopyCsvFormatParams,
 ) -> Result<Vec<Row>, io::Error> {
-    let mut rows = Vec::new();
-
     let (double_quote, escape) = if quote == escape {
         (true, None)
     } else {
         (false, Some(escape))
     };
 
-    let mut rdr = ReaderBuilder::new()
+    let mut rdr = csv_core::ReaderBuilder::new()
         .delimiter(delimiter)
         .quote(quote)
-        .has_headers(header)
-        .double_quote(double_quote)
         .escape(escape)
-        // Must be flexible to accept end of copy marker, which will always be 1
-        // field.
-        .flexible(true)
-        .from_reader(data);
+        .double_quote(double_quote)
+        .build();
 
     let null_as_bytes = null.as_bytes();
+    let mut rows = Vec::new();
+    // We use csv-core (rather than the higher-level csv crate) so we can
+    // recover per-field "was this field quoted?" information by inspecting the
+    // first byte of each field's input. csv unquotes during parsing, which
+    // makes a quoted empty string indistinguishable from an unquoted empty
+    // field — and PostgreSQL COPY ... FORMAT CSV semantics need that
+    // distinction to honor the NULL marker.
+    let mut input = data;
+    let mut output = vec![0u8; data.len().max(1024)];
+    let mut out_pos = 0;
+    let mut fields: Vec<DecodedField> = Vec::new();
+    let mut field_start = 0;
+    let mut field_quoted: Option<bool> = None;
+    let mut skip_header = header;
+    // True at the start of a record (including the very first), where csv-core
+    // may have left an orphaned terminator byte; false for fields that follow a
+    // delimiter within a record.
+    let mut at_record_start = true;
 
-    let mut record = ByteRecord::new();
-
-    while rdr.read_byte_record(&mut record)? {
-        if record.len() == 1 && record.iter().next() == Some(END_OF_COPY_MARKER) {
-            break;
-        }
-
-        match record.len().cmp(&column_types.len()) {
-            std::cmp::Ordering::Less => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "missing data for column",
-            )),
-            std::cmp::Ordering::Greater => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "extra data after last expected column",
-            )),
-            std::cmp::Ordering::Equal => Ok(()),
-        }?;
-
-        let mut row_builder = SharedRow::get();
-        let mut row_packer = row_builder.packer();
-
-        for (typ, raw_value) in column_types.iter().zip_eq(record.iter()) {
-            if raw_value == null_as_bytes {
-                row_packer.push(Datum::Null);
-            } else {
-                let s = match std::str::from_utf8(raw_value) {
-                    Ok(s) => s,
-                    Err(err) => {
-                        let msg = format!("invalid utf8 data in column: {}", err);
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
-                    }
-                };
-                match mz_pgrepr::Value::decode_text_into_row(typ, s, &mut row_packer) {
-                    Ok(()) => {}
-                    Err(err) => {
-                        let msg = format!("unable to decode column: {}", err);
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
-                    }
+    loop {
+        if field_quoted.is_none() {
+            if at_record_start {
+                // csv-core's default terminator is CRLF, and it reports a
+                // record complete after consuming the `\r`, leaving the
+                // trailing `\n` as the first byte of the next record's input
+                // (and, after a worker chunk is split at a `\r` boundary, a
+                // chunk can likewise begin with that orphan `\n`). csv-core
+                // itself consumes and ignores those stray terminator bytes when
+                // parsing the field, but the quote probe below must skip them
+                // so it inspects the field's real first byte rather than an
+                // orphan — otherwise a quoted field on any non-first CRLF record
+                // is misclassified as unquoted. Only skip at a record boundary:
+                // a `\r`/`\n` after a delimiter legitimately terminates an empty
+                // trailing field and must not be swallowed.
+                while matches!(input.first(), Some(&b'\r') | Some(&b'\n')) {
+                    input = &input[1..];
                 }
             }
+            field_quoted = Some(input.first() == Some(&quote));
+            field_start = out_pos;
         }
-        rows.push(row_builder.clone());
-    }
 
-    Ok(rows)
+        let (result, nin, nout) = rdr.read_field(input, &mut output[out_pos..]);
+        input = &input[nin..];
+        out_pos += nout;
+
+        match result {
+            csv_core::ReadFieldResult::Field { record_end } => {
+                fields.push(DecodedField {
+                    start: field_start,
+                    end: out_pos,
+                    quoted: field_quoted.take().unwrap(),
+                });
+                // The next field begins a new record only if this field ended
+                // one; otherwise it follows a delimiter mid-record.
+                at_record_start = record_end;
+
+                if record_end {
+                    if skip_header {
+                        skip_header = false;
+                    } else if let [
+                        DecodedField {
+                            start,
+                            end,
+                            quoted: false,
+                        },
+                    ] = fields[..]
+                        && &output[start..end] == END_OF_COPY_MARKER
+                    {
+                        // Bare `\.` on its own line: end-of-copy marker. A
+                        // quoted `"\."` also decodes to `\.` but is data, so
+                        // only an unquoted match terminates the import.
+                        return Ok(rows);
+                    } else {
+                        match fields.len().cmp(&column_types.len()) {
+                            std::cmp::Ordering::Less => {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "missing data for column",
+                                ));
+                            }
+                            std::cmp::Ordering::Greater => {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    "extra data after last expected column",
+                                ));
+                            }
+                            std::cmp::Ordering::Equal => {}
+                        }
+
+                        let mut row_builder = SharedRow::get();
+                        let mut row_packer = row_builder.packer();
+                        for (typ, field) in column_types.iter().zip_eq(fields.iter()) {
+                            let raw_value = &output[field.start..field.end];
+                            if !field.quoted && raw_value == null_as_bytes {
+                                row_packer.push(Datum::Null);
+                            } else {
+                                let s = match std::str::from_utf8(raw_value) {
+                                    Ok(s) => s,
+                                    Err(err) => {
+                                        let msg = format!("invalid utf8 data in column: {}", err);
+                                        return Err(io::Error::new(
+                                            io::ErrorKind::InvalidData,
+                                            msg,
+                                        ));
+                                    }
+                                };
+                                if let Err(err) =
+                                    mz_pgrepr::Value::decode_text_into_row(typ, s, &mut row_packer)
+                                {
+                                    let msg = format!("unable to decode column: {}", err);
+                                    return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
+                                }
+                            }
+                        }
+                        rows.push(row_builder.clone());
+                    }
+                    fields.clear();
+                    out_pos = 0;
+                }
+            }
+            csv_core::ReadFieldResult::OutputFull => {
+                let new_len = output.len().saturating_mul(2).max(out_pos + 1);
+                output.resize(new_len, 0);
+            }
+            csv_core::ReadFieldResult::InputEmpty => {
+                // InputEmpty means csv-core consumed all our input mid-field
+                // and wants more. We have no more to give, so the next
+                // iteration calls it with the now-empty slice; per its
+                // documented termination protocol, that yields the partial
+                // field (if any) as a final `Field`, then `End`.
+            }
+            csv_core::ReadFieldResult::End => return Ok(rows),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1026,12 +1134,153 @@ mod tests {
         for TestCase { params, expected } in tests {
             out.clear();
             let params = CopyFormatParams::Csv(params);
-            let _ = encode_copy_format(&params, &row, &typ, &mut out);
+            let _ = encode_copy_format(&params, &row, &typ, &mut out, TextEncodeSettings::STABLE);
             let output = std::str::from_utf8(&out);
             assert_eq!(output, std::str::from_utf8(expected));
         }
 
         Ok(())
+    }
+
+    #[mz_ore::test]
+    fn test_decode_copy_format_csv_end_marker() {
+        // Bare `\.` on its own line terminates the COPY. A quoted `"\."`
+        // decodes to the same bytes but must be treated as data. This must
+        // hold for every line ending (LF, CRLF, CR): csv-core places a CRLF
+        // record boundary between `\r` and `\n`, so a naive raw-byte check is
+        // fooled by the orphaned terminator bytes on CRLF/CR input.
+        let column_types = vec![mz_pgrepr::Type::from(&mz_repr::SqlScalarType::String)];
+
+        let decode_strings = |input: &[u8]| -> Vec<String> {
+            decode_copy_format_csv(input, &column_types, CopyCsvFormatParams::default())
+                .expect("decode should succeed")
+                .iter()
+                .map(|r| match r.iter().next().unwrap() {
+                    Datum::String(s) => s.to_owned(),
+                    d => panic!("unexpected datum: {:?}", d),
+                })
+                .collect()
+        };
+
+        for eol in [&b"\n"[..], b"\r\n", b"\r"] {
+            let join = |lines: &[&str]| -> Vec<u8> {
+                let mut out = Vec::new();
+                for line in lines {
+                    out.extend_from_slice(line.as_bytes());
+                    out.extend_from_slice(eol);
+                }
+                out
+            };
+
+            // Quoted "\." is data — all three rows are imported.
+            assert_eq!(
+                decode_strings(&join(&["before", "\"\\.\"", "after"])),
+                vec!["before", "\\.", "after"],
+                "quoted marker, eol={eol:?}"
+            );
+
+            // Bare `\.` terminates the COPY; rows after it are dropped.
+            assert_eq!(
+                decode_strings(&join(&["first", "\\.", "ignored"])),
+                vec!["first"],
+                "bare marker, eol={eol:?}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_decode_copy_format_csv_leading_orphan() {
+        // Worker chunks after the first begin at a `\r` boundary, so for CRLF
+        // input a chunk's bytes start with the orphan `\n` that csv-core left
+        // behind. The decoder must still classify the first field's quote
+        // state from its real first byte, not the stray `\n`. Regression test
+        // for the per-chunk quote probe.
+        let column_types = vec![
+            mz_pgrepr::Type::from(&mz_repr::SqlScalarType::String),
+            mz_pgrepr::Type::from(&mz_repr::SqlScalarType::String),
+        ];
+
+        let rows = decode_copy_format_csv(
+            b"\n\"\",x\r\ny,z\r\n",
+            &column_types,
+            CopyCsvFormatParams::default(),
+        )
+        .expect("decode should succeed");
+        let got: Vec<Vec<Datum>> = rows.iter().map(|r| r.iter().collect()).collect();
+        assert_eq!(got.len(), 2);
+        // Quoted empty first field on the leading-orphan record must decode to
+        // the empty string, not SQL NULL (the bug would misread it as
+        // unquoted and match the default empty NULL marker).
+        assert_eq!(got[0][0], Datum::String(""));
+        assert_eq!(got[0][1], Datum::String("x"));
+        assert_eq!(got[1][0], Datum::String("y"));
+        assert_eq!(got[1][1], Datum::String("z"));
+    }
+
+    #[mz_ore::test]
+    fn test_decode_copy_format_csv_quoted_null() {
+        // PG COPY ... FORMAT CSV distinguishes quoted vs unquoted NULL
+        // markers: unquoted → SQL NULL, quoted → the literal string.
+        let column_types = vec![
+            mz_pgrepr::Type::from(&mz_repr::SqlScalarType::String),
+            mz_pgrepr::Type::from(&mz_repr::SqlScalarType::String),
+        ];
+
+        // Lines as (col_a, col_b) literals, joined per-eol below. The quoted
+        // vs unquoted distinction must survive CRLF/CR line endings, where
+        // csv-core leaves an orphaned terminator byte at the start of every
+        // non-first record.
+        let cases: &[(CopyCsvFormatParams, &[(&str, &str)], &[[Option<&str>; 2]])] = &[
+            // Default params: NULL marker is empty string.
+            (
+                CopyCsvFormatParams::default(),
+                &[("a", ""), ("b", "\"\""), ("\"\"", "c")],
+                &[
+                    [Some("a"), None],
+                    [Some("b"), Some("")],
+                    [Some(""), Some("c")],
+                ],
+            ),
+            // Custom NULL marker "NULL".
+            (
+                CopyCsvFormatParams {
+                    null: Cow::from("NULL"),
+                    ..Default::default()
+                },
+                &[("a", "NULL"), ("b", "\"NULL\""), ("NULL", "c")],
+                &[
+                    [Some("a"), None],
+                    [Some("b"), Some("NULL")],
+                    [None, Some("c")],
+                ],
+            ),
+        ];
+
+        for eol in [&b"\n"[..], b"\r\n", b"\r"] {
+            for (params, lines, expected) in cases {
+                let mut input = Vec::new();
+                for (a, b) in *lines {
+                    input.extend_from_slice(a.as_bytes());
+                    input.push(b',');
+                    input.extend_from_slice(b.as_bytes());
+                    input.extend_from_slice(eol);
+                }
+                let rows = decode_copy_format_csv(&input, &column_types, params.clone())
+                    .expect("decode should succeed");
+                assert_eq!(rows.len(), expected.len(), "eol={eol:?}");
+                for (row, want) in rows.iter().zip_eq(expected.iter()) {
+                    let got: Vec<Datum> = row.iter().collect();
+                    assert_eq!(got.len(), 2);
+                    for (g, w) in got.iter().zip_eq(want.iter()) {
+                        match (g, w) {
+                            (Datum::Null, None) => {}
+                            (Datum::String(s), Some(w)) => assert_eq!(s, w, "eol={eol:?}"),
+                            _ => panic!("mismatch: got {g:?}, want {w:?}, eol={eol:?}"),
+                        }
+                    }
+                }
+            }
+        }
     }
 
     proptest! {
@@ -1055,7 +1304,7 @@ mod tests {
                 let params = CopyFormatParams::Csv(csv_params);
 
                 // Roundtrip the Row through our CSV format.
-                encode_copy_format(&params, &row, &typ, &mut buf)?;
+                encode_copy_format(&params, &row, &typ, &mut buf, TextEncodeSettings::STABLE)?;
                 let column_types = typ
                     .column_types
                     .iter()
@@ -1095,7 +1344,7 @@ mod tests {
                     // TODO: The decoder cannot differentiate between empty string and null.
                     if let Some(value) = mz_pgrepr::Value::from_datum(datum, scalar_type) {
                         let mut buf = bytes::BytesMut::new();
-                        value.encode_text(&mut buf);
+                        value.encode_text(&mut buf, TextEncodeSettings::STABLE);
 
                         if let Ok(datum_str) = std::str::from_utf8(&buf[..]) {
                             if datum_str == copy_csv_params.null {
@@ -1107,6 +1356,16 @@ mod tests {
                     let updated_datum = match datum {
                         // TODO: Fix roundtrip decoding of these types.
                         Datum::Timestamp(_) | Datum::TimestampTz(_) | Datum::Null => {
+                            continue;
+                        }
+                        // Text carries no sign for NaN, so `-NaN` decodes as
+                        // `NaN`, and `Row` equality compares the encoded bytes,
+                        // which differ. The positive NaN of the interesting set
+                        // covers the roundtrip itself.
+                        Datum::Float32(f) if f.is_nan() && f.is_sign_negative() => {
+                            continue;
+                        }
+                        Datum::Float64(f) if f.is_nan() && f.is_sign_negative() => {
                             continue;
                         }
                         Datum::String(s) => {

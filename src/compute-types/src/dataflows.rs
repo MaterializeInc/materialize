@@ -12,25 +12,29 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{
+    CollectionPlan, MapFilterProject, MfpPlan, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr,
+};
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{GlobalId, SqlRelationType};
+use mz_repr::{GlobalId, ReprRelationType, SqlRelationType, Timestamp};
 use mz_storage_types::time_dependence::TimeDependence;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 
-use crate::plan::Plan;
+use crate::plan::LirRelationExpr;
 use crate::plan::render_plan::RenderPlan;
+use crate::plan::scalar::{LirScalarExpr, lses_from_mses};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
+pub struct DataflowDescription<P, S: 'static = (), O = MapFilterProject> {
     /// Sources instantiations made available to the dataflow pair with monotonicity information.
-    pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool, Antichain<T>)>,
+    pub source_imports: BTreeMap<GlobalId, SourceImport<S, O>>,
     /// Indexes made available to the dataflow.
     /// (id of index, import)
     pub index_imports: BTreeMap<GlobalId, IndexImport>,
@@ -40,26 +44,26 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub objects_to_build: Vec<BuildDesc<P>>,
     /// Indexes to be made available to be shared with other dataflows
     /// (id of new index, description of index, relationtype of base source/view/table)
-    pub index_exports: BTreeMap<GlobalId, (IndexDesc, SqlRelationType)>,
+    pub index_exports: BTreeMap<GlobalId, (IndexDesc<MirScalarExpr>, ReprRelationType)>,
     /// sinks to be created
     /// (id of new sink, description of sink)
-    pub sink_exports: BTreeMap<GlobalId, ComputeSinkDesc<S, T>>,
+    pub sink_exports: BTreeMap<GlobalId, ComputeSinkDesc<S>>,
     /// An optional frontier to which inputs should be advanced.
     ///
     /// If this is set, it should override the default setting determined by
     /// the upper bound of `since` frontiers contributing to the dataflow.
     /// It is an error for this to be set to a frontier not beyond that default.
-    pub as_of: Option<Antichain<T>>,
+    pub as_of: Option<Antichain<Timestamp>>,
     /// Frontier beyond which the dataflow should not execute.
     /// Specifically, updates at times greater or equal to this frontier are suppressed.
     /// This is often set to `as_of + 1` to enable "batch" computations.
     /// Note that frontier advancements might still happen to times that are after the `until`,
     /// only data is suppressed. (This is consistent with how frontier advancements can also
     /// happen before the `as_of`.)
-    pub until: Antichain<T>,
+    pub until: Antichain<Timestamp>,
     /// The initial as_of when the collection is first created. Filled only for materialized views.
     /// Note that this doesn't change upon restarts.
-    pub initial_storage_as_of: Option<Antichain<T>>,
+    pub initial_storage_as_of: Option<Antichain<Timestamp>>,
     /// The schedule of REFRESH materialized views.
     pub refresh_schedule: Option<RefreshSchedule>,
     /// Human-readable name
@@ -68,7 +72,7 @@ pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     pub time_dependence: Option<TimeDependence>,
 }
 
-impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
+impl<P, S, O> DataflowDescription<P, S, O> {
     /// Tests if the dataflow refers to a single timestamp, namely
     /// that `as_of` has a single coordinate and that the `until`
     /// value corresponds to the `as_of` value plus one, or `as_of`
@@ -86,24 +90,25 @@ impl<P, S> DataflowDescription<P, S, mz_repr::Timestamp> {
         // Ensure that as_of <= until.
         soft_assert_or_log!(
             timely::PartialOrder::less_equal(as_of, until),
-            "expected empty `as_of ≤ until`, got `{as_of:?} ≰ {until:?}`",
+            "expected `as_of ≤ until`, got `{as_of:?} ≰ {until:?}`",
         );
         // IF `as_of` is not a single timestamp this can't be a single time dataflow.
         let Some(as_of) = as_of.as_option() else {
             return false;
         };
-        // Ensure that `as_of = MAX` implies `until.is_empty()`.
-        soft_assert_or_log!(
-            as_of != &mz_repr::Timestamp::MAX || until.is_empty(),
-            "expected `until = {{}}` due to `as_of = MAX`, got `until = {until:?}`",
-        );
-        // Note that the `(as_of = MAX, until = {})` case also returns `true`
-        // here (as expected) since we are going to compare two `None` values.
+        // With `as_of = MAX` the `as_of <= until` invariant leaves only two valid
+        // frontiers, and both are handled correctly by the comparison below:
+        //   * `until = {}` (unbounded) yields `None == None`, so single time. `MAX`
+        //     is the last timestamp, so an unbounded dataflow starting there sees
+        //     exactly one time.
+        //   * `until = {MAX}` is the empty range produced by e.g.
+        //     `SUBSCRIBE ... AS OF MAX UP TO MAX`. `try_step_forward` on `MAX`
+        //     overflows to `None`, so `None == Some(MAX)` is false: not single time.
         as_of.try_step_forward().as_ref() == until.as_option()
     }
 }
 
-impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
+impl LirDataflowDescription {
     /// Check invariants expected to be true about `DataflowDescription`s.
     pub fn check_invariants(&self) -> Result<(), String> {
         let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();
@@ -123,7 +128,7 @@ impl<T> DataflowDescription<Plan<T>, (), mz_repr::Timestamp> {
     }
 }
 
-impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
+impl DataflowDescription<OptimizedMirRelationExpr, ()> {
     /// Imports a previously exported index.
     ///
     /// This method makes available an index previously exported as `id`, identified
@@ -132,8 +137,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     pub fn import_index(
         &mut self,
         id: GlobalId,
-        desc: IndexDesc,
-        typ: SqlRelationType,
+        desc: IndexDesc<MirScalarExpr>,
+        typ: ReprRelationType,
         monotonic: bool,
     ) {
         self.index_imports.insert(
@@ -142,6 +147,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
                 desc,
                 typ,
                 monotonic,
+                with_snapshot: true,
             },
         );
     }
@@ -150,17 +156,19 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     pub fn import_source(&mut self, id: GlobalId, typ: SqlRelationType, monotonic: bool) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
+        // Similarly, we require the snapshot by default, though optimization may choose to skip it.
         self.source_imports.insert(
             id,
-            (
-                SourceInstanceDesc {
+            SourceImport {
+                desc: SourceInstanceDesc {
                     storage_metadata: (),
                     arguments: SourceInstanceArguments { operators: None },
                     typ,
                 },
                 monotonic,
-                Antichain::new(),
-            ),
+                with_snapshot: true,
+                upper: Antichain::new(),
+            },
         );
     }
 
@@ -173,7 +181,12 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     ///
     /// Future uses of `import_index` in other dataflow descriptions may use `id`,
     /// as long as this dataflow has not been terminated in the meantime.
-    pub fn export_index(&mut self, id: GlobalId, description: IndexDesc, on_type: SqlRelationType) {
+    pub fn export_index(
+        &mut self,
+        id: GlobalId,
+        description: IndexDesc<MirScalarExpr>,
+        on_type: ReprRelationType,
+    ) {
         // We first create a "view" named `id` that ensures that the
         // data are correctly arranged and available for export.
         self.insert_plan(
@@ -190,7 +203,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 
     /// Exports as `id` a sink described by `description`.
-    pub fn export_sink(&mut self, id: GlobalId, description: ComputeSinkDesc<(), T>) {
+    pub fn export_sink(&mut self, id: GlobalId, description: ComputeSinkDesc<()>) {
         self.sink_exports.insert(id, description);
     }
 
@@ -203,7 +216,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, (source, _monotonic, _upper)) in self.source_imports.iter() {
+        for (source_id, source_import) in self.source_imports.iter() {
+            let source = &source_import.desc;
             if source_id == id {
                 return source.typ.arity();
             }
@@ -218,7 +232,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
                 return desc.plan.arity();
             }
         }
-        panic!("GlobalId {} not found in DataflowDesc", id);
+        panic!("GlobalId {} not found in MirDataflowDescription", id);
     }
 
     /// Calls r and s on any sub-members of those types in self. Halts at the first error return.
@@ -230,8 +244,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         for BuildDesc { plan, .. } in &mut self.objects_to_build {
             r(plan)?;
         }
-        for (source_instance_desc, _, _upper) in self.source_imports.values_mut() {
-            let Some(mfp) = source_instance_desc.arguments.operators.as_mut() else {
+        for source_import in self.source_imports.values_mut() {
+            let Some(mfp) = source_import.desc.arguments.operators.as_mut() else {
                 continue;
             };
             for expr in mfp.expressions.iter_mut() {
@@ -245,7 +259,71 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     }
 }
 
-impl<P, S, T> DataflowDescription<P, S, T> {
+impl<P, S, O> DataflowDescription<P, S, O> {
+    /// Applies `f` to the operators of every source import, failing on the
+    /// first error.
+    pub fn try_map_source_operators<O2, E>(
+        self,
+        mut f: impl FnMut(O) -> Result<O2, E>,
+    ) -> Result<DataflowDescription<P, S, O2>, E> {
+        let DataflowDescription {
+            source_imports,
+            index_imports,
+            objects_to_build,
+            index_exports,
+            sink_exports,
+            as_of,
+            until,
+            initial_storage_as_of,
+            refresh_schedule,
+            debug_name,
+            time_dependence,
+        } = self;
+        let source_imports = source_imports
+            .into_iter()
+            .map(|(id, import)| {
+                let SourceImport {
+                    desc:
+                        SourceInstanceDesc {
+                            arguments: SourceInstanceArguments { operators },
+                            storage_metadata,
+                            typ,
+                        },
+                    monotonic,
+                    with_snapshot,
+                    upper,
+                } = import;
+                let desc = SourceInstanceDesc {
+                    arguments: SourceInstanceArguments {
+                        operators: operators.map(&mut f).transpose()?,
+                    },
+                    storage_metadata,
+                    typ,
+                };
+                let import = SourceImport {
+                    desc,
+                    monotonic,
+                    with_snapshot,
+                    upper,
+                };
+                Ok((id, import))
+            })
+            .collect::<Result<_, E>>()?;
+        Ok(DataflowDescription {
+            source_imports,
+            index_imports,
+            objects_to_build,
+            index_exports,
+            sink_exports,
+            as_of,
+            until,
+            initial_storage_as_of,
+            refresh_schedule,
+            debug_name,
+            time_dependence,
+        })
+    }
+
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
         Self {
@@ -286,12 +364,12 @@ impl<P, S, T> DataflowDescription<P, S, T> {
     /// Generally, one should consider setting `as_of` at least to the `since`
     /// frontiers of contributing data sources and as aggressively as the
     /// computation permits.
-    pub fn set_as_of(&mut self, as_of: Antichain<T>) {
+    pub fn set_as_of(&mut self, as_of: Antichain<Timestamp>) {
         self.as_of = Some(as_of);
     }
 
     /// Records the initial `as_of` of the storage collection associated with a materialized view.
-    pub fn set_initial_as_of(&mut self, initial_as_of: Antichain<T>) {
+    pub fn set_initial_as_of(&mut self, initial_as_of: Antichain<Timestamp>) {
         self.initial_storage_as_of = Some(initial_as_of);
     }
 
@@ -308,6 +386,11 @@ impl<P, S, T> DataflowDescription<P, S, T> {
     /// Identifiers of imported sources.
     pub fn imported_source_ids(&self) -> impl Iterator<Item = GlobalId> + Clone + '_ {
         self.source_imports.keys().copied()
+    }
+
+    /// Whether `id` names an import of this dataflow, index or source.
+    pub fn is_import(&self, id: &GlobalId) -> bool {
+        self.index_imports.contains_key(id) || self.source_imports.contains_key(id)
     }
 
     /// Identifiers of exported objects (indexes and sinks).
@@ -331,7 +414,6 @@ impl<P, S, T> DataflowDescription<P, S, T> {
             .iter()
             .filter_map(|(id, desc)| match desc.connection {
                 ComputeSinkConnection::MaterializedView(_) => Some(*id),
-                ComputeSinkConnection::ContinualTask(_) => Some(*id),
                 _ => None,
             })
     }
@@ -342,16 +424,6 @@ impl<P, S, T> DataflowDescription<P, S, T> {
             .iter()
             .filter_map(|(id, desc)| match desc.connection {
                 ComputeSinkConnection::Subscribe(_) => Some(*id),
-                _ => None,
-            })
-    }
-
-    /// Identifiers of exported continual tasks.
-    pub fn continual_task_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.sink_exports
-            .iter()
-            .filter_map(|(id, desc)| match desc.connection {
-                ComputeSinkConnection::ContinualTask(_) => Some(*id),
                 _ => None,
             })
     }
@@ -410,7 +482,7 @@ impl<P, S, T> DataflowDescription<P, S, T> {
     }
 }
 
-impl<P, S, T> DataflowDescription<P, S, T>
+impl<P, S, O> DataflowDescription<P, S, O>
 where
     P: CollectionPlan,
 {
@@ -470,19 +542,42 @@ where
     /// This method behaves like `depends_on` but filters out internal dependencies that are not
     /// included in the dataflow imports.
     pub fn depends_on_imports(&self, collection_id: GlobalId) -> BTreeSet<GlobalId> {
-        let is_import = |id: &GlobalId| {
-            self.source_imports.contains_key(id) || self.index_imports.contains_key(id)
-        };
-
         let deps = self.depends_on(collection_id);
-        deps.into_iter().filter(is_import).collect()
+        deps.into_iter().filter(|id| self.is_import(id)).collect()
+    }
+
+    /// Computes the set of imports the dataflow's exports read, meaning the imports reachable from
+    /// an index export's `on_id` or a sink export's `from`.
+    ///
+    /// A description that has been through the optimizer answers [`Self::import_ids`] here, because
+    /// the optimizer prunes the import list to what the exports read. The two come apart while a
+    /// description is still being assembled, and this is what the prune and the assertion guarding
+    /// it are both defined in terms of. The answer covers the dataflow as a whole, so an import only
+    /// one export reads is still reported, and a dataflow with no exports reports none.
+    ///
+    /// NOTE: On the index side this over-approximates. [`Self::depends_on`] cannot tell which index
+    /// on a collection a plan will use, so reaching a collection reports every index imported on it.
+    /// Pruning index imports needs the exact usage information the MIR pipeline collects, not this.
+    ///
+    /// Panics for an export naming a collection that is neither an import nor built exactly once
+    /// here, which is [`Self::depends_on`]'s precondition on its argument. Rendering resolves the
+    /// same ids, so a description that trips this does not survive being built either.
+    pub fn used_import_ids(&self) -> BTreeSet<GlobalId> {
+        let mut deps = BTreeSet::new();
+        for (index_desc, _typ) in self.index_exports.values() {
+            self.depends_on_into(index_desc.on_id, &mut deps);
+        }
+        for sink_desc in self.sink_exports.values() {
+            self.depends_on_into(sink_desc.from, &mut deps);
+        }
+        deps.retain(|id| self.is_import(id));
+        deps
     }
 }
 
-impl<S, T> DataflowDescription<RenderPlan, S, T>
+impl<S> RenderDataflowDescription<S>
 where
     S: Clone + PartialEq,
-    T: Clone + timely::PartialOrder,
 {
     /// Determine if a dataflow description is compatible with this dataflow description.
     ///
@@ -538,8 +633,8 @@ where
         };
 
         let mut source_imports = self.source_imports.clone();
-        for (_source, _monotonic, upper) in source_imports.values_mut() {
-            *upper = Antichain::new();
+        for import in source_imports.values_mut() {
+            import.upper = Antichain::new();
         }
 
         let mut objects_to_build = self.objects_to_build.clone();
@@ -574,28 +669,62 @@ where
     }
 }
 
-/// A commonly used name for dataflows contain MIR expressions.
-pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
+/// A dataflow of optimized MIR, as the optimizer builds and rewrites it.
+pub type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
+
+/// A dataflow lowered to LIR.
+///
+/// Its source operators are already planned. Rendering evaluates them as
+/// given, so lowering is the only place they are planned.
+pub type LirDataflowDescription<S = ()> = DataflowDescription<LirRelationExpr, S, MfpPlan>;
+
+/// A dataflow ready to render.
+pub type RenderDataflowDescription<S> = DataflowDescription<RenderPlan, S, MfpPlan>;
 
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct IndexDesc {
+pub struct IndexDesc<E> {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
-    pub key: Vec<MirScalarExpr>,
+    pub key: Vec<E>,
+}
+
+impl IndexDesc<MirScalarExpr> {
+    /// Translate an index description from MIR to LIR.
+    pub fn as_lir(&self) -> IndexDesc<LirScalarExpr> {
+        let on_id = self.on_id.clone();
+        let key = lses_from_mses(&self.key);
+
+        IndexDesc { on_id, key }
+    }
 }
 
 /// Information about an imported index, and how it will be used by the dataflow.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct IndexImport {
     /// Description of index.
-    pub desc: IndexDesc,
+    pub desc: IndexDesc<MirScalarExpr>,
     /// Schema and keys of the object the index is on.
-    pub typ: SqlRelationType,
+    pub typ: ReprRelationType,
     /// Whether the index will supply monotonic data.
     pub monotonic: bool,
+    /// Whether this import must include the snapshot data.
+    pub with_snapshot: bool,
+}
+
+/// Information about an imported source, and how it will be used by the dataflow.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct SourceImport<S: 'static = (), O = MapFilterProject> {
+    /// Description of the source instance to import.
+    pub desc: SourceInstanceDesc<S, O>,
+    /// Whether the source will supply monotonic data.
+    pub monotonic: bool,
+    /// Whether this import must include the snapshot data.
+    pub with_snapshot: bool,
+    /// The initial known upper frontier for the source.
+    pub upper: Antichain<Timestamp>,
 }
 
 /// An association of a global identifier to an expression.
@@ -605,4 +734,248 @@ pub struct BuildDesc<P> {
     pub id: GlobalId,
     /// TODO(database-issues#7533): Add documentation.
     pub plan: P,
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_expr::{AccessStrategy, Id, MirRelationExpr, UnmaterializableFunc, func};
+    use mz_repr::optimize::OptimizerFeatures;
+    use mz_repr::{RelationDesc, ReprRelationType, ReprScalarType, SqlRelationType};
+
+    use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
+    use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
+
+    use super::*;
+
+    const READ: GlobalId = GlobalId::User(1);
+    const UNREAD: GlobalId = GlobalId::User(2);
+    const VIEW: GlobalId = GlobalId::Transient(1);
+    const SINK: GlobalId = GlobalId::Transient(2);
+    const INDEX: GlobalId = GlobalId::Transient(3);
+
+    fn typ() -> ReprRelationType {
+        ReprRelationType::new(vec![ReprScalarType::Int64.nullable(false)])
+    }
+
+    /// A dataflow importing `READ` and `UNREAD`, building `VIEW` from `plan`, and exporting a
+    /// subscribe sink over it.
+    fn dataflow(plan: MirRelationExpr) -> MirDataflowDescription {
+        let source_import = || SourceImport {
+            desc: SourceInstanceDesc {
+                arguments: SourceInstanceArguments { operators: None },
+                storage_metadata: (),
+                typ: SqlRelationType::from_repr(&typ()),
+            },
+            monotonic: false,
+            with_snapshot: true,
+            upper: Antichain::from_elem(Timestamp::MIN),
+        };
+
+        let mut df = MirDataflowDescription::new("test".to_string());
+        df.source_imports.insert(READ, source_import());
+        df.source_imports.insert(UNREAD, source_import());
+        df.objects_to_build.push(BuildDesc {
+            id: VIEW,
+            plan: OptimizedMirRelationExpr::declare_optimized(plan),
+        });
+        df.sink_exports.insert(
+            SINK,
+            ComputeSinkDesc {
+                from: VIEW,
+                from_desc: RelationDesc::new(SqlRelationType::from_repr(&typ()), ["c"]),
+                connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                    output: Vec::new(),
+                }),
+                with_snapshot: true,
+                up_to: Antichain::new(),
+                non_null_assertions: Vec::new(),
+                refresh_schedule: None,
+                from_arrangement: None,
+            },
+        );
+        df
+    }
+
+    #[mz_ore::test]
+    fn used_import_ids_reports_only_read_imports() {
+        let df = dataflow(MirRelationExpr::Get {
+            id: Id::Global(READ),
+            typ: typ(),
+            access_strategy: AccessStrategy::Persist,
+        });
+
+        assert_eq!(df.used_import_ids(), BTreeSet::from([READ]));
+    }
+
+    /// An export the optimizer folded to a constant reads nothing, even though the imports it was
+    /// folded from are still there. This is the shape that must not be reported as reading them.
+    #[mz_ore::test]
+    fn used_import_ids_is_empty_for_a_constant_export() {
+        let df = dataflow(MirRelationExpr::Constant {
+            rows: Ok(Vec::new()),
+            typ: typ(),
+        });
+
+        assert_eq!(df.used_import_ids(), BTreeSet::new());
+    }
+
+    /// Index exports are walked from the collection they are on, just like sink exports are from
+    /// the collection they are from.
+    #[mz_ore::test]
+    fn used_import_ids_covers_index_exports() {
+        let mut df = dataflow(MirRelationExpr::Constant {
+            rows: Ok(Vec::new()),
+            typ: typ(),
+        });
+        let other_view = GlobalId::Transient(4);
+        df.objects_to_build.push(BuildDesc {
+            id: other_view,
+            plan: OptimizedMirRelationExpr::declare_optimized(MirRelationExpr::Get {
+                id: Id::Global(UNREAD),
+                typ: typ(),
+                access_strategy: AccessStrategy::Persist,
+            }),
+        });
+        df.index_exports.insert(
+            INDEX,
+            (
+                IndexDesc {
+                    on_id: other_view,
+                    key: Vec::new(),
+                },
+                typ(),
+            ),
+        );
+
+        assert_eq!(df.used_import_ids(), BTreeSet::from([UNREAD]));
+    }
+
+    /// An imported index is reached through the collection it is on, and reported by the id of the
+    /// index rather than that of the collection.
+    #[mz_ore::test]
+    fn used_import_ids_reports_imported_indexes_by_index_id() {
+        let indexed_view = GlobalId::User(3);
+        let imported_index = GlobalId::User(4);
+
+        let mut df = dataflow(MirRelationExpr::Get {
+            id: Id::Global(indexed_view),
+            typ: typ(),
+            access_strategy: AccessStrategy::Index(Vec::new()),
+        });
+        df.index_imports.insert(
+            imported_index,
+            IndexImport {
+                desc: IndexDesc {
+                    on_id: indexed_view,
+                    key: Vec::new(),
+                },
+                typ: typ(),
+                monotonic: false,
+                with_snapshot: true,
+            },
+        );
+
+        assert_eq!(df.used_import_ids(), BTreeSet::from([imported_index]));
+    }
+
+    /// Builds a minimal dataflow description carrying only the `as_of` and
+    /// `until` frontiers that `is_single_time` inspects.
+    fn desc_with_bounds(
+        as_of: Antichain<Timestamp>,
+        until: Antichain<Timestamp>,
+    ) -> DataflowDescription<OptimizedMirRelationExpr, ()> {
+        let mut desc = DataflowDescription::new("test".to_string());
+        desc.set_as_of(as_of);
+        desc.until = until;
+        desc
+    }
+
+    #[mz_ore::test]
+    fn is_single_time_classification() {
+        // Ordinary single-time dataflow: `until = as_of + 1`.
+        assert!(
+            desc_with_bounds(
+                Antichain::from_elem(5.into()),
+                Antichain::from_elem(6.into())
+            )
+            .is_single_time()
+        );
+
+        // `as_of = MAX` with an empty `until` is single time: `MAX` is the last
+        // timestamp, so an unbounded dataflow starting there sees exactly one time.
+        assert!(
+            desc_with_bounds(Antichain::from_elem(Timestamp::MAX), Antichain::new())
+                .is_single_time()
+        );
+
+        // `as_of = MAX` with `until = {MAX}` is an empty range, produced by
+        // `SUBSCRIBE ... AS OF MAX UP TO MAX`. It must not be classified as single
+        // time, and it must not trip an invariant assertion (see CPU-169).
+        assert!(
+            !desc_with_bounds(
+                Antichain::from_elem(Timestamp::MAX),
+                Antichain::from_elem(Timestamp::MAX)
+            )
+            .is_single_time()
+        );
+    }
+
+    #[mz_ore::test]
+    fn lowering_plans_source_operators() {
+        // `#1 = #0::mz_timestamp`, filtered by `mz_now() < #1` and
+        // `mz_now() = #0::mz_timestamp`.
+        let mz_now = || MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let cast = || MirScalarExpr::column(0).call_unary(func::CastInt64ToMzTimestamp);
+        let mfp = MapFilterProject::new(1).map([cast()]).filter([
+            mz_now().call_binary(MirScalarExpr::column(1), func::Lt),
+            mz_now().call_binary(cast(), func::Eq),
+        ]);
+        let planned = MfpPlan::create_from(mfp.clone()).expect("plannable");
+
+        let mut df = dataflow(MirRelationExpr::Get {
+            id: Id::Global(READ),
+            typ: typ(),
+            access_strategy: AccessStrategy::Persist,
+        });
+        let unread = df.source_imports.get_mut(&UNREAD).expect("imported");
+        unread.desc.arguments.operators = Some(mfp);
+
+        let lowered = LirRelationExpr::finalize_dataflow(df, &OptimizerFeatures::default(), None)
+            .expect("lowers");
+        let operators = &lowered.source_imports[&UNREAD].desc.arguments.operators;
+        assert_eq!(operators.as_ref(), Some(&planned));
+    }
+
+    /// MIR predicate pushdown copies `mz_now() <= #0` into the source's operators and keeps it in
+    /// the `Filter` above the read. Hoisting the read's copy into the source must not leave the
+    /// source evaluating the same bound twice.
+    #[mz_ore::test]
+    fn lowering_merges_pushed_down_temporal_predicate() {
+        let mz_now = || MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let cast = || MirScalarExpr::column(0).call_unary(func::CastInt64ToMzTimestamp);
+        let le = || mz_now().call_binary(cast(), func::Lte);
+
+        let mut df = dataflow(
+            MirRelationExpr::Get {
+                id: Id::Global(READ),
+                typ: typ(),
+                access_strategy: AccessStrategy::Persist,
+            }
+            .filter([le()]),
+        );
+        let read = df.source_imports.get_mut(&READ).expect("imported");
+        read.desc.arguments.operators = Some(MapFilterProject::new(1).filter([le()]));
+
+        let lowered = LirRelationExpr::finalize_dataflow(df, &OptimizerFeatures::default(), None)
+            .expect("lowers");
+        let operators = lowered.source_imports[&READ]
+            .desc
+            .arguments
+            .operators
+            .as_ref()
+            .expect("planned operators");
+        let (_safe, lower, upper) = operators.as_parts();
+        assert!(lower.is_empty(), "{operators:?}");
+        assert_eq!(upper.len(), 1, "{operators:?}");
+    }
 }

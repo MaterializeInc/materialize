@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::{Context, bail};
+use mz_postgres_util::query_one_prepared;
 use tokio_postgres::types::Type;
 
 use crate::action::{ControlFlow, State};
@@ -26,10 +27,7 @@ pub async fn run_skip_if(cmd: BuiltinCommand, state: &State) -> Result<ControlFl
         bail!("skip-if query must return exactly one boolean column");
     }
 
-    let should_skip: bool = state
-        .materialize
-        .pgclient
-        .query_one(&stmt, &[])
+    let should_skip: bool = query_one_prepared(&state.materialize.pgclient, &stmt, &[])
         .await
         .context("executing skip-if query failed")?
         .get(0);

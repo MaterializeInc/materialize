@@ -32,3 +32,20 @@ if [[ ! "${MZDEV_NO_SHELLCHECK:-}" ]]; then
         exit 1
     fi
 fi
+
+# Check that GNU sed is available (required by gen-completion).
+if ! command_exists gsed && ! (sed --version 2>/dev/null | grep -q "GNU sed"); then
+    echo -e "lint: $(red fatal:) GNU sed is required but not found" >&2
+    echo -e "hint: on macOS, install it with: brew install gnu-sed" >&2
+    exit 1
+fi
+
+# Check that Python dependencies are importable. A broken httpx (transitive
+# dependency of confluent-kafka) is a common symptom of a stale virtualenv.
+if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
+    if ! bin/pyactivate -c "import httpx" 2>/dev/null; then
+        echo -e "lint: $(red fatal:) Python virtualenv has broken dependencies (cannot import \`httpx\`)" >&2
+        echo -e "hint: rebuild the virtualenv: rm -rf misc/python/venv" >&2
+        exit 1
+    fi
+fi

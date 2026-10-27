@@ -14,17 +14,13 @@ from materialize.checks.checks import Check
 
 class DropTable(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE drop_table1 (f1 INTEGER);
                 > INSERT INTO drop_table1 VALUES (1);
 
                 > CREATE TABLE drop_table2 (f1 INTEGER);
                 > INSERT INTO drop_table2 VALUES (1);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -40,14 +36,10 @@ class DropTable(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 ! SELECT * FROM drop_table1;
                 contains: unknown catalog item
 
                 ! SELECT * FROM drop_table2;
                 contains: unknown catalog item
-           """
-            )
-        )
+           """))

@@ -9,7 +9,6 @@
 
 //! Types related to postgres sources
 
-use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, SqlScalarType};
@@ -85,7 +84,11 @@ impl PostgresSourceConnection {
             )
             .await?;
 
-        let lsn = mz_postgres_util::get_current_wal_lsn(&client).await?;
+        let lsn = mz_postgres_util::fetch_max_lsn(
+            &client,
+            self.publication_details.get_is_physical_replica(),
+        )
+        .await?;
 
         let current_upper = Antichain::from_elem(MzOffset::from(u64::from(lsn)));
         Ok(current_upper)
@@ -185,8 +188,11 @@ pub enum CastType {
 pub struct PostgresSourceExportDetails {
     /// The cast expressions to convert the incoming string encoded rows to
     /// their target types
-    pub column_casts: Vec<(CastType, MirScalarExpr)>,
+    pub column_casts: Vec<(CastType, crate::sources::casts::StorageScalarExpr)>,
     pub table: PostgresTableDesc,
+    /// An upper bound on the upstream LSN whose schema `table` describes.
+    /// `None` for exports created before this was recorded.
+    pub initial_lsn: Option<MzOffset>,
 }
 
 impl AlterCompatible for PostgresSourceExportDetails {
@@ -196,6 +202,7 @@ impl AlterCompatible for PostgresSourceExportDetails {
         let Self {
             column_casts: _,
             table: _,
+            initial_lsn: _,
         } = self;
         Ok(())
     }
@@ -209,6 +216,17 @@ pub struct PostgresSourcePublicationDetails {
     /// prior to this field being introduced
     pub timeline_id: Option<u64>,
     pub database: String,
+    /// Whether the upstream PostgreSQL server was in recovery (i.e. a physical
+    /// replica, per `pg_is_in_recovery()`) when this source was created. The
+    /// None value indicates the check was not performed because the source
+    /// predates this field.
+    pub is_physical_replica: Option<bool>,
+}
+
+impl PostgresSourcePublicationDetails {
+    pub fn get_is_physical_replica(&self) -> bool {
+        self.is_physical_replica.unwrap_or(false)
+    }
 }
 
 impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicationDetails {
@@ -217,6 +235,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
             slot: self.slot.clone(),
             timeline_id: self.timeline_id.clone(),
             database: self.database.clone(),
+            is_physical_replica: self.is_physical_replica,
         }
     }
 
@@ -225,6 +244,7 @@ impl RustType<ProtoPostgresSourcePublicationDetails> for PostgresSourcePublicati
             slot: proto.slot,
             timeline_id: proto.timeline_id,
             database: proto.database,
+            is_physical_replica: proto.is_physical_replica,
         })
     }
 }
@@ -235,6 +255,7 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
             slot,
             timeline_id,
             database,
+            is_physical_replica,
         } = self;
 
         let compatibility_checks = [
@@ -249,6 +270,22 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
                 "timeline_id",
             ),
             (database == &other.database, "database"),
+            (
+                match (is_physical_replica, &other.is_physical_replica) {
+                    // The value will change if a physical replica is promoted to primary. This will break alter statements.
+                    // This is expected and aligns with the current behavior of the source failing on timeline ID changes.
+                    (Some(is_physical_replica), Some(is_physical_replica_other)) => {
+                        is_physical_replica == is_physical_replica_other
+                    }
+                    // All existing sources are expected to not be physical replicas
+                    (None, Some(is_physical_replica_other)) => !is_physical_replica_other,
+                    // Accept mutating other unrelated fields without needing to resolve this to a value.
+                    (None, None) => true,
+                    // Setting a resolved field to None should not be possible or allowed.
+                    (Some(_), None) => false,
+                },
+                "is_physical_replica",
+            ),
         ];
 
         for (compatible, field) in compatibility_checks {
@@ -264,5 +301,29 @@ impl AlterCompatible for PostgresSourcePublicationDetails {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_alter_compatible_timeline_id_overwritten_physical_replica_none() {
+        let curr = PostgresSourcePublicationDetails {
+            slot: "slot".to_string(),
+            timeline_id: None,
+            database: "db".to_string(),
+            is_physical_replica: None,
+        };
+
+        let other = PostgresSourcePublicationDetails {
+            slot: "slot".to_string(),
+            timeline_id: Some(1),
+            database: "db".to_string(),
+            is_physical_replica: None,
+        };
+
+        assert!(curr.alter_compatible(GlobalId::User(1), &other).is_ok());
     }
 }

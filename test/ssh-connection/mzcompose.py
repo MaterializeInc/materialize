@@ -29,18 +29,16 @@ from materialize.mzcompose.services.sql_server import (
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 
 SQL_SERVER_TLS_CONF_PATH = MZ_ROOT / "test" / "sql-server-cdc" / "tls-mssconfig.conf"
 
 SERVICES = [
-    Zookeeper(),
     Kafka(),
     SchemaRegistry(),
     Materialized(),
     Testdrive(consistent_seed=True),
     SshBastionHost(),
-    Postgres(),
+    Postgres(volumes=["secrets:/certs:ro"]),
     TestCerts(),
     Redpanda(),
     MySql(),
@@ -73,7 +71,7 @@ def workflow_basic_ssh_features(c: Composition, redpanda: bool = False) -> None:
     if redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["kafka", "schema-registry"]
     c.up(*dependencies)
 
     c.run_testdrive_files("ssh-connections.td")
@@ -87,13 +85,11 @@ def workflow_validate_connection(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.run_testdrive_files("--no-reset", "validate-failures.td")
 
@@ -112,13 +108,11 @@ def workflow_pg(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.exec(
         "ssh-bastion-host",
@@ -139,13 +133,11 @@ def workflow_mysql(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.exec(
         "ssh-bastion-host",
@@ -206,13 +198,11 @@ def workflow_sql_server(c: Composition) -> None:
     setup_sql_server_testing(c)
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.exec(
         "ssh-bastion-host",
@@ -272,18 +262,16 @@ def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
         if redpanda:
             dependencies += ["redpanda"]
         else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+            dependencies += ["kafka", "schema-registry"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
 
-        public_key = c.sql_query(
-            """
+        public_key = c.sql_query("""
             select public_key_1 from mz_ssh_tunnel_connections ssh \
             join mz_connections c on c.id = ssh.id
             where c.name = 'thancred';
-            """
-        )[0][0]
+            """)[0][0]
 
         c.exec(
             "ssh-bastion-host",
@@ -314,18 +302,16 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
         if redpanda:
             dependencies += ["redpanda"]
         else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+            dependencies += ["kafka", "schema-registry"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
 
-        public_key = c.sql_query(
-            """
+        public_key = c.sql_query("""
             select public_key_1 from mz_ssh_tunnel_connections ssh \
             join mz_connections c on c.id = ssh.id
             where c.name = 'thancred';
-            """
-        )[0][0]
+            """)[0][0]
 
         c.exec(
             "ssh-bastion-host",
@@ -359,18 +345,16 @@ def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
         if redpanda:
             dependencies += ["redpanda"]
         else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
+            dependencies += ["kafka", "schema-registry"]
         c.up(*dependencies)
 
         c.run_testdrive_files("setup.td")
 
-        public_key = c.sql_query(
-            """
+        public_key = c.sql_query("""
             select public_key_1 from mz_ssh_tunnel_connections ssh \
             join mz_connections c on c.id = ssh.id
             where c.name = 'thancred';
-            """
-        )[0][0]
+            """)[0][0]
 
         c.exec(
             "ssh-bastion-host",
@@ -393,18 +377,16 @@ def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
     if redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["kafka", "schema-registry"]
     c.up(*dependencies)
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.exec(
         "ssh-bastion-host",
@@ -437,13 +419,11 @@ def workflow_pg_restart_bastion(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
     c.exec(
         "ssh-bastion-host",
         "bash",
@@ -491,13 +471,11 @@ def workflow_pg_restart_postgres(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
     c.exec(
         "ssh-bastion-host",
         "bash",
@@ -630,13 +608,11 @@ def workflow_pg_via_ssh_tunnel_with_ssl(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    public_key = c.sql_query(
-        """
+    public_key = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.exec(
         "ssh-bastion-host",
@@ -653,13 +629,13 @@ def workflow_ssh_key_after_restart(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    (primary, secondary) = c.sql_query(
+    primary, secondary = c.sql_query(
         "SELECT public_key_1, public_key_2 FROM mz_ssh_tunnel_connections;"
     )[0]
 
     restart_mz(c)
 
-    (restart_primary, restart_secondary) = c.sql_query(
+    restart_primary, restart_secondary = c.sql_query(
         "SELECT public_key_1, public_key_2 FROM mz_ssh_tunnel_connections;"
     )[0]
 
@@ -685,25 +661,21 @@ def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
 
     c.run_testdrive_files("setup.td")
 
-    secondary_public_key = c.sql_query(
-        """
+    secondary_public_key = c.sql_query("""
         select public_key_2 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     c.sql("ALTER CONNECTION thancred ROTATE KEYS;")
 
     restart_mz(c)
 
-    primary_public_key_after_restart = c.sql_query(
-        """
+    primary_public_key_after_restart = c.sql_query("""
         select public_key_1 from mz_ssh_tunnel_connections ssh \
         join mz_connections c on c.id = ssh.id
         where c.name = 'thancred';
-        """
-    )[0][0]
+        """)[0][0]
 
     if secondary_public_key != primary_public_key_after_restart:
         print("initial secondary key:", secondary_public_key)
@@ -737,19 +709,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # and kafka implementations, if --extended is passed
     workflows = [
         # These tests core functionality related to kafka with ssh and error reporting.
-        # (workflow_kafka, (False,), True),  # TODO: Reenable when database-issues#9638 is fixed
+        # (workflow_kafka, (False,), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
         (workflow_hidden_hosts, (False,), True),
         # These tests core functionality related to pg with ssh and error reporting.
         (workflow_basic_ssh_features, (), False),
         (workflow_pg, (), True),
-        # (workflow_kafka_restart_replica, (), True),  # TODO: Reenable when database-issues#9638 is fixed
+        # (workflow_kafka_restart_replica, (), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
         (workflow_kafka_sink, (), True),
         (workflow_sql_server, (), True),
+        (workflow_mysql, (), True),
     ]
     if args.extended:
         workflows.extend(
             [
-                # (workflow_kafka, (True,), True),  # TODO: Reenable when database-issues#9638 is fixed
+                # (workflow_kafka, (True,), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
                 (workflow_hidden_hosts, (True,), True),
                 # Various special cases related to ssh
                 (workflow_ssh_key_after_restart, (), False),

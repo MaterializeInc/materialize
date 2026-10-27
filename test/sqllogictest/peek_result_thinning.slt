@@ -1,0 +1,72 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# ---------------------------------------------------------
+# Thinning of index peek results.
+#
+# While scanning an arrangement, a peek whose finishing bounds how many rows it
+# can need keeps twice that bound and periodically drops the excess. The bound
+# is `limit + offset`, which a `LIMIT` near `i64::MAX` pushes to `2^63`, and
+# doubling that wraps around a `usize`. The doubled value has to be computed
+# without wrapping, or the peek thins when it holds almost nothing: with an
+# `ORDER BY` it drops rows past the end of its buffer and kills the worker,
+# without one it returns a truncated answer.
+#
+# The offsets below are chosen so the wrapped threshold lands within reach of
+# the row count. With `limit = i64::MAX`, doubling `limit + offset` wraps to
+# `2 * offset - 2`, so `OFFSET 1` thins from the very first row and `OFFSET 3`
+# from the fourth.
+# ---------------------------------------------------------
+
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+INSERT INTO t VALUES (1), (2), (3), (4), (5)
+
+# The peek has to be served from an arrangement to reach the scan at all.
+statement ok
+CREATE DEFAULT INDEX ON t
+
+# Wrapped threshold of 0, so every row looks like an excess row.
+query I
+SELECT a FROM t ORDER BY a LIMIT 9223372036854775807 OFFSET 1
+----
+2
+3
+4
+5
+
+# Same bound with no `ORDER BY`, which takes the other branch of the thinning.
+query I rowsort
+SELECT a FROM t LIMIT 9223372036854775807 OFFSET 1
+----
+2
+3
+4
+5
+
+# Wrapped threshold of 4, so the thinning starts partway through the scan.
+query I
+SELECT a FROM t ORDER BY a LIMIT 9223372036854775807 OFFSET 3
+----
+4
+5
+
+# A bound small enough that thinning genuinely fires, to show it still keeps the
+# right rows: 5 rows held against a bound of 2.
+query I
+SELECT a FROM t ORDER BY a LIMIT 1 OFFSET 1
+----
+2
+
+# The largest offset that is still representable, with no limit to pair it with.
+query I
+SELECT a FROM t ORDER BY a OFFSET 9223372036854775807
+----

@@ -1,0 +1,80 @@
+---
+source: src/expr-derive-impl/src/test.rs
+expression: "#[sqlfunc(Concat, sqlname = \"concat\", is_associative = true)]\nfn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {\n    Ok(strs.into_iter().flatten().collect())\n}\n"
+---
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
+pub struct Concat;
+impl crate::func::variadic::EagerVariadicFunc for Concat {
+    type Input<'a> = Variadic<Option<&'a str>>;
+    type Output<'a> = Result<String, EvalError>;
+    fn call<'a>(
+        &self,
+        strs: Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        concat(strs)
+    }
+    fn output_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::variadic::EagerVariadicFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false;
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
+        output.nullable(is_null)
+    }
+    fn is_associative(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for Concat {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("concat")
+    }
+}
+impl crate::func::FuncName for Concat {
+    const NAME: &'static str = stringify!(concat);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(Concat, sqlname = \"concat\", is_associative = true,)] fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError>",
+        signature: "fn(Variadic<Option<&'a str>>) -> Result<String, EvalError>",
+        body_fingerprint: 8293485034765095262u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Option<&'static str>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                Option<&'static str>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
+}
+fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
+    Ok(strs.into_iter().flatten().collect())
+}

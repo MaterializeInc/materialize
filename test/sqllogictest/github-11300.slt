@@ -1,0 +1,29 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for issues found in by SQLsmith database-issues#11300.
+
+statement ok
+select
+  jsonb_each_text(CAST(jsonb_build_array() as jsonb)),
+  pg_postmaster_start_time(),
+  tstzrange(
+    coalesce(now(), now() - mz_catalog.mz_uptime()),
+    pg_postmaster_start_time(),
+    '0'),
+  mz_internal.mz_minimal_name_qualification(
+    coalesce(
+      case when false then regexp_split_to_array(null::text, '0')
+           else regexp_split_to_array(null::text, '0') end,
+      case when false then string_to_array('1', pg_get_userbyid(0::oid), "user"())
+           else string_to_array('1', pg_get_userbyid(0::oid), "user"()) end
+    ),
+    current_user())
+from (select 1) t
+where false;

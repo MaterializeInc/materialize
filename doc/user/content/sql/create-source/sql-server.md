@@ -1,14 +1,18 @@
 ---
-title: "CREATE SOURCE: SQL Server"
+title: "CREATE SOURCE: SQL Server (Legacy Syntax)"
 description: "Connecting Materialize to a SQL Server database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
   main:
-    parent: 'create-source'
+    parent: 'create-source-legacy'
     identifier: cs_sql-server
-    name: SQL Server
-    weight: 23
+    name: SQL Server (Legacy Syntax)
+    weight: 31
 ---
+
+{{< source-versioning-disambiguation is_new=false
+other_ref="[new reference page](/sql/create-source/sql-server-v2)"
+include_blurb=true >}}
 
 {{% create-source/intro %}}
 Materialize supports SQL Server (2016+) as a real-time data source. To connect to a
@@ -19,23 +23,11 @@ for the database that you would like to replicate. Then [create a connection](#c
 in Materialize that specifies access and authentication parameters.
 {{% /create-source/intro %}}
 
+{{% include-headless "/headless/sql-server-deployment-guides" %}}
+
 ## Syntax
 
-{{< diagram "create-source-sql-server.svg" >}}
-
-### `with_options`
-
-{{< diagram "with-options-retain-history.svg" >}}
-
-Field | Use
-------|-----
-_src_name_  | The name for the source.
-**IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
-**CONNECTION** _connection_name_ | The name of the SQL Server connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#sql-server) documentation page.
-**FOR ALL TABLES** | Create subsources for all tables with CDC enabled in all schemas upstream.
-**FOR TABLES (** _table_list_ **)** | Create subsources for specific tables upstream. Requires fully-qualified table names (`<schema>.<table>`).
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{% include-syntax file="examples/create_source_sql_server_legacy" example="syntax" %}}
 
 ## Creating a source
 
@@ -116,7 +108,15 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-{{% include-md file="shared-content/sql-server-considerations.md" %}}
+{{% include-headless "/headless/sql-server-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="sql-server" %}}
+
+## Source failure states and recovery
+
+{{% include-headless "/headless/sql-server-failure-states" %}}
 
 ## Examples
 
@@ -178,7 +178,9 @@ an SSH bastion server to accept connections from Materialize, check
 
 ### Creating a source {#create-source-example}
 
-You **must** enable Change Data Capture, see [Enable Change Data Capture SQL Server Instructions](/ingest-data/sql-server/self-hosted/#a-configure-sql-server).
+You **must** enable Change Data Capture. See the setup instructions for
+[Azure SQL Database](/ingest-data/sql-server/azure-db/#a-configure-azure-sql-database)
+or [self-hosted SQL Server](/ingest-data/sql-server/self-hosted/#a-configure-sql-server).
 
 Once CDC is enabled for all of the relevant tables, you can create a `SOURCE` in
 Materialize to begin replicating data!
@@ -216,9 +218,9 @@ CREATE SOURCE mz_source
 
 ### Handling errors and schema changes
 
-{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
+{{% include-headless "/headless/schema-changes-in-progress" %}}
 
-To handle upstream [schema changes](#schema-changes) or errored subsources, use
+To handle upstream [schema changes](#handling-upstream-operations) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
 subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
 the subsource back to the source.

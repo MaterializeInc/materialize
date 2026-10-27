@@ -22,7 +22,7 @@ use bytes::{BufMut, Bytes};
 use crate::arrow::ArrayOrd;
 use crate::columnar::{ColumnDecoder, ColumnEncoder, Schema};
 use crate::stats::{ColumnStatKinds, ColumnarStats, NoneStats, StructStats};
-use crate::{Codec, Codec64, Opaque, ShardId};
+use crate::{Codec, Codec64, ShardId};
 
 /// All codecs that are compatible with a blob of bytes use that same name. This allows us to
 /// switch between the codecs without any incompatibility errors. The name is chosen for historical
@@ -508,20 +508,6 @@ impl Codec64 for u64 {
     }
 }
 
-impl Opaque for u64 {
-    fn initial() -> Self {
-        u64::MIN
-    }
-}
-
-// TODO: Remove this once we wrap coord epochs in an `Epoch` struct and impl
-// Opaque on `Epoch` instead.
-impl Opaque for i64 {
-    fn initial() -> Self {
-        i64::MIN
-    }
-}
-
 /// A placeholder for a [Codec] impl that hasn't yet gotten a real [Schema].
 #[derive(Debug)]
 pub struct TodoSchema<T>(PhantomData<T>);
@@ -634,14 +620,11 @@ mod tests {
         );
         assert_eq!(
             ShardId::from_str("s0"),
-            Err(
-                "invalid ShardId s0: invalid length: expected length 32 for simple format, found 1"
-                    .to_string()
-            )
+            Err("invalid ShardId s0: invalid length: found 1".to_string())
         );
         assert_eq!(
             ShardId::from_str("s00000000-0000-0000-0000-000000000000FOO"),
-            Err("invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `O` at 38".to_string())
+            Err("invalid ShardId s00000000-0000-0000-0000-000000000000FOO: invalid character: found `O` at 37".to_string())
         );
     }
 

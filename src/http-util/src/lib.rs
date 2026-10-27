@@ -11,9 +11,11 @@
 
 use askama::Template;
 use axum::Json;
+use axum::http::HeaderMap;
 use axum::http::HeaderValue;
+use axum::http::Uri;
 use axum::http::status::StatusCode;
-use axum::response::{Html, IntoResponse};
+use axum::response::{Html, IntoResponse, Response};
 use axum_extra::TypedHeader;
 use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
@@ -23,6 +25,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower_http::cors::AllowOrigin;
 use tracing_subscriber::EnvFilter;
+
+/// MIME type used for the Prometheus protobuf scrape format.
+/// <https://prometheus.io/docs/instrumenting/content_negotiation/#protocol-headers>
+pub const PROMETHEUS_PROTOBUF_CONTENT_TYPE: &str = "application/vnd.google.protobuf; \
+     proto=io.prometheus.client.MetricFamily; \
+     encoding=delimited";
+
+fn wants_prometheus_protobuf(headers: &HeaderMap) -> bool {
+    headers
+        .get_all(axum::http::header::ACCEPT)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.contains(PROMETHEUS_PROTOBUF_CONTENT_TYPE))
+}
 
 /// Renders a template into an HTTP response.
 pub fn template_response<T>(template: T) -> Html<String>
@@ -113,14 +129,37 @@ pub async fn handle_liveness_check() -> impl IntoResponse {
 }
 
 /// Serves metrics from the selected metrics registry variant.
+///
+/// If the caller's `Accept` header advertises support for the Prometheus
+/// protobuf format (`application/vnd.google.protobuf`), the response is a
+/// length-delimited stream of `io.prometheus.client.MetricFamily` messages.
+/// Otherwise the standard Prometheus text format is returned.
 #[allow(clippy::unused_async)]
-pub async fn handle_prometheus(registry: &MetricsRegistry) -> impl IntoResponse + use<> {
-    let mut buffer = Vec::new();
-    let encoder = prometheus::TextEncoder::new();
-    encoder
-        .encode(&registry.gather(), &mut buffer)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok::<_, (StatusCode, String)>((TypedHeader(ContentType::text()), buffer))
+pub async fn handle_prometheus(
+    registry: &MetricsRegistry,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, String)> {
+    let families = registry.gather();
+    let mut buf = Vec::new();
+    let content_type = if wants_prometheus_protobuf(&headers) {
+        prometheus::ProtobufEncoder::new()
+            .encode(&families, &mut buf)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        ContentType::from(
+            PROMETHEUS_PROTOBUF_CONTENT_TYPE
+                .parse::<mime::Mime>()
+                .map_err(|e: mime::FromStrError| {
+                    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+                })?,
+        )
+    } else {
+        prometheus::TextEncoder::new()
+            .encode(&families, &mut buf)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        ContentType::text()
+    };
+
+    Ok((TypedHeader(content_type), buf).into_response())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -155,6 +194,37 @@ pub async fn handle_tracing() -> impl IntoResponse {
     )
 }
 
+/// Returns true if `origin` matches any entry in `allowed`. Supports bare `*`
+/// (any origin), exact match, and wildcard subdomains (`*.example.com`).
+pub fn origin_is_allowed(origin: &HeaderValue, allowed: &[HeaderValue]) -> bool {
+    fn wildcard_origin_match(origin: &HeaderValue, wildcard: &[u8]) -> bool {
+        let Some(origin) = origin.to_str().ok() else {
+            return false;
+        };
+        let Ok(origin) = origin.parse::<Uri>() else {
+            return false;
+        };
+        let Some(host) = origin.host() else {
+            return false;
+        };
+
+        host.as_bytes().ends_with(wildcard)
+    }
+
+    if allowed.iter().any(|o| o.as_bytes() == b"*") {
+        return true;
+    }
+    for val in allowed {
+        if (val.as_bytes().starts_with(b"*.")
+            && wildcard_origin_match(origin, &val.as_bytes()[1..]))
+            || origin == val
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Construct a CORS policy to allow origins to query us via HTTP. If any bare
 /// '*' is passed, this allows any origin; otherwise, allows a list of origins,
 /// which can include wildcard subdomains. If the allowed origin starts with a
@@ -163,6 +233,20 @@ pub fn build_cors_allowed_origin<'a, I>(allowed: I) -> AllowOrigin
 where
     I: IntoIterator<Item = &'a HeaderValue>,
 {
+    fn wildcard_origin_match(origin: &HeaderValue, wildcard: &[u8]) -> bool {
+        let Some(origin) = origin.to_str().ok() else {
+            return false;
+        };
+        let Ok(origin) = origin.parse::<Uri>() else {
+            return false;
+        };
+        let Some(host) = origin.host() else {
+            return false;
+        };
+
+        host.as_bytes().ends_with(wildcard)
+    }
+
     let allowed = allowed.into_iter().cloned().collect::<Vec<HeaderValue>>();
     if allowed.iter().any(|o| o.as_bytes() == b"*") {
         AllowOrigin::any()
@@ -170,7 +254,7 @@ where
         AllowOrigin::predicate(move |origin: &HeaderValue, _request_parts: _| {
             for val in &allowed {
                 if (val.as_bytes().starts_with(b"*.")
-                    && origin.as_bytes().ends_with(&val.as_bytes()[1..]))
+                    && wildcard_origin_match(origin, &val.as_bytes()[1..]))
                     || origin == val
                 {
                     return true;
@@ -215,15 +299,23 @@ mod tests {
 
         let test_cases = [
             TestCase {
+                invalid_origins: vec![HeaderValue::from_static("https://example.org")],
+                ..Default::default()
+            },
+            TestCase {
                 allowed_origins: vec![HeaderValue::from_static("https://example.org")],
                 mirrored_origins: vec![HeaderValue::from_static("https://example.org")],
-                invalid_origins: vec![HeaderValue::from_static("https://wrong.com")],
+                invalid_origins: vec![
+                    HeaderValue::from_static("http://example.org"),
+                    HeaderValue::from_static("https://wrong.com"),
+                ],
                 wildcard_origins: vec![],
             },
             TestCase {
                 allowed_origins: vec![HeaderValue::from_static("*.example.org")],
                 mirrored_origins: vec![
                     HeaderValue::from_static("https://foo.example.org"),
+                    HeaderValue::from_static("https://foo.example.org:8443"),
                     HeaderValue::from_static("https://bar.example.org"),
                     HeaderValue::from_static("https://baz.bar.foo.example.org"),
                 ],
@@ -231,6 +323,11 @@ mod tests {
                 invalid_origins: vec![
                     HeaderValue::from_static("https://example.org"),
                     HeaderValue::from_static("https://wrong.com"),
+                    HeaderValue::from_static("https://wrong.com:8443"),
+                    HeaderValue::from_static("https://badexample.org"),
+                    HeaderValue::from_static("https://foo.example.org.evil.com"),
+                    HeaderValue::from_static("null"),
+                    HeaderValue::from_static("not an origin"),
                 ],
             },
             TestCase {
@@ -240,6 +337,7 @@ mod tests {
                 ],
                 mirrored_origins: vec![
                     HeaderValue::from_static("https://foo.example.org"),
+                    HeaderValue::from_static("https://foo.example.org:8443"),
                     HeaderValue::from_static("https://bar.example.org"),
                     HeaderValue::from_static("https://baz.bar.foo.example.org"),
                     HeaderValue::from_static("https://other.com"),
@@ -299,6 +397,58 @@ mod tests {
                     header, None,
                     "origin {invalid:?} unexpectedly not allowed\n\
                      allowed_origins={allowed_origins:?}",
+                );
+            }
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_cors_credentialed_preflight() {
+        use http::header::{
+            ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
+            ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_REQUEST_HEADERS,
+            ACCESS_CONTROL_REQUEST_METHOD, AUTHORIZATION, CONTENT_TYPE,
+        };
+
+        let allowed_origins = [HeaderValue::from_static("*.example.org")];
+        let cors = CorsLayer::new()
+            .allow_credentials(true)
+            .allow_methods([Method::GET])
+            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+            .allow_origin(super::build_cors_allowed_origin(&allowed_origins));
+
+        for (origin, expected_origin) in [
+            (
+                "https://console.example.org",
+                Some(HeaderValue::from_static("https://console.example.org")),
+            ),
+            ("https://example.org.evil.com", None),
+        ] {
+            let service = ServiceBuilder::new().layer(&cors).service_fn(|_| async {
+                Err::<Response<&str>, _>(anyhow::anyhow!(
+                    "preflight request reached the application handler"
+                ))
+            });
+            let request = Request::builder()
+                .method(Method::OPTIONS)
+                .header(ORIGIN, origin)
+                .header(ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                .header(ACCESS_CONTROL_REQUEST_HEADERS, "authorization,content-type")
+                .body("")
+                .unwrap();
+            let response = service.oneshot(request).await.unwrap();
+            let headers = response.headers();
+            assert_eq!(
+                headers.get(ACCESS_CONTROL_ALLOW_ORIGIN),
+                expected_origin.as_ref(),
+                "origin {origin}",
+            );
+            if expected_origin.is_some() {
+                assert_eq!(headers[ACCESS_CONTROL_ALLOW_CREDENTIALS], "true");
+                assert_eq!(headers[ACCESS_CONTROL_ALLOW_METHODS], "GET");
+                assert_eq!(
+                    headers[ACCESS_CONTROL_ALLOW_HEADERS],
+                    "authorization,content-type"
                 );
             }
         }

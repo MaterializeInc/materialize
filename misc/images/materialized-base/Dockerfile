@@ -9,17 +9,21 @@
 
 # This is a separate mzimage so that we don't have to re-install the apt things
 # every time we get a CI builder with a cold cache.
+MZFROM console AS console
 
-# Package a pinned version of the console into the image, for ease of getting
-# started with Materialize. It's okay if this console lags a bit behind what's
-# deployed to production, but the version needs to be bumped whenever features
-# that the console depends upon are removed (to a version of the console that
-# doesn't depend on those features).
-FROM materialize/console:26.6.0-dev.0 AS console
+# Statically-linked `ssh` client, used by the SSH tunnel feature.
+MZFROM openssh-static AS openssh-static
 
-MZFROM ubuntu-base
+# In production, we use distroless images based on Debian 13.
+# We retain apt and install more packages in this image for development.
+# Pinned by rolling tag + multi-arch index digest, matching debian-base, so
+# dependabot refreshes the digest for security fixes.
+FROM debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 
 ARG CI_SANITIZER=none
+
+ARG BUILD_PROFILE=optimize
+LABEL build.profile=$BUILD_PROFILE
 
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize \
@@ -27,10 +31,11 @@ RUN groupadd --system --gid=999 materialize \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
         ca-certificates \
         curl \
+        eatmydata \
         gettext-base \
+        liblzma5 \
         nginx \
-        postgresql \
-        ssh \
+        postgresql-17 \
         tini \
     && if [ "$CI_SANITIZER" != "none" ]; then \
         TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
@@ -38,6 +43,27 @@ RUN groupadd --system --gid=999 materialize \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     && rm -rf /var/lib/postgresql \
+    # Remove unused PostgreSQL binaries (keep only postgres, initdb, pg_isready, pg_ctl, psql) \
+    && find /usr/lib/postgresql/17/bin -type f \
+        ! -name postgres ! -name initdb ! -name pg_isready ! -name pg_ctl ! -name psql \
+        -delete \
+    # Remove PostgreSQL client binaries except psql \
+    && find /usr/bin -name 'pg_*' -delete \
+    # Remove docs, man pages \
+    && rm -rf /usr/share/postgresql/17/man \
+    && rm -rf /usr/share/doc/postgresql* \
+    # Remove LLVM bitcode (PostgreSQL JIT support, not used) \
+    && rm -rf /usr/lib/postgresql/17/lib/bitcode \
+    # Remove pgxs (extension build infrastructure) \
+    && rm -rf /usr/lib/postgresql/17/lib/pgxs \
+    # Remove static libraries \
+    && find /usr/lib/postgresql -name '*.a' -delete \
+    # Remove unused extension SQL files (keep only plpgsql which is needed for initdb) \
+    && find /usr/share/postgresql/17/extension -type f \
+        ! -name 'plpgsql*' -delete \
+    # Remove nginx docs and unnecessary files \
+    && rm -rf /usr/share/doc/nginx* \
+    && rm -rf /usr/share/nginx/modules-available \
     && mkdir -p /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx \
     && touch /run/nginx.pid \
     && chown -R materialize /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx /run/nginx.pid
@@ -46,6 +72,8 @@ COPY postgresql.conf pg_hba.conf /etc/postgresql/
 
 COPY --from=console /usr/share/nginx/html /usr/share/nginx/html
 COPY console_nginx.template /etc/nginx/templates/default.conf.template
+
+COPY --from=openssh-static /output/ssh /usr/bin/ssh
 
 # Configure the console to listen on port 6874 and proxy API requests through to
 # the Materialize instance that will be started and listening for requests on

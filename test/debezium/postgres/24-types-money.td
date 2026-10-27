@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE money_type (f1 MONEY);
 ALTER TABLE money_type REPLICA IDENTITY FULL;
 INSERT INTO money_type VALUES (NULL), (12.34);
+ANALYZE;
 
 # waiting for the subject fails with "subject not found"
 $ skip-if

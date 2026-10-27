@@ -205,10 +205,11 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 # Data from older transactions should be immediately compacted to the timestamp
 # of the latest transaction (i.e., 4).
 
+# (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM nums AS OF 2
-contains:Timestamp (2) is not valid for all inputs
+contains:imestamp
 ! SELECT * FROM nums AS OF 3
-contains:Timestamp (3) is not valid for all inputs
+contains:imestamp
 > SELECT * FROM nums AS OF 4
 6
 
@@ -238,9 +239,26 @@ $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 > SELECT * FROM nums AS OF 6
 8
 
+# (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM nums_compacted AS OF 4
-contains:Timestamp (4) is not valid for all inputs
+contains:imestamp
 ! SELECT * FROM nums_compacted AS OF 5
-contains:Timestamp (5) is not valid for all inputs
+contains:imestamp
 > SELECT * FROM nums_compacted AS OF 6
 8
+
+# The sink keeps emitting the changes for transactions 4, 5, and 6. Verify them
+# here so the whole topic is consumed and the end-of-file exhaustion check does
+# not flag them as unverified records.
+
+$ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.public.nums_sink sort-messages=true
+4	{"before": null, "after": {"row": {"num": 6}}}
+4	{"before": {"row": {"num": 5}}, "after": null}
+
+$ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.public.nums_sink sort-messages=true
+5	{"before": null, "after": {"row": {"num": 7}}}
+5	{"before": {"row": {"num": 6}}, "after": null}
+
+$ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.public.nums_sink sort-messages=true
+6	{"before": null, "after": {"row": {"num": 8}}}
+6	{"before": {"row": {"num": 7}}, "after": null}

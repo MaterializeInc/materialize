@@ -47,7 +47,7 @@ impl Error {
             ColorChoice::Never
         };
         let mut stdout = StandardStream::stdout(color_choice);
-        eprintln!("^^^ +++");
+        writeln!(&mut stdout, "^^^ +++")?;
         match &self.location {
             Some(location) => {
                 let mut color_spec = ColorSpec::new();
@@ -77,7 +77,7 @@ impl Error {
                 writeln!(&mut stdout, "{}", self.source.display_with_causes())?;
             }
         }
-        std::io::stdout().flush()
+        stdout.flush()
     }
 }
 

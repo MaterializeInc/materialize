@@ -50,7 +50,7 @@ DROP VIEW
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-view.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-view" %}}
 
 ## Related pages
 

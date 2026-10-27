@@ -21,6 +21,7 @@ use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::producer::FutureRecord;
 use serde::de::DeserializeOwned;
 use tokio::fs;
+use uuid::Uuid;
 
 use crate::action::{self, ControlFlow, State};
 use crate::format::avro::{self, Schema};
@@ -29,11 +30,143 @@ use crate::parser::BuiltinCommand;
 
 const INGEST_BATCH_SIZE: isize = 10000;
 
+/// Extracts ALL type names defined in an Avro schema (including nested types).
+/// Returns a set of fully qualified type names.
+#[allow(clippy::disallowed_types)]
+fn extract_all_defined_types(
+    schema_json: &str,
+) -> anyhow::Result<std::collections::HashSet<String>> {
+    let value: serde_json::Value = serde_json::from_str(schema_json)
+        .context("parsing schema JSON to extract defined types")?;
+
+    let mut types = std::collections::HashSet::new();
+    collect_defined_types(&value, None, &mut types);
+    Ok(types)
+}
+
+/// Recursively collects all named type definitions from an Avro schema.
+#[allow(clippy::disallowed_types)]
+fn collect_defined_types(
+    value: &serde_json::Value,
+    parent_namespace: Option<&str>,
+    types: &mut std::collections::HashSet<String>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // Get this schema's namespace (falls back to parent's namespace)
+            let namespace = map
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .or(parent_namespace);
+
+            // Check if this is a named type definition (record, enum, or fixed)
+            if let Some(type_val) = map.get("type")
+                && type_val
+                    .as_str()
+                    .is_some_and(|typ| ["record", "enum", "fixed"].contains(&typ))
+            {
+                if let Some(name) = map.get("name").and_then(|v| v.as_str()) {
+                    // Construct fully qualified name
+                    let fullname = if name.contains('.') {
+                        name.to_string()
+                    } else if let Some(ns) = namespace {
+                        format!("{}.{}", ns, name)
+                    } else {
+                        name.to_string()
+                    };
+                    types.insert(fullname);
+                }
+            }
+
+            // The following types may have references:
+            // type field, items (array types), values (map types), and fields (e.g. unions)
+            for entity_type in &["type", "items", "values", "fields"] {
+                if let Some(val) = map.get(*entity_type) {
+                    collect_defined_types(val, namespace, types);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                collect_defined_types(item, parent_namespace, types);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extracts all type references from an Avro schema JSON string.
+/// This finds all fully qualified type names that are referenced but not defined in the schema.
+#[allow(clippy::disallowed_types)]
+fn extract_type_references(schema_json: &str) -> anyhow::Result<std::collections::HashSet<String>> {
+    let value: serde_json::Value = serde_json::from_str(schema_json)
+        .context("parsing schema JSON to extract type references")?;
+
+    let mut references = std::collections::HashSet::new();
+    collect_type_references(&value, &mut references);
+    Ok(references)
+}
+
+/// Recursively collects type references from an Avro schema JSON value.
+#[allow(clippy::disallowed_types)]
+fn collect_type_references(
+    value: &serde_json::Value,
+    references: &mut std::collections::HashSet<String>,
+) {
+    match value {
+        serde_json::Value::String(s) => {
+            // A string type that contains a dot is likely a fully qualified type reference
+            if s.contains('.')
+                && ![
+                    "null", "boolean", "int", "long", "float", "double", "bytes", "string",
+                ]
+                .contains(&s.as_str())
+            {
+                references.insert(s.clone());
+            }
+        }
+        serde_json::Value::Object(map) => {
+            // For named types, we want to recurse into the fields, but the named type doesn't
+            // get added to references.
+            if let Some(type_val) = map.get("type")
+                && type_val
+                    .as_str()
+                    .is_some_and(|typ| ["record", "enum", "fixed"].contains(&typ))
+            {
+                if let Some(fields) = map.get("fields") {
+                    collect_type_references(fields, references);
+                }
+                return;
+            }
+
+            // The following types may have references:
+            // type field, items (array types), values (map types), and fields (e.g. unions)
+            for entity_type in &["type", "items", "values", "fields"] {
+                if let Some(val) = map.get(*entity_type) {
+                    collect_type_references(val, references);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                collect_type_references(item, references);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[derive(Clone)]
 enum Format {
     Avro {
         schema: String,
         confluent_wire_format: bool,
+        /// If set, override the wire format with AWS Glue Schema Registry framing
+        /// using the given schema-version UUID. Mutually exclusive with
+        /// `confluent_wire_format=true`.
+        glue_schema_version_id: Option<Uuid>,
+        /// Schema references (subject names) for Confluent Schema Registry
+        references: Vec<String>,
     },
     Protobuf {
         descriptor_file: String,
@@ -54,6 +187,10 @@ enum Transcoder {
     ConfluentAvro {
         schema: Schema,
         schema_id: i32,
+    },
+    GlueAvro {
+        schema: Schema,
+        schema_version_id: Uuid,
     },
     Protobuf {
         message: MessageDescriptor,
@@ -96,6 +233,26 @@ impl Transcoder {
                     // https://docs.confluent.io/3.3.0/schema-registry/docs/serializer-formatter.html#wire-format
                     out.write_u8(0).unwrap();
                     out.write_i32::<NetworkEndian>(*schema_id).unwrap();
+                    out.extend(avro::to_avro_datum(schema, val)?);
+                    Ok(Some(out))
+                } else {
+                    Ok(None)
+                }
+            }
+            Transcoder::GlueAvro {
+                schema,
+                schema_version_id,
+            } => {
+                if let Some(val) = Self::decode_json(row)? {
+                    let val = avro::from_json(&val, schema.top_node())?;
+                    let mut out = vec![];
+                    // AWS Glue Schema Registry wire format:
+                    // byte 0   = 0x03 (header version)
+                    // byte 1   = compression byte (0x00 = none)
+                    // bytes 2..18 = 16-byte schema-version UUID
+                    out.write_u8(0x03).unwrap();
+                    out.write_u8(0x00).unwrap();
+                    out.extend_from_slice(schema_version_id.as_bytes());
                     out.extend(avro::to_avro_datum(schema, val)?);
                     Ok(Some(out))
                 } else {
@@ -174,11 +331,35 @@ pub async fn run_ingest(
     let omit_value = cmd.args.opt_bool("omit-value")?.unwrap_or(false);
     let schema_id_var = cmd.args.opt_parse("set-schema-id-var")?;
     let key_schema_id_var = cmd.args.opt_parse("set-key-schema-id-var")?;
+    // `confluent-wire-format` applies to both the value and the key format.
+    // `ArgMap` reads are destructive, so read it once up front: reading it in
+    // both format matches would leave the key side always seeing `None`.
+    let confluent_wire_format_arg = cmd.args.opt_bool("confluent-wire-format")?;
     let format = match cmd.args.string("format")?.as_str() {
-        "avro" => Format::Avro {
-            schema: cmd.args.string("schema")?,
-            confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
-        },
+        "avro" => {
+            let glue_schema_version_id = cmd
+                .args
+                .opt_string("glue-schema-version-id")
+                .map(|s| Uuid::parse_str(&s).context("parsing glue-schema-version-id as UUID"))
+                .transpose()?;
+            let confluent_wire_format_explicit = confluent_wire_format_arg;
+            if glue_schema_version_id.is_some() && confluent_wire_format_explicit == Some(true) {
+                bail!("confluent-wire-format=true is incompatible with glue-schema-version-id");
+            }
+            // Default: confluent unless Glue framing is requested.
+            let confluent_wire_format =
+                confluent_wire_format_explicit.unwrap_or_else(|| glue_schema_version_id.is_none());
+            Format::Avro {
+                schema: cmd.args.string("schema")?,
+                confluent_wire_format,
+                glue_schema_version_id,
+                references: cmd
+                    .args
+                    .opt_string("references")
+                    .map(|s| s.split(',').map(|s| s.to_string()).collect())
+                    .unwrap_or_default(),
+            }
+        }
         "protobuf" => {
             let descriptor_file = cmd.args.string("descriptor-file")?;
             let message = cmd.args.string("message")?;
@@ -187,7 +368,7 @@ pub async fn run_ingest(
                 message,
                 // This was introduced after the avro format's confluent-wire-format, so it defaults to
                 // false
-                confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(false),
+                confluent_wire_format: confluent_wire_format_arg.unwrap_or(false),
                 schema_id_subject: cmd.args.opt_string("schema-id-subject"),
                 schema_message_id: cmd.args.opt_parse::<u8>("schema-message-id")?.unwrap_or(0),
             }
@@ -197,19 +378,40 @@ pub async fn run_ingest(
     };
     let mut key_schema = cmd.args.opt_string("key-schema");
     let key_format = match cmd.args.opt_string("key-format").as_deref() {
-        Some("avro") => Some(Format::Avro {
-            schema: key_schema.take().ok_or_else(|| {
-                anyhow!("key-schema parameter required when key-format is present")
-            })?,
-            confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
-        }),
+        Some("avro") => {
+            let key_glue_schema_version_id = cmd
+                .args
+                .opt_string("key-glue-schema-version-id")
+                .map(|s| Uuid::parse_str(&s).context("parsing key-glue-schema-version-id as UUID"))
+                .transpose()?;
+            let confluent_wire_format_explicit = confluent_wire_format_arg;
+            if key_glue_schema_version_id.is_some() && confluent_wire_format_explicit == Some(true)
+            {
+                bail!("confluent-wire-format=true is incompatible with key-glue-schema-version-id");
+            }
+            // Default: confluent unless Glue framing is requested.
+            let confluent_wire_format = confluent_wire_format_explicit
+                .unwrap_or_else(|| key_glue_schema_version_id.is_none());
+            Some(Format::Avro {
+                schema: key_schema.take().ok_or_else(|| {
+                    anyhow!("key-schema parameter required when key-format is present")
+                })?,
+                confluent_wire_format,
+                glue_schema_version_id: key_glue_schema_version_id,
+                references: cmd
+                    .args
+                    .opt_string("key-references")
+                    .map(|s| s.split(',').map(|s| s.to_string()).collect())
+                    .unwrap_or_default(),
+            })
+        }
         Some("protobuf") => {
             let descriptor_file = cmd.args.string("key-descriptor-file")?;
             let message = cmd.args.string("key-message")?;
             Some(Format::Protobuf {
                 descriptor_file,
                 message,
-                confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(false),
+                confluent_wire_format: confluent_wire_format_arg.unwrap_or(false),
                 schema_id_subject: cmd.args.opt_string("key-schema-id-subject"),
                 schema_message_id: cmd
                     .args
@@ -286,8 +488,16 @@ pub async fn run_ingest(
             match fmt {
                 Format::Avro {
                     confluent_wire_format,
+                    glue_schema_version_id,
                     ..
-                } => Some(*confluent_wire_format),
+                } => {
+                    // Glue framing is its own wire format — don't compare against CSR.
+                    if glue_schema_version_id.is_some() {
+                        None
+                    } else {
+                        Some(*confluent_wire_format)
+                    }
+                }
                 Format::Protobuf {
                     confluent_wire_format,
                     ..
@@ -411,18 +621,133 @@ async fn make_transcoder(
         Format::Avro {
             schema,
             confluent_wire_format,
+            glue_schema_version_id,
+            references,
         } => {
+            if let Some(schema_version_id) = glue_schema_version_id {
+                if !references.is_empty() {
+                    bail!("schema references are not supported with glue-schema-version-id");
+                }
+                let schema = avro::parse_schema(&schema, &[])
+                    .with_context(|| format!("parsing avro schema: {}", schema))?;
+                return Ok(Transcoder::GlueAvro {
+                    schema,
+                    schema_version_id,
+                });
+            }
             if confluent_wire_format {
+                // Build references list by fetching each subject from the registry.
+                // Start with immediate references and automatically resolve transitive ones.
+                // We need ALL references for local parsing, but only DIRECT references for the registry.
+                #[allow(clippy::disallowed_types)]
+                let mut reference_subjects = vec![];
+                #[allow(clippy::disallowed_types)]
+                let mut seen_subjects: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let mut queue: Vec<String> = references.clone();
+
+                // Process queue (as a stack), adding transitive dependencies as we discover them
+                while let Some(ref_name) = queue.pop() {
+                    if seen_subjects.contains(&ref_name) {
+                        continue;
+                    }
+                    seen_subjects.insert(ref_name.clone());
+
+                    let (subject, ref_deps) = state
+                        .ccsr_client
+                        .get_subject_with_references(&ref_name)
+                        .await
+                        .with_context(|| format!("fetching reference {}", ref_name))?;
+
+                    // Add newly discovered dependencies to the queue
+                    for dep in ref_deps {
+                        if !seen_subjects.contains(&dep.subject) {
+                            queue.push(dep.subject);
+                        }
+                    }
+
+                    // Extract ALL type names defined in this schema (including nested types)
+                    let defined_types = extract_all_defined_types(&subject.schema.raw)
+                        .with_context(|| {
+                            format!("extracting type names from reference schema {}", ref_name)
+                        })?;
+                    reference_subjects.push((
+                        ref_name,
+                        subject.version,
+                        subject.schema.raw,
+                        defined_types,
+                    ));
+                }
+
+                // Reverse to get dependency order: since we use a stack, dependencies are
+                // discovered and added after the schemas that depend on them, so reversing
+                // puts dependencies first (required for incremental schema parsing)
+                reference_subjects.reverse();
+
+                // Extract types directly referenced by the primary schema
+                let direct_refs = extract_type_references(&schema)
+                    .context("extracting type references from schema")?;
+
+                // For the registry, create a reference for each type in direct_refs
+                // that is defined in one of the reference subjects
+                let mut schema_references = vec![];
+                for type_name in &direct_refs {
+                    for (subject_name, version, _, defined_types) in &reference_subjects {
+                        if defined_types.contains(type_name) {
+                            schema_references.push(mz_ccsr::SchemaReference {
+                                name: type_name.clone(),
+                                subject: subject_name.clone(),
+                                version: *version,
+                            });
+                            break;
+                        }
+                    }
+                }
+
+                // For local parsing, we need all reference schemas
+                let reference_raw_schemas: Vec<_> = reference_subjects
+                    .into_iter()
+                    .map(|(_, _, raw, _)| raw)
+                    .collect();
+
                 let schema_id = state
                     .ccsr_client
-                    .publish_schema(&ccsr_subject, &schema, mz_ccsr::SchemaType::Avro, &[])
+                    .publish_schema(
+                        &ccsr_subject,
+                        &schema,
+                        mz_ccsr::SchemaType::Avro,
+                        &schema_references,
+                    )
                     .await
                     .context("publishing to schema registry")?;
-                let schema = avro::parse_schema(&schema)
-                    .with_context(|| format!("parsing avro schema: {}", schema))?;
+
+                // Parse schema, handling references if any
+                let schema = if reference_raw_schemas.is_empty() {
+                    avro::parse_schema(&schema, &[])
+                        .with_context(|| format!("parsing avro schema: {}", schema))?
+                } else {
+                    // Parse reference schemas incrementally (each may depend on previous ones).
+                    // References must be specified in dependency order (dependencies first).
+                    let mut parsed_refs: Vec<Schema> = vec![];
+                    for raw in &reference_raw_schemas {
+                        let schema_value: serde_json::Value = serde_json::from_str(raw)
+                            .with_context(|| format!("parsing reference schema JSON: {}", raw))?;
+                        let parsed = Schema::parse_with_references(&schema_value, &parsed_refs)
+                            .with_context(|| format!("parsing reference avro schema: {}", raw))?;
+                        parsed_refs.push(parsed);
+                    }
+
+                    // Parse primary schema with all reference types available
+                    let schema_value: serde_json::Value = serde_json::from_str(&schema)
+                        .with_context(|| format!("parsing schema JSON: {}", schema))?;
+                    Schema::parse_with_references(&schema_value, &parsed_refs).with_context(
+                        || format!("parsing avro schema with references: {}", schema),
+                    )?
+                };
+
                 Ok::<_, anyhow::Error>(Transcoder::ConfluentAvro { schema, schema_id })
             } else {
-                let schema = avro::parse_schema(&schema)
+                let schema = avro::parse_schema(&schema, &[])
                     .with_context(|| format!("parsing avro schema: {}", schema))?;
                 Ok(Transcoder::PlainAvro { schema })
             }

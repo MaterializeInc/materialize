@@ -27,20 +27,6 @@ class PostgresStart(Action):
         c.up("postgres")
 
 
-class PostgresStop(Action):
-    """Stop the Postgres instance."""
-
-    @classmethod
-    def requires(cls) -> set[type[Capability]]:
-        return {PostgresRunning}
-
-    def withholds(self) -> set[type[Capability]]:
-        return {PostgresRunning}
-
-    def run(self, c: Composition, state: State) -> None:
-        c.kill("postgres")
-
-
 class PostgresRestart(Action):
     """Restart the Postgres instance."""
 
@@ -69,8 +55,7 @@ class CreatePostgresTable(Action):
 
         if len(existing_postgres_tables) == 0:
             self.new_postgres_table = True
-            # A PK is now required for Debezium
-            this_postgres_table.has_pk = True
+            this_postgres_table.has_pk = random.choice([True, False])
 
             self.postgres_table = this_postgres_table
         elif len(existing_postgres_tables) == 1:
@@ -85,14 +70,12 @@ class CreatePostgresTable(Action):
         if self.new_postgres_table:
             primary_key = "PRIMARY KEY" if self.postgres_table.has_pk else ""
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
                     CREATE TABLE {self.postgres_table.name} (f1 INTEGER {primary_key});
                     ALTER TABLE {self.postgres_table.name} REPLICA IDENTITY FULL;
                     INSERT INTO {self.postgres_table.name} VALUES ({self.postgres_table.watermarks.max});
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -127,12 +110,10 @@ class PostgresInsert(PostgresDML):
         prev_max = self.postgres_table.watermarks.max
         self.postgres_table.watermarks.max = prev_max + self.delta
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO {self.postgres_table.name} SELECT * FROM generate_series({prev_max + 1}, {self.postgres_table.watermarks.max});
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -144,12 +125,10 @@ class PostgresShiftForward(PostgresDML):
         if not self.postgres_table.has_pk:
             self.postgres_table.watermarks.shift(self.delta)
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
                     UPDATE {self.postgres_table.name} SET f1 = f1 + {self.delta};
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -161,12 +140,10 @@ class PostgresShiftBackward(PostgresDML):
         if not self.postgres_table.has_pk:
             self.postgres_table.watermarks.shift(-self.delta)
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
                     UPDATE {self.postgres_table.name} SET f1 = f1 - {self.delta};
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -180,12 +157,10 @@ class PostgresDeleteFromHead(PostgresDML):
             self.postgres_table.watermarks.min,
         )
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DELETE FROM {self.postgres_table.name} WHERE f1 > {self.postgres_table.watermarks.max};
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -199,11 +174,9 @@ class PostgresDeleteFromTail(PostgresDML):
             self.postgres_table.watermarks.max,
         )
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DELETE FROM {self.postgres_table.name} WHERE f1 < {self.postgres_table.watermarks.min};
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )

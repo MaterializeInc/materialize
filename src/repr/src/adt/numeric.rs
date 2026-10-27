@@ -12,17 +12,20 @@
 //!
 //! [`rust-dec`]: https://github.com/MaterializeInc/rust-dec/
 
+use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt;
 use std::sync::LazyLock;
 
 use anyhow::bail;
-use dec::{Context, Decimal};
-use mz_lowertest::MzReflect;
+use dec::{Context, Decimal, OrderedDecimal};
 use mz_ore::cast;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
-use proptest_derive::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
+use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
+use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.numeric.rs"));
@@ -50,6 +53,35 @@ pub const NUMERIC_AGG_MAX_PRECISION: u8 = NUMERIC_AGG_WIDTH * 3;
 
 /// A double-width version of [`Numeric`] for use in aggregations.
 pub type NumericAgg = Decimal<NUMERIC_AGG_WIDTH_USIZE>;
+
+/// A [`NumericAgg`] with the total order of [`OrderedDecimal`], storable in columnar form.
+///
+/// Equality and ordering are those of `OrderedDecimal`, so NaN equals NaN and every
+/// value has a defined position. This crate cannot implement `Columnar` for
+/// `OrderedDecimal<NumericAgg>`, as both the trait and the type are foreign, so the
+/// newtype hosts that impl.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct OrderedNumericAgg(pub NumericAgg);
+
+impl PartialEq for OrderedNumericAgg {
+    fn eq(&self, other: &Self) -> bool {
+        OrderedDecimal(self.0) == OrderedDecimal(other.0)
+    }
+}
+
+impl Eq for OrderedNumericAgg {}
+
+impl PartialOrd for OrderedNumericAgg {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for OrderedNumericAgg {
+    fn cmp(&self, other: &Self) -> Ordering {
+        OrderedDecimal(self.0).cmp(&OrderedDecimal(other.0))
+    }
+}
 
 static CX_DATUM: LazyLock<Context<Numeric>> = LazyLock::new(|| {
     let mut cx = Context::<Numeric>::default();
@@ -102,7 +134,6 @@ pub mod str_serde {
 ///
 /// [`SqlScalarType::Numeric`]: crate::SqlScalarType::Numeric
 #[derive(
-    Arbitrary,
     Debug,
     Clone,
     Copy,
@@ -112,8 +143,7 @@ pub mod str_serde {
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect,
+    Deserialize
 )]
 pub struct NumericMaxScale(pub(crate) u8);
 
@@ -124,6 +154,18 @@ impl NumericMaxScale {
     /// Consumes the newtype wrapper, returning the inner `u8`.
     pub fn into_u8(self) -> u8 {
         self.0
+    }
+}
+
+#[cfg(any(test, feature = "proptest"))]
+impl Arbitrary for NumericMaxScale {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<NumericMaxScale>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (0..=NUMERIC_DATUM_MAX_PRECISION)
+            .prop_map(NumericMaxScale)
+            .boxed()
     }
 }
 
@@ -155,8 +197,15 @@ impl RustType<ProtoNumericMaxScale> for NumericMaxScale {
         }
     }
 
+    // NOTE: `from_proto` is a trust boundary for durable and protocol state, so it
+    // enforces the same domain as `TryFrom<i64>` rather than trusting the wire.
     fn from_proto(max_scale: ProtoNumericMaxScale) -> Result<Self, TryFromProtoError> {
-        Ok(NumericMaxScale(max_scale.value.into_rust()?))
+        NumericMaxScale::try_from(i64::from(max_scale.value)).map_err(|e| {
+            TryFromProtoError::InvalidFieldError(format!(
+                "ProtoNumericMaxScale::value {}: {e}",
+                max_scale.value
+            ))
+        })
     }
 }
 
@@ -398,6 +447,14 @@ pub fn twos_complement_be_to_numeric(
 pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
     input: &mut [u8],
 ) -> Result<Decimal<N>, anyhow::Error> {
+    if input.is_empty() {
+        // An empty byte string is not a valid two's-complement integer. Our own
+        // encoder never emits one (zero is the single byte `0x00`), so this only
+        // arises from untrusted input. One example is an Avro `decimal` field
+        // whose unscaled value was encoded as zero-length `bytes`. Reject it
+        // rather than indexing `input[0]` below and panicking.
+        bail!("cannot parse a numeric value from an empty byte string");
+    }
     let is_neg = if (input[0] & 0x80) != 0 {
         // byte-level negate all negative values, guaranteeing all bytes are
         // readable as unsigned.
@@ -470,6 +527,21 @@ fn test_twos_complement_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+fn test_twos_complement_empty_is_error() {
+    // An empty byte string is not a valid two's-complement integer and used to
+    // panic with an out-of-bounds index. It only arrives from untrusted input
+    // (e.g. an Avro `decimal` encoded as zero-length `bytes`), so it must be a
+    // clean error, not a panic. Regression test for that fix.
+    for scale in [0u8, 1, 38] {
+        assert!(twos_complement_be_to_numeric(&mut [], scale).is_err());
+    }
+    assert!(
+        twos_complement_be_to_numeric_inner::<Numeric, NUMERIC_DATUM_WIDTH_USIZE>(&mut []).is_err()
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_comp_numeric_primitive() {
     fn inner_inner<P>(i: P, i_be_bytes: &mut [u8])
     where
@@ -503,26 +575,23 @@ fn test_twos_comp_numeric_primitive() {
 
         // Ensure extended version of `to_be_bytes` generates same `i128`.
         let e_numeric = twos_complement_be_to_numeric(&mut e, 0).unwrap();
-        let e_p: P = match e_numeric.try_into() {
-            Ok(e_p) => e_p,
-            Err(_) => panic!(),
-        };
+        let e_p: P = e_numeric
+            .try_into()
+            .unwrap_or_else(|_e| panic!("try_into failed"));
         assert_eq!(i, e_p, "expected val of {:?}, got {:?}", i, e_p);
 
         // Wide representation produces same result.
         let w_numeric = twos_complement_be_to_numeric(&mut w, 0).unwrap();
-        let w_p: P = match w_numeric.try_into() {
-            Ok(w_p) => w_p,
-            Err(_) => panic!(),
-        };
+        let w_p: P = w_numeric
+            .try_into()
+            .unwrap_or_else(|_e| panic!("try_into failed"));
         assert_eq!(i, w_p, "expected val of {:?}, got {:?}", i, e_p);
 
         // Bytes do not need to be in `Numeric`-specific format
         let p_numeric = twos_complement_be_to_numeric(i_be_bytes, 0).unwrap();
-        let p_p: P = match p_numeric.try_into() {
-            Ok(p_p) => p_p,
-            Err(_) => panic!(),
-        };
+        let p_p: P = p_numeric
+            .try_into()
+            .unwrap_or_else(|_e| panic!("try_into failed"));
         assert_eq!(i, p_p, "expected val of {:?}, got {:?}", i, p_p);
     }
 
@@ -822,6 +891,155 @@ impl FixedSizeCodec<Numeric> for PackedNumeric {
     }
 }
 
+mod columnar_impls {
+    use std::ops::Range;
+
+    use columnar::bytes::indexed::DecodedStore;
+    use columnar::{AsBytes, Borrow, Clear, Columnar, Container, FromBytes, Index, Len, Push};
+
+    use super::{NUMERIC_AGG_WIDTH_USIZE, NumericAgg, OrderedNumericAgg};
+
+    /// Width of the coefficient column. One unit wider than the decimal's coefficient so
+    /// that each element is 56 bytes, a whole number of `u64` words. The indexed byte
+    /// store pads every column to whole words and cannot decode an element width that
+    /// does not divide that padding.
+    const LSU_COLUMN_WIDTH: usize = NUMERIC_AGG_WIDTH_USIZE + 1;
+    /// The raw parts of a [`NumericAgg`], in the order `Decimal::to_raw_parts` returns
+    /// them, with the coefficient units zero-padded to [`LSU_COLUMN_WIDTH`].
+    type Parts = (u32, i32, u8, [u16; LSU_COLUMN_WIDTH]);
+    /// One column per raw part. The coefficient units use `Vec<[u16; N]>` directly rather
+    /// than the array's own columnar container, which would add per-element offsets to a
+    /// fixed-width value.
+    type PartsContainer = (Vec<u32>, Vec<i32>, Vec<u8>, Vec<[u16; LSU_COLUMN_WIDTH]>);
+    type PartsBorrowed<'a> = <PartsContainer as Borrow>::Borrowed<'a>;
+
+    impl Columnar for OrderedNumericAgg {
+        #[inline(always)]
+        fn into_owned(other: columnar::Ref<'_, Self>) -> Self {
+            other
+        }
+        type Container = OrderedNumericAggs;
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(thing: columnar::Ref<'a, Self>) -> columnar::Ref<'b, Self>
+        where
+            Self: 'a,
+        {
+            thing
+        }
+    }
+
+    /// Columnar container for [`OrderedNumericAgg`].
+    ///
+    /// References are owned values rebuilt from the part columns, so comparisons on
+    /// references use the decimal order rather than the raw parts' lexicographic order.
+    #[derive(Copy, Clone, Debug, Default)]
+    pub struct OrderedNumericAggs<TC = PartsContainer>(TC);
+
+    impl Borrow for OrderedNumericAggs {
+        type Ref<'a> = OrderedNumericAgg;
+        type Borrowed<'a> = OrderedNumericAggs<PartsBorrowed<'a>>;
+        #[inline(always)]
+        fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
+            OrderedNumericAggs(self.0.borrow())
+        }
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(item: Self::Borrowed<'a>) -> Self::Borrowed<'b>
+        where
+            Self: 'a,
+        {
+            OrderedNumericAggs(<PartsContainer as Borrow>::reborrow(item.0))
+        }
+        #[inline(always)]
+        fn reborrow_ref<'b, 'a: 'b>(item: Self::Ref<'a>) -> Self::Ref<'b>
+        where
+            Self: 'a,
+        {
+            item
+        }
+    }
+
+    impl Container for OrderedNumericAggs {
+        #[inline(always)]
+        fn extend_from_self(&mut self, other: Self::Borrowed<'_>, range: Range<usize>) {
+            self.0.extend_from_self(other.0, range);
+        }
+        #[inline(always)]
+        fn reserve_for<'a, I>(&mut self, selves: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = Self::Borrowed<'a>> + Clone,
+        {
+            self.0.reserve_for(selves.map(|s| s.0));
+        }
+    }
+
+    impl<TC: Len> Len for OrderedNumericAggs<TC> {
+        #[inline(always)]
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+    }
+
+    impl Clear for OrderedNumericAggs {
+        #[inline(always)]
+        fn clear(&mut self) {
+            self.0.clear();
+        }
+    }
+
+    impl<'a> Index for OrderedNumericAggs<PartsBorrowed<'a>> {
+        type Ref = OrderedNumericAgg;
+        #[inline(always)]
+        fn get(&self, index: usize) -> Self::Ref {
+            let (digits, exponent, bits, lsu) = self.0.get(index);
+            let mut units = [0u16; NUMERIC_AGG_WIDTH_USIZE];
+            units.copy_from_slice(&lsu[..NUMERIC_AGG_WIDTH_USIZE]);
+            OrderedNumericAgg(NumericAgg::from_raw_parts(*digits, *exponent, *bits, units))
+        }
+    }
+
+    impl Push<OrderedNumericAgg> for OrderedNumericAggs {
+        #[inline(always)]
+        fn push(&mut self, item: OrderedNumericAgg) {
+            let (digits, exponent, bits, units) = item.0.to_raw_parts();
+            let mut lsu = [0u16; LSU_COLUMN_WIDTH];
+            lsu[..NUMERIC_AGG_WIDTH_USIZE].copy_from_slice(&units);
+            let parts: Parts = (digits, exponent, bits, lsu);
+            self.0.push(parts);
+        }
+    }
+
+    impl Push<&OrderedNumericAgg> for OrderedNumericAggs {
+        #[inline(always)]
+        fn push(&mut self, item: &OrderedNumericAgg) {
+            self.push(*item);
+        }
+    }
+
+    impl<'a, TC: AsBytes<'a>> AsBytes<'a> for OrderedNumericAggs<TC> {
+        const SLICE_COUNT: usize = TC::SLICE_COUNT;
+        #[inline(always)]
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            self.0.get_byte_slice(index)
+        }
+    }
+
+    impl<'a, TC: FromBytes<'a>> FromBytes<'a> for OrderedNumericAggs<TC> {
+        const SLICE_COUNT: usize = TC::SLICE_COUNT;
+        #[inline(always)]
+        fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
+            OrderedNumericAggs(TC::from_bytes(bytes))
+        }
+        #[inline(always)]
+        fn from_store(store: &DecodedStore<'a>, offset: &mut usize) -> Self {
+            OrderedNumericAggs(TC::from_store(store, offset))
+        }
+        fn element_sizes(sizes: &mut Vec<usize>) -> Result<(), String> {
+            TC::element_sizes(sizes)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mz_ore::assert_ok;
@@ -841,7 +1059,9 @@ mod tests {
         }
 
         #[mz_ore::test]
-        fn optional_numeric_max_scale_protobuf_roundtrip(expect in any::<Option<NumericMaxScale>>()) {
+        fn optional_numeric_max_scale_protobuf_roundtrip(
+            expect in any::<Option<NumericMaxScale>>(),
+        ) {
             let actual = protobuf_roundtrip::<_, ProtoOptionalNumericMaxScale>(&expect);
             assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
@@ -919,5 +1139,53 @@ mod tests {
         }
 
         insta::assert_debug_snapshot!(all_numerics);
+    }
+
+    #[mz_ore::test]
+    fn ordered_numeric_agg_columnar_round_trip() {
+        use columnar::{AsBytes, Borrow, BorrowedOf, Columnar, FromBytes, Index, Len};
+
+        let mut cx = cx_agg();
+        let values: Vec<OrderedNumericAgg> = [
+            "0",
+            "-0",
+            "1",
+            "-12345.678",
+            "9e39",
+            "9e-39",
+            "123456789012345678901234567890123456789012345678901234567890",
+            "NaN",
+            "Infinity",
+            "-Infinity",
+        ]
+        .into_iter()
+        .map(|s| OrderedNumericAgg(cx.parse(s).unwrap()))
+        .collect();
+
+        let container = OrderedNumericAgg::as_columns(values.iter());
+        assert_eq!(container.len(), values.len());
+        let borrowed = container.borrow();
+        for (index, value) in values.iter().enumerate() {
+            assert_eq!(borrowed.get(index), *value);
+        }
+
+        let bytes: Vec<&[u8]> = borrowed.as_bytes().map(|(_align, bytes)| bytes).collect();
+        let decoded = BorrowedOf::<OrderedNumericAgg>::from_bytes(&mut bytes.into_iter());
+        assert_eq!(decoded.len(), values.len());
+        for (index, value) in values.iter().enumerate() {
+            assert_eq!(decoded.get(index), *value);
+        }
+
+        // The indexed store pads each column to whole words, so decoding through it
+        // also checks that the column layout tolerates that padding.
+        let mut words = Vec::new();
+        columnar::bytes::indexed::encode(&mut words, &borrowed);
+        columnar::bytes::indexed::validate::<BorrowedOf<OrderedNumericAgg>>(&words).unwrap();
+        let store = columnar::bytes::indexed::DecodedStore::new(&words);
+        let decoded = BorrowedOf::<OrderedNumericAgg>::from_store(&store, &mut 0);
+        assert_eq!(decoded.len(), values.len());
+        for (index, value) in values.iter().enumerate() {
+            assert_eq!(decoded.get(index), *value);
+        }
     }
 }

@@ -19,7 +19,7 @@ class Prometheus(Service):
         super().__init__(
             name=name,
             config={
-                "image": "prom/prometheus:v3.7.3",
+                "image": "prom/prometheus:v3.11.3",
                 "ports": ["9090"],
                 "volumes": [
                     str(

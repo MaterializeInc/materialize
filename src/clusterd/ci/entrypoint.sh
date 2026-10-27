@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
@@ -9,27 +9,26 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -euo pipefail
+set -eu
 
-# We pass default arguments as environment variables, and only if those
-# environment variables do not already exist, to allow users to override these
-# arguments when running the container via either environment variables or
-# command-line arguments.
-export CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=${CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR:-0.0.0.0:2100}
-export CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=${CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR:-0.0.0.0:2101}
-export CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=${CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878}
-export CLUSTERD_SECRETS_READER=${CLUSTERD_SECRETS_READER:-local-file}
-export CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=${CLUSTERD_SECRETS_READER_LOCAL_DIR:-/mzdata/secrets}
+# Defaults passed as environment variables, set only when unset so users can
+# override them via env vars or command-line flags.
+export CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR="${CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR:-0.0.0.0:2100}"
+export CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR="${CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR:-0.0.0.0:2101}"
+export CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR="${CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878}"
+export CLUSTERD_SECRETS_READER="${CLUSTERD_SECRETS_READER:-local-file}"
+export CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR="${CLUSTERD_SECRETS_READER_LOCAL_DIR:-/mzdata/secrets}"
 
-if [[ "${KUBERNETES_SERVICE_HOST:-}" ]]; then
-    # Pass the host's FQDN as the host to be used for GRPC request validation
-    # only when running in Kubernetes. In other contexts (like when running
-    # locally, or in Docker), this is likely not desirable.
-    export CLUSTERD_GRPC_HOST=${CLUSTERD_GRPC_HOST:-$(hostname --fqdn)}
-
-    # When running in Kubernetes, pass the StatefulSet replica's ordinal index
-    # as the process index.
-    export CLUSTERD_PROCESS=${CLUSTERD_PROCESS:-${HOSTNAME##*-}}
+# In Kubernetes, advertise the pod FQDN for the CTP peer check and derive the
+# process ordinal from the StatefulSet pod name (e.g. `cluster-0` -> `0`). Uses
+# `$(hostname)` rather than `$HOSTNAME`, which POSIX sh does not define.
+if [ "${KUBERNETES_SERVICE_HOST:-}" ]; then
+    export CLUSTERD_GRPC_HOST="${CLUSTERD_GRPC_HOST:-$(hostname -f)}"
+    if [ -z "${CLUSTERD_PROCESS:-}" ]; then
+        _mz_pod=$(hostname)
+        CLUSTERD_PROCESS="${_mz_pod##*-}"
+    fi
+    export CLUSTERD_PROCESS
 fi
 
 if [ -z "${MZ_EAT_MY_DATA:-}" ]; then

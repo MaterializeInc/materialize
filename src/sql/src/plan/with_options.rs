@@ -16,11 +16,14 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, RelationVersionSelector, strconv};
 use mz_sql_parser::ast::{
-    ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionDefaultAwsPrivatelink, Expr,
-    Ident, KafkaBroker, NetworkPolicyRuleDefinition, RefreshOptionValue, ReplicaDefinition,
+    ClusterAlterOptionValue, ClusterAutoScalingStrategyOptionValue, ClusterScheduleOptionValue,
+    ConnectionDefaultAwsPrivatelink, Expr, Ident, KafkaBroker, KafkaMatchingBrokerRule,
+    NetworkPolicyRuleDefinition, RefreshOptionValue, ReplicaDefinition,
 };
-use mz_storage_types::connections::IcebergCatalogType;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
+use mz_storage_types::connections::{
+    IcebergAccessDelegation, IcebergCatalogType, IcebergStorageProvider,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{AstInfo, UnresolvedItemName, Value, WithOptionValue};
@@ -67,6 +70,60 @@ impl ImpliedValue for IcebergCatalogType {
     }
 }
 
+impl TryFromValue<WithOptionValue<Aug>> for IcebergStorageProvider {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match String::try_from_value(v)? {
+            s if s.eq_ignore_ascii_case("s3") => Ok(IcebergStorageProvider::S3),
+            s if s.eq_ignore_ascii_case("gcs") => Ok(IcebergStorageProvider::Gcs),
+            s if s.eq_ignore_ascii_case("adls") => Ok(IcebergStorageProvider::Adls),
+            _ => sql_bail!("invalid iceberg storage provider, expected 's3', 'gcs', or 'adls'"),
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Value(Value::String(
+            self.as_str().to_string(),
+        )))
+    }
+
+    fn name() -> String {
+        "iceberg storage provider".to_string()
+    }
+}
+
+impl ImpliedValue for IcebergStorageProvider {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an iceberg storage provider")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for IcebergAccessDelegation {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match String::try_from_value(v)? {
+            s if s.eq_ignore_ascii_case("vended-credentials") => {
+                Ok(IcebergAccessDelegation::VendedCredentials)
+            }
+            _ => sql_bail!("invalid iceberg access delegation, expected 'vended-credentials'"),
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::Value(Value::String(
+            self.as_header_value().to_string(),
+        )))
+    }
+
+    fn name() -> String {
+        "iceberg access delegation".to_string()
+    }
+}
+
+impl ImpliedValue for IcebergAccessDelegation {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an iceberg access delegation")
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct Secret(CatalogItemId);
 
@@ -80,7 +137,7 @@ impl TryFromValue<WithOptionValue<Aug>> for Secret {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         match StringOrSecret::try_from_value(v)? {
             StringOrSecret::Secret(id) => Ok(Secret(id)),
-            _ => sql_bail!("must provide a secret value"),
+            StringOrSecret::String(_) => sql_bail!("must provide a secret value"),
         }
     }
 
@@ -283,7 +340,13 @@ impl ImpliedValue for StringOrSecret {
 impl TryFromValue<Value> for Duration {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         let interval = Interval::try_from_value(v)?;
-        Ok(interval.duration()?)
+        let duration = interval.duration()?;
+        // `try_into_value` (used during unplanning) requires that the `Duration`
+        // is convertible back to an `Interval`, which has a smaller range than
+        // `Duration`. Enforce that here so we return a graceful error instead of
+        // panicking later. See database-issues SQL-361.
+        Interval::from_duration(&duration).map_err(|_| sql_err!("interval out of range"))?;
+        Ok(duration)
     }
 
     fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Value> {
@@ -382,7 +445,18 @@ impl ImpliedValue for OptionalString {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
+)]
 pub struct OptionalDuration(pub Option<Duration>);
 
 impl From<Duration> for OptionalDuration {
@@ -689,9 +763,11 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
             | WithOptionValue::ClusterReplicas(_)
             | WithOptionValue::ConnectionKafkaBroker(_)
             | WithOptionValue::ConnectionAwsPrivatelink(_)
+            | WithOptionValue::KafkaMatchingBrokerRule(_)
             | WithOptionValue::ClusterAlterStrategy(_)
             | WithOptionValue::Refresh(_)
             | WithOptionValue::ClusterScheduleOptionValue(_)
+            | WithOptionValue::ClusterAutoScalingStrategyOptionValue(_)
             | WithOptionValue::NetworkPolicyRules(_) => sql_bail!(
                 "incompatible value types: cannot convert {} to {}",
                 match v {
@@ -709,9 +785,12 @@ impl<V: TryFromValue<Value>, T: AstInfo + std::fmt::Debug> TryFromValue<WithOpti
                     WithOptionValue::Expr(_) => "exprs",
                     WithOptionValue::ClusterReplicas(_) => "cluster replicas",
                     WithOptionValue::ConnectionKafkaBroker(_) => "connection kafka brokers",
-                    WithOptionValue::ConnectionAwsPrivatelink(_) => "connection kafka brokers",
+                    WithOptionValue::ConnectionAwsPrivatelink(_) => "connection privatelink",
+                    WithOptionValue::KafkaMatchingBrokerRule(_) => "matching broker rule",
                     WithOptionValue::Refresh(_) => "refresh option values",
                     WithOptionValue::ClusterScheduleOptionValue(_) => "cluster schedule",
+                    WithOptionValue::ClusterAutoScalingStrategyOptionValue(_) =>
+                        "cluster auto scaling strategy",
                     WithOptionValue::NetworkPolicyRules(_) => "network policy rules",
                 },
                 V::name()
@@ -846,9 +925,93 @@ impl TryFromValue<WithOptionValue<Aug>> for ConnectionDefaultAwsPrivatelink<Aug>
     }
 }
 
+impl TryFromValue<WithOptionValue<Aug>> for KafkaMatchingBrokerRule<Aug> {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::KafkaMatchingBrokerRule(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for a matching broker rule", v)
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::KafkaMatchingBrokerRule(self))
+    }
+
+    fn name() -> String {
+        "matching broker rule".to_string()
+    }
+}
+
 impl ImpliedValue for ConnectionDefaultAwsPrivatelink<Aug> {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide a value")
+    }
+}
+
+impl ImpliedValue for KafkaMatchingBrokerRule<Aug> {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a value")
+    }
+}
+
+/// A list of broker entries that can contain both static `KafkaBroker` entries
+/// and `KafkaMatchingBrokerRule` entries (from `MATCHING` clauses in `BROKERS`).
+#[derive(Debug)]
+pub struct BrokersList {
+    pub static_entries: Vec<KafkaBroker<Aug>>,
+    pub matching_rules: Vec<KafkaMatchingBrokerRule<Aug>>,
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for BrokersList {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        match v {
+            WithOptionValue::Sequence(entries) => {
+                let mut static_entries = vec![];
+                let mut matching_rules = vec![];
+                for entry in entries {
+                    match entry {
+                        WithOptionValue::ConnectionKafkaBroker(b) => static_entries.push(b),
+                        WithOptionValue::KafkaMatchingBrokerRule(m) => matching_rules.push(m),
+                        other => sql_bail!("unexpected value in BROKERS: {}", other),
+                    }
+                }
+                Ok(BrokersList {
+                    static_entries,
+                    matching_rules,
+                })
+            }
+            WithOptionValue::ConnectionKafkaBroker(b) => Ok(BrokersList {
+                static_entries: vec![b],
+                matching_rules: vec![],
+            }),
+            WithOptionValue::KafkaMatchingBrokerRule(m) => Ok(BrokersList {
+                static_entries: vec![],
+                matching_rules: vec![m],
+            }),
+            other => sql_bail!("cannot use {} as brokers list", other),
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        let mut entries: Vec<WithOptionValue<Aug>> = vec![];
+        for b in self.static_entries {
+            entries.push(WithOptionValue::ConnectionKafkaBroker(b));
+        }
+        for m in self.matching_rules {
+            entries.push(WithOptionValue::KafkaMatchingBrokerRule(m));
+        }
+        Some(WithOptionValue::Sequence(entries))
+    }
+
+    fn name() -> String {
+        "brokers list".to_string()
+    }
+}
+
+impl ImpliedValue for BrokersList {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a value for BROKERS")
     }
 }
 
@@ -879,6 +1042,30 @@ impl TryFromValue<WithOptionValue<Aug>> for ClusterScheduleOptionValue {
 
     fn name() -> String {
         "cluster schedule option value".to_string()
+    }
+}
+
+impl ImpliedValue for ClusterAutoScalingStrategyOptionValue {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide an auto scaling strategy option value")
+    }
+}
+
+impl TryFromValue<WithOptionValue<Aug>> for ClusterAutoScalingStrategyOptionValue {
+    fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
+        if let WithOptionValue::ClusterAutoScalingStrategyOptionValue(r) = v {
+            Ok(r)
+        } else {
+            sql_bail!("cannot use value `{}` for an auto scaling strategy", v)
+        }
+    }
+
+    fn try_into_value(self, _catalog: &dyn SessionCatalog) -> Option<WithOptionValue<Aug>> {
+        Some(WithOptionValue::ClusterAutoScalingStrategyOptionValue(self))
+    }
+
+    fn name() -> String {
+        "auto scaling strategy option value".to_string()
     }
 }
 

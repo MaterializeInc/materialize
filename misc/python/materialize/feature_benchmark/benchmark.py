@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import copy
 import time
 
 from materialize.feature_benchmark.aggregation import Aggregation
@@ -49,10 +50,21 @@ class Benchmark:
         self._performance_aggregation = aggregation_class()
         self._default_size = default_size
         self._seed = seed
+        self._measure_memory = measure_memory
 
-        if measure_memory:
-            self._memory_mz_aggregation = aggregation_class()
-            self._memory_clusterd_aggregation = aggregation_class()
+        # Always create the memory aggregations so run() can return them and
+        # run_measurement can reference them unconditionally; whether they are
+        # populated is gated by self._measure_memory.
+        self._memory_mz_aggregation = aggregation_class()
+        self._memory_clusterd_aggregation = aggregation_class()
+
+        # Each measurement stream gets its own filter so the warmup discard
+        # counter is not shared. self._filter is the performance stream; a
+        # single shared FilterFirst(3) would spend all three discards on the
+        # first iteration (wallclock + both memory measurements), dropping only
+        # one warmup iteration instead of three.
+        self._memory_mz_filter = copy.deepcopy(filter)
+        self._memory_clusterd_filter = copy.deepcopy(filter)
 
     def create_scenario_instance(self) -> Scenario:
         scale = self._scenario_cls.SCALE
@@ -64,6 +76,9 @@ class Benchmark:
                 scale = scale - float(self._scale.lstrip("-"))
             elif float(self._scale) > 0:
                 scale = float(self._scale)
+
+        if self._scenario_cls.MAX_SCALE is not None:
+            scale = min(scale, self._scenario_cls.MAX_SCALE)
 
         scenario_class = self._scenario_cls
         return scenario_class(
@@ -173,14 +188,18 @@ class Benchmark:
 
         self._collect_performance_measurement(i, performance_measurement)
 
-        if self._memory_mz_aggregation:
+        if self._measure_memory:
             self._collect_memory_measurement(
-                i, MeasurementType.MEMORY_MZ, self._memory_mz_aggregation
+                i,
+                MeasurementType.MEMORY_MZ,
+                self._memory_mz_aggregation,
+                self._memory_mz_filter,
             )
-
-        if self._memory_clusterd_aggregation:
             self._collect_memory_measurement(
-                i, MeasurementType.MEMORY_CLUSTERD, self._memory_clusterd_aggregation
+                i,
+                MeasurementType.MEMORY_CLUSTERD,
+                self._memory_clusterd_aggregation,
+                self._memory_clusterd_filter,
             )
 
         return performance_measurement
@@ -206,7 +225,11 @@ class Benchmark:
             self._performance_aggregation.append_measurement(performance_measurement)
 
     def _collect_memory_measurement(
-        self, i: int, memory_measurement_type: MeasurementType, aggregation: Aggregation
+        self,
+        i: int,
+        memory_measurement_type: MeasurementType,
+        aggregation: Aggregation,
+        filter: Filter,
     ) -> None:
         if memory_measurement_type == MeasurementType.MEMORY_MZ:
             value = self._executor.DockerMemMz()
@@ -221,6 +244,6 @@ class Benchmark:
         )
 
         if memory_measurement.value > 0:
-            if not self._filter or not self._filter.filter(memory_measurement):
+            if not filter or not filter.filter(memory_measurement):
                 print(f"{i} {memory_measurement}")
                 aggregation.append_measurement(memory_measurement)

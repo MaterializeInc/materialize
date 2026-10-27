@@ -56,7 +56,7 @@ Here's a simple example for a fictional Python load generator called
 ```Dockerfile
 # test/fancy/loadgen/Dockerfile
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 RUN apt-get update && apt-get install -qy python3
 
@@ -141,7 +141,7 @@ this:
 
 MZFROM billing-demo AS billing-demo
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 RUN apt-get update && apt-get install -qy python3
 
@@ -439,6 +439,14 @@ publish: true
      has a custom Cargo build script, as Rust crates without a build script do
      not have a build directory.
 
+     The `builder-files` key copies files out of the ci-builder image, for
+     example a native library that the binary links against. It maps absolute
+     paths inside the ci-builder to destination paths relative to the build
+     context. The copy runs inside the ci-builder even on macOS, where Cargo
+     itself runs on the host. The ci-builder's inputs (`ci/builder/**`) are part
+     of every `cargo-build` fingerprint, so changing what the image installs
+     rebuilds the dependent images.
+
 * `publish` (bool) specifies whether the image should be automatically published
   to Docker Hub by CI. Non-publishable images can still be *used* by users and
   CI, but they must always be built from source. Use sparingly. The default is
@@ -485,7 +493,7 @@ mzbuild images.
 ```dockerfile
 MZFROM environmentd
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 COPY --from=0 ...
 ```

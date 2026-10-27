@@ -44,8 +44,7 @@ SHOW CREATE SINK my_view_sink;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/show-create-sink.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/show-create-sink" %}}
 
 ## Related pages
 

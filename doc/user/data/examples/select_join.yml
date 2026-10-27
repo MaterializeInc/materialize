@@ -1,0 +1,40 @@
+- name: "syntax"
+  code: |
+    <select_pred>
+    [NATURAL] <join_type> JOIN
+      [LATERAL] ( <select_stmt> | <table_func_call> | <table_ref> )
+      [USING ( <col_ref> [, ...] ) [AS <join_using_alias>] | ON <expression>]
+    <select_post>
+  syntax_elements:
+    - name: "`<select_pred>`"
+      description: |
+        The predicating [`SELECT`](/sql/select) clauses you want to use, e.g. `SELECT col_ref FROM table_ref...`. The `<table_ref>` from the `<select_pred>` is the left-hand table.
+    - name: "**NATURAL**"
+      description: |
+        Optional. Join table expressions on all columns with the same names in both tables. This is similar to the `USING` clause naming all identically named columns in both tables.
+    - name: "`<join_type>`"
+      description: |
+        The type of `JOIN` you want to use. Valid join types:
+
+        | Join Type | Description |
+        |-----------|-------------|
+        | `INNER` | (Default) Return all tuples from both tables where the join condition is valid. |
+        | `LEFT` [**OUTER**] | Return all tuples from the left-hand-side table, and all tuples from the right-hand-side table that match the join condition. Tuples from the left-hand table that are not joined contain `NULL` wherever the right-hand table is referenced. |
+        | `RIGHT` [**OUTER**] | Return all tuples from the right-hand-side table, and all tuples from the left-hand-side table that match the join condition. Tuples from the right-hand table that are not joined contain `NULL` wherever the left-hand table is referenced. |
+        | `FULL` [**OUTER**] | Return all tuples from both tables, joining them together where the join conditions are met. Tuples that are not joined contain `NULL` wherever the other table is referenced. |
+        | `CROSS` | Return the Cartesian product of the two tables, i.e. all combinations of tuples from the left-hand table combined with tuples from the right-hand table. |
+    - name: "**LATERAL**"
+      description: |
+        Optional. Let the following subquery or table function call refer to columns from join's left-hand side. See [`LATERAL` subqueries](#lateral-subqueries) for details.
+    - name: "( `<select_stmt>` | `<table_func_call>` | `<table_ref>` )"
+      description: |
+        The table expression you want to join, i.e. the right-hand table. Can be a [`SELECT` statement](/sql/select), a [table function call](/sql/functions/#table-functions), or a table reference.
+    - name: "**USING** ( `<col_ref>` [, ...] ) [**AS** `<join_using_alias>`]"
+      description: |
+        Optional. If the join condition does not require table-level qualification (i.e. joining tables on columns with the same name), the columns to join the tables on. For example, `USING (customer_id)`. The optional `AS` clause provides a table alias for the join columns. The columns will remain referenceable by their original names. For example, given `lhs JOIN rhs USING (c) AS joint`, the column `c` will be referenceable as `lhs.c`, `rhs.c`, and `joint.c`.
+    - name: "**ON** `<expression>`"
+      description: |
+        Optional. The condition on which to join the tables. For example `ON purchase.customer_id = customer.id`.
+    - name: "`<select_post>`"
+      description: |
+        The remaining [`SELECT`](/sql/select) clauses you want to use, e.g. `...WHERE expr GROUP BY col_ref HAVING expr`.

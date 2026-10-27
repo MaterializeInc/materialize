@@ -14,9 +14,7 @@ from materialize.checks.checks import Check
 
 class DefaultPrivileges(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE DATABASE defpriv_db
             > SET DATABASE = defpriv_db
             > CREATE SCHEMA defpriv_schema
@@ -27,9 +25,7 @@ class DefaultPrivileges(Check):
             GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO defpriv_role1
 
             > CREATE TABLE defpriv_table1 (c int)
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -61,9 +57,7 @@ class DefaultPrivileges(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET DATABASE = defpriv_db
                 > SET SCHEMA defpriv_schema
                 > ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA defpriv_db.defpriv_schema GRANT ALL PRIVILEGES ON TABLES TO defpriv_role3;
@@ -95,6 +89,4 @@ class DefaultPrivileges(Check):
                 defpriv_table3 defpriv_role1=arwd/materialize
                 defpriv_table3 defpriv_role2=arwd/materialize
                 defpriv_table3 materialize=arwd/materialize
-                """
-            )
-        )
+                """))

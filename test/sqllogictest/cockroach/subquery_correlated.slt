@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,25 +9,18 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/subquery_correlated
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/subquery_correlated
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET unsafe_enable_table_keys = true
-----
-COMPLETE 0
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET unsafe_enable_table_foreign_key = true
-----
-COMPLETE 0
 
 # ------------------------------------------------------------------------------
 # Create a simple schema that models customers and orders. Each customer has an
@@ -37,26 +30,20 @@ COMPLETE 0
 # enough to provide many interesting correlated subquery variations.
 # ------------------------------------------------------------------------------
 statement ok
-CREATE TABLE c (c_id INT PRIMARY KEY, bill TEXT)
-
-statement ok
-CREATE TABLE o (o_id INT PRIMARY KEY, c_id INT, ship TEXT)
-
-statement ok
+CREATE TABLE c (c_id INT PRIMARY KEY, bill TEXT);
+CREATE TABLE o (o_id INT PRIMARY KEY, c_id INT, ship TEXT);
 INSERT INTO c VALUES
     (1, 'CA'),
     (2, 'TX'),
     (3, 'MA'),
     (4, 'TX'),
     (5, NULL),
-    (6, 'FL')
-
-statement ok
+    (6, 'FL');
 INSERT INTO o VALUES
     (10, 1, 'CA'), (20, 1, 'CA'), (30, 1, 'CA'),
     (40, 2, 'CA'), (50, 2, 'TX'), (60, 2, NULL),
     (70, 4, 'WY'), (80, 4, NULL),
-    (90, 6, 'WA')
+    (90, 6, 'WA');
 
 # ------------------------------------------------------------------------------
 # Subqueries in select filters.
@@ -377,6 +364,7 @@ WHERE EXISTS
 2  TX
 4  TX
 
+# Customers with each of their orders numbered.
 query II rowsort
 SELECT c_id, generate_series(1, (SELECT count(*) FROM o WHERE o.c_id=c.c_id)) FROM c
 ----
@@ -390,9 +378,7 @@ SELECT c_id, generate_series(1, (SELECT count(*) FROM o WHERE o.c_id=c.c_id)) FR
 4  2
 6  1
 
-
 # Customers that have no orders with a NULL ship state.
-# Note: Result differs from Cockroach but matches Postgres.
 query IT rowsort
 SELECT *
 FROM c
@@ -422,6 +408,49 @@ SELECT *
 FROM c
 WHERE (SELECT o_id FROM o WHERE o.c_id=c.c_id AND ship='WY')=4;
 ----
+
+# Try to find customers other than customer #2 that have at most one order that
+# is shipping to 'CA'. However, since there is more than one order shipping to
+# 'CA' corresponding to customers other than #2, this attempt fails with an
+# error.
+query error Evaluation error: more than one record produced in subquery
+SELECT * FROM c WHERE c_id=(SELECT c_id FROM o WHERE ship='CA' AND c.c_id<>2)
+
+# Find customers other than customer #1 that have at most one order that is
+# shipping to 'CA' and a billing state equal to 'TX'. Since there is only one
+# other customer who is shipping to 'CA', and this customer has only a single
+# order, this attempt is successful.
+query IT
+SELECT * FROM c WHERE c_id=(SELECT c_id FROM o WHERE ship='CA' AND c_id<>1 AND bill='TX')
+----
+2  TX
+
+# Find customers with billing state equal to 'FL' that have at most one order
+# that is shipping to 'WA'. Since there is only one order shipping to 'WA', this
+# attempt is successful.
+query IT
+SELECT * FROM c WHERE c_id=(SELECT c_id FROM o WHERE ship='WA' AND bill='FL')
+----
+6  FL
+
+# Try to find customers that have at most one order that is also shipping to
+# 'WA'. However, since there are customers that have more than one order, this
+# attempt fails with an error.
+query error Evaluation error: more than one record produced in subquery
+SELECT * FROM c WHERE (SELECT ship FROM o WHERE o.c_id=c.c_id AND ship IS NOT NULL)='WA'
+
+# Add clause to filter out customers that have more than one order. Find
+# remaining customers with at least one order shipping to 'WA'.
+query IT
+SELECT *
+FROM c
+WHERE (
+  SELECT ship
+  FROM o
+  WHERE o.c_id=c.c_id AND ship IS NOT NULL AND (SELECT count(*) FROM o WHERE o.c_id=c.c_id)<=1
+)='WA'
+----
+6  FL
 
 # ------------------------------------------------------------------------------
 # Subqueries in projection lists.
@@ -791,7 +820,6 @@ ORDER BY c_id;
 6  1
 
 # Count bill/ship addresses in each state.
-# Note: Result differs from Cockroach but matches Postgres.
 query TI
 SELECT
     s.st,
@@ -799,12 +827,12 @@ SELECT
 FROM (SELECT c.bill AS st FROM c UNION SELECT o.ship AS st FROM o) s
 ORDER BY s.st;
 ----
-CA    5
-FL    1
-MA    1
-TX    3
-WA    1
-WY    1
+CA  5
+FL  1
+MA  1
+TX  3
+WA  1
+WY  1
 NULL  0
 
 # Customer orders grouped by ship state, compared with count of all orders
@@ -855,7 +883,6 @@ ORDER BY c.c_id, o.o_id
 
 # Customers, with boolean indicating whether they have at least one order with a
 # NULL ship state.
-# Note: Result differs from Cockroach but matches Postgres.
 query IB
 SELECT
     c.c_id,
@@ -887,6 +914,22 @@ ORDER BY c_id
 5  NULL
 6  false
 
+# Not supported by Materialize.
+onlyif cockroach
+query T
+SELECT (SELECT concat_agg(ship || ' ')
+  FROM
+  (SELECT c_id AS o_c_id, ship FROM o ORDER BY ship)
+  WHERE o_c_id=c.c_id)
+FROM c ORDER BY c_id
+----
+CA CA CA
+CA TX
+NULL
+WY
+NULL
+WA
+
 query T
 SELECT (SELECT string_agg(ship, ', ')
   FROM
@@ -915,38 +958,40 @@ WY
 NULL
 WA
 
-query ITI
+query ITI colnames
 SELECT
     *
 FROM
-    (SELECT c_id AS c_c_id, bill FROM c) s1,
-    LATERAL (SELECT o_id FROM o WHERE c_id = c_c_id) s2
-ORDER BY c_c_id, bill, o_id
+    (SELECT c_id AS c_c_id, bill FROM c),
+    LATERAL (SELECT row_number() OVER () AS rownum FROM o WHERE c_id = c_c_id)
+ORDER BY c_c_id, bill, rownum
 ----
-1 CA 10
-1 CA 20
-1 CA 30
-2 TX 40
-2 TX 50
-2 TX 60
-4 TX 70
-4 TX 80
-6 FL 90
+c_c_id  bill  rownum
+1       CA    1
+1       CA    2
+1       CA    3
+2       TX    1
+2       TX    2
+2       TX    3
+4       TX    1
+4       TX    2
+6       FL    1
 
-query TI
+query TI colnames,rowsort
 SELECT
     *
 FROM
-    (SELECT bill FROM c) s1,
-    LATERAL (SELECT o_id FROM o WHERE ship = bill) s2
-ORDER BY bill, o_id
+    (SELECT bill FROM c),
+    LATERAL (SELECT row_number() OVER (PARTITION BY bill) AS rownum FROM o WHERE ship = bill)
+ORDER BY bill, rownum
 ----
-CA 10
-CA 20
-CA 30
-CA 40
-TX 50
-TX 50
+bill  rownum
+CA    1
+CA    2
+CA    3
+CA    4
+TX    1
+TX    1
 
 # ------------------------------------------------------------------------------
 # Subqueries in other interesting locations.
@@ -959,7 +1004,7 @@ SELECT
     count(*) AS cust_cnt
 FROM c
 GROUP BY (SELECT count(*) FROM o WHERE o.c_id=c.c_id)
-ORDER BY (SELECT count(*) FROM o WHERE o.c_id=c.c_id) DESC
+ORDER BY (SELECT count(*) FROM o WHERE o.c_id=c.c_id) DESC;
 ----
 3  2
 2  1
@@ -987,173 +1032,355 @@ ON c.c_id=o.c_id AND EXISTS(SELECT * FROM o WHERE o.c_id=c.c_id AND ship IS NULL
 4  70
 4  80
 
-# TODO(justin): Not supported by Materialize.
-# query error more than one row returned by a subquery
-# SELECT c.c_id, o.o_id
-# FROM c
-# INNER JOIN o
-# ON c.c_id=o.c_id AND o.ship = (SELECT o.ship FROM o WHERE o.c_id=c.c_id);
+query error Evaluation error: more than one record produced in subquery
+SELECT c.c_id, o.o_id
+FROM c
+INNER JOIN o
+ON c.c_id=o.c_id AND o.ship = (SELECT o.ship FROM o WHERE o.c_id=c.c_id);
 
-# TODO(justin): Not supported by Materialize.
-# # Subquery in ARRAY(...)
-# query ITT
-# SELECT
-#   c_id,
-#   ARRAY(SELECT o_id FROM o WHERE o.c_id = c.c_id ORDER BY o_id),
-#   ARRAY(SELECT o_id FROM o WHERE o.ship = c.bill ORDER BY o_id)
-# FROM c ORDER BY c_id
-# ----
-# 1  {10,20,30}  {10,20,30,40}
-# 2  {40,50,60}  {50}
-# 3  {}          {}
-# 4  {70,80}     {50}
-# 5  {}          {}
-# 6  {90}        {}
-#
-# query IT
-# SELECT
-#   c_id,
-#   ARRAY(SELECT o_id FROM o WHERE o.c_id = c.c_id ORDER BY o_id)
-# FROM c ORDER BY c_id
-# ----
-# 1  {10,20,30}
-# 2  {40,50,60}
-# 3  {}
-# 4  {70,80}
-# 5  {}
-# 6  {90}
+statement error Expected right parenthesis, found AS
+SELECT (SELECT c_id FROM o AS OF SYSTEM TIME '-1us')
+FROM c
+WHERE EXISTS(SELECT * FROM o WHERE o.c_id=c.c_id)
 
-# Regression for issue database-issues#7343: missing support for correlated subquery in JSON
+# Subquery in ARRAY(...)
+query ITT
+SELECT
+  c_id,
+  ARRAY(SELECT o_id FROM o WHERE o.c_id = c.c_id ORDER BY o_id),
+  ARRAY(SELECT o_id FROM o WHERE o.ship = c.bill ORDER BY o_id)
+FROM c ORDER BY c_id
+----
+1  {10,20,30}  {10,20,30,40}
+2  {40,50,60}  {50}
+3  {}          {}
+4  {70,80}     {50}
+5  {}          {}
+6  {90}        {}
+
+query IT
+SELECT
+  c_id,
+  ARRAY(SELECT o_id FROM o WHERE o.c_id = c.c_id ORDER BY o_id)
+FROM c ORDER BY c_id
+----
+1  {10,20,30}
+2  {40,50,60}
+3  {}
+4  {70,80}
+5  {}
+6  {90}
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression for issue #24676: missing support for correlated subquery in JSON
 # operator.
 statement ok
 CREATE TABLE groups(
-  id INT PRIMARY KEY,
+  id SERIAL PRIMARY KEY,
   data JSONB
-)
+);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-INSERT INTO groups(id, data) VALUES(1, '{"name": "Group 1", "members": [{"name": "admin", "type": "USER"}, {"name": "user", "type": "USER"}]}')
+INSERT INTO groups(data) VALUES('{"name": "Group 1", "members": [{"name": "admin", "type": "USER"}, {"name": "user", "type": "USER"}]}');
+INSERT INTO groups(data) VALUES('{"name": "Group 2", "members": [{"name": "admin2", "type": "USER"}]}');
 
-statement ok
-INSERT INTO groups(id, data) VALUES(2, '{"name": "Group 2", "members": [{"name": "admin2", "type": "USER"}]}')
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT
+  g.data->>'name' AS group_name,
+  jsonb_array_elements( (SELECT gg.data->'members' FROM groups gg WHERE gg.data->>'name' = g.data->>'name') )
+FROM
+  groups g
+ORDER BY g.data->>'name'
+----
+Group 1  {"name": "admin", "type": "USER"}
+Group 1  {"name": "user", "type": "USER"}
+Group 2  {"name": "admin2", "type": "USER"}
 
-# database-issues#544
-# query TT
-# SELECT
-#   g.data->>'name' AS group_name,
-#   jsonb_array_elements( (SELECT gg.data->'members' FROM groups gg WHERE gg.data->>'name' = g.data->>'name') )
-# FROM
-#   groups g
-# ----
-# Group 1	{"name": "admin", "type": "USER"}
-# Group 1	{"name": "user", "type": "USER"}
-# Group 2	{"name": "admin2", "type": "USER"}
-
-# query TT
-# SELECT
-#     data->>'name',
-#     members
-# FROM
-#     groups AS g,
-#     jsonb_array_elements(
-#         (
-#             SELECT
-#                 gg.data->'members' AS members
-#             FROM
-#                 groups AS gg
-#             WHERE
-#                 gg.data->>'name' = g.data->>'name'
-#         )
-#     ) AS members
-# ----
-# Group 1  {"name": "admin", "type": "USER"}
-# Group 1  {"name": "user", "type": "USER"}
-# Group 2  {"name": "admin2", "type": "USER"}
+# Not supported by Materialize.
+onlyif cockroach
+query TT
+SELECT
+    data->>'name',
+    members
+FROM
+    groups AS g,
+    jsonb_array_elements(
+        (
+            SELECT
+                gg.data->'members' AS members
+            FROM
+                groups AS gg
+            WHERE
+                gg.data->>'name' = g.data->>'name'
+        )
+    ) AS members
+ORDER BY g.data->>'name'
+----
+Group 1  {"name": "admin", "type": "USER"}
+Group 1  {"name": "user", "type": "USER"}
+Group 2  {"name": "admin2", "type": "USER"}
 
 # ------------------------------------------------------------------------------
 # Regression test cases.
 # ------------------------------------------------------------------------------
 
+# Regression for issue 32786.
+
+statement ok
+CREATE TABLE t32786 (id UUID PRIMARY KEY, parent_id UUID, parent_path text)
+
+statement ok
+INSERT INTO t32786 VALUES ('3AAA2577-DBC3-47E7-9E85-9CC7E19CF48A', null)
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE t32786 as node
+SET parent_path=concat((SELECT parent.parent_path
+  FROM t32786 parent
+  WHERE parent.id=node.parent_id),
+  node.id::varchar, '/')
+
+statement ok
+INSERT INTO t32786 VALUES ('5AE7EAFD-8277-4F41-83DE-0FD4B4482169', '3AAA2577-DBC3-47E7-9E85-9CC7E19CF48A')
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+UPDATE t32786 as node
+SET parent_path=concat((SELECT parent.parent_path
+  FROM t32786 parent
+  WHERE parent.id=node.parent_id),
+  node.id::varchar, '/')
+
+query T
+SELECT parent_path FROM t32786 ORDER BY id
+----
+NULL
+NULL
+
+# Regression test for #32723.
+query I
+SELECT
+    generate_series(a + 1, a + 1)
+FROM
+    (SELECT a FROM ((SELECT 1 AS a, 1) EXCEPT ALL (SELECT 0, 0)))
+----
+2
+
 # Regression for issue 35437.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE users (
-    id INT NOT NULL,
+    id INT8 NOT NULL DEFAULT unique_rowid(),
     name VARCHAR(50),
     PRIMARY KEY (id)
-)
+);
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
-INSERT INTO users(id, name) VALUES (1, 'user1')
+INSERT INTO users(id, name) VALUES (1, 'user1');
+INSERT INTO users(id, name) VALUES (2, 'user2');
+INSERT INTO users(id, name) VALUES (3, 'user3');
 
-statement ok
-INSERT INTO users(id, name) VALUES (2, 'user2')
-
-statement ok
-INSERT INTO users(id, name) VALUES (3, 'user3')
-
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE stuff (
-    id INT NOT NULL,
+    id INT8 NOT NULL DEFAULT unique_rowid(),
     date DATE,
-    user_id INT,
+    user_id INT8,
     PRIMARY KEY (id),
     FOREIGN KEY (user_id) REFERENCES users (id)
+);
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+INSERT INTO stuff(id, date, user_id) VALUES (1, '2007-10-15'::DATE, 1);
+INSERT INTO stuff(id, date, user_id) VALUES (2, '2007-12-15'::DATE, 1);
+INSERT INTO stuff(id, date, user_id) VALUES (3, '2007-11-15'::DATE, 1);
+INSERT INTO stuff(id, date, user_id) VALUES (4, '2008-01-15'::DATE, 2);
+INSERT INTO stuff(id, date, user_id) VALUES (5, '2007-06-15'::DATE, 3);
+INSERT INTO stuff(id, date, user_id) VALUES (6, '2007-03-15'::DATE, 3);
+
+# Not supported by Materialize.
+onlyif cockroach
+query ITITI
+SELECT
+    users.id AS users_id,
+    users.name AS users_name,
+    stuff_1.id AS stuff_1_id,
+    stuff_1.date AS stuff_1_date,
+    stuff_1.user_id AS stuff_1_user_id
+FROM
+    users
+    LEFT JOIN stuff AS stuff_1
+    ON
+        users.id = stuff_1.user_id
+        AND stuff_1.id
+            = (
+                    SELECT
+                        stuff_2.id
+                    FROM
+                        stuff AS stuff_2
+                    WHERE
+                        stuff_2.user_id = users.id
+                    ORDER BY
+                        stuff_2.date DESC
+                    LIMIT
+                        1
+                )
+ORDER BY
+    users.name;
+----
+1  user1  2  2007-12-15 00:00:00 +0000 +0000  1
+2  user2  4  2008-01-15 00:00:00 +0000 +0000  2
+3  user3  5  2007-06-15 00:00:00 +0000 +0000  3
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+DROP TABLE stuff;
+DROP TABLE users;
+
+# Regression test for #38867.
+query T
+SELECT (
+		SELECT
+			ARRAY (
+			  SELECT c.relname
+			  FROM pg_inherits AS i JOIN pg_class AS c ON c.oid = i.inhparent
+			  WHERE i.inhrelid = rel.oid
+			  ORDER BY inhseqno
+			)
+)
+FROM pg_class AS rel
+LIMIT 5;
+----
+{}
+{}
+{}
+{}
+{}
+
+# Customers, their billing address, and all orders not going to their billing address
+query ITT rowsort
+SELECT
+    c_id, bill, states
+FROM
+    c
+    JOIN LATERAL (
+            SELECT
+                COALESCE(array_agg(o.ship), '{}') AS states
+            FROM
+                o
+            WHERE
+                o.c_id = c.c_id AND o.ship != c.bill
+        ) ON true;
+----
+1  CA    {}
+3  MA    {}
+4  TX    {WY}
+5  NULL  {}
+6  FL    {WA}
+2  TX    {CA}
+
+# Customers that have billing addresses and all orders not going to their billing address
+query IT rowsort
+SELECT
+    c_id, states
+FROM
+    c
+    LEFT JOIN LATERAL (
+            SELECT
+                COALESCE(array_agg(o.ship), '{}') AS states
+            FROM
+                o
+            WHERE
+                o.c_id = c.c_id AND o.ship != c.bill
+        ) ON true
+WHERE
+    bill IS NOT NULL;
+----
+1  {}
+3  {}
+2  {CA}
+4  {WY}
+6  {WA}
+
+# Regression test for #48638.
+statement ok
+CREATE TABLE IF NOT EXISTS t_48638 (
+  key INTEGER NOT NULL,
+  value INTEGER NOT NULL,
+  PRIMARY KEY (key, value))
+
+statement ok
+INSERT INTO t_48638 values (1, 4);
+INSERT INTO t_48638 values (4, 3);
+INSERT INTO t_48638 values (3, 2);
+INSERT INTO t_48638 values (4, 1);
+INSERT INTO t_48638 values (1, 2);
+INSERT INTO t_48638 values (6, 5);
+INSERT INTO t_48638 values (7, 8);
+
+query II rowsort
+SELECT *
+FROM t_48638
+WHERE key IN (
+  WITH v AS (
+    SELECT
+      level1.value AS value, level1.key AS level1, level2.key AS level2, level3.key AS level3
+    FROM
+      t_48638 AS level2
+      RIGHT JOIN (SELECT * FROM t_48638 WHERE value = 4) AS level1 ON level1.value = level2.key
+      LEFT JOIN (SELECT * FROM t_48638) AS level3 ON level3.key = level2.value
+  )
+  SELECT v.level1 FROM v WHERE v.level1 IS NOT NULL
+  UNION ALL SELECT v.level2 FROM v WHERE v.level2 IS NOT NULL
+  UNION ALL SELECT v.level3 FROM v WHERE v.level3 IS NOT NULL
+)
+----
+1  2
+1  4
+3  2
+4  1
+4  3
+
+# Regression test for #98691.
+statement ok
+CREATE TABLE t98691 (
+  a INT,
+  b INT
 )
 
 statement ok
-INSERT INTO stuff(id, date, user_id) VALUES (1, '2007-10-15'::DATE, 1)
+INSERT INTO t98691 VALUES (1, 10)
+
+query B
+SELECT (NULL, NULL) = ANY (
+  SELECT a, b FROM t98691 WHERE a > i
+) FROM (VALUES (0), (0)) v(i)
+----
+NULL
+NULL
 
 statement ok
-INSERT INTO stuff(id, date, user_id) VALUES (2, '2007-12-15'::DATE, 1)
+INSERT INTO t98691 VALUES (NULL, NULL)
 
-statement ok
-INSERT INTO stuff(id, date, user_id) VALUES (3, '2007-11-15'::DATE, 1)
-
-statement ok
-INSERT INTO stuff(id, date, user_id) VALUES (4, '2008-01-15'::DATE, 2)
-
-statement ok
-INSERT INTO stuff(id, date, user_id) VALUES (5, '2007-06-15'::DATE, 3)
-
-statement ok
-INSERT INTO stuff(id, date, user_id) VALUES (6, '2007-03-15'::DATE, 3)
-
-# database-issues#949
-# query ITITI
-# SELECT
-#     users.id AS users_id,
-#     users.name AS users_name,
-#     stuff_1.id AS stuff_1_id,
-#     stuff_1.date AS stuff_1_date,
-#     stuff_1.user_id AS stuff_1_user_id
-# FROM
-#     users
-#     LEFT JOIN stuff AS stuff_1
-#     ON
-#         users.id = stuff_1.user_id
-#         AND stuff_1.id
-#             = (
-#                     SELECT
-#                         stuff_2.id
-#                     FROM
-#                         stuff AS stuff_2
-#                     WHERE
-#                         stuff_2.user_id = users.id
-#                     ORDER BY
-#                         stuff_2.date DESC
-#                     LIMIT
-#                         1
-#                 )
-# ORDER BY
-#     users.name;
-# ----
-# 1  user1  2  2007-12-15 00:00:00 +0000 +0000  1
-# 2  user2  4  2008-01-15 00:00:00 +0000 +0000  2
-# 3  user3  5  2007-06-15 00:00:00 +0000 +0000  3
-
-statement ok
-DROP TABLE stuff;
-
-statement ok
-DROP TABLE users;
+query B
+SELECT (2, 20) = ANY (
+  SELECT a, b FROM t98691 WHERE a > i OR a IS NULL
+) FROM (VALUES (0), (0)) v(i)
+----
+NULL
+NULL

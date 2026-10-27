@@ -15,6 +15,7 @@
 /bin/lint-versions                  @MaterializeInc/testing
 /ci                                 @MaterializeInc/testing
 /ci/test/lint-deps.toml
+/console                            @MaterializeInc/console
 /doc/user                           @MaterializeInc/docs
 /doc/developer/reference/compute    @MaterializeInc/cluster
 /doc/developer/reference/storage    @MaterializeInc/cluster
@@ -53,6 +54,7 @@
 /src/build-info                     @MaterializeInc/testing @SangJunBak @DAlperin
 /src/catalog                        @MaterializeInc/adapter
 /src/catalog-debug                  @MaterializeInc/adapter
+/src/catalog-decode                 @MaterializeInc/adapter
 /src/ccsr                           @MaterializeInc/adapter @MaterializeInc/cluster
 /src/cloud-resources                @MaterializeInc/cloud
 /src/cluster                        @MaterializeInc/cluster
@@ -80,6 +82,7 @@
 /src/metabase
 /src/mysql-util                     @MaterializeInc/cluster
 /src/mz                             @MaterializeInc/integrations
+/src/mz-deploy                      @sjwiesman
 /src/npm
 /src/orchestrator                   @MaterializeInc/cloud
 /src/orchestrator-kubernetes        @MaterializeInc/cloud
@@ -106,8 +109,11 @@
 /src/rocksdb                        @MaterializeInc/cluster
 /src/s3-datagen                     @MaterializeInc/cluster
 /src/secrets                        @MaterializeInc/cloud
+/src/secrets-cli                    @MaterializeInc/cluster
+/src/secrets-loader                 @MaterializeInc/cluster
 /src/segment
 /src/service                        @MaterializeInc/cluster
+/src/source-schema-change           @MaterializeInc/sources-sinks
 /src/sql                            @MaterializeInc/adapter
 /src/sql/src/session/vars.rs
 # HirRelationExpr is the boundary between the `sql` crate and the cluster
@@ -122,16 +128,15 @@
 /src/sql-parser                     @MaterializeInc/adapter
 /src/sqllogictest                   @MaterializeInc/testing @ggevay
 /src/ssh-util                       @MaterializeInc/cluster
-/src/storage                        @MaterializeInc/cluster
-/src/storage-client                 @MaterializeInc/cluster
-/src/storage-controller             @MaterializeInc/cluster
-/src/storage-operators              @MaterializeInc/cluster
-/src/storage-types                  @MaterializeInc/cluster
+/src/storage                        @MaterializeInc/sources-sinks
+/src/storage-client                 @MaterializeInc/sources-sinks
+/src/storage-controller             @MaterializeInc/sources-sinks
+/src/storage-operators              @MaterializeInc/sources-sinks
+/src/storage-types                  @MaterializeInc/sources-sinks
 /src/test-macro                     @MaterializeInc/testing
 /src/testdrive                      @MaterializeInc/testing
 /src/timely-util                    @MaterializeInc/cluster
 /src/transform                      @MaterializeInc/cluster
 /src/txn-wal                        @aljoscha
 /src/walkabout                      @MaterializeInc/adapter
-/src/workspace-hack                 @MaterializeInc/testing
 /test

@@ -1,15 +1,31 @@
-{{ $pathArray := split (lower (.Get "data")) "/" }}
-{{ $noHeader := .Get "noHeader" }}
-{{ $data := $.Site.Data }}
+{{- $pathArray := split (lower (.Get "data")) "/" -}}
+{{- $noHeader := .Get "noHeader" -}}
+{{- $columnsParam := .Get "columns" -}}
+{{- $data := $.Site.Data -}}
 
-{{ range $pathArray }}
-  {{ $data = index $data . }}
-{{ end }}
+{{- range $pathArray -}}
+  {{- $data = index $data . -}}
+{{- end -}}
+
+{{- $columns := $data.columns -}}
+{{- if $columnsParam -}}
+  {{- $wanted := split $columnsParam "," -}}
+  {{- $filtered := slice -}}
+  {{- range $wanted -}}
+    {{- $name := strings.TrimSpace . -}}
+    {{- range $data.columns -}}
+      {{- if eq .column $name -}}
+        {{- $filtered = $filtered | append . -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $columns = $filtered -}}
+{{- end -}}
 
 {{ if $noHeader }}
   {{ partial "yaml-tables/generic-table-no-header.html" (dict "rows" $data.rows "columns"
-  $data.columns) }}
+  $columns) }}
 {{ else }}
   {{ partial "yaml-tables/generic-table.html" (dict "rows" $data.rows "columns"
-  $data.columns) }}
+  $columns) }}
 {{ end }}

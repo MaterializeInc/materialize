@@ -17,7 +17,10 @@ use std::time::Instant;
 use mz_persist::indexed::encoding::BlobTraceBatchPart;
 
 use crate::cli::args::StateArgs;
+use crate::cli::bench::blob_read::BlobReadArgs;
 use crate::internal::state::BatchPart;
+
+mod blob_read;
 
 /// Commands for read-only inspection of persist state
 #[derive(Debug, clap::Args)]
@@ -32,6 +35,9 @@ pub(crate) enum Command {
     /// Fetch the blobs in a shard as quickly as possible, repeated some number
     /// of times.
     S3Fetch(S3FetchArgs),
+    /// Read and write test objects in an S3-compatible store with many
+    /// concurrent readers, comparing HTTP clients.
+    BlobRead(BlobReadArgs),
 }
 
 /// Fetch the blobs in a shard as quickly as possible, repeated some number of
@@ -52,6 +58,7 @@ pub struct S3FetchArgs {
 pub async fn run(command: BenchArgs) -> Result<(), anyhow::Error> {
     match command.command {
         Command::S3Fetch(args) => bench_s3(&args).await?,
+        Command::BlobRead(args) => blob_read::run(args).await?,
     }
 
     Ok(())
@@ -86,7 +93,7 @@ async fn bench_s3(args: &S3FetchArgs) -> Result<(), anyhow::Error> {
         for part in &batch_parts {
             let key = match &**part {
                 BatchPart::Hollow(x) => x.key.complete(&shard_id),
-                _ => continue,
+                BatchPart::Inline { .. } => continue,
             };
             let blob = Arc::clone(&state_versions.blob);
             let metrics = Arc::clone(&state_versions.metrics);

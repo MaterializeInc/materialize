@@ -15,12 +15,10 @@ class PeekPersist(Check):
     """Make sure old data can still be read by the PeekPersist LIMIT optimization"""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            """
+        return Testdrive("""
             > CREATE TABLE peek_persist (f1 INTEGER);
             > INSERT INTO peek_persist VALUES (1), (2), (3), (NULL);
-            """
-        )
+            """)
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -38,8 +36,7 @@ class PeekPersist(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            """
+        return Testdrive("""
             > SELECT * FROM peek_persist LIMIT 100
             <null>
             <null>
@@ -57,5 +54,4 @@ class PeekPersist(Check):
             # Explained Query (fast path):
             #   Finish limit=100 output=[#0]
             #     PeekPersist materialize.public.peek_persist
-            """
-        )
+            """)

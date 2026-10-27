@@ -479,6 +479,7 @@ class Text(DataType):
                     rng.randint(-100, 100),
                 ]
             )
+            return literal(str(result)) if in_query else str(result)
         # Fails: unterminated dollar-quoted string
         # chars = string.printable
         chars = string.ascii_letters + string.digits
@@ -514,7 +515,71 @@ class Text(DataType):
             return "string"
 
 
-class Bytea(Text):
+class Char(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        chars = string.ascii_letters + string.digits
+        # char(1) pads with spaces, generate single chars
+        result = rng.choice(chars)
+        return literal(str(result)) if in_query else str(result)
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        result = chr(ord("a") + (num % 26))
+        return f"'{result}'" if in_query else str(result)
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            return "string"
+        elif backend == Backend.JSON:
+            return "string"
+        else:
+            return "char(1)"
+
+
+class VarChar(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        chars = string.ascii_letters + string.digits
+        if record_size == RecordSize.TINY:
+            result = rng.choice(("foo", "bar", "baz"))
+        elif record_size == RecordSize.SMALL:
+            result = "".join(rng.choice(chars) for _ in range(3))
+        elif record_size == RecordSize.MEDIUM:
+            result = "".join(rng.choice(chars) for _ in range(10))
+        elif record_size == RecordSize.LARGE:
+            result = "".join(rng.choice(chars) for _ in range(50))
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+        return literal(str(result)) if in_query else str(result)
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        result = f"key{num}"
+        return f"'{result}'" if in_query else str(result)
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            return "string"
+        elif backend == Backend.JSON:
+            return "string"
+        elif backend == Backend.SQL_SERVER:
+            return "varchar(1024)"
+        else:
+            return "varchar(1024)"
+
+
+class Bytea(DataType):
     @staticmethod
     def name(backend: Backend = Backend.MATERIALIZE) -> str:
         if backend == Backend.AVRO:
@@ -523,6 +588,44 @@ class Bytea(Text):
             return "string"
         else:
             return "bytea"
+
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(10) == 0:
+            result = rng.choice(
+                [
+                    "NULL",
+                    "0.0",
+                    "True",
+                    # "",
+                    "表ポあA鷗ŒéＢ逍Üßªąñ丂㐀𠀀",
+                    rng.randint(-100, 100),
+                ]
+            )
+        # Fails: unterminated dollar-quoted string
+        # chars = string.printable
+        chars = string.ascii_letters + string.digits
+        if record_size == RecordSize.TINY:
+            result = rng.choice(("foo", "bar", "baz"))
+        elif record_size == RecordSize.SMALL:
+            result = "".join(rng.choice(chars) for _ in range(3))
+        elif record_size == RecordSize.MEDIUM:
+            result = "".join(rng.choice(chars) for _ in range(10))
+        elif record_size == RecordSize.LARGE:
+            result = "".join(rng.choice(chars) for _ in range(100))
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+
+        return f"{literal(str(result))}::bytea" if in_query else str(result)
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        result = f"key{num}"
+        return f"'{result}'::bytea" if in_query else str(result)
 
 
 class UUID(DataType):
@@ -705,6 +808,66 @@ class IntList(DataType):
         return f"'{values_str}'::int list" if in_query else values_str
 
 
+class RecordList(DataType):
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        else:
+            return "record list"
+
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if record_size == RecordSize.TINY:
+            key_range = 1
+        elif record_size == RecordSize.SMALL:
+            key_range = 5
+        elif record_size == RecordSize.MEDIUM:
+            key_range = 10
+        elif record_size == RecordSize.LARGE:
+            key_range = 20
+        else:
+            raise ValueError(f"Unexpected record size {record_size}")
+        values = [f"row({rng.randint(-100, 100)})" for i in range(0, key_range)]
+        return f"list[{', '.join(values)}]"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        values = [f"row({i})" for i in range(0, num)]
+        return f"list[{', '.join(values)}]"
+
+
+class Record(DataType):
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        else:
+            return "record"
+
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        value = str(rng.choice(["null::integer", "1"]))
+        return f"row({value})"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        value = str(num)
+        return f"row({value})"
+
+
 class Timestamp(DataType):
     @staticmethod
     def random_value(
@@ -713,11 +876,11 @@ class Timestamp(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            result = "1-01-01"
+            result = "0001-01-01"
         elif rng.randrange(100) == 0:
             result = "99999-12-31"
         else:
-            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+            result = f"{rng.randrange(1, 100000):04}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
         return f"TIMESTAMP '{result}'" if in_query else str(result)
 
     @staticmethod
@@ -738,6 +901,41 @@ class Timestamp(DataType):
             return "datetime2"
         else:
             return "timestamp"
+
+
+class TimestampTz(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(100) == 0:
+            result = "0001-01-01"
+        elif rng.randrange(100) == 0:
+            result = "99999-12-31"
+        else:
+            result = f"{rng.randrange(1, 100000):04}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+        return f"TIMESTAMPTZ '{result}'" if in_query else str(result)
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        day = num % 28
+        month = num // 28 % 12
+        year = num // 336
+        result = f"{year}-{month}-{day}"
+        return f"TIMESTAMPTZ '{result}'" if in_query else str(result)
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend == Backend.AVRO:
+            raise ValueError("Unsupported")
+        elif backend == Backend.JSON:
+            raise ValueError("Unsupported")
+        elif backend == Backend.SQL_SERVER:
+            return "datetimeoffset"
+        else:
+            return "timestamptz"
 
 
 class MzTimestamp(DataType):
@@ -778,11 +976,11 @@ class Date(DataType):
         in_query: bool = False,
     ) -> Any:
         if rng.randrange(100) == 0:
-            result = "1-01-01"
+            result = "0001-01-01"
         elif rng.randrange(100) == 0:
             result = "99999-12-31"
         else:
-            result = f"{rng.randrange(1, 100000)}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+            result = f"{rng.randrange(1, 100000):04}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
         return f"DATE '{result}'" if in_query else result
 
     @staticmethod
@@ -832,6 +1030,16 @@ class Time(DataType):
             raise ValueError("Unsupported")
         elif backend == Backend.JSON:
             raise ValueError("Unsupported")
+        elif backend == Backend.MYSQL:
+            # Fractional-second precision spelled out, because a bare MySQL TIME
+            # has fsp 0 and *rounds* what it is given. The 23:59:59.999999 edge
+            # value above then lands as 24:00:00, which MySQL accepts (its TIME
+            # range is +/-838:59:59) but Materialize cannot represent: the source
+            # decodes TIME into a chrono::NaiveTime, so ingestion fails with
+            # "Couldn't convert the value Time(..) to a desired type" and the
+            # source has to be dropped and recreated. At fsp 6 nothing rounds and
+            # the value survives the round trip.
+            return "time(6)"
         else:
             return "time"
 
@@ -886,97 +1094,232 @@ class Oid(Int):
             return "oid"
 
 
+class Int4Range(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(10) == 0:
+            if in_query:
+                return "int4range(NULL, NULL)"
+            return "(,)"
+        lower = rng.randint(-2147483648, 2147483646)
+        upper = rng.randint(lower + 1, 2147483647)
+        bounds = rng.choice(["[)", "[]", "()", "(]"])
+        if in_query:
+            return f"int4range({lower}, {upper}, '{bounds}')"
+        return f"{bounds[0]}{lower},{upper}{bounds[1]}"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        if in_query:
+            return f"int4range({num}, {num + 10})"
+        return f"[{num},{num + 10})"
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend != Backend.MATERIALIZE:
+            raise ValueError("Unsupported")
+        return "int4range"
+
+
+class Int8Range(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(10) == 0:
+            if in_query:
+                return "int8range(NULL, NULL)"
+            return "(,)"
+        lower = rng.randint(-1000000000, 999999999)
+        upper = rng.randint(lower + 1, 1000000000)
+        bounds = rng.choice(["[)", "[]", "()", "(]"])
+        if in_query:
+            return f"int8range({lower}, {upper}, '{bounds}')"
+        return f"{bounds[0]}{lower},{upper}{bounds[1]}"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        if in_query:
+            return f"int8range({num}, {num + 10})"
+        return f"[{num},{num + 10})"
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend != Backend.MATERIALIZE:
+            raise ValueError("Unsupported")
+        return "int8range"
+
+
+class NumRange(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(10) == 0:
+            if in_query:
+                return "numrange(NULL, NULL)"
+            return "(,)"
+        lower = round(rng.uniform(-1000000, 1000000), 3)
+        upper = round(lower + rng.uniform(0.001, 1000000), 3)
+        bounds = rng.choice(["[)", "[]", "()", "(]"])
+        if in_query:
+            return f"numrange({lower}, {upper}, '{bounds}')"
+        return f"{bounds[0]}{lower},{upper}{bounds[1]}"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        if in_query:
+            return f"numrange({num}, {num + 10})"
+        return f"[{num},{num + 10})"
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend != Backend.MATERIALIZE:
+            raise ValueError("Unsupported")
+        return "numrange"
+
+
+class DateRange(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(10) == 0:
+            if in_query:
+                return "daterange(NULL, NULL)"
+            return "(,)"
+        year1 = rng.randrange(1, 9900)
+        month1 = rng.randrange(1, 13)
+        day1 = rng.randrange(1, 29)
+        # Ensure upper bound is strictly after lower bound
+        year2 = rng.randrange(year1 + 1, year1 + 100)
+        month2 = rng.randrange(1, 13)
+        day2 = rng.randrange(1, 29)
+        bounds = rng.choice(["[)", "[]", "()", "(]"])
+        if in_query:
+            return f"daterange('{year1:04}-{month1}-{day1}'::date, '{year2:04}-{month2}-{day2}'::date, '{bounds}')"
+        return f"{bounds[0]}{year1:04}-{month1}-{day1},{year2:04}-{month2}-{day2}{bounds[1]}"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        if in_query:
+            return f"daterange('2000-01-01'::date, '2000-02-{1 + (num % 28)}'::date)"
+        return f"[2000-01-01,2000-02-{1 + (num % 28)})"
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend != Backend.MATERIALIZE:
+            raise ValueError("Unsupported")
+        return "daterange"
+
+
+class TsRange(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(10) == 0:
+            if in_query:
+                return "tsrange(NULL, NULL)"
+            return "(,)"
+        year1 = rng.randrange(1, 9900)
+        month1 = rng.randrange(1, 13)
+        day1 = rng.randrange(1, 29)
+        year2 = rng.randrange(year1 + 1, year1 + 100)
+        month2 = rng.randrange(1, 13)
+        day2 = rng.randrange(1, 29)
+        bounds = rng.choice(["[)", "[]", "()", "(]"])
+        if in_query:
+            return f"tsrange('{year1:04}-{month1}-{day1}'::timestamp, '{year2:04}-{month2}-{day2}'::timestamp, '{bounds}')"
+        return f"{bounds[0]}{year1:04}-{month1}-{day1},{year2:04}-{month2}-{day2}{bounds[1]}"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        if in_query:
+            return f"tsrange('2000-01-01'::timestamp, '2000-02-{1 + (num % 28)}'::timestamp)"
+        return f"[2000-01-01,2000-02-{1 + (num % 28)})"
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend != Backend.MATERIALIZE:
+            raise ValueError("Unsupported")
+        return "tsrange"
+
+
+class TsTzRange(DataType):
+    @staticmethod
+    def random_value(
+        rng: random.Random,
+        record_size: RecordSize = RecordSize.LARGE,
+        in_query: bool = False,
+    ) -> Any:
+        if rng.randrange(10) == 0:
+            if in_query:
+                return "tstzrange(NULL, NULL)"
+            return "(,)"
+        year1 = rng.randrange(1, 9900)
+        month1 = rng.randrange(1, 13)
+        day1 = rng.randrange(1, 29)
+        year2 = rng.randrange(year1 + 1, year1 + 100)
+        month2 = rng.randrange(1, 13)
+        day2 = rng.randrange(1, 29)
+        bounds = rng.choice(["[)", "[]", "()", "(]"])
+        if in_query:
+            return f"tstzrange('{year1:04}-{month1}-{day1}'::timestamptz, '{year2:04}-{month2}-{day2}'::timestamptz, '{bounds}')"
+        return f"{bounds[0]}{year1:04}-{month1}-{day1},{year2:04}-{month2}-{day2}{bounds[1]}"
+
+    @staticmethod
+    def numeric_value(num: int, in_query: bool = False) -> Any:
+        if in_query:
+            return f"tstzrange('2000-01-01'::timestamptz, '2000-02-{1 + (num % 28)}'::timestamptz)"
+        return f"[2000-01-01,2000-02-{1 + (num % 28)})"
+
+    @staticmethod
+    def name(backend: Backend = Backend.MATERIALIZE) -> str:
+        if backend != Backend.MATERIALIZE:
+            raise ValueError("Unsupported")
+        return "tstzrange"
+
+
+RANGE_TYPES = [Int4Range, Int8Range, NumRange, DateRange, TsRange, TsTzRange]
+
+
 # Sort to keep determinism for reproducible runs with specific seed
 DATA_TYPES = sorted(list(all_subclasses(DataType)), key=repr)
 
-# fastavro._schema_common.UnknownType: record
-# bytea requires Python bytes type instead of str
-DATA_TYPES_FOR_AVRO = sorted(
-    list(
-        set(DATA_TYPES)
-        - {
-            TextTextMap,
-            Jsonb,
-            Bytea,
-            Boolean,
-            UUID,
-            Interval,
-            IntList,
-            IntArray,
-            Time,
-            Date,
-            Timestamp,
-            MzTimestamp,
-            Oid,
-            Numeric,
-            Numeric383,
-            UInt2,
-            UInt4,
-            UInt8,
-            Float,
-            Double,
-        }
-    ),
-    key=repr,
-)
+# Record and RecordList are only used nested within expressions, not as
+# top-level table columns.
+DATA_TYPES_FOR_COLUMNS = sorted(list(set(DATA_TYPES) - {Record, RecordList}), key=repr)
 
-DATA_TYPES_FOR_MYSQL = sorted(
-    list(
-        set(DATA_TYPES)
-        - {
-            IntList,
-            IntArray,
-            UUID,
-            TextTextMap,
-            Interval,
-            Oid,
-            Jsonb,
-            Bytea,
-            Boolean,
-            Numeric,
-            Numeric383,
-            UInt2,
-            UInt4,
-            UInt8,
-        }
-    ),
-    key=repr,
-)
+# Explicit allowlists so that the actually exercised types are visible at a
+# glance. A type belongs in one of these lists only if it maps to a native
+# type on the backend, generated values fit the backend's ranges, and values
+# roundtrip identically for the cross-backend result comparison.
 
-DATA_TYPES_FOR_SQL_SERVER = sorted(
-    list(
-        set(DATA_TYPES)
-        - {
-            IntList,
-            IntArray,
-            UUID,
-            TextTextMap,
-            Interval,
-            Oid,
-            Jsonb,
-            Bytea,
-            Boolean,
-            Numeric,
-            Numeric383,
-            UInt2,
-            UInt4,
-            UInt8,
-            Date,
-            Time,
-            Timestamp,
-            MzTimestamp,
-            Float,
-            Double,
-        }
-    ),
-    key=repr,
-)
+# Types the Kafka executor can encode in Avro directly, no records, bytes or
+# logical types.
+DATA_TYPES_FOR_AVRO = [Int, Long, SmallInt, Text]
+
+# Timestamp and Date are excluded because random_value generates years outside
+# MySQL's supported ranges. MzTimestamp and TimestampTz have no MySQL type.
+DATA_TYPES_FOR_MYSQL = [Double, Float, Int, Long, SmallInt, Text, Time]
+
+DATA_TYPES_FOR_SQL_SERVER = [Int, Long, SmallInt, Text]
 
 # MySQL doesn't support keys of unlimited size
-DATA_TYPES_FOR_KEY = sorted(
-    list(set(DATA_TYPES_FOR_AVRO) - {Text, Bytea, IntList, IntArray, Float, Double}),
-    key=repr,
-)
+DATA_TYPES_FOR_KEY = [Int, Long, SmallInt]
 
 NUMBER_TYPES = [
     SmallInt,

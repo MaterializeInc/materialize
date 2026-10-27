@@ -269,7 +269,7 @@ New York,NY,10004
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output5-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:input_kafka_dbz_view is a view, which cannot be exported as a sink
+contains:view input_kafka_dbz_view cannot be exported as a sink
 
 > CREATE CLUSTER output5_view_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK output5_view
@@ -293,7 +293,7 @@ contains:input_kafka_dbz_view is a view, which cannot be exported as a sink
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'output7-view-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:input_values_view is a view, which cannot be exported as a sink
+contains:view input_values_view cannot be exported as a sink
 
 > CREATE CLUSTER output8_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK output8

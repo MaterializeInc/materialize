@@ -17,11 +17,12 @@ use std::{iter, mem};
 
 use base64::prelude::*;
 use byteorder::{ByteOrder, NetworkEndian};
+use csv_core::ReadRecordResult;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
-use mz_adapter::client::RecordFirstRowStream;
+use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging};
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState,
+    EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState, Session,
     SessionConfig, TransactionStatus,
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
@@ -29,39 +30,43 @@ use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
     verify_datum_desc,
 };
+use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
+use mz_auth::Authenticated;
 use mz_auth::password::Password;
-use mz_authenticator::Authenticator;
+use mz_authenticator::{Authenticator, GenericOidcAuthenticator};
+use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{EpochMillis, SYSTEM_TIME};
 use mz_ore::str::StrExt;
-use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log};
+use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log, soft_assert_or_log};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
     ConnectionCounter, Cursor, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3,
     VERSIONS,
 };
-use mz_repr::user::InternalUserMetadata;
 use mz_repr::{
     CatalogItemId, ColumnIndex, Datum, RelationDesc, RowArena, RowIterator, RowRef,
     SqlRelationType, SqlScalarType,
 };
 use mz_server_core::TlsMode;
+use mz_server_core::listeners;
 use mz_server_core::listeners::AllowedRoles;
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{CopyDirection, CopyStatement, FetchDirection, Ident, Raw, Statement};
+use mz_sql::ast::{
+    CopyDirection, CopyStatement, CopyTarget, FetchDirection, Ident, Raw, Statement,
+};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::INTERNAL_USER_NAMES;
-use mz_sql::session::vars::{MAX_COPY_FROM_SIZE, Var, VarInput};
+use mz_sql::session::vars::VarInput;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::time::{self};
 use tokio_metrics::TaskMetrics;
-use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::{Instrument, debug, debug_span, warn};
+use tracing::{Instrument, debug, debug_span, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{
@@ -109,8 +114,13 @@ where
     pub version: i32,
     /// The parameters that the client provided in the startup message.
     pub params: BTreeMap<String, String>,
-    /// Authentication method to use. Frontegg, Password, or None.
-    pub authenticator: Authenticator,
+    /// Frontegg JWT authenticator.
+    pub frontegg: Option<FronteggAuthenticator>,
+    /// OIDC authenticator.
+    pub oidc: GenericOidcAuthenticator,
+    /// The authentication method defined by the server's listener
+    /// configuration.
+    pub authenticator_kind: listeners::AuthenticatorKind,
     /// Global connection limit and count
     pub active_connection_counter: ConnectionCounter,
     /// Helm chart version
@@ -139,7 +149,9 @@ pub async fn run<'a, A, I>(
         conn_uuid,
         version,
         mut params,
-        authenticator,
+        frontegg,
+        oidc,
+        authenticator_kind,
         active_connection_counter,
         helm_chart_version,
         allowed_roles,
@@ -160,7 +172,9 @@ where
     }
 
     let user = params.remove("user").unwrap_or_else(String::new);
-
+    let options = parse_options(params.get("options").unwrap_or(&String::new()));
+    let authenticator =
+        get_authenticator(authenticator_kind, frontegg, oidc, adapter_client.clone());
     // TODO move this somewhere it can be shared with HTTP
     let is_internal_user = INTERNAL_USER_NAMES.contains(&user);
     // this is a superset of internal users
@@ -181,54 +195,45 @@ where
         return conn.send(err).await;
     }
 
+    let authenticator_kind = authenticator.kind();
+
     let (mut session, expired) = match authenticator {
         Authenticator::Frontegg(frontegg) => {
-            conn.send(BackendMessage::AuthenticationCleartextPassword)
-                .await?;
-            conn.flush().await?;
-            let password = match conn.recv().await? {
-                Some(FrontendMessage::RawAuthentication(data)) => {
-                    match decode_password(Cursor::new(&data)).ok() {
-                        Some(FrontendMessage::Password { password }) => password,
-                        _ => {
-                            return conn
-                                .send(ErrorResponse::fatal(
-                                    SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                                    "expected Password message",
-                                ))
-                                .await;
-                        }
-                    }
-                }
-                _ => {
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                            "expected Password message",
-                        ))
-                        .await;
+            let password = match request_cleartext_password(conn).await {
+                Ok(password) => password,
+                Err(PasswordRequestError::IoError(e)) => return Err(e),
+                Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                    return conn.send(e).await;
                 }
             };
 
-            let auth_response = frontegg.authenticate(&user, &password).await;
+            let group_claim =
+                OIDC_GROUP_CLAIM.get(adapter_client.get_system_vars().await.dyncfgs());
+            let auth_response = frontegg
+                .authenticate(&user, &password, Some(&group_claim))
+                .await;
             match auth_response {
-                Ok(mut auth_session) => {
-                    // Create a session based on the auth session.
-                    //
-                    // In particular, it's important that the username come from the
-                    // auth session, as Frontegg may return an email address with
-                    // different casing than the user supplied via the pgwire
-                    // username field. We want to use the Frontegg casing as
-                    // canonical.
-                    let session = adapter_client.new_session(SessionConfig {
-                        conn_id: conn.conn_id().clone(),
-                        uuid: conn_uuid,
-                        user: auth_session.user().into(),
-                        client_ip: conn.peer_addr().clone(),
-                        external_metadata_rx: Some(auth_session.external_metadata_rx()),
-                        internal_user_metadata: None,
-                        helm_chart_version,
-                    });
+                // Create a session based on the auth session.
+                //
+                // In particular, it's important that the username come from the
+                // auth session, as Frontegg may return an email address with
+                // different casing than the user supplied via the pgwire
+                // username fN
+                Ok((mut auth_session, authenticated)) => {
+                    let groups = auth_session.groups();
+                    let session = adapter_client.new_session(
+                        SessionConfig {
+                            conn_id: conn.conn_id().clone(),
+                            uuid: conn_uuid,
+                            user: auth_session.user().into(),
+                            client_ip: conn.peer_addr().clone(),
+                            external_metadata_rx: Some(auth_session.external_metadata_rx()),
+                            helm_chart_version,
+                            authenticator_kind,
+                            groups,
+                        },
+                        authenticated,
+                    );
                     let expired = async move { auth_session.expired().await };
                     (session, expired.left_future())
                 }
@@ -243,59 +248,89 @@ where
                 }
             }
         }
-        Authenticator::Password(adapter_client) => {
-            conn.send(BackendMessage::AuthenticationCleartextPassword)
-                .await?;
-            conn.flush().await?;
-            let password = match conn.recv().await? {
-                Some(FrontendMessage::RawAuthentication(data)) => {
-                    match decode_password(Cursor::new(&data)).ok() {
-                        Some(FrontendMessage::Password { password }) => Password(password),
-                        _ => {
-                            return conn
-                                .send(ErrorResponse::fatal(
-                                    SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                                    "expected Password message",
-                                ))
-                                .await;
-                        }
+        Authenticator::Oidc(oidc) => {
+            // OIDC listener: accepts either a JWT (uses OIDC authentication) or a
+            // plain SQL password (uses SQL password authentication).
+            let password = match request_cleartext_password(conn).await {
+                Ok(password) => password,
+                Err(PasswordRequestError::IoError(e)) => return Err(e),
+                Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                    return conn.send(e).await;
+                }
+            };
+            if is_jwt(&password) {
+                let auth_response = oidc.authenticate(&password, Some(&user)).await;
+                match auth_response {
+                    Ok((mut claims, authenticated)) => {
+                        let groups = claims.groups.take();
+                        let session = adapter_client.new_session(
+                            SessionConfig {
+                                conn_id: conn.conn_id().clone(),
+                                uuid: conn_uuid,
+                                user: std::mem::take(&mut claims.user),
+                                client_ip: conn.peer_addr().clone(),
+                                external_metadata_rx: None,
+                                helm_chart_version,
+                                authenticator_kind,
+                                groups,
+                            },
+                            authenticated,
+                        );
+                        // No invalidation of the auth session once authenticated,
+                        // so auth session lasts indefinitely.
+                        (session, pending().right_future())
+                    }
+                    Err(err) => {
+                        warn!(?err, "pgwire connection failed authentication");
+                        return conn.send(err.into_response()).await;
                     }
                 }
-                _ => {
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                            "expected Password message",
-                        ))
-                        .await;
+            } else {
+                let session = match authenticate_with_password(
+                    conn,
+                    &adapter_client,
+                    user,
+                    Password(password),
+                    conn_uuid,
+                    helm_chart_version,
+                )
+                .await
+                {
+                    Ok(session) => session,
+                    Err(PasswordRequestError::IoError(e)) => return Err(e),
+                    Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                        return conn.send(e).await;
+                    }
+                };
+                (session, pending().right_future())
+            }
+        }
+        Authenticator::Password(adapter_client) => {
+            let password = match request_cleartext_password(conn).await {
+                Ok(password) => password,
+                Err(PasswordRequestError::IoError(e)) => return Err(e),
+                Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                    return conn.send(e).await;
                 }
             };
-            let auth_response = match adapter_client.authenticate(&user, &password).await {
-                Ok(resp) => resp,
-                Err(err) => {
-                    warn!(?err, "pgwire connection failed authentication");
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INVALID_PASSWORD,
-                            "invalid password",
-                        ))
-                        .await;
-                }
-            };
-            let session = adapter_client.new_session(SessionConfig {
-                conn_id: conn.conn_id().clone(),
-                uuid: conn_uuid,
+            let session = match authenticate_with_password(
+                conn,
+                &adapter_client,
                 user,
-                client_ip: conn.peer_addr().clone(),
-                external_metadata_rx: None,
-                internal_user_metadata: Some(InternalUserMetadata {
-                    superuser: auth_response.superuser,
-                }),
+                Password(password),
+                conn_uuid,
                 helm_chart_version,
-            });
+            )
+            .await
+            {
+                Ok(session) => session,
+                Err(PasswordRequestError::IoError(e)) => return Err(e),
+                Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                    return conn.send(e).await;
+                }
+            };
             // No frontegg check, so auth session lasts indefinitely.
-            let auth_session = pending().right_future();
-            (session, auth_session)
+            (session, pending().right_future())
         }
         Authenticator::Sasl(adapter_client) => {
             // Start the handshake
@@ -395,7 +430,7 @@ where
                 }
             };
 
-            let auth_resp = match conn.recv().await? {
+            let authenticated = match conn.recv().await? {
                 Some(FrontendMessage::RawAuthentication(data)) => {
                     match decode_sasl_response(Cursor::new(&data)).ok() {
                         Some(FrontendMessage::SASLResponse(response)) => {
@@ -422,18 +457,18 @@ where
                                 )
                                 .await
                             {
-                                Ok(resp) => {
+                                Ok((proof_response, authenticated)) => {
                                     conn.send(BackendMessage::AuthenticationSASLFinal(
                                         SASLServerFinalMessage {
                                             kind: SASLServerFinalMessageKinds::Verifier(
-                                                resp.verifier,
+                                                proof_response.verifier,
                                             ),
                                             extensions: vec![],
                                         },
                                     ))
                                     .await?;
                                     conn.flush().await?;
-                                    resp.auth_resp
+                                    authenticated
                                 }
                                 Err(_) => {
                                     return conn
@@ -465,31 +500,38 @@ where
                 }
             };
 
-            let session = adapter_client.new_session(SessionConfig {
-                conn_id: conn.conn_id().clone(),
-                uuid: conn_uuid,
-                user,
-                client_ip: conn.peer_addr().clone(),
-                external_metadata_rx: None,
-                internal_user_metadata: Some(InternalUserMetadata {
-                    superuser: auth_resp.superuser,
-                }),
-                helm_chart_version,
-            });
+            let session = adapter_client.new_session(
+                SessionConfig {
+                    conn_id: conn.conn_id().clone(),
+                    uuid: conn_uuid,
+                    user,
+                    client_ip: conn.peer_addr().clone(),
+                    external_metadata_rx: None,
+                    helm_chart_version,
+                    authenticator_kind,
+                    groups: None,
+                },
+                authenticated,
+            );
             // No frontegg check, so auth session lasts indefinitely.
             let auth_session = pending().right_future();
             (session, auth_session)
         }
+
         Authenticator::None => {
-            let session = adapter_client.new_session(SessionConfig {
-                conn_id: conn.conn_id().clone(),
-                uuid: conn_uuid,
-                user,
-                client_ip: conn.peer_addr().clone(),
-                external_metadata_rx: None,
-                internal_user_metadata: None,
-                helm_chart_version,
-            });
+            let session = adapter_client.new_session(
+                SessionConfig {
+                    conn_id: conn.conn_id().clone(),
+                    uuid: conn_uuid,
+                    user,
+                    client_ip: conn.peer_addr().clone(),
+                    external_metadata_rx: None,
+                    helm_chart_version,
+                    authenticator_kind,
+                    groups: None,
+                },
+                Authenticated,
+            );
             // No frontegg check, so auth session lasts indefinitely.
             let auth_session = pending().right_future();
             (session, auth_session)
@@ -497,9 +539,13 @@ where
     };
 
     let system_vars = adapter_client.get_system_vars().await;
+    // Startup parameters that were successfully applied. They additionally
+    // become the session's default values below, once role defaults have been
+    // applied too.
+    let mut applied_params = vec![];
     for (name, value) in params {
         let settings = match name.as_str() {
-            "options" => match parse_options(&value) {
+            "options" => match &options {
                 Ok(opts) => opts,
                 Err(()) => {
                     session.add_notice(AdapterNotice::BadStartupSetting {
@@ -509,7 +555,7 @@ where
                     continue;
                 }
             },
-            _ => vec![(name, value)],
+            _ => &vec![(name, value)],
         };
         for (key, val) in settings {
             const LOCAL: bool = false;
@@ -517,15 +563,17 @@ where
             // (silently ignore errors on set), but erroring the connection
             // might be the better behavior. We maybe need to support more
             // options sent by psql and drivers before we can safely do this.
-            if let Err(err) =
-                session
-                    .vars_mut()
-                    .set(&system_vars, &key, VarInput::Flat(&val), LOCAL)
+            match session
+                .vars_mut()
+                .set(&system_vars, key, VarInput::Flat(val), LOCAL)
             {
-                session.add_notice(AdapterNotice::BadStartupSetting {
-                    name: key,
-                    reason: err.to_string(),
-                });
+                Ok(()) => applied_params.push((key.clone(), val.clone())),
+                Err(err) => {
+                    session.add_notice(AdapterNotice::BadStartupSetting {
+                        name: key.clone(),
+                        reason: err.to_string(),
+                    });
+                }
             }
         }
     }
@@ -546,6 +594,28 @@ where
         Ok(adapter_client) => adapter_client,
         Err(e) => return conn.send(e.into_response(Severity::Fatal)).await,
     };
+
+    // Make the startup parameters the session's default values, so that RESET
+    // and DISCARD ALL restore them rather than the server defaults. This
+    // matches PostgreSQL, where client-supplied startup parameters take
+    // precedence over role defaults (which startup registration applied) both
+    // as the current value and as the reset value. Connection poolers rely on
+    // this. For example, pgbouncer's default server_reset_query is DISCARD
+    // ALL, which must not rebind a pooled connection to the default database.
+    for (key, val) in applied_params {
+        if let Err(err) = adapter_client
+            .session()
+            .vars_mut()
+            .set_default(&key, VarInput::Flat(&val))
+        {
+            // Unexpected, since the same value was accepted by set() above.
+            mz_ore::soft_panic_or_log!("failed to apply startup parameter as default: {err:?}");
+        }
+    }
+
+    // Authentication succeeded, so the connection may now carry query traffic,
+    // whose frames are far larger than any credential.
+    conn.allow_post_auth_frames();
 
     let mut buf = vec![BackendMessage::AuthenticationOk];
     for var in adapter_client.session().vars().notify_set() {
@@ -577,7 +647,7 @@ where
 
     select! {
         r = machine.run() => {
-            // Errors produced internally (like MAX_REQUEST_SIZE being exceeded) should send an
+            // Errors produced internally (like a malformed frame header) should send an
             // error to the client informing them why the connection was closed. We still want to
             // return the original error up the stack, though, so we skip error checking during conn
             // operations.
@@ -599,6 +669,12 @@ where
             conn.flush().await
         }
     }
+}
+
+/// Decides if a given password is a JWT by checking
+/// if we can decode its header.
+fn is_jwt(password: &str) -> bool {
+    jsonwebtoken::decode_header(password).is_ok()
 }
 
 /// Returns (name, value) session settings pairs from an options value.
@@ -682,6 +758,88 @@ fn split_options(value: &str) -> Vec<String> {
     strs
 }
 
+enum PasswordRequestError {
+    InvalidPasswordError(ErrorResponse),
+    IoError(io::Error),
+}
+
+impl From<io::Error> for PasswordRequestError {
+    fn from(e: io::Error) -> Self {
+        PasswordRequestError::IoError(e)
+    }
+}
+
+/// Requests a cleartext password from a connection and returns it if it is valid.
+/// Sends an error response in the connection if the password
+/// is not valid.
+async fn request_cleartext_password<A>(
+    conn: &mut FramedConn<A>,
+) -> Result<String, PasswordRequestError>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+{
+    conn.send(BackendMessage::AuthenticationCleartextPassword)
+        .await?;
+    conn.flush().await?;
+
+    if let Some(message) = conn.recv().await? {
+        if let FrontendMessage::RawAuthentication(data) = message {
+            if let Some(FrontendMessage::Password { password }) =
+                decode_password(Cursor::new(&data)).ok()
+            {
+                return Ok(password);
+            }
+        }
+    }
+
+    Err(PasswordRequestError::InvalidPasswordError(
+        ErrorResponse::fatal(
+            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            "expected Password message",
+        ),
+    ))
+}
+
+/// Helper for password-based authentication using AdapterClient
+/// and returns an authenticated session.
+async fn authenticate_with_password<A>(
+    conn: &FramedConn<A>,
+    adapter_client: &mz_adapter::Client,
+    user: String,
+    password: Password,
+    conn_uuid: Uuid,
+    helm_chart_version: Option<String>,
+) -> Result<Session, PasswordRequestError>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+{
+    let authenticated = match adapter_client.authenticate(&user, &password).await {
+        Ok(authenticated) => authenticated,
+        Err(err) => {
+            warn!(?err, "pgwire connection failed authentication");
+            return Err(PasswordRequestError::InvalidPasswordError(
+                ErrorResponse::fatal(SqlState::INVALID_PASSWORD, "invalid password"),
+            ));
+        }
+    };
+
+    let session = adapter_client.new_session(
+        SessionConfig {
+            conn_id: conn.conn_id().clone(),
+            uuid: conn_uuid,
+            user,
+            client_ip: conn.peer_addr().clone(),
+            external_metadata_rx: None,
+            helm_chart_version,
+            authenticator_kind: mz_auth::AuthenticatorKind::Password,
+            groups: None,
+        },
+        authenticated,
+    );
+
+    Ok(session)
+}
+
 #[derive(Debug)]
 enum State {
     Ready,
@@ -758,7 +916,7 @@ where
 
                 // Process the error, doing any state cleanup.
                 let error_response = err.into_response(Severity::Fatal);
-                let error_state = self.error(error_response).await;
+                let error_state = self.send_error_and_get_state(error_response).await;
 
                 // Terminate __after__ we do any cleanup.
                 self.adapter_client.terminate().await;
@@ -791,6 +949,10 @@ where
         // NOTE(guswynn): we could consider adding spans to all message types. Currently
         // only a few message types seem useful.
         let message_name = message.as_ref().map(|m| m.name()).unwrap_or_default();
+
+        if let Some(message) = &message {
+            self.maybe_log_message_arrival(message).await;
+        }
 
         let start = message.as_ref().map(|_| Instant::now());
         let next_state = match message {
@@ -850,17 +1012,28 @@ where
                 // trigger an eager commit of the current implicit transaction,
                 // see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
                 //
-                // In Materialize, however, we eagerly commit every statement outside of an explicit
-                // transaction when using the extended query protocol. This allows us to eliminate
-                // the possibility of a multiple statement implicit transaction, which in turn
-                // allows us to apply single-statement optimizations to queries issued in implicit
-                // transactions in the extended query protocol.
+                // In Materialize we instead eagerly commit every implicit transaction that
+                // cannot take on further statements of the same pipeline, which keeps the
+                // single-statement optimizations available to queries issued in the extended
+                // query protocol. The ones that can stay open, so that the pipeline commits
+                // or rolls back as a unit. See `TransactionStatus::may_span_pipeline`.
                 //
                 // We don't immediately commit here to allow users to page through the portal if
                 // necessary. Committing the transaction would destroy the portal before the next
                 // Execute command has a chance to resume it. So we instead mark the transaction
                 // for commit the next time that `ensure_transaction` is called.
-                if self.adapter_client.session().transaction().is_implicit() {
+                let (is_implicit, may_span_pipeline) = {
+                    let txn = self.adapter_client.session().transaction();
+                    (txn.is_implicit(), txn.may_span_pipeline())
+                };
+                // Ordered so that only a write reads the flag, keeping the catalog
+                // snapshot off the read path.
+                let spans_pipeline = may_span_pipeline
+                    && self
+                        .adapter_client
+                        .extended_protocol_implicit_transaction_enabled()
+                        .await;
+                if is_implicit && !spans_pipeline {
                     self.txn_needs_commit = true;
                 }
                 state
@@ -875,10 +1048,17 @@ where
             Some(FrontendMessage::Sync) => self.sync().await?,
             Some(FrontendMessage::Terminate) => State::Done,
 
+            // Accept but ignore stray COPY subprotocol messages, mirroring
+            // PostgreSQL. Clients stream COPY data optimistically, so when a
+            // COPY statement fails before COPY mode is entered, its pipelined
+            // CopyData/CopyDone/CopyFail arrive here. Draining instead would
+            // discard unrelated messages until the next Sync, hanging simple
+            // protocol clients that never send one.
             Some(FrontendMessage::CopyData(_))
             | Some(FrontendMessage::CopyDone)
-            | Some(FrontendMessage::CopyFail(_))
-            | Some(FrontendMessage::Password { .. })
+            | Some(FrontendMessage::CopyFail(_)) => State::Ready,
+
+            Some(FrontendMessage::Password { .. })
             | Some(FrontendMessage::RawAuthentication(_))
             | Some(FrontendMessage::SASLInitialResponse { .. })
             | Some(FrontendMessage::SASLResponse(_)) => State::Drain,
@@ -934,7 +1114,9 @@ where
             .declare(EMPTY_PORTAL.to_string(), stmt, sql)
             .await
         {
-            return self.error(e.into_response(Severity::Error)).await;
+            return self
+                .send_error_and_get_state(e.into_response(Severity::Error))
+                .await;
         }
         let portal = self
             .adapter_client
@@ -947,7 +1129,7 @@ where
         let stmt_desc = portal.desc.clone();
         if !stmt_desc.param_types.is_empty() {
             return self
-                .error(ErrorResponse::error(
+                .send_error_and_get_state(ErrorResponse::error(
                     SqlState::UNDEFINED_PARAMETER,
                     "there is no parameter $1",
                 ))
@@ -986,7 +1168,8 @@ where
             }
             Err(e) => {
                 self.send_pending_notices().await?;
-                self.error(e.into_response(Severity::Error)).await
+                self.send_error_and_get_state(e.into_response(Severity::Error))
+                    .await
             }
         };
 
@@ -1018,6 +1201,98 @@ where
         Ok(())
     }
 
+    /// Logs an arriving frontend message at info level, when
+    /// `enable_statement_arrival_logging` is on. Runs before the message is
+    /// processed, so a message whose processing crashes the process still
+    /// appears in the log. The `kind` field says which message it is, and
+    /// thereby also whether the statement came in through the simple protocol
+    /// (`query`) or the extended protocol (`parse`, `bind`, `execute`, ...).
+    /// The prepared statement and portal names, together with the connection
+    /// id, allow connecting a `bind` or `execute` back to the `parse` that
+    /// carried the SQL text.
+    ///
+    /// SQL text is parsed and logged with its literals redacted, the same
+    /// redaction the statement log applies. This means a statement that
+    /// crashes the parser is not captured, an accepted limitation. Bind
+    /// parameter values are data that redaction cannot reach, so only their
+    /// count is logged. Authentication payloads are never logged. COPY data
+    /// is logged as its length only, and only when it arrives as a stray
+    /// message in the ready state: messages consumed by the COPY subprotocol
+    /// or the post-error drain loop don't pass through here at all.
+    async fn maybe_log_message_arrival(&mut self, message: &FrontendMessage) {
+        if !self
+            .adapter_client
+            .statement_arrival_logging_enabled()
+            .await
+        {
+            return;
+        }
+        let session = self.adapter_client.session();
+        let conn_id = session.conn_id();
+        let session_uuid = session.uuid();
+        let kind = message.name();
+        match message {
+            FrontendMessage::Query { sql } => {
+                info!(
+                    %conn_id, %session_uuid, kind, sql = %redact_sql_for_logging(sql),
+                    "statement arrival"
+                );
+            }
+            FrontendMessage::Parse { name, sql, .. } => {
+                info!(
+                    %conn_id, %session_uuid, kind, name, sql = %redact_sql_for_logging(sql),
+                    "statement arrival"
+                );
+            }
+            FrontendMessage::Bind {
+                portal_name,
+                statement_name,
+                raw_params,
+                ..
+            } => {
+                info!(
+                    %conn_id, %session_uuid, kind, portal_name, statement_name,
+                    num_params = raw_params.len(),
+                    "statement arrival"
+                );
+            }
+            // COPY payloads would flood the log. Log only their length.
+            FrontendMessage::CopyData(data) => {
+                info!(%conn_id, %session_uuid, kind, len = data.len(), "statement arrival");
+            }
+            // Authentication payloads must never be logged.
+            FrontendMessage::Password { .. }
+            | FrontendMessage::RawAuthentication(_)
+            | FrontendMessage::SASLInitialResponse { .. }
+            | FrontendMessage::SASLResponse(_) => {
+                info!(%conn_id, %session_uuid, kind, "statement arrival");
+            }
+            // CopyFail carries a client-supplied free-text error message,
+            // which we don't log.
+            FrontendMessage::CopyFail(_) => {
+                info!(%conn_id, %session_uuid, kind, "statement arrival");
+            }
+            // Log the full Debug representation for all other variants, which
+            // carry only object names or no payload.
+            FrontendMessage::DescribeStatement { .. }
+            | FrontendMessage::DescribePortal { .. }
+            | FrontendMessage::Execute { .. }
+            | FrontendMessage::Flush
+            | FrontendMessage::Sync
+            | FrontendMessage::CloseStatement { .. }
+            | FrontendMessage::ClosePortal { .. }
+            | FrontendMessage::Terminate
+            | FrontendMessage::CopyDone => {
+                // WARNING: When adding a variant here, consider whether its payload is sensitive or
+                // bulky!
+                //
+                // (The field must not be named `message`, that name is
+                // reserved for the event text in tracing.)
+                info!(%conn_id, %session_uuid, kind, contents = ?message, "statement arrival");
+            }
+        }
+    }
+
     fn parse_sql<'b>(&self, sql: &'b str) -> Result<Vec<StatementParseResult<'b>>, ErrorResponse> {
         let parse_start = Instant::now();
         let result = match self.adapter_client.parse(sql) {
@@ -1047,7 +1322,7 @@ where
         let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
-                self.error(err).await?;
+                self.send_error_and_get_state(err).await?;
                 return self.ready().await;
             }
         };
@@ -1112,7 +1387,7 @@ where
                     Ok(ty) => param_types.push(Some(ty)),
                     Err(err) => {
                         return self
-                            .error(ErrorResponse::error(
+                            .send_error_and_get_state(ErrorResponse::error(
                                 SqlState::INVALID_PARAMETER_VALUE,
                                 err.to_string(),
                             ))
@@ -1122,7 +1397,7 @@ where
                 Err(_) if oid == 0 => param_types.push(None),
                 Err(e) => {
                     return self
-                        .error(ErrorResponse::error(
+                        .send_error_and_get_state(ErrorResponse::error(
                             SqlState::PROTOCOL_VIOLATION,
                             e.to_string(),
                         ))
@@ -1134,12 +1409,12 @@ where
         let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
-                return self.error(err).await;
+                return self.send_error_and_get_state(err).await;
             }
         };
         if stmts.len() > 1 {
             return self
-                .error(ErrorResponse::error(
+                .send_error_and_get_state(ErrorResponse::error(
                     SqlState::INTERNAL_ERROR,
                     "cannot insert multiple commands into a prepared statement",
                 ))
@@ -1161,7 +1436,10 @@ where
                 self.send(BackendMessage::ParseComplete).await?;
                 Ok(State::Ready)
             }
-            Err(e) => self.error(e.into_response(Severity::Error)).await,
+            Err(e) => {
+                self.send_error_and_get_state(e.into_response(Severity::Error))
+                    .await
+            }
         }
     }
 
@@ -1178,15 +1456,53 @@ where
     }
 
     /// End a transaction and report to the user if an error occurred.
+    ///
+    /// The parameters this changes must be announced, exactly as an explicit
+    /// `COMMIT`/`ROLLBACK` announces them. Otherwise a `SET LOCAL` outside an
+    /// explicit transaction announces its new value and never its revert, and a
+    /// client that caches parameters keeps the reverted value.
     #[instrument(level = "debug")]
     async fn end_transaction(&mut self, action: EndTransactionAction) -> Result<(), io::Error> {
         self.txn_needs_commit = false;
-        let resp = self.adapter_client.end_transaction(action).await;
-        if let Err(err) = resp {
-            self.send(BackendMessage::ErrorResponse(
-                err.into_response(Severity::Error),
-            ))
-            .await?;
+        match self.adapter_client.end_transaction(action).await {
+            Ok(
+                ExecuteResponse::TransactionCommitted { params }
+                | ExecuteResponse::TransactionRolledBack { params },
+            ) => {
+                self.send_parameter_statuses(params).await?;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                self.send(BackendMessage::ErrorResponse(
+                    err.into_response(Severity::Error),
+                ))
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Announces changed parameters, restricted to those the client is told
+    /// about at startup.
+    #[instrument(level = "debug")]
+    async fn send_parameter_statuses(
+        &mut self,
+        params: BTreeMap<&'static str, String>,
+    ) -> Result<(), io::Error> {
+        let notify_set: mz_ore::collections::HashSet<String> = self
+            .adapter_client
+            .session()
+            .vars()
+            .notify_set()
+            .map(|v| v.name().to_string())
+            .collect();
+
+        for (name, value) in params
+            .into_iter()
+            .filter(|(name, _value)| notify_set.contains(*name))
+        {
+            self.send(BackendMessage::ParameterStatus(name, value))
+                .await?;
         }
         Ok(())
     }
@@ -1210,7 +1526,11 @@ where
             .await
         {
             Ok(stmt) => stmt,
-            Err(err) => return self.error(err.into_response(Severity::Error)).await,
+            Err(err) => {
+                return self
+                    .send_error_and_get_state(err.into_response(Severity::Error))
+                    .await;
+            }
         };
 
         let param_types = &stmt.desc().param_types;
@@ -1223,14 +1543,20 @@ where
                 expected = param_types.len()
             );
             return self
-                .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, message))
+                .send_error_and_get_state(ErrorResponse::error(
+                    SqlState::PROTOCOL_VIOLATION,
+                    message,
+                ))
                 .await;
         }
         let param_formats = match pad_formats(param_formats, raw_params.len()) {
             Ok(param_formats) => param_formats,
             Err(msg) => {
                 return self
-                    .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::PROTOCOL_VIOLATION,
+                        msg,
+                    ))
                     .await;
             }
         };
@@ -1248,11 +1574,30 @@ where
             let datum = match raw_param {
                 None => Datum::Null,
                 Some(bytes) => match mz_pgrepr::Value::decode(format, &pg_typ, &bytes) {
-                    Ok(param) => param.into_datum(&buf, &pg_typ),
+                    Ok(param) => match param.into_datum_decode_error(&buf, &pg_typ, "parameter") {
+                        Ok(datum) => datum,
+                        Err(msg) => {
+                            return self
+                                .send_error_and_get_state(ErrorResponse::error(
+                                    SqlState::INVALID_PARAMETER_VALUE,
+                                    msg,
+                                ))
+                                .await;
+                        }
+                    },
                     Err(err) => {
-                        let msg = format!("unable to decode parameter: {}", err);
+                        // NUL characters get the same SQLSTATE that PostgreSQL
+                        // reports for them.
+                        let (code, msg) = if err.is::<mz_pgrepr::NulCharacterError>() {
+                            (SqlState::CHARACTER_NOT_IN_REPERTOIRE, err.to_string())
+                        } else {
+                            (
+                                SqlState::INVALID_PARAMETER_VALUE,
+                                format!("unable to decode parameter: {}", err),
+                            )
+                        };
                         return self
-                            .error(ErrorResponse::error(SqlState::INVALID_PARAMETER_VALUE, msg))
+                            .send_error_and_get_state(ErrorResponse::error(code, msg))
                             .await;
                     }
                 },
@@ -1271,50 +1616,42 @@ where
             Ok(result_formats) => result_formats,
             Err(msg) => {
                 return self
-                    .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::PROTOCOL_VIOLATION,
+                        msg,
+                    ))
                     .await;
             }
         };
 
         // Binary encodings are disabled for list, map, and aclitem types, but this doesn't
         // apply to COPY TO statements.
-        if !stmt.stmt().map_or(false, |stmt| {
-            matches!(
-                stmt,
-                Statement::Copy(CopyStatement {
-                    direction: CopyDirection::To,
-                    ..
-                })
-            )
+        if !stmt.stmt().map_or(false, |stmt| match stmt {
+            Statement::Copy(CopyStatement {
+                direction: CopyDirection::To,
+                ..
+            }) => true,
+            Statement::Copy(CopyStatement {
+                direction: CopyDirection::From,
+                // To be conservative, we are restricting COPY FROM to only allow list/map/aclitem types if it is not
+                // copying from STDIN. It is likely that this works in theory, but is risky and likely to OOM anyways
+                // as all the data will be held in a buffer in memory before being processed.
+                target: CopyTarget::Expr(_),
+                ..
+            }) => true,
+            _ => false,
         }) {
             if let Some(desc) = stmt.desc().relation_desc.clone() {
                 for (format, ty) in result_formats.iter().zip_eq(desc.iter_types()) {
-                    match (format, &ty.scalar_type) {
-                        (Format::Binary, mz_repr::SqlScalarType::List { .. }) => {
+                    if let Format::Binary = format {
+                        if let Err(msg) = mz_pgrepr::Value::binary_encoding_error(&ty.scalar_type) {
                             return self
-                                .error(ErrorResponse::error(
-                                    SqlState::PROTOCOL_VIOLATION,
-                                    "binary encoding of list types is not implemented",
+                                .send_error_and_get_state(ErrorResponse::error(
+                                    SqlState::UNDEFINED_FUNCTION,
+                                    msg,
                                 ))
                                 .await;
                         }
-                        (Format::Binary, mz_repr::SqlScalarType::Map { .. }) => {
-                            return self
-                                .error(ErrorResponse::error(
-                                    SqlState::PROTOCOL_VIOLATION,
-                                    "binary encoding of map types is not implemented",
-                                ))
-                                .await;
-                        }
-                        (Format::Binary, mz_repr::SqlScalarType::AclItem) => {
-                            return self
-                                .error(ErrorResponse::error(
-                                    SqlState::PROTOCOL_VIOLATION,
-                                    "binary encoding of aclitem types does not exist",
-                                ))
-                                .await;
-                        }
-                        _ => (),
                     }
                 }
             }
@@ -1333,7 +1670,9 @@ where
             result_formats,
             state_revision,
         ) {
-            return self.error(err.into_response(Severity::Error)).await;
+            return self
+                .send_error_and_get_state(err.into_response(Severity::Error))
+                .await;
         }
 
         self.send(BackendMessage::BindComplete).await?;
@@ -1371,7 +1710,10 @@ where
                         );
                     }
                     return self
-                        .error(ErrorResponse::error(SqlState::INVALID_CURSOR_NAME, msg))
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::INVALID_CURSOR_NAME,
+                            msg,
+                        ))
                         .await;
                 }
             };
@@ -1422,7 +1764,8 @@ where
                         }
                         Err(e) => {
                             self.send_pending_notices().await?;
-                            self.error(e.into_response(Severity::Error)).await
+                            self.send_error_and_get_state(e.into_response(Severity::Error))
+                                .await
                         }
                     }
                 }
@@ -1518,7 +1861,7 @@ where
                             },
                         );
                     }
-                    self.error(ErrorResponse::error(
+                    self.send_error_and_get_state(ErrorResponse::error(
                         SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
                         error,
                     ))
@@ -1537,7 +1880,11 @@ where
 
         let stmt = match self.adapter_client.get_prepared_statement(name).await {
             Ok(stmt) => stmt,
-            Err(err) => return self.error(err.into_response(Severity::Error)).await,
+            Err(err) => {
+                return self
+                    .send_error_and_get_state(err.into_response(Severity::Error))
+                    .await;
+            }
         };
         // Cloning to avoid a mutable borrow issue because `send` also uses `adapter_client`
         let parameter_desc = BackendMessage::ParameterDescription(
@@ -1571,7 +1918,7 @@ where
                 Ok(State::Ready)
             }
             None => {
-                self.error(ErrorResponse::error(
+                self.send_error_and_get_state(ErrorResponse::error(
                     SqlState::INVALID_CURSOR_NAME,
                     format!("portal {} does not exist", name.quoted()),
                 ))
@@ -1596,13 +1943,37 @@ where
         Ok(State::Ready)
     }
 
-    fn complete_portal(&mut self, name: &str) {
-        let portal = self
+    /// Completes the portal that carried a `CLOSE`.
+    ///
+    /// The `CLOSE` can name that very portal, and sequencing has then already
+    /// removed it. Marking the state is bookkeeping for a portal nobody will
+    /// read again, so its absence is expected rather than an error.
+    fn complete_portal_after_close(&mut self, name: &str) {
+        if let Some(portal) = self
             .adapter_client
             .session()
             .get_portal_unverified_mut(name)
-            .expect("portal should exist");
-        *portal.state = PortalState::Completed(None);
+        {
+            *portal.state = PortalState::Completed(None);
+        }
+    }
+
+    /// Completes the portal that carried a `DECLARE`.
+    ///
+    /// A successful `DECLARE` only ever adds a portal, and adding one under a
+    /// name already in use fails with `DuplicateCursor`, so the executing portal
+    /// is still present here.
+    fn complete_portal_after_declare(&mut self, name: &str) {
+        match self
+            .adapter_client
+            .session()
+            .get_portal_unverified_mut(name)
+        {
+            Some(portal) => *portal.state = PortalState::Completed(None),
+            None => {
+                mz_ore::soft_panic_or_log!("portal {} vanished across a DECLARE", name.quoted())
+            }
+        }
     }
 
     async fn fetch(
@@ -1642,7 +2013,10 @@ where
                         },
                     );
                     return self
-                        .error(ErrorResponse::error(SqlState::FEATURE_NOT_SUPPORTED, msg))
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::FEATURE_NOT_SUPPORTED,
+                            msg,
+                        ))
                         .await;
                 }
                 ExecuteCount::Count(count)
@@ -1656,7 +2030,10 @@ where
                     },
                 );
                 return self
-                    .error(ErrorResponse::error(SqlState::FEATURE_NOT_SUPPORTED, msg))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        msg,
+                    ))
                     .await;
             }
             (ExecuteCount::All, FetchDirection::ForwardAll) => ExecuteCount::All,
@@ -1766,11 +2143,11 @@ where
 
         let r = match response {
             ExecuteResponse::ClosedCursor => {
-                self.complete_portal(&portal_name);
+                self.complete_portal_after_close(&portal_name);
                 command_complete!()
             }
             ExecuteResponse::DeclaredCursor => {
-                self.complete_portal(&portal_name);
+                self.complete_portal_after_declare(&portal_name);
                 command_complete!()
             }
             ExecuteResponse::EmptyQuery => {
@@ -1895,7 +2272,7 @@ where
                         row_desc,
                         portal_name,
                         InProgressRows::new(RecordFirstRowStream::new(
-                            Box::new(UnboundedReceiverStream::new(rx)),
+                            rx,
                             execute_started,
                             &self.adapter_client,
                             Some(instance_id),
@@ -1952,7 +2329,7 @@ where
                                 format,
                                 row_desc,
                                 RecordFirstRowStream::new(
-                                    Box::new(UnboundedReceiverStream::new(rx)),
+                                    rx,
                                     execute_started,
                                     &self.adapter_client,
                                     Some(instance_id),
@@ -2043,7 +2420,7 @@ where
                     }
                     _ => {
                         return self
-                            .error(ErrorResponse::error(
+                            .send_error_and_get_state(ErrorResponse::error(
                                 SqlState::INTERNAL_ERROR,
                                 "unsupported COPY response type".to_string(),
                             ))
@@ -2064,23 +2441,9 @@ where
                     .await
             }
             ExecuteResponse::TransactionCommitted { params }
-            | ExecuteResponse::TransactionRolledBack { params } => {
-                let notify_set: mz_ore::collections::HashSet<String> = self
-                    .adapter_client
-                    .session()
-                    .vars()
-                    .notify_set()
-                    .map(|v| v.name().to_string())
-                    .collect();
-
-                // Only report on parameters that are in the notify set.
-                for (name, value) in params
-                    .into_iter()
-                    .filter(|(name, _v)| notify_set.contains(*name))
-                {
-                    let msg = BackendMessage::ParameterStatus(name, value);
-                    self.send(msg).await?;
-                }
+            | ExecuteResponse::TransactionRolledBack { params }
+            | ExecuteResponse::DiscardedAll { params } => {
+                self.send_parameter_statuses(params).await?;
                 command_complete!()
             }
 
@@ -2093,9 +2456,9 @@ where
             | ExecuteResponse::CreatedConnection { .. }
             | ExecuteResponse::CreatedDatabase { .. }
             | ExecuteResponse::CreatedIndex { .. }
+            | ExecuteResponse::CreatedMetricSink { .. }
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMaterializedView { .. }
-            | ExecuteResponse::CreatedContinualTask { .. }
             | ExecuteResponse::CreatedRole
             | ExecuteResponse::CreatedSchema { .. }
             | ExecuteResponse::CreatedSecret { .. }
@@ -2109,7 +2472,6 @@ where
             | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
-            | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DroppedObject(_)
             | ExecuteResponse::DroppedOwned
@@ -2204,6 +2566,7 @@ where
                 .map(|ty| mz_pgrepr::Type::from(&ty.scalar_type))
                 .zip_eq(result_formats)
                 .collect(),
+            self.adapter_client.session().vars().text_encode_settings(),
         );
 
         let mut total_sent_rows = 0;
@@ -2224,18 +2587,43 @@ where
                 FetchResult::Rows(None)
             } else {
                 let notice_fut = self.adapter_client.session().recv_notice();
+                // Biased: drain available data before checking the deadline.
+                // This is critical for the WaitOnce case, where the deadline
+                // is set to `Instant::now()` right after the first batch:
+                // without `biased`, `recv()` and the already-expired deadline
+                // race nondeterministically, so we might break the loop
+                // before `no_more_rows` is set (or even before ready rows
+                // are consumed). With an explicit `TIMEOUT`, missing a batch
+                // right at the boundary is acceptable, but WaitOnce fires
+                // immediately and the race is not.
+                //
+                // Trade-off: if `recv()` keeps returning Ready (unlikely in
+                // practice—row processing + flush is slower than upstream
+                // tick granularity), a `TIMEOUT` deadline could be delayed.
+                // See database-issues#9470.
                 tokio::select! {
+                    biased;
                     err = self.conn.wait_closed() => return Err(err),
-                    _ = time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
-                    notice = notice_fut => {
-                        FetchResult::Notice(notice)
-                    }
                     batch = rows.remaining.recv() => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
-                        Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
+                        Some(PeekResponseUnary::Error(err)) => {
+                            FetchResult::Error(err.into_response(Severity::Error))
+                        }
+                        Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                            FetchResult::Error(
+                                dep.to_concurrent_dependency_drop()
+                                    .into_response(Severity::Error),
+                            )
+                        }
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
+                    notice = notice_fut => {
+                        FetchResult::Notice(notice)
+                    }
+                    _ = time::sleep_until(
+                        deadline.unwrap_or_else(tokio::time::Instant::now),
+                    ), if deadline.is_some() => FetchResult::Rows(None),
                 }
             };
 
@@ -2245,7 +2633,7 @@ where
                     if let Err(err) = verify_datum_desc(&row_desc, &mut batch_rows) {
                         let msg = err.to_string();
                         return self
-                            .error(err.into_response(Severity::Error))
+                            .send_error_and_get_state(err.into_response(Severity::Error))
                             .await
                             .map(|state| (state, SendRowsEndedReason::Errored { error: msg }));
                     }
@@ -2298,15 +2686,16 @@ where
                     self.send(notice.into_response()).await?;
                     self.conn.flush().await?;
                 }
-                FetchResult::Error(text) => {
+                FetchResult::Error(err) => {
+                    let text = err.message.clone();
                     return self
-                        .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone()))
+                        .send_error_and_get_state(err)
                         .await
                         .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                 }
                 FetchResult::Canceled => {
                     return self
-                        .error(ErrorResponse::error(
+                        .send_error_and_get_state(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
                             "canceling statement due to user request",
                         ))
@@ -2324,7 +2713,12 @@ where
 
         let saw_rows = rows.remaining.saw_rows;
         let no_more_rows = rows.no_more_rows();
+        let metric_recorded = rows.remaining.metric_recorded;
         let recorded_first_row_instant = rows.remaining.recorded_first_row_instant;
+
+        if no_more_rows && !metric_recorded {
+            rows.remaining.metric_recorded = true;
+        }
 
         // Always return rows back, even if it's empty. This prevents an unclosed
         // portal from re-executing after it has been emptied.
@@ -2339,8 +2733,9 @@ where
         let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
         self.send(response_message).await?;
 
-        // Attend to metrics if there are no more rows.
-        if no_more_rows {
+        // Attend to metrics if there are no more rows. Only record once per stream
+        // to avoid polluting the histogram when an exhausted cursor is FETCHed again.
+        if no_more_rows && !metric_recorded {
             let statement_type = if let Some(stmt) = &self
                 .adapter_client
                 .session()
@@ -2399,14 +2794,50 @@ where
             CopyFormat::Parquet => {
                 let text = "Parquet format is not supported".to_string();
                 return self
-                    .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone()))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::INTERNAL_ERROR,
+                        text.clone(),
+                    ))
                     .await
                     .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
             }
         };
 
+        // Binary encoding is not implemented for some types (e.g., list, map,
+        // and aclitem). Unlike the extended query protocol's Bind handler, COPY
+        // does not validate this when binding the portal: the portal's result
+        // formats describe the `CopyData` wrapper, not the COPY format itself,
+        // so the Bind handler explicitly skips `COPY TO` statements. We must
+        // therefore check here, before streaming any rows, otherwise
+        // `encode_binary` would panic mid-stream (SQL-323).
+        if let CopyFormat::Binary = format {
+            if let Some(msg) = row_desc
+                .iter_types()
+                .find_map(|ty| mz_pgrepr::Value::binary_encoding_error(&ty.scalar_type).err())
+            {
+                return self
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::UNDEFINED_FUNCTION,
+                        msg,
+                    ))
+                    .await
+                    .map(|state| {
+                        (
+                            state,
+                            SendRowsEndedReason::Errored {
+                                error: msg.to_string(),
+                            },
+                        )
+                    });
+            }
+        }
+
+        // Unlike `COPY TO <external destination>`, which is encoded in the
+        // dataflow layer, `COPY TO STDOUT` runs in the session and so honors
+        // the session's encoding settings, matching PostgreSQL.
+        let text_settings = self.adapter_client.session().vars().text_encode_settings();
         let encode_fn = |row: &RowRef, typ: &SqlRelationType, out: &mut Vec<u8>| {
-            mz_pgcopy::encode_copy_format(&row_format, row, typ, out)
+            mz_pgcopy::encode_copy_format(&row_format, row, typ, out, text_settings)
         };
 
         let typ = row_desc.typ();
@@ -2441,14 +2872,24 @@ where
                 e = self.conn.wait_closed() => return Err(e),
                 batch = stream.recv() => match batch {
                     None => break,
-                    Some(PeekResponseUnary::Error(text)) => {
+                    Some(PeekResponseUnary::Error(err)) => {
+                        let text = err.to_string();
                         return self
-                            .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone()))
-                        .await
-                        .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
+                            .send_error_and_get_state(err.into_response(Severity::Error))
+                            .await
+                            .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
+                    }
+                    Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                        let err = dep.to_concurrent_dependency_drop();
+                        let text = err.to_string();
+                        let resp = err.into_response(Severity::Error);
+                        return self
+                            .send_error_and_get_state(resp)
+                            .await
+                            .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                     }
                     Some(PeekResponseUnary::Canceled) => {
-                        return self.error(ErrorResponse::error(
+                        return self.send_error_and_get_state(ErrorResponse::error(
                                 SqlState::QUERY_CANCELED,
                                 "canceling statement due to user request",
                             ))
@@ -2501,7 +2942,7 @@ where
         target_id: CatalogItemId,
         target_name: String,
         columns: Vec<ColumnIndex>,
-        params: CopyFormatParams<'_>,
+        params: CopyFormatParams<'static>,
         row_desc: RelationDesc,
         mut ctx_extra: ExecuteContextGuard,
     ) -> Result<State, io::Error> {
@@ -2516,6 +2957,16 @@ where
             )
             .await;
         match &res {
+            Ok(State::Ready) => {
+                self.adapter_client.retire_execute(
+                    ctx_extra,
+                    StatementEndedExecutionReason::Success {
+                        result_size: None,
+                        rows_returned: None,
+                        execution_strategy: None,
+                    },
+                );
+            }
             Ok(State::Done) => {
                 // The connection closed gracefully without sending us a `CopyDone`,
                 // causing us to just drop the copy request.
@@ -2531,11 +2982,7 @@ where
                     },
                 );
             }
-            other => {
-                tracing::warn!(?other, "aborting COPY FROM");
-                self.adapter_client
-                    .retire_execute(ctx_extra, StatementEndedExecutionReason::Aborted);
-            }
+            Ok(State::Drain) => {}
         }
         res
     }
@@ -2545,7 +2992,7 @@ where
         target_id: CatalogItemId,
         target_name: String,
         columns: Vec<ColumnIndex>,
-        params: CopyFormatParams<'_>,
+        params: CopyFormatParams<'static>,
         row_desc: RelationDesc,
         ctx_extra: &mut ExecuteContextGuard,
     ) -> Result<State, io::Error> {
@@ -2558,38 +3005,140 @@ where
         .await?;
         self.conn.flush().await?;
 
-        let system_vars = self.adapter_client.get_system_vars().await;
-        let max_size = system_vars
-            .get(MAX_COPY_FROM_SIZE.name())
-            .ok()
-            .and_then(|max_size| max_size.value().parse().ok())
+        // Set up the parallel streaming batch builders in the coordinator.
+        let writer = match self
+            .adapter_client
+            .start_copy_from_stdin(
+                target_id,
+                target_name.clone(),
+                columns.clone(),
+                row_desc.clone(),
+                params.clone(),
+            )
+            .await
+        {
+            Ok(writer) => writer,
+            Err(e) => {
+                // Drain remaining CopyData/CopyDone/CopyFail messages from the
+                // socket. Since CopyInResponse was already sent, the client may
+                // have pipelined copy data that we must consume before returning
+                // the error, otherwise they'd be misinterpreted as top-level
+                // protocol messages and cause a deadlock.
+                loop {
+                    match self.conn.recv().await? {
+                        Some(FrontendMessage::CopyData(_)) => {}
+                        Some(FrontendMessage::CopyDone) | Some(FrontendMessage::CopyFail(_)) => {
+                            break;
+                        }
+                        Some(FrontendMessage::Flush) | Some(FrontendMessage::Sync) => {}
+                        Some(_) => break,
+                        None => return Ok(State::Done),
+                    }
+                }
+                self.adapter_client.retire_execute(
+                    std::mem::take(ctx_extra),
+                    StatementEndedExecutionReason::Errored {
+                        error: e.to_string(),
+                    },
+                );
+                return self
+                    .send_error_and_get_state(e.into_response(Severity::Error))
+                    .await;
+            }
+        };
+
+        // Batch size for splitting raw data across parallel workers (~32MB).
+        const BATCH_SIZE: usize = 32 * 1024 * 1024;
+        let max_copy_from_row_size = self
+            .adapter_client
+            .get_system_vars()
+            .await
+            .max_copy_from_row_size()
+            .try_into()
             .unwrap_or(usize::MAX);
-        tracing::debug!("COPY FROM max buffer size: {max_size} bytes");
 
         let mut data = Vec::new();
+        let mut row_scanner = CopyRowScanner::new(&params);
+        let num_workers = writer.batch_txs.len();
+        let mut next_worker: usize = 0;
+        let mut saw_copy_done = false;
+        let mut saw_end_marker = false;
+        let mut copy_from_error: Option<(SqlState, String)> = None;
+
+        // Receive loop: accumulate CopyData, split at row boundaries,
+        // round-robin raw chunks to parallel batch builder workers.
         loop {
             let message = self.conn.recv().await?;
             match message {
                 Some(FrontendMessage::CopyData(buf)) => {
-                    // Bail before we OOM.
-                    if (data.len() + buf.len()) > max_size {
-                        return self
-                            .error(ErrorResponse::error(
-                                SqlState::INSUFFICIENT_RESOURCES,
-                                "COPY FROM STDIN too large",
-                            ))
-                            .await;
+                    if saw_end_marker {
+                        // Per PostgreSQL COPY behavior, ignore all bytes after
+                        // the end-of-copy marker until CopyDone.
+                        continue;
                     }
-                    data.extend(buf)
+                    data.extend(buf);
+                    row_scanner.scan_new_bytes(&data);
+
+                    if let Some(end_pos) = row_scanner.end_marker_end() {
+                        data.truncate(end_pos);
+                        row_scanner.on_truncate(end_pos);
+                        saw_end_marker = true;
+                    }
+
+                    // Guard against pathological single rows that never terminate.
+                    if row_scanner.current_row_size(data.len()) > max_copy_from_row_size {
+                        copy_from_error = Some((
+                            SqlState::INSUFFICIENT_RESOURCES,
+                            format!(
+                                "COPY FROM STDIN row exceeded max_copy_from_row_size \
+                                 ({max_copy_from_row_size} bytes)"
+                            ),
+                        ));
+                        break;
+                    }
+
+                    // When buffer exceeds batch size, split at the last complete row
+                    // and send the complete rows chunk to the next worker.
+                    let mut send_failed = false;
+                    while data.len() >= BATCH_SIZE {
+                        let split_pos = match row_scanner.last_row_end() {
+                            Some(pos) => pos,
+                            None => break, // no complete row yet
+                        };
+                        let remainder = data.split_off(split_pos);
+                        let chunk = std::mem::replace(&mut data, remainder);
+                        row_scanner.on_split(split_pos);
+                        if writer.batch_txs[next_worker].send(chunk).await.is_err() {
+                            send_failed = true;
+                            break;
+                        }
+                        next_worker = (next_worker + 1) % num_workers;
+                    }
+                    // Worker dropped (likely errored) — stop sending,
+                    // fall through to completion_rx for the real error.
+                    if send_failed {
+                        break;
+                    }
                 }
-                Some(FrontendMessage::CopyDone) => break,
+                Some(FrontendMessage::CopyDone) => {
+                    // Send any remaining data to the next worker.
+                    if !data.is_empty() {
+                        let chunk = std::mem::take(&mut data);
+                        // Ignore send failure — completion_rx will have the error.
+                        let _ = writer.batch_txs[next_worker].send(chunk).await;
+                    }
+                    saw_copy_done = true;
+                    break;
+                }
                 Some(FrontendMessage::CopyFail(err)) => {
                     self.adapter_client.retire_execute(
                         std::mem::take(ctx_extra),
                         StatementEndedExecutionReason::Canceled,
                     );
+                    // Drop the writer to signal cancellation to the background tasks.
+                    drop(writer);
                     return self
-                        .error(ErrorResponse::error(
+                        .send_error_and_get_state(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
                             format!("COPY from stdin failed: {}", err),
                         ))
@@ -2604,26 +3153,77 @@ where
                             error: msg.to_string(),
                         },
                     );
+                    drop(writer);
                     return self
-                        .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::PROTOCOL_VIOLATION,
+                            msg,
+                        ))
                         .await;
                 }
                 None => {
+                    drop(writer);
                     return Ok(State::Done);
                 }
             }
         }
 
-        let column_types = typ
-            .column_types
-            .iter()
-            .map(|x| &x.scalar_type)
-            .map(mz_pgrepr::Type::from)
-            .collect::<Vec<mz_pgrepr::Type>>();
+        // If we exited the receive loop before seeing `CopyDone` (e.g. because
+        // a worker failed and dropped its channel), keep draining COPY input to
+        // avoid desynchronizing the protocol state machine.
+        if !saw_copy_done {
+            loop {
+                match self.conn.recv().await? {
+                    Some(FrontendMessage::CopyData(_)) => {}
+                    Some(FrontendMessage::CopyDone) | Some(FrontendMessage::CopyFail(_)) => {
+                        break;
+                    }
+                    Some(FrontendMessage::Flush) | Some(FrontendMessage::Sync) => {}
+                    Some(_) => {
+                        let msg = "unexpected message type during COPY from stdin";
+                        self.adapter_client.retire_execute(
+                            std::mem::take(ctx_extra),
+                            StatementEndedExecutionReason::Errored {
+                                error: msg.to_string(),
+                            },
+                        );
+                        drop(writer);
+                        return self
+                            .send_error_and_get_state(ErrorResponse::error(
+                                SqlState::PROTOCOL_VIOLATION,
+                                msg,
+                            ))
+                            .await;
+                    }
+                    None => {
+                        drop(writer);
+                        return Ok(State::Done);
+                    }
+                }
+            }
+        }
 
-        let rows = match mz_pgcopy::decode_copy_format(&data, &column_types, params) {
-            Ok(rows) => rows,
-            Err(e) => {
+        if let Some((code, msg)) = copy_from_error {
+            self.adapter_client.retire_execute(
+                std::mem::take(ctx_extra),
+                StatementEndedExecutionReason::Errored { error: msg.clone() },
+            );
+            drop(writer);
+            return self
+                .send_error_and_get_state(ErrorResponse::error(code, msg))
+                .await;
+        }
+
+        // Drop all senders to signal EOF to the background batch builders.
+        // If copy_err is set, a worker already failed — dropping the senders
+        // will cause remaining workers to stop, and we'll get the real error
+        // from completion_rx below.
+        drop(writer.batch_txs);
+
+        // Wait for all parallel workers to finish building batches.
+        let (proto_batches, row_count) = match writer.completion_rx.await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
                 self.adapter_client.retire_execute(
                     std::mem::take(ctx_extra),
                     StatementEndedExecutionReason::Errored {
@@ -2631,26 +3231,27 @@ where
                     },
                 );
                 return self
-                    .error(ErrorResponse::error(
-                        SqlState::BAD_COPY_FILE_FORMAT,
-                        format!("{}", e),
-                    ))
+                    .send_error_and_get_state(e.into_response(Severity::Error))
+                    .await;
+            }
+            Err(_) => {
+                let msg = "COPY FROM STDIN: background batch builder tasks dropped";
+                self.adapter_client.retire_execute(
+                    std::mem::take(ctx_extra),
+                    StatementEndedExecutionReason::Errored {
+                        error: msg.to_string(),
+                    },
+                );
+                return self
+                    .send_error_and_get_state(ErrorResponse::error(SqlState::INTERNAL_ERROR, msg))
                     .await;
             }
         };
 
-        let count = rows.len();
-
+        // Stage all batches in the session's transaction for atomic commit.
         if let Err(e) = self
             .adapter_client
-            .insert_rows(
-                target_id,
-                target_name,
-                columns,
-                rows,
-                std::mem::take(ctx_extra),
-            )
-            .await
+            .stage_copy_from_stdin_batches(target_id, proto_batches)
         {
             self.adapter_client.retire_execute(
                 std::mem::take(ctx_extra),
@@ -2658,10 +3259,12 @@ where
                     error: e.to_string(),
                 },
             );
-            return self.error(e.into_response(Severity::Error)).await;
+            return self
+                .send_error_and_get_state(e.into_response(Severity::Error))
+                .await;
         }
 
-        let tag = format!("COPY {}", count);
+        let tag = format!("COPY {}", row_count);
         self.send(BackendMessage::CommandComplete { tag }).await?;
 
         Ok(State::Ready)
@@ -2680,7 +3283,7 @@ where
     }
 
     #[instrument(level = "debug")]
-    async fn error(&mut self, err: ErrorResponse) -> Result<State, io::Error> {
+    async fn send_error_and_get_state(&mut self, err: ErrorResponse) -> Result<State, io::Error> {
         assert!(err.severity.is_error());
         debug!(
             "cid={} error code={}",
@@ -2796,6 +3399,23 @@ fn fetch_message(
     BackendMessage::CommandComplete { tag }
 }
 
+fn get_authenticator(
+    authenticator_kind: listeners::AuthenticatorKind,
+    frontegg: Option<FronteggAuthenticator>,
+    oidc: GenericOidcAuthenticator,
+    adapter_client: mz_adapter::Client,
+) -> Authenticator {
+    match authenticator_kind {
+        listeners::AuthenticatorKind::Frontegg => Authenticator::Frontegg(frontegg.expect(
+            "Frontegg authenticator should exist with listeners::AuthenticatorKind::Frontegg",
+        )),
+        listeners::AuthenticatorKind::Password => Authenticator::Password(adapter_client),
+        listeners::AuthenticatorKind::Sasl => Authenticator::Sasl(adapter_client),
+        listeners::AuthenticatorKind::Oidc => Authenticator::Oidc(oidc),
+        listeners::AuthenticatorKind::None => Authenticator::None,
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 enum ExecuteCount {
     All,
@@ -2815,13 +3435,286 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
 enum FetchResult {
     Rows(Option<Box<dyn RowIterator + Send + Sync>>),
     Canceled,
-    Error(String),
+    Error(ErrorResponse),
     Notice(AdapterNotice),
+}
+
+#[derive(Debug)]
+struct CopyRowScanner {
+    scan_pos: usize,
+    last_row_end: Option<usize>,
+    end_marker_end: Option<usize>,
+    // Byte offset within `data` at which the in-progress CSV record begins.
+    // Used to verify the end-of-copy marker against the raw input bytes,
+    // distinguishing a literal `\.` line from a quoted CSV value `"\."`
+    // whose decoded form is also `\.`.
+    record_start: usize,
+    csv: Option<CsvScanState>,
+}
+
+#[derive(Debug)]
+struct CsvScanState {
+    reader: csv_core::Reader,
+    output: Vec<u8>,
+    ends: Vec<usize>,
+    skip_first_record: bool,
+}
+
+impl CopyRowScanner {
+    fn new(params: &CopyFormatParams<'_>) -> Self {
+        let csv = match params {
+            CopyFormatParams::Csv(CopyCsvFormatParams {
+                delimiter,
+                quote,
+                escape,
+                header,
+                ..
+            }) => Some(CsvScanState::new(*delimiter, *quote, *escape, *header)),
+            _ => None,
+        };
+
+        CopyRowScanner {
+            scan_pos: 0,
+            last_row_end: None,
+            end_marker_end: None,
+            record_start: 0,
+            csv,
+        }
+    }
+
+    fn scan_new_bytes(&mut self, data: &[u8]) {
+        if self.scan_pos >= data.len() {
+            return;
+        }
+
+        if let Some(csv) = self.csv.as_mut() {
+            let mut input = &data[self.scan_pos..];
+            let mut consumed = 0usize;
+            while !input.is_empty() {
+                let (result, n_input, _n_output, _n_ends) =
+                    csv.reader
+                        .read_record(input, &mut csv.output, &mut csv.ends);
+                consumed += n_input;
+                input = &input[n_input..];
+
+                match result {
+                    ReadRecordResult::InputEmpty => break,
+                    ReadRecordResult::OutputFull => {
+                        if n_input == 0 {
+                            csv.output
+                                .resize(csv.output.len().saturating_mul(2).max(1), 0);
+                        }
+                    }
+                    ReadRecordResult::OutputEndsFull => {
+                        if n_input == 0 {
+                            csv.ends.resize(csv.ends.len().saturating_mul(2).max(1), 0);
+                        }
+                    }
+                    ReadRecordResult::Record | ReadRecordResult::End => {
+                        let row_end = self.scan_pos + consumed;
+                        self.last_row_end = Some(row_end);
+                        if self.end_marker_end.is_none() {
+                            let is_marker = if csv.skip_first_record {
+                                csv.skip_first_record = false;
+                                false
+                            } else {
+                                // Detect the marker against the raw input
+                                // bytes, not the CSV-decoded record. A quoted
+                                // data row `"\."` decodes to `\.` but must be
+                                // imported as data; only a bare `\.` line
+                                // terminates the COPY.
+                                let raw = &data[self.record_start..row_end];
+                                // csv-core ends a CRLF record after the `\r`,
+                                // leaving the trailing `\n` as the leading byte
+                                // of the next record's span; a CR-only record
+                                // ends in a lone `\r`. So a `\.` marker record's
+                                // raw span can be `\.\n` (LF), `\n\.\r` (CRLF)
+                                // or `\.\r` (CR). Trim CR/LF from both ends
+                                // before comparing — a trailing-only strip would
+                                // miss the CRLF/CR forms. Quoted `"\."` data
+                                // keeps its surrounding quotes after trimming and
+                                // is therefore correctly rejected.
+                                let start = raw
+                                    .iter()
+                                    .take_while(|&&b| b == b'\r' || b == b'\n')
+                                    .count();
+                                let trailing = raw[start..]
+                                    .iter()
+                                    .rev()
+                                    .take_while(|&&b| b == b'\r' || b == b'\n')
+                                    .count();
+                                let trimmed = &raw[start..raw.len() - trailing];
+                                trimmed == b"\\."
+                            };
+                            if is_marker {
+                                self.end_marker_end = Some(row_end);
+                                self.record_start = row_end;
+                                break;
+                            }
+                        }
+                        self.record_start = row_end;
+                    }
+                }
+            }
+        } else {
+            let mut row_start = self.last_row_end.unwrap_or(0);
+            for (offset, b) in data[self.scan_pos..].iter().enumerate() {
+                if *b == b'\n' {
+                    let row_end = self.scan_pos + offset + 1;
+                    self.last_row_end = Some(row_end);
+                    if self.end_marker_end.is_none() {
+                        let row = &data[row_start..row_end];
+                        if row.get(0..2) == Some(b"\\.") {
+                            self.end_marker_end = Some(row_end);
+                            break;
+                        }
+                    }
+                    row_start = row_end;
+                }
+            }
+        }
+
+        self.scan_pos = data.len();
+    }
+
+    fn last_row_end(&self) -> Option<usize> {
+        self.last_row_end
+    }
+
+    fn end_marker_end(&self) -> Option<usize> {
+        self.end_marker_end
+    }
+
+    fn current_row_size(&self, data_len: usize) -> usize {
+        data_len.saturating_sub(self.last_row_end.unwrap_or(0))
+    }
+
+    fn on_split(&mut self, split_pos: usize) {
+        self.scan_pos = self.scan_pos.saturating_sub(split_pos);
+        self.last_row_end = None;
+        self.end_marker_end = self
+            .end_marker_end
+            .and_then(|end| end.checked_sub(split_pos));
+        // `record_start` is only maintained for the CSV path; the text and
+        // binary paths leave it at 0. For CSV, splits always occur at a
+        // completed-row boundary, so the in-progress record (if any) starts at
+        // the new beginning of the buffer. Assert that invariant so the
+        // `saturating_sub` below doesn't silently paper over a bug that
+        // bisected an in-progress record — but only when CSV is in use, since
+        // otherwise `record_start` is meaninglessly 0.
+        soft_assert_or_log!(
+            self.csv.is_none() || self.record_start >= split_pos,
+            "split bisected an in-progress CSV record: record_start={} < split_pos={}",
+            self.record_start,
+            split_pos,
+        );
+        self.record_start = self.record_start.saturating_sub(split_pos);
+    }
+
+    fn on_truncate(&mut self, new_len: usize) {
+        self.scan_pos = self.scan_pos.min(new_len);
+        self.last_row_end = self.last_row_end.filter(|&end| end <= new_len);
+        self.end_marker_end = self.end_marker_end.filter(|&end| end <= new_len);
+        self.record_start = self.record_start.min(new_len);
+    }
+}
+
+impl CsvScanState {
+    fn new(delimiter: u8, quote: u8, escape: u8, header: bool) -> Self {
+        let (double_quote, escape) = if quote == escape {
+            (true, None)
+        } else {
+            (false, Some(escape))
+        };
+        CsvScanState {
+            reader: csv_core::ReaderBuilder::new()
+                .delimiter(delimiter)
+                .quote(quote)
+                .double_quote(double_quote)
+                .escape(escape)
+                .build(),
+            output: vec![0; 1],
+            ends: vec![0; 1],
+            skip_first_record: header,
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[mz_ore::test]
+    fn test_copy_row_scanner_end_marker_line_endings() {
+        // The pgwire COPY row scanner must detect a bare `\.` end-of-copy
+        // marker for every line ending, and must never mistake a quoted
+        // `"\."` data row for it. csv-core ends a CRLF record after the `\r`
+        // (leaving the `\n` as the next record's leading byte), so the raw
+        // record span of a `\.` marker is `\.\n` (LF), `\n\.\r` (CRLF) or
+        // `\.\r` (CR); a trailing-only strip would miss the CRLF/CR forms and
+        // silently import post-marker rows.
+        let params = CopyFormatParams::Csv(CopyCsvFormatParams::default());
+
+        let marker_end = |data: &[u8]| -> Option<usize> {
+            let mut scanner = CopyRowScanner::new(&params);
+            scanner.scan_new_bytes(data);
+            scanner.end_marker_end()
+        };
+
+        for eol in [&b"\n"[..], b"\r\n", b"\r"] {
+            let join = |lines: &[&str]| -> Vec<u8> {
+                let mut out = Vec::new();
+                for line in lines {
+                    out.extend_from_slice(line.as_bytes());
+                    out.extend_from_slice(eol);
+                }
+                out
+            };
+
+            // Bare `\.` (the marker is the second record, so record_start has
+            // already advanced past the orphaned terminator of `first`).
+            // csv-core reports the record after a single terminator byte, so
+            // the marker boundary sits just past `first<eol>\.` + one byte.
+            let data = join(&["first", "\\.", "after"]);
+            let mut prefix = Vec::new();
+            prefix.extend_from_slice(b"first");
+            prefix.extend_from_slice(eol);
+            prefix.extend_from_slice(b"\\.");
+            assert_eq!(
+                marker_end(&data),
+                Some(prefix.len() + 1),
+                "bare marker, eol={eol:?}"
+            );
+
+            // Quoted "\." is data, not the marker.
+            let data = join(&["before", "\"\\.\"", "after"]);
+            assert_eq!(marker_end(&data), None, "quoted marker, eol={eol:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_copy_row_scanner_non_csv_split() {
+        // Regression: `record_start` is only maintained for the CSV path; the
+        // text and binary paths leave it at 0. `on_split` must therefore not
+        // assert `record_start >= split_pos` for those formats — that fires on
+        // every split of a large text/binary COPY stream (soft-assertions
+        // panic under test). Mirrors `COPY ... FROM STDIN` (default text
+        // format) splitting at a row boundary once the buffer fills.
+        for params in [
+            CopyFormatParams::Text(CopyTextFormatParams::default()),
+            CopyFormatParams::Binary,
+        ] {
+            let mut scanner = CopyRowScanner::new(&params);
+            let data = b"1\thello world\t2\tsome text value here\n\
+                         3\thello world\t6\tsome text value here\n";
+            scanner.scan_new_bytes(data);
+            let split_pos = scanner.last_row_end().expect("a complete row");
+            assert!(split_pos > 0, "params={params:?}");
+            // Must not panic via the CSV-only `on_split` soft-assert.
+            scanner.on_split(split_pos);
+            assert_eq!(scanner.record_start, 0, "params={params:?}");
+        }
+    }
 
     #[mz_ore::test]
     fn test_parse_options() {
@@ -2995,6 +3888,23 @@ mod test {
         for test in tests {
             let got = split_options(test.input);
             assert_eq!(got, test.expect, "input: {}", test.input);
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_is_jwt() {
+        // A real JWT header decodes successfully.
+        assert!(is_jwt("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature"));
+        // Not JWTs: plain strings, wrong segment count, non-JSON headers.
+        for s in [
+            "",
+            "secure_password",
+            "p4ss.w0rd",
+            "aaa.bbb.ccc",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig.extra",
+        ] {
+            assert!(!is_jwt(s), "is_jwt({s:?})");
         }
     }
 }

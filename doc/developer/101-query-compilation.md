@@ -10,6 +10,22 @@
 
 ## Current Compiler Pipeline
 
+```mermaid
+%%{init: {"flowchart": {"defaultRenderer": "elk"} } }%%
+flowchart LR
+    SQL@{ shape: doc, label="SQL" } --> IR
+    IR --> dataflow@{ shape: docs }
+
+    subgraph IR["intermediate languages"]
+      direction LR
+      HIR@{ shape: doc } --> MIR@{ shape: docs } --> LIR@{ shape: docs }
+      MIR -. optimizations .-> MIR
+    end
+
+    classDef purple fill:#472F85
+    class SQL,HIR,MIR,LIR,dataflow purple
+```
+
 Representations:
 
 * `SQL` — source language
@@ -108,8 +124,7 @@ Currently, the optimization team is mostly concerned with the `HIR ⇒ MIR` and 
     * [Unit tests in the mz-expr](https://github.com/MaterializeInc/materialize/tree/main/src/expr/tests) crate currently allow:
         * Testing the simplifying MirScalarExpr, predicates, join equivalences.
         * Testing MapFilterProject.
-    * [There is a DSL to specifying arbitrary MIRs.](https://github.com/MaterializeInc/materialize/tree/main/src/expr-test-util)
-    * [DSL to specify arbitrary enums and structs.](https://github.com/MaterializeInc/materialize/tree/main/src/lowertest)
+    * [There is a parser and printer for specifying arbitrary MIRs.](https://github.com/MaterializeInc/materialize/tree/main/src/expr-parser)
 
 ### Performance tests
 

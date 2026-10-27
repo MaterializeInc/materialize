@@ -28,8 +28,7 @@ from materialize.mzcompose.services.testdrive import Testdrive
 
 COLLECTION_INTERVAL_SECS = 5
 
-PG_CDC_SETUP = dedent(
-    """
+PG_CDC_SETUP = dedent("""
     > CREATE SECRET pgpass AS 'postgres'
     > CREATE CONNECTION pg TO POSTGRES (
         HOST postgres,
@@ -45,11 +44,9 @@ PG_CDC_SETUP = dedent(
 
     DROP PUBLICATION IF EXISTS mz_source;
     CREATE PUBLICATION mz_source FOR ALL TABLES;
-    """
-)
+    """)
 
-KAFKA_SETUP = dedent(
-    """
+KAFKA_SETUP = dedent("""
 
     > CREATE CONNECTION IF NOT EXISTS kafka_conn
       TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
@@ -60,8 +57,7 @@ KAFKA_SETUP = dedent(
 
     $ set key-schema={"type": "string"}
     $ set value-schema={"type": "record", "name": "r", "fields": [{"name": "a", "type": "string"}]}
-    """
-)
+    """)
 
 SERVICES = [
     Redpanda(),
@@ -86,23 +82,19 @@ class DatabaseObject:
 database_objects = [
     DatabaseObject(
         name="table_insert_unique_rows",
-        testdrive=dedent(
-            """
+        testdrive=dedent("""
             > CREATE TABLE obj (f1 TEXT)
             > INSERT INTO obj SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
-            """
-        ),
+            """),
         expected_size=1024 * 1024,
     ),
     # Identical rows should cause a diff > 1 and not be stored individually
     DatabaseObject(
         name="table_insert_identical_rows",
-        testdrive=dedent(
-            """
+        testdrive=dedent("""
             > CREATE TABLE obj (f1 TEXT)
             > INSERT INTO obj SELECT REPEAT('x', 1024 * 1024) FROM generate_series(1, 1024)
-            """
-        ),
+            """),
         expected_size=1024 * 1024,
     ),
     # Deleted/updated rows should be garbage-collected
@@ -151,11 +143,9 @@ database_objects = [
     # ),
     DatabaseObject(
         name="materialized_view_constant",
-        testdrive=dedent(
-            """
+        testdrive=dedent("""
             > CREATE MATERIALIZED VIEW obj AS SELECT generate_series::text , REPEAT('x', 1024) FROM generate_series(1, 1024)
-            """
-        ),
+            """),
         # Dictionary encoding in Persist greatly reduces the size of repeated characters.
         expected_size=1024 * 10,
     ),
@@ -163,22 +153,18 @@ database_objects = [
     # it should not require storage proportional to its input
     DatabaseObject(
         name="materialized_view_small_output",
-        testdrive=dedent(
-            """
+        testdrive=dedent("""
             > CREATE TABLE t1 (f1 TEXT)
             > INSERT INTO t1 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024)
 
             > CREATE MATERIALIZED VIEW obj AS SELECT COUNT(*) FROM t1;
-            """
-        ),
+            """),
         expected_size=4 * 1024,
     ),
     # The pg-cdc source is expected to be empty. The data is in the sub-source
     DatabaseObject(
         name="pg_cdc_source",
-        testdrive=PG_CDC_SETUP
-        + dedent(
-            """
+        testdrive=PG_CDC_SETUP + dedent("""
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             CREATE TABLE pg_table (f1 TEXT);
             INSERT INTO pg_table SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024);
@@ -186,17 +172,14 @@ database_objects = [
 
             > CREATE SOURCE obj
               FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR TABLES (pg_table);
-            """
-        ),
+            """),
         expected_size=4 * 1024,
     ),
     # The pg-cdc data is expected to be in the sub-source,
     # unaffected by the presence of other tables
     DatabaseObject(
         name="pg_cdc_subsource",
-        testdrive=PG_CDC_SETUP
-        + dedent(
-            """
+        testdrive=PG_CDC_SETUP + dedent("""
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             CREATE TABLE pg_table1 (f1 TEXT);
             INSERT INTO pg_table1 SELECT generate_series::text || REPEAT('x', 1024) FROM generate_series(1, 1024);
@@ -216,8 +199,7 @@ database_objects = [
 
             > SELECT COUNT(*) FROM obj;
             1024
-            """
-        ),
+            """),
         expected_size=1024 * 1024,
     ),
 ]
@@ -247,16 +229,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         print(f"Running scenario {database_object.name} ...")
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                 DROP SCHEMA IF EXISTS public CASCADE;
                 CREATE SCHEMA public;
                 GRANT ALL PRIVILEGES ON SCHEMA public TO materialize;
-                """
-            )
-        )
+                """))
 
         c.testdrive(database_object.testdrive)
 
@@ -266,9 +244,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         time.sleep(COLLECTION_INTERVAL_SECS + 1)
 
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 $ set-regex match=\\d+ replacement=<SIZE>
 
                 # Select the raw size as well, so if this errors in testdrive, its easier to debug.
@@ -282,6 +258,4 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                   FROM mz_recent_storage_usage
                   WHERE object_id = ( SELECT id FROM mz_objects WHERE name = 'obj' );
                 <SIZE> true
-                """
-            )
-        )
+                """))

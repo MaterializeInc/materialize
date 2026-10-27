@@ -1,0 +1,37 @@
+# Fuzz crate for mz-persist-client: decode the durable consensus/blob state.
+# `ProtoRollup` (a full state snapshot) and `ProtoStateDiff` (an incremental
+# update) are decoded on every state load. A corrupted or crafted blob that
+# panics the decoder poisons the shard, so decode must never panic and valid
+# values must survive a proto re-encode round trip.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-persist-client-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-persist-client = { path = "..", features = ["fuzzing"] }
+mz-proto = { path = "../../proto" }
+prost = "0.14.3"
+
+[[bin]]
+name = "state_diff_proto_roundtrip"
+path = "fuzz_targets/state_diff_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rollup_proto_roundtrip"
+path = "fuzz_targets/rollup_proto_roundtrip.rs"
+test = false
+doc = false
+bench = false

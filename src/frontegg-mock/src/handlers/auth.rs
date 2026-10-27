@@ -9,9 +9,12 @@
 
 use crate::models::*;
 use crate::server::Context;
-use crate::utils::{RefreshTokenTarget, generate_access_token, generate_refresh_token};
+use crate::utils::{
+    RefreshTokenTarget, generate_access_token, generate_refresh_token, get_user_groups,
+};
 use axum::{Json, extract::State, http::StatusCode};
 use mz_frontegg_auth::{ApiTokenResponse, ClaimTokenType};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -35,6 +38,7 @@ pub async fn handle_post_auth_api_token(
             let user = users
                 .get(email)
                 .expect("API tokens are only created by logged in valid users.");
+            let groups = get_user_groups(&context, &user.id);
             generate_access_token(
                 &context,
                 ClaimTokenType::UserApiToken,
@@ -43,6 +47,7 @@ pub async fn handle_post_auth_api_token(
                 Some(user.id),
                 user.tenant_id,
                 user.roles.clone(),
+                groups,
                 None,
             )
         }
@@ -59,6 +64,7 @@ pub async fn handle_post_auth_api_token(
                     None,
                     config.tenant_id,
                     config.roles.clone(),
+                    Vec::new(),
                     config.metadata.clone(),
                 ),
                 None => return Err(StatusCode::UNAUTHORIZED),
@@ -89,6 +95,7 @@ pub async fn handle_post_auth_user(
         Some(user) if request.password == user.password => user.to_owned(),
         _ => return Err(StatusCode::UNAUTHORIZED),
     };
+    let groups = get_user_groups(&context, &user.id);
     let access_token = generate_access_token(
         &context,
         ClaimTokenType::UserToken,
@@ -97,6 +104,7 @@ pub async fn handle_post_auth_user(
         Some(user.id),
         user.tenant_id,
         user.roles.clone(),
+        groups,
         None,
     );
     let refresh_token = generate_refresh_token(&context, RefreshTokenTarget::User(request));
@@ -136,4 +144,48 @@ pub async fn handle_post_token_refresh(
             handle_post_auth_api_token(State(context), Json(request)).await
         }
     }
+}
+
+/// Request body for vendor authentication.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VendorAuthRequest {
+    pub client_id: String,
+    pub secret: String,
+}
+
+/// Response body for vendor authentication.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VendorAuthResponse {
+    pub token: String,
+    pub expires_in: i64,
+}
+
+/// Handle POST /auth/vendor
+/// Authenticates a vendor SDK client and returns a JWT token.
+pub async fn handle_post_auth_vendor(
+    State(context): State<Arc<Context>>,
+    Json(_request): Json<VendorAuthRequest>,
+) -> Result<Json<VendorAuthResponse>, StatusCode> {
+    // For the mock, we accept any client_id/secret and return a valid token.
+    // In production, this would validate the credentials.
+    let now_secs = context.now.as_secs();
+    let exp_secs = now_secs + context.expires_in_secs;
+    let token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &serde_json::json!({
+            "sub": "vendor",
+            "iss": context.issuer,
+            "iat": now_secs,
+            "exp": exp_secs,
+        }),
+        &context.encoding_key,
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(VendorAuthResponse {
+        token,
+        expires_in: context.expires_in_secs,
+    }))
 }

@@ -1,0 +1,88 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+{{- if and .Values.operator.args.installV1CRD (eq .Values.operator.certificate.source "cert-manager") -}}
+# We provision the webhook serving certificate from a stable root CA rather
+# than as a bare self-signed certificate. The serving certificate rotates
+# frequently, but it is always signed by the same long-lived CA, so the
+# `ca.crt` that orchestratord registers as the conversion webhook's caBundle
+# stays valid across serving-certificate rotations. orchestratord refreshes the
+# caBundle if the CA itself ever changes, e.g. on the rare root CA renewal, so a
+# routine serving-certificate rotation leaves the webhook undisturbed.
+---
+# Bootstrap issuer used only to sign the root CA below.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "materialize-operator.fullname" . }}-self-signed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "materialize-operator.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+
+---
+# Long-lived root CA. Stays stable across serving-certificate rotations so the
+# conversion webhook's caBundle remains valid without changing every rotation.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "materialize-operator.fullname" . }}-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "materialize-operator.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: {{ include "materialize-operator.fullname" . }}-ca
+  secretName: {{ include "materialize-operator.fullname" . }}-ca
+  duration: {{ .Values.operator.certificate.caDuration }}
+  renewBefore: {{ .Values.operator.certificate.caRenewBefore }}
+  privateKey:
+    algorithm: ECDSA
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ include "materialize-operator.fullname" . }}-self-signed
+    kind: Issuer
+    group: cert-manager.io
+
+---
+# CA issuer that signs the serving certificate using the stable root CA.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "materialize-operator.fullname" . }}-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "materialize-operator.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "materialize-operator.fullname" . }}-ca
+
+---
+# Webhook serving certificate. Rotates frequently; its `ca.crt` is the stable
+# root CA above.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "materialize-operator.fullname" . }}-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "materialize-operator.labels" . | nindent 4 }}
+spec:
+  dnsNames:
+    - {{ include "materialize-operator.fullname" . }}.{{ .Release.Namespace }}.svc
+  secretName: {{ include "materialize-operator.fullname" . }}-cert
+  privateKey:
+    algorithm: ECDSA
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ include "materialize-operator.fullname" . }}-ca
+    kind: Issuer
+    group: cert-manager.io
+{{- end -}}

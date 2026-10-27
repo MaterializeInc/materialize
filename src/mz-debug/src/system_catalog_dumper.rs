@@ -21,6 +21,7 @@
 use anyhow::{Context as _, Result};
 use csv_async::AsyncSerializer;
 use futures::TryStreamExt;
+use mz_postgres_util::{Sql, execute, query, sql};
 use mz_tls_util::make_tls;
 use std::fmt;
 use std::path::PathBuf;
@@ -40,6 +41,23 @@ use mz_ore::task::{self, JoinHandle};
 use postgres_openssl::{MakeTlsConnector, TlsStream};
 use tracing::{info, warn};
 
+async fn execute_sql(
+    transaction: &Transaction<'_>,
+    query: Sql,
+) -> Result<u64, mz_postgres_util::PostgresError> {
+    execute(transaction, query, &[]).await
+}
+
+async fn simple_query_sql(
+    transaction: &Transaction<'_>,
+    query: Sql,
+) -> Result<Vec<SimpleQueryMessage>, tokio_postgres::Error> {
+    // `simple_query` is only available on concrete driver types and is required
+    // here to avoid statement preparation for cursor `FETCH` in subscribe flows.
+    #[allow(clippy::disallowed_methods)]
+    transaction.simple_query(query.as_str()).await
+}
+
 #[derive(Debug, Clone)]
 pub enum RelationCategory {
     /// For relations that belong in the `mz_introspection` schema.
@@ -49,6 +67,8 @@ pub enum RelationCategory {
     Retained,
     /// Other relations that we want to do a SELECT * FROM on.
     Basic,
+    /// A custom query that doesn't map to a single relation.
+    Custom { sql: &'static str },
 }
 
 #[derive(Debug, Clone)]
@@ -349,14 +369,6 @@ static RELATIONS: &[Relation] = &[
         category: RelationCategory::Introspection,
     },
     Relation {
-        name: "mz_dataflow_shutdown_durations_histogram_per_worker",
-        category: RelationCategory::Introspection,
-    },
-    Relation {
-        name: "mz_dataflow_shutdown_durations_histogram",
-        category: RelationCategory::Introspection,
-    },
-    Relation {
         name: "mz_scheduling_elapsed_per_worker",
         category: RelationCategory::Introspection,
     },
@@ -438,6 +450,122 @@ static RELATIONS: &[Relation] = &[
         name: "mz_kafka_sinks",
         category: RelationCategory::Basic,
     },
+    // Custom queries
+    Relation {
+        name: "daily_replica_credit_usage",
+        category: RelationCategory::Custom {
+            sql: r#"
+-- Capture replica create and drop events from the audit log
+with replica_events as (
+    select
+        details ->> 'replica_id' as replica_id,
+        details ->> 'replica_name' as replica_name,
+        details ->> 'cluster_name' as cluster_name,
+        details ->> 'logical_size' as replica_size,
+        event_type,
+        occurred_at
+    from mz_catalog.mz_audit_events
+    where
+        object_type = 'cluster-replica'
+        and event_type in ('create', 'drop')
+        and details ->> 'replica_id' like 'u%'
+),
+
+-- Pair each replica creation with its corresponding drop to determine lifespan
+replica_lifespans as (
+    select
+        c.replica_id,
+        c.replica_name,
+        c.cluster_name,
+        c.replica_size,
+        c.occurred_at as created_at,
+        min(d.occurred_at) as dropped_at
+    from replica_events as c
+    left join replica_events as d
+        on  c.replica_id = d.replica_id
+        and d.event_type = 'drop'
+        and c.occurred_at < d.occurred_at
+    where c.event_type = 'create'
+    group by
+        c.replica_id,
+        c.replica_name,
+        c.cluster_name,
+        c.replica_size,
+        c.occurred_at
+),
+
+-- Break replica lifespans into per-day slices and compute seconds online per day
+daily_slices as (
+    select
+        l.replica_id,
+        l.replica_name,
+        l.cluster_name,
+        l.replica_size,
+        gs.day_start::date as usage_date,
+        greatest(
+            0::numeric,
+            extract(
+                epoch from
+                    least(coalesce(l.dropped_at, now()), gs.day_start + interval '1 day')
+                  - greatest(l.created_at, gs.day_start)
+            )::numeric
+        ) as seconds_online
+    from replica_lifespans as l
+    cross join lateral generate_series(
+        date_trunc('day', l.created_at),
+        date_trunc('day', coalesce(l.dropped_at, now())),
+        interval '1 day'
+    ) as gs(day_start)
+),
+
+-- Resolve replica heap limits from configured size definitions
+size_heap as (
+    select
+        size,
+        memory_bytes + disk_bytes as heap_limit
+    from mz_catalog.mz_cluster_replica_sizes
+    where disk_bytes is not null and disk_bytes > 0
+),
+
+-- Resolve replica heap limits from runtime metrics,
+-- since heap_limit is only discovered when the replica comes online.
+-- Prefer rows where heap_limit is known; discard rows without it
+-- rather than substituting usage metrics which are unrelated quantities.
+metrics_heap as (
+    select
+        replica_id,
+        sum(heap_limit) as heap_limit
+    from (
+        select distinct on (replica_id, process_id)
+            replica_id, process_id, heap_limit
+        from mz_internal.mz_cluster_replica_metrics_history
+        where heap_limit is not null
+        order by replica_id, process_id, occurred_at desc
+    ) t
+    group by replica_id
+)
+
+-- Aggregate daily usage, report daily footprint, and compute
+-- M.1 credit equivalency (53 GiB-hour = 1.5 credits), billed per second
+select
+    s.usage_date,
+    mz_environment_id() as env_id,
+
+    sum(coalesce(sh.heap_limit, mh.heap_limit)) as total_heap_limit,
+
+    sum(coalesce(sh.heap_limit, mh.heap_limit) * s.seconds_online)
+        / (53.0 * 1024 * 1024 * 1024 * 3600.0)
+        * 1.5
+        as credit_equivalency
+from daily_slices as s
+left join size_heap as sh on s.replica_size = sh.size
+left join metrics_heap as mh on s.replica_id = mh.replica_id
+where s.seconds_online > 0
+group by s.usage_date
+order by s.usage_date;
+"#,
+        },
+    },
 ];
 
 static PG_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -448,9 +576,6 @@ static PG_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
 /// The maximum number of errors we tolerate for a cluster replica.
 /// If a cluster replica has more than this many errors, we skip it.
 static MAX_CLUSTER_REPLICA_ERROR_COUNT: usize = 3;
-
-static SET_SEARCH_PATH_QUERY: &str = "SET search_path = mz_internal, mz_catalog, mz_introspection";
-static SELECT_CLUSTER_REPLICAS_QUERY: &str = "SELECT c.name as cluster_name, cr.name as replica_name FROM mz_clusters AS c JOIN mz_cluster_replicas AS cr ON c.id = cr.cluster_id;";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ClusterReplica {
@@ -529,12 +654,12 @@ pub async fn create_postgres_connection(
 
 pub async fn write_copy_stream(
     transaction: &Transaction<'_>,
-    copy_query: &str,
+    copy_query: &Sql,
     file: &mut tokio::fs::File,
     relation_name: &str,
 ) -> Result<(), anyhow::Error> {
     let copy_stream = transaction
-        .copy_out(copy_query)
+        .copy_out(copy_query.as_str())
         .await
         .context(format!("Failed to COPY TO for {}", relation_name))?
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
@@ -560,23 +685,25 @@ pub async fn copy_relation_to_csv(
             let mut writer = AsyncSerializer::from_writer(file);
             writer.serialize(column_names).await?;
 
-            transaction
-                .execute(
-                    &format!("DECLARE c CURSOR FOR SUBSCRIBE TO {}", relation.name),
-                    &[],
-                )
+            let declare_query = sql!(
+                "DECLARE c CURSOR FOR SUBSCRIBE TO {}",
+                Sql::ident(relation.name)
+            );
+            execute_sql(transaction, declare_query)
                 .await
                 .context("Failed to declare cursor")?;
 
             // We need to use simple_query, otherwise tokio-postgres will run an introspection SELECT query to figure out the types since it'll
             // try to prepare the query. This causes an error since SUBSCRIBEs and SELECT queries are not allowed to be executed in the same transaction.
             // Thus we use simple_query to avoid the introspection query.
-            let rows = transaction
+            let rows = simple_query_sql(
+                transaction,
                 // We use a timeout of '1' to receive the snapshot of the current state. A timeout of '0' will return no results.
                 // We also don't care if we get more than just the snapshot.
-                .simple_query("FETCH ALL FROM c WITH (TIMEOUT '1')")
-                .await
-                .context("Failed to fetch all from cursor")?;
+                sql!("FETCH ALL FROM c WITH (TIMEOUT '1')"),
+            )
+            .await
+            .context("Failed to fetch all from cursor")?;
 
             for row in rows {
                 if let SimpleQueryMessage::Row(row) = row {
@@ -591,9 +718,9 @@ pub async fn copy_relation_to_csv(
             // TODO (SangJunBak): Use `WITH (HEADER TRUE)` once database-issues#2846 is implemented.
             file.write_all((column_names.join(",") + "\n").as_bytes())
                 .await?;
-            let copy_query = format!(
+            let copy_query = sql!(
                 "COPY (SELECT * FROM {}) TO STDOUT WITH (FORMAT CSV)",
-                relation.name
+                Sql::ident(relation.name)
             );
             write_copy_stream(transaction, &copy_query, &mut file, relation.name).await?;
         }
@@ -609,8 +736,8 @@ pub async fn query_column_names(
 ) -> Result<Vec<String>, anyhow::Error> {
     let relation_name = relation.name;
     // We query the column names to write the header row of the CSV file.
-    let mut column_names = pg_client
-        .query(&format!("SHOW COLUMNS FROM {}", &relation_name), &[])
+    let show_columns_query = sql!("SHOW COLUMNS FROM {}", Sql::ident(relation_name));
+    let mut column_names = query(pg_client, show_columns_query, &[])
         .await
         .context(format!("Failed to get column names for {}", relation_name))?
         .into_iter()
@@ -643,24 +770,21 @@ pub async fn query_relation(
 
     // Some queries (i.e. mz_introspection relations) require the cluster and replica to be set.
     if let Some(cluster_replica) = &cluster_replica {
-        transaction
-            .execute(
-                &format!("SET LOCAL CLUSTER = '{}'", cluster_replica.cluster_name),
-                &[],
-            )
+        let cluster_query = sql!(
+            "SET LOCAL CLUSTER = {}",
+            Sql::literal(&cluster_replica.cluster_name)
+        );
+        execute_sql(transaction, cluster_query)
             .await
             .context(format!(
                 "Failed to set cluster to {}",
                 cluster_replica.cluster_name
             ))?;
-        transaction
-            .execute(
-                &format!(
-                    "SET LOCAL CLUSTER_REPLICA = '{}'",
-                    cluster_replica.replica_name
-                ),
-                &[],
-            )
+        let replica_query = sql!(
+            "SET LOCAL CLUSTER_REPLICA = {}",
+            Sql::literal(&cluster_replica.replica_name)
+        );
+        execute_sql(transaction, replica_query)
             .await
             .context(format!(
                 "Failed to set cluster replica to {}",
@@ -669,7 +793,7 @@ pub async fn query_relation(
     }
 
     match relation_category {
-        RelationCategory::Basic => {
+        RelationCategory::Basic | RelationCategory::Custom { .. } => {
             let file_path = format_file_path(base_path, None);
             let file_path_name = file_path.join(relation_name).with_extension("csv");
             tokio::fs::create_dir_all(&file_path).await?;
@@ -705,13 +829,26 @@ impl SystemCatalogDumper {
         let handle = task::spawn(|| "postgres-connection", pg_conn);
 
         // Set search path to system catalog tables
-        pg_client
-            .execute(SET_SEARCH_PATH_QUERY, &[])
-            .await
-            .context("Failed to set search path")?;
+        execute(
+            &pg_client,
+            sql!("SET search_path = mz_internal, mz_catalog, mz_introspection"),
+            &[],
+        )
+        .await
+        .context("Failed to set search path")?;
 
         // We need to get all cluster replicas to dump introspection relations.
-        let cluster_replicas = match pg_client.query(SELECT_CLUSTER_REPLICAS_QUERY, &[]).await {
+        let cluster_replicas = match query(
+            &pg_client,
+            sql!(
+                "SELECT c.name as cluster_name, cr.name as replica_name \
+                 FROM mz_clusters AS c \
+                 JOIN mz_cluster_replicas AS cr ON c.id = cr.cluster_id;"
+            ),
+            &[],
+        )
+        .await
+        {
             Ok(rows) => rows
                 .into_iter()
                 .map(|row| {
@@ -763,6 +900,26 @@ impl SystemCatalogDumper {
         let pg_client = &self.pg_client;
 
         let relation_name = relation.name.to_string();
+
+        // For custom queries, create a temporary view so the retry loop
+        // can treat them identically to basic relations.
+        if let RelationCategory::Custom { sql: custom_sql } = &relation.category {
+            let pg_client_lock = pg_client.lock().await;
+            execute(
+                &*pg_client_lock,
+                sql!(
+                    "CREATE OR REPLACE TEMPORARY VIEW {} AS {}",
+                    Sql::ident(relation.name),
+                    Sql::new(*custom_sql)
+                ),
+                &[],
+            )
+            .await
+            .context(format!(
+                "Failed to create temporary view for {}",
+                relation.name
+            ))?;
+        }
 
         if let Err(err) = retry::Retry::default()
             .max_duration(PG_QUERY_TIMEOUT)
@@ -851,7 +1008,9 @@ impl SystemCatalogDumper {
             .filter(|relation| {
                 matches!(
                     relation.category,
-                    RelationCategory::Basic | RelationCategory::Retained
+                    RelationCategory::Basic
+                        | RelationCategory::Retained
+                        | RelationCategory::Custom { .. }
                 )
             })
             .map(|relation| (relation, None::<&ClusterReplica>));

@@ -11,6 +11,11 @@
 # Tests for wide and long transactions
 #
 
+# These transactions are intentionally large, so they can exceed the default
+# timeout on slow CI machines. Raise testdrive's client-side timeout; the
+# server-side statement_timeout (default 60s) is raised separately below.
+$ set-sql-timeout duration=120s
+
 > CREATE TABLE wide_transaction (f1 TEXT);
 
 > INSERT INTO wide_transaction VALUES (REPEAT('x', 100 * 1024 * 1024));

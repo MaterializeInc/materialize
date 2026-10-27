@@ -74,14 +74,21 @@ ALTER SCHEMA blue SWAP WITH green
 ----
 ALTER SCHEMA blue SWAP WITH green
 =>
-AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, name_a: Schema(UnresolvedSchemaName([Ident("blue")])), name_b: Ident("green") })
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, if_exists: false, name_a: Schema(UnresolvedSchemaName([Ident("blue")])), name_b: Ident("green") })
+
+parse-statement
+ALTER SCHEMA IF EXISTS blue SWAP WITH green
+----
+ALTER SCHEMA IF EXISTS blue SWAP WITH green
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, if_exists: true, name_a: Schema(UnresolvedSchemaName([Ident("blue")])), name_b: Ident("green") })
 
 parse-statement
 ALTER SCHEMA materialize.blue SWAP WITH green
 ----
 ALTER SCHEMA materialize.blue SWAP WITH green
 =>
-AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, name_a: Schema(UnresolvedSchemaName([Ident("materialize"), Ident("blue")])), name_b: Ident("green") })
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Schema, if_exists: false, name_a: Schema(UnresolvedSchemaName([Ident("materialize"), Ident("blue")])), name_b: Ident("green") })
 
 parse-statement
 ALTER SCHEMA materialize.blue SWAP WITH other.green
@@ -95,7 +102,14 @@ ALTER CLUSTER foo SWAP WITH bar
 ----
 ALTER CLUSTER foo SWAP WITH bar
 =>
-AlterObjectSwap(AlterObjectSwapStatement { object_type: Cluster, name_a: Cluster(Ident("foo")), name_b: Ident("bar") })
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Cluster, if_exists: false, name_a: Cluster(Ident("foo")), name_b: Ident("bar") })
+
+parse-statement
+ALTER CLUSTER IF EXISTS foo SWAP WITH bar
+----
+ALTER CLUSTER IF EXISTS foo SWAP WITH bar
+=>
+AlterObjectSwap(AlterObjectSwapStatement { object_type: Cluster, if_exists: true, name_a: Cluster(Ident("foo")), name_b: Ident("bar") })
 
 parse-statement
 ALTER CLUSTER cluster.too_many SWAP WITH cluster.this_wont_work

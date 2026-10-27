@@ -57,15 +57,11 @@ class TeleportProxy:
                         for p in psutil.process_iter(["pid", "name"])
                         if p.name() == "tsh"
                     ]
-                    ui.warn(
-                        dedent(
-                            f"""
+                    ui.warn(dedent(f"""
                     Teleport proxy failed to start, 'tsh' process already running!
                         existing 'tsh' processes: {other_tshs}
                         exit code: {child_terminated}
-                    """
-                        )
-                    )
+                    """))
                     break
 
             # Timed out! Check if the process is running.

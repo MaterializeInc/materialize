@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class Update(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE update_table (f1 STRING, f2 BIGINT);
                 > INSERT INTO update_table SELECT 'T1', generate_series FROM generate_series(1,10000);
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -37,11 +33,7 @@ class Update(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT MIN(f1), MAX(f1), MIN(f2), MAX(f2), COUNT(*), COUNT(DISTINCT f2) FROM update_table;
                 T2 T2 1000000 10000000000 10000 10000
-           """
-            )
-        )
+           """))

@@ -38,7 +38,7 @@ pub struct FronteggCliArgs {
     )]
     frontegg_tenant: Option<Uuid>,
     /// JWK used to validate JWTs during Frontegg authentication as a PEM public
-    /// key. Can optionally be base64 encoded with the URL-safe alphabet.
+    /// key.
     #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg_tenant")]
     frontegg_jwk: Option<String>,
     /// Path to JWK used to validate JWTs during Frontegg authentication as a PEM public
@@ -51,4 +51,13 @@ pub struct FronteggCliArgs {
     /// The name of the admin role in Frontegg.
     #[clap(long, env = "FRONTEGG_ADMIN_ROLE", requires = "frontegg_tenant")]
     frontegg_admin_role: Option<String>,
+    /// Issuer URL of the Frontegg workspace, advertised in MCP OAuth discovery.
+    #[clap(long, env = "FRONTEGG_OAUTH_ISSUER_URL")]
+    frontegg_oauth_issuer_url: Option<String>,
+}
+
+impl FronteggCliArgs {
+    pub fn oauth_issuer_url(&self) -> Option<&str> {
+        self.frontegg_oauth_issuer_url.as_deref()
+    }
 }

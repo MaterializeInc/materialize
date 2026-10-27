@@ -15,8 +15,8 @@ use std::time::Duration;
 use aws_rds::RdsTokenError;
 pub use tunnel::{
     Config, DEFAULT_CONNECT_TIMEOUT, DEFAULT_SNAPSHOT_LOCK_WAIT_TIMEOUT,
-    DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME, DEFAULT_TCP_KEEPALIVE, MySqlConn, TimeoutConfig,
-    TunnelConfig,
+    DEFAULT_SNAPSHOT_MAX_EXECUTION_TIME, DEFAULT_SNAPSHOT_WAIT_TIMEOUT, DEFAULT_TCP_KEEPALIVE,
+    MySqlConn, TimeoutConfig, TunnelConfig,
 };
 
 mod desc;
@@ -24,6 +24,9 @@ pub use desc::{
     MySqlColumnDesc, MySqlKeyDesc, MySqlTableDesc, ProtoMySqlColumnDesc, ProtoMySqlKeyDesc,
     ProtoMySqlTableDesc,
 };
+
+pub mod schema_change;
+pub use schema_change::{SchemaChange, SchemaChangeError};
 
 mod replication;
 pub use replication::{
@@ -41,6 +44,13 @@ pub use privileges::validate_source_privileges;
 
 pub mod decoding;
 pub use decoding::pack_mysql_row;
+
+pub mod probe;
+pub use probe::{KeyProber, MAX_KEY_LENGTH};
+
+pub mod partition;
+pub use partition::{PartitionParams, partition_table};
+
 mod aws_rds;
 
 #[derive(Debug, Clone)]
@@ -86,7 +96,7 @@ impl std::fmt::Display for MissingPrivilege {
 
 #[derive(Debug, thiserror::Error)]
 pub enum MySqlError {
-    #[error("error validating privileges: {0:?}")]
+    #[error("error validating privileges: {}", itertools::join(.0, ", "))]
     MissingPrivileges(Vec<MissingPrivilege>),
     #[error("error creating mysql connection with config: {0}")]
     InvalidClientConfig(String),
@@ -98,9 +108,28 @@ pub enum MySqlError {
         qualified_table_name: String,
         error: String,
     },
-    #[error("unsupported data types: {columns:?}")]
+    #[error("non-UTF-8 key value in '{qualified_table_name}' column '{column_name}': {error}")]
+    NonUtf8KeyValue {
+        qualified_table_name: String,
+        column_name: String,
+        error: String,
+    },
+    #[error(
+        "missing row estimate in '{qualified_table_name}' for key range ({lower_bound}, {upper_bound})"
+    )]
+    MissingRowEstimate {
+        qualified_table_name: String,
+        /// Redacted at construction, safe to log.
+        lower_bound: String,
+        /// Redacted at construction, safe to log.
+        upper_bound: String,
+    },
+    #[error("unsupported data types: {}", itertools::join(.columns, ", "))]
     UnsupportedDataTypes { columns: Vec<UnsupportedDataType> },
-    #[error("duplicated column names in table '{qualified_table_name}': {columns:?}")]
+    #[error(
+        "duplicated column names in table '{qualified_table_name}': {}",
+        itertools::join(.columns, ", ")
+    )]
     DuplicatedColumnNames {
         qualified_table_name: String,
         columns: Vec<String>,
@@ -119,6 +148,10 @@ pub enum MySqlError {
     MySql(#[from] mysql_async::Error),
     #[error("connection attempt timed out after {0:?}")]
     ConnectionTimeout(Duration),
+    /// The MySQL client panicked while connecting, for example on an
+    /// authentication exchange it does not support.
+    #[error("connection attempt failed, the MySQL client panicked: {0}")]
+    ConnectionPanicked(String),
     /// Error retrieving AWS authorization token
     #[error(transparent)]
     AwsTokenError(#[from] RdsTokenError),

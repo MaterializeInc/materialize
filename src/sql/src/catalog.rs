@@ -19,7 +19,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use mz_auth::password::Password;
@@ -53,7 +53,9 @@ use crate::names::{
 };
 use crate::plan::statement::StatementDesc;
 use crate::plan::statement::ddl::PlannedRoleAttributes;
-use crate::plan::{ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice, query};
+use crate::plan::{
+    AutoScalingStrategy, ClusterSchedule, CreateClusterPlan, PlanError, PlanNotice, query,
+};
 use crate::session::vars::{OwnedVarInput, SystemVars};
 
 /// A catalog keeps track of SQL objects and session state available to the
@@ -351,6 +353,14 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Returns the set of supported AWS PrivateLink availability zone ids.
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>>;
 
+    /// Returns true if the session has `restrict_to_user_objects` active.
+    ///
+    /// Defaults to false so that non-session catalog implementations (e.g. those used during
+    /// catalog rehydration) are unaffected.
+    fn restrict_to_user_objects(&self) -> bool {
+        false
+    }
+
     /// Returns system vars
     fn system_vars(&self) -> &SystemVars;
 
@@ -425,15 +435,20 @@ pub struct CatalogConfig {
     pub session_id: Uuid,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// Default timestamp interval.
-    pub timestamp_interval: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,
     /// Context for source and sink connections.
     pub connection_context: ConnectionContext,
-    /// Which system builtins to include. Not allowed to change dynamically.
-    pub builtins_cfg: BuiltinsConfig,
+    /// The AWS account ID that Materialize runs under, if configured.
+    ///
+    /// This is the `aws_account_id` from the catalog's `AwsPrincipalContext`.
+    /// It is plumbed through here (rather than the whole context) because the
+    /// external-id prefix and connection role ARN already live on
+    /// [`ConnectionContext`], and because `AwsPrincipalContext` is defined in
+    /// `mz-catalog`, which cannot be a dependency of `mz-sql`. Folded into a
+    /// literal by `mz_aws_account_id()`; `None` on non-cloud/local envs.
+    pub aws_account_id: Option<String>,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
 }
@@ -507,6 +522,28 @@ pub enum PasswordAction {
     NoChange,
 }
 
+/// The authenticator that auto-provisioned a role on first login.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
+pub enum AutoProvisionSource {
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::Oidc`].
+    Oidc,
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::Frontegg`].
+    Frontegg,
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::None`]
+    None,
+}
+
 /// A raw representation of attributes belonging to a [`CatalogRole`] that we might
 /// get as input from the user. This includes the password.
 /// This struct explicitly does not implement `Serialize` or `Deserialize` to avoid
@@ -523,12 +560,24 @@ pub struct RoleAttributesRaw {
     pub superuser: Option<bool>,
     /// Whether this role is login
     pub login: Option<bool>,
+    /// The authenticator that auto-provisioned this role, if any.
+    pub auto_provision_source: Option<AutoProvisionSource>,
     // Force use of constructor.
     _private: (),
 }
 
 /// Attributes belonging to a [`CatalogRole`].
-#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialEq, Ord, PartialOrd, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Arbitrary
+)]
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
@@ -536,6 +585,8 @@ pub struct RoleAttributes {
     pub superuser: Option<bool>,
     /// Whether this role is login
     pub login: Option<bool>,
+    /// The authenticator that auto-provisioned this role, if any.
+    pub auto_provision_source: Option<AutoProvisionSource>,
     // Force use of constructor.
     _private: (),
 }
@@ -549,6 +600,7 @@ impl RoleAttributesRaw {
             scram_iterations: None,
             superuser: None,
             login: None,
+            auto_provision_source: None,
             _private: (),
         }
     }
@@ -569,11 +621,12 @@ impl RoleAttributes {
             inherit: true,
             superuser: None,
             login: None,
+            auto_provision_source: None,
             _private: (),
         }
     }
 
-    /// Adds all attributes except password.
+    /// Adds all attributes except password and auto_provision_source.
     pub const fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
         self.superuser = Some(true);
@@ -593,6 +646,7 @@ impl From<RoleAttributesRaw> for RoleAttributes {
             inherit,
             superuser,
             login,
+            auto_provision_source,
             ..
         }: RoleAttributesRaw,
     ) -> RoleAttributes {
@@ -600,6 +654,7 @@ impl From<RoleAttributesRaw> for RoleAttributes {
             inherit,
             superuser,
             login,
+            auto_provision_source,
             _private: (),
         }
     }
@@ -611,6 +666,7 @@ impl From<RoleAttributes> for RoleAttributesRaw {
             inherit,
             superuser,
             login,
+            auto_provision_source,
             ..
         }: RoleAttributes,
     ) -> RoleAttributesRaw {
@@ -620,6 +676,7 @@ impl From<RoleAttributes> for RoleAttributesRaw {
             scram_iterations: None,
             superuser,
             login,
+            auto_provision_source,
             _private: (),
         }
     }
@@ -643,6 +700,7 @@ impl From<PlannedRoleAttributes> for RoleAttributesRaw {
             scram_iterations,
             superuser,
             login,
+            auto_provision_source: None,
             _private: (),
         }
     }
@@ -727,6 +785,12 @@ pub trait CatalogCluster<'a> {
     /// Returns the schedule of the cluster, if the cluster is a managed cluster.
     fn schedule(&self) -> Option<&ClusterSchedule>;
 
+    /// Returns the replication factor of the cluster, if the cluster is a managed cluster.
+    fn replication_factor(&self) -> Option<u32>;
+
+    /// Returns the user-configured autoscaling strategy of the cluster, if the
+    /// cluster is managed and has one set.
+    fn auto_scaling_strategy(&self) -> Option<&AutoScalingStrategy>;
     /// Try to convert this cluster into a [`CreateClusterPlan`].
     // TODO(jkosh44) Make this infallible and convert to `to_plan`.
     fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError>;
@@ -874,7 +938,18 @@ pub trait CatalogCollectionItem: CatalogItem + Send + Sync {
 }
 
 /// The type of a [`CatalogItem`].
-#[derive(Debug, Deserialize, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Debug,
+    Deserialize,
+    Clone,
+    Copy,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum CatalogItemType {
     /// A table.
     Table,
@@ -896,8 +971,8 @@ pub enum CatalogItemType {
     Secret,
     /// A connection.
     Connection,
-    /// A continual task.
-    ContinualTask,
+    /// A metric sink.
+    MetricSink,
 }
 
 impl CatalogItemType {
@@ -931,7 +1006,7 @@ impl CatalogItemType {
             CatalogItemType::Func => false,
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
-            CatalogItemType::ContinualTask => true,
+            CatalogItemType::MetricSink => false,
         }
     }
 }
@@ -949,7 +1024,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
-            CatalogItemType::ContinualTask => f.write_str("continual task"),
+            CatalogItemType::MetricSink => f.write_str("metric sink"),
         }
     }
 }
@@ -967,7 +1042,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
-            CatalogItemType::ContinualTask => ObjectType::ContinualTask,
+            CatalogItemType::MetricSink => ObjectType::MetricSink,
         }
     }
 }
@@ -985,7 +1060,7 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Func => mz_audit_log::ObjectType::Func,
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
-            CatalogItemType::ContinualTask => mz_audit_log::ObjectType::ContinualTask,
+            CatalogItemType::MetricSink => mz_audit_log::ObjectType::MetricSink,
         }
     }
 }
@@ -1008,6 +1083,8 @@ pub struct CatalogTypePgMetadata {
     pub typinput_oid: u32,
     /// The OID of the `typreceive` function in PostgreSQL.
     pub typreceive_oid: u32,
+    /// The OID of the `typsend` function in PostgreSQL.
+    pub typsend_oid: u32,
 }
 
 /// Represents a reference to type in the catalog
@@ -1100,13 +1177,14 @@ impl CatalogType<IdReference> {
         match &self {
             CatalogType::Record { fields } => {
                 let mut desc = RelationDesc::builder();
+                // Share one budget across every field. Resolving each field with
+                // a fresh budget would let a wide record materialize an
+                // unbounded type tree here even though each field is individually
+                // within the bound.
+                let mut budget = query::TypeResolutionBudget::for_root(catalog);
                 for f in fields {
                     let name = f.name.clone();
-                    let ty = query::scalar_type_from_catalog(
-                        catalog,
-                        f.type_reference,
-                        &f.type_modifiers,
-                    )?;
+                    let ty = budget.resolve_child(catalog, f.type_reference, &f.type_modifiers)?;
                     // TODO: support plumbing `NOT NULL` constraints through
                     // `CREATE TYPE`.
                     let ty = ty.nullable(true);
@@ -1483,7 +1561,18 @@ impl Error for CatalogError {}
 
 // Enum variant docs would be useless here.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Copy,
+    Deserialize,
+    Serialize
+)]
 /// The types of objects stored in the catalog.
 pub enum ObjectType {
     Table,
@@ -1491,6 +1580,7 @@ pub enum ObjectType {
     MaterializedView,
     Source,
     Sink,
+    MetricSink,
     Index,
     Type,
     Role,
@@ -1501,7 +1591,6 @@ pub enum ObjectType {
     Database,
     Schema,
     Func,
-    ContinualTask,
     NetworkPolicy,
 }
 
@@ -1512,9 +1601,9 @@ impl ObjectType {
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
-            | ObjectType::Source
-            | ObjectType::ContinualTask => true,
+            | ObjectType::Source => true,
             ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
@@ -1539,6 +1628,7 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Source => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Subsource => ObjectType::Source,
             mz_sql_parser::ast::ObjectType::Sink => ObjectType::Sink,
+            mz_sql_parser::ast::ObjectType::MetricSink => ObjectType::MetricSink,
             mz_sql_parser::ast::ObjectType::Index => ObjectType::Index,
             mz_sql_parser::ast::ObjectType::Type => ObjectType::Type,
             mz_sql_parser::ast::ObjectType::Role => ObjectType::Role,
@@ -1549,7 +1639,6 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Database => ObjectType::Database,
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
-            mz_sql_parser::ast::ObjectType::ContinualTask => ObjectType::ContinualTask,
             mz_sql_parser::ast::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         }
     }
@@ -1563,6 +1652,7 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
             CommentObjectId::Source(_) => ObjectType::Source,
             CommentObjectId::Sink(_) => ObjectType::Sink,
+            CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
             CommentObjectId::Index(_) => ObjectType::Index,
             CommentObjectId::Func(_) => ObjectType::Func,
             CommentObjectId::Connection(_) => ObjectType::Connection,
@@ -1573,7 +1663,6 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Schema(_) => ObjectType::Schema,
             CommentObjectId::Cluster(_) => ObjectType::Cluster,
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
-            CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
             CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
         }
     }
@@ -1587,6 +1676,7 @@ impl Display for ObjectType {
             ObjectType::MaterializedView => "MATERIALIZED VIEW",
             ObjectType::Source => "SOURCE",
             ObjectType::Sink => "SINK",
+            ObjectType::MetricSink => "METRIC SINK",
             ObjectType::Index => "INDEX",
             ObjectType::Type => "TYPE",
             ObjectType::Role => "ROLE",
@@ -1597,13 +1687,23 @@ impl Display for ObjectType {
             ObjectType::Database => "DATABASE",
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
-            ObjectType::ContinualTask => "CONTINUAL TASK",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
         })
     }
 }
 
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Copy,
+    Deserialize,
+    Serialize
+)]
 /// The types of objects in the system.
 pub enum SystemObjectType {
     /// Catalog object type.
@@ -1828,17 +1928,6 @@ impl DefaultPrivilegeAclItem {
             acl_mode: self.acl_mode,
         }
     }
-}
-
-/// Which builtins to return in `BUILTINS::iter`.
-///
-/// All calls to `BUILTINS::iter` within the lifetime of an environmentd process
-/// must provide an equal `BuiltinsConfig`. It is not allowed to change
-/// dynamically.
-#[derive(Debug, Clone)]
-pub struct BuiltinsConfig {
-    /// If true, include system builtin continual tasks.
-    pub include_continual_tasks: bool,
 }
 
 #[cfg(test)]

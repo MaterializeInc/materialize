@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 RUN groupadd --system --gid=999 materialize \
     && useradd --system --gid=999 --uid=999 --create-home materialize
@@ -15,7 +15,8 @@ RUN groupadd --system --gid=999 materialize \
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
         ca-certificates \
-        tini
+        tini \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY mz-frontegg-mock /usr/local/bin/
 

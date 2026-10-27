@@ -10,18 +10,20 @@
 //! A source that reads from an a persist shard.
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
 use std::sync::Arc;
-use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
-use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
+use mz_expr::{ColumnSpecs, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::str::redact;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::{ExchangeableBatchPart, ShardSourcePart};
@@ -33,7 +35,9 @@ use mz_persist_client::stats::STATS_AUDIT_PANIC;
 use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
+use mz_repr::{
+    Datum, DatumVec, Diff, GlobalId, RelationDesc, ReprRelationType, Row, RowArena, Timestamp,
+};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
@@ -43,27 +47,25 @@ use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::probe::ProbeNotify;
-use mz_txn_wal::operator::{TxnsContext, txns_progress};
+use mz_txn_wal::operator::{TxnsContext, TxnsProgress};
 use serde::{Deserialize, Serialize};
-use timely::PartialOrder;
-use timely::container::CapacityContainerBuilder;
-use timely::dataflow::ScopeParent;
+use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
-use timely::dataflow::operators::{Capability, Leave, OkErr};
+use timely::dataflow::operators::{Capability, Leave};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
-use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::timestamp::PathSummary;
 use timely::scheduling::Activator;
+use timely::{ContainerBuilder, PartialOrder};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, trace};
 
-use crate::metrics::BackpressureMetrics;
+use crate::metrics::BackpressureOperatorMetrics;
 
 /// This opaque token represents progress within a timestamp, allowing finer-grained frontier
 /// progress than would otherwise be possible.
@@ -73,8 +75,22 @@ use crate::metrics::BackpressureMetrics;
 /// is a simple batch counter, though we may change it to eg. reflect progress through the keyspace
 /// in the future.)
 #[derive(
-    Copy, Clone, PartialEq, Default, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize, Hash,
+    Copy,
+    Clone,
+    PartialEq,
+    Default,
+    Eq,
+    PartialOrd,
+    Ord,
+    Debug,
+    Serialize,
+    Deserialize,
+    Hash,
+    columnar::Columnar
 )]
+// Derive ordering on the generated `SubtimeReference` too: the paged merge
+// batcher sorts the `(Timestamp, Subtime)` time and so requires `Ref: Ord`.
+#[columnar(derive(PartialEq, Eq, PartialOrd, Ord))]
 pub struct Subtime(u64);
 
 impl PartialOrder for Subtime {
@@ -103,6 +119,25 @@ impl TimelyTimestamp for Subtime {
     }
 }
 
+impl columnation::Columnation for Subtime {
+    type InnerRegion = columnation::CopyRegion<Subtime>;
+}
+
+impl differential_dataflow::lattice::Lattice for Subtime {
+    fn join(&self, other: &Self) -> Self {
+        Subtime(std::cmp::max(self.0, other.0))
+    }
+    fn meet(&self, other: &Self) -> Self {
+        Subtime(std::cmp::min(self.0, other.0))
+    }
+}
+
+impl differential_dataflow::lattice::Maximum for Subtime {
+    fn maximum() -> Self {
+        Subtime(u64::MAX)
+    }
+}
+
 impl Subtime {
     /// The smallest non-zero summary for the opaque timestamp type.
     pub const fn least_summary() -> Self {
@@ -112,6 +147,8 @@ impl Subtime {
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
+///
+/// Returns the shard's rows in `CB`'s containers and its errors in a stream of their own.
 ///
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 /// All updates at times greater or equal to `until` will be suppressed.
@@ -132,8 +169,8 @@ impl Subtime {
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<G>(
-    scope: &mut G,
+pub fn persist_source<'scope, E, CB>(
+    scope: Scope<'scope, mz_repr::Timestamp>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: &TxnsContext,
@@ -144,131 +181,152 @@ pub fn persist_source<G>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     max_inflight_bytes: Option<usize>,
-    start_signal: impl Future<Output = ()> + 'static,
+    start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<G, (Row, Timestamp, Diff)>,
-    Stream<G, (DataflowError, Timestamp, Diff)>,
+    Stream<'scope, mz_repr::Timestamp, CB::Container>,
+    StreamVec<'scope, mz_repr::Timestamp, (E, Timestamp, Diff)>,
     Vec<PressOnDropButton>,
 )
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+    CB: ContainerBuilder + PushInto<(Row, mz_repr::Timestamp, Diff)>,
+    CB::Container: Clone,
 {
-    let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
-
     let mut tokens = vec![];
+    let name = source_id.to_string();
 
-    let stream = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
-        let (flow_control, flow_control_probe) = match max_inflight_bytes {
-            Some(max_inflight_bytes) => {
-                let backpressure_metrics = BackpressureMetrics {
-                    emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
-                    last_backpressured_bytes: Arc::clone(
-                        &shard_metrics.backpressure_last_backpressured_bytes,
-                    ),
-                    retired_bytes: Arc::clone(&shard_metrics.backpressure_retired_bytes),
-                };
+    let outer = scope.clone();
+    let (ok_stream, err_stream) =
+        scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
+            let (flow_control, flow_control_probe) = match max_inflight_bytes {
+                Some(max_inflight_bytes) => {
+                    let series = &persist_clients.metrics().backpressure;
+                    let backpressure_metrics = BackpressureOperatorMetrics::new(
+                        series.emitted_bytes.clone(),
+                        series.last_backpressured_bytes.clone(),
+                        series.retired_bytes.clone(),
+                    );
 
-                let probe = mz_timely_util::probe::Handle::default();
-                let progress_stream = mz_timely_util::probe::source(
-                    scope.clone(),
-                    format!("decode_backpressure_probe({source_id})"),
-                    probe.clone(),
-                );
-                let flow_control = FlowControl {
-                    progress_stream,
-                    max_inflight_bytes,
-                    summary: (Default::default(), Subtime::least_summary()),
-                    metrics: Some(backpressure_metrics),
-                };
-                (Some(flow_control), Some(probe))
-            }
-            None => (None, None),
-        };
+                    let probe = mz_timely_util::probe::Handle::default();
+                    let progress_stream = mz_timely_util::probe::source(
+                        scope.clone(),
+                        format!("decode_backpressure_probe({source_id})"),
+                        probe.clone(),
+                    );
+                    let flow_control = FlowControl {
+                        progress_stream,
+                        max_inflight_bytes,
+                        summary: (Default::default(), Subtime::least_summary()),
+                        metrics: Some(backpressure_metrics),
+                    };
+                    (Some(flow_control), Some(probe))
+                }
+                None => (None, None),
+            };
 
-        // Our default listen sleeps are tuned for the case of a shard that is
-        // written once a second, but txn-wal allows these to be lazy.
-        // Override the tuning to reduce crdb load. The pubsub fallback
-        // responsibility is then replaced by manual "one state" wakeups in the
-        // txns_progress operator.
-        let cfg = Arc::clone(&persist_clients.cfg().configs);
-        let subscribe_sleep = match metadata.txns_shard {
-            Some(_) => Some(move || mz_txn_wal::operator::txns_data_shard_retry_params(&cfg)),
-            None => None,
-        };
+            // Our default listen sleeps are tuned for the case of a shard that is
+            // written once a second, but txn-wal allows these to be lazy.
+            // Override the tuning to reduce crdb load. The pubsub fallback
+            // responsibility is then replaced by manual "one state" wakeups in the
+            // txns_progress operator.
+            let cfg = Arc::clone(&persist_clients.cfg().configs);
+            let subscribe_sleep = match metadata.txns_shard {
+                Some(_) => Some(move || mz_txn_wal::operator::txns_data_shard_retry_params(&cfg)),
+                None => None,
+            };
 
-        let (stream, source_tokens) = persist_source_core(
-            scope,
-            source_id,
-            Arc::clone(&persist_clients),
-            metadata.clone(),
-            read_schema,
-            as_of.clone(),
-            snapshot_mode,
-            until.clone(),
-            map_filter_project,
-            flow_control,
-            subscribe_sleep,
-            start_signal,
-            error_handler,
-        );
-        tokens.extend(source_tokens);
+            let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
+            let (cfg, fetched, source_tokens) = fetch_parts(
+                outer,
+                scope,
+                source_id,
+                Arc::clone(&persist_clients),
+                metadata.clone(),
+                read_schema,
+                as_of.clone(),
+                snapshot_mode,
+                until.clone(),
+                filter_plan,
+                flow_control,
+                subscribe_sleep,
+                start_signal,
+                error_handler,
+            );
+            tokens.extend(source_tokens);
 
-        let stream = match flow_control_probe {
-            Some(probe) => stream.probe_notify_with(vec![probe]),
-            None => stream,
-        };
+            let (ok_stream, err_stream) = decode_and_mfp::<E, mz_repr::Timestamp, CB>(
+                cfg,
+                fetched,
+                &name,
+                until.clone(),
+                map_filter_project,
+                |time| time.0,
+            );
 
-        stream.leave()
-    });
+            // The handle's frontier is the meet of what its clones report, so both streams
+            // have to feed it for backpressure to retire the right bytes.
+            let (ok_stream, err_stream) = match flow_control_probe {
+                Some(probe) => (
+                    ok_stream.probe_notify_with(vec![probe.clone()]),
+                    err_stream.probe_notify_with(vec![probe]),
+                ),
+                None => (ok_stream, err_stream),
+            };
+
+            (ok_stream.leave(outer), err_stream.leave(outer))
+        });
 
     // If a txns_shard was provided, then this shard is in the txn-wal
     // system. This means the "logical" upper may be ahead of the "physical"
-    // upper. Render a dataflow operator that passes through the input and
-    // translates the progress frontiers as necessary.
-    let (stream, txns_tokens) = match metadata.txns_shard {
-        Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _, _>(
-            stream,
-            &source_id.to_string(),
-            txns_ctx,
-            move || {
-                let (c, l) = (
-                    Arc::clone(&persist_clients),
-                    metadata.persist_location.clone(),
-                );
-                async move { c.open(l).await.expect("location is valid") }
-            },
-            txns_shard,
-            metadata.data_shard,
-            as_of
-                .expect("as_of is provided for table sources")
-                .into_option()
-                .expect("shard is not closed"),
-            until,
-            Arc::new(metadata.relation_desc),
-            Arc::new(UnitSchema),
-        ),
-        None => (stream, vec![]),
+    // upper. Render dataflow operators that pass through the inputs and
+    // translate the progress frontiers as necessary.
+    let (ok_stream, err_stream) = match metadata.txns_shard {
+        Some(txns_shard) => {
+            let (progress, remap_token) = TxnsProgress::new::<SourceData, (), i64, TxnsCodecRow, _>(
+                outer,
+                &name,
+                txns_ctx,
+                move || {
+                    let (c, l) = (
+                        Arc::clone(&persist_clients),
+                        metadata.persist_location.clone(),
+                    );
+                    async move { c.open(l).await.expect("location is valid") }
+                },
+                txns_shard,
+                metadata.data_shard,
+                as_of
+                    .expect("as_of is provided for table sources")
+                    .into_option()
+                    .expect("shard is not closed"),
+                Arc::new(metadata.relation_desc),
+                Arc::new(UnitSchema),
+            );
+            let (ok_stream, ok_token) = progress.translate(ok_stream, until.clone());
+            let (err_stream, err_token) = progress.translate(err_stream, until);
+            tokens.extend([remap_token, ok_token, err_token]);
+            (ok_stream, err_stream)
+        }
+        None => (ok_stream, err_stream),
     };
-    tokens.extend(txns_tokens);
-    let (ok_stream, err_stream) = stream.ok_err(|(d, t, r)| match d {
-        Ok(row) => Ok((row, t.0, r)),
-        Err(err) => Err((err, t.0, r)),
-    });
+
     (ok_stream, err_stream, tokens)
 }
 
-type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)>;
+type RefinedScope<'scope, T> = Scope<'scope, (T, Subtime)>;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
 ///
+/// Returns the ok and error sides separately, both carrying the refined time.
+///
 /// All times emitted will have been [advanced by] the given `as_of` frontier.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-#[allow(clippy::needless_borrow)]
-pub fn persist_source_core<'g, G>(
-    scope: &RefinedScope<'g, G>,
+pub fn persist_source_core<'g, 'outer, E>(
+    outer: Scope<'outer, mz_repr::Timestamp>,
+    scope: RefinedScope<'g, mz_repr::Timestamp>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
@@ -277,28 +335,75 @@ pub fn persist_source_core<'g, G>(
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
-    flow_control: Option<FlowControl<RefinedScope<'g, G>>>,
+    flow_control: Option<FlowControl<'g, RefinedTime>>,
     // If Some, an override for the default listen sleep retry parameters.
-    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
-    start_signal: impl Future<Output = ()> + 'static,
+    listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
+    start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<
-        RefinedScope<'g, G>,
-        (
-            Result<Row, DataflowError>,
-            (mz_repr::Timestamp, Subtime),
-            Diff,
-        ),
-    >,
+    StreamVec<'g, RefinedTime, (Row, RefinedTime, Diff)>,
+    StreamVec<'g, RefinedTime, (E, RefinedTime, Diff)>,
     Vec<PressOnDropButton>,
 )
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
 {
-    let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
+    let (cfg, fetched, token) = fetch_parts(
+        outer,
+        scope,
+        source_id,
+        persist_clients,
+        metadata,
+        read_schema,
+        as_of,
+        snapshot_mode,
+        until.clone(),
+        filter_plan,
+        flow_control,
+        listen_sleep,
+        start_signal,
+        error_handler,
+    );
+    let (oks, errs) = decode_and_mfp::<E, RefinedTime, RowVecBuilder<RefinedTime>>(
+        cfg,
+        fetched,
+        &name,
+        until,
+        map_filter_project,
+        |time| time,
+    );
+    (oks, errs, token)
+}
+
+/// Fetch the parts of a persist shard a dataflow needs, distributing the work of reading them
+/// across all timely workers.
+#[allow(clippy::needless_borrow)]
+fn fetch_parts<'g, 'outer>(
+    outer: Scope<'outer, mz_repr::Timestamp>,
+    scope: RefinedScope<'g, mz_repr::Timestamp>,
+    source_id: GlobalId,
+    persist_clients: Arc<PersistClientCache>,
+    metadata: CollectionMetadata,
+    read_schema: Option<RelationDesc>,
+    as_of: Option<Antichain<Timestamp>>,
+    snapshot_mode: SnapshotMode,
+    until: Antichain<Timestamp>,
+    // The MFP whose filter is pushed down into persist, if any.
+    filter_plan: Option<MfpPlan>,
+    flow_control: Option<FlowControl<'g, RefinedTime>>,
+    // If Some, an override for the default listen sleep retry parameters.
+    listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
+    start_signal: impl Future<Output = ()> + Send + 'static,
+    error_handler: ErrorHandler,
+) -> (
+    PersistConfig,
+    StreamVec<'g, RefinedTime, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
+    Vec<PressOnDropButton>,
+) {
+    let cfg = persist_clients.cfg().clone();
+    let name = source_id.to_string();
 
     // N.B. `read_schema` may be a subset of the total columns for this shard.
     let read_desc = match read_schema {
@@ -307,9 +412,9 @@ where
     };
 
     let desc_transformer = match flow_control {
-        Some(flow_control) => Some(move |mut scope: _, descs: &Stream<_, _>, chosen_worker| {
+        Some(flow_control) => Some(move |scope, descs, chosen_worker| {
             let (stream, token) = backpressure(
-                &mut scope,
+                scope,
                 &format!("backpressure({source_id})"),
                 descs,
                 flow_control,
@@ -328,7 +433,8 @@ where
     // `until ` is the empty antichain.
     let upper = until.as_option().cloned().unwrap_or(Timestamp::MAX);
     let (fetched, token) = shard_source(
-        &mut scope.clone(),
+        outer,
+        scope,
         &name,
         move || {
             let (c, l) = (
@@ -371,8 +477,7 @@ where
         start_signal,
         error_handler,
     );
-    let rows = decode_and_mfp(cfg, &fetched, &name, until, map_filter_project);
-    (rows, token)
+    (cfg, fetched, token)
 }
 
 fn filter_result(
@@ -382,7 +487,8 @@ fn filter_result(
     plan: &MfpPlan,
 ) -> FilterResult {
     let arena = RowArena::new();
-    let mut ranges = ColumnSpecs::new(relation_desc.typ(), &arena);
+    let relation = ReprRelationType::from(relation_desc.typ());
+    let mut ranges = ColumnSpecs::new(&relation, &arena);
     ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
     let may_error = stats.err_count().map_or(true, |count| count > 0);
@@ -420,15 +526,39 @@ fn filter_result(
     }
 }
 
-pub fn decode_and_mfp<G>(
+/// The time a decode operator's capabilities carry, refined with a [`Subtime`] so flow
+/// control can pace parts within a millisecond.
+type RefinedTime = (mz_repr::Timestamp, Subtime);
+
+/// Ok-side container builder producing row vectors timestamped with `T`.
+pub type RowVecBuilder<T> = ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>;
+
+/// Err-side container builder.
+type ErrBuilder<E, RT> = ConsolidatingContainerBuilder<Vec<(E, RT, Diff)>>;
+
+/// Decode fetched parts and apply `map_filter_project`, writing ok records into `CB`'s
+/// containers and err records into a separate output.
+///
+/// `record_time` picks what a record stores for its time. A reader that does not distinguish
+/// times within a millisecond passes `|time| time.0`, which drops the [`Subtime`] coordinate
+/// the enclosing scope refines with: that coordinate exists to pace flow control and stays on
+/// the capabilities, and keeping it in the records would force a re-encode to strip it later.
+/// A reader that builds a collection in the refined scope needs it, and passes `|time| time`.
+fn decode_and_mfp<'scope, E, RT, CB>(
     cfg: PersistConfig,
-    fetched: &Stream<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
+    fetched: StreamVec<'scope, RefinedTime, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-) -> Stream<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
+    record_time: fn(RefinedTime) -> RT,
+) -> (
+    Stream<'scope, RefinedTime, CB::Container>,
+    StreamVec<'scope, RefinedTime, (E, RT, Diff)>,
+)
 where
-    G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+    RT: Ord + Clone + Debug + 'static,
+    CB: ContainerBuilder + PushInto<(Row, RT, Diff)>,
 {
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
@@ -438,57 +568,68 @@ where
     let operator_info = builder.operator_info();
 
     let mut fetched_input = builder.new_input(fetched, Pipeline);
-    let (updates_output, updates_stream) = builder.new_output();
-    let mut updates_output = OutputBuilder::from(updates_output);
+    let (ok_output, ok_stream) = builder.new_output::<CB::Container>();
+    let mut ok_output: OutputBuilder<_, CB> = OutputBuilder::from(ok_output);
+    let (err_output, err_stream) = builder.new_output();
+    let mut err_output: OutputBuilder<_, ErrBuilder<E, RT>> = OutputBuilder::from(err_output);
 
-    // Re-used state for processing and building rows.
-    let mut datum_vec = mz_repr::DatumVec::new();
-    let mut row_builder = Row::default();
-
+    let name = name.to_owned();
     // Extract the MFP if it exists; leave behind an identity MFP in that case.
     let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
 
     builder.build(move |_caps| {
-        let name = name.to_owned();
         // Acquire an activator to reschedule the operator when it has unfinished work.
-        let activations = scope.activations();
-        let activator = Activator::new(operator_info.address, activations);
-        // Maintain a list of work to do
-        let mut pending_work = std::collections::VecDeque::new();
+        let activator = Activator::new(operator_info.address, scope.activations());
         let panic_on_audit_failure = STATS_AUDIT_PANIC.handle(&cfg);
+        let mut pending_work = VecDeque::new();
+        let mut datum_vec = DatumVec::new();
+        let mut row_builder = Row::default();
 
         move |_frontier| {
             fetched_input.for_each(|time, data| {
-                let capability = time.retain();
-                for fetched_blob in data.drain(..) {
+                let capabilities = [time.retain(0), time.retain(1)];
+                let panic_on_audit_failure = panic_on_audit_failure.get();
+                for blob in data.drain(..) {
                     pending_work.push_back(PendingWork {
-                        panic_on_audit_failure: panic_on_audit_failure.get(),
-                        capability: capability.clone(),
-                        part: PendingPart::Unparsed(fetched_blob),
-                    })
+                        panic_on_audit_failure,
+                        capabilities: capabilities.clone(),
+                        part: PendingPart::Unparsed(blob),
+                    });
                 }
             });
 
-            // Get dyncfg values once per schedule to amortize the cost of
-            // loading the atomics.
+            // Get dyncfg values once per schedule to amortize the cost of loading the atomics.
             let yield_fuel = cfg.storage_source_decode_fuel();
-            let yield_fn = |_, work| work >= yield_fuel;
-
             let mut work = 0;
-            let start_time = Instant::now();
-            let mut output = updates_output.activate();
-            while !pending_work.is_empty() && !yield_fn(start_time, work) {
-                let done = pending_work.front_mut().unwrap().do_work(
-                    &mut work,
+            let mut ok_output = ok_output.activate();
+            let mut err_output = err_output.activate();
+            while let Some(front) = pending_work.front_mut() {
+                if work >= yield_fuel {
+                    break;
+                }
+                let cap_time = *front.capabilities[0].time();
+                // A session per part: dropping it flushes the container builder, so a
+                // container never mixes records from parts held at different capabilities.
+                let mut ok_session = ok_output.session_with_builder(&front.capabilities[0]);
+                let mut err_session = err_output.session_with_builder(&front.capabilities[1]);
+                let done = decode_part(
+                    &mut front.part,
+                    front.panic_on_audit_failure,
+                    cap_time,
                     &name,
-                    start_time,
-                    yield_fn,
                     &until,
                     map_filter_project.as_ref(),
                     &mut datum_vec,
                     &mut row_builder,
-                    &mut output,
+                    &mut work,
+                    yield_fuel,
+                    |record, time, diff| match record {
+                        Ok(row) => ok_session.give((row.into_owned(), record_time(time), diff)),
+                        Err(err) => err_session.give((err, record_time(time), diff)),
+                    },
                 );
+                drop(ok_session);
+                drop(err_session);
                 if done {
                     pending_work.pop_front();
                 }
@@ -499,15 +640,15 @@ where
         }
     });
 
-    updates_stream
+    (ok_stream, err_stream)
 }
 
 /// Pending work to read from fetched parts
 struct PendingWork {
     /// Whether to panic if a part fails an audit, or to just pass along the audited data.
     panic_on_audit_failure: bool,
-    /// The time at which the work should happen.
-    capability: Capability<(mz_repr::Timestamp, Subtime)>,
+    /// The time at which the work should happen, one capability per operator output.
+    capabilities: [Capability<RefinedTime>; 2],
     /// Pending fetched part.
     part: PendingPart,
 }
@@ -538,141 +679,157 @@ impl PendingPart {
     }
 }
 
-impl PendingWork {
-    /// Perform work, reading from the fetched part, decoding, and sending outputs, while checking
-    /// `yield_fn` whether more fuel is available.
-    fn do_work<YFn>(
-        &mut self,
-        work: &mut usize,
-        name: &str,
-        start_time: Instant,
-        yield_fn: YFn,
-        until: &Antichain<Timestamp>,
-        map_filter_project: Option<&MfpPlan>,
-        datum_vec: &mut DatumVec,
-        row_builder: &mut Row,
-        output: &mut OutputBuilderSession<
-            '_,
-            (mz_repr::Timestamp, Subtime),
-            ConsolidatingContainerBuilder<
-                Vec<(
-                    Result<Row, DataflowError>,
-                    (mz_repr::Timestamp, Subtime),
-                    Diff,
-                )>,
-            >,
-        >,
-    ) -> bool
-    where
-        YFn: Fn(Instant, usize) -> bool,
+/// Read `part`, apply the MFP, and hand every record to `give`, stopping once `work` reaches
+/// `yield_fuel`. Returns whether the part is exhausted.
+///
+/// Records carry `cap_time` with its millisecond replaced by the record's own time, so the
+/// caller must emit them at the capability `cap_time` came from.
+fn decode_part<E, F>(
+    part: &mut PendingPart,
+    panic_on_audit_failure: bool,
+    cap_time: RefinedTime,
+    name: &str,
+    until: &Antichain<Timestamp>,
+    map_filter_project: Option<&MfpPlan>,
+    datum_vec: &mut DatumVec,
+    row_builder: &mut Row,
+    work: &mut usize,
+    yield_fuel: usize,
+    mut give: F,
+) -> bool
+where
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+    F: FnMut(Result<Cow<'_, Row>, E>, RefinedTime, Diff),
+{
+    let fetched_part = part.part_mut();
+    let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
+    let mut row_buf = None;
+    while let Some(((key, val), time, diff)) =
+        fetched_part.next_with_storage(&mut row_buf, &mut None)
     {
-        let mut session = output.session_with_builder(&self.capability);
-        let fetched_part = self.part.part_mut();
-        let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
-        let mut row_buf = None;
-        while let Some(((key, val), time, diff)) =
-            fetched_part.next_with_storage(&mut row_buf, &mut None)
-        {
-            if until.less_equal(&time) {
-                continue;
-            }
-            match (key, val) {
-                (SourceData(Ok(row)), ()) => {
-                    if let Some(mfp) = map_filter_project {
-                        // We originally accounted work as the number of outputs, to give downstream
-                        // operators a chance to reduce down anything we've emitted. This mfp call
-                        // might have a restrictive filter, which would have been counted as no
-                        // work. However, in practice, we've been decode_and_mfp be a source of
-                        // interactivity loss during rehydration, so we now also count each mfp
-                        // evaluation against our fuel.
-                        *work += 1;
-                        let arena = mz_repr::RowArena::new();
-                        let mut datums_local = datum_vec.borrow_with(&row);
-                        for result in mfp.evaluate(
-                            &mut datums_local,
-                            &arena,
-                            time,
-                            diff.into(),
-                            |time| !until.less_equal(time),
-                            row_builder,
-                        ) {
-                            // Earlier we decided this Part doesn't need to be fetched, but to
-                            // audit our logic we fetched it any way. If the MFP returned data it
-                            // means our earlier decision to not fetch this part was incorrect.
-                            if let Some(stats) = &is_filter_pushdown_audit {
-                                // NB: The tag added by this scope is used for alerting. The panic
-                                // message may be changed arbitrarily, but the tag key and val must
-                                // stay the same.
-                                sentry::with_scope(
-                                    |scope| {
-                                        scope
-                                            .set_tag("alert_id", "persist_pushdown_audit_violation")
-                                    },
-                                    || {
-                                        error!(
-                                            ?stats,
-                                            name,
-                                            ?mfp,
-                                            ?result,
-                                            "persist filter pushdown correctness violation!"
+        if until.less_equal(&time) {
+            continue;
+        }
+        match (key, val) {
+            (SourceData(Ok(row)), ()) => {
+                if let Some(mfp) = map_filter_project {
+                    // We originally accounted work as the number of outputs, to give downstream
+                    // operators a chance to reduce down anything we've emitted. This mfp call
+                    // might have a restrictive filter, which would have been counted as no
+                    // work. However, in practice, we've been decode_and_mfp be a source of
+                    // interactivity loss during rehydration, so we now also count each mfp
+                    // evaluation against our fuel.
+                    *work += 1;
+                    let arena = mz_repr::RowArena::new();
+                    let mut datums_local = datum_vec.borrow_with(&row);
+                    for result in mfp.evaluate(
+                        &mut datums_local,
+                        &arena,
+                        time,
+                        diff.into(),
+                        |time| !until.less_equal(time),
+                        row_builder,
+                    ) {
+                        // Earlier we decided this Part doesn't need to be fetched, but to
+                        // audit our logic we fetched it any way. If the MFP returned data it
+                        // means our earlier decision to not fetch this part was incorrect.
+                        if let Some(stats) = &is_filter_pushdown_audit {
+                            // NB: The tag added by this scope is used for alerting. The panic
+                            // message may be changed arbitrarily, but the tag key and val must
+                            // stay the same.
+                            sentry::with_scope(
+                                |scope| {
+                                    scope.set_tag("alert_id", "persist_pushdown_audit_violation")
+                                },
+                                || {
+                                    error!(
+                                        ?stats,
+                                        name,
+                                        mfp = ?redact(&mfp),
+                                        result = ?redact(&result),
+                                        "persist filter pushdown correctness violation!"
+                                    );
+                                    if panic_on_audit_failure {
+                                        panic!(
+                                            "persist filter pushdown correctness violation! {}",
+                                            name
                                         );
-                                        if self.panic_on_audit_failure {
-                                            panic!(
-                                                "persist filter pushdown correctness violation! {}",
-                                                name
-                                            );
-                                        }
-                                    },
-                                );
-                            }
-                            match result {
-                                Ok((row, time, diff)) => {
-                                    // Additional `until` filtering due to temporal filters.
-                                    if !until.less_equal(&time) {
-                                        let mut emit_time = *self.capability.time();
-                                        emit_time.0 = time;
-                                        session.give((Ok(row), emit_time, diff));
-                                        *work += 1;
                                     }
+                                },
+                            );
+                        }
+                        match result {
+                            Ok((row, time, diff)) => {
+                                // Additional `until` filtering due to temporal filters.
+                                if !until.less_equal(&time) {
+                                    let mut emit_time = cap_time;
+                                    emit_time.0 = time;
+                                    give(Ok(Cow::Owned(row)), emit_time, diff);
+                                    *work += 1;
                                 }
-                                Err((err, time, diff)) => {
-                                    // Additional `until` filtering due to temporal filters.
-                                    if !until.less_equal(&time) {
-                                        let mut emit_time = *self.capability.time();
-                                        emit_time.0 = time;
-                                        session.give((Err(err), emit_time, diff));
-                                        *work += 1;
-                                    }
+                            }
+                            Err((err, time, diff)) => {
+                                // Additional `until` filtering due to temporal filters.
+                                if !until.less_equal(&time) {
+                                    let mut emit_time = cap_time;
+                                    emit_time.0 = time;
+                                    give(Err(err), emit_time, diff);
+                                    *work += 1;
                                 }
                             }
                         }
-                        // At the moment, this is the only case where we can re-use the allocs for
-                        // the `SourceData`/`Row` we decoded. This could be improved if this timely
-                        // operator used a different container than `Vec<Row>`.
-                        drop(datums_local);
-                        row_buf.replace(SourceData(Ok(row)));
-                    } else {
-                        let mut emit_time = *self.capability.time();
-                        emit_time.0 = time;
-                        // Clone row so we retain our row allocation.
-                        session.give((Ok(row.clone()), emit_time, diff.into()));
-                        row_buf.replace(SourceData(Ok(row)));
-                        *work += 1;
                     }
-                }
-                (SourceData(Err(err)), ()) => {
-                    let mut emit_time = *self.capability.time();
+                    // The MFP built its output into `row_builder`, so the decoded row's
+                    // allocation is free to go back to `row_buf`.
+                    drop(datums_local);
+                    row_buf.replace(SourceData(Ok(row)));
+                } else {
+                    let mut emit_time = cap_time;
                     emit_time.0 = time;
-                    session.give((Err(err), emit_time, diff.into()));
+                    // The output copies the row out, so the allocation stays with `row_buf`.
+                    give(Ok(Cow::Borrowed(&row)), emit_time, diff.into());
+                    row_buf.replace(SourceData(Ok(row)));
                     *work += 1;
                 }
             }
-            if yield_fn(start_time, *work) {
-                return false;
+            (SourceData(Err(err)), ()) => {
+                // A discarded part that turns out to hold an error row is
+                // as much a pushdown violation as one whose MFP yields
+                // output: errors must surface regardless of any filter.
+                // Without this arm the audit was blind to exactly the
+                // undercounted-err-stats violation class.
+                if let Some(stats) = &is_filter_pushdown_audit {
+                    sentry::with_scope(
+                        |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
+                        || {
+                            // `err` is redacted for the same reason the
+                            // `Ok`-row arm redacts its MFP output: these
+                            // events go to Sentry, and a `DecodeError`
+                            // carries the raw source record bytes while
+                            // several `EvalError`s embed user input.
+                            error!(
+                                ?stats,
+                                name,
+                                err = ?redact(&err),
+                                "persist filter pushdown correctness violation!"
+                            );
+                            if panic_on_audit_failure {
+                                panic!("persist filter pushdown correctness violation! {}", name);
+                            }
+                        },
+                    );
+                }
+                let mut emit_time = cap_time;
+                emit_time.0 = time;
+                give(Err(E::from(err)), emit_time, diff.into());
+                *work += 1;
             }
         }
-        true
+        if *work >= yield_fuel {
+            return false;
+        }
     }
+    true
 }
 
 /// A trait representing a type that can be used in `backpressure`.
@@ -689,21 +846,21 @@ impl<T: Clone + 'static> Backpressureable for (usize, ExchangeableBatchPart<T>) 
 
 /// Flow control configuration.
 #[derive(Debug)]
-pub struct FlowControl<G: Scope> {
+pub struct FlowControl<'scope, T: timely::progress::Timestamp> {
     /// Stream providing in-flight frontier updates.
     ///
     /// As implied by its type, this stream never emits data, only progress updates.
     ///
     /// TODO: Replace `Infallible` with `!` once the latter is stabilized.
-    pub progress_stream: Stream<G, Infallible>,
+    pub progress_stream: StreamVec<'scope, T, Infallible>,
     /// Maximum number of in-flight bytes.
     pub max_inflight_bytes: usize,
     /// The minimum range of timestamps (be they granular or not) that must be emitted,
     /// ignoring `max_inflight_bytes` to ensure forward progress is made.
-    pub summary: <G::Timestamp as TimelyTimestamp>::Summary,
+    pub summary: T::Summary,
 
     /// Optional metrics for the `backpressure` operator to keep up-to-date.
-    pub metrics: Option<BackpressureMetrics>,
+    pub metrics: Option<BackpressureOperatorMetrics>,
 }
 
 /// Apply flow control to the `data` input, based on the given `FlowControl`.
@@ -718,18 +875,17 @@ pub struct FlowControl<G: Scope> {
 /// `max_inflight_bytes`.
 ///
 /// The implementation of this operator is very subtle. Many inline comments have been added.
-pub fn backpressure<T, G, O>(
-    scope: &mut G,
+pub fn backpressure<'scope, T, O>(
+    scope: Scope<'scope, (T, Subtime)>,
     name: &str,
-    data: &Stream<G, O>,
-    flow_control: FlowControl<G>,
+    data: StreamVec<'scope, (T, Subtime), O>,
+    flow_control: FlowControl<'scope, (T, Subtime)>,
     chosen_worker: usize,
     // A probe used to inspect this operator during unit-testing
     probe: Option<UnboundedSender<(Antichain<(T, Subtime)>, usize, usize)>>,
-) -> (Stream<G, O>, PressOnDropButton)
+) -> (StreamVec<'scope, (T, Subtime), O>, PressOnDropButton)
 where
     T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
-    G: Scope<Timestamp = (T, Subtime)>,
     O: Backpressureable + std::fmt::Debug,
 {
     let worker_index = scope.index();
@@ -751,10 +907,10 @@ where
         format!("persist_source_backpressure({})", name),
         scope.clone(),
     );
-    let (data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let mut data_input = builder.new_disconnected_input(data, Pipeline);
-    let mut flow_control_input = builder.new_disconnected_input(&summaried_flow, Pipeline);
+    let mut flow_control_input = builder.new_disconnected_input(summaried_flow, Pipeline);
 
     // Helper method used to synthesize current and next frontier for ordered times.
     fn synthesize_frontiers<T: PartialOrder + Clone>(
@@ -1234,12 +1390,18 @@ mod tests {
         non_granular_consumer: bool,
     ) {
         timely::execute::execute_directly(move |worker| {
-            let (backpressure_probe, consumer_tx, mut backpressure_status_rx, finalizer_tx, _token) =
+            let (
+                backpressure_probe,
+                consumer_tx,
+                mut backpressure_status_rx,
+                finalizer_tx,
+                _token,
+            ) =
                 // Set up the top-level non-granular scope.
-                worker.dataflow::<u64, _, _>(|scope| {
+                worker.dataflow::<u64, _, _>(|outer_scope| {
                     let (non_granular_feedback_handle, non_granular_feedback) =
                         if non_granular_consumer {
-                            let (h, f) = scope.feedback(Default::default());
+                            let (h, f) = outer_scope.feedback(Default::default());
                             (Some(h), Some(f))
                         } else {
                             (None, None)
@@ -1251,7 +1413,7 @@ mod tests {
                         token,
                         backpressured,
                         finalizer_tx,
-                    ) = scope.scoped::<(u64, Subtime), _, _>("hybrid", |scope| {
+                    ) = outer_scope.scoped::<(u64, Subtime), _, _>("hybrid", |scope| {
                         let (input, finalizer_tx) =
                             iterator_operator(scope.clone(), input.into_iter());
 
@@ -1284,7 +1446,7 @@ mod tests {
                         let (backpressured, token) = backpressure(
                             scope,
                             "test",
-                            &input,
+                            input,
                             flow_control,
                             0,
                             Some(backpressure_status_tx),
@@ -1294,19 +1456,20 @@ mod tests {
                         let tx = if !non_granular_consumer {
                             Some(consumer_operator(
                                 scope.clone(),
-                                &backpressured,
+                                backpressured.clone(),
                                 granular_feedback_handle.unwrap(),
                             ))
                         } else {
                             None
                         };
 
+                        let (probe_handle, backpressured) = backpressured.probe();
                         (
-                            backpressured.probe(),
+                            probe_handle,
                             tx,
                             backpressure_status_rx,
                             token,
-                            backpressured.leave(),
+                            backpressured.leave(outer_scope),
                             finalizer_tx,
                         )
                     });
@@ -1314,8 +1477,8 @@ mod tests {
                     // If we want to non-granularly consume the output, we setup the consumer here.
                     let consumer_tx = if non_granular_consumer {
                         consumer_operator(
-                            scope.clone(),
-                            &backpressured,
+                            outer_scope.clone(),
+                            backpressured,
                             non_granular_feedback_handle.unwrap(),
                         )
                     } else {
@@ -1384,13 +1547,10 @@ mod tests {
 
     /// An operator that emits `Part`'s at the specified timestamps. Does not
     /// drop its capability until it gets a signal from the `Sender` it returns.
-    fn iterator_operator<
-        G: Scope<Timestamp = (u64, Subtime)>,
-        I: Iterator<Item = (u64, Part)> + 'static,
-    >(
-        scope: G,
+    fn iterator_operator<'scope, I: Iterator<Item = (u64, Part)> + 'static>(
+        scope: Scope<'scope, (u64, Subtime)>,
         mut input: I,
-    ) -> (Stream<G, Part>, oneshot::Sender<()>) {
+    ) -> (StreamVec<'scope, (u64, Subtime), Part>, oneshot::Sender<()>) {
         let (finalizer_tx, finalizer_rx) = oneshot::channel();
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope);
         let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<Part>>>();
@@ -1421,10 +1581,18 @@ mod tests {
     /// An operator that consumes its input ONLY when given a signal to do from
     /// the `UnboundedSender` it returns. Each `send` corresponds with 1 `Data` event
     /// being processed. Also connects the `feedback` handle to its output.
-    fn consumer_operator<G: Scope, O: Backpressureable + std::fmt::Debug>(
-        scope: G,
-        input: &Stream<G, O>,
-        feedback: timely::dataflow::operators::feedback::Handle<G, Vec<std::convert::Infallible>>,
+    fn consumer_operator<
+        'scope,
+        T: timely::progress::Timestamp,
+        O: Backpressureable + std::fmt::Debug,
+    >(
+        scope: Scope<'scope, T>,
+        input: StreamVec<'scope, T, O>,
+        feedback: timely::dataflow::operators::feedback::Handle<
+            'scope,
+            T,
+            Vec<std::convert::Infallible>,
+        >,
     ) -> UnboundedSender<()> {
         let (tx, mut rx) = unbounded_channel::<()>();
         let mut consumer = AsyncOperatorBuilder::new("consumer".to_string(), scope);
@@ -1441,5 +1609,992 @@ mod tests {
         output.connect_loop(feedback);
 
         tx
+    }
+
+    /// End-to-end persist filter-pushdown soundness checks.
+    ///
+    /// These mirror the real audit contract in [`PendingWork::do_work`]: build
+    /// a part from actual rows, compute the *real* production column statistics
+    /// from it, then run [`filter_result`] and assert it never returns
+    /// [`FilterResult::Discard`] for a part whose MFP would produce output (an
+    /// `Ok` row or an error row) on some actual row. A `Discard` in that case is
+    /// exactly the wrongly-skipped part the runtime audit panics on.
+    ///
+    /// Unlike the interpreter-level proptests in `mz_expr::interpret`, this
+    /// exercises the full path stats derivation -> `col_stats` -> interpreter,
+    /// so it catches both interpreter bugs and stats-derivation bugs (e.g. a
+    /// column stat range that fails to contain a real value). See
+    /// database-issues#9656 / PER-50.
+    mod filter_pushdown_audit {
+        use itertools::Itertools;
+        use mz_expr::func::variadic::{And, Or};
+        use mz_expr::func::{
+            AddFloat32, AddTimestampInterval, CastNumericToFloat32, CastNumericToMzTimestamp, Eq,
+            Gt, Gte, IsNull, JsonbGetString, JsonbGetStringStringify, Lt, Lte, MulFloat32,
+            MulFloat64, Not, RoundNumericBinary, TryParseMonotonicIso8601Timestamp,
+        };
+        use mz_expr::{BinaryFunc, MapFilterProject, MirScalarExpr, UnaryFunc};
+        use mz_ore::metrics::MetricsRegistry;
+        use mz_persist_types::part::PartBuilder;
+        use mz_persist_types::stats::{PartStats, PartStatsMetrics};
+        use mz_repr::adt::interval::Interval;
+        use mz_repr::adt::numeric::Numeric;
+        use mz_repr::{Diff, ReprScalarType, SqlScalarType};
+        use proptest::prelude::*;
+        use proptest::sample::{Index, select};
+        use proptest::strategy::Union;
+
+        use super::*;
+
+        fn f32_lit(x: f32) -> MirScalarExpr {
+            MirScalarExpr::literal_ok(Datum::from(x), ReprScalarType::Float32)
+        }
+
+        fn f64_lit(x: f64) -> MirScalarExpr {
+            MirScalarExpr::literal_ok(Datum::from(x), ReprScalarType::Float64)
+        }
+
+        fn numeric_datum(x: f64) -> Datum<'static> {
+            Datum::from(Numeric::from(x))
+        }
+
+        fn numeric_desc() -> RelationDesc {
+            RelationDesc::builder()
+                .with_column(
+                    "c0",
+                    SqlScalarType::Numeric { max_scale: None }.nullable(false),
+                )
+                .finish()
+        }
+
+        /// Compute the real production `PartStats` from a set of rows, the same
+        /// way the storage read path does.
+        fn build_part_stats(desc: &RelationDesc, rows: &[SourceData]) -> PartStats {
+            let mut builder = PartBuilder::new(desc, &UnitSchema);
+            for row in rows {
+                builder.push(row, &(), 1u64, 1i64);
+            }
+            let part = builder.finish();
+            PartStats::new::<SourceData, RelationDesc>(&part, desc).expect("stats")
+        }
+
+        /// Ground truth: does the MFP produce any output (an `Ok` row that
+        /// passes the filter, or an error row) on at least one actual row? If
+        /// so, the part must not be discarded.
+        fn mfp_yields_output(plan: &MfpPlan, rows: &[Row]) -> bool {
+            let arena = RowArena::new();
+            let mut row_builder = Row::default();
+            for row in rows {
+                let mut datums: Vec<Datum> = row.iter().collect();
+                let mut results = plan.evaluate::<DataflowError, _>(
+                    &mut datums,
+                    &arena,
+                    Timestamp::MIN,
+                    Diff::from(1),
+                    |_| true,
+                    &mut row_builder,
+                );
+                if results.next().is_some() {
+                    return true;
+                }
+            }
+            false
+        }
+
+        fn comparison_funcs() -> impl Strategy<Value = BinaryFunc> {
+            select(vec![
+                BinaryFunc::Lte(Lte),
+                BinaryFunc::Lt(Lt),
+                BinaryFunc::Gte(Gte),
+                BinaryFunc::Gt(Gt),
+                BinaryFunc::Eq(Eq),
+            ])
+        }
+
+        fn f32_consts() -> impl Strategy<Value = f32> {
+            select(vec![
+                0.0f32,
+                1.0,
+                -1.0,
+                0.0087531805,
+                745213.56,
+                76700000000.0,
+                f32::MAX,
+                1e30,
+                -1e30,
+            ])
+        }
+
+        /// `(a::float4 + round(c0, scale)::float4) * b::float4 <cmp> c::float4`.
+        /// `round` overflows and the float arithmetic can produce an error or a
+        /// NaN on interior values of `c0` that the endpoints don't reveal.
+        fn float_arith_predicate(
+            scale: i32,
+            a: f32,
+            b: f32,
+            c: f32,
+            cmp: BinaryFunc,
+        ) -> MirScalarExpr {
+            let round = MirScalarExpr::CallBinary {
+                func: BinaryFunc::RoundNumeric(RoundNumericBinary),
+                expr1: Box::new(MirScalarExpr::column(0)),
+                expr2: Box::new(MirScalarExpr::literal_ok(
+                    Datum::from(scale),
+                    ReprScalarType::Int32,
+                )),
+            };
+            let cast = MirScalarExpr::CallUnary {
+                func: UnaryFunc::CastNumericToFloat32(CastNumericToFloat32),
+                expr: Box::new(round),
+            };
+            let add = MirScalarExpr::CallBinary {
+                func: BinaryFunc::AddFloat32(AddFloat32),
+                expr1: Box::new(f32_lit(a)),
+                expr2: Box::new(cast),
+            };
+            let mul = MirScalarExpr::CallBinary {
+                func: BinaryFunc::MulFloat32(MulFloat32),
+                expr1: Box::new(add),
+                expr2: Box::new(f32_lit(b)),
+            };
+            MirScalarExpr::CallBinary {
+                func: cmp,
+                expr1: Box::new(mul),
+                expr2: Box::new(f32_lit(c)),
+            }
+        }
+
+        /// `c0::mz_timestamp <cmp> <ts>`. The cast errors on fractional or
+        /// out-of-range `c0`, an interior-error condition the interpreter's
+        /// endpoint sampling can miss.
+        fn cast_mz_timestamp_predicate(ts: u64, cmp: BinaryFunc) -> MirScalarExpr {
+            let cast = MirScalarExpr::CallUnary {
+                func: UnaryFunc::CastNumericToMzTimestamp(CastNumericToMzTimestamp),
+                expr: Box::new(MirScalarExpr::column(0)),
+            };
+            MirScalarExpr::CallBinary {
+                func: cmp,
+                expr1: Box::new(cast),
+                expr2: Box::new(MirScalarExpr::literal_ok(
+                    Datum::MzTimestamp(Timestamp::from(ts)),
+                    ReprScalarType::MzTimestamp,
+                )),
+            }
+        }
+
+        fn arb_numeric_rows() -> impl Strategy<Value = Vec<Row>> {
+            let magnitudes = vec![
+                0.0f64, 1.0, 2.0, 1.5, 2.5, 0.25, -1.0, 10.0, 100.0, 1e10, -1e10, 3.0e38, 3.4e38,
+                3.5e38, 1e40, -1e40, 1e300,
+            ];
+            prop::collection::vec(
+                select(magnitudes).prop_map(|x| Row::pack_slice(&[numeric_datum(x)])),
+                1..8,
+            )
+        }
+
+        fn arb_predicate() -> impl Strategy<Value = MirScalarExpr> {
+            let float_arith = (
+                select(vec![0i32, 2, -5, 24699]),
+                f32_consts(),
+                f32_consts(),
+                f32_consts(),
+                comparison_funcs(),
+            )
+                .prop_map(|(scale, a, b, c, cmp)| float_arith_predicate(scale, a, b, c, cmp));
+            let cast_ts = (select(vec![0u64, 1, 2, 100, u64::MAX]), comparison_funcs())
+                .prop_map(|(ts, cmp)| cast_mz_timestamp_predicate(ts, cmp));
+            proptest::strategy::Union::new(vec![float_arith.boxed(), cast_ts.boxed()])
+        }
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault`
+        fn filter_result_never_discards_matching_part() {
+            fn check(rows: Vec<Row>, predicate: MirScalarExpr) -> Result<(), TestCaseError> {
+                let desc = numeric_desc();
+                let plan = MapFilterProject::new(1)
+                    .filter(std::iter::once(predicate))
+                    .into_plan()
+                    .expect("into_plan");
+
+                let source_rows: Vec<_> = rows.iter().map(|r| SourceData(Ok(r.clone()))).collect();
+                let part_stats = build_part_stats(&desc, &source_rows);
+                let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+                let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+
+                let decision = filter_result(&desc, ResultSpec::anything(), stats, &plan);
+
+                if mfp_yields_output(&plan, &rows) {
+                    prop_assert!(
+                        !matches!(decision, FilterResult::Discard),
+                        "filter pushdown discarded a part whose MFP yields output on a real \
+                         row (wrongly-skipped part; the runtime audit would panic).\n\
+                         rows={rows:?}\nplan={plan:?}",
+                    );
+                }
+                Ok(())
+            }
+
+            proptest!(|(rows in arb_numeric_rows(), predicate in arb_predicate())| {
+                check(rows, predicate)?;
+            });
+        }
+
+        /// Assert that `filter_result` keeps a part it must keep, and that the
+        /// case is not vacuous: the MFP has to yield output on a real row for
+        /// "must keep" to mean anything.
+        fn assert_part_kept(desc: &RelationDesc, rows: &[Row], predicate: MirScalarExpr) {
+            let plan = MapFilterProject::new(1)
+                .filter(std::iter::once(predicate))
+                .into_plan()
+                .expect("into_plan");
+            assert!(
+                mfp_yields_output(&plan, rows),
+                "nothing to keep: the MFP yields no output on any of these rows.\n\
+                 rows={rows:?}\nplan={plan:?}",
+            );
+
+            let source_rows: Vec<_> = rows.iter().map(|r| SourceData(Ok(r.clone()))).collect();
+            let part_stats = build_part_stats(desc, &source_rows);
+            let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+            let stats = RelationPartStats::new("test", &metrics, desc, &part_stats);
+            let decision = filter_result(desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                !matches!(decision, FilterResult::Discard),
+                "filter pushdown discarded a part whose MFP yields output on a real row.\n\
+                 rows={rows:?}\nplan={plan:?}",
+            );
+        }
+
+        /// A part holding `-NaN` must not hide the rest of its rows from a
+        /// filter on that column.
+        ///
+        /// `PrimitiveStats` takes a float column's bounds in arrow's *total*
+        /// order, where `-NaN` sorts below `-Infinity`, so such a part records
+        /// `lower = -NaN` against a finite `upper`. `OrderedFloat`, the `Datum`
+        /// order the interpreter compares in, ranks every NaN *above* every
+        /// finite value, so those bounds arrive unordered. Reading them as an
+        /// empty range discarded the part, which lost every other row in it
+        /// (PER-53). Both float widths take the same path.
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+        fn negative_nan_does_not_discard_matching_part() {
+            // Both rows have to land in the same part. Split across parts each
+            // one gets ordered bounds of its own and nothing is discarded.
+            let desc = RelationDesc::builder()
+                .with_column("c0", SqlScalarType::Float32.nullable(false))
+                .finish();
+            let rows = [
+                Row::pack_slice(&[Datum::from(-f32::NAN)]),
+                Row::pack_slice(&[Datum::from(0.0f32)]),
+            ];
+            assert_part_kept(
+                &desc,
+                &rows,
+                MirScalarExpr::CallBinary {
+                    func: BinaryFunc::Lt(Lt),
+                    expr1: Box::new(MirScalarExpr::column(0)),
+                    expr2: Box::new(f32_lit(1.0)),
+                },
+            );
+
+            let desc = RelationDesc::builder()
+                .with_column("c0", SqlScalarType::Float64.nullable(false))
+                .finish();
+            let rows = [
+                Row::pack_slice(&[Datum::from(-f64::NAN)]),
+                Row::pack_slice(&[Datum::from(0.0f64)]),
+            ];
+            assert_part_kept(
+                &desc,
+                &rows,
+                MirScalarExpr::CallBinary {
+                    func: BinaryFunc::Lt(Lt),
+                    expr1: Box::new(MirScalarExpr::column(0)),
+                    expr2: Box::new(f64_lit(1.0)),
+                },
+            );
+        }
+
+        /// A part holding NaNs of both signs must not hide its other rows.
+        ///
+        /// Arrow's total order puts `-NaN` below and `+NaN` above everything,
+        /// so such a part records the bounds `(-NaN, +NaN)`. Under
+        /// `OrderedFloat` those decode to `NaN == NaN`: not an inverted range
+        /// but a seemingly valid one claiming the part holds nothing but NaN,
+        /// so widening unordered bounds does not catch it. A filter that a
+        /// finite row matches but NaN does not then discarded the part. Only
+        /// the stats decode still sees the NaN signs, so the guard lives in
+        /// `mz_repr::stats::col_values`.
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+        fn mixed_sign_nans_do_not_discard_matching_part() {
+            let desc = RelationDesc::builder()
+                .with_column("c0", SqlScalarType::Float32.nullable(false))
+                .finish();
+            let rows = [
+                Row::pack_slice(&[Datum::from(-f32::NAN)]),
+                Row::pack_slice(&[Datum::from(f32::NAN)]),
+                Row::pack_slice(&[Datum::from(0.0f32)]),
+            ];
+            assert_part_kept(
+                &desc,
+                &rows,
+                MirScalarExpr::CallBinary {
+                    func: BinaryFunc::Eq(Eq),
+                    expr1: Box::new(MirScalarExpr::column(0)),
+                    expr2: Box::new(f32_lit(0.0)),
+                },
+            );
+
+            let desc = RelationDesc::builder()
+                .with_column("c0", SqlScalarType::Float64.nullable(false))
+                .finish();
+            let rows = [
+                Row::pack_slice(&[Datum::from(-f64::NAN)]),
+                Row::pack_slice(&[Datum::from(f64::NAN)]),
+                Row::pack_slice(&[Datum::from(0.0f64)]),
+            ];
+            assert_part_kept(
+                &desc,
+                &rows,
+                MirScalarExpr::CallBinary {
+                    func: BinaryFunc::Eq(Eq),
+                    expr1: Box::new(MirScalarExpr::column(0)),
+                    expr2: Box::new(f64_lit(0.0)),
+                },
+            );
+        }
+
+        // Wide-schema variant: multiple column types populated from
+        // `interesting_datums`, a predicate vocabulary that reaches the
+        // interpreter's special cases (jsonb map specs and their unions,
+        // `TryParseMonotonicIso8601Timestamp`, dynamically-monotone
+        // timestamp+interval, the infinity guard on float multiplication),
+        // Err rows, and real mz_now bounds instead of an unconstrained time
+        // range.
+
+        const NUM: usize = 0;
+        const F32: usize = 1;
+        const F64: usize = 2;
+        const STR: usize = 3;
+        const J1: usize = 4;
+        const J2: usize = 5;
+        const BOOL: usize = 6;
+        const TS: usize = 7;
+        const MZTS: usize = 8;
+        const WIDE_ARITY: usize = 9;
+
+        fn wide_scalar_type(col: usize) -> SqlScalarType {
+            match col {
+                NUM => SqlScalarType::Numeric { max_scale: None },
+                F32 => SqlScalarType::Float32,
+                F64 => SqlScalarType::Float64,
+                STR => SqlScalarType::String,
+                J1 | J2 => SqlScalarType::Jsonb,
+                BOOL => SqlScalarType::Bool,
+                TS => SqlScalarType::Timestamp { precision: None },
+                MZTS => SqlScalarType::MzTimestamp,
+                _ => unreachable!("no such column"),
+            }
+        }
+
+        fn wide_repr_type(col: usize) -> ReprScalarType {
+            match col {
+                NUM => ReprScalarType::Numeric,
+                F32 => ReprScalarType::Float32,
+                F64 => ReprScalarType::Float64,
+                STR => ReprScalarType::String,
+                J1 | J2 => ReprScalarType::Jsonb,
+                BOOL => ReprScalarType::Bool,
+                TS => ReprScalarType::Timestamp,
+                MZTS => ReprScalarType::MzTimestamp,
+                _ => unreachable!("no such column"),
+            }
+        }
+
+        fn wide_desc() -> RelationDesc {
+            let mut builder = RelationDesc::builder();
+            for col in 0..WIDE_ARITY {
+                // The bool column stays non-nullable so an all-Err part
+                // exercises the fabricated default bounds a non-nullable
+                // column gets when no Ok row provides a value.
+                let nullable = col != BOOL;
+                builder = builder
+                    .with_column(format!("c{col}"), wide_scalar_type(col).nullable(nullable));
+            }
+            builder.finish()
+        }
+
+        fn wide_pool(col: usize) -> Vec<Datum<'static>> {
+            let mut pool: Vec<_> = wide_scalar_type(col).interesting_datums().collect();
+            if col != BOOL {
+                pool.push(Datum::Null);
+            }
+            pool
+        }
+
+        fn arb_wide_rows() -> impl Strategy<Value = Vec<SourceData>> {
+            let pools: Vec<Vec<Datum<'static>>> = (0..WIDE_ARITY).map(wide_pool).collect();
+            let ok_row = prop::collection::vec(any::<Index>(), WIDE_ARITY).prop_map(move |picks| {
+                let datums = picks
+                    .iter()
+                    .zip_eq(&pools)
+                    .map(|(pick, pool)| pool[pick.index(pool.len())]);
+                SourceData(Ok(Row::pack(datums)))
+            });
+            let err_row = Just(SourceData(Err(DataflowError::from(
+                EvalError::DivisionByZero,
+            ))));
+            let row = Union::new_weighted(vec![(9, ok_row.boxed()), (1, err_row.boxed())]);
+            prop::collection::vec(row, 2..8)
+        }
+
+        fn lit(datum: Datum<'static>, typ: ReprScalarType) -> MirScalarExpr {
+            if datum.is_null() {
+                MirScalarExpr::literal_null(typ)
+            } else {
+                MirScalarExpr::literal_ok(datum, typ)
+            }
+        }
+
+        fn is_null(expr: MirScalarExpr) -> MirScalarExpr {
+            MirScalarExpr::CallUnary {
+                func: UnaryFunc::IsNull(IsNull),
+                expr: Box::new(expr),
+            }
+        }
+
+        fn not(expr: MirScalarExpr) -> MirScalarExpr {
+            MirScalarExpr::CallUnary {
+                func: UnaryFunc::Not(Not),
+                expr: Box::new(expr),
+            }
+        }
+
+        fn binary(func: BinaryFunc, a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+            MirScalarExpr::CallBinary {
+                func,
+                expr1: Box::new(a),
+                expr2: Box::new(b),
+            }
+        }
+
+        /// `col <cmp> lit`, with the literal drawn from the same interesting
+        /// pool as the row values, so poison values show up on both sides.
+        fn arb_cmp_col_lit() -> impl Strategy<Value = MirScalarExpr> {
+            (0..WIDE_ARITY, any::<Index>(), comparison_funcs()).prop_map(|(col, pick, cmp)| {
+                let pool = wide_pool(col);
+                let datum = pool[pick.index(pool.len())];
+                binary(
+                    cmp,
+                    MirScalarExpr::column(col),
+                    lit(datum, wide_repr_type(col)),
+                )
+            })
+        }
+
+        fn arb_is_null_pred() -> impl Strategy<Value = MirScalarExpr> {
+            (0..WIDE_ARITY, any::<bool>()).prop_map(|(col, negate)| {
+                let expr = is_null(MirScalarExpr::column(col));
+                if negate { not(expr) } else { expr }
+            })
+        }
+
+        fn jsonb_keys() -> impl Strategy<Value = &'static str> {
+            select(vec!["x", "y", "nested", "absent"])
+        }
+
+        fn jsonb_get(expr: MirScalarExpr, key: &'static str, stringify: bool) -> MirScalarExpr {
+            let func = if stringify {
+                BinaryFunc::JsonbGetStringStringify(JsonbGetStringStringify)
+            } else {
+                BinaryFunc::JsonbGetString(JsonbGetString)
+            };
+            binary(
+                func,
+                expr,
+                MirScalarExpr::literal_ok(Datum::String(key), ReprScalarType::String),
+            )
+        }
+
+        /// `(jN -> 'key') IS NULL` or `(jN ->> 'key') = 'a'`, the shapes that
+        /// consume the Nested specs built from real jsonb map stats.
+        fn arb_jsonb_pred() -> impl Strategy<Value = MirScalarExpr> {
+            (
+                select(vec![J1, J2]),
+                jsonb_keys(),
+                any::<bool>(),
+                any::<bool>(),
+            )
+                .prop_map(|(col, key, stringify, wrap_eq)| {
+                    let get = jsonb_get(MirScalarExpr::column(col), key, stringify);
+                    if wrap_eq {
+                        let typ = if stringify {
+                            ReprScalarType::String
+                        } else {
+                            ReprScalarType::Jsonb
+                        };
+                        binary(BinaryFunc::Eq(Eq), get, lit(Datum::String("a"), typ))
+                    } else {
+                        is_null(get)
+                    }
+                })
+        }
+
+        /// `((CASE WHEN <cond> THEN j1 ELSE j2 END) ->> 'key') IS NULL`, the
+        /// PER-6 shape: unioning the two columns' Nested specs.
+        fn arb_case_jsonb_pred() -> impl Strategy<Value = MirScalarExpr> {
+            (any::<bool>(), jsonb_keys(), any::<bool>()).prop_map(
+                |(cond_is_col, key, stringify)| {
+                    let cond = if cond_is_col {
+                        MirScalarExpr::column(BOOL)
+                    } else {
+                        is_null(MirScalarExpr::column(STR))
+                    };
+                    let case = MirScalarExpr::If {
+                        cond: Box::new(cond),
+                        then: Box::new(MirScalarExpr::column(J1)),
+                        els: Box::new(MirScalarExpr::column(J2)),
+                    };
+                    is_null(jsonb_get(case, key, stringify))
+                },
+            )
+        }
+
+        /// `try_parse_monotonic_iso8601_timestamp(c_str) <cmp> <ts>`, the one
+        /// SpecialUnary implementation in the interpreter.
+        fn arb_iso_parse_pred() -> impl Strategy<Value = MirScalarExpr> {
+            (comparison_funcs(), any::<Index>(), any::<bool>()).prop_map(
+                |(cmp, pick, wrap_null)| {
+                    let parse = MirScalarExpr::CallUnary {
+                        func: UnaryFunc::TryParseMonotonicIso8601Timestamp(
+                            TryParseMonotonicIso8601Timestamp,
+                        ),
+                        expr: Box::new(MirScalarExpr::column(STR)),
+                    };
+                    if wrap_null {
+                        is_null(parse)
+                    } else {
+                        let pool: Vec<_> = SqlScalarType::Timestamp { precision: None }
+                            .interesting_datums()
+                            .collect();
+                        let datum = pool[pick.index(pool.len())];
+                        binary(cmp, parse, lit(datum, ReprScalarType::Timestamp))
+                    }
+                },
+            )
+        }
+
+        /// `(c_ts + <interval>) <cmp> <ts>`, the DynamicMonotone handler:
+        /// day-only intervals are treated as monotone, month-bearing ones must
+        /// stay conservative.
+        fn arb_ts_interval_pred() -> impl Strategy<Value = MirScalarExpr> {
+            let intervals = select(vec![
+                Interval::new(0, 2, 0),
+                Interval::new(0, 0, 3_600_000_000),
+                Interval::new(1, 0, 0),
+                Interval::new(-1, 0, 0),
+            ]);
+            (comparison_funcs(), intervals, any::<Index>()).prop_map(|(cmp, iv, pick)| {
+                let add = binary(
+                    BinaryFunc::AddTimestampInterval(AddTimestampInterval),
+                    MirScalarExpr::column(TS),
+                    lit(Datum::Interval(iv), ReprScalarType::Interval),
+                );
+                let pool: Vec<_> = SqlScalarType::Timestamp { precision: None }
+                    .interesting_datums()
+                    .collect();
+                let datum = pool[pick.index(pool.len())];
+                binary(cmp, add, lit(datum, ReprScalarType::Timestamp))
+            })
+        }
+
+        /// `(c_f64 * <const>) <cmp> <const>`, aimed at the interpreter's
+        /// infinity guard: multiplication is monotone but not
+        /// infinity-monotone.
+        fn arb_float_mul_pred() -> impl Strategy<Value = MirScalarExpr> {
+            let consts = || select(vec![0.0f64, 1.0, -1.0, 1e300, -1e300, f64::INFINITY]);
+            (comparison_funcs(), consts(), consts()).prop_map(|(cmp, a, c)| {
+                let mul = binary(
+                    BinaryFunc::MulFloat64(MulFloat64),
+                    MirScalarExpr::column(F64),
+                    lit(Datum::from(a), ReprScalarType::Float64),
+                );
+                binary(cmp, mul, lit(Datum::from(c), ReprScalarType::Float64))
+            })
+        }
+
+        /// `mz_now() <cmp> <mz_timestamp expr>`, compiled by `into_plan` into
+        /// the temporal lower/upper bounds that `filter_result` checks against
+        /// the part's time range.
+        fn arb_temporal_pred() -> impl Strategy<Value = MirScalarExpr> {
+            let cmps = select(vec![
+                BinaryFunc::Lte(Lte),
+                BinaryFunc::Lt(Lt),
+                BinaryFunc::Gte(Gte),
+                BinaryFunc::Gt(Gt),
+            ]);
+            (cmps, any::<bool>(), any::<Index>()).prop_map(|(cmp, use_col, pick)| {
+                let mz_now = MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+                let rhs = if use_col {
+                    MirScalarExpr::column(MZTS)
+                } else {
+                    let pool = wide_pool(MZTS);
+                    lit(pool[pick.index(pool.len())], ReprScalarType::MzTimestamp)
+                };
+                binary(cmp, mz_now, rhs)
+            })
+        }
+
+        fn arb_wide_predicate() -> impl Strategy<Value = MirScalarExpr> {
+            let leaf = Union::new(vec![
+                arb_cmp_col_lit().boxed(),
+                arb_is_null_pred().boxed(),
+                arb_jsonb_pred().boxed(),
+                arb_case_jsonb_pred().boxed(),
+                arb_iso_parse_pred().boxed(),
+                arb_ts_interval_pred().boxed(),
+                arb_float_mul_pred().boxed(),
+                arb_temporal_pred().boxed(),
+                // The numeric shapes from the narrow test, aimed at the
+                // fallible-interior mechanisms; both reference column 0.
+                (
+                    select(vec![0i32, 2, -5, 24699]),
+                    f32_consts(),
+                    f32_consts(),
+                    f32_consts(),
+                    comparison_funcs(),
+                )
+                    .prop_map(|(s, a, b, c, cmp)| float_arith_predicate(s, a, b, c, cmp))
+                    .boxed(),
+                (select(vec![0u64, 1, 2, 100, u64::MAX]), comparison_funcs())
+                    .prop_map(|(ts, cmp)| cast_mz_timestamp_predicate(ts, cmp))
+                    .boxed(),
+            ])
+            .boxed();
+            Union::new_weighted(vec![
+                (3, leaf.clone()),
+                (
+                    1,
+                    (leaf.clone(), leaf.clone(), any::<bool>())
+                        .prop_map(|(a, b, is_and)| {
+                            let func = if is_and { And.into() } else { Or.into() };
+                            MirScalarExpr::CallVariadic {
+                                func,
+                                exprs: vec![a, b],
+                            }
+                        })
+                        .boxed(),
+                ),
+                (1, leaf.prop_map(not).boxed()),
+            ])
+        }
+
+        /// The zero-column count(*) path: when the read desc projects away
+        /// every column and each row is known to pass, `filter_result`
+        /// replaces the part with a synthesized single-row KV instead of
+        /// keeping or discarding it. Errors and filters that can skip rows
+        /// must suppress the substitution.
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
+        fn zero_column_relation_replace_with() {
+            let desc = RelationDesc::empty();
+            let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+            let ok_rows = vec![
+                SourceData(Ok(Row::default())),
+                SourceData(Ok(Row::default())),
+            ];
+
+            // No predicates, no errors: every row passes, so the part is
+            // replaced with the synthesized KV.
+            let plan = MapFilterProject::new(0).into_plan().expect("into_plan");
+            let part_stats = build_part_stats(&desc, &ok_rows);
+            let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+            let decision = filter_result(&desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                matches!(decision, FilterResult::ReplaceWith { .. }),
+                "expected ReplaceWith, got {decision:?}",
+            );
+
+            // An error row must disable the substitution: the part has to be
+            // fetched so the error surfaces.
+            let mixed_rows = vec![
+                SourceData(Ok(Row::default())),
+                SourceData(Err(DataflowError::from(EvalError::DivisionByZero))),
+            ];
+            let part_stats = build_part_stats(&desc, &mixed_rows);
+            let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+            let decision = filter_result(&desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                matches!(decision, FilterResult::Keep),
+                "expected Keep, got {decision:?}",
+            );
+
+            // A constant-false filter never keeps anything: plain Discard.
+            let plan = MapFilterProject::new(0)
+                .filter(std::iter::once(MirScalarExpr::literal_ok(
+                    Datum::False,
+                    ReprScalarType::Bool,
+                )))
+                .into_plan()
+                .expect("into_plan");
+            let part_stats = build_part_stats(&desc, &ok_rows);
+            let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+            let decision = filter_result(&desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                matches!(decision, FilterResult::Discard),
+                "expected Discard, got {decision:?}",
+            );
+        }
+
+        /// Schema drift between the stats and the read desc must degrade to
+        /// "no stats", never to a narrower spec.
+        ///
+        /// Two real shapes: a column appended by `ALTER TABLE ... ADD COLUMN`
+        /// after the part was written (present in the read desc, absent from
+        /// the stats), and demand pushdown projecting the read desc down to a
+        /// subset of the written columns (stats carry extra columns).
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
+        fn schema_drift_degrades_to_no_stats() {
+            let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+
+            // Part written before ALTER TABLE ... ADD COLUMN b.
+            let write_desc = RelationDesc::builder()
+                .with_column("a", SqlScalarType::Int32.nullable(false))
+                .finish();
+            let rows = vec![SourceData(Ok(Row::pack_slice(&[Datum::Int32(1)])))];
+            let part_stats = build_part_stats(&write_desc, &rows);
+
+            let read_desc = RelationDesc::builder()
+                .with_column("a", SqlScalarType::Int32.nullable(false))
+                .with_column("b", SqlScalarType::Float64.nullable(true))
+                .finish();
+            let stats = RelationPartStats::new("test", &metrics, &read_desc, &part_stats);
+            // Old rows read the new column as null, so `b IS NULL` matches
+            // them and the part must be kept.
+            let plan = MapFilterProject::new(2)
+                .filter(std::iter::once(is_null(MirScalarExpr::column(1))))
+                .into_plan()
+                .expect("into_plan");
+            let decision = filter_result(&read_desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                !matches!(decision, FilterResult::Discard),
+                "part written before ADD COLUMN was discarded: {decision:?}",
+            );
+
+            // Demand pushdown: the read desc is a projection of the written
+            // schema. The surviving column's stats must still line up with it
+            // by name, so a matching filter keeps the part.
+            let write_desc = RelationDesc::builder()
+                .with_column("a", SqlScalarType::Int32.nullable(false))
+                .with_column("b", SqlScalarType::Float64.nullable(true))
+                .finish();
+            let rows = vec![SourceData(Ok(Row::pack_slice(&[
+                Datum::Int32(1),
+                Datum::from(5.0f64),
+            ])))];
+            let part_stats = build_part_stats(&write_desc, &rows);
+
+            let read_desc = RelationDesc::builder()
+                .with_column("b", SqlScalarType::Float64.nullable(true))
+                .finish();
+            let stats = RelationPartStats::new("test", &metrics, &read_desc, &part_stats);
+            let plan = MapFilterProject::new(1)
+                .filter(std::iter::once(binary(
+                    BinaryFunc::Eq(Eq),
+                    MirScalarExpr::column(0),
+                    lit(Datum::from(5.0f64), ReprScalarType::Float64),
+                )))
+                .into_plan()
+                .expect("into_plan");
+            let decision = filter_result(&read_desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                !matches!(decision, FilterResult::Discard),
+                "projected read desc discarded a matching part: {decision:?}",
+            );
+        }
+
+        /// Ground truth, mirroring [`PendingWork::do_work`]: a part yields
+        /// output if any Err row survives `until`, or if the MFP applied to
+        /// any Ok row at its effective time produces anything at all. The
+        /// runtime audit fires on any result from `evaluate`, before the
+        /// additional `until` filtering of the produced rows, so this must
+        /// not post-filter either.
+        fn part_yields_output(
+            plan: &MfpPlan,
+            rows: &[SourceData],
+            eval_time: Timestamp,
+            until: &Antichain<Timestamp>,
+        ) -> bool {
+            if until.less_equal(&eval_time) {
+                return false;
+            }
+            let arena = RowArena::new();
+            let mut row_builder = Row::default();
+            for source_data in rows {
+                match &source_data.0 {
+                    Err(_) => return true,
+                    Ok(row) => {
+                        let mut datums: Vec<Datum> = row.iter().collect();
+                        let mut results = plan.evaluate::<DataflowError, _>(
+                            &mut datums,
+                            &arena,
+                            eval_time,
+                            Diff::from(1),
+                            |time| !until.less_equal(time),
+                            &mut row_builder,
+                        );
+                        if results.next().is_some() {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow, and decNumber FFI is unsupported
+        fn wide_filter_result_never_discards_matching_part() {
+            fn check(
+                rows: Vec<SourceData>,
+                predicate: MirScalarExpr,
+                eval_time: u64,
+                until: Option<u64>,
+            ) -> Result<(), TestCaseError> {
+                let desc = wide_desc();
+                // Predicate shapes that use mz_now in a way the temporal
+                // filter machinery does not support fail to plan; there is
+                // nothing to check for those.
+                let Ok(plan) = MapFilterProject::new(desc.arity())
+                    .filter(std::iter::once(predicate))
+                    .into_plan()
+                else {
+                    return Ok(());
+                };
+                let eval_time = Timestamp::from(eval_time);
+                let until =
+                    until.map_or_else(Antichain::new, |t| Antichain::from_elem(Timestamp::from(t)));
+
+                let part_stats = build_part_stats(&desc, &rows);
+                let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+                let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+
+                // Mirror the read path: mz_now is bounded by the part's
+                // frontier and the dataflow's until, both inclusive, with an
+                // empty until standing in for MAX. A frontier past the until
+                // is discarded before stats are consulted.
+                let upper = until.as_option().copied().unwrap_or(Timestamp::MAX);
+                if eval_time > upper {
+                    return Ok(());
+                }
+                let time_range = ResultSpec::value_between(
+                    Datum::MzTimestamp(eval_time),
+                    Datum::MzTimestamp(upper),
+                );
+                let decision = filter_result(&desc, time_range, stats, &plan);
+
+                if part_yields_output(&plan, &rows, eval_time, &until) {
+                    prop_assert!(
+                        !matches!(decision, FilterResult::Discard),
+                        "filter pushdown discarded a part whose MFP yields output on a real \
+                         row (wrongly-skipped part; the runtime audit would panic).\n\
+                         rows={rows:?}\nplan={plan:?}\neval_time={eval_time}\nuntil={until:?}",
+                    );
+                }
+                Ok(())
+            }
+
+            // The vocabulary is wide (9 columns, 10 predicate shapes), so a
+            // specific poison-value-plus-predicate coincidence is rare per
+            // case. The default 256 cases demonstrably miss known bugs; 4096
+            // still runs in a couple of seconds because each case is cheap.
+            // An explicit PROPTEST_CASES (already parsed into the default
+            // config) wins, for long local or nightly runs.
+            let default = ProptestConfig::default();
+            let cases = if std::env::var_os("PROPTEST_CASES").is_some() {
+                default.cases
+            } else {
+                4096
+            };
+            let config = ProptestConfig { cases, ..default };
+            proptest!(config, |(
+                rows in arb_wide_rows(),
+                predicate in arb_wide_predicate(),
+                eval_time in select(vec![1u64, 5]),
+                until in select(vec![None, Some(1u64), Some(5), Some(8), Some(100)]),
+            )| {
+                check(rows, predicate, eval_time, until)?;
+            });
+        }
+
+        /// Filter decisions are made per part: rows split across several
+        /// parts get an independent decision per part, and a part whose own
+        /// rows yield output must never be discarded, regardless of what the
+        /// sibling parts contain (e.g. a poison value in one part must not
+        /// affect another part's decision, and vice versa).
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow, and decNumber FFI is unsupported
+        fn multi_part_decisions_are_independent() {
+            fn check(
+                parts: Vec<Vec<SourceData>>,
+                predicate: MirScalarExpr,
+                eval_time: u64,
+                until: Option<u64>,
+            ) -> Result<(), TestCaseError> {
+                let desc = wide_desc();
+                let Ok(plan) = MapFilterProject::new(desc.arity())
+                    .filter(std::iter::once(predicate))
+                    .into_plan()
+                else {
+                    return Ok(());
+                };
+                let eval_time = Timestamp::from(eval_time);
+                let until =
+                    until.map_or_else(Antichain::new, |t| Antichain::from_elem(Timestamp::from(t)));
+                let upper = until.as_option().copied().unwrap_or(Timestamp::MAX);
+                if eval_time > upper {
+                    return Ok(());
+                }
+                let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+
+                for rows in &parts {
+                    let part_stats = build_part_stats(&desc, rows);
+                    let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+                    let time_range = ResultSpec::value_between(
+                        Datum::MzTimestamp(eval_time),
+                        Datum::MzTimestamp(upper),
+                    );
+                    let decision = filter_result(&desc, time_range, stats, &plan);
+                    if part_yields_output(&plan, rows, eval_time, &until) {
+                        prop_assert!(
+                            !matches!(decision, FilterResult::Discard),
+                            "filter pushdown discarded a part whose MFP yields output on a \
+                             real row.\nrows={rows:?}\nplan={plan:?}\neval_time={eval_time}\n\
+                             until={until:?}",
+                        );
+                    }
+                }
+                Ok(())
+            }
+
+            let default = ProptestConfig::default();
+            let cases = if std::env::var_os("PROPTEST_CASES").is_some() {
+                default.cases
+            } else {
+                1024
+            };
+            let config = ProptestConfig { cases, ..default };
+            proptest!(config, |(
+                parts in prop::collection::vec(arb_wide_rows(), 2..4),
+                predicate in arb_wide_predicate(),
+                eval_time in select(vec![1u64, 5]),
+                until in select(vec![None, Some(5u64), Some(100)]),
+            )| {
+                check(parts, predicate, eval_time, until)?;
+            });
+        }
     }
 }

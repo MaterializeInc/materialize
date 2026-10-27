@@ -29,8 +29,7 @@ determine
       ]
     }
   },
-  "when": "Immediately",
-  "instance": "s1"
+  "when": "Immediately"
 }
 ----
 10
@@ -48,8 +47,7 @@ determine
       ]
     }
   },
-  "when": "Immediately",
-  "instance": "s1"
+  "when": "Immediately"
 }
 ----
 19
@@ -71,8 +69,7 @@ determine
       ]
     }
   },
-  "when": "Immediately",
-  "instance": "s1"
+  "when": "Immediately"
 }
 ----
 15
@@ -90,8 +87,7 @@ determine
       ]
     }
   },
-  "when": "Immediately",
-  "instance": "s1"
+  "when": "Immediately"
 }
 ----
 25
@@ -105,8 +101,7 @@ determine
       ]
     }
   },
-  "when": "FreshestTableWrite",
-  "instance": "s1"
+  "when": "FreshestTableWrite"
 }
 ----
 25
@@ -125,8 +120,7 @@ determine
       ]
     }
   },
-  "when": "AtLeastTimestamp:5",
-  "instance": "s1"
+  "when": "AtLeastTimestamp:5"
 }
 ----
 10
@@ -150,8 +144,7 @@ determine
       ]
     }
   },
-  "when": "Immediately",
-  "instance": "s1"
+  "when": "Immediately"
 }
 ----
 15
@@ -167,8 +160,7 @@ determine
       ]
     }
   },
-  "when": "FreshestTableWrite",
-  "instance": "s1"
+  "when": "FreshestTableWrite"
 }
 ----
 15
@@ -188,8 +180,7 @@ determine
       ]
     }
   },
-  "when": "Immediately",
-  "instance": "s1"
+  "when": "Immediately"
 }
 ----
 19
@@ -205,8 +196,7 @@ determine
       ]
     }
   },
-  "when": "FreshestTableWrite",
-  "instance": "s1"
+  "when": "FreshestTableWrite"
 }
 ----
 25
@@ -226,8 +216,7 @@ determine
       ]
     }
   },
-  "when": "Immediately",
-  "instance": "s1"
+  "when": "Immediately"
 }
 ----
 10
@@ -248,8 +237,7 @@ determine
       ]
     }
   },
-  "when": "AtLeastTimestamp:5",
-  "instance": "s1"
+  "when": "AtLeastTimestamp:5"
 }
 ----
 10
@@ -265,8 +253,7 @@ determine
       ]
     }
   },
-  "when": "AtLeastTimestamp:13",
-  "instance": "s1"
+  "when": "AtLeastTimestamp:13"
 }
 ----
 13

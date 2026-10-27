@@ -24,29 +24,74 @@ from queue import Queue
 
 from materialize import MZ_ROOT, buildkite, ci_util, file_util, spawn, ui
 from materialize.cli.run import update_sqlite_repo
+from materialize.mzcompose import sanitizer_enabled
 from materialize.mzcompose.composition import (
     Composition,
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
-from materialize.ui import CommandFailureCausedUIError
+from materialize.ui import CommandFailureCausedUIError, UIError
 
 MAX_SLTS = 8
 SLTS = [f"slt_{i+1}" for i in range(MAX_SLTS)]
 
-SERVICES = [CockroachOrPostgresMetadata(), Mz(app_password="")] + [
+SERVICES = [CockroachOrPostgresMetadata(), Mz(app_password=""), Materialized()] + [
     SqlLogicTest(name=slt) for slt in SLTS
 ]
 
 COCKROACH_DEFAULT_PORT = 26257
 
+# Replica configuration the recorded catalog-server EXPLAIN plans depend on.
+# Shared by `run_sqllogictest`'s defaults and the `catalog-server-explain
+# --rewrite` plan fill so a rewrite reproduces the plans CI validates.
+DEFAULT_REPLICA_SIZE = "scale=1,workers=2"
+DEFAULT_REPLICAS = 1
+
+# --- catalog_server_explain.slt coverage ------------------------------------
+#
+# `catalog_server_explain.slt` snapshots the EXPLAIN plan of every index,
+# materialized view, and system-schema view on `mz_catalog_server`. sqllogictest
+# owns the recorded plans (run as a normal .slt); the workflows below own the
+# *list* of objects, enumerated from the catalog, and assert the file covers
+# exactly that set so a newly added/removed builtin cannot silently escape it.
+
+CATALOG_SERVER_EXPLAIN_SLT = (
+    MZ_ROOT / "test" / "sqllogictest" / "catalog_server_explain.slt"
+)
+
+BEGIN_MARKER = "# BEGIN AUTO-GENERATED QUERIES"
+END_MARKER = "# END AUTO-GENERATED QUERIES"
+
+CATALOG_SERVER_CLUSTER = "mz_catalog_server"
+
+# System schemas whose views we snapshot. Mirrors `SYSTEM_SCHEMAS` in
+# src/repr/src/namespaces.rs. Views are not tied to a cluster, but when planned
+# with `SET cluster = mz_catalog_server` (as the .slt does) they resolve the
+# arrangements maintained on the catalog server, which is exactly the plan we
+# want to guard against churn.
+CATALOG_SERVER_SYSTEM_SCHEMAS = [
+    "mz_catalog",
+    "mz_catalog_unstable",
+    "pg_catalog",
+    "mz_internal",
+    "mz_introspection",
+    "information_schema",
+    "mz_unsafe",
+]
+
 
 def workflow_default(c: Composition) -> None:
+    # `catalog-server-explain` validation runs inside `fast_tests` (shard 0), so
+    # skip it here to avoid running it twice (and it is `--rewrite`-capable, so
+    # we never want it auto-run with stray args).
+    skip = {"default", "catalog-server-explain"}
+
     def process(name: str) -> None:
-        if name == "default":
+        if name in skip:
             return
 
         with c.test_case(name):
@@ -58,6 +103,18 @@ def workflow_default(c: Composition) -> None:
 def workflow_fast_tests(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Run fast SQL logic tests"""
     update_sqlite_repo()
+    # Validate catalog-server EXPLAIN coverage once per CI run (on a single
+    # shard), alongside the normal run that checks the recorded plans. Call the
+    # helpers directly rather than `c.workflow(...)`, which would feed this
+    # workflow's argv to the nested workflow's parser.
+    if buildkite.get_parallelism_index() == 0:
+        c.up("materialized")
+        queries = _enumerate_catalog_server_explain_queries(c)
+        _validate_catalog_server_explain(queries)
+        print(
+            f"OK: {CATALOG_SERVER_EXPLAIN_SLT} covers all {len(queries)} "
+            "catalog-server objects."
+        )
     run_sqllogictest(c, parser, compileFastSltConfig())
 
 
@@ -95,11 +152,205 @@ def workflow_selection(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
 
+def workflow_catalog_server_explain(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Assert catalog_server_explain.slt covers exactly the current set of
+    mz_catalog_server objects. With --rewrite, regenerate the query list and
+    fill in the recorded plans instead, producing a ready-to-commit file."""
+    parser.add_argument(
+        "--rewrite",
+        action="store_true",
+        help="Regenerate the query list and recorded plans instead of validating.",
+    )
+    args = parser.parse_args()
+
+    c.up("materialized")
+    queries = _enumerate_catalog_server_explain_queries(c)
+
+    if args.rewrite:
+        _rewrite_catalog_server_explain(queries)
+        print(f"Wrote {len(queries)} EXPLAIN queries to {CATALOG_SERVER_EXPLAIN_SLT}.")
+        # Newly added objects land with empty plans; fill them (and refresh any
+        # churned plans) by running sqllogictest in rewrite mode, so a single
+        # invocation produces a ready-to-commit file.
+        _fill_catalog_server_explain_plans(c)
+        print(f"Filled in plans for {CATALOG_SERVER_EXPLAIN_SLT}.")
+    else:
+        _validate_catalog_server_explain(queries)
+        print(
+            f"OK: {CATALOG_SERVER_EXPLAIN_SLT} covers all {len(queries)} "
+            "catalog-server objects."
+        )
+
+
+def _quote_ident(ident: str) -> str:
+    """Double-quote a SQL identifier, escaping embedded double quotes."""
+    escaped = ident.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _qualified(schema: str, name: str) -> str:
+    return f"{_quote_ident(schema)}.{_quote_ident(name)}"
+
+
+def _enumerate_catalog_server_explain_queries(c: Composition) -> list[str]:
+    """Return the deterministically-ordered list of EXPLAIN statements that
+    should appear in catalog_server_explain.slt, one per catalog-server object."""
+    # Exclude per-replica introspection log indexes (catalog kind
+    # `ClusterIntrospectionSourceIndex`, surfaced with an `si` id prefix; see
+    # `introspection_source_indexes_cte` in src/catalog/src/builtin/mz_catalog.rs).
+    # These are auto-created once per replica over the logging arrangements, so
+    # their names embed a non-deterministic replica id (e.g.
+    # `..._s2_primary_idx`) and they have no optimizer plan -- `EXPLAIN INDEX`
+    # errors with "cannot find dataflow metainformation". The `si`-prefix filter
+    # keys off the object kind, not the schema, so it still excludes them if a
+    # future log index is created over a relation outside `mz_introspection`.
+    indexes = c.sql_query(f"""
+        SELECT s.name, o.name
+        FROM mz_objects o
+        JOIN mz_schemas s ON o.schema_id = s.id
+        JOIN mz_clusters c ON o.cluster_id = c.id
+        WHERE o.type = 'index' AND c.name = '{CATALOG_SERVER_CLUSTER}'
+          AND o.id NOT LIKE 'si%'
+        ORDER BY s.name, o.name
+        """)
+    materialized_views = c.sql_query(f"""
+        SELECT s.name, o.name
+        FROM mz_objects o
+        JOIN mz_schemas s ON o.schema_id = s.id
+        JOIN mz_clusters c ON o.cluster_id = c.id
+        WHERE o.type = 'materialized-view' AND c.name = '{CATALOG_SERVER_CLUSTER}'
+        ORDER BY s.name, o.name
+        """)
+    schema_list = ", ".join(f"'{s}'" for s in CATALOG_SERVER_SYSTEM_SCHEMAS)
+    views = c.sql_query(f"""
+        SELECT s.name, v.name
+        FROM mz_views v
+        JOIN mz_schemas s ON v.schema_id = s.id
+        WHERE s.name IN ({schema_list})
+        ORDER BY s.name, v.name
+        """)
+
+    queries: list[str] = []
+    for schema, name in indexes:
+        queries.append(f"EXPLAIN INDEX {_qualified(schema, name)};")
+    for schema, name in materialized_views:
+        queries.append(f"EXPLAIN MATERIALIZED VIEW {_qualified(schema, name)};")
+    for schema, name in views:
+        queries.append(f"EXPLAIN SELECT * FROM {_qualified(schema, name)};")
+    return queries
+
+
+def _split_catalog_server_explain() -> tuple[list[str], list[str], list[str]]:
+    """Split the .slt into (header_through_begin_marker, records_lines,
+    end_marker_through_tail)."""
+    text = CATALOG_SERVER_EXPLAIN_SLT.read_text()
+    lines = text.split("\n")
+    try:
+        begin = next(i for i, l in enumerate(lines) if l.startswith(BEGIN_MARKER))
+        end = next(i for i, l in enumerate(lines) if l.startswith(END_MARKER))
+    except StopIteration:
+        raise UIError(
+            f"{CATALOG_SERVER_EXPLAIN_SLT} is missing the {BEGIN_MARKER!r} / "
+            f"{END_MARKER!r} markers."
+        )
+    return lines[: begin + 1], lines[begin + 1 : end], lines[end:]
+
+
+def _parse_catalog_server_explain_records(
+    records_lines: list[str],
+) -> dict[str, list[str]]:
+    """Parse the auto-generated region into a mapping of EXPLAIN statement to
+    its recorded plan output lines (so plans survive a query-list rewrite)."""
+    plans: dict[str, list[str]] = {}
+    i = 0
+    while i < len(records_lines):
+        if records_lines[i].strip() == "query T multiline":
+            sql = records_lines[i + 1]
+            assert records_lines[i + 2] == "----", f"malformed record near: {sql!r}"
+            j = i + 3
+            output: list[str] = []
+            while j < len(records_lines) and records_lines[j] != "EOF":
+                output.append(records_lines[j])
+                j += 1
+            plans[sql] = output
+            i = j + 1
+        else:
+            i += 1
+    return plans
+
+
+def _render_catalog_server_explain_records(
+    queries: list[str], plans: dict[str, list[str]]
+) -> str:
+    blocks = []
+    for sql in queries:
+        output = plans.get(sql, [])
+        body = "".join(f"{line}\n" for line in output)
+        blocks.append(f"query T multiline\n{sql}\n----\n{body}EOF")
+    return "\n\n".join(blocks)
+
+
+def _rewrite_catalog_server_explain(queries: list[str]) -> None:
+    head, records_lines, tail = _split_catalog_server_explain()
+    plans = _parse_catalog_server_explain_records(records_lines)
+    rendered = _render_catalog_server_explain_records(queries, plans)
+    body = ["", rendered, ""] if rendered else [""]
+    CATALOG_SERVER_EXPLAIN_SLT.write_text("\n".join(head + body + tail))
+
+
+def _fill_catalog_server_explain_plans(c: Composition) -> None:
+    """Run sqllogictest in rewrite mode to fill the recorded plans for the
+    auto-generated query list, equivalent to `bin/sqllogictest --
+    --rewrite-results`. Uses the same replica configuration the plans are
+    validated with so the rewrite is reproducible."""
+    rel_path = str(CATALOG_SERVER_EXPLAIN_SLT.relative_to(MZ_ROOT))
+    c.up(c.metadata_store(), Service("slt_1", idle=True))
+    cmd = SltRunStepConfig(file_set=set(), flags=[]).to_command(
+        "slt_1",
+        rel_path,
+        DEFAULT_REPLICAS,
+        DEFAULT_REPLICA_SIZE,
+        junit_report_path=None,
+        metadata_store=c.metadata_store(),
+        rewrite_results=True,
+    )
+    c.exec("slt_1", *cmd, capture=True, capture_stderr=True)
+
+
+def _validate_catalog_server_explain(queries: list[str]) -> None:
+    _, records_lines, _ = _split_catalog_server_explain()
+    covered = set(_parse_catalog_server_explain_records(records_lines).keys())
+    desired = set(queries)
+
+    missing = sorted(desired - covered)
+    extra = sorted(covered - desired)
+    if not missing and not extra:
+        return
+
+    lines = [
+        f"{CATALOG_SERVER_EXPLAIN_SLT} is out of date with the objects on "
+        f"{CATALOG_SERVER_CLUSTER}.",
+        "Regenerate it with:",
+        "  bin/mzcompose --find sqllogictest run catalog-server-explain --rewrite",
+    ]
+    if missing:
+        lines.append(f"\nMissing EXPLAIN queries ({len(missing)}):")
+        lines.extend(f"  + {q}" for q in missing)
+    if extra:
+        lines.append(
+            f"\nStale EXPLAIN queries no longer backed by an object ({len(extra)}):"
+        )
+        lines.extend(f"  - {q}" for q in extra)
+    raise UIError("\n".join(lines))
+
+
 def run_sqllogictest(
     c: Composition, parser: WorkflowArgumentParser, run_config: SltRunConfig
 ) -> None:
-    parser.add_argument("--replica-size", default="scale=1,workers=2", type=str)
-    parser.add_argument("--replicas", default=1, type=int)
+    parser.add_argument("--replica-size", default=DEFAULT_REPLICA_SIZE, type=str)
+    parser.add_argument("--replicas", default=DEFAULT_REPLICAS, type=int)
     parser.add_argument("--parallelism", default=MAX_SLTS, type=int)
     args = parser.parse_args()
 
@@ -127,6 +378,12 @@ def run_sqllogictest(
 
     failed_files = []
 
+    def file_replicas(file: str) -> int:
+        # `singlereplica_*` files assert replica-targeted introspection
+        # results, so always run them with a single replica instead of
+        # skipping them when the workflow requests more.
+        return 1 if "singlereplica_" in file else args.replicas
+
     def worker(container_name: str):
         exception: Exception | None = None
         while True:
@@ -134,9 +391,6 @@ def run_sqllogictest(
                 step, file, rewrite_results = work_queue.get_nowait()
             except Exception:
                 break  # Queue is empty
-
-            if "singlereplica_" in file and args.replicas > 1:
-                continue
 
             junit_report_path = (
                 None
@@ -148,7 +402,7 @@ def run_sqllogictest(
             cmd = step.to_command(
                 container_name,
                 file,
-                args.replicas,
+                file_replicas(file),
                 args.replica_size,
                 junit_report_path,
                 c.metadata_store(),
@@ -161,9 +415,21 @@ def run_sqllogictest(
                     os.remove(junit_report_path)
             except CommandFailureCausedUIError as e:
                 print(f"STDERR:\n{e.stderr}")
+                if (
+                    junit_report_path
+                    and junit_report_path.exists()
+                    and junit_report_path.stat().st_size > 0
+                ):
+                    # sqllogictest wrote a junit report with the failure
+                    # details; signal that the mzcompose-level junit should be
+                    # skipped to avoid duplicate annotations. Workflow failures
+                    # outside the sqllogictest run (or crashes that leave no
+                    # report behind) still get the mzcompose-level junit, so
+                    # ci-annotate-errors can annotate them.
+                    c.has_sqllogictest_junit = True
                 if not rewrite_results:
                     failed_files.append((step, file))
-                    if ui.env_is_truthy("CI"):
+                    if ui.env_is_truthy("CI") and not sanitizer_enabled():
                         work_queue.put((step, file, True))
                 exception = e
             finally:
@@ -193,9 +459,16 @@ def run_sqllogictest(
                         f.write(diff)
                 else:
                     print("Rewriting results did not result in a diff")
-                print(
-                    f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results {' '.join([file for step, file in failed_files])}"
-                )
+                replica_counts = {file_replicas(file) for _, file in failed_files}
+                for replicas in sorted(replica_counts):
+                    files = [
+                        file
+                        for _, file in failed_files
+                        if file_replicas(file) == replicas
+                    ]
+                    print(
+                        f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results --replica-size={args.replica_size} --replicas={replicas} {' '.join(files)}"
+                    )
                 print(f"Or apply directly: git apply <<'EOF'\n{diff}EOF")
         if errors:
             raise errors[0]
@@ -221,7 +494,7 @@ class SltRunStepConfig:
         container_name: str,
         file: str,
         replicas: int,
-        replica_size: int,
+        replica_size: str,
         junit_report_path: Path | None,
         metadata_store: str,
         metadata_store_port: int = COCKROACH_DEFAULT_PORT,
@@ -238,7 +511,6 @@ class SltRunStepConfig:
         ]
         command = [
             "sqllogictest",
-            "-v",
             *([] if rewrite_results else self.flags),
             *sqllogictest_config,
             file,
@@ -316,10 +588,18 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/cast.slt",
         "test/sqllogictest/char.slt",
         "test/sqllogictest/chbench.slt",
+        # A constant-folded numeric(5,2) literal loses its scale in a view;
+        # see the file's header.
+        "test/sqllogictest/try_cast_noindex.slt",
         "test/sqllogictest/chr.slt",
         "test/sqllogictest/cluster.slt",
         "test/sqllogictest/coercion.slt",
         "test/sqllogictest/collate.slt",
+        # Asserts on exact allocated ids to force a replica/item id collision,
+        # which --auto-index-selects perturbs by consuming item ids for its
+        # wrapper views. The singlereplica_ prefix also pins it to one replica,
+        # since extra replicas shift id allocation and add replica rows.
+        "test/sqllogictest/singlereplica_comment_id_collision.slt",
         "test/sqllogictest/comparison.slt",
         "test/sqllogictest/cte.slt",
         "test/sqllogictest/cte_lowering.slt",
@@ -371,11 +651,16 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/jsonb.slt",
         "test/sqllogictest/keys.slt",
         "test/sqllogictest/like.slt",
+        # Asserts that a LIMIT at the top level of a SELECT must be constant,
+        # which no longer holds once --auto-index-selects wraps the SELECT in a
+        # view, where a non-constant LIMIT is allowed.
+        "test/sqllogictest/limit_expr.slt",
         "test/sqllogictest/list.slt",
         "test/sqllogictest/list_subquery.slt",
         "test/sqllogictest/managed_cluster.slt",
         "test/sqllogictest/map.slt",
         "test/sqllogictest/materialized_views.slt",
+        "test/sqllogictest/mz_audit_events.slt",
         "test/sqllogictest/mz_catalog_server_index_accounting.slt",
         "test/sqllogictest/mztimestamp.slt",
         "test/sqllogictest/name_resolution.slt",
@@ -386,6 +671,11 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/operator.slt",
         "test/sqllogictest/outer_join.slt",
         "test/sqllogictest/outer_join_simplification.slt",
+        # The huge `LIMIT`s here overflow `limit + offset` inside the
+        # maintained TopK that --auto-index-selects wraps the query in, which
+        # then returns no rows at all. That is a separate bug in a different
+        # operator from the peek result thinning this file covers.
+        "test/sqllogictest/peek_result_thinning.slt",
         "test/sqllogictest/parse_ident.slt",
         "test/sqllogictest/pg_catalog_attribute.slt",
         "test/sqllogictest/pg_catalog_class.slt",
@@ -407,6 +697,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/quote_ident.slt",
         "test/sqllogictest/quoting.slt",
         "test/sqllogictest/range.slt",
+        "test/sqllogictest/rbac_create_table_from_source.slt",
         "test/sqllogictest/rbac_enabled.slt",
         "test/sqllogictest/record.slt",
         "test/sqllogictest/recursion_limit.slt",
@@ -415,7 +706,11 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/regproc.slt",
         "test/sqllogictest/regressions.slt",
         "test/sqllogictest/regtype.slt",
+        # Selects from temporary objects, which cannot be wrapped in the
+        # persistent indexed views that --auto-index-selects creates.
+        "test/sqllogictest/rename.slt",
         "test/sqllogictest/returning.slt",
+        "test/sqllogictest/replacement-materialized-views.slt",
         "test/sqllogictest/role.slt",
         "test/sqllogictest/role_create.slt",
         "test/sqllogictest/role_membership.slt",
@@ -528,103 +823,187 @@ def compileFastSltConfig() -> SltRunConfig:
         # "test/sqllogictest/sqlite/test/select4.test",
         # "test/sqllogictest/sqlite/test/select5.test",
         "test/sqllogictest/cockroach/alias_types.slt",
-        "test/sqllogictest/cockroach/alter_column_type.slt",
-        "test/sqllogictest/cockroach/alter_table.slt",
+        "test/sqllogictest/cockroach/alter_database_convert_to_schema.slt",
+        "test/sqllogictest/cockroach/alter_database_owner.slt",
+        "test/sqllogictest/cockroach/alter_default_privileges_for_all_roles.slt",
+        "test/sqllogictest/cockroach/alter_default_privileges_for_schema.slt",
+        "test/sqllogictest/cockroach/alter_role_set.slt",
+        "test/sqllogictest/cockroach/alter_schema_owner.slt",
+        "test/sqllogictest/cockroach/alter_sequence_owner.slt",
+        "test/sqllogictest/cockroach/alter_table_owner.slt",
+        "test/sqllogictest/cockroach/alter_type_owner.slt",
+        "test/sqllogictest/cockroach/alter_view_owner.slt",
+        "test/sqllogictest/cockroach/and_or.slt",
         "test/sqllogictest/cockroach/apply_join.slt",
-        "test/sqllogictest/cockroach/array.slt",
         "test/sqllogictest/cockroach/as_of.slt",
         "test/sqllogictest/cockroach/bit.slt",
-        # "test/sqllogictest/cockroach/builtin_function.slt",
+        "test/sqllogictest/cockroach/builtin_function.slt",
         "test/sqllogictest/cockroach/bytes.slt",
         "test/sqllogictest/cockroach/case_sensitive_names.slt",
-        # "test/sqllogictest/cockroach/collatedstring_constraint.slt",
+        "test/sqllogictest/cockroach/collatedstring.slt",
+        "test/sqllogictest/cockroach/collatedstring_constraint.slt",
         "test/sqllogictest/cockroach/collatedstring_index1.slt",
         "test/sqllogictest/cockroach/collatedstring_index2.slt",
         "test/sqllogictest/cockroach/collatedstring_normalization.slt",
         "test/sqllogictest/cockroach/collatedstring_nullinindex.slt",
         "test/sqllogictest/cockroach/collatedstring_uniqueindex1.slt",
         "test/sqllogictest/cockroach/collatedstring_uniqueindex2.slt",
-        "test/sqllogictest/cockroach/collatedstring.slt",
-        "test/sqllogictest/cockroach/computed.slt",
-        # "test/sqllogictest/cockroach/conditional.slt",
-        "test/sqllogictest/cockroach/create_as.slt",
+        "test/sqllogictest/cockroach/column_families.slt",
+        "test/sqllogictest/cockroach/comment_on.slt",
+        "test/sqllogictest/cockroach/composite_types.slt",
+        "test/sqllogictest/cockroach/conditional.slt",
+        "test/sqllogictest/cockroach/connect_privilege.slt",
+        "test/sqllogictest/cockroach/create_index.slt",
+        "test/sqllogictest/cockroach/create_statements.slt",
         "test/sqllogictest/cockroach/custom_escape_character.slt",
-        "test/sqllogictest/cockroach/database.slt",
-        # "test/sqllogictest/cockroach/datetime.slt",
-        # "test/sqllogictest/cockroach/decimal.slt",
+        "test/sqllogictest/cockroach/datetime.slt",
+        "test/sqllogictest/cockroach/decimal.slt",
+        "test/sqllogictest/cockroach/default.slt",
         "test/sqllogictest/cockroach/delete.slt",
+        "test/sqllogictest/cockroach/dependencies.slt",
         "test/sqllogictest/cockroach/discard.slt",
-        "test/sqllogictest/cockroach/drop_database.slt",
+        "test/sqllogictest/cockroach/disjunction_in_join.slt",
+        "test/sqllogictest/cockroach/distinct.slt",
+        "test/sqllogictest/cockroach/drop_index.slt",
+        "test/sqllogictest/cockroach/drop_role_with_default_privileges.slt",
+        "test/sqllogictest/cockroach/drop_role_with_default_privileges_in_schema.slt",
+        "test/sqllogictest/cockroach/drop_schema.slt",
         "test/sqllogictest/cockroach/drop_table.slt",
+        "test/sqllogictest/cockroach/drop_temp.slt",
         "test/sqllogictest/cockroach/drop_user.slt",
         "test/sqllogictest/cockroach/drop_view.slt",
+        "test/sqllogictest/cockroach/edge.slt",
         "test/sqllogictest/cockroach/errors.slt",
-        # "test/sqllogictest/cockroach/exec_hash_join.slt",
+        "test/sqllogictest/cockroach/exec_hash_join.slt",
         # "test/sqllogictest/cockroach/exec_merge_join.slt",
-        "test/sqllogictest/cockroach/exec_window.slt",
+        "test/sqllogictest/cockroach/external_connection_privileges.slt",
         "test/sqllogictest/cockroach/extract.slt",
-        # "test/sqllogictest/cockroach/float.slt",
+        "test/sqllogictest/cockroach/family.slt",
+        "test/sqllogictest/cockroach/float.slt",
+        "test/sqllogictest/cockroach/format.slt",
+        "test/sqllogictest/cockroach/function_lookup.slt",
+        "test/sqllogictest/cockroach/fuzzystrmatch.slt",
+        "test/sqllogictest/cockroach/grant_database.slt",
+        "test/sqllogictest/cockroach/grant_in_txn.slt",
+        "test/sqllogictest/cockroach/grant_on_all_sequences_in_schema.slt",
+        "test/sqllogictest/cockroach/grant_on_all_tables_in_schema.slt",
+        "test/sqllogictest/cockroach/grant_role.slt",
+        "test/sqllogictest/cockroach/grant_schema.slt",
+        "test/sqllogictest/cockroach/grant_table.slt",
+        "test/sqllogictest/cockroach/grant_type.slt",
+        "test/sqllogictest/cockroach/group_join.slt",
+        "test/sqllogictest/cockroach/hash_join.slt",
+        "test/sqllogictest/cockroach/hidden_columns.slt",
+        "test/sqllogictest/cockroach/impure.slt",
         "test/sqllogictest/cockroach/inet.slt",
-        "test/sqllogictest/cockroach/information_schema.slt",
-        "test/sqllogictest/cockroach/insert.slt",
+        "test/sqllogictest/cockroach/inner-join.slt",
         "test/sqllogictest/cockroach/int_size.slt",
+        "test/sqllogictest/cockroach/interval.slt",
         "test/sqllogictest/cockroach/join.slt",
-        # "test/sqllogictest/cockroach/json_builtins.slt",
-        # "test/sqllogictest/cockroach/json.slt",
+        "test/sqllogictest/cockroach/json.slt",
+        "test/sqllogictest/cockroach/json_builtins.slt",
         "test/sqllogictest/cockroach/like.slt",
         "test/sqllogictest/cockroach/limit.slt",
-        # "test/sqllogictest/cockroach/lookup_join.slt",
+        "test/sqllogictest/cockroach/lock_timeout.slt",
+        "test/sqllogictest/cockroach/lookup_join.slt",
+        "test/sqllogictest/cockroach/lookup_join_local.slt",
+        "test/sqllogictest/cockroach/materialized_view.slt",
+        "test/sqllogictest/cockroach/merge_join.slt",
+        "test/sqllogictest/cockroach/multi_statement.slt",
         "test/sqllogictest/cockroach/namespace.slt",
-        # "test/sqllogictest/cockroach/no_primary_key.slt",
+        "test/sqllogictest/cockroach/no_primary_key.slt",
+        "test/sqllogictest/cockroach/notice.slt",
+        "test/sqllogictest/cockroach/numeric_references.slt",
+        "test/sqllogictest/cockroach/operator.slt",
+        "test/sqllogictest/cockroach/optimizer_timeout.slt",
         "test/sqllogictest/cockroach/order_by.slt",
         "test/sqllogictest/cockroach/ordinal_references.slt",
         "test/sqllogictest/cockroach/ordinality.slt",
-        "test/sqllogictest/cockroach/orms-opt.slt",
         "test/sqllogictest/cockroach/orms.slt",
-        "test/sqllogictest/cockroach/pg_catalog.slt",
+        "test/sqllogictest/cockroach/overflow.slt",
+        "test/sqllogictest/cockroach/partitioning.slt",
+        "test/sqllogictest/cockroach/pg_builtins.slt",
+        "test/sqllogictest/cockroach/pg_catalog_pg_default_acl_with_grant_option.slt",
+        "test/sqllogictest/cockroach/pg_extension.slt",
+        "test/sqllogictest/cockroach/pgcrypto_builtins.slt",
         "test/sqllogictest/cockroach/pgoidtype.slt",
-        # "test/sqllogictest/cockroach/postgres_jsonb.slt",
-        # "test/sqllogictest/cockroach/postgresjoin.slt",
-        "test/sqllogictest/cockroach/prepare.slt",
+        "test/sqllogictest/cockroach/postgres_jsonb.slt",
+        "test/sqllogictest/cockroach/postgresjoin.slt",
+        "test/sqllogictest/cockroach/privilege_builtins.slt",
+        "test/sqllogictest/cockroach/privileges_comments.slt",
+        "test/sqllogictest/cockroach/propagate_input_ordering.slt",
+        "test/sqllogictest/cockroach/record.slt",
+        "test/sqllogictest/cockroach/rename_atomic.slt",
         "test/sqllogictest/cockroach/rename_column.slt",
         "test/sqllogictest/cockroach/rename_constraint.slt",
-        "test/sqllogictest/cockroach/rename_database.slt",
+        "test/sqllogictest/cockroach/rename_index.slt",
+        "test/sqllogictest/cockroach/rename_sequence.slt",
         "test/sqllogictest/cockroach/rename_table.slt",
         "test/sqllogictest/cockroach/rename_view.slt",
+        "test/sqllogictest/cockroach/reset.slt",
         "test/sqllogictest/cockroach/returning.slt",
         "test/sqllogictest/cockroach/rows_from.slt",
+        "test/sqllogictest/cockroach/savepoints.slt",
         "test/sqllogictest/cockroach/scale.slt",
+        "test/sqllogictest/cockroach/secondary_index_column_families.slt",
+        "test/sqllogictest/cockroach/select.slt",
+        "test/sqllogictest/cockroach/select_for_update.slt",
+        "test/sqllogictest/cockroach/select_index.slt",
         "test/sqllogictest/cockroach/select_index_flags.slt",
         # "test/sqllogictest/cockroach/select_index_span_ranges.slt",
-        # "test/sqllogictest/cockroach/select_index.slt",
         "test/sqllogictest/cockroach/select_search_path.slt",
         "test/sqllogictest/cockroach/select_table_alias.slt",
-        # "test/sqllogictest/cockroach/select.slt",
+        "test/sqllogictest/cockroach/set.slt",
+        "test/sqllogictest/cockroach/set_role.slt",
+        "test/sqllogictest/cockroach/set_time_zone.slt",
         "test/sqllogictest/cockroach/shift.slt",
-        # "test/sqllogictest/cockroach/sqlsmith.slt",
+        "test/sqllogictest/cockroach/show_create.slt",
+        "test/sqllogictest/cockroach/show_create_all_schemas.slt",
+        "test/sqllogictest/cockroach/show_create_all_tables.slt",
+        "test/sqllogictest/cockroach/show_create_all_tables_builtin.slt",
+        "test/sqllogictest/cockroach/show_create_all_types.slt",
+        "test/sqllogictest/cockroach/show_create_redact.slt",
+        "test/sqllogictest/cockroach/show_default_privileges.slt",
+        "test/sqllogictest/cockroach/show_indexes.slt",
+        "test/sqllogictest/cockroach/show_tables.slt",
+        "test/sqllogictest/cockroach/show_var.slt",
+        "test/sqllogictest/cockroach/sqlsmith.slt",
         "test/sqllogictest/cockroach/srfs.slt",
-        # "test/sqllogictest/cockroach/statement_source.slt",
-        # "test/sqllogictest/cockroach/suboperators.slt",
+        "test/sqllogictest/cockroach/statement_source.slt",
+        "test/sqllogictest/cockroach/storing.slt",
+        "test/sqllogictest/cockroach/suboperators.slt",
         # "test/sqllogictest/cockroach/subquery-opt.slt",
         "test/sqllogictest/cockroach/subquery.slt",
-        "test/sqllogictest/cockroach/table.slt",
-        # "test/sqllogictest/cockroach/target_names.slt",
-        # "test/sqllogictest/cockroach/time.slt",
+        "test/sqllogictest/cockroach/target_names.slt",
+        "test/sqllogictest/cockroach/temp_table_txn.slt",
+        "test/sqllogictest/cockroach/time.slt",
         "test/sqllogictest/cockroach/timestamp.slt",
         "test/sqllogictest/cockroach/truncate.slt",
+        "test/sqllogictest/cockroach/tsvector.slt",
         "test/sqllogictest/cockroach/tuple.slt",
-        # "test/sqllogictest/cockroach/typing.slt",
-        # "test/sqllogictest/cockroach/union-opt.slt",
+        "test/sqllogictest/cockroach/tuple_local.slt",
+        "test/sqllogictest/cockroach/txn_as_of.slt",
+        "test/sqllogictest/cockroach/type_privileges.slt",
+        "test/sqllogictest/cockroach/typing.slt",
+        "test/sqllogictest/cockroach/udf_in_constraints.slt",
+        "test/sqllogictest/cockroach/udf_oid_ref.slt",
+        "test/sqllogictest/cockroach/udf_setof.slt",
+        "test/sqllogictest/cockroach/udf_star.slt",
+        "test/sqllogictest/cockroach/udf_volatility_check.slt",
+        "test/sqllogictest/cockroach/union-opt.slt",
         "test/sqllogictest/cockroach/union.slt",
-        "test/sqllogictest/cockroach/update.slt",
-        "test/sqllogictest/cockroach/upsert.slt",
+        "test/sqllogictest/cockroach/update_from.slt",
+        "test/sqllogictest/cockroach/user.slt",
         "test/sqllogictest/cockroach/uuid.slt",
         "test/sqllogictest/cockroach/values.slt",
-        # "test/sqllogictest/cockroach/views.slt",
+        "test/sqllogictest/cockroach/views.slt",
+        "test/sqllogictest/cockroach/virtual_table_privileges.slt",
+        "test/sqllogictest/cockroach/void.slt",
         "test/sqllogictest/cockroach/where.slt",
         "test/sqllogictest/cockroach/window.slt",
         "test/sqllogictest/cockroach/with.slt",
-        # "test/sqllogictest/cockroach/zero.slt",
+        "test/sqllogictest/cockroach/zero.slt",
+        "test/sqllogictest/cockroach/zigzag_join.slt",
         "test/sqllogictest/postgres/float4.slt",
         "test/sqllogictest/postgres/float8.slt",
         "test/sqllogictest/postgres/join-lateral.slt",
@@ -684,12 +1063,15 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/introspection/singlereplica_attribution_sources.slt",
         "test/sqllogictest/timedomain.slt",
         "test/sqllogictest/transactions.slt",
+        # depends on log sources
+        "test/sqllogictest/github-10045-10046-10052.slt",
         # depends on unmaterializable functions
         "test/sqllogictest/regclass.slt",
         "test/sqllogictest/regproc.slt",
         "test/sqllogictest/regtype.slt",
         # different outputs:
         # seems expected for audit log to be different
+        "test/sqllogictest/mz_audit_events.slt",
         "test/sqllogictest/singlereplica_audit_log.slt",
         # different indexes auto-created
         "test/sqllogictest/cluster.slt",
@@ -703,15 +1085,38 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/managed_cluster.slt",
         "test/sqllogictest/web-console.slt",
         "test/sqllogictest/show_clusters.slt",
+        "test/sqllogictest/replacement-materialized-views.slt",
     }
     tests_no_auto_index_selects = {
+        # Selects from temporary objects, which cannot be wrapped in the
+        # persistent indexed views that --auto-index-selects creates.
+        "test/sqllogictest/rename.slt",
         # pg_typeof contains public schema name in views
         "test/sqllogictest/cast.slt",
         "test/sqllogictest/map.slt",
+        # A constant-folded numeric(5,2) literal loses its scale in a view;
+        # see the file's header.
+        "test/sqllogictest/try_cast_noindex.slt",
         # pg_typeof contains public schema name in views
         "test/sqllogictest/typeof.slt",
         # https://github.com/MaterializeInc/database-issues/issues/9513#issuecomment-3128051157
         "test/sqllogictest/temporal.slt",
+        # Asserts that a LIMIT at the top level of a SELECT must be constant,
+        # which no longer holds once --auto-index-selects wraps the SELECT in a
+        # view, where a non-constant LIMIT is allowed.
+        "test/sqllogictest/limit_expr.slt",
+        # The huge `LIMIT`s here overflow `limit + offset` inside the
+        # maintained TopK that --auto-index-selects wraps the query in, which
+        # then returns no rows at all. That is a separate bug in a different
+        # operator from the peek result thinning this file covers.
+        "test/sqllogictest/peek_result_thinning.slt",
+        # The extra statements make it more flaky from timing issues, when expecting a refresh to not yet have happened.
+        "test/sqllogictest/materialized_views.slt",
+        # Asserts on exact allocated ids to force a replica/item id collision,
+        # which --auto-index-selects perturbs by consuming item ids for its
+        # wrapper views. The singlereplica_ prefix also pins it to one replica,
+        # since extra replicas shift id allocation and add replica rows.
+        "test/sqllogictest/singlereplica_comment_id_collision.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)

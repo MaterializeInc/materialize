@@ -18,16 +18,14 @@ use std::net::IpAddr;
 
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
-use bytesize::ByteSize;
 use futures::{SinkExt, TryStreamExt, sink};
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
     ChannelBinding, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, GS2Header,
-    MAX_REQUEST_SIZE, Pgbuf, SASLClientFinalResponse, SASLInitialResponse, input_err,
+    MAX_PREAUTH_FRAME_SIZE, Pgbuf, SASLClientFinalResponse, SASLInitialResponse, input_err,
     parse_frame_len,
 };
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, Ready};
@@ -141,8 +139,21 @@ where
     pub fn set_encode_state(
         &mut self,
         encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
+        text_settings: mz_pgrepr::TextEncodeSettings,
     ) {
-        self.inner.get_mut().codec_mut().encode_state = encode_state;
+        let codec = self.inner.get_mut().codec_mut();
+        codec.encode_state = encode_state;
+        codec.text_settings = text_settings;
+    }
+
+    /// Raises the frame ceiling now that the client has authenticated.
+    ///
+    /// Until this is called the connection is held to
+    /// [`MAX_PREAUTH_FRAME_SIZE`], which fits any credential but not a query.
+    /// Must not be called before authentication succeeds, since that is what
+    /// keeps the two phases on their own ceilings.
+    pub fn allow_post_auth_frames(&mut self) {
+        self.inner.get_mut().codec_mut().max_frame_len = mz_ore::netio::MAX_FRAME_SIZE;
     }
 
     /// Waits for the connection to be closed.
@@ -205,17 +216,30 @@ where
     }
 }
 
-struct Codec {
+pub struct Codec {
     decode_state: DecodeState,
     encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
+    /// The session's text encoding settings when `encode_state` was installed.
+    text_settings: mz_pgrepr::TextEncodeSettings,
+    /// Largest frame the client may declare, raised once it authenticates.
+    ///
+    /// One `Codec` serves a connection for its whole life, but the frames it
+    /// should accept change partway through: before authentication only a
+    /// credential is legitimate, while afterwards a single `Bind` parameter can
+    /// carry bulk data. A ceiling wide enough for the second is far too wide for
+    /// the first, so the bound starts tight and
+    /// [`FramedConn::allow_post_auth_frames`] widens it.
+    max_frame_len: usize,
 }
 
 impl Codec {
-    /// Creates a new `Codec`.
+    /// Creates a new `Codec` for a client that has not yet authenticated.
     pub fn new() -> Codec {
         Codec {
             decode_state: DecodeState::Head,
+            max_frame_len: MAX_PREAUTH_FRAME_SIZE,
             encode_state: vec![],
+            text_settings: mz_pgrepr::TextEncodeSettings::STABLE,
         }
     }
 }
@@ -229,7 +253,27 @@ impl Default for Codec {
 impl Encoder<BackendMessage> for Codec {
     type Error = io::Error;
 
+    /// Encode a backend message into `dst`.
+    /// If this function returns an error result, `dst` is left unmodified.
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
+        // Record the starting position so we can truncate on error.
+        // This prevents partial messages from being left in the buffer,
+        // which could be sent to the client and cause "lost synchronization" errors.
+        let start = dst.len();
+        match self.encode_inner(msg, dst) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                dst.truncate(start);
+                Err(e)
+            }
+        }
+    }
+}
+
+impl Codec {
+    /// This is the meat of the encoding logic. It's a separate function so that errors returned by
+    /// `?` can be handled in the outer `encode` function.
+    fn encode_inner(&self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
         // Write type byte.
         let byte = match &msg {
             BackendMessage::AuthenticationOk => b'R',
@@ -279,6 +323,16 @@ impl Encoder<BackendMessage> for Codec {
                 column_formats,
             } => {
                 dst.put_format_i8(overall_format);
+                if column_formats.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} columns in COPY response, which exceeds {}",
+                            column_formats.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(column_formats.len())?;
                 for format in column_formats {
                     dst.put_format_i16(format);
@@ -321,6 +375,16 @@ impl Encoder<BackendMessage> for Codec {
                 }
             }
             BackendMessage::RowDescription(fields) => {
+                if fields.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} fields in row description, which exceeds {}",
+                            fields.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(fields.len())?;
                 for f in &fields {
                     dst.put_string(&f.name.to_string());
@@ -334,16 +398,26 @@ impl Encoder<BackendMessage> for Codec {
                 }
             }
             BackendMessage::DataRow(fields) => {
+                if fields.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} fields in data row, which exceeds {}",
+                            fields.len(),
+                            i16::MAX
+                        ),
+                    ));
+                }
                 dst.put_length_i16(fields.len())?;
                 for (f, (ty, format)) in fields.iter().zip_eq(&self.encode_state) {
                     if let Some(f) = f {
                         let base = dst.len();
                         dst.put_u32(0);
-                        f.encode(ty, *format, dst)?;
+                        f.encode(ty, *format, dst, self.text_settings)?;
                         let len = dst.len() - base - 4;
                         let len = i32::try_from(len).map_err(|_| {
                             io::Error::new(
-                                io::ErrorKind::Other,
+                                io::ErrorKind::InvalidData,
                                 "length of encoded data row field does not fit into an i32",
                             )
                         })?;
@@ -377,7 +451,17 @@ impl Encoder<BackendMessage> for Codec {
                 dst.put_u32(secret_key);
             }
             BackendMessage::ParameterDescription(params) => {
-                dst.put_length_i16(params.len())?;
+                if params.len() > usize::from(u16::MAX) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{} params in parameter description, which exceeds {}",
+                            params.len(),
+                            u16::MAX
+                        ),
+                    ));
+                }
+                dst.put_length_u16(params.len())?;
                 for param in params {
                     dst.put_u32(param.oid());
                 }
@@ -417,7 +501,7 @@ impl Encoder<BackendMessage> for Codec {
         // Overwrite length placeholder with true length.
         let len = i32::try_from(len).map_err(|_| {
             io::Error::new(
-                io::ErrorKind::Other,
+                io::ErrorKind::InvalidData,
                 "length of encoded message does not fit into an i32",
             )
         })?;
@@ -432,15 +516,6 @@ impl Decoder for Codec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<FrontendMessage>, io::Error> {
-        if src.len() > MAX_REQUEST_SIZE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "request larger than {}",
-                    ByteSize::b(u64::cast_from(MAX_REQUEST_SIZE))
-                ),
-            ));
-        }
         loop {
             match self.decode_state {
                 DecodeState::Head => {
@@ -448,7 +523,7 @@ impl Decoder for Codec {
                         return Ok(None);
                     }
                     let msg_type = src[0];
-                    let frame_len = parse_frame_len(&src[1..])?;
+                    let frame_len = parse_frame_len(&src[1..], self.max_frame_len)?;
                     src.advance(5);
                     src.reserve(frame_len);
                     self.decode_state = DecodeState::Data(msg_type, frame_len);
@@ -738,8 +813,12 @@ fn decode_parse(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let name = buf.read_cstr()?;
     let sql = buf.read_cstr()?;
 
+    // NOTE: the protocol calls the counts that precede repeated groups `Int16`,
+    // but PostgreSQL decodes them as unsigned, so they reach 65535. Reading one
+    // as signed makes it negative, which drops the group and leaves the cursor
+    // misaligned for the rest of the message.
     let mut param_types = vec![];
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         param_types.push(buf.read_u32()?);
     }
 
@@ -779,13 +858,15 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
 
+    // The three counts below are `Int16` in the protocol but decoded as
+    // unsigned, for the reason spelled out in `decode_parse`.
     let mut param_formats = Vec::new();
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         param_formats.push(buf.read_format()?);
     }
 
     let mut raw_params = Vec::new();
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         let len = buf.read_i32()?;
         if len == -1 {
             raw_params.push(None); // NULL
@@ -800,7 +881,7 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     }
 
     let mut result_formats = Vec::new();
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         result_formats.push(buf.read_format()?);
     }
 

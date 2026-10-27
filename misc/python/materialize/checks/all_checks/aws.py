@@ -17,9 +17,7 @@ from materialize.checks.checks import Check, externally_idempotent
 @externally_idempotent(False)
 class AwsConnection(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_connection_validation_syntax = true
 
@@ -30,9 +28,7 @@ class AwsConnection(Check):
 
                 > CREATE CONNECTION aws_credentials
                   TO AWS (ACCESS KEY ID = 'access_key', SECRET ACCESS KEY = SECRET aws_secret_access_key);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -51,9 +47,7 @@ class AwsConnection(Check):
         # We can't actually run `VALIDATE CONNECTION` here because we don't have
         # valid AWS credentials. So instead we settle for inspecting the system
         # catalog and ensuring it contains the altered values.
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT assume_role_arn FROM mz_internal.mz_aws_connections a
                   JOIN mz_connections c ON a.id = c.id
                   WHERE name = 'aws_assume_role'
@@ -63,6 +57,4 @@ class AwsConnection(Check):
                   JOIN mz_connections c ON a.id = c.id
                   WHERE name = 'aws_credentials'
                 access_key_2
-                """
-            )
-        )
+                """))

@@ -1,0 +1,110 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Regression test for database-issues#11280: wrong results from a `FlatMap` whose
+# input is only available as an arrangement on a non-leading column. The MFP
+# above the table function references input columns at positions
+# `0..input_arity`, which are in arrangement order rather than logical order.
+# Previously, lowering forwarded the arrangement to the `FlatMap` without
+# permuting those references, so the MFP's projection picked up the wrong
+# columns.
+
+statement ok
+CREATE TABLE t (a INT, b INT, c INT)
+
+statement ok
+INSERT INTO t VALUES (1, 2, 3), (10, 20, 30)
+
+statement ok
+CREATE INDEX idx_c ON t(c)
+
+query IIII rowsort
+SELECT t.a, t.b, t.c, gs.v FROM t, LATERAL generate_series(1, t.c) AS gs(v) WHERE gs.v = 1
+----
+1 2 3 1
+10 20 30 1
+
+# Same shape, but with the index on a different non-leading column.
+statement ok
+DROP INDEX idx_c
+
+statement ok
+CREATE INDEX idx_b ON t(b)
+
+query IIII rowsort
+SELECT t.a, t.b, t.c, gs.v FROM t, LATERAL generate_series(1, t.c) AS gs(v) WHERE gs.v = 1
+----
+1 2 3 1
+10 20 30 1
+
+# A predicate on an input column referenced by the MFP.
+query IIII rowsort
+SELECT t.a, t.b, t.c, gs.v FROM t, LATERAL generate_series(1, t.c) AS gs(v) WHERE gs.v = 1 AND t.a = 1
+----
+1 2 3 1
+
+# The same bug also affects arrangements whose key is not a set of distinct
+# column references (expression, functional, or repeated-column index): the
+# arranged row is wider than the logical row, so the table-function output lands
+# after it and the MFP must reference it at that wider position.
+
+# --- Expression-keyed index: CREATE INDEX ON t (a + b) ---
+statement ok
+DROP INDEX idx_b
+
+statement ok
+CREATE INDEX idx_expr ON t (a + b)
+
+# Empty-result failure mode: the predicate ends up testing a value column.
+query IIII rowsort
+SELECT t.a, t.b, t.c, gs.v FROM t, LATERAL generate_series(1, t.c) AS gs(v) WHERE gs.v = 1
+----
+1 2 3 1
+10 20 30 1
+
+query IIII rowsort
+SELECT t.a, t.b, t.c, gs.v FROM t, LATERAL generate_series(1, t.c) AS gs(v) WHERE gs.v = 1 AND t.a = 1
+----
+1 2 3 1
+
+# Wrong-column-projection failure mode: the MFP projects a value column where
+# the table-function output should be (here gs.v = t.a, distinct from t.c).
+query IIII rowsort
+SELECT t.a, t.b, t.c, gs.v FROM t, LATERAL unnest(ARRAY[t.a]) AS gs(v)
+----
+1 2 3 1
+10 20 30 10
+
+# --- Functional index: CREATE INDEX ON t (abs(a)) ---
+statement ok
+DROP INDEX idx_expr
+
+statement ok
+CREATE INDEX idx_func ON t (abs(a))
+
+query IIII rowsort
+SELECT t.a, t.b, t.c, gs.v FROM t, LATERAL generate_series(1, t.c) AS gs(v) WHERE gs.v = 1
+----
+1 2 3 1
+10 20 30 1
+
+# --- Repeated-column index: CREATE INDEX ON t (c, c) ---
+statement ok
+DROP INDEX idx_func
+
+statement ok
+CREATE INDEX idx_rep ON t (c, c)
+
+query IIII rowsort
+SELECT t.a, t.b, t.c, gs.v FROM t, LATERAL generate_series(1, t.c) AS gs(v) WHERE gs.v = 1
+----
+1 2 3 1
+10 20 30 1

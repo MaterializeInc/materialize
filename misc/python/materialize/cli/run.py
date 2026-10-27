@@ -22,7 +22,7 @@ import sys
 import tempfile
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 import psutil
@@ -197,7 +197,7 @@ def main() -> int:
     parser.add_argument(
         "--listeners-config-path",
         help="Path to json file with environmentd listeners configuration.",
-        default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
+        default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/v26_32_0/no_auth.json",
     )
     args = parser.parse_intermixed_args()
 
@@ -211,9 +211,7 @@ def main() -> int:
     if args.program in KNOWN_PROGRAMS:
         build_func = _cargo_build
 
-        (build_retcode, built_programs) = build_func(
-            args, extra_programs=[args.program]
-        )
+        build_retcode, built_programs = build_func(args, extra_programs=[args.program])
 
         if args.build_only:
             return build_retcode
@@ -224,8 +222,6 @@ def main() -> int:
                     _macos_codesign(program)
             if sys.platform != "darwin":
                 print("Ignoring --enable-mac-codesigning since we're not on macOS")
-        else:
-            print("Disabled macOS Codesigning")
 
         if args.wrapper:
             command = shlex.split(args.wrapper)
@@ -322,9 +318,15 @@ def main() -> int:
                     update_sqlite_repo()
                     break
 
+            # Local sqllogictest points its embedded environmentd at
+            # `args.postgres`, which defaults to a local CockroachDB. Keep
+            # `persist_pg_consensus_read_committed` off, as it requires a
+            # Postgres consensus backend.
             formatted_params = [
                 f"{key}={value}"
-                for key, value in get_default_system_parameters().items()
+                for key, value in get_default_system_parameters(
+                    metadata_store="cockroach"
+                ).items()
             ]
 
             system_parameter_default = ";".join(formatted_params)
@@ -341,7 +343,7 @@ def main() -> int:
             # Always enable soft assertions in SLTs for un-redacted debug formatting and additional testing.
             env["MZ_SOFT_ASSERTIONS"] = "1"
     elif args.program == "test":
-        (build_retcode, _) = _cargo_build(args)
+        build_retcode, _ = _cargo_build(args)
         if args.build_only:
             return build_retcode
 
@@ -355,6 +357,12 @@ def main() -> int:
             raise UIError("cargo nextest not found, run `cargo install cargo-nextest`")
 
         command = _cargo_command(args, "nextest", "run")
+
+        features = []
+        if args.features:
+            features.extend(args.features.split(","))
+        if features:
+            command += [f"--features={','.join(features)}"]
 
         for package in args.package:
             command += ["--package", package]
@@ -404,7 +412,8 @@ def main() -> int:
     os.setpgid(child_pid, child_pid)
 
     # Then, spawn the desired command.
-    print(f"$ {' '.join(command)}")
+    if args.program != "sqllogictest":
+        print(f"$ {' '.join(command)}")
     if args.program == "environmentd":
         # Automatically restart `environmentd` after it halts, but not more than
         # once every 5s to prevent hot loops. This simulates what happens when
@@ -413,11 +422,12 @@ def main() -> int:
         # generally unexpected and we don't want to inadvertently hide them
         # during local development.)
         while True:
-            last_start_time = datetime.now()
+            last_start_time = datetime.now(UTC)
             proc = subprocess.run(command, env=env)
-            if proc.returncode == 166:
+            # 166: `halt!`, 75: `restart_in_place!`.
+            if proc.returncode in (166, 75):
                 wait = max(
-                    timedelta(seconds=5) - (datetime.now() - last_start_time),
+                    timedelta(seconds=5) - (datetime.now(UTC) - last_start_time),
                     timedelta(seconds=0),
                 )
                 print(f"environmentd halted; will restart in {wait.total_seconds()}s")
@@ -441,6 +451,7 @@ def _cargo_build(
         env["RUSTFLAGS"] = (
             env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.coverage)
         )
+        env["LLVM_PROFILE_FILE"] = "/dev/null"
     if args.sanitizer != "none":
         env["RUSTFLAGS"] = (
             env.get("RUSTFLAGS", "")
@@ -470,15 +481,15 @@ def _cargo_build(
     programs = [*REQUIRED_SERVICES, *extra_programs]
     for program in programs:
         command += ["--bin", program]
-    completed_proc = spawn.runv(
-        command,
-        env=env,
-        cwd=pathlib.Path(
-            os.path.abspath(os.path.join(os.path.realpath(sys.argv[0]), "../.."))
-        ),
+    cwd = pathlib.Path(
+        os.path.abspath(os.path.join(os.path.realpath(sys.argv[0]), "../.."))
     )
+    completed_proc = spawn.runv(command, env=env, cwd=cwd)
 
-    artifacts = [str(_cargo_artifact_path(args, program)) for program in programs]
+    target_dir = _cargo_target_dir(env, cwd)
+    artifacts = [
+        str(_cargo_artifact_path(args, target_dir, program)) for program in programs
+    ]
 
     return (completed_proc.returncode, artifacts)
 
@@ -504,12 +515,23 @@ def _cargo_command(args: argparse.Namespace, *subcommands: str) -> list[str]:
     return command
 
 
-def _cargo_artifact_path(args: argparse.Namespace, program: str) -> pathlib.Path:
+def _cargo_target_dir(env: dict[str, str], cwd: pathlib.Path) -> pathlib.Path:
+    """Returns the directory cargo builds into, honoring `CARGO_TARGET_DIR` and
+    a configured `build.target-dir`."""
+    metadata = spawn.capture(
+        ["cargo", "metadata", "--format-version=1", "--no-deps"], env=env, cwd=cwd
+    )
+    return pathlib.Path(json.loads(metadata)["target_directory"])
+
+
+def _cargo_artifact_path(
+    args: argparse.Namespace, target_dir: pathlib.Path, program: str
+) -> pathlib.Path:
     dir_name = "release" if args.release else "optimized" if args.optimized else "debug"
     if args.sanitizer != "none":
-        artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / dir_name
+        artifact_path = target_dir / SANITIZER_TARGET / dir_name
     else:
-        artifact_path = MZ_ROOT / "target" / dir_name
+        artifact_path = target_dir / dir_name
 
     return artifact_path / program
 
@@ -539,7 +561,7 @@ For CockroachDB:
 For PostgreSQL:
     1. Install PostgreSQL
     2. Create a database: `createdb materialize`
-    3. Set the MZDEV_POSTGRES environment variable accordingly: `export MZDEV_POSTGRES=postgres://localhost/materialize`"""
+    3. Set the MZDEV_POSTGRES environment variable accordingly: `export MZDEV_POSTGRES=postgres://$(whoami)@localhost/materialize`"""
     try:
         dbconn = psycopg.connect(urlstr)
         dbconn.autocommit = True

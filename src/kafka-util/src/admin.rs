@@ -206,18 +206,31 @@ pub async fn ensure_topic<'a, C>(
 where
     C: ClientContext,
 {
-    let res = client
-        .create_topics(iter::once(new_topic), admin_opts)
-        .await?;
+    // First, check whether the topic already exists.
+    let metadata = client
+        .inner()
+        // N.B. It is extremely important not to ask specifically
+        // about the topic here, even though the API supports it!
+        // Asking about the topic will create it automatically...
+        // with the wrong number of partitions. Yes, this is
+        // unbelievably horrible.
+        .fetch_metadata(None, Some(Duration::from_secs(10)))?;
+    let already_exists = metadata.topics().iter().any(|t| t.name() == new_topic.name) || {
+        // If we didn't just see the topic in the metadata, try creating it.
+        let res = client
+            .create_topics(iter::once(new_topic), admin_opts)
+            .await?;
 
-    let already_exists = match res.as_slice() {
-        &[Ok(_)] => false,
-        &[Err((_, RDKafkaErrorCode::TopicAlreadyExists))] => true,
-        &[Err((_, e))] => bail!(KafkaError::AdminOp(e)),
-        other => bail!(
-            "kafka topic creation returned {} results, but exactly one result was expected",
-            other.len()
-        ),
+        // We still check for "already exists" in case we're racing against someone else.
+        match res.as_slice() {
+            &[Ok(_)] => false,
+            &[Err((_, RDKafkaErrorCode::TopicAlreadyExists))] => true,
+            &[Err((_, e))] => bail!(KafkaError::AdminOp(e)),
+            other => bail!(
+                "kafka topic creation returned {} results, but exactly one result was expected",
+                other.len()
+            ),
+        }
     };
 
     // We don't need to read in metadata / do any validation if the topic already exists.

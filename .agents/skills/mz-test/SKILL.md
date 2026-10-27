@@ -1,0 +1,305 @@
+---
+name: mz-test
+description: >
+  Run tests + pick test framework in Materialize. Trigger: "run tests",
+  "run testdrive", "run sqllogictest", "run mzcompose", "run cargo test",
+  "run pgtest", "rewrite test results", "add a test", "reproduce a bug",
+  "write a regression test", or mentions testing, testdrive, sqllogictest,
+  mzcompose, pgtest, cargo test, nextest, flaky tests, test failures. Also
+  "test this" or "how do I verify this works". Specifics: mz-platform-checks
+  (upgrade/restart survival), mz-parallel-workload (concurrent stress),
+  mz-limits-test (many objects).
+---
+
+# Testing Materialize
+
+## Cluster sizes
+
+mzcompose-based tests and `bin/environmentd` take their cluster replica sizes
+from `cluster_replica_size_map()` in
+`misc/python/materialize/mzcompose/__init__.py`, named
+`scale=<n>,workers=<w>[,mem=<n>GiB]`, e.g.
+`CREATE CLUSTER c SIZE 'scale=1,workers=1'`. Plain sizes like `'1'` fail there
+with "unknown cluster replica size". The emulator image run directly knows only
+cloud-style sizes (`25cc`, `50cc`, ...).
+
+## Unit tests
+
+Run unit tests with `cargo test`.
+If available, use `cargo nextest` instead.
+If these complain about `METADATA_BACKEND_URL`, then use `bin/cargo-test` instead.
+`bin/cargo-test` sets `METADATA_BACKEND_URL` from its `--postgres` argument,
+which defaults to `MZDEV_POSTGRES` or else the local CockroachDB, and
+overwrites any value already in the environment. To run against another
+metadata store, pass `--postgres` or set `MZDEV_POSTGRES`. It also sets
+`RUST_MIN_STACK=8388608`, which some tests need to avoid stack overflows.
+CI's cargo-test step sets 4194304. A bare `cargo test` or `cargo nextest run`
+sets neither, so export it yourself.
+When using `-p`, our packages typically have an `mz-` suffix, e.g., `mz-adapter`.
+Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
+Do not manually update `*.snap` files.
+Use `cargo test` followed by `cargo insta accept` to update snapshot files.
+
+### Scalar function registry
+
+`cargo test -p mz-compute-types --test func_registry` snapshots every
+`UnaryFunc`, `BinaryFunc`, and `VariadicFunc` variant's properties and
+`#[sqlfunc]` body fingerprint into `src/compute-types/tests/snapshots/`. It
+fails when a variant is added or removed, when a recorded property changes,
+and when a `#[sqlfunc]` declaration or body changes. It records nothing for
+the bodies of hand-written variants, so a change to one of those passes.
+Removals and property changes to a shipped `LIR_VERSION` require a bump
+**before** regenerating, because a rewrite at the old version silently
+overwrites that version's digest. See the mz-commit skill for the decision
+procedure. Then regenerate with
+`REWRITE=1 cargo test -p mz-compute-types --test func_registry` and review the
+JSON diff. Never edit those files by hand. A new variant whose payload carries
+data needs a `Sample` in `src/expr/src/scalar/func/registry.rs`, and the panic
+names the function to add it to.
+
+The sibling `--test lir_schema` snapshots the serde schema of the whole LIR
+plan into `lir_v{LIR_VERSION}.json` and fails on shape changes anywhere under
+`src/compute-types/src/plan`, including `*Func` payloads. Regenerate with
+`REWRITE=1 cargo test -p mz-compute-types --test lir_schema`.
+
+Some tests require access to a metadata store.
+Set environment variables to `COCKROACH_URL=postgres://root@localhost:26257 METADATA_BACKEND_URL=postgres://root@localhost:26257`.
+
+Control log output during tests with `MZ_TEST_LOG_FILTER=<level>`, e.g. `MZ_TEST_LOG_FILTER=debug cargo test ...`.
+
+The first run includes a cargo build step that can take several minutes.
+Use a bash timeout of at least 600000ms (10 min) for test commands.
+
+## sqllogictest
+
+Run sqllogictest files with:
+
+```
+bin/sqllogictest -- PATH [PATH ...]
+```
+
+`PATH` is relative to the repo root, usually a file in `test/sqllogictest/`.
+sqllogictest accepts a list of files, not just one, and runs them in order.
+Prefer batching files into one invocation: each invocation bootstraps a fresh
+catalog and cluster, which is slow, so batching amortizes that startup cost
+across files instead of paying it per file. It also matches how CI drives the
+suite, so goldens generated one-file-per-process can diverge from CI's batched
+context.
+Rewrite expected results with `bin/sqllogictest -- --rewrite-results PATH`.
+Override one system parameter with
+`bin/sqllogictest -- --system-parameter-default=NAME=VALUE PATH`. The wrapper
+passes its own defaults first and the last value per name wins.
+After `timeout N bin/sqllogictest ...` expires, sqllogictest and its clusterd
+processes keep running. The mz-run skill explains why and how to stop them.
+
+Before blaming a change for a golden failure, run the same file on
+upstream/main in a detached worktree. Not every file runs on PRs:
+`compileFastSltConfig` in `test/sqllogictest/mzcompose.py` excludes some (e.g.
+`distinct_arrangements.slt`), which then only run in Nightly, so their goldens
+can be stale on main. `test/sqllogictest/introspection/relations.slt` pins
+dataflow channel container type names, so changing an operator's output
+container needs `--rewrite-results` on it.
+
+When a plan changes only because of nondeterministic IDs in the output,
+normalize it with sqllogictest's `replace` directive rather than running files
+isolated to dodge the ID noise. Treat catalog-bloat plan drift as a real signal
+to investigate, not ID text noise.
+
+Add `--optimized` when running many or large files: it significantly improves execution speed at the cost of a longer one-time compile.
+For a single small file, skip `--optimized`, since the extra compile time outweighs the runtime savings.
+You can use `-v` for printing each query before it is run, e.g. to figure out where we are crashing.
+
+## When sqllogictest gives InconsistentViewOutcome
+
+CI runs many SLTs with `--auto-index-selects`, which wraps most successful
+`SELECT`s in an indexed view and checks that the view returns the same rows as
+the one-shot query. A query that behaves differently when wrapped fails this
+check even though a normal run passes.
+
+You can exempt a file from that mode by adding its path to both configs in
+`test/sqllogictest/mzcompose.py`:
+
+* `compileFastSltConfig` (the `sqllogictest-fast` PR job): add to
+  `tests_without_views`.
+* `compileSlowSltConfig` (the Nightly `slow-tests` job): add to
+  `tests_no_auto_index_selects`.
+
+The file still runs, just without the indexed-view wrapping.
+
+## Testdrive
+
+Run testdrive files with:
+
+```
+bin/mzcompose --find testdrive run default -- FILENAME.td
+```
+
+`FILENAME.td` is a file in `test/testdrive/`, relative to that directory (not the repo root).
+
+`mz_system` and `materialize` are built-in testdrive connections, so
+`$ postgres-execute connection=mz_system` (e.g. for `ALTER SYSTEM SET`) works
+without a prior registration. Any other connection name must first be
+registered:
+
+```
+$ postgres-connect name=conn1 url=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
+```
+
+Using an unregistered name fails with `connection 'conn1' not found`.
+
+Some compositions (e.g. platform-checks, upgrade, pg-cdc multi-version) run the
+same `.td` file against multiple Materialize versions. When a change alters
+version-sensitive output (e.g. the result of a `SHOW`, a system-catalog query,
+or the exact text of an error message), gate the affected lines with version
+guards so each version asserts on the output it actually produces:
+
+```
+>[version<2602300] SHOW some_setting
+old_default
+
+>[version>=2602300] SHOW some_setting
+new_default
+
+![version<2602300] SELECT * FROM t1_update;
+contains:Invalid data in source, saw retractions
+
+![version>=2602300] SELECT * FROM t1_update;
+contains:negative record multiplicity
+```
+
+The `[version...]` guard goes immediately after the directive sigil (`>` for a
+query expecting success, `!` for one expecting an error, etc.) and before the
+SQL. The version is encoded as `MMmmmpp` (e.g. `26.23.0` → `2602300`); see
+`src/build-info/src/lib.rs::version_num`. Existing examples:
+`test/pg-cdc-old-syntax/privileges.td`,
+`test/pg-cdc/publication-with-publish-option.td`.
+
+## pgtest
+
+Run pgtest files with:
+
+```
+bin/cargo-test -p mz-environmentd pgtest
+```
+
+Run a specific pgtest file: `bin/cargo-test -p mz-environmentd test_pgtest_FILE_NAME`.
+
+## mzcompose
+
+`NAME` is any directory containing an `mzcompose.py` file.
+
+Run mzcompose compositions with:
+
+```
+bin/mzcompose --find NAME run WORKFLOW
+```
+
+`default` is a valid workflow in many compositions, provided a `workflow_default` exists that iterates over all workflows.
+Not all compositions have a `workflow_default`.
+
+Other useful commands:
+
+* `bin/mzcompose --find NAME list` — list available compositions
+* `bin/mzcompose --find NAME list-workflows` — list workflows for a composition
+* `bin/mzcompose --find NAME logs` — view container logs
+* `bin/mzcompose --find NAME down` — stop a composition
+
+Many tests expect to start with fresh state.
+Run `bin/mzcompose --find NAME down` between test runs, not just at the end of a session.
+
+The Docker Compose project name defaults to the composition directory name, so
+every worktree and concurrent session running the same composition shares
+containers, and one session's `down` kills another's run. Pass
+`bin/mzcompose --project-name <unique> --find NAME` on both `run` and `down`.
+
+Instead of manually building with `cargo build`, use `bin/mzcompose` directly.
+It implicitly builds in the `target-xcompile` directory when no prebuilt image
+is available from Docker Hub/GHCR, so a manual build beforehand is wasted work
+that mzcompose never uses.
+
+mzcompose builds optimized binaries by default, which are nearly as fast to run as release and much faster to link than debug builds.
+
+* `--release` builds full release binaries, which can be slow.
+  Instead of building release locally, let CI build the binary by creating a (draft) pull request and waiting for the build jobs to finish.
+  Afterward, `mzcompose` will attempt to download the binaries instead of building them locally.
+* `--dev` builds non-optimized debug binaries locally.
+
+## Reproducing bugs
+
+Reproducing bugs is a manual process.
+Ask the user for reproduction instructions, or point them to the GitHub issue or the Buildkite annotation under "Test details & reproducer".
+
+Many tests expect fresh state.
+Always run `bin/mzcompose --find NAME down` before attempting to reproduce.
+
+For flaky tests, the user can run in a loop until failure:
+
+```
+while true; do
+    bin/mzcompose --find testdrive down && \
+    bin/mzcompose --find testdrive run default FILENAME.td || break
+done
+```
+
+If a flake cannot be reproduced locally, suggest the user trigger CI runs manually via https://ci.dev.materialize.com/trigger
+Removing the "Target Branch" generates a random identifier, allowing parallel runs.
+10-20 runs to reproduce a flake is fine.
+
+To check whether a failure is already known and chronic in CI, see the
+mz-debug-ci skill's `bin/ci-failures` search.
+
+## Additional logging for flaky tests
+
+Add logging through `log_filter` in the test's `mzcompose.py`:
+
+```python
+Materialized(
+    additional_system_parameter_defaults={
+        # TODO: Remove when SQL-NNN is fixed
+        "log_filter": "mz_storage::source::postgres=trace"
+    },
+)
+```
+
+If the flake might occur anywhere, extend `get_minimal_system_parameters` in `misc/python/materialize/mzcompose/__init__.py` with a `log_filter`.
+Always add a TODO comment referencing the issue.
+
+## Adding a test
+
+Determine the right framework based on what you're testing:
+
+* **SQL correctness, types, functions** (no external systems, no concurrency): sqllogictest (`.slt` in `test/sqllogictest/`).
+  Use `mode cockroach`, test NULLs and edge cases.
+  Do NOT modify files in `test/sqllogictest/sqlite` or `test/sqllogictest/cockroach` (upstream).
+  Do NOT drive data-dependent assertions with a `LOAD GENERATOR COUNTER` source plus `mz_unsafe.mz_sleep(...)` to wait for ingestion: the counter emits rows over wall-clock time, so the check races ingestion and flakes in CI. Use a plain `CREATE TABLE` with deterministic `INSERT`s.
+  When a statically-monotonic operator needs a `FROM SOURCE` load generator (whose row timing is nondeterministic), split coverage: test the plan shape with `EXPLAIN PHYSICAL PLAN` over the `FROM SOURCE` table (no data, non-flaky), and test runtime row correctness with a one-shot `SELECT` over a plain `CREATE TABLE` + `INSERT`.
+* **Sources/sinks, Kafka, catalog, pgwire** (external systems): testdrive (`.td` in `test/testdrive/`).
+  Frameworks like `pg-cdc`, `mysql-cdc`, `sql-server-cdc`, `kafka-*` have targeted setups but also run testdrive files.
+* **Raw pgwire messages** (COPY, extended protocol): pgtest (`.pt` in `test/pgtest/`).
+  Wire new files in `src/environmentd/tests/pgwire.rs`.
+* **Pure logic, decoding, pure functions**: Rust `#[mz_ore::test]` (or `#[mz_ore::test(tokio::test)]` for async).
+* **Restart/upgrade issues**: Platform Checks.
+  See `doc/developer/platform-checks.md`, especially the "Writing a Check" section.
+  Do not use the old Legacy Upgrade tests.
+* **Panics or unexpected query errors under concurrency**: extend Parallel Workload actions in `misc/python/materialize/parallel_workload/action.py`.
+* **Many objects / limits**: add a `Generator` subclass in `test/limits/mzcompose.py`.
+* **OOM / bounded memory**: add a `Scenario` in `test/bounded-memory/mzcompose.py`.
+* **Performance micro-benchmarks**: Feature Benchmark scenarios in `misc/python/materialize/feature_benchmark/scenarios`.
+  See `doc/developer/feature-benchmark.md`.
+
+For functional issues, aim for at least two different test frameworks that can independently detect the regression.
+
+Read `doc/developer/guide-testing.md` for more detail on test frameworks.
+
+### Extend an existing file, do not create a new one
+
+It is preferred to extend an existing mzcompose-based test, a `.td` file or `.slt` file when appropriate. Write the smallest test that fails without the fix.
+
+A panic is caught by CI automatically. Just run the statement that panics. Do not add an assertion on the panic message.
+
+## Prove a regression test is red before you call it done
+
+A regression test that has never failed proves nothing. Whenever the test is meant to demonstrate a bug, verify both directions before reporting:
+
+1. With the fix removed run the test and confirm it fails, for the expected reason. Read the failure output.
+2. Restore the fix, run the test again, and confirm it passes.

@@ -13,13 +13,16 @@ from psycopg import Cursor
 
 
 class OperationData:
-    def __init__(self, cursor: Cursor, worker_id: int):
+    def __init__(self, cursor: Cursor | None, worker_id: int):
         self._data: dict[str, Any] = dict()
         self._data["cursor"] = cursor
         self._data["worker_id"] = worker_id
 
     def cursor(self) -> Cursor:
-        return self._data["cursor"]
+        cursor = self._data["cursor"]
+        if cursor is None:
+            raise RuntimeError("Cursor is not set")
+        return cursor
 
     def worker_id(self) -> Cursor:
         return self._data["worker_id"]

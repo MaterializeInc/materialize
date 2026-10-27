@@ -11,13 +11,15 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 /// A macro for feature flags managed by the optimizer.
 macro_rules! optimizer_feature_flags {
     ({ $($feature:ident: $type:ty,)* }) => {
-        #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Arbitrary)]
+        #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
         pub struct OptimizerFeatures {
             $(pub $feature: $type),*
         }
@@ -95,11 +97,6 @@ optimizer_feature_flags!({
     // Use `EquivalenceClassesWithholdingErrors` instead of raw
     // `EquivalenceClasses` during eq prop for joins.
     enable_eq_classes_withholding_errors: bool,
-    enable_guard_subquery_tablefunc: bool,
-    // Enable consolidation of unions that happen immediately after negate.
-    //
-    // The refinement happens in the LIR ⇒ LIR phase.
-    enable_consolidate_after_union_negate: bool,
     // Bound from `SystemVars::enable_eager_delta_joins`.
     enable_eager_delta_joins: bool,
     // Enable Lattice-based fixpoint iteration on LetRec nodes in the
@@ -121,16 +118,31 @@ optimizer_feature_flags!({
     // `DataflowDescription` in the global MIR optimization phase.
     reoptimize_imported_views: bool,
     // See the feature flag of the same name.
-    enable_reduce_reduction: bool,
-    // See the feature flag of the same name.
     enable_join_prioritize_arranged: bool,
     // See the feature flag of the same name.
     enable_projection_pushdown_after_relation_cse: bool,
     // See the feature flag of the same name.
+    enable_union_cancellation_after_relation_cse: bool,
+    // See the feature flag of the same name.
     enable_less_reduce_in_eqprop: bool,
     // See the feature flag of the same name.
     enable_dequadratic_eqprop_map: bool,
+    // See the feature flag of the same name.
     enable_fast_path_plan_insights: bool,
+    // See the feature flag of the same name.
+    enable_cast_elimination: bool,
+    // See the feature flag of the same name.
+    enable_case_literal_transform: bool,
+    // See the feature flag of the same name.
+    enable_simplify_quantified_comparisons: bool,
+    // See the feature flag of the same name.
+    enable_simplify_from_less_existence: bool,
+    // See the feature flag of the same name.
+    enable_coalesce_case_transform: bool,
+    // See the feature flag of the same name.
+    enable_will_distinct_propagation: bool,
+    // See the feature flag of the same name.
+    enable_fixed_correlated_cte_lowering: bool,
 });
 
 /// A trait used to implement layered config construction.
@@ -182,4 +194,54 @@ macro_rules! impl_optimizer_feature_type {
 
 // Implement `OptimizerFeatureType` for all types used in the
 // `optimizer_feature_flags!(...)`  call above.
-impl_optimizer_feature_type![bool, usize];
+impl_optimizer_feature_type![usize];
+
+impl OptimizerFeatureType for bool {
+    fn encode(self) -> String {
+        self.to_string()
+    }
+
+    fn decode(v: &str) -> Self {
+        // Accept both the Rust spelling (`true`/`false`, what `encode` and
+        // `CREATE CLUSTER ... FEATURES` produce) and the canonical system-var /
+        // PostgreSQL spellings (`on`/`off`, ...). A cluster-coherent scoped
+        // override may arrive as the var's canonical `on`/`off`.
+        match v.trim().to_lowercase().as_str() {
+            "t" | "true" | "on" | "1" | "y" | "yes" => true,
+            "f" | "false" | "off" | "0" | "n" | "no" => false,
+            // The writer only stores values that passed `canonicalize`, so this
+            // arm is unreachable in practice. Log rather than panic anyway: a
+            // stored bad value reaching the plan path would otherwise crash the
+            // optimizer on every query for the affected cluster. Fall back to
+            // `false`.
+            other => {
+                mz_ore::soft_panic_or_log!("invalid boolean optimizer feature override: {other:?}");
+                false
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::OptimizerFeatureOverrides;
+
+    #[mz_ore::test]
+    fn bool_override_decodes_lenient_spellings() {
+        for (stored, want) in [
+            ("true", true),
+            ("false", false),
+            ("on", true),
+            ("off", false),
+        ] {
+            let map =
+                BTreeMap::from([("enable_eager_delta_joins".to_string(), stored.to_string())]);
+            assert_eq!(
+                OptimizerFeatureOverrides::from(map).enable_eager_delta_joins,
+                Some(want),
+            );
+        }
+    }
+}

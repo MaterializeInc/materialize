@@ -16,6 +16,7 @@ CREATE TABLE boolean_type (pk_col BOOLEAN PRIMARY KEY, nopk_col BOOLEAN);
 ALTER TABLE boolean_type REPLICA IDENTITY FULL;
 INSERT INTO boolean_type VALUES (TRUE, TRUE);
 INSERT INTO boolean_type VALUES (FALSE, FALSE);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.boolean_type
 

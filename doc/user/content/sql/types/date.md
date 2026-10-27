@@ -11,7 +11,7 @@ menu:
 Detail | Info
 -------|------
 **Quick Syntax** | `DATE '2007-02-01'`
-**Size** | 1 byte
+**Size** | 4 bytes
 **Catalog name** | `pg_catalog.date`
 **OID** | 1082
 **Min value** | 4714-11-24 BC
@@ -20,13 +20,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-date.svg" >}}
-
-Field | Use
-------|----
-_date&lowbar;str_ | A string representing a date in `Y-M-D`, `Y M-D`, `Y M D` or `YMD` format.
-_time&lowbar;str_ | _(NOP)_ A string representing a time of day in `H:M:S.NS` format.
-_tz&lowbar;offset_ | _(NOP)_ The timezone's distance, in hours, from UTC.
+{{% include-syntax file="examples/sql_types/date" example="syntax" %}}
 
 ## Details
 

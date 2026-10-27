@@ -12,6 +12,43 @@
 //! environmentd embeds an HTTP server for introspection into the running
 //! process. At the moment, its primary exports are Prometheus metrics, heap
 //! profiles, and catalog dumps.
+//!
+//! ## Authentication/Authorization flow
+//!
+//! The server supports several authentication modes, controlled by the
+//! configured [`listeners::AuthenticatorKind`]. The general flow is:
+//!
+//! 1. **Authentication.** An authentication middleware runs on every
+//!    protected request and resolves the caller's identity via one of:
+//!    - **Credentials in headers.** The caller supplies a username/password or
+//!      token in the request headers. Supported by all [`listeners::AuthenticatorKind`]s.
+//!    - **Session reuse.** If the caller has an active authenticated session
+//!      (established via `POST /api/login`) and has not supplied credentials
+//!      in the request headers, the session is reused. Only available for
+//!      [`listeners::AuthenticatorKind::Password`] and [`listeners::AuthenticatorKind::Oidc`].
+//!    - **Trusted header injection.** A trusted upstream proxy (e.g. Teleport)
+//!      may inject the caller's identity into the request headers. Only available
+//!      for [`listeners::AuthenticatorKind::None`].
+//!
+//! 2. **Authorization.** The authentication middleware is followed by an authorization
+//!    middleware that checks if the caller's identity is allowed to access the route based on
+//!    its [`listeners::AllowedRoles`].
+//!
+//! 3. **Session initialization.** Once the caller's identity is known, an
+//!    adapter session is opened on their behalf. This happens as part of
+//!    request processing, after all middleware has run.
+//!
+//! 4. **Request handling.** The handler executes the request (e.g. runs SQL)
+//!    using the initialized adapter session.
+//!
+//! ### WebSocket
+//!
+//! The WebSocket flow is identical to the HTTP flow with two differences:
+//!
+//! - Credentials are not read from request headers. Instead, the first
+//!   message sent by the client is treated as the authentication message.
+//! - Authorization and session initialization (step 2 and 3) happen inside
+//!   the WebSocket handler itself, rather than as separate middleware steps.
 
 // Axum handlers must use async, but often don't actually use `await`.
 #![allow(clippy::unused_async)]
@@ -25,7 +62,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
-use async_trait::async_trait;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Query, Request, State};
@@ -43,8 +79,13 @@ use hyper_openssl::client::legacy::MaybeHttpsStream;
 use hyper_util::rt::TokioIo;
 use mz_adapter::session::{Session as AdapterSession, SessionConfig as AdapterSessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
+use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
+use mz_auth::Authenticated;
 use mz_auth::password::Password;
+use mz_auth::user::ExternalUserMetadata;
 use mz_authenticator::Authenticator;
+use mz_controller::ReplicaHttpLocator;
+use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Error as FronteggError;
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
@@ -52,8 +93,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ConnectionCounter, ConnectionHandle};
-use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
-use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind, HttpRoutesEnabled};
+use mz_server_core::listeners::{self, AllowedRoles, HttpRoutesEnabled, RouteGroup};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingSslContext, Server};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
@@ -82,12 +122,18 @@ use tracing::warn;
 
 use crate::BUILD_INFO;
 use crate::deployment::state::DeploymentStateHandle;
-use crate::http::sql::SqlError;
+use crate::http::sql::{ExistingUser, SqlError};
 
 mod catalog;
+mod cluster;
 mod console;
+mod mcp;
+pub mod mcp_metrics;
 mod memory;
 mod metrics;
+mod metrics_public;
+mod metrics_viz;
+pub(crate) mod oauth_metadata;
 mod probe;
 mod prometheus;
 mod root;
@@ -108,18 +154,40 @@ const PROFILING_API_ENDPOINTS: &[&str] = &["/memory", "/hierarchical-memory", "/
 pub struct HttpConfig {
     pub source: &'static str,
     pub tls: Option<ReloadingSslContext>,
-    pub authenticator_kind: AuthenticatorKind,
-    pub authenticator_rx: Shared<Receiver<Arc<Authenticator>>>,
+    pub authenticator_kind: listeners::AuthenticatorKind,
+    pub frontegg: Option<mz_frontegg_auth::Authenticator>,
+    pub oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
     pub adapter_client_rx: Shared<Receiver<Client>>,
     pub allowed_origin: AllowOrigin,
+    /// Raw list of allowed CORS origins, used by the MCP endpoints for
+    /// server-side Origin validation to defend against DNS rebinding.
+    pub allowed_origin_list: Vec<HeaderValue>,
     pub active_connection_counter: ConnectionCounter,
     pub helm_chart_version: Option<String>,
+    /// Externally-visible host name for this environment (without scheme).
+    ///
+    /// Used as the canonical host when constructing absolute URLs that the
+    /// server needs to publish (e.g. the OAuth Protected Resource Metadata
+    /// `resource` field, RFC 9728). When `None`, callers fall back to the
+    /// request's `Host` header, which is correct for unproxied dev setups
+    /// but loses fidelity behind a load balancer that rewrites Host.
+    ///
+    /// We deliberately do NOT consult `X-Forwarded-Host` or
+    /// `X-Forwarded-Proto`: there is no proxy-trust model in environmentd
+    /// today, and an attacker reaching the server directly can otherwise
+    /// poison the published metadata URLs.
+    pub http_host_name: Option<String>,
+    pub frontegg_oauth_issuer_url: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
+    pub dyncfgs: Arc<ConfigSet>,
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
-    pub allowed_roles: AllowedRoles,
+    pub mcp_metrics: mcp_metrics::McpMetrics,
+    pub oauth_metadata_metrics: oauth_metadata::OauthMetadataMetrics,
     pub internal_route_config: Arc<InternalRouteConfig>,
     pub routes_enabled: HttpRoutesEnabled,
+    /// Locator for cluster replica HTTP addresses, used for proxying requests.
+    pub replica_http_locator: Arc<ReplicaHttpLocator>,
 }
 
 #[derive(Debug, Clone)]
@@ -130,7 +198,9 @@ pub struct InternalRouteConfig {
 
 #[derive(Clone)]
 pub struct WsState {
-    authenticator_rx: Delayed<Arc<Authenticator>>,
+    frontegg: Option<mz_frontegg_auth::Authenticator>,
+    oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
+    authenticator_kind: listeners::AuthenticatorKind,
     adapter_client_rx: Delayed<mz_adapter::Client>,
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
@@ -141,7 +211,11 @@ pub struct WsState {
 pub struct WebhookState {
     adapter_client_rx: Delayed<mz_adapter::Client>,
     webhook_cache: WebhookAppenderCache,
+    dyncfgs: Arc<ConfigSet>,
 }
+
+#[derive(Clone, Debug)]
+struct HelmChartVersion(Option<String>);
 
 #[derive(Debug)]
 pub struct HttpServer {
@@ -155,21 +229,36 @@ impl HttpServer {
             source,
             tls,
             authenticator_kind,
-            authenticator_rx,
+            frontegg,
+            oidc_rx,
             adapter_client_rx,
             allowed_origin,
+            allowed_origin_list,
             active_connection_counter,
             helm_chart_version,
+            http_host_name,
+            frontegg_oauth_issuer_url,
             concurrent_webhook_req,
+            dyncfgs,
             metrics,
             metrics_registry,
-            allowed_roles,
+            mcp_metrics,
+            oauth_metadata_metrics,
             internal_route_config,
             routes_enabled,
+            replica_http_locator,
         }: HttpConfig,
     ) -> HttpServer {
         let tls_enabled = tls.is_some();
         let webhook_cache = WebhookAppenderCache::new();
+
+        // Compute OAuth discovery once per listener so the Bearer challenge
+        // and the discovery handler always agree, and the middleware doesn't
+        // re-derive (and re-allocate the Frontegg issuer) on each request.
+        let oauth_discovery = Arc::new(oauth_metadata::McpOAuthDiscovery::for_authenticator(
+            authenticator_kind,
+            frontegg_oauth_issuer_url.as_deref(),
+        ));
 
         // Create secure session store and manager
         let session_store = TowerSessionMemoryStore::default();
@@ -180,26 +269,36 @@ impl HttpServer {
             .with_name("mz_session") // Custom cookie name
             .with_path("/"); // Set cookie path
 
-        let auth_middleware_authenticator_rx = authenticator_rx.clone();
+        let frontegg_middleware = frontegg.clone();
+        let oidc_middleware_rx = oidc_rx.clone();
+        let adapter_client_middleware_rx = adapter_client_rx.clone();
         let auth_middleware = middleware::from_fn(move |req, next| {
-            let authenticator_rx = auth_middleware_authenticator_rx.clone();
+            let frontegg = frontegg_middleware.clone();
+            let oidc_rx = oidc_middleware_rx.clone();
+            let adapter_client_rx = adapter_client_middleware_rx.clone();
             async move {
-                let authenticator = authenticator_rx
-                    .await
-                    .expect("sender not dropped before sending once");
-                http_auth(req, next, tls_enabled, authenticator, allowed_roles).await
+                http_auth(
+                    req,
+                    next,
+                    tls_enabled,
+                    authenticator_kind,
+                    frontegg,
+                    oidc_rx,
+                    adapter_client_rx,
+                )
+                .await
             }
         });
-
         let mut router = Router::new();
         let mut base_router = Router::new();
-        if routes_enabled.base {
-            base_router = base_router
+        let cluster_proxy_config = Arc::new(cluster::ClusterProxyConfig::new(Arc::clone(
+            &replica_http_locator,
+        )));
+        if let RouteGroup::Enabled(base_roles) = routes_enabled.base {
+            let base_group = Router::new()
                 .route(
                     "/",
-                    routing::get(move || async move {
-                        root::handle_home(routes_enabled.profiling).await
-                    }),
+                    routing::get(move || async move { root::handle_home(routes_enabled).await }),
                 )
                 .route("/api/sql", routing::post(sql::handle_sql))
                 .route("/memory", routing::get(memory::handle_memory))
@@ -207,35 +306,55 @@ impl HttpServer {
                     "/hierarchical-memory",
                     routing::get(memory::handle_hierarchical_memory),
                 )
-                .route("/static/*path", routing::get(root::handle_static));
+                .route(
+                    "/metrics-viz",
+                    routing::get(metrics_viz::handle_metrics_viz),
+                )
+                .route("/static/{*path}", routing::get(root::handle_static))
+                .route(
+                    "/metrics/public",
+                    routing::get(metrics_public::handle_public_metrics),
+                )
+                .layer(Extension(metrics_registry.clone()))
+                .layer(Extension(Arc::clone(&cluster_proxy_config)))
+                .authorize(base_roles);
+            base_router = base_router.merge(base_group);
 
             let mut ws_router = Router::new()
                 .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
                 .with_state(WsState {
-                    authenticator_rx: authenticator_rx.clone(),
+                    frontegg,
+                    oidc_rx: oidc_rx.clone(),
+                    authenticator_kind,
                     adapter_client_rx: adapter_client_rx.clone(),
                     active_connection_counter: active_connection_counter.clone(),
-                    helm_chart_version,
-                    allowed_roles,
+                    helm_chart_version: helm_chart_version.clone(),
+                    // WS is gated by the base route group, so it enforces the
+                    // base group's roles
+                    allowed_roles: base_roles,
                 });
-            if let AuthenticatorKind::None = authenticator_kind {
+            if let listeners::AuthenticatorKind::None = authenticator_kind {
                 ws_router = ws_router.layer(middleware::from_fn(x_materialize_user_header_auth));
             }
             router = router.merge(ws_router);
         }
-        if routes_enabled.profiling {
-            base_router = base_router.nest("/prof/", mz_prof_http::router(&BUILD_INFO));
+        if let RouteGroup::Enabled(profiling_roles) = routes_enabled.profiling {
+            let profiling_group = Router::new()
+                .nest("/prof/", mz_prof_http::router(&BUILD_INFO))
+                .authorize(profiling_roles);
+            base_router = base_router.merge(profiling_group);
         }
 
-        if routes_enabled.webhook {
+        if routes_enabled.webhook.is_enabled() {
             let webhook_router = Router::new()
                 .route(
-                    "/api/webhook/:database/:schema/:id",
+                    "/api/webhook/{:database}/{:schema}/{:id}",
                     routing::post(webhook::handle_webhook),
                 )
                 .with_state(WebhookState {
                     adapter_client_rx: adapter_client_rx.clone(),
                     webhook_cache,
+                    dyncfgs,
                 })
                 .layer(
                     tower_http::decompression::RequestDecompressionLayer::new()
@@ -244,6 +363,11 @@ impl HttpServer {
                         .br(true)
                         .zstd(true),
                 )
+                // The webhook handler enforces WEBHOOK_MAX_REQUEST_SIZE_BYTES
+                // itself via to_bytes on a raw Body. This disable is defense-in-depth:
+                // it only matters if the handler ever returns to a Bytes extractor,
+                // which would otherwise inherit the global 5 MiB limit.
+                .layer(DefaultBodyLimit::disable())
                 .layer(
                     CorsLayer::new()
                         .allow_methods(Method::POST)
@@ -261,12 +385,12 @@ impl HttpServer {
             router = router.merge(webhook_router);
         }
 
-        if routes_enabled.internal {
+        if let RouteGroup::Enabled(internal_roles) = routes_enabled.internal {
             let console_config = Arc::new(console::ConsoleProxyConfig::new(
                 internal_route_config.internal_console_redirect_url.clone(),
                 "/internal-console".to_string(),
             ));
-            base_router = base_router
+            let internal_group = Router::new()
                 .route(
                     "/api/opentelemetry/config",
                     routing::put({
@@ -303,6 +427,10 @@ impl HttpServer {
                     routing::get(catalog::handle_catalog_check),
                 )
                 .route(
+                    "/api/catalog/inject-audit-events",
+                    routing::post(catalog::handle_inject_audit_events),
+                )
+                .route(
                     "/api/coordinator/check",
                     routing::get(catalog::handle_coordinator_check),
                 )
@@ -315,14 +443,30 @@ impl HttpServer {
                     routing::get(|| async { Redirect::temporary("/internal-console/") }),
                 )
                 .route(
-                    "/internal-console/*path",
-                    routing::get(console::handle_internal_console),
+                    "/internal-console/{*path}",
+                    routing::get(console::handle_internal_console)
+                        .post(console::handle_internal_console),
                 )
                 .route(
                     "/internal-console/",
-                    routing::get(console::handle_internal_console),
+                    routing::get(console::handle_internal_console)
+                        .post(console::handle_internal_console),
                 )
-                .layer(Extension(console_config));
+                // Cluster HTTP proxy routes.
+                .route("/clusters", routing::get(cluster::handle_clusters))
+                .route(
+                    "/api/cluster/{:cluster_id}/replica/{:replica_id}/process/{:process}/",
+                    routing::any(cluster::handle_cluster_proxy_root),
+                )
+                .route(
+                    "/api/cluster/{:cluster_id}/replica/{:replica_id}/process/{:process}/{*path}",
+                    routing::any(cluster::handle_cluster_proxy),
+                )
+                .layer(Extension(console_config))
+                .layer(Extension(Arc::clone(&cluster_proxy_config)))
+                .authorize(internal_roles);
+            base_router = base_router.merge(internal_group);
+
             let leader_router = Router::new()
                 .route("/api/leader/status", routing::get(handle_leader_status))
                 .route("/api/leader/promote", routing::post(handle_leader_promote))
@@ -330,45 +474,51 @@ impl HttpServer {
                     "/api/leader/skip-catchup",
                     routing::post(handle_leader_skip_catchup),
                 )
+                .authorize(internal_roles)
                 .layer(auth_middleware.clone())
                 .with_state(internal_route_config.deployment_state_handle.clone());
             router = router.merge(leader_router);
         }
 
-        if routes_enabled.metrics {
+        if let RouteGroup::Enabled(metrics_roles) = routes_enabled.metrics {
+            // Clone into the closure so the outer `metrics_registry` binding
+            // stays available for other route blocks below (e.g. MCP metric
+            // registration).
+            let metrics_registry_for_handler = metrics_registry.clone();
             let metrics_router = Router::new()
                 .route(
                     "/metrics",
-                    routing::get(move || async move {
-                        mz_http_util::handle_prometheus(&metrics_registry).await
+                    routing::get(move |headers: HeaderMap| async move {
+                        mz_http_util::handle_prometheus(&metrics_registry_for_handler, headers)
+                            .await
                     }),
                 )
                 .route(
                     "/metrics/mz_usage",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
                     "/metrics/mz_frontier",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
                     "/metrics/mz_compute",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
                     "/metrics/mz_storage",
-                    routing::get(|client: AuthedClient| async move {
+                    routing::get(|client: AuthedClient, headers: HeaderMap| async move {
                         let registry = sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
+                        mz_http_util::handle_prometheus(&registry, headers).await
                     }),
                 )
                 .route(
@@ -376,16 +526,134 @@ impl HttpServer {
                     routing::get(mz_http_util::handle_liveness_check),
                 )
                 .route("/api/readyz", routing::get(probe::handle_ready))
+                .authorize(metrics_roles)
                 .layer(auth_middleware.clone())
                 .layer(Extension(adapter_client_rx.clone()))
-                .layer(Extension(active_connection_counter.clone()));
+                .layer(Extension(active_connection_counter.clone()))
+                .layer(Extension(HelmChartVersion(helm_chart_version.clone())));
             router = router.merge(metrics_router);
+        }
+
+        if routes_enabled.console_config.is_enabled() {
+            let console_config_router = Router::new()
+                .route(
+                    "/api/console/config",
+                    routing::get(console::handle_console_config),
+                )
+                .layer(Extension(adapter_client_rx.clone()))
+                .layer(Extension(active_connection_counter.clone()));
+            router = router.merge(console_config_router);
+        }
+
+        // MCP (Model Context Protocol) endpoints
+        // Enabled via runtime `routes_enabled.mcp_agent` and `routes_enabled.mcp_developer` configuration
+        if routes_enabled.mcp_agent.is_enabled() || routes_enabled.mcp_developer.is_enabled() {
+            use tracing::info;
+
+            // RFC 9728 Protected Resource Metadata. Public route: MCP
+            // clients fetch it before they have a token. Sits on its own
+            // router so the auth middleware never runs on it. The handler
+            // 404s when the listener does not advertise OAuth (see
+            // `McpOAuthDiscovery`) or `oidc_issuer` is unset, so it is safe
+            // to enable unconditionally whenever MCP is enabled.
+            // RFC 9728 §3.1 lets clients look up per-resource metadata
+            // via a path-suffixed well-known URI before falling back to
+            // the bare one. The MCP endpoints share an identical
+            // metadata view today, so we serve the same handler at all
+            // three paths.
+            let oauth_metadata_router = Router::new()
+                .route(
+                    oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH,
+                    routing::get(oauth_metadata::handle_protected_resource_metadata),
+                )
+                .route(
+                    oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH_AGENT,
+                    routing::get(oauth_metadata::handle_protected_resource_metadata),
+                )
+                .route(
+                    oauth_metadata::PROTECTED_RESOURCE_METADATA_PATH_DEVELOPER,
+                    routing::get(oauth_metadata::handle_protected_resource_metadata),
+                )
+                .layer(Extension(adapter_client_rx.clone()))
+                .layer(Extension(oauth_metadata::McpOAuthConfig {
+                    http_host_name: http_host_name.clone(),
+                    discovery: Arc::clone(&oauth_discovery),
+                }))
+                .layer(Extension(oauth_metadata_metrics.clone()));
+            router = router.merge(oauth_metadata_router);
+
+            let mut mcp_router = Router::new();
+
+            if let RouteGroup::Enabled(mcp_agent_roles) = routes_enabled.mcp_agent {
+                info!("Enabling MCP agent endpoint: /api/mcp/agent");
+                let agent_router = Router::new()
+                    .route(
+                        "/api/mcp/agent",
+                        routing::post(mcp::handle_mcp_agent)
+                            .get(mcp::handle_mcp_method_not_allowed),
+                    )
+                    .authorize(mcp_agent_roles);
+                mcp_router = mcp_router.merge(agent_router);
+            }
+
+            if let RouteGroup::Enabled(mcp_developer_roles) = routes_enabled.mcp_developer {
+                info!("Enabling MCP developer endpoint: /api/mcp/developer");
+                let developer_router = Router::new()
+                    .route(
+                        "/api/mcp/developer",
+                        routing::post(mcp::handle_mcp_developer)
+                            .get(mcp::handle_mcp_method_not_allowed),
+                    )
+                    .authorize(mcp_developer_roles);
+                mcp_router = mcp_router.merge(developer_router);
+            }
+
+            // The MCP handlers perform a server-side Origin check against this
+            // allowlist to defend against DNS rebinding attacks (see
+            // database-issues#11311). The CorsLayer alone is not enough: in a
+            // DNS rebinding attack the browser considers the request
+            // same-origin, so no preflight fires and CORS enforcement is
+            // bypassed.
+            let mcp_allowed_origins = Arc::new(allowed_origin_list.clone());
+            mcp_router = mcp_router
+                .layer(auth_middleware.clone())
+                .layer(Extension(oauth_metadata::McpOAuthConfig {
+                    http_host_name: http_host_name.clone(),
+                    discovery: Arc::clone(&oauth_discovery),
+                }))
+                .layer(Extension(adapter_client_rx.clone()))
+                .layer(Extension(active_connection_counter.clone()))
+                .layer(Extension(HelmChartVersion(helm_chart_version.clone())))
+                .layer(Extension(mcp_allowed_origins))
+                .layer(Extension(mcp_metrics))
+                .layer(
+                    CorsLayer::new()
+                        .allow_methods(Method::POST)
+                        .allow_origin(allowed_origin.clone())
+                        // The transport's own request headers, which a browser
+                        // client on an allowed origin must be able to send.
+                        .allow_headers([
+                            AUTHORIZATION,
+                            CONTENT_TYPE,
+                            HeaderName::from_static("mcp-protocol-version"),
+                            HeaderName::from_static("mcp-method"),
+                            HeaderName::from_static("mcp-name"),
+                        ]),
+                );
+            // Trust `x-materialize-user` injected by an upstream proxy on
+            // listeners without HTTP auth, matching `base_router` and
+            // `ws_router` (CLO-158).
+            if let listeners::AuthenticatorKind::None = authenticator_kind {
+                mcp_router = mcp_router.layer(middleware::from_fn(x_materialize_user_header_auth));
+            }
+            router = router.merge(mcp_router);
         }
 
         base_router = base_router
             .layer(auth_middleware.clone())
             .layer(Extension(adapter_client_rx.clone()))
             .layer(Extension(active_connection_counter.clone()))
+            .layer(Extension(HelmChartVersion(helm_chart_version)))
             .layer(
                 CorsLayer::new()
                     .allow_credentials(false)
@@ -401,7 +669,7 @@ impl HttpServer {
             );
 
         match authenticator_kind {
-            AuthenticatorKind::Password => {
+            listeners::AuthenticatorKind::Password | listeners::AuthenticatorKind::Oidc => {
                 base_router = base_router.layer(session_layer.clone());
 
                 let login_router = Router::new()
@@ -410,7 +678,7 @@ impl HttpServer {
                     .layer(Extension(adapter_client_rx));
                 router = router.merge(login_router).layer(session_layer);
             }
-            AuthenticatorKind::None => {
+            listeners::AuthenticatorKind::None => {
                 base_router =
                     base_router.layer(middleware::from_fn(x_materialize_user_header_auth));
             }
@@ -529,17 +797,32 @@ async fn x_materialize_user_header_auth(mut req: Request, next: Next) -> impl In
                 )));
             }
         };
-        let superuser = matches!(username.as_str(), SYSTEM_USER_NAME);
+        // Authorization runs later: for HTTP routes
+        // in the `http_authz` middleware, and for WebSocket connections inside
+        // `init_ws`. This middleware only resolves the injected identity.
         req.extensions_mut().insert(AuthedUser {
             name: username,
             external_metadata_rx: None,
-            internal_metadata: Some(InternalUserMetadata { superuser }),
+            authenticated: Authenticated,
+            authenticator_kind: mz_auth::AuthenticatorKind::None,
+            groups: None,
         });
     }
     Ok(next.run(req).await)
 }
 
-type Delayed<T> = Shared<oneshot::Receiver<T>>;
+pub(crate) type Delayed<T> = Shared<oneshot::Receiver<T>>;
+
+/// Resolve the dyncfg-configured group claim path from a delayed adapter
+/// client. Callers must already have driven `adapter_client_rx` to readiness
+/// (e.g. via `get_authenticator`), so the await here is non-blocking.
+async fn group_claim_for(adapter_client_rx: &Delayed<Client>) -> String {
+    let client = adapter_client_rx
+        .clone()
+        .await
+        .expect("adapter client receiver dropped");
+    OIDC_GROUP_CLAIM.get(client.get_system_vars().await.dyncfgs())
+}
 
 #[derive(Clone)]
 enum ConnProtocol {
@@ -547,11 +830,36 @@ enum ConnProtocol {
     Https,
 }
 
+/// The `allowed_roles` policy for a route group, attached as a request
+/// extension on each authenticated route group and read by [`http_authz`].
+#[derive(Clone, Copy)]
+struct RouteAllowedRoles(AllowedRoles);
+
+/// Router extension for attaching the authorization middleware.
+trait AuthzRouterExt {
+    fn authorize(self, roles: AllowedRoles) -> Self;
+}
+
+impl<S> AuthzRouterExt for Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    fn authorize(self, roles: AllowedRoles) -> Router<S> {
+        // Adds the `RouteAllowedRoles` extension to the request such that
+        // `http_authz` knows which roles to check for a RouteGroup.
+        self.layer(middleware::from_fn(http_authz))
+            .layer(Extension(RouteAllowedRoles(roles)))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AuthedUser {
     name: String,
     external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
-    internal_metadata: Option<InternalUserMetadata>,
+    authenticated: Authenticated,
+    authenticator_kind: mz_auth::AuthenticatorKind,
+    /// Groups from JWT claims for OIDC group-to-role sync.
+    groups: Option<Vec<String>>,
 }
 
 pub struct AuthedClient {
@@ -574,15 +882,19 @@ impl AuthedClient {
         F: FnOnce(&mut AdapterSession),
     {
         let conn_id = adapter_client.new_conn_id()?;
-        let mut session = adapter_client.new_session(AdapterSessionConfig {
-            conn_id,
-            uuid: epoch_to_uuid_v7(&(now)()),
-            user: user.name,
-            client_ip: Some(peer_addr),
-            external_metadata_rx: user.external_metadata_rx,
-            internal_user_metadata: user.internal_metadata,
-            helm_chart_version,
-        });
+        let mut session = adapter_client.new_session(
+            AdapterSessionConfig {
+                conn_id,
+                uuid: epoch_to_uuid_v7(&(now)()),
+                user: user.name,
+                client_ip: Some(peer_addr),
+                external_metadata_rx: user.external_metadata_rx,
+                helm_chart_version,
+                authenticator_kind: user.authenticator_kind,
+                groups: user.groups,
+            },
+            user.authenticated,
+        );
         let connection_guard = active_connection_counter.allocate_connection(session.user())?;
 
         session_config(&mut session);
@@ -608,7 +920,6 @@ impl AuthedClient {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for AuthedClient
 where
     S: Send + Sync,
@@ -645,7 +956,11 @@ where
             (StatusCode::INTERNAL_SERVER_ERROR, "adapter client missing").into_response()
         })?;
         let active_connection_counter = req.extensions.get::<ConnectionCounter>().unwrap();
-        let helm_chart_version = None;
+        let helm_chart_version = req
+            .extensions
+            .get::<HelmChartVersion>()
+            .map(|h| h.0.clone())
+            .unwrap_or(None);
 
         let options = if params.options.is_empty() {
             // It's possible 'options' simply wasn't provided, we don't want that to
@@ -693,15 +1008,39 @@ where
     }
 }
 
+/// Per-request decision about which `WWW-Authenticate` challenges to emit
+/// on a 401, computed by the auth middleware.
+///
+/// Carries both the `Basic` toggle (today's behavior, kept for the SQL HTTP
+/// layer and friends) and an optional `Bearer` challenge with a
+/// `resource_metadata` URL per RFC 9728. The Bearer challenge is only set on
+/// routes that attach an [`oauth_metadata::McpOAuthConfig`] extension; other
+/// routes emit only `Basic` so their behavior is unchanged.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WwwAuthenticateChallenges {
+    /// Whether to emit `WWW-Authenticate: Basic realm=Materialize`.
+    pub include_basic: bool,
+    /// If `Some`, also emit `WWW-Authenticate: Bearer
+    /// resource_metadata="<url>"`. The URL points at this server's RFC 9728
+    /// Protected Resource Metadata document, which advertises the
+    /// authorization server the client should use.
+    pub bearer_resource_metadata: Option<String>,
+    /// If `Some`, also emit `scope="<scope>"` inside the Bearer challenge.
+    /// Tells clients which OAuth scope to request a token with for this
+    /// resource. Only set in conjunction with `bearer_resource_metadata`
+    /// (a scope challenge with no resource hint would be confusing).
+    pub bearer_scope: Option<&'static str>,
+}
+
 #[derive(Debug, Error)]
-enum AuthError {
+pub(crate) enum AuthError {
     #[error("role dissallowed")]
     RoleDisallowed(String),
     #[error("{0}")]
     Frontegg(#[from] FronteggError),
     #[error("missing authorization header")]
     MissingHttpAuthentication {
-        include_www_authenticate_header: bool,
+        challenges: WwwAuthenticateChallenges,
     },
     #[error("{0}")]
     MismatchedUser(String),
@@ -711,26 +1050,62 @@ enum AuthError {
     FailedToUpdateSession,
     #[error("invalid credentials")]
     InvalidCredentials,
+    /// Payload is `OidcError`'s sanitized `Display` (no expected-values leaks).
+    #[error("{0}")]
+    OidcFailed(String),
 }
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         warn!("HTTP request failed authentication: {}", self);
         let mut headers = HeaderMap::new();
-        match self {
-            AuthError::MissingHttpAuthentication {
-                include_www_authenticate_header,
-            } if include_www_authenticate_header => {
-                headers.insert(
-                    http::header::WWW_AUTHENTICATE,
-                    HeaderValue::from_static("Basic realm=Materialize"),
-                );
-            }
-            _ => {}
-        };
         // We omit most detail from the error message we send to the client, to
-        // avoid giving attackers unnecessary information.
-        (StatusCode::UNAUTHORIZED, headers, "unauthorized").into_response()
+        // avoid giving attackers unnecessary information. `OidcFailed` is the
+        // exception: its payload is a sanitized `OidcError::Display` that the
+        // console embeds in the login-page error.
+        let body = match &self {
+            // Bearer goes first so OAuth-aware clients see it before the
+            // Basic fallback. RFC 7235 allows emitting multiple
+            // `WWW-Authenticate` headers; we use one per scheme so each
+            // challenge is unambiguously framed; some parsers struggle
+            // with multiple schemes on a single header value.
+            AuthError::MissingHttpAuthentication { challenges } => {
+                if let Some(resource_metadata) = &challenges.bearer_resource_metadata {
+                    // `scope` is hard-coded to a vetted constant
+                    // (`MCP_SCOPE`); only `resource_metadata` is derived
+                    // from a header value, and `resolve_host` has already
+                    // round-tripped it through the URI grammar. The quoted
+                    // form follows RFC 6749 §3.3 / RFC 6750 §3.
+                    let value = match &challenges.bearer_scope {
+                        Some(scope) => format!(
+                            "Bearer scope=\"{scope}\", resource_metadata=\"{resource_metadata}\"",
+                        ),
+                        None => format!("Bearer resource_metadata=\"{resource_metadata}\""),
+                    };
+                    match HeaderValue::from_str(&value) {
+                        Ok(v) => {
+                            headers.append(http::header::WWW_AUTHENTICATE, v);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "skipping Bearer WWW-Authenticate challenge: invalid header \
+                                 value derived from resource_metadata={resource_metadata:?}: {e}",
+                            );
+                        }
+                    }
+                }
+                if challenges.include_basic {
+                    headers.append(
+                        http::header::WWW_AUTHENTICATE,
+                        HeaderValue::from_static("Basic realm=Materialize"),
+                    );
+                }
+                "unauthorized".to_string()
+            }
+            AuthError::OidcFailed(message) => message.clone(),
+            _ => "unauthorized".to_string(),
+        };
+        (StatusCode::UNAUTHORIZED, headers, body).into_response()
     }
 }
 
@@ -740,25 +1115,27 @@ pub async fn handle_login(
     Extension(adapter_client_rx): Extension<Delayed<Client>>,
     Json(LoginCredentials { username, password }): Json<LoginCredentials>,
 ) -> impl IntoResponse {
+    // The listener's `allowed_roles` policy is not enforced here. Login only
+    // mints a session. Authorization runs per request in the `http_authz`
+    // middleware (and in `init_ws` for WebSocket), so a session for a
+    // disallowed role cannot actually reach any route.
     let Ok(adapter_client) = adapter_client_rx.clone().await else {
         return StatusCode::INTERNAL_SERVER_ERROR;
     };
-    let auth_response = match adapter_client.authenticate(&username, &password).await {
-        Ok(auth_response) => auth_response,
+    let authenticated = match adapter_client.authenticate(&username, &password).await {
+        Ok(authenticated) => authenticated,
         Err(err) => {
             warn!(?err, "HTTP login failed authentication");
             return StatusCode::UNAUTHORIZED;
         }
     };
-
     // Create session data
     let session_data = TowerSessionData {
         username,
         created_at: SystemTime::now(),
         last_activity: SystemTime::now(),
-        internal_metadata: InternalUserMetadata {
-            superuser: auth_response.superuser,
-        },
+        authenticated,
+        authenticator_kind: mz_auth::AuthenticatorKind::Password,
     };
     // Store session data
     let session = session.and_then(|Extension(session)| Some(session));
@@ -784,41 +1161,41 @@ pub async fn handle_logout(session: Option<Extension<TowerSession>>) -> impl Int
     }
 }
 
+/// Authentication middleware.
 async fn http_auth(
     mut req: Request,
     next: Next,
     tls_enabled: bool,
-    authenticator: Arc<Authenticator>,
-    allowed_roles: AllowedRoles,
-) -> impl IntoResponse + use<> {
-    // First check for session authentication
-    if let Some(session) = req.extensions().get::<TowerSession>() {
-        if let Ok(Some(session_data)) = session.get::<TowerSessionData>("data").await {
-            // Check session expiration
-            if session_data
-                .last_activity
-                .elapsed()
-                .unwrap_or(Duration::MAX)
-                > SESSION_DURATION
-            {
-                let _ = session.delete().await;
-                return Err(AuthError::SessionExpired);
-            }
-            // Update last activity
-            let mut updated_data = session_data.clone();
-            updated_data.last_activity = SystemTime::now();
-            session
-                .insert("data", &updated_data)
-                .await
-                .map_err(|_| AuthError::FailedToUpdateSession)?;
-            // User is authenticated via session
-            req.extensions_mut().insert(AuthedUser {
-                name: session_data.username,
-                external_metadata_rx: None,
-                internal_metadata: Some(session_data.internal_metadata),
-            });
-            return Ok(next.run(req).await);
-        }
+    authenticator_kind: listeners::AuthenticatorKind,
+    frontegg: Option<mz_frontegg_auth::Authenticator>,
+    oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
+    adapter_client_rx: Delayed<Client>,
+) -> Result<impl IntoResponse, AuthError> {
+    let creds = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
+        Some(Credentials::Password {
+            username: basic.username().to_owned(),
+            password: Password(basic.password().to_owned()),
+        })
+    } else if let Some(bearer) = req.headers().typed_get::<Authorization<Bearer>>() {
+        Some(Credentials::Token {
+            token: bearer.token().to_owned(),
+        })
+    } else {
+        None
+    };
+
+    // Reuses an authenticated session if one already exists.
+    // If credentials are provided, we perform a new authentication,
+    // separate from the existing session.
+    if creds.is_none()
+        && let Some((session, session_data)) =
+            maybe_get_authenticated_session(req.extensions().get::<TowerSession>()).await
+    {
+        let user = ensure_session_unexpired(session, session_data).await?;
+        // Authorization runs next in the `http_authz` middleware, which reads
+        // this `AuthedUser` and the route's `RouteAllowedRoles`.
+        req.extensions_mut().insert(user);
+        return Ok(next.run(req).await);
     }
 
     // First, extract the username from the certificate, validating that the
@@ -844,31 +1221,59 @@ async fn http_auth(
     if req.extensions().get::<AuthedUser>().is_some() {
         return Ok(next.run(req).await);
     }
-    let creds = if let Some(basic) = req.headers().typed_get::<Authorization<Basic>>() {
-        Some(Credentials::Password {
-            username: basic.username().to_owned(),
-            password: Password(basic.password().to_owned()),
-        })
-    } else if let Some(bearer) = req.headers().typed_get::<Authorization<Bearer>>() {
-        Some(Credentials::Token {
-            token: bearer.token().to_owned(),
-        })
+
+    let path = req.uri().path();
+    // Routes that advertise OAuth opt in by attaching an `McpOAuthConfig`
+    // extension; the middleware stays path-agnostic. Routes that opt in also
+    // get a `Basic` challenge so existing curl/Bearer-already users still see
+    // a usable challenge. See `crate::http::oauth_metadata` for the discovery
+    // document; the challenge and the discovery handler read the same
+    // `McpOAuthConfig`, so they emit the same authorization server and the
+    // same host for a given listener.
+    let oauth_config = req
+        .extensions()
+        .get::<oauth_metadata::McpOAuthConfig>()
+        .cloned();
+    let include_basic = path == "/"
+        || PROFILING_API_ENDPOINTS
+            .iter()
+            .any(|prefix| path.starts_with(prefix))
+        || oauth_config.is_some();
+    let (bearer_resource_metadata, bearer_scope) = if let Some(config) = &oauth_config
+        && config.discovery.is_enabled()
+    {
+        (
+            oauth_metadata::metadata_url(&req, config.http_host_name.as_deref()),
+            Some(config.scope()),
+        )
+    } else {
+        (None, None)
+    };
+    let challenges = WwwAuthenticateChallenges {
+        include_basic,
+        bearer_resource_metadata,
+        bearer_scope,
+    };
+    let authenticator = get_authenticator(
+        authenticator_kind,
+        creds.as_ref(),
+        frontegg,
+        &oidc_rx,
+        &adapter_client_rx,
+    )
+    .await;
+
+    // Only the Frontegg arm consumes `group_claim`; resolving it requires a
+    // coordinator round-trip (`Command::GetSystemVars`), so skip it for
+    // None/Password/OIDC paths. Otherwise unauth'd probes like `/api/livez`,
+    // `/api/readyz`, and `/metrics` on a `None`-auth listener would couple
+    // liveness to coordinator health. Mirrors the pgwire path.
+    let group_claim = if matches!(authenticator, Authenticator::Frontegg(_)) {
+        Some(group_claim_for(&adapter_client_rx).await)
     } else {
         None
     };
-
-    let path = req.uri().path();
-    let include_www_authenticate_header = path == "/"
-        || PROFILING_API_ENDPOINTS
-            .iter()
-            .any(|prefix| path.starts_with(prefix));
-    let user = auth(
-        &authenticator,
-        creds,
-        allowed_roles,
-        include_www_authenticate_header,
-    )
-    .await?;
+    let user = auth(&authenticator, creds, &challenges, group_claim.as_deref()).await?;
 
     // Add the authenticated user as an extension so downstream handlers can
     // inspect it if necessary.
@@ -878,19 +1283,44 @@ async fn http_auth(
     Ok(next.run(req).await)
 }
 
+/// Authorization middleware. Enforces the route group's `allowed_roles` policy
+/// against the authenticated user.
+///
+/// Layered immediately inside [`http_auth`] on every authenticated route group,
+/// always paired with a [`RouteAllowedRoles`] extension. By that wiring both the
+/// `AuthedUser` (from `http_auth`) and the `RouteAllowedRoles` extension are
+/// present whenever this runs. A missing extension is a wiring bug, so we fail
+/// closed rather than skip the check.
+async fn http_authz(req: Request, next: Next) -> Result<impl IntoResponse, AuthError> {
+    match (
+        req.extensions().get::<AuthedUser>(),
+        req.extensions().get::<RouteAllowedRoles>().copied(),
+    ) {
+        (Some(user), Some(RouteAllowedRoles(allowed_roles))) => {
+            check_role_allowed(&user.name, allowed_roles)?;
+            Ok(next.run(req).await)
+        }
+        _ => {
+            warn!("http_authz missing AuthedUser or RouteAllowedRoles extension; denying request");
+            Err(AuthError::RoleDisallowed("<unknown>".to_string()))
+        }
+    }
+}
+
 async fn init_ws(
     WsState {
-        authenticator_rx,
+        frontegg,
+        oidc_rx,
+        authenticator_kind,
         adapter_client_rx,
         active_connection_counter,
         helm_chart_version,
         allowed_roles,
-    }: &WsState,
-    existing_user: Option<AuthedUser>,
+    }: WsState,
+    existing_user: Option<ExistingUser>,
     peer_addr: IpAddr,
     ws: &mut WebSocket,
 ) -> Result<AuthedClient, anyhow::Error> {
-    let authenticator = authenticator_rx.clone().await.expect("sender not dropped");
     // TODO: Add a timeout here to prevent resource leaks by clients that
     // connect then never send a message.
     let ws_auth: WebSocketAuth = loop {
@@ -911,38 +1341,71 @@ async fn init_ws(
         }
     };
 
-    let (user, options) = if let Some(existing_user) = existing_user {
-        match ws_auth {
-            WebSocketAuth::OptionsOnly { options } => (existing_user, options),
-            _ => {
-                warn!("Unexpected bearer or basic auth provided when using user header");
-                anyhow::bail!("unexpected")
-            }
-        }
-    } else {
-        let (creds, options) = match ws_auth {
-            WebSocketAuth::Basic {
-                user,
+    // If credentials are provided, we perform a new authentication,
+    // separate from the existing session.
+    let (creds, options) = match ws_auth {
+        WebSocketAuth::Basic {
+            user,
+            password,
+            options,
+        } => {
+            let creds = Credentials::Password {
+                username: user,
                 password,
-                options,
-            } => {
-                let creds = Credentials::Password {
-                    username: user,
-                    password,
-                };
-                (creds, options)
-            }
-            WebSocketAuth::Bearer { token, options } => {
-                let creds = Credentials::Token { token };
-                (creds, options)
-            }
-            WebSocketAuth::OptionsOnly { .. } => {
-                anyhow::bail!("expected auth information");
-            }
-        };
-        let user = auth(&authenticator, Some(creds), *allowed_roles, false).await?;
-        (user, options)
+            };
+            (Some(creds), options)
+        }
+        WebSocketAuth::Bearer { token, options } => {
+            let creds = Credentials::Token { token };
+            (Some(creds), options)
+        }
+        WebSocketAuth::OptionsOnly { options } => (None, options),
     };
+
+    let user = match (existing_user, creds) {
+        (Some(ExistingUser::XMaterializeUserHeader(_)), Some(_creds)) => {
+            warn!("Unexpected bearer or basic auth provided when using user header");
+            anyhow::bail!("unexpected")
+        }
+        (Some(ExistingUser::Session(user)), None) => user,
+        (Some(ExistingUser::XMaterializeUserHeader(user)), None) => user,
+        (_, Some(creds)) => {
+            let authenticator = get_authenticator(
+                authenticator_kind,
+                Some(&creds),
+                frontegg,
+                &oidc_rx,
+                &adapter_client_rx,
+            )
+            .await;
+            // WebSocket init: no 401-with-challenge contract, the
+            // client is reading WS frames, not parsing HTTP headers, so
+            // we just suppress challenge emission entirely.
+            let no_challenges = WwwAuthenticateChallenges::default();
+            // See `http_auth`: only Frontegg uses `group_claim`, and the
+            // fetch costs a coordinator round-trip.
+            let group_claim = if matches!(authenticator, Authenticator::Frontegg(_)) {
+                Some(group_claim_for(&adapter_client_rx).await)
+            } else {
+                None
+            };
+            let user = auth(
+                &authenticator,
+                Some(creds),
+                &no_challenges,
+                group_claim.as_deref(),
+            )
+            .await?;
+            user
+        }
+        (None, None) => anyhow::bail!("expected auth information"),
+    };
+
+    // Authorization. WebSocket connections authenticate after the HTTP upgrade
+    // (by reading the first frame), so the `http_authz` middleware cannot cover
+    // them. Enforce the authorization here instead, once, for every way
+    // the user was resolved above (session, injected header, or credentials).
+    check_role_allowed(&user.name, allowed_roles)?;
 
     let client = AuthedClient::new(
         &adapter_client_rx.clone().await?,
@@ -969,48 +1432,126 @@ enum Credentials {
     },
 }
 
+async fn get_authenticator(
+    kind: listeners::AuthenticatorKind,
+    creds: Option<&Credentials>,
+    frontegg: Option<mz_frontegg_auth::Authenticator>,
+    oidc_rx: &Delayed<mz_authenticator::GenericOidcAuthenticator>,
+    adapter_client_rx: &Delayed<Client>,
+) -> Authenticator {
+    match kind {
+        listeners::AuthenticatorKind::Frontegg => Authenticator::Frontegg(frontegg.expect(
+            "Frontegg authenticator should exist with listeners::AuthenticatorKind::Frontegg",
+        )),
+        listeners::AuthenticatorKind::Password | listeners::AuthenticatorKind::Sasl => {
+            let client = adapter_client_rx.clone().await.expect("sender not dropped");
+            Authenticator::Password(client)
+        }
+        listeners::AuthenticatorKind::Oidc => match creds {
+            // Use the password authenticator if the credentials are password-based
+            Some(Credentials::Password { .. }) => {
+                let client = adapter_client_rx.clone().await.expect("sender not dropped");
+                Authenticator::Password(client)
+            }
+            _ => Authenticator::Oidc(oidc_rx.clone().await.expect("sender not dropped")),
+        },
+        listeners::AuthenticatorKind::None => Authenticator::None,
+    }
+}
+
+/// Attempts to retrieve session data from a [`TowerSession`], if available.
+/// Session data is present only if an authenticated session has been
+/// established via [`handle_login`].
+pub(crate) async fn maybe_get_authenticated_session(
+    session: Option<&TowerSession>,
+) -> Option<(&TowerSession, TowerSessionData)> {
+    if let Some(session) = session {
+        if let Ok(Some(session_data)) = session.get::<TowerSessionData>("data").await {
+            return Some((session, session_data));
+        }
+    }
+    None
+}
+
+/// Ensures the session is still valid by checking for expiration,
+/// and returns the associated user if the session remains active.
+pub(crate) async fn ensure_session_unexpired(
+    session: &TowerSession,
+    session_data: TowerSessionData,
+) -> Result<AuthedUser, AuthError> {
+    if session_data
+        .last_activity
+        .elapsed()
+        .unwrap_or(Duration::MAX)
+        > SESSION_DURATION
+    {
+        let _ = session.delete().await;
+        return Err(AuthError::SessionExpired);
+    }
+    let mut updated_data = session_data.clone();
+    updated_data.last_activity = SystemTime::now();
+    session
+        .insert("data", &updated_data)
+        .await
+        .map_err(|_| AuthError::FailedToUpdateSession)?;
+
+    Ok(AuthedUser {
+        name: session_data.username,
+        external_metadata_rx: None,
+        authenticated: session_data.authenticated,
+        authenticator_kind: session_data.authenticator_kind,
+        groups: None,
+    })
+}
+
 async fn auth(
     authenticator: &Authenticator,
     creds: Option<Credentials>,
-    allowed_roles: AllowedRoles,
-    include_www_authenticate_header: bool,
+    challenges: &WwwAuthenticateChallenges,
+    group_claim: Option<&str>,
 ) -> Result<AuthedUser, AuthError> {
-    let (name, external_metadata_rx, internal_metadata) = match authenticator {
+    let (name, external_metadata_rx, authenticated, groups) = match authenticator {
         Authenticator::Frontegg(frontegg) => match creds {
             Some(Credentials::Password { username, password }) => {
-                let auth_session = frontegg.authenticate(&username, &password.0).await?;
+                let (auth_session, authenticated) = frontegg
+                    .authenticate(&username, password.as_str(), group_claim)
+                    .await?;
                 let name = auth_session.user().into();
+                let groups = auth_session.groups();
                 let external_metadata_rx = Some(auth_session.external_metadata_rx());
-                (name, external_metadata_rx, None)
+                (name, external_metadata_rx, authenticated, groups)
             }
             Some(Credentials::Token { token }) => {
-                let claims = frontegg.validate_access_token(&token, None)?;
+                let (claims, authenticated) =
+                    frontegg.validate_access_token(&token, None, group_claim)?;
                 let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
                     user_id: claims.user_id,
                     admin: claims.is_admin,
                 });
-                (claims.user, Some(external_metadata_rx), None)
+                (
+                    claims.user,
+                    Some(external_metadata_rx),
+                    authenticated,
+                    claims.groups,
+                )
             }
             None => {
                 return Err(AuthError::MissingHttpAuthentication {
-                    include_www_authenticate_header,
+                    challenges: challenges.clone(),
                 });
             }
         },
         Authenticator::Password(adapter_client) => match creds {
             Some(Credentials::Password { username, password }) => {
-                let auth_response = adapter_client
+                let authenticated = adapter_client
                     .authenticate(&username, &password)
                     .await
                     .map_err(|_| AuthError::InvalidCredentials)?;
-                let internal_metadata = InternalUserMetadata {
-                    superuser: auth_response.superuser,
-                };
-                (username, None, Some(internal_metadata))
+                (username, None, authenticated, None)
             }
             _ => {
                 return Err(AuthError::MissingHttpAuthentication {
-                    include_www_authenticate_header,
+                    challenges: challenges.clone(),
                 });
             }
         },
@@ -1019,9 +1560,25 @@ async fn auth(
             // If we do, it's a server misconfiguration.
             // Just in case, we return a 401 rather than panic.
             return Err(AuthError::MissingHttpAuthentication {
-                include_www_authenticate_header,
+                challenges: challenges.clone(),
             });
         }
+        Authenticator::Oidc(oidc) => match creds {
+            Some(Credentials::Token { token }) => {
+                let (mut claims, authenticated) = oidc
+                    .authenticate(&token, None)
+                    .await
+                    .map_err(|e| AuthError::OidcFailed(e.to_string()))?;
+                let name = std::mem::take(&mut claims.user);
+                let groups = claims.groups.take();
+                (name, None, authenticated, groups)
+            }
+            _ => {
+                return Err(AuthError::MissingHttpAuthentication {
+                    challenges: challenges.clone(),
+                });
+            }
+        },
         Authenticator::None => {
             // If no authentication, use whatever is in the HTTP auth
             // header (without checking the password), or fall back to the
@@ -1030,16 +1587,16 @@ async fn auth(
                 Some(Credentials::Password { username, .. }) => username,
                 _ => HTTP_DEFAULT_USER.name.to_owned(),
             };
-            (name, None, None)
+            (name, None, Authenticated, None)
         }
     };
-
-    check_role_allowed(&name, allowed_roles)?;
 
     Ok(AuthedUser {
         name,
         external_metadata_rx,
-        internal_metadata,
+        authenticated,
+        authenticator_kind: authenticator.kind(),
+        groups,
     })
 }
 
@@ -1106,7 +1663,8 @@ pub struct TowerSessionData {
     username: String,
     created_at: SystemTime,
     last_activity: SystemTime,
-    internal_metadata: InternalUserMetadata,
+    authenticated: Authenticated,
+    authenticator_kind: mz_auth::AuthenticatorKind,
 }
 
 #[cfg(test)]

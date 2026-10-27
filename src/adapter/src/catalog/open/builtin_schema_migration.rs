@@ -29,15 +29,19 @@
 //! `doc/developer/design/20251015_builtin_schema_migration.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::bail;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
-    BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
-    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_CATALOG_RAW, MZ_CATALOG_RAW_DESCRIPTION,
+    MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, MZ_COMPUTE_HYDRATION_TIMES_DESCRIPTION,
+    MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION, MZ_OBJECT_HYDRATION_HISTORY,
+    MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION, MZ_REPLICA_HYDRATION_HISTORY,
+    MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
@@ -45,7 +49,7 @@ use mz_catalog::durable::{SystemObjectDescription, SystemObjectMapping, Transact
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_ore::soft_assert_or_log;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_CATALOG;
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{Opaque, SinceHandle};
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::write::WriteHandle;
@@ -71,54 +75,485 @@ use crate::catalog::migrate::get_migration_version;
 /// example, if we support upgrading one major version at a time, the release of version `N.0.0`
 /// can delete all migration steps with versions before `(N-1).0.0`.
 ///
+/// Exception: when a builtin's `SystemObjectDescription` changes — e.g. a builtin table is
+/// converted to a materialized view (see `migrate_builtin_tables_to_mvs`), or a builtin is
+/// renamed or removed — existing steps naming the old description must be removed regardless
+/// of version, because `validate_migration_steps` panics on steps that don't resolve to a
+/// current builtin. This is safe only if a `Replacement` step for the new description is added
+/// at the conversion version: every environment that needed the removed steps upgrades from an
+/// even older version, so the new replacement subsumes them.
+///
 /// Smallest supported version: 0.147.0
-const MIGRATIONS: &[MigrationStep] = &[
-    MigrationStep {
-        version: Version::new(0, 149, 0),
-        object: Object {
-            type_: CatalogItemType::Source,
-            schema: MZ_INTERNAL_SCHEMA,
-            name: "mz_sink_statistics_raw",
-        },
-        mechanism: Mechanism::Replacement,
-    },
-    MigrationStep {
-        version: Version::new(0, 149, 0),
-        object: Object {
-            type_: CatalogItemType::Source,
-            schema: MZ_INTERNAL_SCHEMA,
-            name: "mz_source_statistics_raw",
-        },
-        mechanism: Mechanism::Replacement,
-    },
-    MigrationStep {
-        version: Version::new(0, 159, 0),
-        object: Object {
-            type_: CatalogItemType::Source,
-            schema: MZ_INTERNAL_SCHEMA,
-            name: "mz_cluster_replica_metrics_history",
-        },
-        mechanism: Mechanism::Evolution,
-    },
-    MigrationStep {
-        version: Version::new(0, 160, 0),
-        object: Object {
-            type_: CatalogItemType::Table,
-            schema: MZ_CATALOG_SCHEMA,
-            name: "mz_roles",
-        },
-        mechanism: Mechanism::Replacement,
-    },
-    MigrationStep {
-        version: Version::new(0, 160, 0),
-        object: Object {
-            type_: CatalogItemType::Table,
-            schema: MZ_CATALOG_SCHEMA,
-            name: "mz_sinks",
-        },
-        mechanism: Mechanism::Replacement,
-    },
-];
+static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
+    vec![
+        MigrationStep::replacement(
+            "0.149.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_sink_statistics_raw",
+        ),
+        MigrationStep::replacement(
+            "0.149.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_source_statistics_raw",
+        ),
+        MigrationStep::evolution(
+            "0.159.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_replica_metrics_history",
+        ),
+        MigrationStep::replacement(
+            "26.18.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_databases",
+        ),
+        MigrationStep::replacement(
+            "26.19.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_schemas",
+        ),
+        MigrationStep::replacement(
+            "26.19.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_role_members",
+        ),
+        MigrationStep::replacement(
+            "26.19.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_network_policies",
+        ),
+        MigrationStep::replacement(
+            "26.19.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_network_policy_rules",
+        ),
+        MigrationStep::replacement(
+            "26.19.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_workload_classes",
+        ),
+        MigrationStep::replacement(
+            "26.19.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_internal_cluster_replicas",
+        ),
+        MigrationStep::replacement(
+            "26.19.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_pending_cluster_replicas",
+        ),
+        MigrationStep::replacement(
+            "26.20.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_materialized_views",
+        ),
+        MigrationStep::replacement(
+            "26.22.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_connections",
+        ),
+        MigrationStep::replacement(
+            "26.22.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_secrets",
+        ),
+        MigrationStep::replacement(
+            "26.27.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
+        ),
+        MigrationStep::replacement(
+            "26.29.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        MigrationStep::replacement(
+            "26.29.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_roles",
+        ),
+        MigrationStep::replacement(
+            "26.29.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_role_parameters",
+        ),
+        // Required because we added `mz_cluster_replica_size_internal_ind` builtin
+        // index without bumping mz_indexes. make_mz_indexes inlines the builtin-index
+        // set as VALUES, so any add/remove changes its SQL fingerprint and requires
+        // an explicit replacement step.
+        MigrationStep::replacement(
+            "26.30.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        MigrationStep::replacement(
+            "26.30.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_clusters",
+        ),
+        MigrationStep::replacement(
+            "26.30.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_cluster_replicas",
+        ),
+        MigrationStep::replacement(
+            "26.30.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_schedules",
+        ),
+        MigrationStep::replacement(
+            "26.30.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_default_privileges",
+        ),
+        MigrationStep::replacement(
+            "26.30.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_system_privileges",
+        ),
+        // The mz_cluster_replicas MV definition changed in 26.31.0-dev (the
+        // `availability_zone` column now aggregates the durable
+        // `availability_zones` list).
+        MigrationStep::replacement(
+            "26.31.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_cluster_replicas",
+        ),
+        MigrationStep::replacement(
+            "26.32.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_comments",
+        ),
+        // Required because we added the console cluster-utilization overview builtin
+        // indexes (overview/_3h/_24h). make_mz_indexes inlines the builtin-index set
+        // as VALUES, so any add/remove changes its SQL fingerprint and requires an
+        // explicit replacement step.
+        MigrationStep::replacement(
+            "26.32.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        MigrationStep::replacement(
+            "26.33.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_audit_events",
+        ),
+        // Required because we added the `mz_cluster_reconfigurations_ind` and
+        // `mz_cluster_auto_scaling_strategies_ind` builtin indexes without
+        // bumping mz_indexes. make_mz_indexes inlines the builtin-index set as
+        // VALUES, so any add/remove changes its SQL fingerprint and requires an
+        // explicit replacement step.
+        //
+        // NOTE: this version must stay at the workspace's current dev version
+        // until this change ships in a release. A dev version orders below its
+        // release, so a step pinned to an older dev version is skipped when
+        // upgrading from that release onward, and the fingerprint check then
+        // panics at catalog open.
+        MigrationStep::replacement(
+            "26.34.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        // Converting mz_postgres_sources / mz_kafka_sources from builtin tables
+        // to materialized views changes their catalog fingerprint, so both need
+        // an explicit replacement step. See the NOTE above: this version must
+        // stay at the workspace's current dev version until the change ships.
+        MigrationStep::replacement(
+            "26.34.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_postgres_sources",
+        ),
+        MigrationStep::replacement(
+            "26.34.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_kafka_sources",
+        ),
+        // Converting the four mz_*_source_tables from builtin tables to
+        // materialized views changes their catalog fingerprint, so each needs an
+        // explicit replacement step.
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_postgres_source_tables",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_mysql_source_tables",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_sql_server_source_tables",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_kafka_source_tables",
+        ),
+        // `mz_type_pg_metadata` gained a trailing `typsend` column. See the NOTE
+        // above: this version must stay at the workspace's current dev version
+        // until the change ships.
+        MigrationStep::replacement(
+            "26.40.0-dev.0",
+            CatalogItemType::Table,
+            MZ_INTERNAL_SCHEMA,
+            "mz_type_pg_metadata",
+        ),
+        // `mz_type_pg_metadata` gained a trailing `typlen` column. See the NOTE
+        // above: this version must stay at the workspace's current dev version
+        // until the change ships.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::Table,
+            MZ_INTERNAL_SCHEMA,
+            "mz_type_pg_metadata",
+        ),
+        // Converting the connection-detail builtin tables to materialized views
+        // changes their catalog fingerprint, so each needs an explicit
+        // replacement step.
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_kafka_connections",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_ssh_tunnel_connections",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_aws_connections",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_aws_privatelink_connections",
+        ),
+        // The three sink tables became materialized views, which moves their
+        // fingerprints. The old `0.160.0` `mz_sinks` step had to go at the same
+        // time, because it names the `Table` description and that no longer
+        // resolves. Nothing is lost: anything that needed the old step upgrades
+        // from further back than this one, so this one covers it too.
+        MigrationStep::replacement(
+            "26.38.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sinks",
+        ),
+        MigrationStep::replacement(
+            "26.38.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_kafka_sinks",
+        ),
+        MigrationStep::replacement(
+            "26.38.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_iceberg_sinks",
+        ),
+        // The mz_cluster_reconfigurations MV definition changed (the `changes`
+        // diff now includes the `arrangement_compression` dimension).
+        MigrationStep::replacement(
+            "26.38.0-rc.2",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_reconfigurations",
+        ),
+        // The mz_audit_events MV gained a `metric-sink` arm in its object_type
+        // CASE, changing its SQL fingerprint, so it needs an explicit
+        // replacement step. See the NOTE above: this version must stay at the
+        // workspace's current dev version until the change ships.
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_audit_events",
+        ),
+        // Required because we added the `mz_metric_sinks_ind` builtin index.
+        // make_mz_indexes inlines the builtin-index set as VALUES, so any add or
+        // remove changes its SQL fingerprint and requires an explicit
+        // replacement. See the NOTE above: this version must stay at the
+        // workspace's current dev version until the change ships. The addition
+        // is unshipped, so this step supersedes the earlier `26.39.0-dev.0`
+        // `mz_indexes` step (which covered `mz_object_graph_edges_ind`): a
+        // replacement recreates `mz_indexes` from its current definition, so a
+        // single step at the current dev version covers every earlier change too.
+        MigrationStep::replacement(
+            "26.40.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        // Converting mz_tables and mz_views from builtin tables to
+        // materialized views over mz_catalog_raw changes their catalog
+        // fingerprints, so each needs an explicit replacement step. See the
+        // NOTE above: this version must stay at the workspace's current dev
+        // version until the change ships.
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_tables",
+        ),
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_views",
+        ),
+        // Required because we added the `mz_cluster_replica_resource_usage` builtin log.
+        // make_mz_indexes and make_mz_sources inline the builtin-log set as
+        // VALUES, so adding one changes both MVs' SQL fingerprints. See the NOTE
+        // above: this version must stay at the workspace's current dev version
+        // until the change ships.
+        MigrationStep::replacement(
+            "26.40.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        MigrationStep::replacement(
+            "26.40.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
+        ),
+        // Converting mz_object_dependencies from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint, so it needs an explicit replacement step. See the
+        // NOTE above: this version must stay at the workspace's current dev
+        // version until the change ships.
+        MigrationStep::replacement(
+            "26.41.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_object_dependencies",
+        ),
+        // Adding the `swap_bytes` column to `mz_cluster_replica_metrics_history`
+        // is a backward-compatible append, so the shard schema can evolve in
+        // place. See the NOTE above: this version must stay at the workspace's
+        // current dev version until the change ships.
+        MigrationStep::evolution(
+            "26.43.0-dev.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_replica_metrics_history",
+        ),
+        MigrationStep::evolution(
+            "26.43.0-dev.0",
+            CatalogItemType::Table,
+            MZ_INTERNAL_SCHEMA,
+            "mz_replica_hydration_history",
+        ),
+        // Converting mz_object_global_ids from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.44.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_object_global_ids",
+        ),
+        // Converting mz_source_references from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.45.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_source_references",
+        ),
+        // Converting mz_replacements from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.46.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_replacements",
+        ),
+        // mz_indexes reads builtin indexes from mz_builtin_indexes
+        // and builtin logs from mz_builtin_log_indexes instead of
+        // inlining them, which changes its SQL fingerprint.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        // mz_sources reads builtin sources from mz_builtin_sources
+        // and builtin logs from mz_builtin_log_indexes
+        // instead of inlining them, which changes its SQL fingerprint.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
+        ),
+        // Converting mz_history_retention_strategies from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_history_retention_strategies",
+        ),
+        // Converting mz_materialized_view_refresh_strategies from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint. We also change columns:
+        // - aligned_at (timestamptz) -> aligned_to_expression (text)
+        // - at (timestamptz)-> at_expression (text)
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_materialized_view_refresh_strategies",
+        ),
+    ]
+});
 
 /// A migration required to upgrade past a specific version.
 #[derive(Clone, Debug)]
@@ -126,9 +561,37 @@ struct MigrationStep {
     /// The build version that requires this migration.
     version: Version,
     /// The object that requires migration.
-    object: Object,
+    object: SystemObjectDescription,
     /// The migration mechanism to be used.
     mechanism: Mechanism,
+}
+
+impl MigrationStep {
+    /// Helper to construct an `Evolution` migration step.
+    fn evolution(version: &str, type_: CatalogItemType, schema: &str, name: &str) -> Self {
+        Self {
+            version: Version::parse(version).expect("valid"),
+            object: SystemObjectDescription {
+                schema_name: schema.into(),
+                object_type: type_,
+                object_name: name.into(),
+            },
+            mechanism: Mechanism::Evolution,
+        }
+    }
+
+    /// Helper to construct a `Replacement` migration step.
+    fn replacement(version: &str, type_: CatalogItemType, schema: &str, name: &str) -> Self {
+        Self {
+            version: Version::parse(version).expect("valid"),
+            object: SystemObjectDescription {
+                schema_name: schema.into(),
+                object_type: type_,
+                object_name: name.into(),
+            },
+            mechanism: Mechanism::Replacement,
+        }
+    }
 }
 
 /// The mechanism to use to migrate the schema of a builtin collection.
@@ -144,27 +607,6 @@ enum Mechanism {
     ///
     /// Works for arbitrary schema changes but loses existing contents.
     Replacement,
-}
-
-/// The object of a migration.
-///
-/// This has the same information as [`SystemObjectDescription`] but can be constructed in `const`
-/// contexts, like the `MIGRATIONS` list.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct Object {
-    type_: CatalogItemType,
-    schema: &'static str,
-    name: &'static str,
-}
-
-impl From<Object> for SystemObjectDescription {
-    fn from(object: Object) -> Self {
-        SystemObjectDescription {
-            schema_name: object.schema.into(),
-            object_type: object.type_,
-            object_name: object.name.into(),
-        }
-    }
 }
 
 /// The result of a builtin schema migration.
@@ -241,7 +683,7 @@ pub(super) async fn run(
         config,
     };
 
-    let result = migration.run(MIGRATIONS).await.map_err(|e| {
+    let result = migration.run(&MIGRATIONS).await.map_err(|e| {
         Error::new(ErrorKind::FailedBuiltinSchemaMigration {
             last_seen_version: durable_version.to_string(),
             this_version: build_version.to_string(),
@@ -349,6 +791,36 @@ struct Migration {
     config: BuiltinItemMigrationConfig,
 }
 
+/// Whether `builtin` participates in a forced migration using `mechanism`.
+fn participates_in_forced_migration(
+    builtin: &Builtin<NameReference>,
+    mechanism: Mechanism,
+) -> bool {
+    use Builtin::*;
+    match builtin {
+        // A forced replacement allocates a fresh shard, which discards the
+        // table's contents. Exclude the tables whose contents are the point:
+        // storage usage is retained for billing, and hydration histories cannot
+        // be rebuilt from any other source.
+        //
+        // Hydration history tables take part in a forced `Evolution`, which
+        // keeps the rows. They have to: dev upgrades force one for every object,
+        // and a table left out of the plan never gets its new schema registered.
+        // `update_fingerprints` then panics at open as soon as the desc changes.
+        // See the tripwire in `validate_migration_steps` for how to give up the
+        // replacement exemption deliberately.
+        Table(table) => {
+            **table != *MZ_STORAGE_USAGE_BY_SHARD
+                && (mechanism != Mechanism::Replacement
+                    || (**table != *MZ_OBJECT_HYDRATION_HISTORY
+                        && **table != *MZ_REPLICA_HYDRATION_HISTORY))
+        }
+        MaterializedView(..) => true,
+        Source(source) => **source != *MZ_CATALOG_RAW,
+        Log(..) | View(..) | Type(..) | Func(..) | Index(..) | Connection(..) => false,
+    }
+}
+
 impl Migration {
     async fn run(self, steps: &[MigrationStep]) -> anyhow::Result<MigrationRunResult> {
         info!(
@@ -359,12 +831,24 @@ impl Migration {
 
         self.validate_migration_steps(steps);
 
-        let (force, plan) = match self.config.force_migration.as_deref() {
+        // Version-based migration filter fails for dev versions, see for example
+        // https://github.com/MaterializeInc/database-issues/issues/11335
+        let force_migration = if self.source_version != self.target_version
+            && self.source_version.pre.as_str().starts_with("dev")
+            && self.config.force_migration.is_none()
+        {
+            Some("evolution".to_string())
+        } else {
+            self.config.force_migration.clone()
+        };
+
+        let (force, plan) = match force_migration.as_deref() {
             None => (false, self.plan_migration(steps)),
             Some("evolution") => (true, self.plan_forced_migration(Mechanism::Evolution)),
             Some("replacement") => (true, self.plan_forced_migration(Mechanism::Replacement)),
             Some(other) => panic!("unknown force migration mechanism: {other}"),
         };
+        let plan = self.drop_shardless(plan);
 
         if self.source_version == self.target_version && !force {
             info!("skipping migration: already at target version");
@@ -412,7 +896,7 @@ impl Migration {
                 self.target_version,
             );
 
-            let object = SystemObjectDescription::from(step.object.clone());
+            let object = &step.object;
 
             // `mz_storage_usage_by_shard` cannot be migrated for multiple reasons. Firstly, it would
             // cause the table to be truncated because the contents are not also stored in the durable
@@ -422,18 +906,67 @@ impl Migration {
             //
             // TODO: Confirm the above reasoning, it might be outdated?
             assert_ne!(
-                *MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, object,
+                &*MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, object,
                 "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated"
             );
 
-            let Some(object_info) = self.system_objects.get(&object) else {
+            // Same hazard as `mz_storage_usage_by_shard`: the startup pruner
+            // (`Coordinator::prune_arrangement_sizes_history_on_startup`) assumes it is
+            // the only source of retractions, so migration-driven truncation would break it.
+            assert_ne!(
+                &*MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION, object,
+                "mz_object_arrangement_size_history cannot be migrated or else the table will be truncated"
+            );
+
+            // Unlike the two tables above, there is no correctness hazard here, a
+            // truncation would only lose history. This is a tripwire so that the
+            // loss is chosen rather than stumbled into: if a schema change to
+            // this table is worth clearing it for, remove this assert along with
+            // the exemption in `plan_forced_migration`, and say in the release
+            // notes that the history restarts.
+            //
+            // Only `Replacement` loses the rows. An `Evolution` keeps the shard
+            // and its contents, so it is the path a schema change to this table
+            // should take and we let it through.
+            if step.mechanism == Mechanism::Replacement {
+                assert_ne!(
+                    &*MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION, object,
+                    "replacing mz_object_hydration_history clears it, see the comment above"
+                );
+                assert_ne!(
+                    &*MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION, object,
+                    "replacing mz_replica_hydration_history clears it, see the comment above"
+                );
+            }
+
+            // `mz_catalog_raw` cannot be migrated because it contains the durable catalog and it
+            // wouldn't be very durable if we allowed it to be truncated.
+            assert_ne!(
+                &*MZ_CATALOG_RAW_DESCRIPTION, object,
+                "mz_catalog_raw cannot be migrated"
+            );
+
+            // The 0dt caught-up gate reads the leader's `mz_cluster_replica_frontiers` shard for
+            // the live frontiers it checks every collection against. Migrating it via `Replacement`
+            // hands us a fresh shard we write ourselves, so the gate would compare us against
+            // ourselves instead of against the leader.
+            assert_ne!(
+                &*MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, object,
+                "mz_cluster_replica_frontiers cannot be migrated or else the 0dt caught-up gate loses its live-frontier reference"
+            );
+            assert_ne!(
+                &*MZ_COMPUTE_HYDRATION_TIMES_DESCRIPTION, object,
+                "mz_compute_hydration_times cannot be migrated or else the 0dt caught-up gate loses its leader-hydration reference"
+            );
+
+            let Some(object_info) = self.system_objects.get(object) else {
                 panic!("migration step for non-existent builtin: {object:?}");
             };
 
             let builtin = object_info.builtin;
             use Builtin::*;
             assert!(
-                matches!(builtin, Table(..) | Source(..) | ContinualTask(..)),
+                matches!(builtin, Table(..) | Source(..) | MaterializedView(..)),
                 "schema migration not supported for builtin: {builtin:?}",
             );
         }
@@ -464,8 +997,8 @@ impl Migration {
         let mut plan = Plan::default();
         for (object, mechanism) in by_object {
             match mechanism {
-                Mechanism::Evolution => plan.evolve.push(object.into()),
-                Mechanism::Replacement => plan.replace.push(object.into()),
+                Mechanism::Evolution => plan.evolve.push(object),
+                Mechanism::Replacement => plan.replace.push(object),
             }
         }
 
@@ -477,7 +1010,7 @@ impl Migration {
         let objects = self
             .system_objects
             .iter()
-            .filter(|(_, info)| matches!(info.builtin, Builtin::Table(..) | Builtin::Source(..)))
+            .filter(|(_, info)| participates_in_forced_migration(info.builtin, mechanism))
             .map(|(object, _)| object.clone())
             .collect();
 
@@ -487,6 +1020,26 @@ impl Migration {
             Mechanism::Replacement => plan.replace = objects,
         }
 
+        plan
+    }
+
+    /// Drop objects that have no shard registered from the plan.
+    ///
+    /// A builtin without a shard does not exist in persist yet: either it was added in the target
+    /// version, or the source version predates it entirely (an upgrade from before the builtin
+    /// was introduced can reach an `Evolution` step registered for a later version). In both
+    /// cases the leader allocates the shard during bootstrap, at the target schema, and there is
+    /// nothing to evolve or replace. Applied to every plan, forced or versioned, so that both
+    /// paths agree; a read-only process that reached `migrate_evolve_one` with such an object
+    /// would otherwise bail out and crash-loop.
+    fn drop_shardless(&self, mut plan: Plan) -> Plan {
+        let has_shard = |object: &SystemObjectDescription| {
+            self.system_objects
+                .get(object)
+                .is_none_or(|info| info.shard_id.is_some())
+        };
+        plan.evolve.retain(has_shard);
+        plan.replace.retain(has_shard);
         plan
     }
 
@@ -538,7 +1091,7 @@ impl Migration {
         let target_desc = match object_info.builtin {
             Builtin::Table(table) => &table.desc,
             Builtin::Source(source) => &source.desc,
-            Builtin::ContinualTask(ct) => &ct.desc,
+            Builtin::MaterializedView(mv) => &mv.desc,
             _ => bail!("not a storage collection: {object:?}"),
         };
 
@@ -807,7 +1360,7 @@ impl Migration {
     async fn open_migration_shard_since(
         &self,
         diagnostics: Diagnostics,
-    ) -> SinceHandle<migration_shard::Key, ShardId, Timestamp, StorageDiff, i64> {
+    ) -> SinceHandle<migration_shard::Key, ShardId, Timestamp, StorageDiff> {
         self.config
             .persist_client
             .open_critical_since(
@@ -815,6 +1368,7 @@ impl Migration {
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&i64::MIN),
                 diagnostics.clone(),
             )
             .await
@@ -953,7 +1507,7 @@ impl Migration {
         .boxed();
 
         // Downgrade the since, to enable some compaction.
-        let o = *persist_since.opaque();
+        let o = persist_since.opaque().clone();
         let new_since = Antichain::from_elem(read_ts);
         let result = persist_since
             .maybe_compare_and_downgrade_since(&o, (&o, &new_since))
@@ -975,7 +1529,7 @@ async fn read_migration_shard<P>(
     predicate: P,
 ) -> Option<Vec<(migration_shard::Key, ShardId)>>
 where
-    P: for<'a> Fn(&migration_shard::Key) -> bool,
+    P: Fn(&migration_shard::Key) -> bool,
 {
     let as_of = Antichain::from_elem(read_ts);
     let updates = persist_read.snapshot_and_fetch(as_of).await.ok()?;

@@ -27,10 +27,13 @@ use crossbeam::channel::{Receiver, Sender, unbounded};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
+use mz_ore::netio::{DnsResolutionError, resolve_address};
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig, SshTunnelStatus};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
 use rdkafka::client::{Client, NativeClient, OAuthToken};
-use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
+use rdkafka::config::{
+    ClientConfig, FromClientConfig, FromClientConfigAndContext, RDKafkaLogLevel,
+};
 use rdkafka::consumer::{ConsumerContext, Rebalance};
 use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
 use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};
@@ -39,7 +42,7 @@ use rdkafka::util::Timeout;
 use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
-use tracing::{Level, debug, error, info, trace, warn};
+use tracing::{Level, debug, info, trace, warn};
 
 use crate::aws;
 
@@ -104,6 +107,11 @@ impl MzClientContext {
     }
 }
 
+/// Prefix of the `FAIL` log [`TunnelingClientContext`] emits when it rejects a
+/// broker, which [`MzKafkaError::from_str`] maps to
+/// [`MzKafkaError::PrivateBrokerAddress`].
+const PRIVATE_BROKER_ADDRESS_MARKER: &str = "Broker address resolved to a private IP";
+
 /// A structured error type for errors reported by librdkafka through its logs.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum MzKafkaError {
@@ -134,6 +142,9 @@ pub enum MzKafkaError {
     /// Failed to resolve hostname
     #[error("Failed to resolve hostname")]
     HostnameResolutionFailed,
+    /// Broker resolved to a private address while external addresses are enforced
+    #[error("Broker address resolved to a private IP")]
+    PrivateBrokerAddress,
     /// Unsupported SASL mechanism
     #[error("Unsupported SASL mechanism")]
     UnsupportedSASLMechanism,
@@ -187,6 +198,8 @@ impl FromStr for MzKafkaError {
             Ok(Self::ConnectionReset(inner.to_owned()))
         } else if s.contains("request(s) timed out: disconnect") {
             Ok(Self::ConnectionTimeout)
+        } else if s.contains(PRIVATE_BROKER_ADDRESS_MARKER) {
+            Ok(Self::PrivateBrokerAddress)
         } else if s.contains("Failed to resolve") {
             Ok(Self::HostnameResolutionFailed)
         } else if s.contains("mechanism handshake failed:") {
@@ -288,6 +301,13 @@ pub struct BrokerAddr {
     pub port: u16,
 }
 
+impl BrokerAddr {
+    /// Attempt to resolve this broker address into a list of socket addresses.
+    pub fn to_socket_addrs(&self) -> Result<Vec<SocketAddr>, io::Error> {
+        Ok((self.host.as_str(), self.port).to_socket_addrs()?.collect())
+    }
+}
+
 /// Rewrites a broker address.
 ///
 /// For use with [`TunnelingClientContext`].
@@ -299,6 +319,16 @@ pub struct BrokerRewrite {
     ///
     /// If unspecified, the broker's original port is left unchanged.
     pub port: Option<u16>,
+}
+
+impl BrokerRewrite {
+    /// Apply the rewrite to this broker address.
+    pub fn rewrite(&self, address: &BrokerAddr) -> BrokerAddr {
+        BrokerAddr {
+            host: self.host.clone(),
+            port: self.port.unwrap_or(address.port),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -313,6 +343,78 @@ enum BrokerRewriteHandle {
     FailedDefaultSshTunnel(String),
 }
 
+#[derive(Clone)]
+/// Parsed from a string, with optional leading and trailing '*' wildcards.
+pub struct ConnectionRulePattern {
+    /// If true, allow any combination of characters before the literal match.
+    pub prefix_wildcard: bool,
+    /// We expect the broker's host:port to match these characters in their entirety.
+    pub literal_match: String,
+    /// If true, allow any combination of characters after the literal match.
+    pub suffix_wildcard: bool,
+}
+
+impl std::fmt::Display for ConnectionRulePattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.prefix_wildcard {
+            f.write_str("*")?;
+        }
+        f.write_str(&self.literal_match)?;
+        if self.suffix_wildcard {
+            f.write_str("*")?;
+        }
+        Ok(())
+    }
+}
+
+impl ConnectionRulePattern {
+    /// Does this "{host}:{port}" address fit the pattern?
+    pub fn matches(&self, address: &str) -> bool {
+        if self.prefix_wildcard {
+            if self.suffix_wildcard {
+                address.contains(&self.literal_match)
+            } else {
+                address.ends_with(&self.literal_match)
+            }
+        } else if self.suffix_wildcard {
+            address.starts_with(&self.literal_match)
+        } else {
+            address == self.literal_match
+        }
+    }
+}
+
+#[derive(Clone)]
+/// Given a host address, map it to a different host.
+pub struct HostMappingRules {
+    /// Map matching hosts to a different host. First applicable rule wins.
+    pub rules: Vec<(ConnectionRulePattern, BrokerRewrite)>,
+}
+
+impl HostMappingRules {
+    /// Rewrite this broker address according to the rules. Returns `None` when
+    /// no rule matches.
+    pub fn rewrite(&self, src: &BrokerAddr) -> Option<BrokerAddr> {
+        let address = format!("{}:{}", src.host, src.port);
+        for (pattern, dst) in &self.rules {
+            if pattern.matches(&address) {
+                let result = dst.rewrite(src);
+                info!(
+                    "HostMappingRules: broker {}:{} matched pattern '{}' -> rewriting to {}:{}",
+                    src.host, src.port, pattern, result.host, result.port,
+                );
+                return Some(result);
+            }
+        }
+
+        warn!(
+            "HostMappingRules: broker {}:{} matched no rules, using original address",
+            src.host, src.port,
+        );
+        None
+    }
+}
+
 /// Tunneling clients
 /// used for re-writing ports / hosts
 #[derive(Clone)]
@@ -321,6 +423,8 @@ pub enum TunnelConfig {
     Ssh(SshTunnelConfig),
     /// Re-writes internal hosts using the value, used for privatelink
     StaticHost(String),
+    /// Re-writes internal hosts according to an ordered list of rules, also used for privatelink
+    Rules(HostMappingRules),
     /// Performs no re-writes
     None,
 }
@@ -336,6 +440,7 @@ pub struct TunnelingClientContext<C> {
     ssh_timeout_config: SshTimeoutConfig,
     aws_config: Option<SdkConfig>,
     runtime: Handle,
+    enforce_external_addresses: bool,
 }
 
 impl<C> TunnelingClientContext<C> {
@@ -347,6 +452,7 @@ impl<C> TunnelingClientContext<C> {
         ssh_timeout_config: SshTimeoutConfig,
         aws_config: Option<SdkConfig>,
         in_task: InTask,
+        enforce_external_addresses: bool,
     ) -> TunnelingClientContext<C> {
         TunnelingClientContext {
             inner,
@@ -357,6 +463,7 @@ impl<C> TunnelingClientContext<C> {
             ssh_timeout_config,
             aws_config,
             runtime,
+            enforce_external_addresses,
         }
     }
 
@@ -442,6 +549,42 @@ impl<C> TunnelingClientContext<C> {
     }
 }
 
+impl<C: ClientContext> TunnelingClientContext<C> {
+    /// Resolves a broker address that the user controls directly, i.e. one not
+    /// rewritten to an SSH tunnel or PrivateLink endpoint. With
+    /// `enforce_external_addresses`, fails unless every address is global.
+    // NOTE: librdkafka connects only to addresses returned here, and every
+    // re-resolution (e.g. after `broker.address.ttl`) comes back through this
+    // callback, so checking here also defeats DNS rebinding. TLS SNI and
+    // certificate verification still use the broker's hostname.
+    fn resolve_direct(&self, addr: &BrokerAddr) -> Result<Vec<SocketAddr>, io::Error> {
+        if !self.enforce_external_addresses {
+            return addr.to_socket_addrs();
+        }
+        match self.runtime.block_on(resolve_address(&addr.host, true)) {
+            Ok(ips) => Ok(ips
+                .into_iter()
+                .map(|ip| SocketAddr::new(ip, addr.port))
+                .collect()),
+            Err(e) => {
+                // librdkafka reports a callback failure as a generic resolution
+                // failure, so surface the reason through the inner context.
+                if let DnsResolutionError::PrivateAddress = e {
+                    self.inner.log(
+                        RDKafkaLogLevel::Error,
+                        "FAIL",
+                        &format!(
+                            "{PRIVATE_BROKER_ADDRESS_MARKER}: {}:{} is not routable on the public internet",
+                            addr.host, addr.port
+                        ),
+                    );
+                }
+                Err(io::Error::other(e))
+            }
+        }
+    }
+}
+
 impl<C> ClientContext for TunnelingClientContext<C>
 where
     C: ClientContext,
@@ -489,7 +632,12 @@ where
         }
     }
 
+    /// Look up the broker's address in our book of rewrites.
+    /// If we've already rewritten it before, reuse the existing rewrite.
+    /// Otherwise, use our "default tunnel" rewriting strategy to attempt to rewrite this broker's address
+    /// and record it in the book of rewrites.
     fn resolve_broker_addr(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, io::Error> {
+        info!("kafka: resolve_broker_addr called for {}:{}", host, port);
         let return_rewrite = |rewrite: &BrokerRewriteHandle| -> Result<Vec<SocketAddr>, io::Error> {
             let rewrite = match rewrite {
                 BrokerRewriteHandle::Simple(rewrite) => rewrite.clone(),
@@ -525,8 +673,12 @@ where
         let rewrite = self.rewrites.lock().expect("poisoned").get(&addr).cloned();
 
         match rewrite {
+            // No (successful) broker address rewrite exists yet.
             None | Some(BrokerRewriteHandle::FailedDefaultSshTunnel(_)) => {
+                // "Default tunnel" is actually the configured rewriting strategy used for brokers we haven't already rewritten.
                 match &self.default_tunnel {
+                    // This "default tunnel" is actually a default tunnel.
+                    // Try connecting so we have a valid rewrite for thsi broker address.
                     TunnelConfig::Ssh(default_tunnel) => {
                         // Multiple users could all run `connect` at the same time; only one ssh
                         // tunnel will ever be connected, and only one will be inserted into the
@@ -543,6 +695,7 @@ where
                                 .await
                         });
                         match ssh_tunnel {
+                            // Use the tunnel we just created, but only if nobody beat us in the race.
                             Ok(ssh_tunnel) => {
                                 let mut rewrites = self.rewrites.lock().expect("poisoned");
                                 let rewrite = match rewrites.entry(addr.clone()) {
@@ -565,6 +718,7 @@ where
 
                                 return_rewrite(rewrite)
                             }
+                            // We couldn't connect. Someone else will have to try again.
                             Err(e) => {
                                 warn!(
                                     "failed to create ssh tunnel for {:?}: {}",
@@ -587,15 +741,49 @@ where
                             }
                         }
                     }
+                    // Our rewrite strategy is to use a specific host, e.g. a PrivateLink endpoint.
                     TunnelConfig::StaticHost(host) => (host.as_str(), port)
                         .to_socket_addrs()
                         .map(|addrs| addrs.collect()),
-                    TunnelConfig::None => {
-                        (host, port).to_socket_addrs().map(|addrs| addrs.collect())
+                    // Rewrite according to the routing rules.
+                    TunnelConfig::Rules(rules) => {
+                        // If no rules match, just use the address as-is.
+                        let (resolved, result) = match rules.rewrite(&addr) {
+                            Some(rewritten) => {
+                                let result = rewritten.to_socket_addrs();
+                                (rewritten, result)
+                            }
+                            None => (addr.clone(), self.resolve_direct(&addr)),
+                        };
+                        match result {
+                            Ok(addrs) => {
+                                info!(
+                                    "kafka: resolve_broker_addr {}:{} -> {}:{} resolved to {:?}",
+                                    host, port, resolved.host, resolved.port, addrs,
+                                );
+                                Ok(addrs)
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "kafka: resolve_broker_addr {}:{} -> {}:{} DNS resolution FAILED: {e}",
+                                    host, port, resolved.host, resolved.port,
+                                );
+                                Err(e)
+                            }
+                        }
                     }
+                    // We leave the broker's address as it is.
+                    TunnelConfig::None => self.resolve_direct(&addr),
                 }
             }
-            Some(rewrite) => return_rewrite(&rewrite),
+            // This broker's address was already rewritten. Reuse the existing rewrite.
+            Some(rewrite) => {
+                info!(
+                    "kafka: resolve_broker_addr {}:{} using cached rewrite",
+                    host, port
+                );
+                return_rewrite(&rewrite)
+            }
         }
     }
 
@@ -795,14 +983,14 @@ impl TimeoutConfig {
 
         let transaction_timeout = if transaction_timeout.as_millis() > i32::MAX.try_into().unwrap()
         {
-            error!(
+            warn!(
                 "transaction_timeout ({transaction_timeout:?}) greater than max \
                 of {}, defaulting to the default of {DEFAULT_TRANSACTION_TIMEOUT:?}",
                 i32::MAX
             );
             DEFAULT_TRANSACTION_TIMEOUT
         } else if transaction_timeout.as_millis() < 1000 {
-            error!(
+            warn!(
                 "transaction_timeout ({transaction_timeout:?}) less than max \
                 of 1000ms, defaulting to the default of {DEFAULT_TRANSACTION_TIMEOUT:?}"
             );
@@ -816,7 +1004,7 @@ impl TimeoutConfig {
         let progress_record_fetch_timeout =
             progress_record_fetch_timeout.unwrap_or(progress_record_fetch_timeout_derived_default);
         let progress_record_fetch_timeout = if progress_record_fetch_timeout < transaction_timeout {
-            error!(
+            warn!(
                 "progress record fetch ({progress_record_fetch_timeout:?}) less than transaction \
                 timeout ({transaction_timeout:?}), defaulting to transaction timeout {transaction_timeout:?}",
             );
@@ -835,7 +1023,7 @@ impl TimeoutConfig {
             std::cmp::min(max_socket_timeout, DEFAULT_SOCKET_TIMEOUT);
         let socket_timeout = socket_timeout.unwrap_or(socket_timeout_derived_default);
         let socket_timeout = if socket_timeout > max_socket_timeout {
-            error!(
+            warn!(
                 "socket_timeout ({socket_timeout:?}) greater than max \
                 of min(30000, transaction.timeout.ms + 100 ({})), \
                 defaulting to the maximum of {max_socket_timeout:?}",
@@ -843,7 +1031,7 @@ impl TimeoutConfig {
             );
             max_socket_timeout
         } else if socket_timeout.as_millis() < 10 {
-            error!(
+            warn!(
                 "socket_timeout ({socket_timeout:?}) less than min \
                 of 10ms, defaulting to the default of {socket_timeout_derived_default:?}"
             );
@@ -854,7 +1042,7 @@ impl TimeoutConfig {
 
         let socket_connection_setup_timeout =
             if socket_connection_setup_timeout.as_millis() > i32::MAX.try_into().unwrap() {
-                error!(
+                warn!(
                     "socket_connection_setup_timeout ({socket_connection_setup_timeout:?}) \
                     greater than max of {}ms, defaulting to the default \
                     of {DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT:?}",
@@ -862,7 +1050,7 @@ impl TimeoutConfig {
                 );
                 DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT
             } else if socket_connection_setup_timeout.as_millis() < 10 {
-                error!(
+                warn!(
                     "socket_connection_setup_timeout ({socket_connection_setup_timeout:?}) \
                     less than max of 10ms, defaulting to the default of \
                 {DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT:?}"
@@ -945,10 +1133,6 @@ pub fn create_new_client_config(
         timeout_config.socket_timeout.as_millis().to_string(),
     );
     config.set(
-        "transaction.timeout.ms",
-        timeout_config.transaction_timeout.as_millis().to_string(),
-    );
-    config.set(
         "socket.connection.setup.timeout.ms",
         timeout_config
             .socket_connection_setup_timeout
@@ -957,4 +1141,170 @@ pub fn create_new_client_config(
     );
 
     config
+}
+
+/// Creates a client from `config` using [`ClientConfig::create`].
+///
+/// Leaves the calling thread's OpenSSL error queue empty, see
+/// [`create_with_context`].
+pub fn create<T: FromClientConfig>(config: &ClientConfig) -> KafkaResult<T> {
+    #[allow(clippy::disallowed_methods)]
+    let client = config.create();
+    drop(openssl::error::ErrorStack::get());
+    client
+}
+
+/// Creates a client from `config` using [`ClientConfig::create_with_context`].
+///
+/// Leaves the calling thread's OpenSSL error queue empty.
+pub fn create_with_context<C, T>(config: &ClientConfig, context: C) -> KafkaResult<T>
+where
+    C: ClientContext,
+    T: FromClientConfigAndContext<C>,
+{
+    #[allow(clippy::disallowed_methods)]
+    let client = config.create_with_context(context);
+    // NOTE: librdkafka loads `ssl.ca.pem` by reading certificates until
+    // `PEM_read_bio_X509` fails, and leaves that final `PEM routines:get_name:no
+    // start line` error on the calling thread's OpenSSL error queue. OpenSSL's
+    // `SSL_get_error` reports any queued error as `SSL_ERROR_SSL`, so a later
+    // TLS read that would merely block on this thread fails with the stale
+    // error instead. On a tokio worker this breaks unrelated connections, for
+    // example HTTPS requests to a schema registry. librdkafka v2.15.1 clears
+    // the queue itself (confluentinc/librdkafka#5561).
+    drop(openssl::error::ErrorStack::get());
+    client
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use openssl::asn1::Asn1Time;
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::PKey;
+    use openssl::rsa::Rsa;
+    use openssl::x509::{X509, X509NameBuilder};
+    use rdkafka::consumer::BaseConsumer;
+
+    fn self_signed_cert_pem() -> String {
+        let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let mut name = X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", "test").unwrap();
+        let name = name.build();
+        let mut cert = X509::builder().unwrap();
+        cert.set_version(2).unwrap();
+        cert.set_subject_name(&name).unwrap();
+        cert.set_issuer_name(&name).unwrap();
+        cert.set_pubkey(&key).unwrap();
+        cert.set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        cert.set_not_after(&Asn1Time::days_from_now(1).unwrap())
+            .unwrap();
+        cert.sign(&key, MessageDigest::sha256()).unwrap();
+        String::from_utf8(cert.build().to_pem().unwrap()).unwrap()
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    fn resolve_direct_broker_enforces_external_addresses() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let loopback = BrokerAddr {
+            host: "127.0.0.1".into(),
+            port: 9092,
+        };
+        let no_match = HostMappingRules {
+            rules: vec![(
+                ConnectionRulePattern {
+                    prefix_wildcard: false,
+                    literal_match: "other:9092".into(),
+                    suffix_wildcard: false,
+                },
+                BrokerRewrite {
+                    host: "rewritten".into(),
+                    port: None,
+                },
+            )],
+        };
+        for tunnel in [TunnelConfig::None, TunnelConfig::Rules(no_match)] {
+            for enforce in [false, true] {
+                let (inner, errors) = MzClientContext::with_errors();
+                let mut cx = TunnelingClientContext::new(
+                    inner,
+                    runtime.handle().clone(),
+                    SshTunnelManager::default(),
+                    SshTimeoutConfig::default(),
+                    None,
+                    InTask::No,
+                    enforce,
+                );
+                cx.set_default_tunnel(tunnel.clone());
+                let result = cx.resolve_broker_addr(&loopback.host, loopback.port);
+                if enforce {
+                    assert!(result.is_err(), "loopback broker should be rejected");
+                    assert_eq!(
+                        errors.try_iter().collect::<Vec<_>>(),
+                        vec![MzKafkaError::PrivateBrokerAddress],
+                    );
+                } else {
+                    assert_eq!(
+                        result.expect("loopback broker should resolve"),
+                        loopback.to_socket_addrs().unwrap(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    fn test_create_with_context_clears_openssl_error_queue() {
+        let mut config = create_new_client_config_simple();
+        // Client creation does not connect, so the broker need not exist.
+        config.set("bootstrap.servers", "localhost:1");
+        config.set("security.protocol", "ssl");
+        config.set("ssl.ca.pem", self_signed_cert_pem());
+        let _consumer: BaseConsumer =
+            create_with_context(&config, rdkafka::consumer::DefaultConsumerContext).unwrap();
+        let errors = openssl::error::ErrorStack::get();
+        assert!(
+            errors.errors().is_empty(),
+            "stale OpenSSL errors after client creation: {errors}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_connection_rule_pattern_matches() {
+        let p = ConnectionRulePattern {
+            prefix_wildcard: false,
+            literal_match: "broker:9092".to_string(),
+            suffix_wildcard: false,
+        };
+        assert!(p.matches("broker:9092"));
+        assert!(!p.matches("other:9092"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: true,
+            literal_match: ":9092".to_string(),
+            suffix_wildcard: false,
+        };
+        assert!(p.matches("any-host:9092"));
+        assert!(!p.matches("broker:9093"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: false,
+            literal_match: "broker:".to_string(),
+            suffix_wildcard: true,
+        };
+        assert!(p.matches("broker:9092"));
+        assert!(!p.matches("other:9092"));
+
+        let p = ConnectionRulePattern {
+            prefix_wildcard: true,
+            literal_match: "broker".to_string(),
+            suffix_wildcard: true,
+        };
+        assert!(p.matches("my-broker-host:1234"));
+        assert!(!p.matches("other:9092"));
+    }
 }

@@ -356,7 +356,7 @@ fn write_value_ref(schema: &Schema, value: &Value, buffer: &mut Vec<u8>) -> Resu
 /// performing schema validation.
 ///
 /// **NOTE** This function has a quite small niche of usage and does NOT generate headers and sync
-/// markers; use [`Writer`](struct.Writer.html) to be fully Avro-compatible if you don't know what
+/// markers; use [`Writer`] to be fully Avro-compatible if you don't know what
 /// you are doing, instead.
 pub fn to_avro_datum<T: ToAvro>(schema: &Schema, value: T) -> Result<Vec<u8>, Error> {
     let mut buffer = Vec::new();

@@ -1,0 +1,228 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_catalog.mz_role_parameters, locking down the column
+# shape and the formatting of parameter_value across both OwnedVarInput variants
+# (Flat single-value and SqlSet list-value) so future changes can't regress the
+# storage shape silently.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 3 columns, canonical order, types, all NOT NULL.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_role_parameters' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+role_id  text  false
+parameter_name  text  false
+parameter_value  text  false
+
+# --- Empty when no role-level parameters are set ------------------------------
+
+# On a freshly-reset server, no role has any parameter defaults yet.
+query I
+SELECT count(*) FROM mz_role_parameters
+----
+0
+
+statement ok
+CREATE ROLE rp_empty
+
+query I
+SELECT count(*) FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_empty')
+----
+0
+
+statement ok
+DROP ROLE rp_empty
+
+# --- Flat variant: `cluster` is a single-value variable -----------------------
+
+statement ok
+CREATE ROLE rp_flat
+
+statement ok
+ALTER ROLE rp_flat SET cluster TO 'quickstart'
+
+query TT
+SELECT parameter_name, parameter_value
+FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_flat')
+----
+cluster  quickstart
+
+statement ok
+DROP ROLE rp_flat
+
+# --- SqlSet variant: `search_path` accepts a list ----------------------------
+
+# search_path is a Vec<Ident> session var. Setting it with multiple values
+# routes through OwnedVarInput::SqlSet. The populator formats this via
+# Vec<Ident>::format(), which joins idents with ", " (comma + space).
+#
+# This is the exact contract the post-conversion SQL must reproduce.
+statement ok
+CREATE ROLE rp_list
+
+statement ok
+ALTER ROLE rp_list SET search_path TO a, b, c
+
+query TT
+SELECT parameter_name, parameter_value
+FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_list')
+----
+search_path  a,␠b,␠c
+
+# Single-element list — SqlSet with one value must still format cleanly.
+statement ok
+ALTER ROLE rp_list SET search_path TO only_one
+
+query TT
+SELECT parameter_name, parameter_value
+FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_list')
+----
+search_path  only_one
+
+statement ok
+DROP ROLE rp_list
+
+# --- RESET removes the parameter row -----------------------------------------
+
+statement ok
+CREATE ROLE rp_reset
+
+statement ok
+ALTER ROLE rp_reset SET cluster TO 'quickstart'
+
+query I
+SELECT count(*) FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_reset')
+----
+1
+
+statement ok
+ALTER ROLE rp_reset RESET cluster
+
+query I
+SELECT count(*) FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_reset')
+----
+0
+
+statement ok
+DROP ROLE rp_reset
+
+# --- Multiple parameters on one role -----------------------------------------
+
+statement ok
+CREATE ROLE rp_multi
+
+statement ok
+ALTER ROLE rp_multi SET cluster TO 'quickstart'
+
+statement ok
+ALTER ROLE rp_multi SET application_name TO 'foo'
+
+query TT
+SELECT parameter_name, parameter_value
+FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_multi')
+ORDER BY parameter_name
+----
+application_name  foo
+cluster  quickstart
+
+statement ok
+DROP ROLE rp_multi
+
+# --- Re-setting the same parameter updates value, doesn't add a row ----------
+
+statement ok
+CREATE ROLE rp_update
+
+statement ok
+ALTER ROLE rp_update SET cluster TO 'quickstart'
+
+statement ok
+ALTER ROLE rp_update SET cluster TO 'mz_catalog_server'
+
+query TT
+SELECT parameter_name, parameter_value
+FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_update')
+----
+cluster  mz_catalog_server
+
+statement ok
+DROP ROLE rp_update
+
+# --- DROP ROLE removes all parameter rows (no orphans) -----------------------
+
+statement ok
+CREATE ROLE rp_drop
+
+statement ok
+ALTER ROLE rp_drop SET cluster TO 'quickstart'
+
+statement ok
+ALTER ROLE rp_drop SET application_name TO 'bar'
+
+query I
+SELECT count(*) FROM mz_role_parameters
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'rp_drop')
+----
+2
+
+statement ok
+DROP ROLE rp_drop
+
+# Whole-table invariant: no parameter row outlives its owning role.
+query I
+SELECT count(*) FROM mz_role_parameters rp
+LEFT JOIN mz_roles r ON rp.role_id = r.id
+WHERE r.id IS NULL
+----
+0
+
+# --- PUBLIC has no parameter rows --------------------------------------------
+
+query I
+SELECT count(*) FROM mz_role_parameters WHERE role_id = 'p'
+----
+0
+
+# --- Cross-table JOIN with mz_roles (the canonical query pattern) ------------
+
+statement ok
+CREATE ROLE rp_join
+
+statement ok
+ALTER ROLE rp_join SET cluster TO 'quickstart'
+
+query TTT
+SELECT r.name, rp.parameter_name, rp.parameter_value
+FROM mz_role_parameters rp
+JOIN mz_roles r ON rp.role_id = r.id
+WHERE r.name = 'rp_join'
+----
+rp_join  cluster  quickstart
+
+statement ok
+DROP ROLE rp_join

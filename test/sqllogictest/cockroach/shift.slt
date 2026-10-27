@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,36 +9,40 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/shift
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/shift
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
 # Check non-constant eval
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE t AS SELECT 1 AS i
 
-statement error shift argument out of range
+statement error unknown catalog item 't'
 SELECT i << 64 FROM t
 
-statement error shift argument out of range
+statement error unknown catalog item 't'
 SELECT i >> 64 FROM t
 
-statement error shift argument out of range
+statement error unknown catalog item 't'
 SELECT i << -1 FROM t
 
-statement error shift argument out of range
+statement error unknown catalog item 't'
 SELECT i >> -1 FROM t
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT i << 63 >> 63, i << 62 >> 62 FROM t
 ----
@@ -46,15 +50,23 @@ SELECT i << 63 >> 63, i << 62 >> 62 FROM t
 
 # Check constant folding
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error shift argument out of range
 SELECT 1 << 64
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error shift argument out of range
 SELECT 1 >> 64
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error shift argument out of range
 SELECT 1 << -1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error shift argument out of range
 SELECT 1 >> -1
 

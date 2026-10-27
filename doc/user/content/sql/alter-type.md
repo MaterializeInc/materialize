@@ -12,10 +12,8 @@ Use `ALTER TYPE` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Rename" >}}
-
-### Rename
 
 To rename a type:
 
@@ -23,8 +21,6 @@ To rename a type:
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
-
-### Change owner
 
 To change the owner of a type:
 
@@ -38,5 +34,4 @@ To change the owner of a type:
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/alter-type.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-type" %}}

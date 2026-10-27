@@ -44,14 +44,14 @@ Explained Query:
               Filter (#0{c0} <= #0{c0}) AND (#0{c0} >= #0{c0})
                 ReadStorage materialize.public.t5
           ArrangeBy keys=[[]]
-            Filter (#1{c1} = text_to_char[len=unbounded](text_to_varchar[len=unbounded](boolean_to_text(like["0.31161855206970124"](padchar(#1{c1}))))))
+            Filter (#1{c1} = text_to_char[len=unbounded](boolean_to_text(like["0.31161855206970124"](padchar(#1{c1})))))
               ReadStorage materialize.public.t3
           ArrangeBy keys=[[]]
             ReadStorage materialize.public.t5
 
 Source materialize.public.t0
 Source materialize.public.t3
-  filter=((#1{c1} = text_to_char[len=unbounded](text_to_varchar[len=unbounded](boolean_to_text(like["0.31161855206970124"](padchar(#1{c1})))))))
+  filter=((#1{c1} = text_to_char[len=unbounded](boolean_to_text(like["0.31161855206970124"](padchar(#1{c1}))))))
 Source materialize.public.t5
 
 Target cluster: quickstart

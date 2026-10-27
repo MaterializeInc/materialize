@@ -48,6 +48,11 @@ pub enum PgSourcePurificationError {
     DanglingTextColumns { items: Vec<PartialItemName> },
     #[error("EXCLUDE COLUMNS refers to table not currently being added")]
     DanglingExcludeColumns { items: Vec<PartialItemName> },
+    #[error("EXCLUDE CONSTRAINTS refers to constraints that do not exist on table {table}")]
+    ConstraintsNotFound {
+        table: PartialItemName,
+        constraints: Vec<String>,
+    },
     #[error("duplicated column name references: {0:?}")]
     DuplicatedColumnNames(Vec<String>),
     #[error("referenced tables use unsupported types")]
@@ -66,6 +71,13 @@ impl PgSourcePurificationError {
             Self::DanglingTextColumns { items } => Some(format!(
                 "the following tables are referenced but not added: {}",
                 itertools::join(items, ", ")
+            )),
+            Self::ConstraintsNotFound {
+                table: _,
+                constraints,
+            } => Some(format!(
+                "the following constraints were not found: {}",
+                constraints.join(", ")
             )),
             Self::DatabaseMissingFilteredSchemas {
                 database: _,
@@ -122,6 +134,11 @@ impl PgSourcePurificationError {
                 "Remove the {} option, as no tables are being added.",
                 option
             )),
+            Self::ConstraintsNotFound { .. } => Some(
+                "Constraint names are matched exactly, including case, against the upstream \
+                 PRIMARY KEY and UNIQUE constraint names."
+                    .into(),
+            ),
             Self::BypassRLSRequired { .. } => Some("Add the BYPASSRLS attribute to the Materialize user".into()),
             Self::InvalidConnection(e) => e.hint(),
             _ => None,
@@ -218,6 +235,11 @@ pub enum IcebergSinkPurificationError {
     CatalogError(Arc<anyhow::Error>),
     #[error("error loading aws sdk context")]
     AwsSdkContextError(Arc<anyhow::Error>),
+    #[error("S3 Tables connection region mismatch")]
+    S3TablesRegionMismatch {
+        s3_tables_region: String,
+        environment_region: String,
+    },
 }
 
 impl IcebergSinkPurificationError {
@@ -225,11 +247,26 @@ impl IcebergSinkPurificationError {
         match self {
             Self::CatalogError(e) => Some(e.to_string_with_causes()),
             Self::AwsSdkContextError(e) => Some(e.to_string_with_causes()),
+            Self::S3TablesRegionMismatch {
+                s3_tables_region,
+                environment_region,
+            } => Some(format!(
+                "S3 Tables connection is configured for region '{}' but this Materialize environment is running in region '{}'",
+                s3_tables_region, environment_region
+            )),
         }
     }
 
     pub fn hint(&self) -> Option<String> {
-        None
+        match self {
+            Self::S3TablesRegionMismatch {
+                environment_region, ..
+            } => Some(format!(
+                "Create a new AWS connection with REGION = '{}' to use with S3 Tables in this environment.",
+                environment_region
+            )),
+            _ => None,
+        }
     }
 }
 
@@ -251,7 +288,52 @@ impl CsrPurificationError {
         match self {
             Self::ClientError(e) => Some(e.to_string_with_causes()),
             Self::ListSubjectsError(e) => Some(e.to_string_with_causes()),
-            _ => None,
+            Self::NotCsrConnection(_) => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        None
+    }
+}
+
+/// Logical errors detectable during purification for AWS Glue Schema Registry.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum GluePurificationError {
+    #[error("{0} is not an AWS GLUE SCHEMA REGISTRY CONNECTION")]
+    NotGlueConnection(FullItemName),
+    #[error("SCHEMA NAME option is required")]
+    MissingSchemaName,
+    #[error("loading AWS SDK configuration failed")]
+    LoadSdkConfigError(Arc<anyhow::Error>),
+    #[error("Glue schema lookup failed (registry {registry:?}, schema {schema:?})")]
+    SchemaLookupError {
+        registry: String,
+        schema: String,
+        #[source]
+        cause: Arc<mz_aws_glue_schema_registry::GetSchemaVersionError>,
+    },
+    #[error("Glue schema {schema:?} in registry {registry:?} has no definition")]
+    EmptyDefinition { registry: String, schema: String },
+    #[error(
+        "Glue schema {schema:?} in registry {registry:?} uses unsupported data format {format}; only AVRO is supported"
+    )]
+    UnsupportedDataFormat {
+        registry: String,
+        schema: String,
+        format: String,
+    },
+}
+
+impl GluePurificationError {
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::LoadSdkConfigError(e) => Some(e.to_string_with_causes()),
+            Self::SchemaLookupError { cause, .. } => Some(cause.to_string_with_causes()),
+            Self::NotGlueConnection(_)
+            | Self::MissingSchemaName
+            | Self::EmptyDefinition { .. }
+            | Self::UnsupportedDataFormat { .. } => None,
         }
     }
 
@@ -280,6 +362,11 @@ pub enum MySqlSourcePurificationError {
         option_name: String,
         items: Vec<UnresolvedItemName>,
     },
+    #[error("EXCLUDE CONSTRAINTS refers to constraints that do not exist on table {table}")]
+    ConstraintsNotFound {
+        table: String,
+        constraints: Vec<String>,
+    },
     #[error("Invalid MySQL table reference: {0}")]
     InvalidTableReference(String),
     #[error("No tables found for provided reference")]
@@ -290,6 +377,14 @@ pub enum MySqlSourcePurificationError {
     NoTablesFoundForSchemas(Vec<String>),
     #[error(transparent)]
     InvalidConnection(#[from] MySqlConnectionValidationError),
+    #[error(
+        "The MySQL system variable 'binlog_row_metadata' is set to an unsupported value: {setting}. Materialize requires this variable to be set to 'FULL' to use the \"CREATE TABLE FROM SOURCE\" syntax for MySQL sources."
+    )]
+    UnsupportedBinlogMetadataSetting { setting: String },
+    #[error(
+        "You are using MySQL version {version}. Materialize requires MySQL 8.0.1 or later to use the \"CREATE TABLE FROM SOURCE\" syntax for MySQL sources."
+    )]
+    UnsupportedMySqlVersion { version: String },
 }
 
 impl MySqlSourcePurificationError {
@@ -310,6 +405,13 @@ impl MySqlSourcePurificationError {
             } => Some(format!(
                 "the following columns are referenced but not added: {}",
                 itertools::join(items, ", ")
+            )),
+            Self::ConstraintsNotFound {
+                table: _,
+                constraints,
+            } => Some(format!(
+                "the following constraints were not found: {}",
+                constraints.join(", ")
             )),
             Self::UnrecognizedTypes { cols } => Some(format!(
                 "the following columns contain unsupported types:\n{}",
@@ -341,6 +443,11 @@ impl MySqlSourcePurificationError {
             }
             Self::InvalidTableReference(_) => Some(
                 "Specify tables names as SCHEMA_NAME.TABLE_NAME in a FOR TABLES (..) clause".into(),
+            ),
+            Self::ConstraintsNotFound { .. } => Some(
+                "Constraint names are matched exactly, including case, against the upstream \
+                 unique index names. The primary key's index is named PRIMARY."
+                    .into(),
             ),
             Self::UnrecognizedTypes { cols: _ } => Some(
                 "Check the docs -- some types can be supported using the TEXT COLUMNS option to \

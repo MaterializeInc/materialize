@@ -98,7 +98,6 @@ fn bench_consensus_compare_and_set_all_iters(
 
                             let fut = consensus.compare_and_set(
                                 key,
-                                current_seqno,
                                 VersionedData {
                                     seqno: next_seqno,
                                     data: Bytes::clone(&data),

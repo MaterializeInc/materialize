@@ -7,14 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
-RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-11-jdk openssl && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y default-jdk-headless openssl && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY create-certs.sh /
 
 RUN ./create-certs.sh
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 COPY --from=0 /secrets /secrets

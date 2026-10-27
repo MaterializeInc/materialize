@@ -7,188 +7,96 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
-use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
+use mz_expr_derive::sqlfunc;
+use mz_repr::{Datum, DatumList, DatumMap, ExcludeNull, RowArena, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
-use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
-use crate::{EvalError, MirScalarExpr};
+use crate::EvalError;
+use crate::scalar::func::stringify_datum;
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct CastMapToString {
     pub ty: SqlScalarType,
 }
 
-impl LazyUnaryFunc for CastMapToString {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let mut buf = String::new();
-        stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
-    }
-
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        // TODO? If we moved typeconv into expr, we could evaluate this
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
+// TODO? If we moved typeconv into expr, we could evaluate the inverse of this cast
+#[sqlfunc(CastMapToString, sqlname = "maptostr", preserves_uniqueness = super::text_preserves_uniqueness(&self.ty))]
+fn cast_map_to_string<'a>(&self, a: ExcludeNull<Datum<'a>>) -> Result<String, EvalError> {
+    let mut buf = String::new();
+    stringify_datum(&mut buf, *a, &self.ty)?;
+    Ok(buf)
 }
 
-impl fmt::Display for CastMapToString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("maptostr")
-    }
+#[sqlfunc(sqlname = "map_length")]
+fn map_length<'a>(a: DatumMap<'a>) -> Result<i32, EvalError> {
+    let count = a.iter().count();
+    count
+        .try_into()
+        .map_err(|_| EvalError::Int32OutOfRange(count.to_string().into()))
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct MapLength;
-
-impl LazyUnaryFunc for MapLength {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let count = a.unwrap_map().iter().count();
-        match count.try_into() {
-            Ok(c) => Ok(Datum::Int32(c)),
-            Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
-        }
-    }
-
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Int32.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for MapLength {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("map_length")
-    }
-}
-
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct MapBuildFromRecordList {
     pub value_type: SqlScalarType,
 }
 
-impl LazyUnaryFunc for MapBuildFromRecordList {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let list = a.unwrap_list();
-        let mut map = std::collections::BTreeMap::new();
+#[sqlfunc(
+    MapBuildFromRecordList,
+    sqlname = "map_build",
+    output_type_expr = SqlScalarType::Map {
+        value_type: Box::new(self.value_type.clone()),
+        custom_id: None,
+    }
+    .nullable(true),
+    // NOTE: The body never returns NULL, but a non-nullable output changes the column
+    // types of existing materialized views that call this function. A Kafka sink with
+    // Avro on such a view regenerates its schema on upgrade, and the schema registry
+    // rejects the narrowed schema as incompatible, which stalls the sink. Iceberg sinks
+    // require nullability to match the table exactly (`field_is_compatible`).
+    introduces_nulls = true
+)]
+fn map_build_from_record_list<'a>(
+    &self,
+    a: DatumList<'a>,
+    temp_storage: &'a RowArena,
+) -> DatumMap<'a> {
+    let mut map = std::collections::BTreeMap::new();
 
-        for i in list.iter() {
-            if i.is_null() {
+    for i in a.iter() {
+        if i.is_null() {
+            continue;
+        }
+
+        for (k, v) in i.unwrap_list().iter().tuples() {
+            if k.is_null() {
                 continue;
             }
-
-            for (k, v) in i.unwrap_list().iter().tuples() {
-                if k.is_null() {
-                    continue;
-                }
-                map.insert(k.unwrap_str(), v);
-            }
+            map.insert(k.unwrap_str(), v);
         }
-
-        let map = temp_storage.make_datum(|packer| packer.push_dict(map));
-        Ok(map)
     }
 
-    fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Map {
-            value_type: Box::new(self.value_type.clone()),
-            custom_id: None,
-        }
-        .nullable(true)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        true
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for MapBuildFromRecordList {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("map_build")
-    }
+    temp_storage
+        .make_datum(|packer| packer.push_dict(map))
+        .unwrap_map()
 }

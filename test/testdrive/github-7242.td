@@ -43,7 +43,7 @@ $ set-arg-default single-replica-cluster=quickstart
   ENVELOPE DEBEZIUM
 
 # Wait for the sink to create the topic
-$ kafka-wait-topic topic=testdrive-supplier-${testdrive.seed} partitions=1
+$ kafka-wait-topic topic=testdrive-supplier-${testdrive.seed}
 
 > BEGIN
 > CREATE SOURCE progress_check

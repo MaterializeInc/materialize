@@ -12,36 +12,48 @@ Testdrive is the basic framework and language for defining product tests under
 the expected-result/actual-result (aka golden testing) paradigm. A query is
 retried until it produces the desired result.
 """
-import glob
-import os
 
-from materialize import MZ_ROOT, ci_util
+import glob
+
+from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import (
+    METADATA_STORE,
+    CockroachOrPostgresMetadata,
+)
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import (
-    METADATA_STORE,
-    CockroachOrPostgresMetadata,
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.source_table_migration import (
     verify_sources_after_source_table_migration,
 )
 
 SERVICES = [
-    Zookeeper(),
-    Kafka(),
+    Kafka(
+        environment_extra=[
+            # kafka-time-offset.td ingests messages with timestamps in 2099 to
+            # exercise relative offsets; Kafka 4.x otherwise rejects those as
+            # InvalidTimestamp under the default broker validation.
+            "KAFKA_LOG_MESSAGE_TIMESTAMP_AFTER_MAX_MS=9223372036854775807",
+            "KAFKA_LOG_MESSAGE_TIMESTAMP_BEFORE_MAX_MS=9223372036854775807",
+        ],
+    ),
     SchemaRegistry(),
-    Redpanda(),
+    Redpanda(
+        # See the Kafka comment above; `kafka-time-offset.td` also runs against
+        # Redpanda (in `--redpanda` mode) and needs the same relaxation.
+        extra_cluster_settings={
+            "log_message_timestamp_after_max_ms": "9223372036854",
+        },
+    ),
     Postgres(),
     MySql(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
@@ -74,7 +86,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--default-size",
         type=int,
-        default=Materialized.Size.DEFAULT_SIZE,
+        default=Materialized.Size.default(),
         help="Use SIZE 'scale=N,workers=N' for replicas and SIZE 'scale=N,workers=1' for sources",
     )
     parser.add_argument(
@@ -109,7 +121,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=["*.td"],
         help="run against the specified files",
     )
-    (args, passthrough_args) = parser.parse_known_args()
+    args, passthrough_args = parser.parse_known_args()
 
     dependencies = [
         "fivetran-destination",
@@ -120,7 +132,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.redpanda:
         dependencies += ["redpanda"]
     else:
-        dependencies += ["zookeeper", "kafka", "schema-registry"]
+        dependencies += ["kafka", "schema-registry"]
 
     sysparams = args.system_param
     if not args.system_param:
@@ -232,9 +244,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 persistent=False,
             )
             # Uploading successful junit files wastes time and contains no useful information
-            os.remove(
-                MZ_ROOT / "test" / "testdrive-old-kafka-src-syntax" / junit_report
-            )
+            if not args.rewrite_results:
+                (
+                    MZ_ROOT / "test" / "testdrive-old-kafka-src-syntax" / junit_report
+                ).unlink(missing_ok=True)
 
         c.test_parts(args.files, process)
         c.sanity_restart_mz()
@@ -290,7 +303,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="run against the specified files",
     )
 
-    (args, _) = parser.parse_known_args()
+    args, _ = parser.parse_known_args()
 
     matching_files = []
     for filter in args.files:
@@ -312,14 +325,16 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             "session.td",
             "status-history.td",
             "kafka-progress.td",
-            # TODO: Reenable these 4 files when database-issues#9686 is fixed
+            # TODO: Reenable these 4 files when https://linear.app/materializeinc/issue/SS-286 is fixed
             "load-generator-key-value.td",
             "materialization-lag.td",
             "primary-key-optimizations.td",
             "privilege_checks.td",
         )
     ]
-    matching_files: list[str] = sorted(matching_files)
+    matching_files: list[str] = buildkite.shard_list(
+        sorted(matching_files), lambda f: f
+    )
 
     dependencies = [
         "fivetran-destination",
@@ -332,7 +347,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
     if args.redpanda:
         kafka_deps = ["redpanda"]
     else:
-        kafka_deps = ["zookeeper", "kafka", "schema-registry"]
+        kafka_deps = ["kafka", "schema-registry"]
 
     dependencies += kafka_deps
 

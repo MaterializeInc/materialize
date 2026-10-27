@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TYPE enum1 AS ENUM ('val1', 'val2');
 CREATE TABLE enum_type ( f1 enum1, f2 INTEGER PRIMARY KEY);
 INSERT INTO enum_type VALUES ('val1', 0), ('val2', 1);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.enum_type
 

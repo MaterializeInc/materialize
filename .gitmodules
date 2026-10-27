@@ -1,3 +1,0 @@
-[submodule "fivetran-sdk"]
-	path = misc/fivetran-sdk
-	url = https://github.com/fivetran/fivetran_sdk.git

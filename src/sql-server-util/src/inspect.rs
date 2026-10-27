@@ -375,6 +375,7 @@ SELECT
     t.name as table_name,
     ch.capture_instance as capture_instance,
     ch.create_date as capture_instance_create_date,
+    ch.index_name as capture_instance_index_name,
     c.name as col_name,
     ty.name as col_type,
     c.is_nullable as col_nullable,
@@ -390,7 +391,7 @@ JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
 ";
 
 /// Returns the table metadata for the tables that are tracked by the specified `capture_instance`s.
-pub async fn get_tables_for_capture_instance<'a>(
+pub async fn get_tables_for_capture_instance(
     client: &mut Client,
     capture_instances: impl IntoIterator<Item = &str>,
 ) -> Result<Vec<SqlServerTableRaw>, SqlServerError> {
@@ -499,27 +500,25 @@ pub async fn get_constraints_for_tables(
         .map(|idx| format!("@P{}", idx))
         .join(", ");
 
-    // Because we don't have an object idenfifier for the table(s), this query concatenates the
-    // schema and table name to create a single identifier for the query rather than compose a
-    // complex set of OR conditions for each schema + set of tables in the schema.
-    //
-    // This query may perform poorly due to the condition relying on a concatenated value. We may get
-    // better performance by adding a query constraint on the table names, but it isn't clear at
-    // this time if that is needed.
+    // KEY_COLUMN_USAGE (not CONSTRAINT_COLUMN_USAGE) because it exposes
+    // ORDINAL_POSITION, letting us preserve composite-key column order.
     let query = format!(
         "SELECT \
         tc.table_schema, \
         tc.table_name, \
-        ccu.column_name,  \
+        kcu.column_name, \
         tc.constraint_name, \
         tc.constraint_type \
     FROM information_schema.table_constraints tc \
-    JOIN information_schema.constraint_column_usage ccu \
-        ON ccu.constraint_schema = tc.constraint_schema \
-        AND ccu.constraint_name = tc.constraint_name \
+    JOIN information_schema.key_column_usage kcu \
+        ON kcu.constraint_schema = tc.constraint_schema \
+        AND kcu.constraint_name = tc.constraint_name \
+        AND kcu.table_schema = tc.table_schema \
+        AND kcu.table_name = tc.table_name \
     WHERE
         QUOTENAME(tc.table_schema) + '.' + QUOTENAME(tc.table_name) IN ({params})
-        AND tc.constraint_type in ('PRIMARY KEY', 'UNIQUE')"
+        AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+    ORDER BY tc.table_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position"
     );
 
     let query_params: Vec<_> = qualified_table_names
@@ -593,6 +592,12 @@ pub async fn ensure_database_cdc_enabled(client: &mut Client) -> Result<(), SqlS
 pub async fn get_latest_restore_history_id(
     client: &mut Client,
 ) -> Result<Option<i32>, SqlServerError> {
+    // Azure SQL Database does not expose `msdb`, so restore history is
+    // unavailable and restore detection does not apply.
+    if !client.engine_edition().await?.has_restore_history() {
+        return Ok(None);
+    }
+
     static LATEST_RESTORE_ID_QUERY: &str = "SELECT TOP 1 restore_history_id \
         FROM msdb.dbo.restorehistory \
         WHERE destination_database_name = DB_NAME() \
@@ -622,7 +627,7 @@ impl DDLEvent {
     ///  2. ALTER TABLE .. DROP COLUMN
     ///
     /// See <https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-table-transact-sql?view=sql-server-ver17>
-    pub fn is_compatible(&self) -> bool {
+    pub fn is_compatible(&self, included_columns: &[Arc<str>]) -> bool {
         // TODO (maz): This is currently a basic check that doesn't take into account type changes.
         // At some point, we will need to move this to SqlServerTableDesc and expand it.
         let mut words = self.ddl_command.split_ascii_whitespace();
@@ -635,9 +640,54 @@ impl DDLEvent {
                 let mut compatible = true;
                 while compatible && let Some(token) = peekable.next() {
                     compatible = match token.to_ascii_lowercase().as_str() {
-                        "alter" | "drop" => peekable
-                            .peek()
-                            .is_some_and(|next_tok| !next_tok.eq_ignore_ascii_case("column")),
+                        "alter" | "drop" => {
+                            let target = peekable.next();
+                            match target {
+                                // Targeting a column
+                                Some(t) if t.eq_ignore_ascii_case("column") => {
+                                    let mut all_excluded = true;
+                                    while let Some(tok) = peekable.next() {
+                                        // The column name(s) can be preceeded by the pair of keywords "IF EXISTS", so we want to skip those.
+                                        match tok.to_ascii_lowercase().as_str() {
+                                            "if" | "exists" | "," | "column" => continue,
+                                            col_str => {
+                                                // If any column is in the included list, then it is not okay to alter/drop it
+                                                // The col_str token may be a comma-separated list of columns as whitespace is not required
+                                                // between column names in SQL Server DDL.
+                                                if !col_str.trim_matches(',').split(',').all(
+                                                    |col_name| {
+                                                        !included_columns.iter().any(|included| {
+                                                            included.eq_ignore_ascii_case(
+                                                                col_name.trim_matches(
+                                                                    ['[', ']', '"'].as_ref(),
+                                                                ),
+                                                            )
+                                                        })
+                                                    },
+                                                ) {
+                                                    all_excluded = false;
+                                                    break;
+                                                }
+                                                // If this is the only/last column, then we can break out of the while loop.
+                                                // Check if this string has no trailing comma, and if not, peek to see if the next token
+                                                // contains a leading comma.
+                                                if !col_str.ends_with(",") {
+                                                    match peekable.peek() {
+                                                        Some(x) if x.starts_with(",") => continue,
+                                                        _ => break,
+                                                    }
+                                                }
+                                            }
+                                        };
+                                    }
+                                    all_excluded
+                                }
+                                // No target token after "alter" or "drop"
+                                None => false,
+                                // Other targets are considered compatible
+                                _ => true,
+                            }
+                        }
                         _ => true,
                     }
                 }
@@ -728,10 +778,111 @@ pub async fn ensure_snapshot_isolation_enabled(client: &mut Client) -> Result<()
     Ok(())
 }
 
+/// The engine edition of a SQL Server instance, as reported by
+/// `SERVERPROPERTY('EngineEdition')`.
+///
+/// Materialize adjusts some CDC setup and monitoring behavior based on the
+/// edition. Azure SQL Database in particular has no SQL Server Agent and no
+/// accessible `msdb`, so the agent and restore-history checks do not apply
+/// there.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/t-sql/functions/serverproperty-transact-sql?view=sql-server-ver17>
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineEdition {
+    /// Personal or Desktop Engine (1).
+    PersonalOrDesktop,
+    /// Standard, Web, or Business Intelligence (2).
+    Standard,
+    /// Enterprise, Enterprise Eval, or Developer (3).
+    Enterprise,
+    /// Express and Express-derived editions (4).
+    Express,
+    /// Azure SQL Database (5).
+    AzureSqlDatabase,
+    /// Azure Synapse Analytics (6).
+    AzureSynapseAnalytics,
+    /// Azure SQL Managed Instance (8).
+    AzureSqlManagedInstance,
+    /// Azure SQL Edge (9).
+    AzureSqlEdge,
+    /// Azure Synapse serverless SQL pool (11).
+    AzureSynapseServerlessSqlPool,
+    /// An edition not otherwise recognized, carrying the raw
+    /// `SERVERPROPERTY('EngineEdition')` value.
+    Other(i32),
+}
+
+impl EngineEdition {
+    /// Whether this edition runs a SQL Server Agent that hosts the CDC capture
+    /// and cleanup jobs. Azure SQL Database uses an internal scheduler instead
+    /// and does not expose `sys.dm_server_services`.
+    pub fn has_sql_server_agent(&self) -> bool {
+        !matches!(self, EngineEdition::AzureSqlDatabase)
+    }
+
+    /// Whether `msdb.dbo.restorehistory` is queryable. Azure SQL Database does
+    /// not expose `msdb`, so restore history is unavailable there.
+    pub fn has_restore_history(&self) -> bool {
+        !matches!(self, EngineEdition::AzureSqlDatabase)
+    }
+}
+
+impl From<i32> for EngineEdition {
+    fn from(value: i32) -> Self {
+        match value {
+            1 => EngineEdition::PersonalOrDesktop,
+            2 => EngineEdition::Standard,
+            3 => EngineEdition::Enterprise,
+            4 => EngineEdition::Express,
+            5 => EngineEdition::AzureSqlDatabase,
+            6 => EngineEdition::AzureSynapseAnalytics,
+            8 => EngineEdition::AzureSqlManagedInstance,
+            9 => EngineEdition::AzureSqlEdge,
+            11 => EngineEdition::AzureSynapseServerlessSqlPool,
+            other => EngineEdition::Other(other),
+        }
+    }
+}
+
+/// Returns the [`EngineEdition`] of the SQL Server instance the `client` is
+/// connected to.
+///
+/// tiberius does not surface the engine edition, so we query
+/// `SERVERPROPERTY('EngineEdition')`, which is returned as a `sql_variant` and
+/// cast to an integer.
+///
+/// See: <https://learn.microsoft.com/en-us/sql/t-sql/functions/serverproperty-transact-sql?view=sql-server-ver17>
+pub async fn get_engine_edition(client: &mut Client) -> Result<EngineEdition, SqlServerError> {
+    static ENGINE_EDITION_QUERY: &str = "SELECT CAST(SERVERPROPERTY('EngineEdition') AS INT);";
+    let result = client.simple_query(ENGINE_EDITION_QUERY).await?;
+
+    match &result[..] {
+        [row] => {
+            let raw = row.try_get::<i32, _>(0)?.ok_or_else(|| {
+                SqlServerError::InvariantViolated(
+                    "SERVERPROPERTY('EngineEdition') returned NULL".to_string(),
+                )
+            })?;
+            Ok(EngineEdition::from(raw))
+        }
+        other => Err(SqlServerError::InvariantViolated(format!(
+            "expected one row, got {other:?}"
+        ))),
+    }
+}
+
 /// Ensure the SQL Server Agent is running.
+///
+/// Azure SQL Database has no SQL Server Agent (CDC is driven by an internal
+/// scheduler and `sys.dm_server_services` is unavailable), so the check is
+/// skipped for that edition.
 ///
 /// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-dynamic-management-views/sys-dm-server-services-transact-sql?view=azuresqldb-current&viewFallbackFrom=sql-server-ver17>
 pub async fn ensure_sql_server_agent_running(client: &mut Client) -> Result<(), SqlServerError> {
+    if !client.engine_edition().await?.has_sql_server_agent() {
+        return Ok(());
+    }
+
     static AGENT_STATUS_QUERY: &str = "SELECT status_desc FROM sys.dm_server_services WHERE servicename LIKE 'SQL Server Agent%';";
     let result = client.simple_query(AGENT_STATUS_QUERY).await?;
 
@@ -768,6 +919,9 @@ fn deserialize_table_columns_to_raw_tables(
         let capture_instance: Arc<str> = get_value::<&str>(row, "capture_instance")?.into();
         let capture_instance_create_date: NaiveDateTime =
             get_value::<NaiveDateTime>(row, "capture_instance_create_date")?;
+        let capture_instance_index_name: Option<Arc<str>> = row
+            .try_get::<&str, _>("capture_instance_index_name")?
+            .map(Into::into);
 
         let column_name = get_value::<&str>(row, "col_name")?.into();
         let column = SqlServerColumnRaw {
@@ -786,6 +940,7 @@ fn deserialize_table_columns_to_raw_tables(
                 Arc::clone(&table_name),
                 Arc::clone(&capture_instance),
                 capture_instance_create_date,
+                capture_instance_index_name,
             ))
             .or_default();
         columns.push(column);
@@ -794,13 +949,17 @@ fn deserialize_table_columns_to_raw_tables(
     let raw_tables = tables
         .into_iter()
         .map(
-            |((schema, name, capture_instance, capture_instance_create_date), columns)| {
+            |(
+                (schema, name, capture_instance, capture_instance_create_date, index_name),
+                columns,
+            )| {
                 SqlServerTableRaw {
                     schema_name: schema,
                     name,
                     capture_instance: Arc::new(SqlServerCaptureInstanceRaw {
                         name: capture_instance,
                         create_date: capture_instance_create_date.into(),
+                        index_name,
                     }),
                     columns: columns.into(),
                 }
@@ -891,7 +1050,7 @@ where
 /// have the necessary permissions to and an error if any table, column,
 /// or capture instance does not have the necessary permissions
 /// for tracking changes.
-pub async fn validate_source_privileges<'a>(
+pub async fn validate_source_privileges(
     client: &mut Client,
     capture_instances: impl IntoIterator<Item = &str>,
 ) -> Result<(), SqlServerError> {
@@ -972,4 +1131,144 @@ pub async fn validate_source_privileges<'a>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DDLEvent, EngineEdition};
+    use std::sync::Arc;
+
+    #[mz_ore::test]
+    fn test_engine_edition_mapping() {
+        assert_eq!(EngineEdition::from(2), EngineEdition::Standard);
+        assert_eq!(EngineEdition::from(3), EngineEdition::Enterprise);
+        assert_eq!(EngineEdition::from(5), EngineEdition::AzureSqlDatabase);
+        assert_eq!(
+            EngineEdition::from(8),
+            EngineEdition::AzureSqlManagedInstance
+        );
+        // Unrecognized values are preserved rather than dropped.
+        assert_eq!(EngineEdition::from(42), EngineEdition::Other(42));
+
+        // Only Azure SQL Database lacks an agent and `msdb` restore history.
+        assert!(!EngineEdition::AzureSqlDatabase.has_sql_server_agent());
+        assert!(!EngineEdition::AzureSqlDatabase.has_restore_history());
+        for edition in [
+            EngineEdition::Enterprise,
+            EngineEdition::AzureSqlManagedInstance,
+            EngineEdition::Other(42),
+        ] {
+            assert!(edition.has_sql_server_agent());
+            assert!(edition.has_restore_history());
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_ddl_event_is_compatible() {
+        fn test_case(ddl_command: &str, included_columns: &[Arc<str>], expected: bool) {
+            let ddl_event = DDLEvent {
+                lsn: Default::default(),
+                ddl_command: ddl_command.into(),
+            };
+            let result = ddl_event.is_compatible(included_columns);
+            assert_eq!(
+                result, expected,
+                "DDL command '{}' with included_columns {:?} expected to be {}, got {}",
+                ddl_command, included_columns, expected, result
+            );
+        }
+
+        let included_columns = vec![Arc::from("col3"), Arc::from("col4"), Arc::from("col4")];
+
+        test_case(
+            "ALTER TABLE my_table ALTER COLUMN col1 INT",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table ALTER COLUMN col3 INT",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col4 INT",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "CREATE INDEX idx_my_index ON my_table(col1)",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "DROP INDEX idx_my_index ON my_table",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table ADD COLUMN col5 INT",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1, col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col3, col2",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col3, col4",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN IF EXISTS col1, col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP CONSTRAINT constraint_name",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1,col3",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1,col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 ,col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 , col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 , col3",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 , COLUMN col3",
+            &included_columns,
+            false,
+        );
+    }
 }

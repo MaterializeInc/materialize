@@ -32,13 +32,13 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
-    ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
-    ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
-    IdAllocatorCollection, ItemCollection, NetworkPolicyCollection, RoleAuthCollection,
-    RoleCollection, SchemaCollection, SettingCollection, SourceReferencesCollection,
-    StorageCollectionMetadataCollection, SystemConfigurationCollection,
-    SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
-    UnfinalizedShardsCollection,
+    ClusterReplicaCollection, ClusterSystemConfigurationCollection, Collection, CollectionTrace,
+    CollectionType, CommentCollection, ConfigCollection, DatabaseCollection, DebugCatalogState,
+    DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection, NetworkPolicyCollection,
+    ReplicaSystemConfigurationCollection, RoleAuthCollection, RoleCollection, SchemaCollection,
+    SettingCollection, SourceReferencesCollection, StorageCollectionMetadataCollection,
+    SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
+    TxnWalShardCollection, UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     BootstrapArgs, OpenableDurableCatalogState, persist_backed_catalog_state,
@@ -58,7 +58,7 @@ use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation};
 use mz_repr::{Diff, Timestamp};
-use mz_service::secrets::SecretsReaderCliArgs;
+use mz_secrets_cli::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::connections::ConnectionContext;
@@ -69,6 +69,10 @@ use tracing::{Instrument, error};
 
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
+
+fn parse_json(s: &str) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::from_str(s)
+}
 
 #[derive(Parser, Debug)]
 #[clap(name = "catalog", next_line_help = true, version = VERSION.as_str())]
@@ -139,8 +143,10 @@ enum Action {
         /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to edit.
+        #[clap(value_parser = parse_json)]
         key: serde_json::Value,
         /// The new JSON-encoded value for the item.
+        #[clap(value_parser = parse_json)]
         value: serde_json::Value,
     },
     /// Deletes a single item in a collection in the catalog
@@ -148,6 +154,7 @@ enum Action {
         /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to delete.
+        #[clap(value_parser = parse_json)]
         key: serde_json::Value,
     },
     /// Checks if the specified catalog could be upgraded from its state to the
@@ -281,12 +288,16 @@ macro_rules! for_collection {
         match $collection_type {
             CollectionType::AuditLog => $fn::<AuditLogCollection>($($arg),*).await?,
             CollectionType::ComputeInstance => $fn::<ClusterCollection>($($arg),*).await?,
-            CollectionType::ComputeIntrospectionSourceIndex => $fn::<ClusterIntrospectionSourceIndexCollection>($($arg),*).await?,
+            CollectionType::ComputeIntrospectionSourceIndex => {
+                $fn::<ClusterIntrospectionSourceIndexCollection>($($arg),*).await?
+            }
             CollectionType::ComputeReplicas => $fn::<ClusterReplicaCollection>($($arg),*).await?,
             CollectionType::Comments => $fn::<CommentCollection>($($arg),*).await?,
             CollectionType::Config => $fn::<ConfigCollection>($($arg),*).await?,
             CollectionType::Database => $fn::<DatabaseCollection>($($arg),*).await?,
-            CollectionType::DefaultPrivileges => $fn::<DefaultPrivilegeCollection>($($arg),*).await?,
+            CollectionType::DefaultPrivileges => {
+                $fn::<DefaultPrivilegeCollection>($($arg),*).await?
+            }
             CollectionType::IdAlloc => $fn::<IdAllocatorCollection>($($arg),*).await?,
             CollectionType::Item => $fn::<ItemCollection>($($arg),*).await?,
             CollectionType::NetworkPolicy => $fn::<NetworkPolicyCollection>($($arg),*).await?,
@@ -295,11 +306,27 @@ macro_rules! for_collection {
             CollectionType::Schema => $fn::<SchemaCollection>($($arg),*).await?,
             CollectionType::Setting => $fn::<SettingCollection>($($arg),*).await?,
             CollectionType::SourceReferences => $fn::<SourceReferencesCollection>($($arg),*).await?,
-            CollectionType::SystemConfiguration => $fn::<SystemConfigurationCollection>($($arg),*).await?,
-            CollectionType::SystemGidMapping => $fn::<SystemItemMappingCollection>($($arg),*).await?,
-            CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
-            CollectionType::StorageCollectionMetadata => $fn::<StorageCollectionMetadataCollection>($($arg),*).await?,
-            CollectionType::UnfinalizedShard => $fn::<UnfinalizedShardsCollection>($($arg),*).await?,
+            CollectionType::SystemConfiguration => {
+                $fn::<SystemConfigurationCollection>($($arg),*).await?
+            }
+            CollectionType::ClusterSystemConfiguration => {
+                $fn::<ClusterSystemConfigurationCollection>($($arg),*).await?
+            }
+            CollectionType::ReplicaSystemConfiguration => {
+                $fn::<ReplicaSystemConfigurationCollection>($($arg),*).await?
+            }
+            CollectionType::SystemGidMapping => {
+                $fn::<SystemItemMappingCollection>($($arg),*).await?
+            }
+            CollectionType::SystemPrivileges => {
+                $fn::<SystemPrivilegeCollection>($($arg),*).await?
+            }
+            CollectionType::StorageCollectionMetadata => {
+                $fn::<StorageCollectionMetadataCollection>($($arg),*).await?
+            }
+            CollectionType::UnfinalizedShard => {
+                $fn::<UnfinalizedShardsCollection>($($arg),*).await?
+            }
             CollectionType::TxnWalShard => $fn::<TxnWalShardCollection>($($arg),*).await?,
         }
     };
@@ -443,6 +470,8 @@ async fn dump(
         source_references,
         system_object_mappings,
         system_configurations,
+        cluster_system_configurations,
+        replica_system_configurations,
         system_privileges,
         storage_collection_metadata,
         unfinalized_shards,
@@ -510,6 +539,20 @@ async fn dump(
     );
     dump_col(
         &mut data,
+        cluster_system_configurations,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        replica_system_configurations,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
         system_object_mappings,
         &ignore,
         stats_only,
@@ -559,7 +602,9 @@ async fn upgrade_check(
     cluster_replica_sizes: ClusterReplicaSizeMap,
     start: Instant,
 ) -> Result<(), anyhow::Error> {
-    let secrets_reader = secrets.load().await.context("loading secrets reader")?;
+    let secrets_reader = mz_secrets_loader::load(secrets)
+        .await
+        .context("loading secrets reader")?;
 
     let now = SYSTEM_TIME.clone();
     let mut storage = openable_state
@@ -573,8 +618,7 @@ async fn upgrade_check(
                 cluster_replica_size_map: cluster_replica_sizes.clone(),
             },
         )
-        .await?
-        .0;
+        .await?;
 
     // If this upgrade has new builtin replicas, then we need to assign some size to it. It doesn't
     // really matter what size since it's not persisted, so we pick a random valid one.
@@ -604,7 +648,6 @@ async fn upgrade_check(
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,
-            deploy_generation: args.deploy_generation.unwrap_or(0),
             environment_id: args.environment_id.clone(),
             read_only,
             now,
@@ -668,8 +711,8 @@ async fn upgrade_check(
 
     let msg = format!(
         "catalog upgrade from {} to {} would succeed in about {} ms",
-        last_seen_version,
-        &BUILD_INFO.human_version(None),
+        last_seen_version.map_or_else(|| "new".into(), |v| v.to_string()),
+        BUILD_INFO.human_version(None),
         dur.as_millis(),
     );
     println!("{msg}");
@@ -681,11 +724,11 @@ async fn upgrade_check(
             // TODO(alter_table): Handle multiple versions of tables.
             CatalogItem::Table(table) => Some((table.global_id_writes(), table.desc.latest())),
             CatalogItem::Source(source) => Some((source.global_id(), source.desc.clone())),
-            CatalogItem::ContinualTask(ct) => Some((ct.global_id(), ct.desc.clone())),
             CatalogItem::MaterializedView(mv) => Some((mv.global_id_writes(), mv.desc.latest())),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
             | CatalogItem::Index(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
@@ -697,9 +740,7 @@ async fn upgrade_check(
     for (gid, item_desc) in storage_entries {
         // If a new version adds a BuiltinTable or BuiltinSource, we won't have created the shard
         // yet so there isn't anything to check.
-        let maybe_shard_id = state
-            .storage_metadata()
-            .get_collection_shard::<Timestamp>(gid);
+        let maybe_shard_id = state.storage_metadata().get_collection_shard(gid);
         let shard_id = match maybe_shard_id {
             Ok(shard_id) => shard_id,
             Err(StorageError::IdentifierMissing(_)) => {
@@ -801,6 +842,6 @@ struct UnescapedDebug(String);
 
 impl std::fmt::Debug for UnescapedDebug {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "'{}'", &self.0)
+        write!(f, "'{}'", self.0)
     }
 }

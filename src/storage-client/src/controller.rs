@@ -32,13 +32,13 @@ use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL;
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_ore::soft_panic_or_log;
 use mz_persist_client::batch::ProtoBatch;
-use mz_persist_types::{Codec64, Opaque, ShardId};
+use mz_persist_types::{Codec64, ShardId};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, Timestamp};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
@@ -54,15 +54,25 @@ use mz_storage_types::sources::{
     SourceExportDetails, Timeline,
 };
 use serde::{Deserialize, Serialize};
-use timely::progress::Timestamp as TimelyTimestamp;
+use timely::progress::Antichain;
 use timely::progress::frontier::MutableAntichain;
-use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::client::{AppendOnlyUpdate, StatusUpdate, TableData};
 use crate::statistics::WebhookStatistics;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord
+)]
 pub enum IntrospectionType {
     /// We're not responsible for appending to this collection automatically, but we should
     /// automatically bump the write frontier from time to time.
@@ -98,6 +108,7 @@ pub enum IntrospectionType {
     ComputeMaterializedViewRefreshes,
     ComputeErrorCounts,
     ComputeHydrationTimes,
+    ComputeObjectArrangementSizes,
 
     // Written by the Adapter for tracking AWS PrivateLink Connection Status History
     PrivatelinkConnectionStatusHistory,
@@ -105,7 +116,7 @@ pub enum IntrospectionType {
 
 /// Describes how data is written to the collection.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DataSource<T> {
+pub enum DataSource {
     /// Ingest data from some external source.
     Ingestion(IngestionDescription),
     /// This source receives its data from the identified ingestion,
@@ -130,22 +141,19 @@ pub enum DataSource<T> {
     /// controller, e.g. it's a materialized view or the catalog collection.
     Other,
     /// This collection is the output collection of a sink.
-    Sink { desc: ExportDescription<T> },
+    Sink { desc: ExportDescription },
 }
 
 /// Describes a request to create a source.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CollectionDescription<T> {
+pub struct CollectionDescription {
     /// The schema of this collection
     pub desc: RelationDesc,
     /// The source of this collection's data.
-    pub data_source: DataSource<T>,
+    pub data_source: DataSource,
     /// An optional frontier to which the collection's `since` should be advanced.
-    pub since: Option<Antichain<T>>,
-    /// A GlobalId to use for this collection to use for the status collection.
-    /// Used to keep track of source status/error information.
-    pub status_collection_id: Option<GlobalId>,
-    /// The timeline of the source. Absent for materialized views, continual tasks, etc.
+    pub since: Option<Antichain<Timestamp>>,
+    /// The timeline of the source. Absent for materialized views, etc.
     pub timeline: Option<Timeline>,
     /// The primary of this collections.
     ///
@@ -156,14 +164,13 @@ pub struct CollectionDescription<T> {
     pub primary: Option<GlobalId>,
 }
 
-impl<T> CollectionDescription<T> {
+impl CollectionDescription {
     /// Create a CollectionDescription for [`DataSource::Other`].
-    pub fn for_other(desc: RelationDesc, since: Option<Antichain<T>>) -> Self {
+    pub fn for_other(desc: RelationDesc, since: Option<Antichain<Timestamp>>) -> Self {
         Self {
             desc,
             data_source: DataSource::Other,
             since,
-            status_collection_id: None,
             timeline: None,
             primary: None,
         }
@@ -175,7 +182,6 @@ impl<T> CollectionDescription<T> {
             desc,
             data_source: DataSource::Table,
             since: None,
-            status_collection_id: None,
             timeline: Some(Timeline::EpochMilliseconds),
             primary: None,
         }
@@ -190,8 +196,8 @@ pub struct ExportDescription<T = mz_repr::Timestamp> {
 }
 
 #[derive(Debug)]
-pub enum Response<T> {
-    FrontierUpdates(Vec<(GlobalId, Antichain<T>)>),
+pub enum Response {
+    FrontierUpdates(Vec<(GlobalId, Antichain<Timestamp>)>),
 }
 
 /// Metadata that the storage controller must know to properly handle the life
@@ -210,7 +216,7 @@ pub struct StorageMetadata {
 }
 
 impl StorageMetadata {
-    pub fn get_collection_shard<T>(&self, id: GlobalId) -> Result<ShardId, StorageError<T>> {
+    pub fn get_collection_shard(&self, id: GlobalId) -> Result<ShardId, StorageError> {
         let shard_id = self
             .collection_metadata
             .get(&id)
@@ -226,7 +232,7 @@ impl StorageMetadata {
 /// Data written to the implementor of this trait should make a consistent view
 /// of the data available through [`StorageMetadata`].
 #[async_trait]
-pub trait StorageTxn<T> {
+pub trait StorageTxn {
     /// Retrieve all of the visible storage metadata.
     ///
     /// The value of this map should be treated as opaque.
@@ -239,7 +245,7 @@ pub trait StorageTxn<T> {
     fn insert_collection_metadata(
         &mut self,
         s: BTreeMap<GlobalId, ShardId>,
-    ) -> Result<(), StorageError<T>>;
+    ) -> Result<(), StorageError>;
 
     /// Remove the metadata associated with the identified collections.
     ///
@@ -247,16 +253,20 @@ pub trait StorageTxn<T> {
     /// include these keys.
     fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)>;
 
-    /// Retrieve all of the shards that are no longer in use by an active
-    /// collection but are yet to be finalized.
+    /// Retrieve the durable set of shards recorded as unfinalized.
+    ///
+    /// Entries must be reconciled with active collection metadata before
+    /// finalization because stale entries can refer to active collections.
     fn get_unfinalized_shards(&self) -> BTreeSet<ShardId>;
 
     /// Insert the specified values as unfinalized shards.
-    fn insert_unfinalized_shards(&mut self, s: BTreeSet<ShardId>) -> Result<(), StorageError<T>>;
+    fn insert_unfinalized_shards(&mut self, s: BTreeSet<ShardId>) -> Result<(), StorageError>;
 
-    /// Mark the specified shards as finalized, deleting them from the
-    /// unfinalized shard collection.
-    fn mark_shards_as_finalized(&mut self, shards: BTreeSet<ShardId>);
+    /// Removes the specified shards from the unfinalized shard collection.
+    ///
+    /// Missing shards are ignored. This only updates transaction metadata and
+    /// does not finalize the underlying Persist shards.
+    fn remove_unfinalized_shards(&mut self, shards: BTreeSet<ShardId>);
 
     /// Get the txn WAL shard for this environment if it exists.
     fn get_txn_wal_shard(&self) -> Option<ShardId>;
@@ -264,7 +274,7 @@ pub trait StorageTxn<T> {
     /// Store the specified shard as the environment's txn WAL shard.
     ///
     /// The implementor should error if the shard is already specified.
-    fn write_txn_wal_shard(&mut self, shard: ShardId) -> Result<(), StorageError<T>>;
+    fn write_txn_wal_shard(&mut self, shard: ShardId) -> Result<(), StorageError>;
 }
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -293,10 +303,45 @@ impl StorageWriteOp {
     }
 }
 
+/// Metadata required to register a table with the txns shard.
+#[derive(Debug, Clone)]
+pub struct TableRegistration {
+    pub id: GlobalId,
+    pub data_shard: ShardId,
+    pub relation_desc: RelationDesc,
+}
+
+/// Queues txns-shard operations on the storage table worker.
+///
+/// The adapter's group committer is the sole runtime caller, preserving FIFO order across appends,
+/// registrations, and forgets. On [`StorageError::InvalidUppers`], the writable implementation
+/// restores its bookkeeping and the caller must retry at a fresh timestamp.
+pub trait TableWriteHandle: Debug + Send + Sync {
+    /// Appends `commands` at `write_ts` and advances all registered tables to `advance_to`.
+    fn append(
+        &self,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
+        commands: Vec<(GlobalId, Vec<TableData>)>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+
+    /// Registers `tables` at `register_ts`.
+    fn register(
+        &self,
+        register_ts: Timestamp,
+        tables: Vec<TableRegistration>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+
+    /// Forgets registered `ids` at `forget_ts`, ignoring unknown IDs.
+    fn forget(
+        &self,
+        forget_ts: Timestamp,
+        ids: Vec<GlobalId>,
+    ) -> oneshot::Receiver<Result<(), StorageError>>;
+}
+
 #[async_trait(?Send)]
 pub trait StorageController: Debug {
-    type Timestamp: TimelyTimestamp;
-
     /// Marks the end of any initialization commands.
     ///
     /// The implementor may wait for this method to be called before implementing prior commands,
@@ -306,6 +351,19 @@ pub trait StorageController: Debug {
 
     /// Update storage configuration with new parameters.
     fn update_parameters(&mut self, config_params: StorageParameters);
+
+    /// Replaces the per-replica dyncfg overrides for the given instances.
+    ///
+    /// This only stores the overrides; callers should follow with a
+    /// configuration push (e.g. [`Self::update_parameters`]) so existing
+    /// replicas observe the new values. Instances absent from `overrides` have
+    /// their overrides cleared, so a replica that no longer has an override
+    /// reverts to the environment-wide configuration. Used by the scoped
+    /// feature flags (replica-local) layer.
+    fn update_replica_dyncfg_overrides(
+        &mut self,
+        overrides: BTreeMap<StorageInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
+    );
 
     /// Get the current configuration, including parameters updated with `update_parameters`.
     fn config(&self) -> &StorageConfiguration;
@@ -318,13 +376,15 @@ pub trait StorageController: Debug {
     /// For this check, zero-replica clusters are always considered hydrated.
     /// Their collections would never normally be considered hydrated but it's
     /// clearly intentional that they have no replicas.
-    fn collection_hydrated(
-        &self,
-        collection_id: GlobalId,
-    ) -> Result<bool, StorageError<Self::Timestamp>>;
+    fn collection_hydrated(&self, collection_id: GlobalId) -> Result<bool, StorageError>;
 
     /// Returns `true` if each non-transient, non-excluded collection is
     /// hydrated on at least one of the provided replicas.
+    ///
+    /// Collections that are not scheduled on any of the provided replicas do
+    /// not count against hydration: a single-replica source keeps running on
+    /// its current replica and can never hydrate on a replica it is not
+    /// scheduled on.
     ///
     /// If no replicas are provided, this checks for hydration on _any_ replica.
     ///
@@ -335,13 +395,13 @@ pub trait StorageController: Debug {
         target_replica_ids: Option<Vec<ReplicaId>>,
         target_cluster_ids: &StorageInstanceId,
         exclude_collections: &BTreeSet<GlobalId>,
-    ) -> Result<bool, StorageError<Self::Timestamp>>;
+    ) -> Result<bool, StorageError>;
 
     /// Returns the since/upper frontiers of the identified collection.
     fn collection_frontiers(
         &self,
         id: GlobalId,
-    ) -> Result<(Antichain<Self::Timestamp>, Antichain<Self::Timestamp>), CollectionMissing>;
+    ) -> Result<(Antichain<Timestamp>, Antichain<Timestamp>), CollectionMissing>;
 
     /// Returns the since/upper frontiers of the identified collections.
     ///
@@ -354,14 +414,7 @@ pub trait StorageController: Debug {
     fn collections_frontiers(
         &self,
         id: Vec<GlobalId>,
-    ) -> Result<
-        Vec<(
-            GlobalId,
-            Antichain<Self::Timestamp>,
-            Antichain<Self::Timestamp>,
-        )>,
-        CollectionMissing,
-    >;
+    ) -> Result<Vec<(GlobalId, Antichain<Timestamp>, Antichain<Timestamp>)>, CollectionMissing>;
 
     /// Acquire an iterator over [CollectionMetadata] for all active
     /// collections.
@@ -380,7 +433,7 @@ pub trait StorageController: Debug {
 
     /// Checks whether a collection exists under the given `GlobalId`. Returns
     /// an error if the collection does not exist.
-    fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>>;
+    fn check_exists(&self, id: GlobalId) -> Result<(), StorageError>;
 
     /// Creates a storage instance with the specified ID.
     ///
@@ -433,7 +486,7 @@ pub trait StorageController: Debug {
         &mut self,
         storage_metadata: &StorageMetadata,
         collections: Vec<(GlobalId, RelationDesc)>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
 
     /// Create the sources described in the individual RunIngestionCommand commands.
     ///
@@ -449,16 +502,20 @@ pub trait StorageController: Debug {
     /// collections and leave the controller in an inconsistent state. It is almost
     /// always wrong to do anything but abort the process on `Err`.
     ///
-    /// The `register_ts` is used as the initial timestamp that tables are available for reads. (We
+    /// The `register_ts` is the initial timestamp at which tables become available for reads. (We
     /// might later give non-tables the same treatment, but hold off on that initially.) Callers
     /// must provide a Some if any of the collections is a table. A None may be given if none of the
     /// collections are a table (i.e. all materialized views, sources, etc).
+    ///
+    /// This sets up storage but does not register tables in the txns shard. Runtime registration
+    /// must go through the adapter's group committer. Bootstrap uses
+    /// [`Self::register_table_collections`].
     async fn create_collections(
         &mut self,
         storage_metadata: &StorageMetadata,
-        register_ts: Option<Self::Timestamp>,
-        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
+        register_ts: Option<Timestamp>,
+        collections: Vec<(GlobalId, CollectionDescription)>,
+    ) -> Result<(), StorageError> {
         self.create_collections_for_bootstrap(
             storage_metadata,
             register_ts,
@@ -475,10 +532,10 @@ pub trait StorageController: Debug {
     async fn create_collections_for_bootstrap(
         &mut self,
         storage_metadata: &StorageMetadata,
-        register_ts: Option<Self::Timestamp>,
-        collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+        register_ts: Option<Timestamp>,
+        collections: Vec<(GlobalId, CollectionDescription)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
 
     /// Check that the ingestion associated with `id` can use the provided
     /// [`SourceDesc`].
@@ -490,40 +547,63 @@ pub trait StorageController: Debug {
         &mut self,
         ingestion_id: GlobalId,
         source_desc: &SourceDesc,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
+
+    /// Alters each identified ingestion to use the correlated [`SourceDesc`].
+    async fn alter_ingestion_source_desc(
+        &mut self,
+        ingestion_ids: BTreeMap<GlobalId, SourceDesc>,
+    ) -> Result<(), StorageError>;
 
     /// Alters each identified collection to use the correlated [`GenericSourceConnection`].
     async fn alter_ingestion_connections(
         &mut self,
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
 
     /// Alters the data config for the specified source exports of the specified ingestions.
     async fn alter_ingestion_export_data_configs(
         &mut self,
         source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
 
+    /// Evolves a table's schema without registering the new collection in the txns shard.
+    ///
+    /// Runtime registration must go through the adapter's group committer.
     async fn alter_table_desc(
         &mut self,
         existing_collection: GlobalId,
         new_collection: GlobalId,
         new_desc: RelationDesc,
         expected_version: RelationVersion,
-        register_ts: Self::Timestamp,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
+
+    /// Registers the `DataSource::Table` collections among `ids` during bootstrap.
+    ///
+    /// Runtime registration must go through the adapter's group committer. In read-only mode, only
+    /// migrated tables are registered.
+    async fn register_table_collections(
+        &mut self,
+        register_ts: Timestamp,
+        ids: Vec<GlobalId>,
+    ) -> Result<(), StorageError>;
+
+    /// Returns registration metadata for the `DataSource::Table` collections among `ids`.
+    ///
+    /// Other data sources are ignored.
+    fn table_registrations(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Result<Vec<TableRegistration>, StorageError>;
+
+    /// Returns the `DataSource::Table` IDs among `ids`.
+    fn txns_table_ids(&self, ids: Vec<GlobalId>) -> Result<Vec<GlobalId>, StorageError>;
 
     /// Acquire an immutable reference to the export state, should it exist.
-    fn export(
-        &self,
-        id: GlobalId,
-    ) -> Result<&ExportState<Self::Timestamp>, StorageError<Self::Timestamp>>;
+    fn export(&self, id: GlobalId) -> Result<&ExportState, StorageError>;
 
     /// Acquire a mutable reference to the export state, should it exist.
-    fn export_mut(
-        &mut self,
-        id: GlobalId,
-    ) -> Result<&mut ExportState<Self::Timestamp>, StorageError<Self::Timestamp>>;
+    fn export_mut(&mut self, id: GlobalId) -> Result<&mut ExportState, StorageError>;
 
     /// Create a oneshot ingestion.
     async fn create_oneshot_ingestion(
@@ -533,48 +613,47 @@ pub trait StorageController: Debug {
         instance_id: StorageInstanceId,
         request: OneshotIngestionRequest,
         result_tx: OneshotResultCallback<ProtoBatch>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
 
     /// Cancel a oneshot ingestion.
-    fn cancel_oneshot_ingestion(
-        &mut self,
-        ingestion_id: uuid::Uuid,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    fn cancel_oneshot_ingestion(&mut self, ingestion_id: uuid::Uuid) -> Result<(), StorageError>;
 
     /// Alter the sink identified by the given id to match the provided `ExportDescription`.
     async fn alter_export(
         &mut self,
         id: GlobalId,
-        export: ExportDescription<Self::Timestamp>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+        export: ExportDescription,
+    ) -> Result<(), StorageError>;
 
     /// For each identified export, alter its [`StorageSinkConnection`].
     async fn alter_export_connections(
         &mut self,
         exports: BTreeMap<GlobalId, StorageSinkConnection>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
 
-    /// Drops the read capability for the tables and allows their resources to be reclaimed.
+    /// Schedules controller cleanup for tables.
+    ///
+    /// The txn-wal tables among `identifiers` must first be forgotten through the adapter's group
+    /// committer.
     fn drop_tables(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
-        ts: Self::Timestamp,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sources and allows their resources to be reclaimed.
     fn drop_sources(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     fn drop_sinks(
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
 
     /// Drops the read capability for the sinks and allows their resources to be reclaimed.
     ///
@@ -606,32 +685,25 @@ pub trait StorageController: Debug {
         &mut self,
         storage_metadata: &StorageMetadata,
         identifiers: Vec<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
+    ) -> Result<(), StorageError>;
 
-    /// Append `updates` into the local input named `id` and advance its upper to `upper`.
+    /// Appends to tables during bootstrap.
     ///
-    /// The method returns a oneshot that can be awaited to indicate completion of the write.
-    /// The method may return an error, indicating an immediately visible error, and also the
-    /// oneshot may return an error if one is encountered during the write.
-    ///
-    /// All updates in `commands` are applied atomically.
-    // TODO(petrosagg): switch upper to `Antichain<Timestamp>`
+    /// Runtime writes must go through the adapter's group committer. The returned receiver resolves
+    /// when the atomic write completes.
     fn append_table(
         &mut self,
-        write_ts: Self::Timestamp,
-        advance_to: Self::Timestamp,
+        write_ts: Timestamp,
+        advance_to: Timestamp,
         commands: Vec<(GlobalId, Vec<TableData>)>,
-    ) -> Result<
-        tokio::sync::oneshot::Receiver<Result<(), StorageError<Self::Timestamp>>>,
-        StorageError<Self::Timestamp>,
-    >;
+    ) -> Result<tokio::sync::oneshot::Receiver<Result<(), StorageError>>, StorageError>;
+
+    /// Returns the process-lifetime storage mechanism used by the adapter's group committer.
+    fn table_write_handle(&self) -> Arc<dyn TableWriteHandle>;
 
     /// Returns a [`MonotonicAppender`] which is a channel that can be used to monotonically
     /// append to the specified [`GlobalId`].
-    fn monotonic_appender(
-        &self,
-        id: GlobalId,
-    ) -> Result<MonotonicAppender<Self::Timestamp>, StorageError<Self::Timestamp>>;
+    fn monotonic_appender(&self, id: GlobalId) -> Result<MonotonicAppender, StorageError>;
 
     /// Returns a shared [`WebhookStatistics`] which can be used to report user-facing
     /// statistics for this given webhhook, specified by the [`GlobalId`].
@@ -640,10 +712,7 @@ pub trait StorageController: Debug {
     // from outside the ordinary controller-clusterd path. Its possible to merge this with
     // `monotonic_appender`, whose only current user is webhooks, but given that they will
     // likely be moved to clusterd, we just leave this a special case.
-    fn webhook_statistics(
-        &self,
-        id: GlobalId,
-    ) -> Result<Arc<WebhookStatistics>, StorageError<Self::Timestamp>>;
+    fn webhook_statistics(&self, id: GlobalId) -> Result<Arc<WebhookStatistics>, StorageError>;
 
     /// Waits until the controller is ready to process a response.
     ///
@@ -659,7 +728,7 @@ pub trait StorageController: Debug {
     fn process(
         &mut self,
         storage_metadata: &StorageMetadata,
-    ) -> Result<Option<Response<Self::Timestamp>>, anyhow::Error>;
+    ) -> Result<Option<Response>, anyhow::Error>;
 
     /// Exposes the internal state of the data shard for debugging and QA.
     ///
@@ -704,7 +773,7 @@ pub trait StorageController: Debug {
         type_: IntrospectionType,
     ) -> mpsc::UnboundedSender<(
         Vec<AppendOnlyUpdate>,
-        oneshot::Sender<Result<(), StorageError<Self::Timestamp>>>,
+        oneshot::Sender<Result<(), StorageError>>,
     )>;
 
     /// Returns a sender for updates to the specified differential introspection collection.
@@ -715,25 +784,19 @@ pub trait StorageController: Debug {
     fn differential_introspection_tx(
         &self,
         type_: IntrospectionType,
-    ) -> mpsc::UnboundedSender<(
-        StorageWriteOp,
-        oneshot::Sender<Result<(), StorageError<Self::Timestamp>>>,
-    )>;
+    ) -> mpsc::UnboundedSender<(StorageWriteOp, oneshot::Sender<Result<(), StorageError>>)>;
 
     async fn real_time_recent_timestamp(
         &self,
         source_ids: BTreeSet<GlobalId>,
         timeout: Duration,
-    ) -> Result<
-        BoxFuture<Result<Self::Timestamp, StorageError<Self::Timestamp>>>,
-        StorageError<Self::Timestamp>,
-    >;
+    ) -> Result<BoxFuture<Result<Timestamp, StorageError>>, StorageError>;
 
     /// Returns the state of the [`StorageController`] formatted as JSON.
     fn dump(&self) -> Result<serde_json::Value, anyhow::Error>;
 }
 
-impl<T> DataSource<T> {
+impl DataSource {
     /// Returns true if the storage controller manages the data shard for this
     /// source using txn-wal.
     pub fn in_txns(&self) -> bool {
@@ -753,14 +816,8 @@ impl<T> DataSource<T> {
 /// A wrapper struct that presents the adapter token to a format that is understandable by persist
 /// and also allows us to differentiate between a token being present versus being set for the
 /// first time.
-#[derive(PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug, Default)]
 pub struct PersistEpoch(pub Option<NonZeroI64>);
-
-impl Opaque for PersistEpoch {
-    fn initial() -> Self {
-        PersistEpoch(None)
-    }
-}
 
 impl Codec64 for PersistEpoch {
     fn codec_name() -> String {
@@ -784,41 +841,38 @@ impl From<NonZeroI64> for PersistEpoch {
 
 /// State maintained about individual exports.
 #[derive(Debug)]
-pub struct ExportState<T: TimelyTimestamp> {
+pub struct ExportState {
     /// Really only for keeping track of changes to the `derived_since`.
-    pub read_capabilities: MutableAntichain<T>,
+    pub read_capabilities: MutableAntichain<Timestamp>,
 
     /// The cluster this export is associated with.
     pub cluster_id: StorageInstanceId,
 
     /// The current since frontier, derived from `write_frontier` using
     /// `hold_policy`.
-    pub derived_since: Antichain<T>,
+    pub derived_since: Antichain<Timestamp>,
 
     /// The read holds that this export has on its dependencies (its input and itself). When
     /// the upper of the export changes, we downgrade this, which in turn
     /// downgrades holds we have on our dependencies' sinces.
-    pub read_holds: [ReadHold<T>; 2],
+    pub read_holds: [ReadHold; 2],
 
     /// The policy to use to downgrade `self.read_capability`.
-    pub read_policy: ReadPolicy<T>,
+    pub read_policy: ReadPolicy,
 
     /// Reported write frontier.
-    pub write_frontier: Antichain<T>,
+    pub write_frontier: Antichain<Timestamp>,
 }
 
-impl<T: Timestamp> ExportState<T> {
+impl ExportState {
     pub fn new(
         cluster_id: StorageInstanceId,
-        read_hold: ReadHold<T>,
-        self_hold: ReadHold<T>,
-        write_frontier: Antichain<T>,
-        read_policy: ReadPolicy<T>,
-    ) -> Self
-    where
-        T: Lattice,
-    {
-        let mut dependency_since = Antichain::from_elem(T::minimum());
+        read_hold: ReadHold,
+        self_hold: ReadHold,
+        write_frontier: Antichain<Timestamp>,
+        read_policy: ReadPolicy,
+    ) -> Self {
+        let mut dependency_since = Antichain::from_elem(Timestamp::MIN);
         for read_hold in [&read_hold, &self_hold] {
             dependency_since.join_assign(read_hold.since());
         }
@@ -838,7 +892,7 @@ impl<T: Timestamp> ExportState<T> {
     }
 
     /// Returns the cluster to which the export is bound.
-    pub fn input_hold(&self) -> &ReadHold<T> {
+    pub fn input_hold(&self) -> &ReadHold {
         &self.read_holds[0]
     }
 
@@ -851,25 +905,25 @@ impl<T: Timestamp> ExportState<T> {
 ///
 /// See `CollectionManager::monotonic_appender` to acquire a [`MonotonicAppender`].
 #[derive(Clone, Debug)]
-pub struct MonotonicAppender<T> {
+pub struct MonotonicAppender {
     /// Channel that sends to a [`tokio::task`] which pushes updates to Persist.
     tx: mpsc::UnboundedSender<(
         Vec<AppendOnlyUpdate>,
-        oneshot::Sender<Result<(), StorageError<T>>>,
+        oneshot::Sender<Result<(), StorageError>>,
     )>,
 }
 
-impl<T> MonotonicAppender<T> {
+impl MonotonicAppender {
     pub fn new(
         tx: mpsc::UnboundedSender<(
             Vec<AppendOnlyUpdate>,
-            oneshot::Sender<Result<(), StorageError<T>>>,
+            oneshot::Sender<Result<(), StorageError>>,
         )>,
     ) -> Self {
         MonotonicAppender { tx }
     }
 
-    pub async fn append(&self, updates: Vec<AppendOnlyUpdate>) -> Result<(), StorageError<T>> {
+    pub async fn append(&self, updates: Vec<AppendOnlyUpdate>) -> Result<(), StorageError> {
         let (tx, rx) = oneshot::channel();
 
         // Send our update to the CollectionManager.

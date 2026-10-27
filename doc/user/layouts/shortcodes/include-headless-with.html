@@ -1,0 +1,27 @@
+{{- /*
+  Like `include-headless`, but substitutes named parameters into the included
+  file. Every named parameter other than `file` is substituted into the
+  included content by replacing the token `__PARAM__` (the parameter name,
+  uppercased, wrapped in double underscores) with the parameter value.
+
+  Example:
+    {{< include-headless-with file="/headless/foo" port="3306" instance="RDS" >}}
+  replaces `__PORT__` with `3306` and `__INSTANCE__` with `RDS` in `/headless/foo`.
+
+  The substituted content is rendered to HTML, so call this shortcode with the
+  `{{< >}}` form (like `include-md`).
+*/ -}}
+{{- $file := .Get "file" -}}
+{{- with $.Page.GetPage $file -}}
+  {{- $out := .RenderShortcodes -}}
+  {{- $out = replaceRE `{{__hugo_ctx[^}]*}}` "" $out -}}
+  {{- $out = replace $out "{{__hugo_ctx/}}" "" -}}
+  {{- range $k, $v := $.Params -}}
+    {{- if ne $k "file" -}}
+      {{- $out = replace $out (printf "__%s__" (upper $k)) $v -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $out | markdownify -}}
+{{- else -}}
+  {{- errorf "The %q shortcode was unable to find %q. See %s" $.Name $file $.Position -}}
+{{- end -}}

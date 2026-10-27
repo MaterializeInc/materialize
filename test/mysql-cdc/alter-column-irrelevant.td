@@ -9,7 +9,6 @@
 
 $ set-sql-timeout duration=1s
 
-
 #
 # Test ALTER TABLE -- some column changes should not do any harm
 #
@@ -56,10 +55,12 @@ INSERT INTO t1 VALUES (2, 2);
 # add a new column to t1 at the beginning of
 $ mysql-execute name=mysql
 ALTER TABLE t1 ADD COLUMN f3 INTEGER FIRST;
-INSERT INTO t1 VALUES (3, 3, 3);
+INSERT INTO t1 VALUES (0, 3, 3);
 
-! SELECT * FROM t1;
-contains:incompatible schema change
+> SELECT * FROM t1;
+1
+2
+3
 
 # add a new column to t2
 $ mysql-execute name=mysql

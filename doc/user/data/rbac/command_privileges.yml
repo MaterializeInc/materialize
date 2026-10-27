@@ -4,359 +4,302 @@ columns:
 rows:
   - Command: "[`ALTER CLUSTER`](/sql/alter-cluster)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-cluster.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-cluster" %}}
   - Command: "[`ALTER CLUSTER REPLICA`](/sql/alter-cluster-replica)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-cluster-replica.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-cluster-replica" %}}
   - Command: "[`ALTER CONNECTION`](/sql/alter-connection)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-connection.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-connection" %}}
   - Command: "[`ALTER DATABASE`](/sql/alter-database)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-database.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-database" %}}
   - Command: "[`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-default-privileges.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-default-privileges" %}}
   - Command: "[`ALTER INDEX`](/sql/alter-index)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-index.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-index" %}}
   - Command: "[`ALTER MATERIALIZED VIEW`](/sql/alter-materialized-view)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-materialized-view.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-materialized-view" %}}
   - Command: "[`ALTER NETWORK POLICY`](/sql/alter-network-policy)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-network-policy.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-network-policy" %}}
 
   - Command: "[`ALTER ROLE`](/sql/alter-role)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-role.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-role" %}}
 
   - Command: "[`ALTER SCHEMA`](/sql/alter-schema)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-schema.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-schema" %}}
   - Command: "[`ALTER SECRET`](/sql/alter-secret)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-secret.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-secret" %}}
   - Command: "[`ALTER SINK`](/sql/alter-sink)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-sink.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-sink" %}}
   - Command: "[`ALTER SOURCE`](/sql/alter-source)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-source.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-source" %}}
   - Command: "[`ALTER SYSTEM RESET`](/sql/alter-system-reset)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-system-reset.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-system-reset" %}}
   - Command: "[`ALTER SYSTEM SET`](/sql/alter-system-set)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-system-set.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-system-set" %}}
   - Command: "[`ALTER TABLE`](/sql/alter-table)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-table.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-table" %}}
   - Command: "[`ALTER TYPE`](/sql/alter-type)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-type.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-type" %}}
   - Command: "[`ALTER VIEW`](/sql/alter-view)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-view.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/alter-view" %}}
   - Command: "[`COMMENT ON`](/sql/comment-on)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/comment-on.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/comment-on" %}}
 
   - Command: "[`COPY FROM`](/sql/copy-from)"
     Privileges: |
-
-      {{< include-md file="shared-content/sql-command-privileges/copy-from.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/copy-from" %}}
 
   - Command: "[`COPY TO`](/sql/copy-to)"
     Privileges: |
-
-      {{< include-md file="shared-content/sql-command-privileges/copy-to.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/copy-to" %}}
 
   - Command: "[`CREATE CLUSTER`](/sql/create-cluster)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-cluster.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/create-cluster" %}}
 
   - Command: "[`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-cluster-replica.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/create-cluster-replica" %}}
 
   - Command: "[`CREATE CONNECTION`](/sql/create-connection)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-connection.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/create-connection" %}}
 
   - Command: "[`CREATE DATABASE`](/sql/create-database)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-database.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/create-database" %}}
 
   - Command: "[`CREATE INDEX`](/sql/create-index)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-index.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/create-index" %}}
 
   - Command: "[`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-materialized-view.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/create-materialized-view" %}}
 
   - Command: "[`CREATE NETWORK POLICY`](/sql/create-network-policy/)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-network-policy.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/create-network-policy" %}}
 
   - Command: "[`CREATE ROLE`](/sql/create-role)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-role.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/create-role" %}}
 
   - Command: "[`CREATE SCHEMA`](/sql/create-schema)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-schema.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/create-schema" %}}
 
   - Command: "[`CREATE SECRET`](/sql/create-secret)"
     Privileges: |
 
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-secret.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/create-secret" %}}
 
   - Command: "[`CREATE SINK`](/sql/create-sink)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/create-sink.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/create-sink" %}}
 
   - Command: "[`CREATE SOURCE`](/sql/create-source)"
     Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-source.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/create-source" %}}
 
   - Command: "[`CREATE TABLE`](/sql/create-table)"
     Privileges: |
 
-      {{< include-md
-      file="shared-content/sql-command-privileges/create-table.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/create-table" %}}
 
   - Command: "[`CREATE TYPE`](/sql/create-type)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/create-type.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/create-type" %}}
 
   - Command: "[`CREATE VIEW`](/sql/create-view)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/create-view.md"
-      >}}
+      {{% include-headless "/headless/sql-command-privileges/create-view" %}}
 
   - Command: "[`DELETE`](/sql/delete)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/delete.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/delete" %}}
 
   - Command: "[`DROP CLUSTER REPLICA`](/sql/drop-cluster-replica)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-cluster-replica.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-cluster-replica" %}}
 
   - Command: "[`DROP CLUSTER`](/sql/drop-cluster)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-cluster.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-cluster" %}}
 
   - Command: "[`DROP CONNECTION`](/sql/drop-connection)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-connection.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-connection" %}}
 
   - Command: "[`DROP DATABASE`](/sql/drop-database)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-database.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-database" %}}
 
   - Command: "[`DROP INDEX`](/sql/drop-index)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-index.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-index" %}}
 
   - Command: "[`DROP MATERIALIZED VIEW`](/sql/drop-materialized-view)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-materialized-view.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-materialized-view" %}}
 
   - Command: "[`DROP NETWORK POLICY`](/sql/drop-network-policy)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-network-policy.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-network-policy" %}}
 
   - Command: "[`DROP OWNED`](/sql/drop-owned)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-owned.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-owned" %}}
 
   - Command: "[`DROP ROLE`](/sql/drop-role)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-role.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-role" %}}
 
   - Command: "[`DROP SCHEMA`](/sql/drop-schema)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-schema.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-schema" %}}
 
   - Command: "[`DROP SECRET`](/sql/drop-secret)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-secret.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-secret" %}}
 
   - Command: "[`DROP SINK`](/sql/drop-sink)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-sink.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-sink" %}}
 
   - Command: "[`DROP SOURCE`](/sql/drop-source)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-source.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-source" %}}
 
   - Command: "[`DROP TABLE`](/sql/drop-table)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-table.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-table" %}}
 
   - Command: "[`DROP TYPE`](/sql/drop-type)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-type.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-type" %}}
 
   - Command: "[`DROP USER`](/sql/drop-user)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-user.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-user" %}}
 
   - Command: "[`DROP VIEW`](/sql/drop-view)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/drop-view.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/drop-view" %}}
 
   - Command: "[`EXPLAIN ANALYZE`](/sql/explain-analyze)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/explain-analyze.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/explain-analyze" %}}
 
   - Command: "[`EXPLAIN FILTER PUSHDOWN`](/sql/explain-filter-pushdown)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/explain-filter-pushdown.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/explain-filter-pushdown" %}}
 
   - Command: "[`EXPLAIN PLAN`](/sql/explain-plan)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/explain-plan.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/explain-plan" %}}
 
   - Command: "[`EXPLAIN SCHEMA`](/sql/explain-schema)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/explain-schema.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/explain-schema" %}}
 
   - Command: "[`EXPLAIN TIMESTAMP`](/sql/explain-timestamp)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/explain-timestamp.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/explain-timestamp" %}}
 
   - Command: "[`GRANT PRIVILEGE`](/sql/grant-privilege)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/grant-privilege.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/grant-privilege" %}}
 
   - Command: "[`GRANT ROLE`](/sql/grant-role)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/grant-role.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/grant-role" %}}
 
   - Command: "[`INSERT`](/sql/insert)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/insert.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/insert" %}}
 
   - Command: "[`REASSIGN OWNED`](/sql/reassign-owned)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/reassign-owned.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/reassign-owned" %}}
 
   - Command: "[`REVOKE PRIVILEGE`](/sql/revoke-privilege)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/revoke-privilege.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/revoke-privilege" %}}
 
   - Command: "[`REVOKE ROLE`](/sql/revoke-role)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/revoke-role.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/revoke-role" %}}
 
   - Command: "[`SELECT`](/sql/select)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/select.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/select" %}}
 
   - Command: "[`SHOW COLUMNS`](/sql/show-columns)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/show-columns.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/show-columns" %}}
 
   - Command: "[`SHOW CREATE CLUSTER`](/sql/show-create-cluster)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/show-create-cluster.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/show-create-cluster" %}}
 
   - Command: "[`SHOW CREATE CONNECTION`](/sql/show-create-connection)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/show-create-connection.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/show-create-connection" %}}
 
   - Command: "[`SHOW CREATE INDEX`](/sql/show-create-index)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/show-create-index.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/show-create-index" %}}
 
   - Command: "[`SHOW CREATE MATERIALIZED VIEW`](/sql/show-create-materialized-view)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/show-create-materialized-view.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/show-create-materialized-view" %}}
 
   - Command: "[`SHOW CREATE TYPE`](/sql/show-create-type)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/show-create-type.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/show-create-type" %}}
 
   - Command: "[`SHOW CREATE SINK`](/sql/show-create-sink)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/show-create-sink.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/show-create-sink" %}}
 
   - Command: "[`SHOW CREATE SOURCE`](/sql/show-create-source)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/show-create-source.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/show-create-source" %}}
 
   - Command: "[`SHOW CREATE TABLE`](/sql/show-create-table)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/show-create-table.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/show-create-table" %}}
 
   - Command: "[`SHOW CREATE VIEW`](/sql/show-create-view)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/show-create-view.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/show-create-view" %}}
 
   - Command: "[`SUBSCRIBE`](/sql/subscribe)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/subscribe.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/subscribe" %}}
 
   - Command: "[`UPDATE`](/sql/update)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/update.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/update" %}}
 
   - Command: "[`VALIDATE CONNECTION`](/sql/validate-connection)"
     Privileges: |
-      {{< include-md file="shared-content/sql-command-privileges/validate-connection.md" >}}
+      {{% include-headless "/headless/sql-command-privileges/validate-connection" %}}

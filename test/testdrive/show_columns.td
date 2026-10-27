@@ -8,7 +8,6 @@
 # by the Apache License, Version 2.0.
 
 $ postgres-connect name=mz_support url=postgres://mz_support:materialize@${testdrive.materialize-internal-sql-addr}
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
 > CREATE TABLE t(a int)
 

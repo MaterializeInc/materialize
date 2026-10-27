@@ -1,9 +1,8 @@
 ---
-source: src/expr-derive-impl/src/lib.rs
-expression: "#[sqlfunc()]\nfn unary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {\n    unimplemented!()\n}\n"
+source: src/expr-derive-impl/src/test.rs
+expression: "#[sqlfunc(test = true)]\nfn binary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {\n    unimplemented!()\n}\n"
 ---
 #[derive(
-    proptest_derive::Arbitrary,
     Ord,
     PartialOrd,
     Clone,
@@ -13,25 +12,22 @@ expression: "#[sqlfunc()]\nfn unary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
 )]
-pub struct UnaryFn;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for UnaryFn {
-    type Input1 = Datum<'a>;
-    type Input2 = u16;
-    type Output = bool;
-    fn call(
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
+pub struct BinaryFn;
+impl crate::func::binary::EagerBinaryFunc for BinaryFn {
+    type Input<'a> = (Datum<'a>, u16);
+    type Output<'a> = bool;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        (a, b): Self::Input<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
-        unary_fn(a, b, temp_storage)
+    ) -> Self::Output<'a> {
+        binary_fn(a, b, temp_storage)
     }
-    fn output_type(
+    fn output_sql_type(
         &self,
-        input_type_a: mz_repr::SqlColumnType,
-        input_type_b: mz_repr::SqlColumnType,
+        input_types: &[mz_repr::SqlColumnType],
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
         let output = Self::Output::as_column_type();
@@ -39,19 +35,42 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for UnaryFn {
             self,
         );
         let nullable = output.nullable;
-        output
-            .nullable(
-                nullable
-                    || (propagates_nulls
-                        && (input_type_a.nullable || input_type_b.nullable)),
-            )
+        let non_nullable_input_is_nullable = false
+            || input_types.get(1usize).map_or(false, |t| t.nullable);
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
+        output.nullable(is_null)
     }
 }
-impl std::fmt::Display for UnaryFn {
+impl std::fmt::Display for BinaryFn {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str(stringify!(unary_fn))
+        f.write_str(stringify!(binary_fn))
     }
 }
-fn unary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {
+impl crate::func::FuncName for BinaryFn {
+    const NAME: &'static str = stringify!(binary_fn);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(test = true)] fn binary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool",
+        signature: "fn(Datum<'a>, u16) -> bool",
+        body_fingerprint: 4726381389472009124u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<u16>(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
+}
+fn binary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {
     unimplemented!()
 }

@@ -15,10 +15,12 @@ mod schema;
 
 pub use crate::avro::decode::{Decoder, DiffPair};
 pub use crate::avro::encode::{
-    AvroEncoder, AvroSchemaGenerator, DocTarget, encode_datums_as_avro,
+    AvroEncoder, AvroSchemaGenerator, AvroSchemaId, DocTarget, encode_datums_as_avro,
     encode_debezium_transaction_unchecked, get_debezium_transaction_schema,
 };
-pub use crate::avro::schema::{ConfluentAvroResolver, parse_schema, schema_to_relationdesc};
+pub use crate::avro::schema::{
+    AvroSchemaResolver, WriterSchemaKey, WriterSchemaProvider, parse_schema, schema_to_relationdesc,
+};
 
 fn is_null(schema: &SchemaPieceOrNamed) -> bool {
     matches!(schema, SchemaPieceOrNamed::Piece(SchemaPiece::Null))
@@ -44,7 +46,7 @@ mod tests {
             "fields": []
         }"#;
 
-        let desc = schema_to_relationdesc(parse_schema(schema)?)?;
+        let desc = schema_to_relationdesc(parse_schema(schema, &[])?)?;
         assert_eq!(desc.arity(), 0, "empty record produced rows");
 
         Ok(())
@@ -61,7 +63,7 @@ mod tests {
             ]
         }"#;
 
-        let desc = schema_to_relationdesc(parse_schema(schema)?)?;
+        let desc = schema_to_relationdesc(parse_schema(schema, &[])?)?;
         let expected_desc = RelationDesc::builder()
             .with_column("f1", SqlScalarType::Int32.nullable(false))
             .with_column("f2", SqlScalarType::String.nullable(false))

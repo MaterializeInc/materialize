@@ -51,10 +51,15 @@ $ set-arg-default single-replica-cluster=quickstart
   )
   ENVELOPE UPSERT;
 
-> SHOW CREATE SINK sink1;
+>[version<2600700] SHOW CREATE SINK sink1;
 name                            create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.sink1 "CREATE SINK materialize.public.sink1 IN CLUSTER sink1_cluster FROM materialize.public.t INTO KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-sink1-${testdrive.seed}') KEY (c2) NOT ENFORCED FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn (DOC ON COLUMN materialize.public.t.c1 = 'doc on t.c1', VALUE DOC ON COLUMN materialize.public.t.c2 = 'value doc on t.c2', KEY DOC ON COLUMN materialize.public.t.c2 = 'key doc on t.c2', DOC ON COLUMN materialize.public.t.c4 = 'doc on t.c4', KEY DOC ON TYPE materialize.public.point = 'key doc on point', VALUE DOC ON TYPE materialize.public.point = 'value doc on point', KEY DOC ON TYPE materialize.public.t = 'key doc on t', VALUE DOC ON COLUMN materialize.public.point.y = 'value doc on point.y', DOC ON TYPE materialize.public.point = 'comment on type point', DOC ON COLUMN materialize.public.point.x = 'comment on column point.x', DOC ON TYPE materialize.public.t = 'comment on table t with a \\\\ \\', DOC ON COLUMN materialize.public.t.\"c3_map[text=>text]\" = 'comment on column t.c3_map with a ''') ENVELOPE UPSERT;"
+
+>[version>=2600700] SHOW CREATE SINK sink1;
+name                            create_sql
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+materialize.public.sink1 "CREATE SINK materialize.public.sink1\nIN CLUSTER sink1_cluster\nFROM materialize.public.t\nINTO\n    KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-sink1-${testdrive.seed}') KEY (c2) NOT ENFORCED\nFORMAT\n    AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn (DOC ON COLUMN materialize.public.t.c1 = 'doc on t.c1', VALUE DOC ON COLUMN materialize.public.t.c2 = 'value doc on t.c2', KEY DOC ON COLUMN materialize.public.t.c2 = 'key doc on t.c2', DOC ON COLUMN materialize.public.t.c4 = 'doc on t.c4', KEY DOC ON TYPE materialize.public.point = 'key doc on point', VALUE DOC ON TYPE materialize.public.point = 'value doc on point', KEY DOC ON TYPE materialize.public.t = 'key doc on t', VALUE DOC ON COLUMN materialize.public.point.y = 'value doc on point.y', DOC ON TYPE materialize.public.point = 'comment on type point', DOC ON COLUMN materialize.public.point.x = 'comment on column point.x', DOC ON TYPE materialize.public.t = 'comment on table t with a \\\\ \\', DOC ON COLUMN materialize.public.t.\"c3_map[text=>text]\" = 'comment on column t.c3_map with a ''')\nENVELOPE UPSERT;"
 
 $ unset-regex
 
@@ -63,6 +68,21 @@ $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.se
 
 $ schema-registry-verify schema-type=avro subject=testdrive-sink1-${testdrive.seed}-key
 {"type":"record","name":"row","doc":"key doc on t","fields":[{"name":"c2","type":"string","doc":"key doc on t.c2"}]}
+
+# The sink's DOC ON references record dependency edges on the commented type
+# and on the sinked table. The type reference persists by id, so reference
+# extraction (mz_object_dependencies) recovers the edge; a bare name would
+# silently drop out. The guard names the first release that prints ids in
+# DOC ON positions
+>[version>=2604200] SELECT count(*) FROM mz_internal.mz_object_dependencies
+  WHERE object_id = (SELECT id FROM mz_sinks WHERE name = 'sink1')
+    AND referenced_object_id = (SELECT id FROM mz_types WHERE name = 'point');
+1
+
+> SELECT count(*) FROM mz_internal.mz_object_dependencies
+  WHERE object_id = (SELECT id FROM mz_sinks WHERE name = 'sink1')
+    AND referenced_object_id = (SELECT id FROM mz_tables WHERE name = 't');
+1
 
 > CREATE CLUSTER sink2_cluster SIZE '${arg.default-storage-size}';
 > CREATE SINK sink2

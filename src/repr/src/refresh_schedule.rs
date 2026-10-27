@@ -13,7 +13,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::Timestamp;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd
+)]
 pub struct RefreshSchedule {
     // `REFRESH EVERY`s
     pub everies: Vec<RefreshEvery>,
@@ -73,7 +83,7 @@ impl RefreshSchedule {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct RefreshEvery {
-    pub interval: Duration,
+    pub interval: Duration, // must be at least 1 ms
     pub aligned_to: Timestamp,
 }
 

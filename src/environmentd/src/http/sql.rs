@@ -7,17 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use axum::extract::connect_info::ConnectInfo;
-use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
@@ -26,7 +25,7 @@ use futures::future::BoxFuture;
 
 use http::StatusCode;
 use itertools::Itertools;
-use mz_adapter::client::RecordFirstRowStream;
+use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging};
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
@@ -40,6 +39,7 @@ use mz_interchange::json::{JsonNumberPolicy, ToJson};
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{MakeCollectorOpts, MetricsRegistry};
 use mz_ore::result::ResultExt;
+use mz_ore::sql::Sql;
 use mz_repr::{Datum, RelationDesc, RowArena, RowIterator};
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{CopyDirection, CopyStatement, CopyTarget, Raw, Statement, StatementKind};
@@ -51,15 +51,14 @@ use prometheus::core::{AtomicF64, GenericGaugeVec};
 use serde::{Deserialize, Serialize};
 use tokio::{select, time};
 use tokio_postgres::error::SqlState;
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_sessions::Session as TowerSession;
 use tracing::{debug, info};
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::prometheus::PrometheusSqlQuery;
 use crate::http::{
-    AuthError, AuthedClient, AuthedUser, MAX_REQUEST_SIZE, SESSION_DURATION, TowerSessionData,
-    WsState, init_ws,
+    AuthError, AuthedClient, AuthedUser, MAX_REQUEST_SIZE, WsState, ensure_session_unexpired,
+    init_ws, maybe_get_authenticated_session,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -180,18 +179,29 @@ async fn execute_promsql_query(
         });
 
     for row in rows {
+        // Rows are stored as pre-serialized JSON arrays. Parse each one back to
+        // `Value`s here. Promsql results are tiny, so the parse cost is
+        // negligible.
+        let row: Vec<serde_json::Value> =
+            serde_json::from_str(row.get()).expect("row is a valid JSON array");
+
+        // Non-value columns become Prometheus label values. A SQL `NULL`
+        // arrives as JSON `null` and yields `None` from `as_str()`; fall back
+        // to an empty label rather than panicking. The query author is
+        // responsible for `COALESCE`ing nullable columns to a meaningful
+        // value; this is a defensive backstop.
         let mut label_values = desc
             .columns
             .iter()
-            .zip_eq(row)
+            .zip_eq(&row)
             .filter(|(col, _)| col.name != query.value_column_name)
-            .map(|(_, val)| val.as_str().expect("must be string"))
+            .map(|(_, val)| val.as_str().unwrap_or(""))
             .collect::<Vec<_>>();
 
         let value = desc
             .columns
             .iter()
-            .zip_eq(row)
+            .zip_eq(&row)
             .find(|(col, _)| col.name == query.value_column_name)
             .map(|(_, val)| val.as_str().unwrap_or("0").parse::<f64>().unwrap_or(0.0))
             .unwrap_or(0.0);
@@ -278,52 +288,42 @@ pub async fn handle_sql(
     }
 }
 
-pub async fn handle_sql_ws(
+#[derive(Debug)]
+pub enum ExistingUser {
+    /// An AuthedUser provided by the
+    /// `x_materialize_user_header_auth` middleware
+    XMaterializeUserHeader(AuthedUser),
+    /// An AuthedUser provided by an authenticated session
+    /// established via [`crate::http::handle_login`].
+    Session(AuthedUser),
+}
+
+pub(crate) async fn handle_sql_ws(
     State(state): State<WsState>,
     existing_user: Option<Extension<AuthedUser>>,
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     tower_session: Option<Extension<TowerSession>>,
-) -> impl IntoResponse {
-    // An upstream middleware may have already provided the user for us
-    let user = match (existing_user, tower_session) {
-        (Some(Extension(user)), _) => Some(user),
-        (None, Some(session)) => {
-            if let Ok(Some(session_data)) = session.get::<TowerSessionData>("data").await {
-                // Check session expiration
-                if session_data
-                    .last_activity
-                    .elapsed()
-                    .unwrap_or(Duration::MAX)
-                    > SESSION_DURATION
-                {
-                    let _ = session.delete().await;
-                    return Err(AuthError::SessionExpired);
-                }
-                // Update last activity
-                let mut updated_data = session_data.clone();
-                updated_data.last_activity = SystemTime::now();
-                session
-                    .insert("data", &updated_data)
-                    .await
-                    .map_err(|_| AuthError::FailedToUpdateSession)?;
-                // User is authenticated via session
-                Some(AuthedUser {
-                    name: session_data.username,
-                    external_metadata_rx: None,
-                    internal_metadata: Some(session_data.internal_metadata),
-                })
+) -> Result<impl IntoResponse, AuthError> {
+    let session = tower_session.map(|Extension(session)| session);
+    // The `x_materialize_user_header_auth` middleware may have already provided the user for us
+    let user = match existing_user {
+        Some(Extension(user)) => Some(ExistingUser::XMaterializeUserHeader(user)),
+        None => {
+            let session = maybe_get_authenticated_session(session.as_ref()).await;
+            if let Some((session, session_data)) = session {
+                let user = ensure_session_unexpired(session, session_data).await?;
+                Some(ExistingUser::Session(user))
             } else {
                 None
             }
         }
-        _ => None,
     };
 
     let addr = Box::new(addr.ip());
     Ok(ws
         .max_message_size(MAX_REQUEST_SIZE)
-        .on_upgrade(|ws| async move { run_ws(&state, user, *addr, ws).await }))
+        .on_upgrade(|ws| async move { run_ws(state, user, *addr, ws).await }))
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -346,7 +346,7 @@ pub enum WebSocketAuth {
     },
 }
 
-async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mut ws: WebSocket) {
+async fn run_ws(state: WsState, user: Option<ExistingUser>, peer_addr: IpAddr, mut ws: WebSocket) {
     let mut client = match init_ws(state, user, peer_addr, &mut ws).await {
         Ok(client) => client,
         Err(e) => {
@@ -354,9 +354,9 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mu
             // avoid giving attackers unnecessary information during auth. AdapterErrors
             // are safe to return because they're generated after authentication.
             debug!("WS request failed init: {}", e);
-            let reason = match e.downcast_ref::<AdapterError>() {
-                Some(error) => Cow::Owned(error.to_string()),
-                None => "unauthorized".into(),
+            let reason: Utf8Bytes = match e.downcast_ref::<AdapterError>() {
+                Some(error) => error.to_string().into(),
+                None => "unauthorized".to_string().into(),
             };
             let _ = ws
                 .send(Message::Close(Some(CloseFrame {
@@ -387,7 +387,7 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mu
     for msg in msgs {
         let _ = ws
             .send(Message::Text(
-                serde_json::to_string(&msg).expect("must serialize"),
+                serde_json::to_string(&msg).expect("must serialize").into(),
             ))
             .await;
     }
@@ -492,7 +492,7 @@ async fn run_ws_request(
 /// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`].
 async fn send_ws_response(ws: &mut WebSocket, resp: WebSocketResponse) -> Result<(), Error> {
     let msg = serde_json::to_string(&resp).unwrap();
-    let msg = Message::Text(msg);
+    let msg = Message::Text(msg.into());
     ws.send(msg).await?;
 
     Ok(())
@@ -520,29 +520,27 @@ async fn forward_notices(
     Ok(())
 }
 
-/// A request to execute SQL over HTTP.
+/// A request to execute SQL over HTTP or WebSocket. Execution stops at the first statement
+/// that fails.
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 pub enum SqlRequest {
-    /// A simple query request.
-    Simple {
-        /// A query string containing zero or more queries delimited by
-        /// semicolons.
-        query: String,
-    },
-    /// An extended query request.
-    Extended {
-        /// Queries to execute using the extended protocol.
-        queries: Vec<ExtendedRequest>,
-    },
+    /// One SQL string without parameters, as in PostgreSQL's simple query protocol. Its
+    /// statements, separated by semicolons, share one implicit transaction, unless `BEGIN` and
+    /// `COMMIT` among them group statements into an explicit transaction.
+    Simple { query: Sql },
+    /// A list of statements, each with its own parameters. Each statement runs in its own
+    /// implicit transaction, as if it were followed by a `Sync` in PostgreSQL's extended query
+    /// protocol, unless `BEGIN` and `COMMIT` entries group statements into an explicit transaction.
+    Extended { queries: Vec<ExtendedRequest> },
 }
 
-/// An request to execute a SQL query using the extended protocol.
+/// One statement of an [`SqlRequest::Extended`].
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ExtendedRequest {
-    /// A query string containing zero or one queries.
+    /// A SQL string containing exactly one statement.
     query: String,
-    /// Optional parameters for the query.
+    /// The values of the statement's parameters, as text. `None` is SQL `NULL`.
     #[serde(default)]
     params: Vec<Option<String>>,
 }
@@ -551,11 +549,29 @@ pub struct ExtendedRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SqlResponse {
     /// The results for each query in the request.
-    results: Vec<SqlResult>,
+    pub(in crate::http) results: Vec<SqlResult>,
 }
 
-enum StatementResult {
+impl SqlResponse {
+    /// Creates a new empty SqlResponse for collecting results.
+    pub(in crate::http) fn new() -> Self {
+        Self {
+            results: Vec::new(),
+        }
+    }
+}
+
+pub(in crate::http) enum StatementResult {
     SqlResult(SqlResult),
+    /// A peek (`SELECT`) result whose rows are streamed out of the peek response
+    /// stash. The stream is consumed lazily by the sender so a large result is
+    /// not buffered whole. Contrast `SqlResult::Rows`, which holds
+    /// already-collected rows and exists only for the buffered JSON transport.
+    Rows {
+        desc: RelationDesc,
+        rows_stream: RecordFirstRowStream,
+        max_result_size: usize,
+    },
     Subscribe {
         desc: RelationDesc,
         tag: String,
@@ -578,8 +594,15 @@ pub enum SqlResult {
     Rows {
         /// The command complete tag.
         tag: String,
-        /// The result rows.
-        rows: Vec<Vec<serde_json::Value>>,
+        /// The result rows, each already serialized to a compact JSON array.
+        ///
+        /// We accumulate pre-serialized rows rather than a `serde_json::Value`
+        /// tree so the buffered footprint stays close to the wire size. A
+        /// `Value` tree is ~10-15x larger (each cell a heap `Value`, in a
+        /// per-row `Vec`, in the outer `Vec`), which is what let a large
+        /// `SELECT` over the JSON endpoint OOM the process. `RawValue`
+        /// re-serializes verbatim, so the wire format is unchanged.
+        rows: Vec<Box<serde_json::value::RawValue>>,
         /// Information about each column.
         desc: Description,
         // Any notices generated during execution of the query.
@@ -606,9 +629,16 @@ pub enum SqlResult {
 }
 
 impl SqlResult {
-    /// Convert adapter Row results into the web row result format. Error if the row format does not
-    /// match the expected descriptor.
-    // TODO(aljoscha): Bail when max_result_size is exceeded.
+    /// Convert adapter Row results into the buffered web row result format. Error
+    /// if the row format does not match the expected descriptor, or if the
+    /// result exceeds `max_query_result_size`.
+    ///
+    /// This buffers the whole result, so it is used only by the JSON transport,
+    /// whose response is a single document. The WebSocket transport streams rows
+    /// through `StatementResult::Rows` and never calls this. The size guard
+    /// counts `Row::byte_len`, matching the WebSocket transport and pgwire, and
+    /// rows are stored as pre-serialized compact `RawValue`s to avoid the
+    /// amplified `Value`-tree buffering that could OOM.
     async fn rows<S>(
         sender: &mut S,
         client: &mut SessionClient,
@@ -619,11 +649,11 @@ impl SqlResult {
     where
         S: ResultSender,
     {
-        let mut rows: Vec<Vec<serde_json::Value>> = vec![];
+        let mut rows: Vec<Box<serde_json::value::RawValue>> = vec![];
         let mut datum_vec = mz_repr::DatumVec::new();
         let types = &desc.typ().column_types;
 
-        let mut query_result_size = 0;
+        let mut query_result_size: usize = 0;
 
         loop {
             let peek_response = tokio::select! {
@@ -643,7 +673,10 @@ impl SqlResult {
             let mut sql_rows = match peek_response {
                 PeekResponseUnary::Rows(rows) => rows,
                 PeekResponseUnary::Error(e) => {
-                    return Ok(SqlResult::err(client, Error::Unstructured(anyhow!(e))));
+                    return Ok(SqlResult::err(client, e));
+                }
+                PeekResponseUnary::DependencyDropped(dep) => {
+                    return Ok(SqlResult::err(client, dep.to_concurrent_dependency_drop()));
                 }
                 PeekResponseUnary::Canceled => {
                     return Ok(SqlResult::err(client, AdapterError::Canceled));
@@ -658,7 +691,10 @@ impl SqlResult {
             }
 
             while let Some(row) = sql_rows.next() {
-                query_result_size += row.byte_len();
+                // Enforce `max_result_size` on `Row::byte_len`, the same quantity
+                // pgwire and the WebSocket transport use, so the cap means one
+                // thing across every transport.
+                query_result_size = query_result_size.saturating_add(row.byte_len());
                 if query_result_size > max_query_result_size {
                     use bytesize::ByteSize;
                     return Ok(SqlResult::err(
@@ -669,18 +705,21 @@ impl SqlResult {
                         )),
                     ));
                 }
-
                 let datums = datum_vec.borrow_with(row);
-                rows.push(
-                    datums
-                        .iter()
-                        .enumerate()
-                        .map(|(i, d)| {
-                            TypedDatum::new(*d, &types[i])
-                                .json(&JsonNumberPolicy::ConvertNumberToString)
-                        })
-                        .collect(),
-                );
+                let json_row: Vec<serde_json::Value> = datums
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| {
+                        TypedDatum::new(*d, &types[i])
+                            .json(&JsonNumberPolicy::ConvertNumberToString)
+                    })
+                    .collect();
+                // Keep only the compact serialized JSON text. The transient
+                // `Value` tree above is dropped per row, so at most one row's tree
+                // is resident, avoiding the amplified buffering that could OOM.
+                let raw = serde_json::value::to_raw_value(&json_row)
+                    .expect("row of JSON values always serializes");
+                rows.push(raw);
             }
         }
 
@@ -823,7 +862,7 @@ pub struct CommandStarting {
 /// accumulate into a Vec and send all at once. WebSocket clients send each
 /// message as they occur.
 #[async_trait]
-trait ResultSender: Send {
+pub(in crate::http) trait ResultSender: Send {
     const SUPPORTS_STREAMING_NOTICES: bool = false;
 
     /// Adds a result to the client. The first component of the return value is
@@ -866,7 +905,7 @@ impl ResultSender for SqlResponse {
     // needs to be retired for statement logging purposes.
     async fn add_result(
         &mut self,
-        _client: &mut SessionClient,
+        client: &mut SessionClient,
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
@@ -874,6 +913,25 @@ impl ResultSender for SqlResponse {
     ) {
         let (res, stmt_logging) = match res {
             StatementResult::SqlResult(res) => {
+                let is_err = matches!(res, SqlResult::Err { .. });
+                self.results.push(res);
+                let res = if is_err { Err(()) } else { Ok(()) };
+                (res, None)
+            }
+            StatementResult::Rows {
+                desc,
+                rows_stream,
+                max_result_size,
+            } => {
+                // The JSON transport is a single buffered document, so the rows
+                // must be collected before the response is serialized.
+                // `SqlResult::rows` bounds that buffer against `max_result_size`.
+                let res = match SqlResult::rows(self, client, rows_stream, max_result_size, &desc)
+                    .await
+                {
+                    Ok(res) => res,
+                    Err(e) => return (Err(e), None),
+                };
                 let is_err = matches!(res, SqlResult::Err { .. });
                 self.results.push(res);
                 let res = if is_err { Err(()) } else { Ok(()) };
@@ -929,6 +987,7 @@ impl ResultSender for WebSocket {
             StatementResult::SqlResult(SqlResult::Err { .. }) => (false, false),
             StatementResult::SqlResult(SqlResult::Ok { .. }) => (false, false),
             StatementResult::SqlResult(SqlResult::Rows { .. }) => (true, false),
+            StatementResult::Rows { .. } => (true, false),
             StatementResult::Subscribe { .. } => (true, true),
         };
         if let Err(e) = send_ws_response(
@@ -944,18 +1003,25 @@ impl ResultSender for WebSocket {
         }
 
         let (is_err, msgs, stmt_logging) = match res {
-            StatementResult::SqlResult(SqlResult::Rows {
-                tag,
-                rows,
-                desc,
-                notices,
-            }) => {
-                let mut msgs = vec![WebSocketResponse::Rows(desc)];
-                msgs.extend(rows.into_iter().map(WebSocketResponse::Row));
-                msgs.push(WebSocketResponse::CommandComplete(tag));
-                msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
-                (false, msgs, None)
+            StatementResult::SqlResult(SqlResult::Rows { .. }) => {
+                // `SqlResult::Rows` holds already-collected rows for the buffered
+                // JSON transport only. The WebSocket transport streams peek
+                // results through `StatementResult::Rows` and never materializes
+                // a `SqlResult::Rows`.
+                unreachable!("WebSocket streams peek rows via StatementResult::Rows")
             }
+            StatementResult::Rows {
+                ref desc,
+                mut rows_stream,
+                max_result_size,
+            } => match stream_ws_peek_rows(self, client, desc, &mut rows_stream, max_result_size)
+                .await
+            {
+                Ok(result) => result,
+                // A write failure means the remote broke the connection, which we
+                // treat as a cancellation to match pgwire.
+                Err(e) => return (Err(e), None),
+            },
             StatementResult::SqlResult(SqlResult::Ok {
                 ok,
                 parameters,
@@ -1021,7 +1087,7 @@ impl ResultSender for WebSocket {
 
                             rows_returned += rows.count();
                             while let Some(row) = rows.next() {
-                                result_size += row.byte_len();
+                                result_size = result_size.saturating_add(row.byte_len());
                                 let datums = datum_vec.borrow_with(row);
                                 let types = &desc.typ().column_types;
                                 if let Err(e) = send_ws_response(
@@ -1048,12 +1114,20 @@ impl ResultSender for WebSocket {
                                 }
                             }
                         }
-                        Some(PeekResponseUnary::Error(error)) => {
+                        Some(PeekResponseUnary::Error(err)) => {
+                            let error = err.to_string();
                             break (
                                 true,
-                                vec![WebSocketResponse::Error(
-                                    Error::Unstructured(anyhow!(error.clone())).into(),
-                                )],
+                                vec![WebSocketResponse::Error(err.into())],
+                                Some((StatementEndedExecutionReason::Errored { error }, ctx_extra)),
+                            );
+                        }
+                        Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                            let err = dep.to_concurrent_dependency_drop();
+                            let error = err.to_string();
+                            break (
+                                true,
+                                vec![WebSocketResponse::Error(err.into())],
                                 Some((StatementEndedExecutionReason::Errored { error }, ctx_extra)),
                             );
                         }
@@ -1105,7 +1179,7 @@ impl ResultSender for WebSocket {
             tick.tick().await;
             loop {
                 tick.tick().await;
-                if let Err(err) = self.send(Message::Ping(Vec::new())).await {
+                if let Err(err) = self.send(Message::Ping(Vec::new().into())).await {
                     return err.into();
                 }
             }
@@ -1136,6 +1210,159 @@ where
             r = &mut f => return Ok(r),
         }
     }
+}
+
+/// Streams a peek (`SELECT`) result to a WebSocket client one stash batch at a
+/// time, flushing between batches so a slow client applies real backpressure
+/// and only one batch is resident. This gives a large `SELECT` over WebSocket
+/// the same bounded memory profile as pgwire `SELECT`, and mirrors the
+/// `Subscribe` arm of `WebSocket::add_result`.
+///
+/// On success returns the `(is_err, msgs, stmt_logging)` triple that
+/// `add_result` folds into its response. An `Err` means a write to the socket
+/// failed, so the server should disconnect. `add_result` turns that into a
+/// cancellation to match pgwire.
+///
+/// The `Rows` descriptor is sent lazily, right before the first batch of rows
+/// or an empty successful result, but never before an error. So a query that
+/// fails before producing any rows emits only an `Error`.
+async fn stream_ws_peek_rows(
+    ws: &mut WebSocket,
+    client: &mut SessionClient,
+    desc: &RelationDesc,
+    rows_stream: &mut RecordFirstRowStream,
+    max_result_size: usize,
+) -> Result<
+    (
+        bool,
+        Vec<WebSocketResponse>,
+        Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
+    ),
+    Error,
+> {
+    let mut datum_vec = mz_repr::DatumVec::new();
+    let mut result_size: usize = 0;
+    let mut rows_returned: usize = 0;
+    let mut sent_rows_desc = false;
+    loop {
+        // Bind before matching so the `Option<PeekResponseUnary>` (which has a
+        // significant `Drop`) is not a temporary living for the whole match.
+        let res = await_rows(ws, client, rows_stream.recv()).await?;
+        match res {
+            Some(PeekResponseUnary::Rows(mut rows)) => {
+                if let Err(err) = verify_datum_desc(desc, &mut rows) {
+                    return Ok(ws_peek_result(
+                        client,
+                        true,
+                        vec![WebSocketResponse::Error(err.into())],
+                    ));
+                }
+                // The header waits until a batch has passed `verify_datum_desc`,
+                // so a query that fails before producing any rows emits only an
+                // `Error`. Sending it before the loop, as the `Subscribe` arm
+                // does, would put a `Rows` header in front of that `Error`.
+                if !sent_rows_desc {
+                    send_ws_response(ws, WebSocketResponse::Rows(desc.into())).await?;
+                    sent_rows_desc = true;
+                }
+                let types = &desc.typ().column_types;
+                while let Some(row) = rows.next() {
+                    result_size = result_size.saturating_add(row.byte_len());
+                    if result_size > max_result_size {
+                        use bytesize::ByteSize;
+                        return Ok(ws_peek_result(
+                            client,
+                            true,
+                            vec![WebSocketResponse::Error(
+                                AdapterError::ResultSize(format!(
+                                    "result exceeds max size of {}",
+                                    ByteSize::b(u64::cast_from(max_result_size))
+                                ))
+                                .into(),
+                            )],
+                        ));
+                    }
+                    let datums = datum_vec.borrow_with(row);
+                    send_ws_response(
+                        ws,
+                        WebSocketResponse::Row(
+                            datums
+                                .iter()
+                                .enumerate()
+                                .map(|(i, d)| {
+                                    TypedDatum::new(*d, &types[i])
+                                        .json(&JsonNumberPolicy::ConvertNumberToString)
+                                })
+                                .collect(),
+                        ),
+                    )
+                    .await?;
+                    rows_returned += 1;
+                }
+            }
+            Some(PeekResponseUnary::Error(error)) => {
+                return Ok(ws_peek_result(
+                    client,
+                    true,
+                    vec![WebSocketResponse::Error(error.into())],
+                ));
+            }
+            Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                return Ok(ws_peek_result(
+                    client,
+                    true,
+                    vec![WebSocketResponse::Error(
+                        dep.to_concurrent_dependency_drop().into(),
+                    )],
+                ));
+            }
+            Some(PeekResponseUnary::Canceled) => {
+                return Ok(ws_peek_result(
+                    client,
+                    true,
+                    vec![WebSocketResponse::Error(AdapterError::Canceled.into())],
+                ));
+            }
+            None => {
+                // An empty successful result still owes the client a `Rows`
+                // descriptor before `CommandComplete`.
+                if !sent_rows_desc {
+                    send_ws_response(ws, WebSocketResponse::Rows(desc.into())).await?;
+                }
+                return Ok(ws_peek_result(
+                    client,
+                    false,
+                    vec![WebSocketResponse::CommandComplete(format!(
+                        "SELECT {rows_returned}"
+                    ))],
+                ));
+            }
+        }
+    }
+}
+
+/// Packages a terminal result of `stream_ws_peek_rows`, appending any notices
+/// still buffered on the session after `msgs`.
+///
+/// The streaming loop forwards notices live through `await_rows`' `recv_notice`
+/// select, but the terminal `recv() -> None` can race a still-buffered notice
+/// and end the loop first. Draining here restores the buffered path's guarantee
+/// that all notices reach the client, after `CommandComplete` or `Error`.
+fn ws_peek_result(
+    client: &mut SessionClient,
+    is_err: bool,
+    mut msgs: Vec<WebSocketResponse>,
+) -> (
+    bool,
+    Vec<WebSocketResponse>,
+    Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
+) {
+    msgs.extend(
+        make_notices(client)
+            .into_iter()
+            .map(WebSocketResponse::Notice),
+    );
+    (is_err, msgs, None)
 }
 
 async fn send_and_retire<S: ResultSender>(
@@ -1210,12 +1437,42 @@ async fn execute_stmt_group<S: ResultSender>(
 ///
 /// See the user-facing documentation about the HTTP API for a description of
 /// the semantics of this function.
-async fn execute_request<S: ResultSender>(
+/// Executes a SQL request and sends results to the provided sender.
+///
+/// Made visible to http submodules (like mcp) via `pub(in crate::http)` to allow
+/// reuse of SQL execution logic.
+pub(in crate::http) async fn execute_request<S: ResultSender>(
     client: &mut AuthedClient,
     request: SqlRequest,
     sender: &mut S,
 ) -> Result<(), Error> {
     let client = &mut client.client;
+
+    if client.statement_arrival_logging_enabled().await {
+        let session = client.session();
+        let conn_id = session.conn_id();
+        let session_uuid = session.uuid();
+        match &request {
+            SqlRequest::Simple { query } => {
+                info!(
+                    %conn_id, %session_uuid, kind = "http_simple",
+                    sql = %redact_sql_for_logging(query.as_str()),
+                    "statement arrival"
+                );
+            }
+            SqlRequest::Extended { queries } => {
+                for ExtendedRequest { query, params } in queries {
+                    // Parameter values are data that redaction cannot reach,
+                    // so only their count is logged.
+                    info!(
+                        %conn_id, %session_uuid, kind = "http_extended",
+                        sql = %redact_sql_for_logging(query), num_params = params.len(),
+                        "statement arrival"
+                    );
+                }
+            }
+        }
+    }
 
     // This API prohibits executing statements with responses whose
     // semantics are at odds with an HTTP response.
@@ -1283,7 +1540,7 @@ async fn execute_request<S: ResultSender>(
     let mut stmt_groups = vec![];
 
     match request {
-        SqlRequest::Simple { query } => match parse(client, &query) {
+        SqlRequest::Simple { query } => match parse(client, query.as_str()) {
             Ok(stmts) => {
                 let mut stmt_group = Vec::with_capacity(stmts.len());
                 let mut stmt_err = None;
@@ -1395,7 +1652,14 @@ async fn execute_stmt<S: ResultSender>(
                     &pg_typ,
                     raw_param.as_bytes(),
                 ) {
-                    Ok(param) => param.into_datum(&buf, &pg_typ),
+                    Ok(param) => match param.into_datum_decode_error(&buf, &pg_typ, "parameter") {
+                        Ok(datum) => datum,
+                        Err(msg) => {
+                            return Ok(
+                                SqlResult::err(client, Error::Unstructured(anyhow!(msg))).into()
+                            );
+                        }
+                    },
                     Err(err) => {
                         let msg = anyhow!("unable to decode parameter: {}", err);
                         return Ok(SqlResult::err(client, Error::Unstructured(msg)).into());
@@ -1466,6 +1730,7 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedClusterReplica { .. }
         | ExecuteResponse::CreatedTable { .. }
         | ExecuteResponse::CreatedIndex { .. }
+        | ExecuteResponse::CreatedMetricSink { .. }
         | ExecuteResponse::CreatedIntrospectionSubscribe
         | ExecuteResponse::CreatedSecret { .. }
         | ExecuteResponse::CreatedSource { .. }
@@ -1473,13 +1738,11 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedView { .. }
         | ExecuteResponse::CreatedViews { .. }
         | ExecuteResponse::CreatedMaterializedView { .. }
-        | ExecuteResponse::CreatedContinualTask { .. }
         | ExecuteResponse::CreatedType
         | ExecuteResponse::CreatedNetworkPolicy
         | ExecuteResponse::Comment
         | ExecuteResponse::Deleted(_)
         | ExecuteResponse::DiscardedTemp
-        | ExecuteResponse::DiscardedAll
         | ExecuteResponse::DroppedObject(_)
         | ExecuteResponse::DroppedOwned
         | ExecuteResponse::EmptyQuery
@@ -1506,7 +1769,8 @@ async fn execute_stmt<S: ResultSender>(
         )
         .into(),
         ExecuteResponse::TransactionCommitted { params }
-        | ExecuteResponse::TransactionRolledBack { params } => {
+        | ExecuteResponse::TransactionRolledBack { params }
+        | ExecuteResponse::DiscardedAll { params } => {
             let notify_set: mz_ore::collections::HashSet<_> = client
                 .session()
                 .vars()
@@ -1553,7 +1817,7 @@ async fn execute_stmt<S: ResultSender>(
             instance_id,
             strategy,
         } => {
-            let max_query_result_size =
+            let max_result_size =
                 usize::cast_from(client.get_system_vars().await.max_result_size());
 
             let rows_stream = RecordFirstRowStream::new(
@@ -1564,33 +1828,25 @@ async fn execute_stmt<S: ResultSender>(
                 Some(strategy),
             );
 
-            SqlResult::rows(
-                sender,
-                client,
+            StatementResult::Rows {
+                desc: desc.relation_desc.expect("RelationDesc must exist"),
                 rows_stream,
-                max_query_result_size,
-                &desc.relation_desc.expect("RelationDesc must exist"),
-            )
-            .await?
-            .into()
+                max_result_size,
+            }
         }
         ExecuteResponse::SendingRowsImmediate { rows } => {
-            let max_query_result_size =
+            let max_result_size =
                 usize::cast_from(client.get_system_vars().await.max_result_size());
 
             let rows = futures::stream::once(futures::future::ready(PeekResponseUnary::Rows(rows)));
             let rows_stream =
                 RecordFirstRowStream::new(Box::new(rows), execute_started, client, None, None);
 
-            SqlResult::rows(
-                sender,
-                client,
+            StatementResult::Rows {
+                desc: desc.relation_desc.expect("RelationDesc must exist"),
                 rows_stream,
-                max_query_result_size,
-                &desc.relation_desc.expect("RelationDesc must exist"),
-            )
-            .await?
-            .into()
+                max_result_size,
+            }
         }
         ExecuteResponse::Subscribing {
             rx,
@@ -1599,13 +1855,7 @@ async fn execute_stmt<S: ResultSender>(
         } => StatementResult::Subscribe {
             tag: "SUBSCRIBE".into(),
             desc: desc.relation_desc.unwrap(),
-            rx: RecordFirstRowStream::new(
-                Box::new(UnboundedReceiverStream::new(rx)),
-                execute_started,
-                client,
-                Some(instance_id),
-                None,
-            ),
+            rx: RecordFirstRowStream::new(rx, execute_started, client, Some(instance_id), None),
             ctx_extra,
         },
         res @ (ExecuteResponse::Fetch { .. }

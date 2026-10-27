@@ -7,10 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import yaml
+
+from materialize import MZ_ROOT
 from materialize.cloudtest import DEFAULT_K8S_NAMESPACE
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
-MINIO_YAML_DIRECTORY_URL = "https://raw.githubusercontent.com/kubernetes/examples/1b8cbf894ead6b25e9e870af6ae04f49dfdedfc9/staging/storage/minio"
+# Vendored from
+# https://github.com/kubernetes/examples/tree/1b8cbf894ead6b25e9e870af6ae04f49dfdedfc9/staging/storage/minio
+# rather than fetched at runtime. Fetching from raw.githubusercontent.com on
+# every application boot intermittently trips GitHub's per-IP rate limit (HTTP
+# 429), which failed cloudtest setup.
+MINIO_YAML_DIRECTORY = MZ_ROOT / "misc/python/materialize/cloudtest/k8s/minio-yaml"
 
 
 class Minio(K8sResource):
@@ -29,57 +37,75 @@ class Minio(K8sResource):
             "true",
         )
 
-        # the PVC will be created afterwards
         for yaml_file in [
-            "minio-standalone-deployment",
+            "minio-standalone-pvc",
             "minio-standalone-service",
         ]:
             self.kubectl(
                 "create",
                 "-f",
-                f"{MINIO_YAML_DIRECTORY_URL}/{yaml_file}.yaml",
+                str(MINIO_YAML_DIRECTORY / f"{yaml_file}.yaml"),
             )
 
-        if self.apply_node_selectors:
-            self.kubectl(
-                "patch",
-                "deployment",
-                "minio-deployment",
-                "--type",
-                "json",
-                "-p",
-                '[{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {"supporting-services": "true"} }]',
-            )
-
-        # the PVC needs to be created after patching the deployment
+        # NOTE: The deployment must carry its final nodeSelector before it is
+        # created, so it is injected here rather than patched in afterwards.
+        # The claim's storage class binds with WaitForFirstConsumer, so the
+        # provisioner pins the volume to whichever node the scheduler picks for
+        # the first pod that consumes the claim. A pod created without the
+        # nodeSelector can drive that decision even if it is replaced moments
+        # later, pinning the volume to a node the final pod may not run on. The
+        # pod then stays Pending forever, because nothing can satisfy both the
+        # volume's node affinity and the pod's node selector.
         self.kubectl(
             "create",
             "-f",
-            f"{MINIO_YAML_DIRECTORY_URL}/minio-standalone-pvc.yaml",
+            "-",
+            input=self.deployment_manifest(),
         )
 
         self.wait(
             resource="deployment.apps/minio-deployment",
             condition="condition=Available=True",
+            timeout_secs=600,
         )
 
-        self.create_buckets(["persist", "copytos3"])
+        self.create_buckets(["persist", "copytos3", "copyfroms3"])
+
+    def deployment_manifest(self) -> str:
+        with open(MINIO_YAML_DIRECTORY / "minio-standalone-deployment.yaml") as f:
+            deployment = yaml.safe_load(f)
+
+        deployment["spec"]["template"]["spec"]["containers"][0]["image"] = self.image(
+            "minio", tag=None, release_mode=True
+        )
+
+        if self.apply_node_selectors:
+            deployment["spec"]["template"]["spec"]["nodeSelector"] = {
+                "supporting-services": "true"
+            }
+
+        return yaml.dump(deployment)
 
     def create_buckets(self, buckets: list[str]) -> None:
+        # NOTE: `mc` treats a path under an unknown alias as a local directory,
+        # so after a failed `mc alias set`, `mc mb myminio/<bucket>` reports
+        # success without creating a bucket. The service can refuse connections
+        # briefly even after the deployment is Available, so retry the alias,
+        # and fail the pod if `mc mb` fails.
         cmds = [
-            f"mc config host add myminio http://minio-service.{self.namespace()}:9000 minio minio123"
+            f"until mc alias set myminio http://minio-service.{self.namespace()}:9000 minio minio123; do sleep 1; done"
         ]
         for bucket in buckets:
             cmds.extend(
                 [
                     f"mc rm -r --force myminio/{bucket}",
-                    f"mc mb myminio/{bucket}",
+                    f"mc mb --ignore-existing myminio/{bucket} || exit 1",
                 ]
             )
         self.kubectl(
             "run",
             "minio",
-            "--image=minio/mc:RELEASE.2023-07-07T05-25-51Z",
+            f"--image={self.image('mc', tag=None, release_mode=True)}",
             "--restart=Never",
             "--command",
             "/bin/sh",

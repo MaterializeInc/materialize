@@ -31,6 +31,10 @@ struct Opt {
     max_credit_consumption_rate: f64,
     #[clap(long, default_value_t = 365 * 24 * 60 * 60)]
     validity_secs: u64,
+    /// Repeatable: each `--entitlement <name>` adds one entitlement to the
+    /// signed key (e.g. `--entitlement ory`).
+    #[clap(long = "entitlement")]
+    entitlements: Vec<String>,
 }
 
 #[tokio::main]
@@ -53,6 +57,7 @@ async fn main() {
         opt.max_credit_consumption_rate,
         false,
         ExpirationBehavior::Warn,
+        opt.entitlements,
     )
     .await
     .unwrap();

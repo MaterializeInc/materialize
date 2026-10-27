@@ -18,12 +18,17 @@ The syntax supports the `ALL [PRIVILEGES]` shorthand to refer to all
 [*applicable* privileges](#applicable-privileges-to-revoke) for the
 object type.
 
+For PostgreSQL compatibility, you can reference views, materialized views,
+and sources with the `TABLE` keyword. With `ON TABLE`, the `ALL [PRIVILEGES]`
+shorthand expands to the full table privilege set
+(`SELECT, INSERT, UPDATE, DELETE`). This clears every privilege previously
+granted through the same shorthand, including the non-applicable ones that
+have no runtime effect.
+
 {{</note>}}
 
 
 {{< tabs >}}
-
-<!-- ============ CLUSTER syntax ==============  -->
 
 {{< tab "Cluster" >}}
 
@@ -46,8 +51,6 @@ FROM <role_name> [, ... ]
 ```
 {{</ tab >}}
 
-<!-- ================== Connection syntax ======================  -->
-
 {{< tab "Connection">}}
 
 For specific connection(s):
@@ -69,8 +72,6 @@ FROM <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ================== Database syntax =====================  -->
-
 {{< tab "Database">}}
 
 For specific database(s):
@@ -91,25 +92,53 @@ FROM <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- =============== Materialized view syntax ===================  -->
-
 {{< tab "Materialized view/view/source">}}
 
 {{< note >}}
-{{< include-md file="shared-content/rbac-cloud/privilege-for-views-mat-views.md" >}}
+{{% include-headless "/headless/rbac-cloud/privilege-for-views-mat-views" %}}
 {{</ note >}}
 
 For specific materialized view(s)/view(s)/source(s):
 
 ```mzsql
 REVOKE <SELECT | ALL [PRIVILEGES]>
-ON [TABLE] <name> [, <name> ...] -- For PostgreSQL compatibility, if specifying type, use TABLE
+ON <name> [, <name> ...]
+FROM <role_name> [, ... ];
+```
+
+For PostgreSQL compatibility, the `TABLE` keyword is also accepted. With the
+`TABLE` syntax, you can name `INSERT`, `UPDATE`, and `DELETE` explicitly, and
+`ALL [PRIVILEGES]` expands to the full table privilege set
+(`SELECT, INSERT, UPDATE, DELETE`). This clears every privilege previously
+granted through the matching `GRANT ALL ON TABLE` shorthand.
+
+```mzsql
+REVOKE <SELECT | INSERT | UPDATE | DELETE | ALL [PRIVILEGES]> [, ...]
+ON TABLE <name> [, <name> ...]
 FROM <role_name> [, ... ];
 ```
 
 {{</ tab >}}
 
-<!-- ==================== Schema syntax =====================  -->
+{{< tab "Network policy">}}
+
+For specific network policies:
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]>
+ON NETWORK POLICY <name> [, ...]
+FROM <role_name> [, ... ];
+```
+
+For all network policies:
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]>
+ON ALL POLICIES
+FROM <role_name> [, ... ];
+```
+
+{{</ tab >}}
 
 {{< tab "Schema">}}
 
@@ -131,8 +160,6 @@ FROM <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ==================== Secret syntax =====================  -->
-
 {{< tab "Secret">}}
 
 For specific secret(s):
@@ -153,8 +180,6 @@ FROM <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ==================== System syntax =====================  -->
-
 {{< tab "System">}}
 
 ```mzsql
@@ -164,8 +189,6 @@ FROM <role_name> [, ... ];
 ```
 
 {{</ tab >}}
-
-<!-- ==================== Type syntax =======================  -->
 
 {{< tab "Type">}}
 
@@ -188,8 +211,6 @@ FROM <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ======================= Table syntax =====================  -->
-
 {{< tab "Table">}}
 
 For specific table(s):
@@ -204,7 +225,7 @@ For all tables or all tables in a specific schema(s) or in a specific database(s
 
 {{< note >}}
 
-{{< include-md file="shared-content/rbac-cloud/grant-privilege-all-tables.md" >}}
+{{% include-headless "/headless/rbac-cloud/grant-privilege-all-tables" %}}
 
 {{</ note >}}
 
@@ -237,8 +258,7 @@ FROM <role_name> [, ... ];
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/revoke-privilege.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/revoke-privilege" %}}
 
 
 ## Examples

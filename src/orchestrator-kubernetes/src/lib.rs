@@ -16,7 +16,7 @@ use std::{env, fmt};
 
 use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::DateTime;
 use clap::ValueEnum;
 use cloud_resource_controller::KubernetesResourceReader;
 use futures::TryFutureExt;
@@ -30,13 +30,14 @@ use k8s_openapi::api::core::v1::{
     PersistentVolumeClaimTemplate, Pod, PodAffinity, PodAffinityTerm, PodAntiAffinity,
     PodSecurityContext, PodSpec, PodTemplateSpec, PreferredSchedulingTerm, ResourceRequirements,
     SeccompProfile, Secret, SecurityContext, Service as K8sService, ServicePort, ServiceSpec,
-    Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeResourceRequirements,
+    Sysctl, Toleration, TopologySpreadConstraint, Volume, VolumeMount, VolumeResourceRequirements,
     WeightedPodAffinityTerm,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
     LabelSelector, LabelSelectorRequirement, OwnerReference,
 };
+use k8s_openapi::jiff::Timestamp;
 use kube::ResourceExt;
 use kube::api::{Api, DeleteParams, ObjectMeta, PartialObjectMetaExt, Patch, PatchParams};
 use kube::client::Client;
@@ -48,9 +49,11 @@ use mz_cloud_resources::crd::vpc_endpoint::v1::VpcEndpoint;
 use mz_orchestrator::{
     DiskLimit, LabelSelectionLogic, LabelSelector as MzLabelSelector, NamespacedOrchestrator,
     OfflineReason, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
-    ServiceProcessMetrics, ServiceStatus, scheduling_config::*,
+    ServiceProcessMetrics, ServiceStatus, recommended_k8s_labels, scheduling_config::*,
 };
 use mz_ore::cast::CastInto;
+use mz_ore::error::ErrorExt;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use serde::Deserialize;
@@ -58,12 +61,20 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
 
+use crate::metrics::{FetchStep, OrchestratorMetrics};
+
 pub mod cloud_resource_controller;
+mod metrics;
 pub mod secrets;
 pub mod util;
 
 const FIELD_MANAGER: &str = "environmentd";
 const NODE_FAILURE_THRESHOLD_SECONDS: i64 = 30;
+/// How many attempts of a failed worker command log at warn level before later attempts log at
+/// error level. With the retry backoff starting at 125ms, the first error-level attempt comes
+/// about 4s after the first failure, so a Kubernetes API error that clears on retry, such as a
+/// new service account's RBAC that has not yet propagated, does not reach Sentry.
+const RETRY_WARN_ATTEMPTS: usize = 5;
 
 const POD_TEMPLATE_HASH_ANNOTATION: &str = "environmentd.materialize.cloud/pod-template-hash";
 
@@ -75,6 +86,8 @@ pub struct KubernetesOrchestratorConfig {
     pub context: String,
     /// The name of a non-default Kubernetes scheduler to use, if any.
     pub scheduler_name: Option<String>,
+    /// The name of a `PriorityClass` to assign to services, if any.
+    pub priority_class_name: Option<String>,
     /// Annotations to install on every service created by the orchestrator.
     pub service_annotations: BTreeMap<String, String>,
     /// Labels to install on every service created by the orchestrator.
@@ -156,6 +169,7 @@ pub struct KubernetesOrchestrator {
     vpc_endpoint_api: Api<VpcEndpoint>,
     namespaces: Mutex<BTreeMap<String, Arc<dyn NamespacedOrchestrator>>>,
     resource_reader: Arc<KubernetesResourceReader>,
+    metrics: OrchestratorMetrics,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -168,6 +182,7 @@ impl KubernetesOrchestrator {
     /// Creates a new Kubernetes orchestrator from the provided configuration.
     pub async fn new(
         config: KubernetesOrchestratorConfig,
+        metrics_registry: &MetricsRegistry,
     ) -> Result<KubernetesOrchestrator, anyhow::Error> {
         let (client, kubernetes_namespace) = util::create_client(config.context.clone()).await?;
         let resource_reader =
@@ -180,6 +195,7 @@ impl KubernetesOrchestrator {
             vpc_endpoint_api: Api::default_namespaced(client),
             namespaces: Mutex::new(BTreeMap::new()),
             resource_reader,
+            metrics: OrchestratorMetrics::register_into(metrics_registry),
         })
     }
 }
@@ -198,6 +214,7 @@ impl Orchestrator for KubernetesOrchestrator {
                 command_rx,
                 name_prefix: self.config.name_prefix.clone().unwrap_or_default(),
                 collect_pod_metrics: self.config.collect_pod_metrics,
+                metrics: self.metrics.clone(),
             }
             .spawn(format!("kubernetes-orchestrator-worker:{namespace}"));
 
@@ -258,6 +275,9 @@ enum WorkerCommand {
         namespace: String,
         result_tx: oneshot::Sender<Vec<String>>,
     },
+    Flush {
+        result_tx: oneshot::Sender<()>,
+    },
     FetchServiceMetrics {
         name: String,
         info: ServiceInfo,
@@ -295,6 +315,7 @@ struct OrchestratorWorker {
     command_rx: mpsc::UnboundedReceiver<WorkerCommand>,
     name_prefix: String,
     collect_pod_metrics: bool,
+    metrics: OrchestratorMetrics,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -555,6 +576,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         &self,
         id: &str,
         ServiceConfig {
+            app_name,
             image,
             init_container_image,
             args,
@@ -562,6 +584,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             memory_limit,
             memory_request,
             cpu_limit,
+            cpu_request,
             scale,
             labels: labels_in,
             annotations: annotations_in,
@@ -597,6 +620,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         for (key, value) in labels_in {
             labels.insert(self.make_label_key(&key), value);
         }
+
+        let standard_labels = recommended_k8s_labels(app_name);
+
+        // Standard Kubernetes labels
+        labels.extend(standard_labels.clone());
 
         labels.insert(self.make_label_key("scale"), scale.to_string());
 
@@ -634,9 +662,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 Quantity(format!("{}m", cpu_limit.as_millicpus())),
             );
         }
+        if let Some(cpu_request) = cpu_request {
+            requests.insert(
+                "cpu".into(),
+                Quantity(format!("{}m", cpu_request.as_millicpus())),
+            );
+        }
         let service = K8sService {
             metadata: ObjectMeta {
                 name: Some(name.clone()),
+                labels: Some(standard_labels.clone()),
                 ..Default::default()
             },
             spec: Some(ServiceSpec {
@@ -776,9 +811,28 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 };
 
+                if config.soft && config.min_domains.is_some() {
+                    warn!(
+                        "topology spread is soft but min_domains is set; \
+                         Kubernetes rejects minDomains with ScheduleAnyway, \
+                         so min_domains will be ignored"
+                    );
+                }
+                if availability_zones.is_some() && config.min_domains.is_some() {
+                    warn!(
+                        "topology spread has min_domains set but availability_zones \
+                         constrains eligible topology domains via node affinity; \
+                         minDomains will be ignored to avoid preventing pod scheduling"
+                    );
+                }
+
                 let constraint = TopologySpreadConstraint {
                     label_selector: Some(ls),
-                    min_domains: config.min_domains,
+                    min_domains: topology_spread_min_domains(
+                        config.soft,
+                        availability_zones.is_some(),
+                        config.min_domains,
+                    ),
                     max_skew: config.max_skew,
                     topology_key: "topology.kubernetes.io/zone".to_string(),
                     when_unsatisfiable: if config.soft {
@@ -1069,15 +1123,34 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             None
         };
 
+        let tcp_keepalive_sysctls = vec![
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_time".to_string(),
+                value: "300".to_string(),
+            },
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_intvl".to_string(),
+                value: "30".to_string(),
+            },
+            Sysctl {
+                name: "net.ipv4.tcp_keepalive_probes".to_string(),
+                value: "3".to_string(),
+            },
+        ];
+
         let security_context = if let Some(fs_group) = self.config.service_fs_group {
             Some(PodSecurityContext {
                 fs_group: Some(fs_group),
                 run_as_user: Some(fs_group),
                 run_as_group: Some(fs_group),
+                sysctls: Some(tcp_keepalive_sysctls),
                 ..Default::default()
             })
         } else {
-            None
+            Some(PodSecurityContext {
+                sysctls: Some(tcp_keepalive_sysctls),
+                ..Default::default()
+            })
         };
 
         let mut tolerations = vec![
@@ -1147,6 +1220,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 security_context,
                 node_selector: Some(node_selector),
                 scheduler_name: self.config.scheduler_name.clone(),
+                priority_class_name: self.config.priority_class_name.clone(),
                 service_account: self.config.service_account.clone(),
                 affinity: Some(affinity),
                 topology_spread_constraints: topology_spread,
@@ -1179,7 +1253,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let pod_template_json = serde_json::to_string(&pod_template_spec).unwrap();
         let mut hasher = Sha256::new();
         hasher.update(pod_template_json);
-        let pod_template_hash = format!("{:x}", hasher.finalize());
+        let pod_template_hash = hex::encode(hasher.finalize());
         pod_annotations.insert(
             POD_TEMPLATE_HASH_ANNOTATION.to_owned(),
             pod_template_hash.clone(),
@@ -1190,6 +1264,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let stateful_set = StatefulSet {
             metadata: ObjectMeta {
                 name: Some(name.clone()),
+                labels: Some(standard_labels.clone()),
                 ..Default::default()
             },
             spec: Some(StatefulSetSpec {
@@ -1253,6 +1328,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         Ok(list)
     }
 
+    async fn flush(&self) -> Result<(), anyhow::Error> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::Flush { result_tx });
+        result_rx.await.expect("worker task not dropped");
+        Ok(())
+    }
+
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         fn into_service_event(pod: Pod) -> Result<ServiceEvent, anyhow::Error> {
             let process_id = pod.name_any().split('-').next_back().unwrap().parse()?;
@@ -1288,6 +1370,22 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 })
                 .unwrap_or(false);
 
+            // Sum the per-container restart counts to get a per-process (per-pod)
+            // restart count. This is cumulative and survives gaps in the watch
+            // stream, so it lets consumers detect restarts they'd otherwise miss
+            // by only sampling the ready/not-ready status.
+            let restart_count = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_ref())
+                .map(|container_statuses| {
+                    container_statuses
+                        .iter()
+                        .map(|cs| u64::try_from(cs.restart_count).unwrap_or(0))
+                        .sum()
+                })
+                .unwrap_or(0);
+
             let (pod_ready, last_probe_time) = pod
                 .status
                 .and_then(|status| status.conditions)
@@ -1303,14 +1401,17 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             let time = if let Some(time) = last_probe_time {
                 time.0
             } else {
-                Utc::now()
+                Timestamp::now()
             };
 
             Ok(ServiceEvent {
                 service_id,
                 process_id,
                 status,
-                time,
+                restart_count,
+                time: DateTime::from_timestamp_nanos(
+                    time.as_nanosecond().try_into().expect("must fit"),
+                ),
             })
         }
 
@@ -1357,6 +1458,12 @@ impl OrchestratorWorker {
             self.owner_references
                 .extend(orchestrator_pod.owner_references().into_iter().cloned());
 
+            if !self.collect_pod_metrics {
+                info!(
+                    "pod metrics collection is disabled; resource usage graphs in the console will not be available"
+                );
+            }
+
             info!(
                 "Kubernetes orchestrator worker initialized in {:?}",
                 start.elapsed()
@@ -1379,12 +1486,29 @@ impl OrchestratorWorker {
             F: Fn() -> U,
             U: Future<Output = Result<R, K8sError>>,
         {
+            let start = Instant::now();
             Retry::default()
                 .clamp_backoff(Duration::from_secs(10))
-                .retry_async(|_| {
-                    f().map_err(
-                        |error| tracing::error!(%cmd_type, "orchestrator call failed: {error}"),
-                    )
+                .retry_async(|state| {
+                    f().map_err(move |error| {
+                        let attempt = state.i + 1;
+                        let elapsed = start.elapsed();
+                        if state.i < RETRY_WARN_ATTEMPTS {
+                            tracing::warn!(
+                                %cmd_type,
+                                attempt,
+                                ?elapsed,
+                                "orchestrator call failed: {error}"
+                            );
+                        } else {
+                            tracing::error!(
+                                %cmd_type,
+                                attempt,
+                                ?elapsed,
+                                "orchestrator call failed: {error}"
+                            );
+                        }
+                    })
                 })
                 .await
                 .expect("always retries on error")
@@ -1402,6 +1526,9 @@ impl OrchestratorWorker {
             } => {
                 let result = retry(|| self.list_services(&namespace), "ListServices").await;
                 let _ = result_tx.send(result);
+            }
+            Flush { result_tx } => {
+                let _ = result_tx.send(());
             }
             FetchServiceMetrics {
                 name,
@@ -1448,18 +1575,28 @@ impl OrchestratorWorker {
 
             let clusterd_usage_fut = get_clusterd_usage(self_, service_name, i);
             let (metrics, clusterd_usage) =
-                match futures::future::join(self_.metrics_api.get(&name), clusterd_usage_fut).await
-                {
-                    (Ok(metrics), Ok(clusterd_usage)) => (metrics, Some(clusterd_usage)),
-                    (Ok(metrics), Err(e)) => {
-                        warn!("Failed to fetch clusterd usage for {name}: {e}");
-                        (metrics, None)
-                    }
-                    (Err(e), _) => {
-                        warn!("Failed to get metrics for {name}: {e}");
-                        return ServiceProcessMetrics::default();
-                    }
-                };
+                futures::future::join(self_.metrics_api.get(&name), clusterd_usage_fut).await;
+            let clusterd_usage = match clusterd_usage {
+                Ok(clusterd_usage) => Some(clusterd_usage),
+                Err(e) => {
+                    self_
+                        .metrics
+                        .record_fetch_error(FetchStep::ClusterdUsage, e.as_ref());
+                    warn!("Failed to fetch clusterd usage for {name}: {e:#}");
+                    None
+                }
+            };
+            let metrics = match metrics {
+                Ok(metrics) => metrics,
+                Err(e) => {
+                    self_.metrics.record_fetch_error(FetchStep::PodMetrics, &e);
+                    warn!(
+                        "Failed to get metrics for {name}: {}",
+                        e.display_with_causes()
+                    );
+                    return ServiceProcessMetrics::default();
+                }
+            };
             let Some(PodMetricsContainer {
                 usage:
                     PodMetricsContainerUsage {
@@ -1469,6 +1606,9 @@ impl OrchestratorWorker {
                 ..
             }) = metrics.containers.get(0)
             else {
+                self_
+                    .metrics
+                    .record_fetch_failure(FetchStep::PodMetrics, "no_containers");
                 warn!("metrics result contained no containers for {name}");
                 return ServiceProcessMetrics::default();
             };
@@ -1510,6 +1650,7 @@ impl OrchestratorWorker {
                 };
 
                 process_metrics.heap_limit = usage.heap_limit;
+                process_metrics.swap_bytes = usage.swap_bytes;
             }
 
             process_metrics
@@ -1711,9 +1852,38 @@ impl Service for KubernetesService {
     }
 }
 
+/// Returns the `minDomains` value for a `TopologySpreadConstraint`.
+///
+/// `minDomains` must be suppressed when spread is soft (Kubernetes rejects
+/// `minDomains` with `ScheduleAnyway`) and when `availability_zones` is set
+/// (node affinity already constrains eligible domains; if `minDomains` exceeds
+/// the number of pinned zones the global minimum is treated as 0, causing all
+/// but one replica to remain pending with `maxSkew=1`).
+fn topology_spread_min_domains(
+    soft: bool,
+    az_pinned: bool,
+    min_domains: Option<i32>,
+) -> Option<i32> {
+    if soft || az_pinned { None } else { min_domains }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[mz_ore::test]
+    fn topology_spread_min_domains_suppression() {
+        // min_domains is kept when neither soft nor az-pinned
+        assert_eq!(topology_spread_min_domains(false, false, Some(3)), Some(3));
+        // min_domains is None when not set regardless of flags
+        assert_eq!(topology_spread_min_domains(false, false, None), None);
+        // suppressed when soft (Kubernetes rejects minDomains with ScheduleAnyway)
+        assert_eq!(topology_spread_min_domains(true, false, Some(3)), None);
+        // suppressed when availability_zones pins to specific AZs
+        assert_eq!(topology_spread_min_domains(false, true, Some(3)), None);
+        // suppressed when both
+        assert_eq!(topology_spread_min_domains(true, true, Some(3)), None);
+    }
 
     #[mz_ore::test]
     fn k8s_quantity_base10_large() {

@@ -33,8 +33,6 @@ DEFAULT_MINIO = "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012
 
 def main():
     os.chdir(MZ_ROOT)
-    # Console is not on GHCR yet
-    os.environ["MZ_GHCR"] = "0"
 
     parser = argparse.ArgumentParser(
         prog="orchestratord",
@@ -81,11 +79,11 @@ For a new setup you can run:
     parser_environment.add_argument(
         "--external-login-password-mz-system", required=False
     )
+    parser_environment.add_argument("--authenticator-kind", required=False)
     parser_environment.add_argument(
         "--enable-rbac",
-        type=bool,
+        action=argparse.BooleanOptionalAction,
         default=False,
-        required=False,
     )
     parser_environment.set_defaults(func=environment)
 
@@ -147,7 +145,7 @@ def reset(args: argparse.Namespace):
         .splitlines()
     )
     for environment in environments:
-        (namespace, environment_name) = environment.split("/", 1)
+        namespace, environment_name = environment.split("/", 1)
         env_kubectl = make_env_kubectl(args, namespace)
 
         mz = json.loads(
@@ -194,7 +192,7 @@ def environment(args: argparse.Namespace):
     if args.environmentd_version:
         image_tag = args.environmentd_version
     else:
-        for image in ["environmentd", "clusterd", "balancerd"]:
+        for image in ["environmentd", "clusterd", "balancerd", "console"]:
             acquire(
                 image,
                 dev=args.dev,
@@ -308,11 +306,13 @@ def environment(args: argparse.Namespace):
         },
     ]
 
+    if args.authenticator_kind is not None:
+        resources[-1]["spec"]["authenticatorKind"] = args.authenticator_kind
+
     if args.external_login_password_mz_system is not None:
         resources[0]["stringData"][
             "external_login_password_mz_system"
         ] = args.external_login_password_mz_system
-        resources[-1]["spec"]["authenticatorKind"] = "Password"
 
     env_kubectl("apply", "-f", "-", input=yaml.safe_dump_all(resources).encode())
 
@@ -489,7 +489,7 @@ def retry(
             result = f()
             break
         except tuple(exception_types):
-            if attempt == max_attempts:
+            if attempt == max_attempts - 1:
                 raise
             sleep(sleep_secs)
     return result

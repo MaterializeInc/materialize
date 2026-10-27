@@ -12,7 +12,7 @@
 use std::fmt::{self, Debug};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Int64Array};
@@ -21,11 +21,12 @@ use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use itertools::EitherOrBoth;
-use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
+use mz_dyncfg::{Config, ConfigSet, ConfigValHandle, ParameterScope};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::{soft_assert_or_log, soft_panic_no_log, soft_panic_or_log};
 use mz_persist::indexed::columnar::arrow::{realloc_any, realloc_array};
+use mz_persist::indexed::columnar::parquet::BlobTraceBatchPartReader;
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
@@ -46,6 +47,7 @@ use tracing::{Instrument, debug, debug_span, trace_span};
 use crate::ShardId;
 use crate::cfg::PersistConfig;
 use crate::error::InvalidUsage;
+use crate::internal::apply::Applier;
 use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{Metrics, MetricsPermits, ReadMetrics, ShardMetrics};
@@ -65,6 +67,7 @@ pub(crate) const FETCH_SEMAPHORE_COST_ADJUSTMENT: Config<f64> = Config::new(
     "\
     An adjustment multiplied by encoded_size_bytes to approximate an upper \
     bound on the size in lgalloc, which includes the decoded version.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
@@ -75,6 +78,7 @@ pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
     parsed, expressed as a multiplier of the process's memory limit. This data \
     all spills to lgalloc, so values > 1.0 are safe. Only applied to cc \
     replicas.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
@@ -83,12 +87,23 @@ pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
     "\
     Format we'll use to decode a Persist Part, either 'row', \
     'row_with_validate', or 'arrow' (Materialize).",
+    ParameterScope::Environment,
+);
+
+pub(crate) const PART_DECODE_BATCH_ROWS: Config<Option<usize>> = Config::new(
+    "persist_part_decode_batch_rows",
+    Some(16384),
+    "\
+    Maximum number of rows of a fetched blob part that a reader decodes at \
+    once. Unset decodes the whole part at once.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
     "persist_optimize_ignored_data_fetch",
     true,
     "CYA to allow opt-out of a performance optimization to skip fetching ignored data",
+    ParameterScope::Environment,
 );
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
@@ -96,17 +111,22 @@ pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
     false,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
     for the batch containing that part",
+    ParameterScope::Environment,
 );
 
 #[derive(Debug, Clone)]
 pub(crate) struct FetchConfig {
     pub(crate) validate_bounds_on_read: bool,
+    /// See [`PART_DECODE_BATCH_ROWS`]. Only consulted by readers that decode
+    /// through [`FetchedPart`].
+    pub(crate) part_decode_batch_rows: Option<usize>,
 }
 
 impl FetchConfig {
     pub fn from_persist_config(cfg: &PersistConfig) -> Self {
         Self {
             validate_bounds_on_read: VALIDATE_PART_BOUNDS_ON_READ.get(cfg),
+            part_decode_batch_rows: PART_DECODE_BATCH_ROWS.get(cfg),
         }
     }
 }
@@ -114,19 +134,29 @@ impl FetchConfig {
 #[derive(Debug, Clone)]
 pub(crate) struct BatchFetcherConfig {
     pub(crate) part_decode_format: ConfigValHandle<String>,
-    pub(crate) fetch_config: FetchConfig,
+    pub(crate) validate_bounds_on_read: ConfigValHandle<bool>,
+    pub(crate) part_decode_batch_rows: ConfigValHandle<Option<usize>>,
 }
 
 impl BatchFetcherConfig {
     pub fn new(value: &PersistConfig) -> Self {
         Self {
             part_decode_format: PART_DECODE_FORMAT.handle(value),
-            fetch_config: FetchConfig::from_persist_config(value),
+            validate_bounds_on_read: VALIDATE_PART_BOUNDS_ON_READ.handle(value),
+            part_decode_batch_rows: PART_DECODE_BATCH_ROWS.handle(value),
         }
     }
 
     pub fn part_decode_format(&self) -> PartDecodeFormat {
         PartDecodeFormat::from_str(self.part_decode_format.get().as_str())
+    }
+
+    /// The [`FetchConfig`] with values read at call time.
+    pub fn fetch_config(&self) -> FetchConfig {
+        FetchConfig {
+            validate_bounds_on_read: self.validate_bounds_on_read.get(),
+            part_decode_batch_rows: self.part_decode_batch_rows.get(),
+        }
     }
 }
 
@@ -154,6 +184,33 @@ where
     pub(crate) _phantom: PhantomData<fn() -> (K, V, T, D)>,
 }
 
+// Hand-written (rather than derived) so cloning does not require `K: Clone`
+// etc.: every field is an `Arc` or independently `Clone`. The `schema_cache`
+// clone shares the schema-lookup maps and applier, so clones reuse cached
+// schema fetches and only duplicate a small per-clone migration memo. Used to
+// run several `fetch_leased_part` calls concurrently, each on its own clone.
+impl<K, V, T, D> Clone for BatchFetcher<K, V, T, D>
+where
+    T: Timestamp + Lattice + Codec64,
+    K: Debug + Codec,
+    V: Debug + Codec,
+    D: Monoid + Codec64 + Send + Sync,
+{
+    fn clone(&self) -> Self {
+        Self {
+            cfg: self.cfg.clone(),
+            blob: Arc::clone(&self.blob),
+            metrics: Arc::clone(&self.metrics),
+            shard_metrics: Arc::clone(&self.shard_metrics),
+            shard_id: self.shard_id.clone(),
+            read_schemas: self.read_schemas.clone(),
+            schema_cache: self.schema_cache.clone(),
+            is_transient: self.is_transient,
+            _phantom: PhantomData,
+        }
+    }
+}
+
 impl<K, V, T, D> BatchFetcher<K, V, T, D>
 where
     K: Debug + Codec,
@@ -176,6 +233,7 @@ where
             filter,
             filter_pushdown_audit,
             part,
+            reader_id: _,
         } = part;
         let part: BatchPart<T> = part.decode_to().expect("valid part");
         if shard_id != self.shard_id {
@@ -251,9 +309,117 @@ where
             structured_part_audit: self.cfg.part_decode_format(),
             fetch_permit,
             _phantom: PhantomData,
-            fetch_config: self.cfg.fetch_config.clone(),
+            fetch_config: self.cfg.fetch_config(),
         };
         Ok(Ok(fetched_blob))
+    }
+
+    /// Diagnoses a missing-blob fetch failure for a part leased by the given
+    /// reader. See the free function `missing_blob_diagnostics`.
+    pub async fn missing_blob_diagnostics(
+        &self,
+        reader_id: &LeasedReaderId,
+    ) -> MissingBlobDiagnosis {
+        missing_blob_diagnostics(self.schema_cache.applier(), reader_id.clone()).await
+    }
+}
+
+/// How long [missing_blob_diagnostics] waits to refresh state.
+const MISSING_BLOB_DIAGNOSIS_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The result of [BatchFetcher::missing_blob_diagnostics].
+#[derive(Debug)]
+pub enum MissingBlobDiagnosis {
+    /// The reader has been expired out of state, so its lease was lost.
+    LeaseExpired {
+        /// The reader that leased the part.
+        reader_id: LeasedReaderId,
+    },
+    /// The shard was tombstoned, which removes every reader. Not a lost lease.
+    ShardTombstoned {
+        /// The reader that leased the part.
+        reader_id: LeasedReaderId,
+    },
+    /// The reader is still in state, so its hold did not protect the blob.
+    LeasePresent {
+        /// The reader that leased the part.
+        reader_id: LeasedReaderId,
+        /// The reader's lease state, for the error message.
+        lease_state: String,
+    },
+    /// State could not be refreshed in time to tell.
+    Unknown {
+        /// The reader that leased the part.
+        reader_id: LeasedReaderId,
+    },
+}
+
+impl fmt::Display for MissingBlobDiagnosis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MissingBlobDiagnosis::LeaseExpired { reader_id } => write!(
+                f,
+                "reader {reader_id} has been expired out of state; \
+                 the process likely failed to heartbeat it within the lease duration \
+                 (machine sleep, CPU/memory starvation, or a partition from consensus?)"
+            ),
+            MissingBlobDiagnosis::ShardTombstoned { reader_id } => write!(
+                f,
+                "reader {reader_id}: the shard has been tombstoned, which removes every reader"
+            ),
+            MissingBlobDiagnosis::LeasePresent {
+                reader_id,
+                lease_state,
+            } => write!(
+                f,
+                "reader {reader_id} is still present in state ({lease_state}); \
+                 a missing blob despite a live lease indicates a GC bug"
+            ),
+            MissingBlobDiagnosis::Unknown { reader_id } => write!(
+                f,
+                "reader {reader_id}: could not refresh state within {}s to diagnose the lease; \
+                 partitioned from consensus?",
+                MISSING_BLOB_DIAGNOSIS_TIMEOUT.as_secs()
+            ),
+        }
+    }
+}
+
+/// Diagnoses a missing-blob fetch failure: refreshes the shard state and
+/// reports whether the reader that leased the part is still present in it.
+///
+/// A missing blob means garbage collection deleted a blob that the part's
+/// lease (a seqno hold in shard state) should have protected. See
+/// [MissingBlobDiagnosis] for what each outcome means.
+pub(crate) async fn missing_blob_diagnostics<K, V, T, D>(
+    applier: &Applier<K, V, T, D>,
+    reader_id: LeasedReaderId,
+) -> MissingBlobDiagnosis
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64 + Sync,
+    D: Monoid + Codec64,
+{
+    // Refreshing state talks to consensus; this runs on an already-fatal path
+    // and a partition from consensus may be the very reason the lease was
+    // lost, so don't let the diagnosis block the restart indefinitely.
+    let refresh = applier.fetch_and_update_state(None);
+    if tokio::time::timeout(MISSING_BLOB_DIAGNOSIS_TIMEOUT, refresh)
+        .await
+        .is_err()
+    {
+        return MissingBlobDiagnosis::Unknown { reader_id };
+    }
+    if applier.is_tombstone() {
+        return MissingBlobDiagnosis::ShardTombstoned { reader_id };
+    }
+    match applier.reader_lease(reader_id.clone()) {
+        Some(lease_state) => MissingBlobDiagnosis::LeasePresent {
+            reader_id,
+            lease_state: format!("{lease_state:?}"),
+        },
+        None => MissingBlobDiagnosis::LeaseExpired { reader_id },
     }
 }
 
@@ -330,28 +496,55 @@ where
     D: Monoid + Codec64 + Send + Sync,
 {
     let fetch_config = FetchConfig::from_persist_config(cfg);
-    let encoded_part = EncodedPart::fetch(
-        &fetch_config,
-        &part.shard_id,
-        blob,
-        &metrics,
-        shard_metrics,
-        read_metrics,
-        &part.desc,
-        &part.part,
-    )
-    .await
-    .unwrap_or_else(|blob_key| {
-        // Ideally, readers should never encounter a missing blob. They place a seqno
-        // hold as they consume their snapshot/listen, preventing any blobs they need
-        // from being deleted by garbage collection, and all blob implementations are
-        // linearizable so there should be no possibility of stale reads.
-        //
-        // If we do have a bug and a reader does encounter a missing blob, the state
-        // cannot be recovered, and our best option is to panic and retry the whole
-        // process.
-        panic!("{} could not fetch batch part: {}", reader_id, blob_key)
-    });
+    let fetched = match &part.part {
+        BatchPart::Hollow(x) => fetch_batch_part_blob(
+            &part.shard_id,
+            blob,
+            &metrics,
+            shard_metrics,
+            read_metrics,
+            x,
+        )
+        .await
+        .map(|buf| {
+            PartSource::from_hollow_blob(
+                &fetch_config,
+                &metrics,
+                read_metrics,
+                part.desc.clone(),
+                x,
+                &buf,
+            )
+        }),
+        BatchPart::Inline {
+            updates,
+            ts_rewrite,
+            ..
+        } => Ok(PartSource::Whole(EncodedPart::from_inline(
+            &fetch_config,
+            &metrics,
+            read_metrics.clone(),
+            part.desc.clone(),
+            updates,
+            ts_rewrite.as_ref(),
+        ))),
+    };
+    let source = match fetched {
+        Ok(x) => x,
+        Err(blob_key) => {
+            // Ideally, readers should never encounter a missing blob. They place a seqno
+            // hold as they consume their snapshot/listen, preventing any blobs they need
+            // from being deleted by garbage collection, and all blob implementations are
+            // linearizable so there should be no possibility of stale reads.
+            //
+            // If we do have a bug and a reader does encounter a missing blob, the state
+            // cannot be recovered, and our best option is to panic and retry the whole
+            // process.
+            let diagnostics =
+                missing_blob_diagnostics(schema_cache.applier(), reader_id.clone()).await;
+            panic!("could not fetch batch part {}: {}", blob_key, diagnostics)
+        }
+    };
     let part_cfg = BatchFetcherConfig::new(cfg);
     let migration = PartMigration::new(&part.part, read_schemas, schema_cache)
         .await
@@ -364,7 +557,7 @@ where
         });
     FetchedPart::new(
         metrics,
-        encoded_part,
+        source,
         migration,
         part.filter.clone(),
         part.filter_pushdown_audit,
@@ -386,7 +579,12 @@ pub(crate) async fn fetch_batch_part_blob<T>(
     let blob_key = part.key.complete(shard_id);
     let value = retry_external(&metrics.retries.external.fetch_batch_get, || async {
         shard_metrics.blob_gets.inc();
-        blob.get(&blob_key).await
+        // Name the blob in the error. A GET stuck retrying forever surfaces only in the retry log
+        // (see `retry_external`), which prints the error, so without this the log cannot say which
+        // blob, and thus which shard, is wedged.
+        blob.get(&blob_key)
+            .await
+            .map_err(|err| err.context(format!("blob {blob_key}")))
     })
     .instrument(get_span.clone())
     .await
@@ -472,7 +670,6 @@ impl Lease {
     }
 
     /// Returns the inner [SeqNo] of this [Lease].
-    #[cfg(test)]
     pub fn seqno(&self) -> SeqNo {
         *self.0
     }
@@ -518,7 +715,16 @@ pub struct LeasedBatchPart<T> {
     /// The lease that prevents this part from being GCed. Code should ensure that this lease
     /// lives as long as the part is needed.
     pub(crate) lease: Lease,
+    /// The id of the reader that leased this part, for diagnostics: if the
+    /// blob backing the part goes missing, knowing whether this reader is
+    /// still present in state distinguishes a lost lease from a GC bug.
+    pub(crate) reader_id: LeasedReaderId,
     pub(crate) filter_pushdown_audit: bool,
+    /// Whether the containing batch has a run that may hold updates outside
+    /// the registered desc (see `RunMeta::bounds_truncated`). A fetch filters
+    /// those updates out, but write-time part statistics count them, so
+    /// optimizations that substitute statistics for a fetch must not fire.
+    pub(crate) bounds_truncated: bool,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -543,6 +749,7 @@ where
             desc: self.desc.clone(),
             filter: self.filter.clone(),
             part: LazyProto::from(&self.part.into_proto()),
+            reader_id: self.reader_id.clone(),
             filter_pushdown_audit: self.filter_pushdown_audit,
         };
         (part, lease)
@@ -562,8 +769,11 @@ where
     }
 
     /// Returns the pushdown stats for this part.
+    ///
+    /// Stats written by a newer version may not decode; those return `None`,
+    /// the same as a part that carries no stats.
     pub fn stats(&self) -> Option<PartStats> {
-        self.part.stats().map(|x| x.decode())
+        self.part.stats().and_then(|x| x.try_decode().ok())
     }
 
     /// Apply any relevant projection pushdown optimizations, assuming that the data in the part
@@ -576,6 +786,12 @@ where
             FetchBatchFilter::Listen { .. } | FetchBatchFilter::Compaction { .. } => return,
         };
         if !OPTIMIZE_IGNORED_DATA_FETCH.get(cfg) {
+            return;
+        }
+        // A truncated batch's parts may physically hold updates outside the
+        // registered desc. A fetch filters those out, but the write-time
+        // diffs_sum counts them, so substituting it would fabricate data.
+        if self.bounds_truncated {
             return;
         }
         let (diffs_sum, _stats) = match &self.part {
@@ -594,6 +810,11 @@ where
             &[as_of] => as_of,
             _ => return,
         };
+        // NOTE: `diffs_sum` sums every row physically in the blob, while
+        // reads truncate rows outside the registered desc. Substituting it is
+        // sound only while no writer registers a batch with tighter bounds
+        // than the blob holds (none does today, and rewritten batches prove
+        // it), which nothing here can re-check without fetching the blob.
         let eligible = self.desc.upper().less_equal(as_of) && self.desc.since().less_equal(as_of);
         if !eligible {
             return;
@@ -734,7 +955,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
     pub(crate) fn parse_internal(&self, cfg: &FetchConfig) -> ShardSourcePart<K, V, T, D> {
         let (part, stats) = match &self.buf {
             FetchedBlobBuf::Hollow { buf, part } => {
-                let parsed = decode_batch_part_blob(
+                let source = PartSource::from_hollow_blob(
                     cfg,
                     &self.metrics,
                     &self.read_metrics,
@@ -742,7 +963,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                     part,
                     buf,
                 );
-                (parsed, part.stats.as_ref())
+                (source, part.stats.as_ref())
             }
             FetchedBlobBuf::Inline {
                 desc,
@@ -757,7 +978,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                     updates,
                     ts_rewrite.as_ref(),
                 );
-                (parsed, None)
+                (PartSource::Whole(parsed), None)
             }
         };
         let part = FetchedPart::new(
@@ -776,9 +997,14 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
     }
 
     /// Decodes and returns the pushdown stats for this part, if known.
+    ///
+    /// Stats written by a newer version may not decode; those return `None`,
+    /// the same as a part that carries no stats.
     pub fn stats(&self) -> Option<PartStats> {
         match &self.buf {
-            FetchedBlobBuf::Hollow { part, .. } => part.stats.as_ref().map(|x| x.decode()),
+            FetchedBlobBuf::Hollow { part, .. } => {
+                part.stats.as_ref().and_then(|x| x.try_decode().ok())
+            }
             FetchedBlobBuf::Inline { .. } => None,
         }
     }
@@ -792,6 +1018,26 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
 pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     metrics: Arc<Metrics>,
     ts_filter: FetchBatchFilter<T>,
+    // The decoded rows of the whole part, or of the current batch of
+    // `batches`. `None` before the first batch and after the last.
+    rows: Option<DecodedRows<K, V>>,
+    // Batches not yet decoded into `rows`, if the part is decoded in batches.
+    batches: Option<EncodedPartBatches<T>>,
+    part_decode_format: PartDecodeFormat,
+    // Row count of the whole part before normalization.
+    part_rows: usize,
+    migration: PartMigration<K, V>,
+    filter_pushdown_audit: Option<LazyPartStats>,
+    peek_stash: Option<((K, V), T, D)>,
+    key_storage: Option<K::Storage>,
+    val_storage: Option<V::Storage>,
+
+    _phantom: PhantomData<fn() -> D>,
+}
+
+/// Decoded rows of a [`FetchedPart`] and the cursor into them.
+#[derive(Debug)]
+struct DecodedRows<K: Codec, V: Codec> {
     // If migration is Either, then the columnar one will have already been
     // applied here on the structured data only.
     part: EitherOrBoth<
@@ -803,27 +1049,30 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     >,
     timestamps: Int64Array,
     diffs: Int64Array,
-    migration: PartMigration<K, V>,
-    filter_pushdown_audit: Option<LazyPartStats>,
-    peek_stash: Option<((K, V), T, D)>,
-    part_cursor: usize,
-    key_storage: Option<K::Storage>,
-    val_storage: Option<V::Storage>,
-
-    _phantom: PhantomData<fn() -> D>,
+    cursor: usize,
 }
 
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, T, D> {
     pub(crate) fn new(
         metrics: Arc<Metrics>,
-        part: EncodedPart<T>,
+        source: PartSource<T>,
         migration: PartMigration<K, V>,
         ts_filter: FetchBatchFilter<T>,
         filter_pushdown_audit: bool,
         part_decode_format: PartDecodeFormat,
         stats: Option<&LazyPartStats>,
     ) -> Self {
-        let part_len = u64::cast_from(part.part.updates.len());
+        let (updates, batches, part_rows) = match source {
+            PartSource::Whole(part) => {
+                let part_rows = part.updates().len();
+                (Some(part.normalize(&metrics.columnar)), None, part_rows)
+            }
+            PartSource::Batched(batches) => {
+                let part_rows = batches.reader.num_rows();
+                (None, Some(batches), part_rows)
+            }
+        };
+        let part_len = u64::cast_from(part_rows);
         match &migration {
             PartMigration::SameSchema { .. } => metrics.schema.migration_count_same.inc(),
             PartMigration::Schemaless { .. } => {
@@ -855,11 +1104,56 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             None
         };
 
+        let mut ret = FetchedPart {
+            metrics,
+            ts_filter,
+            rows: None,
+            peek_stash: None,
+            batches,
+            part_decode_format,
+            part_rows,
+            migration,
+            filter_pushdown_audit,
+            key_storage: None,
+            val_storage: None,
+            _phantom: PhantomData,
+        };
+        ret.rows = updates.map(|updates| ret.decode_rows(updates));
+        ret
+    }
+
+    /// Replaces the current decoded rows with the next batch, if any.
+    ///
+    /// Returns false once all batches have been decoded, or if the part was
+    /// decoded whole.
+    fn next_batch(&mut self) -> bool {
+        let Some(batches) = self.batches.as_mut() else {
+            return false;
+        };
+        // Release the current batch before decoding the next, so at most one
+        // decoded batch is alive.
+        self.rows = None;
+        match batches.next_updates(&self.metrics) {
+            Some(updates) => {
+                self.rows = Some(self.decode_rows(updates));
+                true
+            }
+            None => {
+                self.batches = None;
+                false
+            }
+        }
+    }
+
+    /// Builds decoders over normalized `updates`.
+    fn decode_rows(&self, updates: BlobTraceUpdates) -> DecodedRows<K, V> {
+        let metrics = &*self.metrics;
+        let migration = &self.migration;
         let downcast_structured = |structured: ColumnarRecordsStructuredExt,
                                    structured_only: bool| {
             let key_size_before = ArrayOrd::new(&structured.key).goodbytes();
 
-            let structured = match &migration {
+            let structured = match migration {
                 PartMigration::SameSchema { .. } => structured,
                 PartMigration::Schemaless { read } if structured_only => {
                     // We don't know the source schema, but we do know the source datatype; migrate it directly.
@@ -915,7 +1209,6 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             Some((key.ok()?, val.ok()?))
         };
 
-        let updates = part.normalize(&metrics.columnar);
         let timestamps = updates.timestamps().clone();
         let diffs = updates.diffs().clone();
         let part = match updates {
@@ -927,7 +1220,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                 downcast_structured(key_values, true).expect("valid schemas for structured data"),
             ),
             // If both are available, respect the specified part decode format.
-            BlobTraceUpdates::Both(records, ext) => match part_decode_format {
+            BlobTraceUpdates::Both(records, ext) => match self.part_decode_format {
                 PartDecodeFormat::Row {
                     validate_structured: false,
                 } => EitherOrBoth::Left(records),
@@ -944,19 +1237,11 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             },
         };
 
-        FetchedPart {
-            metrics,
-            ts_filter,
+        DecodedRows {
             part,
-            peek_stash: None,
             timestamps,
             diffs,
-            migration,
-            filter_pushdown_audit,
-            part_cursor: 0,
-            key_storage: None,
-            val_storage: None,
-            _phantom: PhantomData,
+            cursor: 0,
         }
     }
 
@@ -974,11 +1259,129 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
 /// logic.
 #[derive(Debug)]
 pub(crate) struct EncodedPart<T> {
+    part: BlobTraceBatchPart<T>,
+    normalization: PartNormalization<T>,
+}
+
+/// The updates [`FetchedPart`] reads: a part decoded whole, or one decoded
+/// in bounded batches on demand.
+///
+/// Readers decode hollow parts in batches when
+/// [`FetchConfig::part_decode_batch_rows`] is set. Inline parts, and
+/// all parts read through [`EncodedPart`] directly (compaction, consolidating
+/// iteration, inspect), are decoded whole.
+#[derive(Debug)]
+pub(crate) enum PartSource<T> {
+    Whole(EncodedPart<T>),
+    Batched(EncodedPartBatches<T>),
+}
+
+impl<T: Timestamp + Lattice + Codec64> PartSource<T> {
+    /// Decodes the fetched blob `buf` of the hollow `part`, in batches if
+    /// [`FetchConfig::part_decode_batch_rows`] is set.
+    pub(crate) fn from_hollow_blob(
+        cfg: &FetchConfig,
+        metrics: &Metrics,
+        read_metrics: &ReadMetrics,
+        registered_desc: Description<T>,
+        part: &HollowBatchPart<T>,
+        buf: &SegmentedBytes,
+    ) -> Self {
+        match cfg.part_decode_batch_rows {
+            None => PartSource::Whole(decode_batch_part_blob(
+                cfg,
+                metrics,
+                read_metrics,
+                registered_desc,
+                part,
+                buf,
+            )),
+            Some(batch_rows) => PartSource::Batched(EncodedPartBatches::new(
+                cfg,
+                batch_rows,
+                metrics,
+                read_metrics.clone(),
+                registered_desc,
+                part,
+                buf.clone(),
+            )),
+        }
+    }
+}
+
+/// The normalization of a fetched part's updates to its registered
+/// description: truncation to the registered bounds and `ts_rewrite`.
+#[derive(Debug)]
+struct PartNormalization<T> {
     metrics: ReadMetrics,
     registered_desc: Description<T>,
-    part: BlobTraceBatchPart<T>,
     needs_truncation: bool,
     ts_rewrite: Option<Antichain<T>>,
+}
+
+/// A hollow part decoded into normalized updates in batches of at most
+/// `batch_rows` rows.
+///
+/// Holds the encoded bytes until the last batch is decoded.
+#[derive(Debug)]
+pub(crate) struct EncodedPartBatches<T> {
+    reader: BlobTraceBatchPartReader<T>,
+    normalization: PartNormalization<T>,
+}
+
+impl<T: Timestamp + Lattice + Codec64> EncodedPartBatches<T> {
+    pub(crate) fn new(
+        cfg: &FetchConfig,
+        batch_rows: usize,
+        metrics: &Metrics,
+        read_metrics: ReadMetrics,
+        registered_desc: Description<T>,
+        part: &HollowBatchPart<T>,
+        buf: SegmentedBytes,
+    ) -> Self {
+        let reader = metrics
+            .codecs
+            .batch
+            .decode(|| BlobTraceBatchPartReader::new(buf, batch_rows))
+            .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", part.key, err))
+            // Same as `decode_batch_part_blob`: undecodable durable data is
+            // not recoverable.
+            .expect("internal error: invalid encoded state");
+        let normalization = PartNormalization::new(
+            cfg,
+            read_metrics,
+            registered_desc,
+            &part.key.0,
+            part.ts_rewrite.as_ref(),
+            reader.desc(),
+        );
+        EncodedPartBatches {
+            reader,
+            normalization,
+        }
+    }
+
+    /// Decodes and normalizes the next batch, or returns `None` once all rows
+    /// have been returned.
+    fn next_updates(&mut self, metrics: &Metrics) -> Option<BlobTraceUpdates> {
+        let start = Instant::now();
+        let updates = self
+            .reader
+            .next_updates(&metrics.columnar)?
+            .expect("internal error: invalid encoded state");
+        // Counts parts, not batches, so only the open in `new` increments
+        // `decode_count`.
+        metrics
+            .codecs
+            .batch
+            .decode_seconds
+            .inc_by(start.elapsed().as_secs_f64());
+        self.normalization
+            .metrics
+            .part_goodbytes
+            .inc_by(u64::cast_from(updates.goodbytes()));
+        Some(self.normalization.normalize(&updates, &metrics.columnar))
+    }
 }
 
 impl<K, V, T, D> FetchedPart<K, V, T, D>
@@ -1000,21 +1403,31 @@ where
         let mut consolidated = self.peek_stash.take();
         loop {
             // Fetch and decode the next tuple in the sequence. (Or break if there is none.)
-            let next = if self.part_cursor < self.timestamps.len() {
-                let next_idx = self.part_cursor;
-                self.part_cursor += 1;
+            let row = match &mut self.rows {
+                Some(rows) if rows.cursor < rows.timestamps.len() => {
+                    let idx = rows.cursor;
+                    rows.cursor += 1;
+                    Some((idx, rows.timestamps.values()[idx], rows.diffs.values()[idx]))
+                }
+                _ => None,
+            };
+            let next = if let Some((next_idx, t, d)) = row {
                 // These `to_le_bytes` calls were previously encapsulated by `ColumnarRecords`.
                 // TODO(structured): re-encapsulate these once we've finished the structured migration.
-                let mut t = T::decode(self.timestamps.values()[next_idx].to_le_bytes());
+                let mut t = T::decode(t.to_le_bytes());
                 if !self.ts_filter.filter_ts(&mut t) {
                     continue;
                 }
-                let d = D::decode(self.diffs.values()[next_idx].to_le_bytes());
+                let d = D::decode(d.to_le_bytes());
                 if d.is_zero() {
                     continue;
                 }
                 let kv = self.decode_kv(next_idx, key, val);
                 (kv, t, d)
+            } else if self.next_batch() {
+                // `consolidated` and `peek_stash` are owned, so consolidation
+                // continues across the batch boundary.
+                continue;
             } else {
                 break;
             };
@@ -1043,6 +1456,9 @@ where
 
     fn decode_kv(&mut self, index: usize, key: &mut Option<K>, val: &mut Option<V>) -> (K, V) {
         let decoded = self
+            .rows
+            .as_ref()
+            .expect("decoded rows present while the cursor is in bounds")
             .part
             .as_ref()
             .map_left(|codec| {
@@ -1157,7 +1573,7 @@ where
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         // We don't know in advance how restrictive the filter will be.
-        let max_len = self.timestamps.len();
+        let max_len = self.part_rows;
         (0, Some(max_len))
     }
 }
@@ -1242,6 +1658,45 @@ where
         ts_rewrite: Option<&Antichain<T>>,
         parsed: BlobTraceBatchPart<T>,
     ) -> Self {
+        let normalization = PartNormalization::new(
+            cfg,
+            metrics,
+            registered_desc,
+            printable_name,
+            ts_rewrite,
+            &parsed.desc,
+        );
+        EncodedPart {
+            part: parsed,
+            normalization,
+        }
+    }
+
+    pub(crate) fn maybe_unconsolidated(&self) -> bool {
+        // At time of writing, only user parts may be unconsolidated, and they are always
+        // written with a since of [T::minimum()].
+        self.part.desc.since().borrow() == AntichainRef::new(&[T::minimum()])
+    }
+
+    pub(crate) fn updates(&self) -> &BlobTraceUpdates {
+        &self.part.updates
+    }
+
+    /// Returns the updates with all truncation / timestamp rewriting applied.
+    pub(crate) fn normalize(&self, metrics: &ColumnarMetrics) -> BlobTraceUpdates {
+        self.normalization.normalize(&self.part.updates, metrics)
+    }
+}
+
+impl<T: Timestamp + Lattice + Codec64> PartNormalization<T> {
+    fn new(
+        cfg: &FetchConfig,
+        metrics: ReadMetrics,
+        registered_desc: Description<T>,
+        printable_name: &str,
+        ts_rewrite: Option<&Antichain<T>>,
+        inline_desc: &Description<T>,
+    ) -> Self {
         // There are two types of batches in persist:
         // - Batches written by a persist user (either directly or indirectly
         //   via BatchBuilder). These always have a since of the minimum
@@ -1256,7 +1711,6 @@ where
         //   The inline since may be less than the registered desc since,
         //   this is because of incremental compaction, where we might rewrite
         //   certain runs in a batch but not others.
-        let inline_desc = &parsed.desc;
         let needs_truncation = inline_desc.lower() != registered_desc.lower()
             || inline_desc.upper() != registered_desc.upper();
         if needs_truncation {
@@ -1296,7 +1750,7 @@ where
                 registered_desc
             );
         } else {
-            assert!(
+            soft_assert_or_log!(
                 PartialOrder::less_equal(inline_desc.since(), registered_desc.since()),
                 "key={} inline={:?} registered={:?}",
                 printable_name,
@@ -1321,28 +1775,17 @@ where
             );
         }
 
-        EncodedPart {
+        PartNormalization {
             metrics,
             registered_desc,
-            part: parsed,
             needs_truncation,
             ts_rewrite: ts_rewrite.cloned(),
         }
     }
 
-    pub(crate) fn maybe_unconsolidated(&self) -> bool {
-        // At time of writing, only user parts may be unconsolidated, and they are always
-        // written with a since of [T::minimum()].
-        self.part.desc.since().borrow() == AntichainRef::new(&[T::minimum()])
-    }
-
-    pub(crate) fn updates(&self) -> &BlobTraceUpdates {
-        &self.part.updates
-    }
-
-    /// Returns the updates with all truncation / timestamp rewriting applied.
-    pub(crate) fn normalize(&self, metrics: &ColumnarMetrics) -> BlobTraceUpdates {
-        let updates = self.part.updates.clone();
+    /// Returns `updates` with all truncation / timestamp rewriting applied.
+    fn normalize(&self, updates: &BlobTraceUpdates, metrics: &ColumnarMetrics) -> BlobTraceUpdates {
+        let updates = updates.clone();
         if !self.needs_truncation && self.ts_rewrite.is_none() {
             return updates;
         }
@@ -1440,6 +1883,9 @@ pub struct ExchangeableBatchPart<T> {
     desc: Description<T>,
     filter: FetchBatchFilter<T>,
     part: LazyProto<ProtoHollowBatchPart>,
+    /// The id of the reader that leased this part. See the corresponding field
+    /// on [LeasedBatchPart].
+    reader_id: LeasedReaderId,
     filter_pushdown_audit: bool,
 }
 
@@ -1447,6 +1893,11 @@ impl<T> ExchangeableBatchPart<T> {
     /// Returns the encoded size of the given part.
     pub fn encoded_size_bytes(&self) -> usize {
         self.encoded_size_bytes
+    }
+
+    /// Returns the id of the reader that leased this part.
+    pub fn reader_id(&self) -> &LeasedReaderId {
+        &self.reader_id
     }
 }
 
@@ -1518,3 +1969,6 @@ fn client_exchange_data() {
     is_exchange_data::<ExchangeableBatchPart<u64>>();
     is_exchange_data::<ExchangeableBatchPart<u64>>();
 }
+
+#[cfg(test)]
+mod tests;

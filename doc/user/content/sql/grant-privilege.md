@@ -17,11 +17,17 @@ The syntax supports the `ALL [PRIVILEGES]` shorthand to refer to all
 [*applicable* privileges](/sql/grant-privilege/#available-privileges) for the
 object type.
 
+For PostgreSQL compatibility, you can reference views, materialized views,
+and sources with the `TABLE` keyword. With `ON TABLE`, the `ALL [PRIVILEGES]`
+shorthand expands to the full table privilege set
+(`SELECT, INSERT, UPDATE, DELETE`), even if some of those privileges aren't
+meaningful for the object type. The non-applicable privileges have no
+runtime effect. They're stored so that a later `REVOKE ALL ON TABLE` can
+clear every privilege previously granted through the same shorthand.
+
 {{</note>}}
 
 {{< tabs >}}
-
-<!-- ============ CLUSTER syntax ==============  -->
 
 {{< tab "Cluster" >}}
 
@@ -41,8 +47,6 @@ ON ALL CLUSTERS
 TO <role_name> [, ... ];
 ```
 {{</ tab >}}
-
-<!-- ================== Connection syntax ======================  -->
 
 {{< tab "Connection">}}
 
@@ -65,8 +69,6 @@ TO <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ================== Database syntax =====================  -->
-
 {{< tab "Database">}}
 
 For specific database(s):
@@ -87,25 +89,55 @@ TO <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- =============== Materialized view syntax ===================  -->
-
 {{< tab "Materialized view/view/source">}}
 
 {{< note >}}
-{{< include-md file="shared-content/rbac-cloud/privilege-for-views-mat-views.md" >}}
+{{% include-headless "/headless/rbac-cloud/privilege-for-views-mat-views" %}}
 {{</ note >}}
 
 For specific materialized view(s)/view(s)/source(s):
 
 ```mzsql
 GRANT <SELECT | ALL [PRIVILEGES]>
-ON [TABLE] <name> [, <name> ...] -- For PostgreSQL compatibility, if specifying type, use TABLE
+ON <name> [, <name> ...]
+TO <role_name> [, ... ];
+```
+
+For PostgreSQL compatibility, the `TABLE` keyword is also accepted. With the
+`TABLE` syntax, you can name `INSERT`, `UPDATE`, and `DELETE` explicitly, and
+`ALL [PRIVILEGES]` expands to the full table privilege set
+(`SELECT, INSERT, UPDATE, DELETE`). The non-applicable privileges have no
+runtime effect, but they're stored so a matching `REVOKE ALL` can clear them.
+
+```mzsql
+GRANT <SELECT | INSERT | UPDATE | DELETE | ALL [PRIVILEGES]> [, ...]
+ON TABLE <name> [, <name> ...]
 TO <role_name> [, ... ];
 ```
 
 {{</ tab >}}
 
-<!-- ==================== Schema syntax =====================  -->
+
+{{< tab "Network policy">}}
+
+For specific network policies:
+
+```mzsql
+GRANT <USAGE | ALL [PRIVILEGES]>
+ON NETWORK POLICY <name> [, ...]
+TO <role_name> [, ... ];
+```
+
+For all network policies:
+
+```mzsql
+GRANT <USAGE | ALL [PRIVILEGES]>
+ON ALL POLICIES
+TO <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
 
 {{< tab "Schema">}}
 
@@ -127,7 +159,6 @@ TO <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ==================== Secret syntax =====================  -->
 
 {{< tab "Secret">}}
 
@@ -149,8 +180,6 @@ TO <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ==================== System syntax =====================  -->
-
 {{< tab "System">}}
 
 ```mzsql
@@ -160,8 +189,6 @@ TO <role_name> [, ... ];
 ```
 
 {{</ tab >}}
-
-<!-- ==================== Type syntax =======================  -->
 
 {{< tab "Type">}}
 
@@ -184,8 +211,6 @@ TO <role_name> [, ... ];
 
 {{</ tab >}}
 
-<!-- ======================= Table syntax =====================  -->
-
 {{< tab "Table">}}
 
 For specific table(s):
@@ -200,7 +225,7 @@ For all tables or all tables in a specific schema(s) or in a specific database(s
 
 {{< note >}}
 
-{{< include-md file="shared-content/rbac-cloud/grant-privilege-all-tables.md" >}}
+{{% include-headless "/headless/rbac-cloud/grant-privilege-all-tables" %}}
 
 {{</ note >}}
 
@@ -232,8 +257,7 @@ TO <role_name> [, ... ];
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/grant-privilege.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/grant-privilege" %}}
 
 ## Examples
 

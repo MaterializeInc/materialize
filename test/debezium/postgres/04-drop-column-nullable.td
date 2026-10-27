@@ -14,6 +14,7 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_drop_column (f1 INTEGER PRIMARY KEy, col_null_no_default INTEGER, col_null_default INTEGER DEFAULT 999);
 INSERT INTO alter_drop_column VALUES (123, 234, 345);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.alter_drop_column
 

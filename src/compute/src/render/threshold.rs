@@ -11,113 +11,97 @@
 //!
 //! Consult [ThresholdPlan] documentation for details.
 
-use differential_dataflow::Data;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::implementations::merge_batcher::container::MergerChunk;
-use differential_dataflow::trace::{Builder, Trace, TraceReader};
+use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::Cursor;
+use differential_dataflow::trace::cursor::BatchCursor;
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
-use mz_expr::MirScalarExpr;
-use mz_repr::Diff;
-use timely::Container;
-use timely::container::PushInto;
-use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
+use mz_repr::{Diff, Row, Timestamp};
+use mz_row_spine::{DatumSeq, RowRowBuilder};
+use mz_timely_util::columnation::ColumnationChunker;
 
-use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
+use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
+use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
-use crate::row_spine::RowRowBuilder;
-use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
+use crate::typedefs::{ErrBatcher, ErrBuilder, RowRowAgent, RowRowEnter, RowRowSpine};
 
-/// Shared function to compute an arrangement of values matching `logic`.
-fn threshold_arrangement<G, T1, Bu2, T2, L>(
-    arrangement: &Arranged<G, T1>,
+/// Thresholds a dataflow-local ok arrangement, keeping rows with a positive count.
+///
+/// The reduce goes through a concrete-spine helper because `reduce_abelian`'s higher-ranked
+/// output-key bound only normalizes when the input and output trace types are concrete through a
+/// function signature.
+fn threshold_local<'scope, T: RenderTimestamp>(
+    arrangement: Arranged<'scope, RowRowAgent<T, Diff>>,
     name: &str,
-    logic: L,
-) -> Arranged<G, TraceAgent<T2>>
-where
-    G: Scope,
-    G::Timestamp: MzTimestamp,
-    T1: TraceReader<KeyOwn: MzData + Data, ValOwn: MzData + Data, Time = G::Timestamp, Diff = Diff>
-        + Clone
-        + 'static,
-    Bu2: Builder<
-            Time = G::Timestamp,
-            Input: Container
-                       + MergerChunk
-                       + PushInto<((T1::KeyOwn, T1::ValOwn), G::Timestamp, Diff)>,
-            Output = T2::Batch,
-        >,
-    T2: for<'a> Trace<
-            Key<'a> = T1::Key<'a>,
-            Val<'a> = T1::Val<'a>,
-            KeyOwn = T1::KeyOwn,
-            ValOwn = T1::ValOwn,
-            Time = G::Timestamp,
-            Diff = Diff,
-        > + 'static,
-    L: Fn(&Diff) -> bool + 'static,
-    Arranged<G, TraceAgent<T2>>: ArrangementSize,
-{
-    arrangement.mz_reduce_abelian::<_, Bu2, T2>(name, move |_key, s, t| {
+) -> Arranged<'scope, RowRowAgent<T, Diff>> {
+    arrangement.mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>, _>(
+        name,
+        move |_key, s, t| {
+            for (record, count) in s.iter() {
+                if count.is_positive() {
+                    t.push((
+                        <BatchCursor<RowRowSpine<T, Diff>> as Cursor>::owned_val(*record),
+                        *count,
+                    ));
+                }
+            }
+        },
+    )
+}
+
+/// Like [`threshold_local`] but over an imported trace's ok arrangement.
+fn threshold_trace<'scope, T: RenderTimestamp>(
+    arrangement: Arranged<'scope, RowRowEnter<Timestamp, Diff, T>>,
+    name: &str,
+) -> Arranged<'scope, RowRowAgent<T, Diff>> {
+    let logic = move |_key: DatumSeq<'_>, s: &[(DatumSeq<'_>, Diff)], t: &mut Vec<(Row, Diff)>| {
         for (record, count) in s.iter() {
-            if logic(count) {
-                t.push((T1::owned_val(*record), *count));
+            if count.is_positive() {
+                t.push((
+                    <BatchCursor<RowRowSpine<T, Diff>> as Cursor>::owned_val(*record),
+                    *count,
+                ));
             }
         }
-    })
+    };
+    arrangement.mz_reduce_abelian::<_, RowRowBuilder<T, Diff>, RowRowSpine<T, Diff>, _>(name, logic)
 }
 
 /// Build a dataflow to threshold the input data.
 ///
 /// This implementation maintains rows in the output, i.e. all rows that have a count greater than
 /// zero. It returns a [CollectionBundle] populated from a local arrangement.
-pub fn build_threshold_basic<G, T>(
-    input: CollectionBundle<G, T>,
-    key: Vec<MirScalarExpr>,
-) -> CollectionBundle<G, T>
-where
-    G: Scope,
-    G::Timestamp: MzTimestamp + Refines<T>,
-    T: MzTimestamp,
-{
+pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
+    input: CollectionBundle<'scope, T>,
+    key: Vec<LirScalarExpr>,
+) -> CollectionBundle<'scope, T> {
     let arrangement = input
         .arrangement(&key)
         .expect("Arrangement ensured to exist");
     match arrangement {
         ArrangementFlavor::Local(oks, errs) => {
-            let oks = threshold_arrangement::<_, _, RowRowBuilder<_, _>, _, _>(
-                &oks,
-                "Threshold local",
-                |count| count.is_positive(),
-            );
+            let oks = threshold_local(oks, "Threshold local");
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
-            let oks = threshold_arrangement::<_, _, RowRowBuilder<_, _>, _, _>(
-                &oks,
-                "Threshold trace",
-                |count| count.is_positive(),
-            );
+            let oks = threshold_trace(oks, "Threshold trace");
             let errs: KeyCollection<_, _, _> = errs.as_collection(|k, _| k.clone()).into();
             let errs = errs
-                .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange threshold basic err");
+                .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                    "Arrange threshold basic err",
+                );
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
     }
 }
 
-impl<G, T> Context<G, T>
-where
-    G: Scope,
-    G::Timestamp: MzTimestamp + Refines<T>,
-    T: MzTimestamp,
-{
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     pub(crate) fn render_threshold(
         &self,
-        input: CollectionBundle<G, T>,
+        input: CollectionBundle<'scope, T>,
         threshold_plan: ThresholdPlan,
-    ) -> CollectionBundle<G, T> {
+    ) -> CollectionBundle<'scope, T> {
         match threshold_plan {
             ThresholdPlan::Basic(BasicThresholdPlan {
                 ensure_arrangement: (key, _, _),

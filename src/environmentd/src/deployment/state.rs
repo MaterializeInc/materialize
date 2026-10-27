@@ -12,7 +12,7 @@
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
-use mz_orchestratord::controller::materialize::environmentd::DeploymentStatus;
+use mz_orchestratord::controller::materialize::generation::DeploymentStatus;
 use mz_ore::channel::trigger::{self, Trigger};
 
 #[derive(Debug)]

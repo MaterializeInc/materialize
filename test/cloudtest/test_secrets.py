@@ -19,9 +19,7 @@ from materialize.cloudtest.util.wait import wait
 
 
 def test_secrets(mz: MaterializeApplication) -> None:
-    mz.testdrive.run(
-        input=dedent(
-            """
+    mz.testdrive.run(input=dedent("""
             > CREATE SECRET username AS '123';
             > CREATE SECRET password AS '234';
 
@@ -34,9 +32,7 @@ def test_secrets(mz: MaterializeApplication) -> None:
                 SASL PASSWORD = SECRET password
               );
             contains:Broker does not support SSL connections
-            """
-        )
-    )
+            """))
 
     id = mz.environmentd.sql_query("SELECT id FROM mz_secrets WHERE name = 'username'")[
         0
@@ -62,7 +58,9 @@ def test_secrets(mz: MaterializeApplication) -> None:
 
 # Tests that secrets deleted from the catalog but not from k8s are cleaned up on
 # envd startup.
-@pytest.mark.skip(reason="Failpoints mess up the Mz intance database-issues#5263")
+@pytest.mark.skip(
+    reason="Failpoints mess up the Mz intance https://linear.app/materializeinc/issue/CLU-127"
+)
 def test_orphaned_secrets(mz: MaterializeApplication) -> None:
     # Use two separate failpoints. One that crashes after modifying the catalog
     # (drop_secrets), and one that fails during bootstrap (orphan_secrets) so
@@ -95,12 +93,10 @@ def test_orphaned_secrets(mz: MaterializeApplication) -> None:
     wait(condition="delete", resource=f"secret/{secret}")
 
 
-@pytest.mark.skip(reason="Flaky, see database-issues#8456")
+@pytest.mark.skip(reason="Flaky, see https://linear.app/materializeinc/issue/DB-136")
 def test_missing_secret(mz: MaterializeApplication) -> None:
     """Test that Mz does not panic if a secret goes missing from K8s"""
-    mz.testdrive.run(
-        input=dedent(
-            """
+    mz.testdrive.run(input=dedent("""
           $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
           ALTER SYSTEM SET enable_connection_validation_syntax = true
 
@@ -143,9 +139,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
 
           > SELECT COUNT(*) > 0 FROM t1;
           true
-     """
-        )
-    )
+     """))
 
     id = mz.environmentd.sql_query(
         "SELECT id FROM mz_secrets WHERE name = 'to_be_deleted'"
@@ -157,8 +151,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     wait(condition="delete", resource=f"secret/{secret}")
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
               (PUBLICATION 'mz_source');
@@ -168,8 +161,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
               FROM KAFKA CONNECTION kafka_conn_with_deleted_secret
               (TOPIC 'foo')
             contains:failed to create and connect Kafka consumer
-            """
-        ),
+            """),
         no_reset=True,
     )
 
@@ -184,14 +176,13 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     wait(condition="condition=Ready", resource=f"{pod_name}")
 
     try:
-        mz.kubectl("exec", pod_name, "--", "bash", "-c", "kill -9 `pidof clusterd`")
+        mz.kubectl("exec", pod_name, "--", "sh", "-c", "kill -9 `pidof clusterd`")
     except subprocess.CalledProcessError as e:
         # Killing the entrypoint via kubectl may result in kubectl exiting with code 137
         assert e.returncode == 137
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
               (PUBLICATION 'mz_source');
@@ -206,8 +197,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
               FROM mz_internal.mz_source_statuses
               WHERE name = 'source_with_deleted_secret';
             true
-            """
-        ),
+            """),
         no_reset=True,
     )
 
@@ -217,15 +207,14 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
         "exec",
         "pod/environmentd-0",
         "--",
-        "bash",
+        "sh",
         "-c",
         "kill -9 `pidof environmentd`",
     )
     wait(condition="condition=Ready", resource="pod/environmentd-0")
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
               (PUBLICATION 'mz_source');
@@ -245,7 +234,6 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             # upstream Postgres DB, and we don't want to block dropping objects
             # because of that.
             > DROP CLUSTER to_be_killed CASCADE;
-            """
-        ),
+            """),
         no_reset=True,
     )

@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class Cast(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE cast_table (f1 INT);
             > INSERT INTO cast_table VALUES (0);
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -39,9 +35,7 @@ class Cast(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > SELECT * FROM cast_view1;
             false 0 0 0 0 0 0 0 0 0 false
             true 1 1 1 1 1 1 1 1 1 true
@@ -50,6 +44,4 @@ class Cast(Check):
             false 0 0 0 0 0 0 false
             true 1 1 1 1 1 1 true
             true -1 -1 -1 -1 -1 -1 true
-            """
-            )
-        )
+            """))

@@ -1,0 +1,166 @@
+---
+name: mz-commit
+description: >
+  Trigger: "commit", "prepare commit", "create PR", "push", "open pull request",
+  or mentions committing, pre-commit checks, pull requests in Materialize. Also
+  "ship it", "ready to merge". For code review use mz-pr-review.
+---
+
+# Committing in Materialize
+
+Read `doc/developer/guide-changes.md` for the full conventions on submitting and reviewing changes.
+
+## Pre-commit checklist
+
+Before committing, run these and fix any warnings:
+
+1. `bin/fmt` (formats all `.rs`, `.py`, and `.proto` files; takes no file arguments)
+2. `bin/lint` (can error if tools are missing; use `bin/ci-builder run stable bin/lint` as an alternative)
+3. `cargo clippy --all-targets -- -D warnings`
+
+`bin/lint` and clippy do not run rustdoc. When the diff adds imports or edits
+doc comments, run the Doctests check on the changed crates (command in the
+mz-debug-ci skill). When a `metric!` definition changed, `bin/lint`
+regenerates `doc/user/data/metrics.yml`. Commit the result, or the "Lint and
+rustfmt" job fails on the diff.
+
+After rebasing onto upstream/main, run `cargo check --workspace --all-targets`
+even when the rebase had no conflicts. Upstream changes can still break the
+branch, for example a dependency your branch needs that upstream removed as
+unused (Nightly's `bin/unused-deps` reports those), a duplicate item, or a new
+enum variant your match does not cover. CI checks this in the
+"Merge skew cargo check" job.
+
+Do not manually update `*.snap` files.
+Use `cargo test` followed by `cargo insta accept` to update snapshot files.
+Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
+
+### LIR plan changes: regenerate the schema registry
+
+The stable LIR format lets optimized plans be stored durably and reused, so
+two snapshot tests in `mz-compute-types` pin what a stored plan looks like
+and what it means. Both key off `LIR_VERSION` in
+`src/compute-types/src/plan.rs`.
+
+`lir_schema` traces the serde schema of everything reachable from
+`LirRelationExpr` into `tests/snapshots/lir_v{LIR_VERSION}.json`. Run it
+whenever the diff changes the serde-visible shape of a type the trace
+reaches: anything in `src/compute-types/src/plan.rs` or
+`src/compute-types/src/plan/`, a `*Func` payload, or a plan-reachable type
+in `mz-expr` or `mz-repr` such as `AggregateFunc`, `TableFunc`,
+`SqlScalarType` or `DateTimeUnits`:
+
+```
+cargo test -p mz-compute-types --test lir_schema
+```
+
+Regenerate with `REWRITE=1 cargo test -p mz-compute-types --test lir_schema`
+and review the diff. It is the reviewable record of the format change. If
+the current `LIR_VERSION` has shipped (see below), bump it first so the old
+`lir_v{N}.json` stays in place for migration tooling and the rewrite targets
+a fresh file.
+
+### Scalar function changes: regenerate the function registry
+
+The schema registry sees a plan's shape, not what its functions compute.
+`func_registry` covers that gap for `UnaryFunc`, `BinaryFunc`, and
+`VariadicFunc`. Run it whenever the diff touches
+`src/expr/src/scalar/func.rs` or `src/expr/src/scalar/func/` (including
+`impls/` and `#[sqlfunc]` bodies):
+
+```
+cargo test -p mz-compute-types --test func_registry
+```
+
+* It fails when a function is added, removed, or has a changed property
+  (nullability, error behavior, monotonicity, output type, sqlfunc
+  signature) or a changed `#[sqlfunc]` body. If the failure names removed or
+  changed functions, or a body change that alters results, settle the
+  `LIR_VERSION` question below **before** regenerating. A rewrite at the old
+  version overwrites that version's entry in `func_registry_digests.json`
+  instead of adding a new one, no later check catches it, and that entry is
+  the only key back into git history for what the shipped version's
+  functions meant. Once the version is settled, regenerate the checked-in
+  snapshots and review the diff under `src/compute-types/tests/snapshots/`:
+
+  ```
+  REWRITE=1 cargo test -p mz-compute-types --test func_registry
+  ```
+
+  Never hand-edit `func_registry*.json`. The test rebuilds the registry and
+  compares it against all three files, so an edit fails it.
+* **New function with a payload** (any variant that carries data, e.g. a
+  target type, a regex, a scale): the registry build panics naming the
+  variant. Add a representative `Sample` to `unary_samples()`,
+  `binary_samples()`, or `variadic_samples()` in
+  `src/expr/src/scalar/func/registry.rs`. If a property depends on the
+  payload (e.g. a cast only errors when it has a scale), add a second sample
+  with `.labeled("...")` covering the other branch. Payload-free variants and
+  plain `#[sqlfunc]` functions need no sample.
+* **Removed or changed function, or a body change that alters results**: if
+  the current `LIR_VERSION` has shipped in a release, bump it so stored plans
+  are replanned, and only then regenerate. An unshipped version is
+  regenerated in place. Treat the version as shipped when the latest release tag carries the
+  same `LIR_VERSION`:
+
+  ```
+  git fetch --tags
+  git show $(git tag --list 'v*' --sort=-v:refname | grep -v -- '-rc' | head -1):src/compute-types/src/plan.rs | grep 'pub const LIR_VERSION'
+  ```
+
+  A bump is a judgment call, so confirm it with the user before making it.
+  Additions never need a bump. When unsure whether a body change alters
+  results, say so in the PR description rather than deciding silently.
+
+Commit the regenerated snapshots together with the function change, and call
+out the registry diff (added, removed, changed functions) in the PR
+description.
+
+## PR titles and commit messages
+
+Materialize uses squash merging, so the PR title becomes the commit subject on `main`.
+
+* Use imperative mood: "Fix X" not "Fixed X" or "Fixes X".
+* Be specific: "Fix panic in catalog sync when controller restarts" not "Fix bug".
+* Prefix with area if helpful: `adapter: `, `storage: `, `compute: `, `sql: `.
+
+Write a thorough PR description explaining the rationale for the change.
+Mention which tests were added or modified in the pull request description, but do not list which tests were run.
+Add release notes for user-visible changes (should complete "This release will...").
+
+## Issue tracking: Linear only for new issues
+
+New issues are filed in Linear, never in the `database-issues` GitHub repo. `database-issues` is legacy. Its open issues are still valid to read, link, and close, so an existing `database-issues#NNNN` reference in code or a comment stays as it is.
+
+Reference the Linear issue by its its key, e.g. `Closes: SQL-450`. Don't include the full URL containing the issue title.
+
+When a change closes a legacy GitHub issue, `Fixes database-issues#NNNN` works for auto-closing.
+
+## Cargo.lock discipline
+
+Never regenerate the entire Cargo.lock — bare `cargo update` bumps every semver-compatible dep and introduces unrelated breakage (e.g., `os_info` pulling in `objc2` on macOS, `chrono-tz` changing timezone data, `serde_path_to_error` changing error formats).
+
+* **Adding a dep or changing features**: just `cargo check`. It updates only what's needed.
+* **Updating one crate**: `cargo update -p <crate>` (add `--precise <ver>` to pin).
+* **After any Cargo.lock change**, review the diff:
+  ```
+  git diff Cargo.lock | grep '^[+-]version' | head -40
+  ```
+  Pin back anything that moved unexpectedly: `cargo update -p <crate> --precise <old-version>`.
+* **After rebase conflicts in Cargo.lock**: resolve by taking HEAD's version then running `cargo check` (not `cargo update`). This preserves existing pins while adding only what the new commits require.
+
+## Git conventions
+
+* Work against the `main` branch of `MaterializeInc/materialize`.
+* Push branches to your fork.
+* Pull requests target `main` on `MaterializeInc/materialize`.
+* Each PR should contain one semantic change.
+* Put non-trivial user docs for a new feature in a separate PR. See "Adding documentation for new features" in `doc/user/README.md`.
+
+## Splitting large branches
+
+The repo is squash-merge-only: every PR lands as exactly one commit on `main`, however many commits it had internally. Keep each commit/PR under ~500 changed lines, split by concern, not by the chronology of how the code was written.
+
+* Prefer GitHub's native stacked-PR support to land a chain of dependent PRs, where it's set up for the branch. Where it isn't, fall back to sequential landing, one PR at a time: cut a PR from the front, merge, `git fetch upstream && git rebase upstream/main` the remaining tail, repeat. Squash-only means merging an earlier PR always replaces its commits with one new commit, so any later branch still built on the old commits needs a rebase either way; sequential landing keeps that to one clean rebase per merge instead of compounding across an unmanaged chain.
+* Land foundational or low-conflict commits (design docs, scaffolding, new deps) first. The longer a tail branch lives, the more likely a concurrent unrelated PR touches the same files and turns a clean rebase into a real conflict.
+* To split one large diff into smaller commits, or squash a long messy history into fewer reviewable units, as an alternative to interactive rebase: `git reset --soft <base>` stages the full diff, then stage per group with `git add <files>` for a file-level split, or use `git checkout <sha> -- .` to reproduce an exact historical checkpoint's tree for a chronological squash. (Claude Code's Bash tool has no interactive terminal, so agents need this non-interactive form; use whichever you prefer by hand.) `git checkout <sha> -- .` only adds or updates paths present in `<sha>`, it never removes files that shouldn't exist yet at that checkpoint: compute the removal set first with `comm -23 <(git ls-files|sort) <(git ls-tree -r --name-only <sha>|sort)` and `git rm -f` those, or the checkpoint commit silently carries files from later history. Verify every checkpoint with `git diff HEAD <sha>` (must be empty) before moving to the next. Reattach already-clean commits on top with `git rebase --onto <new-branch> <old-base>` (also non-interactive).

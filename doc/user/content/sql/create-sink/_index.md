@@ -9,23 +9,76 @@ menu:
     identifier: 'create-sink'
 ---
 
-A [sink](/concepts/sinks/) describes an external system you
+A [sink](/fundamentals/concepts/sinks/) describes an external system you
 want Materialize to write data to, and provides details about how to encode
 that data. You can define a sink over a materialized view, source, or table.
 
-## Connectors
+## Syntax summary
 
-Materialize bundles **native connectors** that allow writing data to the
-following external systems:
+<!--"Docs Note: Using include-example shortcode instead of include-syntax since only want the code snippet on this page."
+-->
 
-{{< multilinkbox >}}
-{{< linkbox title="Message Brokers" >}}
-- [Kafka/Redpanda](/sql/create-sink/kafka)
-{{</ linkbox >}}
-{{</ multilinkbox >}}
+{{< tabs >}}
 
-For details on the syntax, supported formats and features of each connector,
-check out the dedicated `CREATE SINK` documentation pages.
+{{< tab "Kafka/Redpanda" >}}
+
+{{< tabs >}}
+
+{{< tab "Format Avro" >}}
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-avro" %}}
+
+{{< /tab >}}
+
+{{< tab "Format JSON" >}}
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-json" %}}
+
+{{< /tab >}}
+
+{{< tab "Format TEXT/BYTES" >}}
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-text-bytes" %}}
+
+{{< /tab >}}
+
+{{< tab "KEY FORMAT VALUE FORMAT" >}}
+
+By default, the message key is encoded using the same format as the message value. However, you can set the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT`.
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-key-value-format" %}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+
+For details, see [CREATE Sink: Kafka/Redpanda](/sql/create-sink/kafka/).
+{{< /tab >}}
+
+{{< tab "Iceberg" >}}
+
+{{< public-preview />}}
+
+{{< tabs >}}
+
+{{< tab "MODE UPSERT" >}}
+
+{{% include-example file="examples/create_sink_iceberg" example="syntax-upsert" %}}
+
+{{< /tab >}}
+
+{{< tab "MODE APPEND" >}}
+
+{{% include-example file="examples/create_sink_iceberg" example="syntax-append" %}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+For details, see [CREATE Sink: Iceberg](/sql/create-sink/iceberg/).
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Best practices
 
@@ -47,21 +100,17 @@ A sink cannot be created directly on a catalog object. As a workaround you can
 create a materialized view on a catalog object and create a sink on the
 materialized view.
 
-### Kafka transaction markers
-
-{{< include-md file="shared-content/kafka-transaction-markers.md" >}}
-
 [//]: # "TODO(morsapaes) Add best practices for sizing sinks."
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-sink.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-sink" %}}
 
 ## Related pages
 
-- [Sinks](/concepts/sinks/)
+- [Sinks](/fundamentals/concepts/sinks/)
 - [`SHOW SINKS`](/sql/show-sinks/)
 - [`SHOW COLUMNS`](/sql/show-columns/)
 - [`SHOW CREATE SINK`](/sql/show-create-sink/)

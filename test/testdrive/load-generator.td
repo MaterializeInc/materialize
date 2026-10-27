@@ -94,8 +94,21 @@ regex:.*FOR SCHEMAS.*unsupported
 > SHOW CREATE SOURCE auction_house
 "materialize.public.auction_house" "CREATE SOURCE materialize.public.auction_house\nIN CLUSTER ${arg.single-replica-cluster}\nFROM LOAD GENERATOR AUCTION (AS OF = 300, UP TO = 301);"
 
-> SHOW CREATE TABLE accounts
+>[version<2600700] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (DETAILS = '1a040a021002');"
+
+>[2600700<=version<2603000] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (DETAILS = '1a040a021002');"
+
+>[version>=2603000] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE materialize.public.accounts\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts);"
+
+# Regression test for database-issues#10010 and SQL-392: the full statement
+# printed by `SHOW CREATE TABLE` (fully-qualified `REFERENCE`, no column list)
+# must round-trip back into a `CREATE TABLE`.
+>[version>=2603000] CREATE TABLE accounts_roundtrip FROM SOURCE auction_house (REFERENCE mz_load_generators.auction.accounts);
+
+>[version>=2603000] DROP TABLE accounts_roundtrip;
 
 > SHOW SOURCES
 auction_house           load-generator ${arg.single-replica-cluster}    ""
@@ -109,6 +122,30 @@ users                   ""
 
 > SELECT count(*) FROM bids
 255
+
+# CTFS: omitting REFERENCE for a multi-output source is ambiguous, since
+# Materialize cannot determine which upstream table you mean.
+! CREATE TABLE ambiguous_tbl FROM SOURCE auction_house;
+contains:is ambiguous
+
+# CTFS: multiple tables can reference the same external table.
+> CREATE TABLE bids_2 FROM SOURCE auction_house (REFERENCE bids);
+
+> SELECT count(*) FROM bids_2
+255
+
+> DROP TABLE bids_2;
+
+# CTFS: EXCLUDE COLUMNS has no effect on load generator tables; the
+# "excluded" column is still ingested.
+> CREATE TABLE accounts_exclude FROM SOURCE auction_house (REFERENCE accounts) WITH (EXCLUDE COLUMNS (balance));
+
+> SHOW COLUMNS FROM accounts_exclude
+balance false bigint ""
+id false bigint ""
+org_id false bigint ""
+
+> DROP TABLE accounts_exclude;
 
 ! CREATE SOURCE auction_house
   IN CLUSTER ${arg.single-replica-cluster}
@@ -151,8 +188,14 @@ users                   ""
 
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
-> SHOW CREATE TABLE accounts
+>[version<2600700] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (<DETAILS>);"
+
+>[2600700<=version<2603000] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (<DETAILS>);"
+
+>[version>=2603000] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE materialize.public.accounts\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts);"
 
 # CLOCK load generator source
 
@@ -217,7 +260,7 @@ contains:invalid TICK INTERVAL: cannot convert negative interval to duration
 ! CREATE SOURCE counter5
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2147483647d')
-contains: out of range integral type conversion
+contains: interval is too large to convert to duration
 
 # Query automatically generated progress topic
 $ set-regex match=\d+ replacement=<NUMBER>
@@ -227,7 +270,7 @@ $ set-regex match=\d+ replacement=<NUMBER>
 # Ensure we report the write frontier of the progress subsource
 $ set-regex match=(\s{12}0|\d{13,20}|u\d{1,5}|\(\d+-\d\d-\d\d\s\d\d:\d\d:\d\d\.\d\d\d\)|true|false) replacement=<>
 > EXPLAIN TIMESTAMP FOR SELECT * FROM another.auction_house
-"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.another.auction_house (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (IsolationLevel(StrictSerializable)): [<> <>]\n"
+"                query timestamp: <> <>\n          oracle read timestamp: <> <>\nlargest not in advance of upper: <> <>\n                          upper:[<> <>]\n                          since:[<> <>]\n        can respond immediately: <>\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <> <>\n\nsource materialize.another.auction_house (<>, storage):\n                  read frontier:[<> <>]\n                 write frontier:[<> <>]\n\nbinding constraints:\nlower:\n  (Isolation level: StrictSerializable): [<> <>]\n"
 
 > DROP SOURCE auction_house CASCADE
 > DROP SOURCE another.auction_house CASCADE

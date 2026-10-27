@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,22 +9,27 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/ordinal_references
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/ordinal_references
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
 statement ok
+SET allow_ordinal_column_references=true
+
+statement ok
 CREATE TABLE foo(a INT, b CHAR)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 INSERT INTO foo(a, b) VALUES (1,'c'), (2,'b'), (3,'a') RETURNING @1
 ----
@@ -32,12 +37,14 @@ INSERT INTO foo(a, b) VALUES (1,'c'), (2,'b'), (3,'a') RETURNING @1
 2
 3
 
-query error invalid column ordinal
+query error Expected an expression, found operator "@"
 SELECT @0 FROM foo
 
-query error invalid column ordinal
+query error Expected an expression, found operator "@"
 SELECT @42 FROM foo
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI rowsort
 SELECT @2, @1 FROM foo
 ----
@@ -49,10 +56,10 @@ a 3
 query TI
 SELECT b, a FROM foo ORDER BY 1
 ----
-a 3
-b 2
-c 1
 
+
+# Not supported by Materialize.
+onlyif cockroach
 # CockroachDB column ordinals refer to the data source.
 query TI
 SELECT b, a FROM foo ORDER BY @1
@@ -61,6 +68,8 @@ c 1
 b 2
 a 3
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT b, a FROM foo ORDER BY @1 % 2, a
 ----
@@ -71,6 +80,8 @@ a 3
 statement ok
 INSERT INTO foo(a, b) VALUES (4, 'c'), (5, 'c'), (6, 'c')
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT sum(a) AS s FROM foo GROUP BY @1 ORDER BY s
 ----
@@ -81,6 +92,8 @@ SELECT sum(a) AS s FROM foo GROUP BY @1 ORDER BY s
 5
 6
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT sum(a) AS s FROM foo GROUP BY @2 ORDER BY s
 ----
@@ -88,14 +101,14 @@ SELECT sum(a) AS s FROM foo GROUP BY @2 ORDER BY s
 3
 16
 
-statement error column reference @1 not allowed in this context
+statement error Expected an expression, found operator "@"
 INSERT INTO foo(a, b) VALUES (@1, @2)
 
-query error column reference @485 not allowed in this context
+query error Expected an expression, found operator "@"
 VALUES (@485)
 
-query error column reference @1 not allowed in this context
+query error Expected an expression, found operator "@"
 SELECT * FROM foo LIMIT @1
 
-query error column reference @1 not allowed in this context
+query error Expected an expression, found operator "@"
 SELECT * FROM foo OFFSET @1

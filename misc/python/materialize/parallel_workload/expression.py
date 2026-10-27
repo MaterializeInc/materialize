@@ -12,8 +12,10 @@ from enum import Enum
 
 from materialize.data_ingest.data_type import (
     DATA_TYPES,
+    RANGE_TYPES,
     Boolean,
     Bytea,
+    Char,
     DataType,
     Date,
     Double,
@@ -27,18 +29,23 @@ from materialize.data_ingest.data_type import (
     MzTimestamp,
     Numeric,
     Numeric383,
+    Record,
+    RecordList,
     RecordSize,
     Text,
     TextTextMap,
     Time,
     Timestamp,
+    TimestampTz,
     UInt2,
     UInt4,
     UInt8,
+    VarChar,
 )
 from materialize.parallel_workload.column import (
     Column,
     KafkaColumn,
+    LoadGeneratorColumn,
     MySqlColumn,
     PostgresColumn,
     SqlServerColumn,
@@ -74,13 +81,32 @@ for dt in DATA_TYPES:
     if dt != Bytea:
         FUNC_OPS[Text] += [FuncOp("cast({} as text)", [dt])]
 
-    if dt not in (IntList, IntArray, TextTextMap, Bytea, Jsonb, Text):
+    if dt not in (
+        IntList,
+        RecordList,
+        Record,
+        IntArray,
+        TextTextMap,
+        Bytea,
+        Jsonb,
+        Text,
+        *RANGE_TYPES,
+    ):
         FUNC_OPS[Text] += [
             FuncOp("{} || {}", [dt, Text]),
             FuncOp("{} || {}", [Text, dt]),
         ]
 
-    if dt not in (IntList, IntArray, TextTextMap, Bytea, Jsonb):
+    if dt not in (
+        IntList,
+        RecordList,
+        Record,
+        IntArray,
+        TextTextMap,
+        Bytea,
+        Jsonb,
+        *RANGE_TYPES,
+    ):
         FUNC_OPS[Boolean] += [
             FuncOp("{} > {}", [dt, dt]),
             FuncOp("{} < {}", [dt, dt]),
@@ -182,6 +208,10 @@ FUNC_OPS[Boolean] += [
     FuncOp("mz_is_superuser()", [], unsupported=ExprKind.MATERIALIZABLE),
 ]
 
+FUNC_OPS[Record] += [FuncOp("row{}", [Int])]
+
+FUNC_OPS[RecordList] += [FuncOp("list[{}]", [Record])]
+
 FUNC_OPS[Text] += [
     FuncOp("lower{}", [Text]),
     FuncOp("upper{}", [Text]),
@@ -213,6 +243,7 @@ FUNC_OPS[Int] += [
     FuncOp("char_length{}", [Text]),
     FuncOp("map_length{}", [TextTextMap]),
     FuncOp("list_length{}", [IntList]),
+    FuncOp("list_length{}", [RecordList]),
     FuncOp("mz_version_num()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("pg_backend_pid()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("{} - {}", [Date, Date]),
@@ -227,11 +258,20 @@ FUNC_OPS[Timestamp] += [
     FuncOp("now()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("current_timestamp()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("cast({} as timestamp)", [MzTimestamp]),
+    FuncOp("cast({} as timestamp)", [TimestampTz]),
+]
+
+FUNC_OPS[TimestampTz] += [
+    FuncOp("{} + {}", [TimestampTz, Interval]),
+    FuncOp("{} - {}", [TimestampTz, Interval]),
+    FuncOp("cast({} as timestamptz)", [Date]),
+    FuncOp("cast({} as timestamptz)", [Timestamp]),
 ]
 
 FUNC_OPS[Date] += [
     # FuncOp("cast({} as date)", [Text]),
     FuncOp("cast({} as date)", [Timestamp]),
+    FuncOp("cast({} as date)", [TimestampTz]),
 ]
 
 FUNC_OPS[MzTimestamp] += [
@@ -240,6 +280,7 @@ FUNC_OPS[MzTimestamp] += [
 
 FUNC_OPS[Interval] += [
     FuncOp("{} - {}", [Timestamp, Timestamp]),
+    FuncOp("{} - {}", [TimestampTz, TimestampTz]),
     FuncOp("{} - {}", [Time, Time]),
     # FuncOp("cast({} as interval)", [Text]),
     FuncOp("cast({} as interval)", [Time]),
@@ -259,6 +300,40 @@ FUNC_OPS[IntList] += [
     FuncOp("list_cat({}, {})", [IntList, IntList]),
 ]
 
+FUNC_OPS[Char] += [
+    FuncOp("cast({} as char(1))", [Text]),
+]
+
+FUNC_OPS[VarChar] += [
+    FuncOp("cast({} as varchar(1024))", [Text]),
+    FuncOp("lower{}", [VarChar]),
+    FuncOp("upper{}", [VarChar]),
+]
+
+FUNC_OPS[Text] += [
+    FuncOp("cast({} as text)", [Char]),
+    FuncOp("cast({} as text)", [VarChar]),
+]
+
+# Range type operations
+for rt in RANGE_TYPES:
+    FUNC_OPS[Boolean] += [
+        FuncOp("{} @> {}", [rt, rt]),
+        FuncOp("{} <@ {}", [rt, rt]),
+        FuncOp("{} && {}", [rt, rt]),
+        FuncOp("{} << {}", [rt, rt]),
+        FuncOp("{} >> {}", [rt, rt]),
+        FuncOp("isempty{}", [rt]),
+        FuncOp("lower_inc{}", [rt]),
+        FuncOp("upper_inc{}", [rt]),
+        FuncOp("lower_inf{}", [rt]),
+        FuncOp("upper_inf{}", [rt]),
+    ]
+    FUNC_OPS[rt] += [
+        # range union ({} + {}) omitted: errors on non-overlapping ranges
+        FuncOp("{} * {}", [rt, rt]),
+    ]
+
 # uuid_generate_v5 can return NULL
 # FUNC_OPS[UUID] += [
 #     FuncOp("uuid_generate_v5({}, {})", [UUID, Text]),
@@ -266,11 +341,33 @@ FUNC_OPS[IntList] += [
 # ]
 
 
+# Edge-case literals injected at low probability as leaves of read/filter
+# expressions (ExprKind.ALL only), to surface NaN/Infinity handling in
+# arithmetic, comparisons, and aggregation. The generator's `Float` is float4,
+# so these MUST be float4: a wider literal (float8/int8) injected where a float4
+# is expected breaks function overload resolution (e.g. round(numeric, bigint)),
+# producing spurious failures rather than findings.
+#
+# Scope is deliberately narrow: NaN/Infinity are the genuinely-new coverage
+# (random_value never produces them). Numeric/int boundary and overflow values
+# are NOT injected here, because the existing LARGE record size already
+# generates overflow-inducing magnitudes and mis-widthed literals only break
+# overload resolution. Extreme-year date/timestamp literals are also omitted:
+# a 6-digit year deterministically trips the known SS-345 date-parser bug in
+# every context, spamming a known-unfixed issue rather than finding new ones.
+EDGE_VALUES: dict[type, list[str]] = {
+    Float: ["'NaN'::float4", "'Infinity'::float4", "'-Infinity'::float4"],
+}
+
+
 def expression(
     data_type: type[DataType],
     columns: list[Column] | (
         list[MySqlColumn]
-        | (list[PostgresColumn] | (list[SqlServerColumn] | list[KafkaColumn]))
+        | (
+            list[PostgresColumn]
+            | (list[SqlServerColumn] | (list[KafkaColumn] | list[LoadGeneratorColumn]))
+        )
     ),
     rng: random.Random,
     kind: ExprKind = ExprKind.ALL,
@@ -296,6 +393,12 @@ def expression(
             for col in rng.sample(columns, len(columns)):
                 if col.data_type == data_type:
                     return str(col)
+
+    # Only in read/filter contexts: overflow/eval errors are tolerated there,
+    # but not in write (INSERT value) or materialized-view-body contexts.
+    edges = EDGE_VALUES.get(data_type)
+    if edges and kind == ExprKind.ALL and rng.random() < 0.2:
+        return rng.choice(edges)
 
     record_size = rng.choice(
         [RecordSize.TINY, RecordSize.SMALL, RecordSize.MEDIUM, RecordSize.LARGE]

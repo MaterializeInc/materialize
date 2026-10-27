@@ -91,24 +91,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     )
 
                     # Create a topic that some tests rely on
-                    c.testdrive(
-                        input=dedent(
-                            """
+                    c.testdrive(input=dedent("""
                                 $ kafka-create-topic topic=test-source partitions=1
                                 $ kafka-create-topic topic=test-sink partitions=1
-                                """
-                        )
-                    )
+                                """))
 
                     # Set enable_create_table_from_source to true
-                    c.testdrive(
-                        input=dedent(
-                            """
+                    c.testdrive(input=dedent("""
                                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                                 ALTER SYSTEM SET enable_create_table_from_source = true
-                                """
-                        )
-                    )
+                                """))
 
                     # Give the test harness permission to modify the built-in
                     # objects as necessary.
@@ -128,14 +120,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.sql(
                         service="materialized",
                         user="materialize",
-                        sql=dedent(
-                            """
+                        sql=dedent("""
                             CREATE DATABASE test_database_1;
                             CREATE DATABASE test_database_2;
                             CREATE TABLE test_database_1.public.table1 (id int);
                             CREATE TABLE test_database_2.public.table2 (id int);
-                            """
-                        ),
+                            """),
                     )
 
                     c.run(

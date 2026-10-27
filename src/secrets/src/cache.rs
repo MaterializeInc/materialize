@@ -141,6 +141,15 @@ impl CachingSecretsReader {
     fn set_ttl(&self, ttl: Duration) -> Duration {
         self.policy.set_ttl(ttl)
     }
+
+    /// Invalidates a single cached secret, returning whether the cache contained it.
+    pub fn invalidate(&self, id: CatalogItemId) -> bool {
+        self.cache
+            .write()
+            .expect("CachingSecretsReader panicked!")
+            .remove(&id)
+            .is_some()
+    }
 }
 
 #[async_trait]
@@ -326,6 +335,32 @@ mod test {
         // Should only have one read since we updated the cache.
         let reads = testing_reader.drain();
         assert_eq!(reads.len(), 1);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_invalidate() {
+        let controller = InMemorySecretsController::new();
+        let testing_reader = TestingSecretsReader::new(controller.reader());
+        let caching_reader = CachingSecretsReader::new(Arc::new(testing_reader.clone()));
+
+        let secret = [42, 42, 42, 42];
+        let id = CatalogItemId::User(1);
+
+        controller.ensure(id, &secret).await.expect("success");
+        caching_reader.read(id).await.expect("success");
+
+        caching_reader.read(id).await.expect("success");
+        let reads = testing_reader.drain();
+        assert_eq!(reads.len(), 1);
+
+        assert!(caching_reader.invalidate(id));
+
+        caching_reader.read(id).await.expect("success");
+        let reads = testing_reader.drain();
+        assert_eq!(reads.len(), 1);
+        assert_eq!(reads[0], id);
+
+        assert!(!caching_reader.invalidate(CatalogItemId::User(999)));
     }
 
     /// A "secrets controller" that logs all of the actions it takes and allows us to inject

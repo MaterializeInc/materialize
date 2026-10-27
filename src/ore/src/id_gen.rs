@@ -16,6 +16,7 @@
 //! ID generation utilities.
 
 use hibitset::BitSet;
+use serde::{Serialize, Serializer};
 use std::borrow::Borrow;
 use std::fmt;
 use std::hash::Hash;
@@ -25,8 +26,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+use rand::RngExt;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
 
 use crate::cast::CastFrom;
 
@@ -94,27 +95,25 @@ pub type AtomicIdGen = AtomicGen<u64>;
 
 /// IdAllocator common traits.
 pub trait IdGenerator:
-    From<u8> + AddAssign + Sub + PartialOrd + Copy + Eq + Hash + Ord + serde::Serialize + fmt::Display
+    From<u8> + AddAssign + Sub + PartialOrd + Copy + Eq + Hash + Ord + Serialize + fmt::Display
 {
 }
 
 impl<T> IdGenerator for T where
-    T: From<u8>
-        + AddAssign
-        + Sub
-        + PartialOrd
-        + Copy
-        + Eq
-        + Hash
-        + Ord
-        + serde::Serialize
-        + fmt::Display
+    T: From<u8> + AddAssign + Sub + PartialOrd + Copy + Eq + Hash + Ord + Serialize + fmt::Display
 {
 }
 
 /// Manages allocation of numeric IDs.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct IdAllocator<A: IdAllocatorInner>(pub Arc<Mutex<A>>);
+
+// `derive(Clone)` would require `A: Clone`, but clones share the inner allocator.
+impl<A: IdAllocatorInner> Clone for IdAllocator<A> {
+    fn clone(&self) -> Self {
+        IdAllocator(Arc::clone(&self.0))
+    }
+}
 
 /// Common trait for id allocators.
 pub trait IdAllocatorInner: std::fmt::Debug + Send {
@@ -130,7 +129,7 @@ pub trait IdAllocatorInner: std::fmt::Debug + Send {
 }
 
 /// IdAllocator using a HiBitSet.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct IdAllocatorInnerBitSet {
     next: StdRng,
     min: u32,
@@ -146,7 +145,7 @@ impl IdAllocatorInner for IdAllocatorInnerBitSet {
         let total = usize::cast_from(max - min);
         assert!(total < BitSet::BITS_PER_USIZE.pow(4));
         IdAllocatorInnerBitSet {
-            next: StdRng::from_os_rng(),
+            next: rand::make_rng(),
             min,
             max,
             mask,
@@ -302,10 +301,10 @@ impl<T: IdGenerator, A: IdAllocatorInner> fmt::Display for IdHandle<T, A> {
     }
 }
 
-impl<T: IdGenerator, A: IdAllocatorInner> serde::Serialize for IdHandle<T, A> {
+impl<T: IdGenerator, A: IdAllocatorInner> Serialize for IdHandle<T, A> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
+        S: Serializer,
     {
         self.unhandled().serialize(serializer)
     }

@@ -12,6 +12,7 @@
 use std::fmt;
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{Condition, Time};
+use k8s_openapi::jiff::Timestamp;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -20,7 +21,15 @@ pub mod v1 {
     use super::*;
 
     /// Describes an AWS VPC endpoint to create.
-    #[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+    #[derive(
+        CustomResource,
+        Clone,
+        Debug,
+        Default,
+        Deserialize,
+        Serialize,
+        JsonSchema
+    )]
     #[serde(rename_all = "camelCase")]
     #[kube(
         group = "materialize.cloud",
@@ -73,7 +82,7 @@ pub mod v1 {
             vec![Condition {
                 type_: "Available".into(),
                 status: "Unknown".to_string(),
-                last_transition_time: Time(chrono::offset::Utc::now()),
+                last_transition_time: Time(Timestamp::now()),
                 message: v1::VpcEndpointState::Unknown.message().into(),
                 observed_generation: None,
                 reason: "".into(),
@@ -186,7 +195,7 @@ mod tests {
         assert_eq!(
             &crd_json, exported_crd_json,
             "VpcEndpoint CRD json does not match exported json.\n\nCRD:\n{}\n\nExported CRD:\n{}",
-            &crd_json, exported_crd_json,
+            crd_json, exported_crd_json,
         );
     }
 }

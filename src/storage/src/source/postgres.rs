@@ -13,8 +13,9 @@
 //! # Snapshot
 //!
 //! One part of the dataflow deals with snapshotting the tables involved in the ingestion. Each
-//! table that needs a snapshot is assigned to a specific worker which performs a `COPY` query
-//! and distributes the raw COPY bytes to all workers to decode the text encoded rows.
+//! table is partitioned across all workers using PostgreSQL's `ctid` column to identify row
+//! ranges. Each worker fetches its assigned range using a `COPY` query with ctid filtering,
+//! enabling parallel snapshotting of large tables.
 //!
 //! For all tables that ended up being snapshotted the snapshot reader also emits a rewind request
 //! to the replication reader which will ensure that the requested portion of the replication
@@ -75,42 +76,45 @@
 //!          │concat│              │
 //!          ╰──┬───╯              │
 //!             │ data             │progress
-//!             │ output           │output
+//!             │ outputs          │output
+//!             │ (one per export) │
 //!             v                  v
 //! ```
+//!
+//! Both the snapshot and the replication operators emit one output stream per source export, and
+//! the streams of each export are concatenated pairwise.
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::rc::Rc;
 use std::time::Duration;
 
-use differential_dataflow::AsCollection;
 use itertools::Itertools as _;
-use mz_expr::{EvalError, MirScalarExpr};
-use mz_ore::cast::CastFrom;
+use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
-use mz_postgres_util::{Client, PostgresError, simple_query_opt};
-use mz_repr::{Datum, Diff, GlobalId, Row};
-use mz_sql_parser::ast::Ident;
-use mz_sql_parser::ast::display::AstDisplay;
+use mz_postgres_util::schema_change::SchemaChangeError;
+use mz_postgres_util::{
+    Client, PostgresError, Sql, query_opt, simple_query, simple_query_opt, sql,
+};
+use mz_repr::{Datum, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
+use mz_storage_types::sources::casts::StorageScalarExpr;
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
     MzOffset, PostgresSourceConnection, SourceExport, SourceExportDetails, SourceTimestamp,
 };
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
-use timely::container::CapacityContainerBuilder;
-use timely::dataflow::operators::core::Partition;
-use timely::dataflow::operators::{Concat, Map, ToStream};
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
+use timely::dataflow::operators::Concat;
+use timely::dataflow::operators::vec::{Map, ToStream};
+use timely::dataflow::{Scope, StreamVec};
+use timely::progress::{Antichain, Timestamp};
+use tokio_postgres::SimpleQueryRow;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{Probe, SourceRender, StackedCollection};
+use crate::source::types::{Probe, ResumeUppers, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -123,17 +127,19 @@ impl SourceRender for PostgresSourceConnection {
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.
-    fn render<G: Scope<Timestamp = MzOffset>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: Scope<'scope, MzOffset>,
         config: &RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        resume_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
-        Stream<G, HealthStatusMessage>,
-        Option<Stream<G, Probe<MzOffset>>>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, MzOffset, HealthStatusMessage>,
+        StreamVec<'scope, MzOffset, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting into a per-table map.
@@ -166,6 +172,7 @@ impl SourceRender for PostgresSourceConnection {
                 casts,
                 resume_upper,
                 export_id: id.clone(),
+                initial_lsn: details.initial_lsn.unwrap_or_else(MzOffset::minimum),
             };
             table_info
                 .entry(output.desc.oid)
@@ -184,35 +191,27 @@ impl SourceRender for PostgresSourceConnection {
                 metrics.snapshot_metrics.clone(),
             );
 
-        let (repl_updates, uppers, probe_stream, repl_err, repl_token) = replication::render(
+        let (repl_updates, probe_stream, repl_err, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             self,
             table_info,
-            &rewinds,
-            &slot_ready,
+            rewinds,
+            slot_ready,
             resume_uppers,
             metrics,
         );
 
-        let updates = snapshot_updates.concat(&repl_updates);
-        let partition_count = u64::cast_from(config.source_exports.len());
-        let data_streams: Vec<_> = updates
-            .inner
-            .partition::<CapacityContainerBuilder<_>, _, _>(
-                partition_count,
-                |((output, data), time, diff): &(
-                    (usize, Result<SourceMessage, DataflowError>),
-                    MzOffset,
-                    Diff,
-                )| {
-                    let output = u64::cast_from(*output);
-                    (output, (data.clone(), time.clone(), diff.clone()))
-                },
-            );
+        // Both operators produce one stream per export, in output index order, which matches the
+        // iteration order of `source_exports`.
         let mut data_collections = BTreeMap::new();
-        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
-            data_collections.insert(*id, data_stream.as_collection());
+        for ((id, snapshot_updates), repl_updates) in config
+            .source_exports
+            .keys()
+            .zip_eq(snapshot_updates)
+            .zip_eq(repl_updates)
+        {
+            data_collections.insert(*id, snapshot_updates.concat(repl_updates));
         }
 
         let export_ids = config.source_exports.keys().copied();
@@ -230,10 +229,14 @@ impl SourceRender for PostgresSourceConnection {
         // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
         // restart we are going to set the status to an ssh error correctly, so we don't do this
         // extra work.
-        let errs = snapshot_err.concat(&repl_err).map(move |err| {
+        let errs = snapshot_err.concat(repl_err).map(move |err| {
             // This update will cause the dataflow to restart
             let err_string = err.display_with_causes().to_string();
-            let update = HealthStatusUpdate::halting(err_string.clone(), None);
+            let hint = match &err {
+                ReplicationError::Definite(err) => err.hint(),
+                ReplicationError::Transient(_) => None,
+            };
+            let update = HealthStatusUpdate::halting(err_string.clone(), hint);
 
             let namespace = match err {
                 ReplicationError::Transient(err)
@@ -255,11 +258,10 @@ impl SourceRender for PostgresSourceConnection {
             }
         });
 
-        let health = health_init.concat(&errs);
+        let health = health_init.concat(errs);
 
         (
             data_collections,
-            uppers,
             health,
             probe_stream,
             vec![snapshot_token, repl_token],
@@ -275,9 +277,29 @@ struct SourceOutputInfo {
     /// is recalculated every time we observe an upstream schema change. On dataflow initialization
     /// this field is None since we haven't yet observed any schemas.
     projection: Option<Vec<usize>>,
-    casts: Vec<(CastType, MirScalarExpr)>,
+    casts: Vec<(CastType, StorageScalarExpr)>,
     resume_upper: Antichain<MzOffset>,
     export_id: GlobalId,
+    /// An upper bound on the LSN whose upstream schema `desc` describes, read during purification
+    /// once `desc` was in hand. Outputs created before this was recorded fall back to
+    /// [`MzOffset::minimum`], which ignores nothing.
+    initial_lsn: MzOffset,
+}
+
+impl SourceOutputInfo {
+    /// Whether this output must skip replication messages committed at `commit_lsn`.
+    ///
+    /// Such messages fall outside the range this output describes. Its snapshot is taken at an LSN
+    /// at or after `initial_lsn`, so the rewind that subtracts the replication stream from that
+    /// snapshot stops at the same point. They also need not line up with `desc`, since the
+    /// upstream schema may have changed between them and `initial_lsn`.
+    ///
+    /// The comparison is strict because `initial_lsn` is an upper. Everything committed when it
+    /// was read is strictly below it, so a transaction landing exactly on it is one this output
+    /// has to ingest.
+    fn ignores(&self, commit_lsn: MzOffset) -> bool {
+        commit_lsn < self.initial_lsn
+    }
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -302,6 +324,11 @@ pub enum TransientError {
     },
     #[error("replication slot already exists")]
     ReplicationSlotAlreadyExists,
+    #[error(
+        "creating replication slot {slot} timed out after {timeout:?}. Slot creation waits for \
+         in-progress upstream transactions to end"
+    )]
+    ReplicationSlotCreationTimeout { slot: String, timeout: Duration },
     #[error("stream ended prematurely")]
     ReplicationEOF,
     #[error("unexpected replication message")]
@@ -346,6 +373,17 @@ pub enum DefiniteError {
     )]
     InvalidTimelineId { expected: u64, actual: u64 },
     #[error(
+        "unsupported action: upstream went back in time. Expected a snapshot at or after LSN {initial_lsn} but the snapshot was taken at {snapshot_lsn}"
+    )]
+    InvalidSnapshotLsn {
+        initial_lsn: MzOffset,
+        snapshot_lsn: MzOffset,
+    },
+    #[error(
+        "unsupported action: upstream physical replica status changed (e.g. a physical replica was promoted to a primary). Expected pg_is_in_recovery()={expected} but got {actual}"
+    )]
+    InvalidPhysicalReplica { expected: bool, actual: bool },
+    #[error(
         "TOASTed value missing from old row. Did you forget to set REPLICA IDENTITY to FULL for your table?"
     )]
     MissingToast,
@@ -353,9 +391,8 @@ pub enum DefiniteError {
         "old row missing from replication stream. Did you forget to set REPLICA IDENTITY to FULL for your table?"
     )]
     DefaultReplicaIdentity,
-    #[error("incompatible schema change: {0}")]
-    // TODO: proper error variants for all the expected schema violations
-    IncompatibleSchema(String),
+    #[error(transparent)]
+    IncompatibleSchema(SchemaChangeError),
     #[error("invalid UTF8 string: {0:?}")]
     InvalidUTF8(Vec<u8>),
     #[error("failed to cast raw column: {0}")]
@@ -364,10 +401,20 @@ pub enum DefiniteError {
     UnexpectedBinaryData,
 }
 
+impl DefiniteError {
+    fn hint(&self) -> Option<String> {
+        match self {
+            DefiniteError::IncompatibleSchema(err) => err.hint(),
+            _ => None,
+        }
+    }
+}
+
 impl From<DefiniteError> for DataflowError {
     fn from(err: DefiniteError) -> Self {
         let m = err.to_string().into();
         DataflowError::SourceError(Box::new(SourceError {
+            hint: err.hint().map(Into::into),
             error: match &err {
                 DefiniteError::SlotCompactedPastResumePoint(_, _) => SourceErrorDetails::Other(m),
                 DefiniteError::TableTruncated => SourceErrorDetails::Other(m),
@@ -377,6 +424,10 @@ impl From<DefiniteError> for DataflowError {
                 DefiniteError::MissingColumn => SourceErrorDetails::Other(m),
                 DefiniteError::InvalidCopyInput => SourceErrorDetails::Other(m),
                 DefiniteError::InvalidTimelineId { .. } => SourceErrorDetails::Initialization(m),
+                DefiniteError::InvalidSnapshotLsn { .. } => SourceErrorDetails::Initialization(m),
+                DefiniteError::InvalidPhysicalReplica { .. } => {
+                    SourceErrorDetails::Initialization(m)
+                }
                 DefiniteError::MissingToast => SourceErrorDetails::Other(m),
                 DefiniteError::DefaultReplicaIdentity => SourceErrorDetails::Other(m),
                 DefiniteError::IncompatibleSchema(_) => SourceErrorDetails::Other(m),
@@ -388,19 +439,79 @@ impl From<DefiniteError> for DataflowError {
     }
 }
 
-async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), TransientError> {
-    // Note: Using unchecked here is okay because we're using it in a SQL query.
-    let slot = Ident::new_unchecked(slot).to_ast_string_simple();
-    let query = format!("CREATE_REPLICATION_SLOT {slot} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT");
-    match simple_query_opt(client, &query).await {
+async fn ensure_replication_slot(
+    client: &Client,
+    slot: &str,
+    timeout: Duration,
+) -> Result<(), TransientError> {
+    let query = sql!(
+        "CREATE_REPLICATION_SLOT {} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT",
+        Sql::ident(slot)
+    );
+    match create_replication_slot(client, slot, query, timeout).await {
         Ok(_) => Ok(()),
-        // If the slot already exists that's still ok
-        Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
-            tracing::trace!("replication slot {slot} already existed");
+        Err(TransientError::ReplicationSlotAlreadyExists) => {
+            tracing::trace!(%slot, "replication slot already existed");
             Ok(())
         }
-        Err(err) => Err(TransientError::PostgresError(err)),
+        Err(err) => Err(err),
     }
+}
+
+/// Runs the `CREATE_REPLICATION_SLOT` command `query` for `slot`, failing with
+/// [`TransientError::ReplicationSlotCreationTimeout`] once the command has waited `timeout` for
+/// in-progress upstream transactions to end.
+///
+/// A failure inside a transaction leaves that transaction aborted.
+async fn create_replication_slot(
+    client: &Client,
+    slot: &str,
+    query: Sql,
+    timeout: Duration,
+) -> Result<Option<SimpleQueryRow>, TransientError> {
+    // Slot creation blocks on the transaction locks of in-progress transactions, which
+    // `lock_timeout` bounds. `statement_timeout` does not apply: the server arms it for SQL
+    // statements only, never for replication commands. Abandoning the command client-side does not
+    // help either: a walsender blocked on a transaction lock does not notice the closed connection
+    // and the `CREATE` command remains on the upstream.
+    //
+    // NOTE: `lock_timeout` only detects locks of concurrent sessions on the same server, not
+    // on upstream servers of physical replicas.
+    set_timeout(client, "lock_timeout", timeout).await?;
+    let result = simple_query_opt(client, query).await;
+    // Inside a transaction a failed command also fails the reset, and rolling the transaction back
+    // reverts the `SET`. The command's error is the one to report.
+    let reset = simple_query(client, sql!("RESET lock_timeout")).await;
+    let row = match result {
+        Ok(row) => row,
+        Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
+            return Err(TransientError::ReplicationSlotAlreadyExists);
+        }
+        Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::LOCK_NOT_AVAILABLE) => {
+            return Err(TransientError::ReplicationSlotCreationTimeout {
+                slot: slot.to_owned(),
+                timeout,
+            });
+        }
+        Err(err) => return Err(err.into()),
+    };
+    reset?;
+    Ok(row)
+}
+
+/// Sets the session's timeout `parameter` (for example `statement_timeout`) to `timeout`.
+async fn set_timeout(
+    client: &Client,
+    parameter: &'static str,
+    timeout: Duration,
+) -> Result<(), TransientError> {
+    // A unitless value is interpreted as milliseconds, and the server rejects values above
+    // `i32::MAX` (about 24.8 days) rather than clamping them.
+    // https://www.postgresql.org/docs/current/runtime-config-client.html
+    let millis = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+    let query = sql!("SET {} = {}", Sql::new(parameter), Sql::from(millis));
+    simple_query(client, query).await?;
+    Ok(())
 }
 
 /// The state of a replication slot.
@@ -411,18 +522,32 @@ struct SlotMetadata {
     /// The address (LSN) up to which the logical slot's consumer has confirmed receiving data.
     /// Data corresponding to the transactions committed before this LSN is not available anymore.
     confirmed_flush_lsn: MzOffset,
+    /// Whether the slot can no longer be read from, which PostgreSQL reports as a `wal_status` of
+    /// `lost`.
+    invalidated: bool,
 }
 
-/// Fetches the minimum LSN at which this slot can safely resume.
+/// Fetches the state of `slot`, waiting for it to finish initializing.
 async fn fetch_slot_metadata(
     client: &Client,
     slot: &str,
     interval: Duration,
 ) -> Result<SlotMetadata, TransientError> {
     loop {
-        let query = "SELECT active_pid, confirmed_flush_lsn
-                FROM pg_replication_slots WHERE slot_name = $1";
-        let Some(row) = client.query_opt(query, &[&slot]).await? else {
+        // `wal_status` exists on PostgreSQL 13 and later, which are also the only versions that
+        // invalidate slots. Reading it through `to_jsonb` yields NULL on earlier versions instead
+        // of failing the query.
+        let Some(row) = query_opt(
+            &**client,
+            sql!(
+                "SELECT active_pid, confirmed_flush_lsn, \
+                    to_jsonb(s) ->> 'wal_status' = 'lost' AS invalidated \
+                 FROM pg_replication_slots s WHERE slot_name = $1"
+            ),
+            &[&slot],
+        )
+        .await?
+        else {
             return Err(TransientError::MissingReplicationSlot);
         };
 
@@ -434,6 +559,7 @@ async fn fetch_slot_metadata(
                 return Ok(SlotMetadata {
                     confirmed_flush_lsn: MzOffset::from(lsn),
                     active_pid: row.get("active_pid"),
+                    invalidated: row.get::<_, Option<bool>>("invalidated").unwrap_or(false),
                 });
             }
             // It can happen that confirmed_flush_lsn is NULL as the slot initializes
@@ -441,26 +567,6 @@ async fn fetch_slot_metadata(
             // so its fine like this.
             None => tokio::time::sleep(interval).await,
         };
-    }
-}
-
-/// Fetch the `pg_current_wal_lsn`, used to report metrics.
-async fn fetch_max_lsn(client: &Client) -> Result<MzOffset, TransientError> {
-    let query = "SELECT pg_current_wal_lsn()";
-    let row = simple_query_opt(client, query).await?;
-
-    match row.and_then(|row| {
-        row.get("pg_current_wal_lsn")
-            .map(|lsn| lsn.parse::<PgLsn>().unwrap())
-    }) {
-        // Based on the documentation, it appears that `pg_current_wal_lsn` has
-        // the same "upper" semantics of `confirmed_flush_lsn`:
-        // <https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-BACKUP>
-        // We may need to revisit this and use `pg_current_wal_flush_lsn`.
-        Some(lsn) => Ok(MzOffset::from(lsn)),
-        None => Err(TransientError::Generic(anyhow::anyhow!(
-            "pg_current_wal_lsn() mysteriously has no value"
-        ))),
     }
 }
 
@@ -489,13 +595,13 @@ fn verify_schema(
         .determine_compatibility(current_desc, &allow_oids_to_change_by_col_num)
     {
         Ok(()) => Ok(()),
-        Err(err) => Err(DefiniteError::IncompatibleSchema(err.to_string())),
+        Err(err) => Err(DefiniteError::IncompatibleSchema(err)),
     }
 }
 
 /// Casts a text row into the target types
 fn cast_row(
-    casts: &[(CastType, MirScalarExpr)],
+    casts: &[(CastType, StorageScalarExpr)],
     datums: &[Datum<'_>],
     row: &mut Row,
 ) -> Result<(), DefiniteError> {

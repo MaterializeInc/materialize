@@ -3,7 +3,7 @@ title: "Identifiers"
 description: "SQL identifiers are names of columns and database objects such as sources and views."
 menu:
   main:
-    parent: reference
+    parent: sql
     name: 'SQL identifiers'
     weight: 125
 ---

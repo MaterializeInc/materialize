@@ -1,0 +1,26 @@
+# Composition-only file: defines the "Objects and hydration" table for the
+# `yaml-table` shortcode. Render on a page with:
+#   {{% yaml-table data="hydration-objects-table" %}}
+#
+# The Object column is stated literally here. The Hydration behavior column
+# pulls from hydration-details.yml via include-from-yaml, so the behavior text
+# stays single-sourced. This file defines the columns and the row order.
+columns:
+  - column: Object
+  - column: "Hydration behavior"
+
+rows:
+  - Object: "Materialized views"
+    Hydration behavior: '{{< include-from-yaml data="hydration-details" name="materialized-view" >}}'
+  - Object: "Indexes"
+    Hydration behavior: '{{< include-from-yaml data="hydration-details" name="index" >}}'
+  - Object: "Kafka **upsert** sources and associated read-only tables/subsources"
+    Hydration behavior: '{{< include-from-yaml data="hydration-details" name="kafka-upsert-sources" >}}'
+  - Object: "Append-only Kafka sources and CDC database sources (PostgreSQL, MySQL, SQL Server), and their read-only tables/subsources"
+    Hydration behavior: '{{< include-from-yaml data="hydration-details" name="append-only-and-cdc-sources" >}}'
+  - Object: "Webhook sources"
+    Hydration behavior: '{{< include-from-yaml data="hydration-details" name="webhook-sources" >}}'
+  - Object: "Sinks"
+    Hydration behavior: '{{< include-from-yaml data="hydration-details" name="sink" >}}'
+  - Object: "Subscriptions"
+    Hydration behavior: '{{< include-from-yaml data="hydration-details" name="subscription" >}}'

@@ -9,6 +9,11 @@ rows:
       [Use `UNNEST()` or `DISTINCT UNNEST()` to expand the values and join](/transform-data/idiomatic-materialize-sql/any/).
 
   - Query Pattern: |
+      [`NOT IN (<subquery>)` predicate](/transform-data/idiomatic-materialize-sql/not-in/)
+    Idiomatic Materialize: |
+      [Rewrite to `NOT EXISTS`, or filter out `NULL`s on both sides of the `NOT IN`](/transform-data/idiomatic-materialize-sql/not-in/).
+
+  - Query Pattern: |
       [`mz_now()` with date/time operators](/transform-data/idiomatic-materialize-sql/mz_now/#mz_now-expressions-to-calculate-past-or-future-timestamp)
     Idiomatic Materialize: |
       [Move the operation to the other side of the comparison](/transform-data/idiomatic-materialize-sql/mz_now/#mz_now-expressions-to-calculate-past-or-future-timestamp):

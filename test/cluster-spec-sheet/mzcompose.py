@@ -13,24 +13,37 @@ Reproduces cluster spec sheet results on Materialize Cloud (or local Docker).
 
 import argparse
 import csv
+import functools
 import glob
 import itertools
+import json
 import os
 import re
-import shlex
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Hashable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from functools import partial
 from textwrap import dedent
-from typing import Any
+from typing import Any, LiteralString, TextIO
+from urllib.parse import parse_qs, urlencode
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pandas as pd
 import psycopg
 from psycopg import InterfaceError, OperationalError
+from psycopg import sql as psycopg_sql
 
-from materialize import MZ_ROOT, buildkite
-from materialize.mzcompose import _wait_for_pg
+from materialize import MZ_ROOT, buildkite, pgbench
+from materialize.cluster_spec_sheet_qps import (
+    QPS_CONCURRENCIES,
+    QpsSweep,
+    validate_qps_result,
+)
+from materialize.mz_env_util import print_environment_id
+from materialize.mz_version import MzVersion
+from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
@@ -54,17 +67,61 @@ PRODUCTION_ENVIRONMENT = "production"
 PRODUCTION_USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
 PRODUCTION_APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
 
-STAGING_REGION = "aws/eu-west-1"
+# Must match the region of the CI agents (the AWS `linux-aarch64-small` queue
+# runs in us-east-1). qps sessions are closed-loop, so cross-region RTT caps
+# per-session QPS and the envd_qps_scalability results would measure network
+# latency rather than environmentd.
+STAGING_REGION = "aws/us-east-1"
 STAGING_ENVIRONMENT = "staging"
-STAGING_USERNAME = os.getenv(
-    "NIGHTLY_CANARY_USERNAME", "infra+nightly-canary@materialize.com"
-)
-STAGING_APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
 
-MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
+
+def staging_username_for_account(index: int) -> str:
+    return f"infra+cloud-integration-tests-staging-database-{index}@materialize.io"
+
+
+def staging_credentials() -> tuple[str, str]:
+    """`(username, app_password)` for this run's staging account.
+
+    Each parallel CI shard gets its own dedicated Frontegg account from the e2e
+    pool, so concurrent shards don't trample each other on shared cloud state.
+    The account is picked by `CI_CONCURRENCY_POOL_SLOT`, which ci/mkpipeline.py
+    computes together with the matching per-account concurrency group, rotating
+    the shard window over the account pool per build so that concurrent builds
+    use disjoint accounts. Outside CI (no slot set) the parallel-job index is
+    used directly. The per-account app passwords are pre-generated and stored
+    in i2 (see bin/gen-staging-database-app-passwords there), exposed one per
+    account as `..._APP_PASSWORD_<index>`.
+    """
+    slot = os.getenv("CI_CONCURRENCY_POOL_SLOT")
+    index = int(slot) if slot is not None else buildkite.get_parallelism_index()
+    app_password = os.getenv(f"E2E_STAGING_TEST_FRONTEGG_DATABASE_APP_PASSWORD_{index}")
+    if not app_password:
+        raise UIError(
+            f"E2E_STAGING_TEST_FRONTEGG_DATABASE_APP_PASSWORD_{index} is not set. "
+            "It is required to select a per-shard staging account."
+        )
+    return staging_username_for_account(index), app_password
+
+
+MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS | {
     "memory_limiter_interval": "0s",
     "max_credit_consumption_rate": "1024",
+    # Headroom over the 30k default cap from `--envd-objects-scalability-sizes`,
+    # plus the per-pad-cluster MV split. Cloud targets need
+    # matching limits configured server-side.
+    "max_tables": "200000",
+    "max_materialized_views": "200000",
+    "max_objects_per_schema": "200000",
+    "max_clusters": "50",
 }
+
+
+@functools.cache
+def staging_version() -> str:
+    # Cached: the version cannot change within a run, and `parse_cargo` shells
+    # out to cargo, whose failure must not surface inside a region retry loop.
+    return f"{MzVersion.parse_cargo()}--pr.g{os.environ['BUILDKITE_COMMIT']}"
+
 
 SERVICES = [
     # Overridden below
@@ -73,11 +130,10 @@ SERVICES = [
         propagate_crashes=True,
         additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
     ),
-    # dbbench service built from our mzbuild Dockerfile (test/dbbench)
     MzComposeService(
-        "dbbench",
+        "qps-pgbench",
         {
-            "mzbuild": "dbbench",
+            "mzbuild": "postgres",
         },
     ),
 ]
@@ -88,26 +144,91 @@ SCENARIO_TPCH_MV_STRONG = "tpch_mv_strong"
 SCENARIO_TPCH_QUERIES_STRONG = "tpch_queries_strong"
 SCENARIO_TPCH_QUERIES_WEAK = "tpch_queries_weak"
 SCENARIO_TPCH_STRONG = "tpch_strong"
+SCENARIO_SOURCE_INGESTION_STRONG = "source_ingestion_strong"
 SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
+SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING = "copy_from_stdin_envd_strong_scaling"
+SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES = "envd_objects_scalability_tables"
+SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS = "envd_objects_scalability_mvs"
+SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_PERSIST_SOURCES = (
+    "cluster_object_limits_indexes_from_persist_sources"
+)
+SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_INDEX = (
+    "cluster_object_limits_indexes_from_index"
+)
+SCENARIO_CLUSTER_OBJECT_LIMITS_MVS_FROM_PERSIST_SOURCES = (
+    "cluster_object_limits_mvs_from_persist_sources"
+)
 
-SCENARIOS_CLUSTERD = [
-    SCENARIO_AUCTION_STRONG,
-    SCENARIO_AUCTION_WEAK,
-    SCENARIO_TPCH_MV_STRONG,
-    SCENARIO_TPCH_QUERIES_STRONG,
-    SCENARIO_TPCH_QUERIES_WEAK,
-    SCENARIO_TPCH_STRONG,
-]
-SCENARIOS_ENVIRONMENTD = [
-    SCENARIO_QPS_ENVD_STRONG_SCALING,
-]
-ALL_SCENARIOS = SCENARIOS_CLUSTERD + SCENARIOS_ENVIRONMENTD
+# Scenario groupings (`SCENARIO_GROUPS`, `SCENARIOS_BY_NAME`) are derived
+# from the `SCENARIOS` registry further down — see `ScenarioSpec`.
 
-SCENARIO_GROUPS = {
-    "cluster": SCENARIOS_CLUSTERD,
-    "environmentd": SCENARIOS_ENVIRONMENTD,
-    "all": ALL_SCENARIOS,
-}
+REPLICA_SCALES = [1, 2, 4, 8, 16, 32]
+
+ENVD_OBJECTS_SCALABILITY_SIZES = [
+    1,
+    10,
+    100,
+    1_000,
+    3_000,
+    5_000,
+    10_000,
+    20_000,
+    30_000,
+]
+ENVD_OBJECTS_SCALABILITY_MVS_PER_CLUSTER = 10_000
+
+# Default N-walk for the cluster_object_limits scenarios: geometric up to 1k,
+# then +1k increments. The cap is configurable via --cluster-object-limits-max
+# (default mirrored in `default_cluster_object_limits_sizes()`).
+CLUSTER_OBJECT_LIMITS_DEFAULT_MAX = 30_000
+CLUSTER_OBJECT_LIMITS_GEOMETRIC_HEAD = [100, 200, 500, 1_000]
+CLUSTER_OBJECT_LIMITS_LINEAR_STEP = 1_000
+
+# Freshness probe knobs. Healthy = max local lag below threshold.
+CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS = 2_000
+# Cap on recorded lag values for plot legibility; the `healthy`
+# column preserves the underlying truth.
+CLUSTER_OBJECT_LIMITS_LAG_CAP_MS = 10 * CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS
+# Per-batch deadline for all N materializations to report
+# `hydrated=true` in `mz_hydration_statuses`. Steady-state lag
+# check below handles overloaded clusters. Probes that time out
+# are recorded with `failure_mode="hydration_timeout"`.
+CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S = 300
+# Longer timeout for the first probe after `CREATE CLUSTER c`,
+# to absorb cold-start cost on larger replicas. Subsequent probes
+# (warmer replica) use the shorter timeout above.
+CLUSTER_OBJECT_LIMITS_FIRST_PROBE_HYDRATION_TIMEOUT_S = 180
+# Steady-state sampling window after hydration: take this many samples spaced
+# CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S apart and use the max as the
+# representative lag.
+CLUSTER_OBJECT_LIMITS_SAMPLES = 5
+CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S = 2
+# After the coarse N-walk locates the first unhealthy N for a given cluster
+# size, bisect the (last_healthy, first_unhealthy) interval this many times to
+# narrow the cliff. With a coarse +1k step, 4 bisection steps narrow the cliff
+# to ±~60. Set to 0 to disable.
+CLUSTER_OBJECT_LIMITS_BISECT_STEPS = 4
+
+
+def default_cluster_object_limits_sizes(max_n: int) -> list[int]:
+    """Geometric ramp up to 1k, then +1k increments up to ``max_n``."""
+    sizes = [n for n in CLUSTER_OBJECT_LIMITS_GEOMETRIC_HEAD if n <= max_n]
+    next_n = (
+        CLUSTER_OBJECT_LIMITS_GEOMETRIC_HEAD[-1] if sizes else 0
+    ) + CLUSTER_OBJECT_LIMITS_LINEAR_STEP
+    while next_n <= max_n:
+        sizes.append(next_n)
+        next_n += CLUSTER_OBJECT_LIMITS_LINEAR_STEP
+    return sizes
+
+
+# `SET LOCAL` is excluded because it only lasts until the end of the current
+# transaction, which a reconnect discards anyway.
+_SESSION_SET_RE = re.compile(
+    r"SET\s+(?:SESSION\s+)?(?!LOCAL\b)(\w+)\s*(?:=|\s+TO\s+).*",
+    re.IGNORECASE | re.DOTALL,
+)
+_SESSION_RESET_RE = re.compile(r"RESET\s+(\w+)\s*;?", re.IGNORECASE)
 
 
 class ConnectionHandler:
@@ -115,10 +236,37 @@ class ConnectionHandler:
         self.new_connection = new_connection
         self.connection = self.new_connection()
         self.cursor: psycopg.Cursor | None = None
+        # Session `SET` statements keyed by lowercased variable name, replayed
+        # on every new connection.
+        self.session_sets: dict[str, str] = {}
+
+    def record_session_statement(self, query: str) -> None:
+        """Record `query` if it is a session-level `SET` or `RESET`.
+
+        Must be called only after `query` succeeded outside an explicit
+        transaction. Statements executed directly on a cursor are not recorded.
+        """
+        if m := _SESSION_SET_RE.fullmatch(query):
+            self.session_sets[m.group(1).lower()] = query
+        elif m := _SESSION_RESET_RE.fullmatch(query):
+            name = m.group(1).lower()
+            if name == "all":
+                self.session_sets.clear()
+            else:
+                self.session_sets.pop(name, None)
 
     def __ensure_connection(self):
         if not self.connection or self.connection.closed:
             self.connection = self.new_connection()
+            try:
+                for stmt in self.session_sets.values():
+                    self.connection.execute(stmt.encode())
+            except BaseException:
+                # Close so that the next call reconnects and replays all
+                # statements, instead of reusing a partially configured
+                # session.
+                self.connection.close()
+                raise
 
     def __enter__(self) -> psycopg.Cursor:
         self.__ensure_connection()
@@ -136,8 +284,7 @@ class ConnectionHandler:
             try:
                 self.__ensure_connection()
                 return func()
-            # TODO: Catch DatabaseError until https://github.com/MaterializeInc/database-issues/issues/9496 is fixed.
-            except (InterfaceError, OperationalError, psycopg.DatabaseError) as e:
+            except (InterfaceError, OperationalError) as e:
                 if retries <= 0:
                     raise e
                 print(f"Retryable error: {e}, reconnecting...")
@@ -155,7 +302,6 @@ class ScenarioRunner:
         mode: str,
         connection: ConnectionHandler,
         results_writer: csv.DictWriter,
-        replica_size: Any,
         target: "BenchTarget",
     ) -> None:
         self.scenario = scenario
@@ -164,9 +310,11 @@ class ScenarioRunner:
         self.mode = mode
         self.connection = connection
         self.results_writer = results_writer
-        self.replica_size = replica_size
+        # Per-point fields populated by the scenario's `apply()` (cluster
+        # size and envd CPU count) before each `measure()` call.
+        self.replica_size: str | None = None
         self.target = target
-        self.envd_cpus: int | None = None  # Used only in QPS scenarios
+        self.envd_cpus: int | None = None
 
     def add_result(
         self,
@@ -174,9 +322,19 @@ class ScenarioRunner:
         name: str,
         repetition: int,
         size_bytes: int | None,
-        time: float | None = None,
+        time_ms: int | None = None,
         qps: float | None = None,
+        healthy: int | None = None,
+        failure_mode: str | None = None,
+        qps_details: dict | None = None,
     ) -> None:
+        """Write one result row.
+
+        ``healthy`` and ``failure_mode`` are recorded for
+        cluster_object_limits only; extra columns are silently dropped
+        on streams whose schema doesn't include them
+        (``csv.DictWriter(extrasaction="ignore")``).
+        """
         self.results_writer.writerow(
             {
                 "scenario": self.scenario,
@@ -189,27 +347,60 @@ class ScenarioRunner:
                 "envd_cpus": self.envd_cpus,
                 "repetition": repetition,
                 "size_bytes": size_bytes,
-                "time_ms": int(time * 1000) if time is not None else None,
+                "time_ms": time_ms,
                 "qps": qps,
+                "healthy": healthy,
+                "failure_mode": failure_mode,
+                **(qps_details or {}),
             }
         )
 
-    def run_query(self, query: str, fetch: bool = False, **params) -> list | None:
+    def run_query(
+        self, query: str, fetch: bool = False, retries: int = 5, **params
+    ) -> list | None:
         query = dedent(query).strip()
-        print(f"> {query} {params or ''}")
-        with self.connection as cur:
-            cur.execute(query.encode(), params)
-            if fetch:
-                return cur.fetchall()
-            else:
-                return None
+        if "CREATE SECRET" not in query:
+            print(f"> {query} {params or ''}")
+        for retry in range(retries + 1):
+            in_transaction = False
+            try:
+                with self.connection as cur:
+                    in_transaction = (
+                        self.connection.connection.info.transaction_status
+                        != psycopg.pq.TransactionStatus.IDLE
+                    )
+                    cur.execute(query.encode(), params)
+                    # A `SET` inside an explicit transaction is undone by
+                    # `ROLLBACK`, and a reconnect reruns the whole transaction
+                    # including the `SET`, so only record it outside one.
+                    if not in_transaction:
+                        self.connection.record_session_statement(query)
+                    if fetch:
+                        return cur.fetchall()
+                    else:
+                        return None
+            except (
+                InterfaceError,
+                OperationalError,
+                psycopg.errors.SystemError,
+            ) as e:
+                # A retry runs on a fresh connection that lacks the open
+                # transaction's state, such as a declared cursor. Re-raise so
+                # that `ConnectionHandler.retryable` reconnects and reruns the
+                # whole statement sequence. All caught errors derive from
+                # `InterfaceError` or `OperationalError`, which it retries.
+                if retry >= retries or in_transaction:
+                    raise
+                print(f"Retryable error (attempt {retry + 1}/{retries}): {e}")
+                time.sleep(5 * (retry + 1))
+        return None
 
     def measure(
         self,
         category: str,
         name: str,
         setup: list[str],
-        query: list[str],
+        query: list[str | tuple[str, list[tuple]]],
         after: list[str] = [],
         repetitions: int = 1,
         size_of_index: str | None = None,
@@ -226,7 +417,13 @@ class ScenarioRunner:
                 time.sleep(setup_delay)
                 start_time = time.time()
                 for query_part in query:
-                    self.run_query(query_part)
+                    if isinstance(query_part, str):
+                        self.run_query(query_part)
+                    else:
+                        q = query_part[0]
+                        expected = query_part[1]
+                        actual = self.run_query(q, fetch=True)
+                        assert actual == expected, f"Expected {expected}, got {actual}"
                 end_time = time.time()
                 if size_of_index:
                     # We need to wait for the introspection source to catch up.
@@ -236,153 +433,16 @@ class ScenarioRunner:
                 else:
                     size_bytes = None
                 self.add_result(
-                    category, name, repetition, size_bytes, (end_time - start_time)
+                    category,
+                    name,
+                    repetition,
+                    size_bytes,
+                    time_ms=int((end_time - start_time) * 1000),
                 )
                 for after_part in after:
                     self.run_query(after_part)
 
             self.connection.retryable(inner)
-
-    def measure_dbbench(
-        self,
-        category: str,
-        name: str,
-        *,
-        setup: list[str],
-        query: list[str],
-        after: list[str],
-        duration: str,
-        concurrency: int | None = None,
-    ) -> None:
-        """
-        Run dbbench via the 'dbbench' mzcompose service and record its final QPS.
-
-        Parameters somewhat mirror ScenarioRunner.measure for consistency, but are applied to a
-        generated dbbench.ini:
-          - setup:    SQL statements run once before the workload (dbbench [setup])
-          - query:    SQL statements that form the workload (dbbench [loadtest] query=...)
-          - after:    SQL statements run once after the workload (dbbench [teardown])
-          - duration: length of the workload (top-level duration=...)
-          - concurrency: concurrent sessions for the workload.
-
-        We capture and parse dbbench's output (stderr or stdout) to find the last
-        occurrence of a "QPS" value that dbbench reports in its summary, and store that
-        as the 'qps' column in the results CSV. If no QPS is found, the test fails.
-        (We omit time_ms for these rows since wall-clock time is not meaningful here.)
-        """
-
-        # Build a dbbench command that targets the current Materialize instance and
-        # the active cluster 'c' using target-provided flags.
-        flags = self.target.dbbench_connection_flags()
-
-        # Render a minimal INI file for dbbench.
-        def ini_escape(s: str) -> str:
-            return s.replace("\n", " ")
-
-        lines: list[str] = []
-        lines.append(f"duration={duration}")
-        # [setup]
-        if setup:
-            lines.append("")
-            lines.append("[setup]")
-            for q in setup:
-                q = dedent(q).strip()
-                if q:
-                    lines.append(f"query={ini_escape(q)}")
-        # [teardown]
-        if after:
-            lines.append("")
-            lines.append("[teardown]")
-            for q in after:
-                q = dedent(q).strip()
-                if q:
-                    lines.append(f"query={ini_escape(q)}")
-        # [loadtest]
-        lines.append("")
-        lines.append("[loadtest]")
-        for q in query:
-            q = dedent(q).strip()
-            if q:
-                lines.append(f"query={ini_escape(q)}")
-        if concurrency is not None:
-            lines.append(f"concurrency={int(concurrency)}")
-
-        ini_text = "\n".join(lines) + "\n"
-
-        # Construct a shell snippet to write the INI and execute dbbench
-        quoted_flags = " ".join(shlex.quote(x) for x in flags)
-        script = (
-            "set -euo pipefail; "
-            'tmp="$(mktemp -t dbbench.XXXXXX)"; '
-            'cat > "$tmp"; '
-            f'exec dbbench {quoted_flags} -intermediate-stats=false "$tmp"'
-        )
-
-        print(f"--- Running dbbench step '{name}' for {self.envd_cpus} ...")
-        # Execute the command in the 'dbbench' service container and capture output
-        result = self.target.composition.run(
-            "dbbench",
-            "-lc",  # sh arg to make it run `script`
-            script,
-            entrypoint="sh",
-            rm=True,
-            capture_and_print=True,
-            stdin=ini_text,
-        )
-
-        # dbbench writes its final summary to stderr; prefer stderr but also
-        # consider stdout just in case.
-        stderr_out = result.stderr or ""
-        stdout_out = result.stdout or ""
-        combined_out = f"{stderr_out}\n{stdout_out}".strip()
-
-        # Persist full dbbench output to a log file for later inspection
-        logs_dir = os.path.join("test", "cluster-spec-sheet", "dbbench-logs")
-        os.makedirs(logs_dir, exist_ok=True)
-
-        # Build a descriptive, filesystem-safe filename
-        def _slug(x: Any) -> str:
-            return re.sub(r"[^A-Za-z0-9._=-]+", "-", str(x))
-
-        fname = f"{_slug(self.scenario)}_{_slug(self.mode)}_{_slug(self.envd_cpus)}_{_slug(name)}.log"
-        log_path = os.path.join(logs_dir, fname)
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.write(combined_out + ("\n" if not combined_out.endswith("\n") else ""))
-        print(f"dbbench logs saved to {log_path}")
-
-        # Parse QPS from output.
-        # (Alternatively, we could make our fork of dbbench print a more machine-readable output.)
-        # TODO: Later, we'll want to also look at latency (avg and tail-latency), but seems too unstable for now.
-        qps_val: float | None = None
-        try:
-            qps_matches = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*QPS", combined_out)
-            if len(qps_matches) > 1:
-                raise UIError(
-                    f"dbbench: found multiple QPS values in output: {qps_matches}"
-                )
-            if qps_matches:
-                qps_val = float(qps_matches[0])
-        except Exception as e:
-            raise UIError(f"Failed to parse dbbench QPS from output: {e}")
-
-        if qps_val is None:
-            tail = "\n".join(combined_out.splitlines()[-25:])
-            raise UIError("dbbench: failed to find QPS in output. Last lines:\n" + tail)
-        else:
-            print(f"dbbench parsed QPS: {qps_val}")
-
-        # Record a result row: put QPS into the 'qps' column, and omit time_ms (not applicable)
-        self.add_result(
-            category,
-            name,
-            # For QPS measurements, we have only one repetition (i.e., repetition 0). We have `duration` instead of
-            # `repetitions` in QPS benchmarks currently (but maybe it's good to keep `repetition` in the schema in case
-            # we ever want also multiple repetitions for QPS).
-            0,
-            None,
-            None,
-            qps=qps_val,
-        )
 
     def size_of_dataflow(self, object: str) -> int | None:
         retries = 10
@@ -400,7 +460,19 @@ class ScenarioRunner:
         return None
 
 
-class Scenario(ABC):
+class ClusterScalingScenario(ABC):
+    """Workload base for the strong/weak/envd_cpu sweep families.
+
+    Wrapped by `StrongScalingSweep` / `WeakScalingSweep` /
+    `EnvdCpuSweep`, which drive the cluster-size or envd-cpu loop and
+    delegate per-point measurement to `run()` here.
+
+    Lifecycle: `setup()` builds load-generator clusters / sources /
+    tables, `materialize_views()` lists persist objects to hydrate,
+    `run()` measures, `drop()` cleans up before each `setup()`, and
+    `teardown()` runs once after the last scale point.
+    """
+
     # Bump this version in the individual test if it changes in a way that
     # makes comparing results between versions useless.
     VERSION: str = "1.0.0"
@@ -413,28 +485,23 @@ class Scenario(ABC):
     def name(self) -> str: ...
 
     @abstractmethod
-    def setup(self) -> list[str]:
-        """
-        Prepare the scenario by setting up resources like clusters, sources, and
-        load generators.
-        """
-        ...
+    def setup(self) -> list[str]: ...
 
-    @abstractmethod
-    def drop(self) -> list[str]: ...
+    def drop(self) -> list[str]:
+        return []
 
-    @abstractmethod
+    def teardown(self, runner: ScenarioRunner) -> None:
+        pass
+
     def materialize_views(self) -> list[str]:
-        """
-        Returns names of the persist objects that setup initializes.
-        """
-        ...
+        """Returns names of the persist objects that setup initializes."""
+        return []
 
     @abstractmethod
     def run(self, runner: ScenarioRunner) -> None: ...
 
 
-class TpchScenario(Scenario):
+class TpchScenario(ClusterScalingScenario):
 
     def name(self) -> str:
         return "tpch"
@@ -510,7 +577,7 @@ class TpchScenario(Scenario):
         )
 
 
-class TpchScenarioMV(Scenario):
+class TpchScenarioMV(ClusterScalingScenario):
 
     def name(self) -> str:
         return "tpch_mv"
@@ -604,7 +671,7 @@ class TpchScenarioMV(Scenario):
         )
 
 
-class TpchScenarioQueriesIndexedInputs(Scenario):
+class TpchScenarioQueriesIndexedInputs(ClusterScalingScenario):
 
     def name(self) -> str:
         return "tpch_queries_indexed_inputs"
@@ -1428,7 +1495,7 @@ class TpchScenarioQueriesIndexedInputs(Scenario):
             )
 
 
-class AuctionScenario(Scenario):
+class AuctionScenario(ClusterScalingScenario):
     def name(self) -> str:
         return "auction"
 
@@ -1846,92 +1913,1647 @@ class AuctionScenario(Scenario):
         )
 
 
-class QpsEnvdStrongScalingScenario(Scenario):
+class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
+
+    VERSION = "3.0.0"
+
+    def __init__(self, options: QpsSweep) -> None:
+        super().__init__(1, None)
+        self.options = options
+        self.warnings: list[str] = []
 
     def name(self) -> str:
         return SCENARIO_QPS_ENVD_STRONG_SCALING
 
-    def materialize_views(self) -> list[str]:
+    def setup(self) -> list[str]:
         return []
+
+    def run(self, runner: ScenarioRunner) -> None:
+        size = "50cc" if isinstance(runner.target, CloudTarget) else "scale=1,workers=1"
+        try:
+            # Reuse c and remove the unused setup cluster so the configured
+            # query-cluster count also fits an account with that cluster limit.
+            runner.run_query("DROP CLUSTER IF EXISTS quickstart CASCADE")
+            runner.run_query(
+                f"ALTER CLUSTER c SET (SIZE '{size}', REPLICATION FACTOR 1)"
+            )
+            runner.run_query(
+                "CREATE VIEW qps_gen_view AS SELECT generate_series AS x FROM generate_series(1, 10)"
+            )
+            for i in range(self.options.clusters):
+                cluster = "c" if i == 0 else f"qps_{i}"
+                if i != 0:
+                    runner.run_query(
+                        f"CREATE CLUSTER {cluster} SIZE '{size}', REPLICATION FACTOR 1"
+                    )
+                runner.run_query(
+                    f"CREATE INDEX qps_idx_{i} IN CLUSTER {cluster} ON qps_gen_view (x)"
+                )
+                runner.run_query(f"SET cluster = '{cluster}'")
+                runner.run_query("SELECT * FROM qps_gen_view")
+            runner.run_query("SET cluster = 'c'")
+            # Keep the default-logging series intact, then repeat on the same
+            # clusters with sampling disabled in every benchmark connection.
+            for disable_statement_logging in (False, True):
+                for protocol in self.options.protocols:
+                    for concurrency in self.options.concurrencies:
+                        self.measure(
+                            runner,
+                            size,
+                            concurrency,
+                            protocol,
+                            disable_statement_logging,
+                        )
+        finally:
+            runner.run_query("SET cluster = 'c'")
+            runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
+            for i in range(1, self.options.clusters):
+                runner.run_query(f"DROP CLUSTER IF EXISTS qps_{i} CASCADE")
+
+    def measure(
+        self,
+        runner: ScenarioRunner,
+        size: str,
+        concurrency: int,
+        protocol: str,
+        disable_statement_logging: bool = False,
+    ) -> None:
+        suffix = "_logging_disabled" if disable_statement_logging else ""
+        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters{suffix}"
+        print(
+            f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
+        )
+        flags = runner.target.qps_connection_flags().copy()
+        if disable_statement_logging:
+            params_index = flags.index("-params") + 1
+            params = parse_qs(flags[params_index])
+            params["options"] = [
+                " ".join(
+                    [*params.get("options", []), "-c statement_logging_sample_rate=0"]
+                )
+            ]
+            flags[params_index] = urlencode(params, doseq=True)
+        config = self.options.config(flags, concurrency, protocol)
+        result = pgbench.run(config, runner.target.composition)
+        validate_qps_result(result, concurrency, protocol)
+        if (
+            disable_statement_logging
+            and result.get("statement_logging_sample_rates") != [0] * result["clusters"]
+        ):
+            raise ValueError(
+                "Statement logging was not disabled in every benchmark session"
+            )
+        warnings = list(result["driver"]["warnings"])
+        replica_cpu = None
+        replica_samples = 0
+        try:
+            metrics = runner.run_query(
+                """SELECT max(u.cpu_percent), count(u.cpu_percent)
+                   FROM mz_internal.mz_cluster_replica_utilization_history u
+                   JOIN mz_catalog.mz_cluster_replicas r ON u.replica_id = r.id
+                   JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
+                   WHERE (c.name = 'c' OR c.name LIKE 'qps_%%')
+                     AND u.occurred_at >= %(start)s::timestamptz
+                     AND u.occurred_at <= %(end)s::timestamptz""",
+                fetch=True,
+                start=result["started_at"],
+                end=result["finished_at"],
+            )
+            assert metrics is not None
+            replica_cpu, replica_samples = metrics[0]
+        except psycopg.Error:
+            warnings.append("query-replica utilization telemetry unavailable")
+        if replica_samples == 0:
+            warnings.append("no query-replica CPU samples in measurement window")
+        if replica_cpu is not None and replica_cpu >= 80:
+            warnings.append(
+                "query replica reached at least 80% CPU; increase --qps-clusters before attributing the plateau to environmentd"
+            )
+        if isinstance(runner.target, DockerTarget):
+            warnings.append(
+                "Docker query replicas share environmentd's container quota; this is not an isolated adapter benchmark"
+            )
+        result.update(
+            replica_cpu_peak_percent=replica_cpu,
+            replica_cpu_samples=replica_samples,
+            warnings=warnings,
+            envd_cpus=runner.envd_cpus,
+            query_cluster_size=size,
+            query=config["query"],
+            expected_rows=config["expected_rows"],
+        )
+        logs_dir = os.path.join("test", "cluster-spec-sheet", "qps-logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        with open(os.path.join(logs_dir, f"{runner.envd_cpus}_{name}.json"), "w") as f:
+            json.dump(result, f, indent=2)
+        if buildkite.is_in_buildkite():
+            buildkite.upload_artifact(
+                os.path.join(logs_dir, f"{runner.envd_cpus}_{name}.json"),
+                cwd=MZ_ROOT,
+                quiet=True,
+            )
+        print(json.dumps(result))
+        runner.add_result(
+            f"peek_qps{suffix}",
+            name,
+            0,
+            None,
+            qps=result["qps"],
+            qps_details={
+                "concurrency": concurrency,
+                "protocol": protocol,
+                "query_clusters": self.options.clusters,
+                "active_query_clusters": result["clusters"],
+                "cluster_size": size,
+                **{
+                    k: result[k]
+                    for k in (
+                        "mean_latency_ms",
+                        "p50_latency_ms",
+                        "p95_latency_ms",
+                        "p99_latency_ms",
+                        "max_latency_ms",
+                        "replica_cpu_peak_percent",
+                        "replica_cpu_samples",
+                    )
+                },
+                "driver_cpu_percent": result["driver"]["cpu_percent"],
+                "driver_throttled_period_percent": result["driver"][
+                    "throttled_period_percent"
+                ],
+                "driver_peak_thread_cpu_percent": result["driver"][
+                    "peak_thread_cpu_percent"
+                ],
+                "warnings": json.dumps(warnings),
+            },
+        )
+        for warning in warnings:
+            print(f"WARNING: {name} at {runner.envd_cpus} CPUs: {warning}")
+            self.warnings.append(f"- {name}, envd={runner.envd_cpus}: {warning}")
+        if self.warnings and buildkite.is_in_buildkite():
+            buildkite.add_annotation(
+                "warning",
+                "QPS benchmark qualification warnings",
+                "\n".join(self.warnings),
+                context="qps-headroom",
+            )
+
+
+class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
+    """Measure COPY FROM STDIN throughput as envd CPU count scales.
+
+    Uses psycopg's COPY protocol to send pre-generated tab-delimited data,
+    exercising the parallel decode + persist pipeline in environmentd.
+
+    Note that this doesn't scale well in Cloud at the moment, but scales well
+    locally. We might be bound by the incoming postgres connection, S3, or CRDB
+    throughput.
+    """
+
+    NUM_ROWS = 100_000_000
+    NUM_COLS = 4  # (int, text, int, text)
+    REPETITIONS = 1  # Pretty slow and resource-intensive
+
+    def name(self) -> str:
+        return SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING
 
     def setup(self) -> list[str]:
         return []
 
-    def drop(self) -> list[str]:
-        return []
+    # Avoid Python from going OoM
+    CHUNK_SIZE = 100_000
 
     def run(self, runner: ScenarioRunner) -> None:
-        runner.measure_dbbench(
-            category="peek_qps",
-            name="dbbench_256_conns",
-            setup=[
-                "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
-                "create default index on gen_view",
-                "select * from gen_view",  # Wait for hydration
-            ],
+        # Pre-generate one chunk and reuse it for all writes.
+        chunk = "".join(
+            f"{i}\thello world\t{i * 2}\tsome text value here\n"
+            for i in range(self.CHUNK_SIZE)
+        )
+        num_chunks = self.NUM_ROWS // self.CHUNK_SIZE
+
+        for repetition in range(self.REPETITIONS):
+
+            def inner() -> None:
+                with runner.connection as cur:
+                    cur.execute("DROP TABLE IF EXISTS copy_t")
+                    cur.execute(
+                        "CREATE TABLE copy_t (f1 INTEGER, f2 TEXT, f3 INTEGER, f4 TEXT)"
+                    )
+
+                start_time = time.time()
+                with runner.connection as cur:
+                    with cur.copy("COPY copy_t FROM STDIN") as copy:
+                        for _ in range(num_chunks):
+                            copy.write(chunk)
+                end_time = time.time()
+
+                elapsed = end_time - start_time
+                rows_per_sec = self.NUM_ROWS / elapsed
+                print(
+                    f"    COPY FROM: {self.NUM_ROWS} rows in {elapsed:.2f}s "
+                    f"({rows_per_sec:.0f} rows/s)"
+                )
+                runner.add_result(
+                    "copy_from",
+                    "copy_from_stdin_1m_rows",
+                    repetition,
+                    None,
+                    time_ms=int(elapsed * 1000),
+                    qps=rows_per_sec,
+                )
+
+                with runner.connection as cur:
+                    cur.execute("DROP TABLE IF EXISTS copy_t")
+
+            runner.connection.retryable(inner)
+
+
+class SourceIngestionScenario(ClusterScalingScenario):
+    # 1.1.0: MySQL RDS instance type changed
+    # 1.2.0: MySQL table rebuilt with OPTIMIZE TABLE
+    VERSION: str = "1.2.0"
+
+    def name(self) -> str:
+        return "source_ingestion"
+
+    def setup(self) -> list[str]:
+        # External setup was done once:
+        # Postgres (RDS)
+        # create user materialize password '...';
+        # create table tbl (customer_id int, region_id int, customer_name text, customer_email text, customer_phone text);
+        # \set N 50000000
+        # set synchronous_commit = off;
+        # insert into tbl
+        # select
+        #   gs::int as customer_id,
+        #   (1 + (random()*999)::int) as region_id,
+        #   'Customer ' || gs as customer_name,
+        #   'customer' || gs || '@example.com' as customer_email,
+        #   lpad((random()*10000000000)::bigint::text, 10, '0') as customer_phone
+        # from generate_series(1, :N) as gs;
+        # analyze tbl;
+        # Parameter group: rds.logical_replication = 1, max_slot_wal_keep_size = 20480
+
+        # MySQL (RDS)
+        # CREATE USER 'materialize'@'%' IDENTIFIED BY '...';
+        # CREATE DATABASE admin;
+        # USE admin;
+        # create table tbl (customer_id int NOT NULL PRIMARY KEY, region_id int, customer_name text, customer_email text, customer_phone text);
+        # INSERT INTO tbl
+        # SELECT
+        #   n AS customer_id,
+        #   1 + (RAND() * 999) AS region_id,
+        #   CONCAT('Customer ', n) AS customer_name,
+        #   CONCAT('customer', n, '@example.com') AS customer_email,
+        #   LPAD(FLOOR(RAND() * 10000000000), 10, '0') AS customer_phone
+        # FROM (
+        #   SELECT (a.n + b.n*10 + c.n*100 + d.n*1000 + e.n*10000 + f.n*100000 + g.n*1000000 + h.n*10000000) AS n
+        #   FROM (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+        #         UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a
+        #   CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+        #         UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b
+        #   CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+        #         UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) c
+        #   CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+        #         UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) d
+        #   CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+        #         UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) e
+        #   CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+        #         UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) f
+        #   CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+        #         UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) g
+        #   CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+        #         UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) h
+        # ) nums
+        # WHERE n BETWEEN 1 AND 50000000;
+        # OPTIMIZE TABLE tbl;
+
+        # Kafka (Confluent)
+        # node /usr/local/bin/datagen -f avro -n 50000000 -w 0 -p qa_cluster_spec_sheet -s table.json
+        # cat table.json
+        # [
+        #     {
+        #         "_meta": {
+        #             "topic": "table",
+        #             "key": "customer_id"
+        #         },
+        #         "customer_id": "iteration.index",
+        #         "region_id": "faker.number.int({ min: 1, max: 4 })",
+        #         "customer_name": "faker.person.fullName()",
+        #         "customer_email": "faker.internet.email()",
+        #         "customer_phone": "faker.phone.number()"
+        #     }
+        # ]
+
+        postgres_hostname = os.environ[
+            "QA_CLUSTER_SPEC_SHEET_POSTGRES_HOSTNAME"
+        ].replace("%", "%%")
+        postgres_password = os.environ[
+            "QA_CLUSTER_SPEC_SHEET_POSTGRES_PASSWORD"
+        ].replace("%", "%%")
+        mysql_hostname = os.environ["QA_CLUSTER_SPEC_SHEET_MYSQL_HOSTNAME"].replace(
+            "%", "%%"
+        )
+        mysql_password = os.environ["QA_CLUSTER_SPEC_SHEET_MYSQL_PASSWORD"].replace(
+            "%", "%%"
+        )
+        kafka_username = os.environ["CONFLUENT_CLOUD_QA_CANARY_KAFKA_USERNAME"].replace(
+            "%", "%%"
+        )
+        kafka_password = os.environ["CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD"].replace(
+            "%", "%%"
+        )
+        csr_username = os.environ["CONFLUENT_CLOUD_QA_CANARY_CSR_USERNAME"].replace(
+            "%", "%%"
+        )
+        csr_password = os.environ["CONFLUENT_CLOUD_QA_CANARY_CSR_PASSWORD"].replace(
+            "%", "%%"
+        )
+        return [
+            "DROP CONNECTION IF EXISTS pg_conn CASCADE;",
+            "DROP CONNECTION IF EXISTS mysql_conn CASCADE;",
+            "DROP CONNECTION IF EXISTS kafka_conn CASCADE;",
+            "DROP CONNECTION IF EXISTS csr_conn CASCADE;",
+            f"CREATE SECRET IF NOT EXISTS pgpass AS '{postgres_password}';",
+            f"CREATE CONNECTION pg_conn TO postgres (HOST '{postgres_hostname}', PORT 5432, USER materialize, PASSWORD SECRET pgpass, SSL MODE 'require', DATABASE 'postgres');",
+            f"CREATE SECRET IF NOT EXISTS mysqlpass AS '{mysql_password}';",
+            f"CREATE CONNECTION mysql_conn TO MYSQL (HOST '{mysql_hostname}', PORT 3306, USER 'materialize', PASSWORD SECRET mysqlpass, SSL MODE REQUIRED);",
+            f"CREATE SECRET IF NOT EXISTS kafka_username AS '{kafka_username}';",
+            f"CREATE SECRET IF NOT EXISTS kafka_password AS '{kafka_password}';",
+            "CREATE CONNECTION kafka_conn TO KAFKA (BROKER 'pkc-oxqxx9.us-east-1.aws.confluent.cloud:9092', SASL MECHANISMS = 'PLAIN', SASL USERNAME = SECRET kafka_username, SASL PASSWORD = SECRET kafka_password);",
+            f"CREATE SECRET IF NOT EXISTS csr_username AS '{csr_username}';",
+            f"CREATE SECRET IF NOT EXISTS csr_password AS '{csr_password}';",
+            "CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'https://psrc-e0919.us-east-2.aws.confluent.cloud', USERNAME = SECRET csr_username, PASSWORD = SECRET csr_password);",
+        ]
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        # NOTE: Tearing down the region does not drop its sources, so a
+        # Postgres source still present leaks its replication slot, which
+        # retains WAL until the upstream disk fills. `DROP SOURCE` drops the
+        # slot in a background task that retries for up to 60s
+        # (`drop_replication_slots_and_secrets` in the adapter), so wait that
+        # long before the region can go.
+        _best_effort_drop(
+            runner, "DROP SOURCE IF EXISTS pg_source CASCADE", "pg_source"
+        )
+        time.sleep(60)
+
+    def run(self, runner: ScenarioRunner) -> None:
+        runner.measure(
+            "hydration",
+            "postgres",
+            setup=["DROP SOURCE IF EXISTS pg_source CASCADE;"],
             query=[
-                "select * from gen_view",
+                "CREATE SOURCE pg_source IN CLUSTER c FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source') FOR TABLES (tbl AS pg_table);",
+                # TODO: Use `CREATE TABLE FROM SOURCE` once supported in prod.
+                # "CREATE TABLE pg_table FROM SOURCE qa_cluster_spec_sheet_pg_source (REFERENCE tbl);",
+                ("SELECT count(*) FROM pg_table;", [(50000000,)]),
             ],
-            after=[
-                "drop view gen_view cascade",
-            ],
-            duration="40s",
-            concurrency=256,
         )
 
-        runner.measure_dbbench(
-            category="peek_qps",
-            name="dbbench_512_conns",
-            setup=[
-                "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
-                "create default index on gen_view",
-                "select * from gen_view",  # Wait for hydration
-            ],
+        runner.measure(
+            "hydration",
+            "mysql",
+            setup=["DROP SOURCE IF EXISTS mysql_source CASCADE;"],
             query=[
-                "select * from gen_view",
+                "CREATE SOURCE mysql_source IN CLUSTER c FROM MYSQL CONNECTION mysql_conn FOR TABLES (admin.tbl AS mysql_table);",
+                # TODO: Use `CREATE TABLE FROM SOURCE` once supported in prod.
+                # "CREATE TABLE mysql_table FROM SOURCE mysql_source (REFERENCE admin.tbl);",
+                ("SELECT count(*) FROM mysql_table;", [(50000000,)]),
             ],
-            after=[
-                "drop view gen_view cascade",
-            ],
-            duration="40s",
-            concurrency=512,
         )
 
-        # TODO: Add more scenarios as the QPS/CPS work progresses:
-        # - different connection counts
-        # - distribute queries across more clusters;
-        #   see manual test results with multiple clusters here:
-        #   https://docs.google.com/presentation/d/1bIyTWaRiyEqBXFxoxpHwWSywztSW1jRw_JP3M-Zj_6A/edit?slide=id.g39de8b7440c_0_86#slide=id.g39de8b7440c_0_86
-        # - explicit transactions (which are currently super slow)
-        # - (slow-path queries are kinda expected to be slow, so it's not so important to measure them)
-        # - I think dbbench uses the "Simple Query Protocol" by default. We might want to also measure the
-        #   "Extended Query Protocol" / prepared statements.
-        # - Lookups in a large index, especially on a larger replica.
-        # - Larger result sets.
-        #
-        # We'll also want to measure latency, including tail latency.
+        runner.measure(
+            "hydration",
+            "kafka",
+            setup=["DROP SOURCE IF EXISTS kafka_table CASCADE;"],
+            query=[
+                "CREATE SOURCE kafka_table IN CLUSTER c FROM KAFKA CONNECTION kafka_conn (TOPIC 'qa_cluster_spec_sheet_table') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;",
+                # TODO: Use `CREATE TABLE FROM SOURCE` once supported in prod.
+                # "CREATE TABLE kafka_table FROM SOURCE kafka_source;",
+                ("SELECT count(*) FROM kafka_table;", [(50000000,)]),
+            ],
+        )
 
 
-# TODO: We should factor out the below
-# `disable_region`, `cloud_disable_enable_and_wait`, `reconfigure_envd_cpus`, `wait_for_envd`
-# functions into a separate module. (Similar `disable_region` functions also occur in other tests.)
-def disable_region(composition: Composition, hard: bool) -> None:
-    print("Shutting down region ...")
+class EnvdObjectsScalabilityScenario(ABC):
+    """Workload base for the envd_objects_scalability family.
 
+    Wrapped by `EnvdObjectsSweep`, which drives the N-loop and calls
+    `init` / `add_objects` / `run` / `teardown`. `runner.scale` is
+    updated per step so result rows carry N.
+    """
+
+    VERSION: str = "1.0.0"
+    REPETITIONS: int = 10
+
+    PAD_SCHEMA: str = "pad_schema"
+
+    def __init__(self) -> None:
+        self._current_n = 0
+
+    @abstractmethod
+    def name(self) -> str: ...
+
+    def init(self, runner: ScenarioRunner) -> None:
+        runner.run_query(f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE")
+        runner.run_query(f"CREATE SCHEMA {self.PAD_SCHEMA}")
+
+    @abstractmethod
+    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None: ...
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        _best_effort_drop(
+            runner,
+            f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE",
+            self.PAD_SCHEMA,
+        )
+
+    def run(self, runner: ScenarioRunner) -> None:
+        # Measure DDL (CREATE TABLE) latency. Each repetition creates a fresh
+        # `m_tmp` table and drops it afterwards; only the CREATE is timed.
+        runner.measure(
+            "adapter_ddl_latency",
+            "create_table",
+            setup=["DROP TABLE IF EXISTS m_tmp CASCADE"],
+            query=["CREATE TABLE m_tmp (a int)"],
+            after=["DROP TABLE m_tmp"],
+            repetitions=self.REPETITIONS,
+        )
+
+        # Measure simple peek latency against a 1-row table on the fixed
+        # measurement cluster `c`.
+        runner.measure(
+            "adapter_peek_latency",
+            "select_one_row",
+            setup=[],
+            query=["SELECT * FROM t"],
+            repetitions=self.REPETITIONS,
+        )
+
+
+def _bulk_run(runner: ScenarioRunner, statements: list[str], log_label: str) -> None:
+    """Execute a list of DDL statements one-by-one with progress logging.
+
+    Callers must pass idempotent statements: ``ConnectionHandler.retryable``
+    may resend a statement that the server already committed before losing
+    the response (e.g. TLS EOF against staging).
+    """
+    total = len(statements)
+    if total == 0:
+        return
+    print(f"  {log_label}: {total} statements")
+    log_every = max(1, total // 10)
+
+    def execute_one(stmt: str) -> None:
+        with runner.connection as cur:
+            cur.execute(stmt.encode())
+
+    start = time.time()
+    for i, stmt in enumerate(statements, 1):
+        runner.connection.retryable(lambda s=stmt: execute_one(s))
+        if i % log_every == 0 or i == total:
+            elapsed = time.time() - start
+            rate = i / elapsed if elapsed > 0 else 0
+            print(f"  {log_label}: {i}/{total} ({rate:.1f}/s)")
+
+
+# CSV schemas used by `workflow_default`. The cluster-focused schema is the
+# default; envd_qps_scalability uses its own QPS-focused shape;
+# envd_objects_scalability reuses CLUSTER_FIELDNAMES verbatim and
+# cluster_object_limits extends it with `healthy` and `failure_mode` columns.
+CLUSTER_FIELDNAMES: list[str] = [
+    "scenario",
+    "scenario_version",
+    "scale",
+    "mode",
+    "category",
+    "test_name",
+    "cluster_size",
+    "repetition",
+    "size_bytes",
+    "time_ms",
+]
+ENVD_FIELDNAMES: list[str] = [
+    "scenario",
+    "scenario_version",
+    "scale",
+    "mode",
+    "category",
+    "test_name",
+    "envd_cpus",
+    "repetition",
+    "qps",
+    "concurrency",
+    "protocol",
+    "query_clusters",
+    "active_query_clusters",
+    "cluster_size",
+    "mean_latency_ms",
+    "p50_latency_ms",
+    "p95_latency_ms",
+    "p99_latency_ms",
+    "max_latency_ms",
+    "replica_cpu_peak_percent",
+    "replica_cpu_samples",
+    "driver_cpu_percent",
+    "driver_throttled_period_percent",
+    "driver_peak_thread_cpu_percent",
+    "warnings",
+]
+
+
+def _make_csv_writer(file: TextIO, fieldnames: list[str]) -> csv.DictWriter:
+    writer = csv.DictWriter(file, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    return writer
+
+
+def _recreate_cluster_c(
+    runner: ScenarioRunner,
+    replica_size: str,
+    smoke_test: bool = False,
+    skip_if_unavailable_label: str | None = None,
+) -> bool:
+    """Drop+recreate cluster ``c`` at the given size and SET cluster='c'.
+
+    Returns ``True`` if the cluster is now ready, ``False`` only when
+    ``skip_if_unavailable_label`` is set and ``CREATE CLUSTER`` failed with a
+    server-side error indicating the size isn't available (e.g. missing from
+    ``mz_cluster_replica_sizes``, or allocating it would exceed
+    ``max_credit_consumption_rate``). ``OperationalError`` always propagates
+    so connection-level failures aren't swallowed.
+
+    ``smoke_test=True`` issues ``SELECT * FROM t`` after the SET as a
+    cluster-startup sanity check before the scenario runs (relies on
+    `_prepare_probe_table` having already created ``t``).
+    """
+    runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
     try:
-        if hard:
-            composition.run("mz", "region", "disable", "--hard", rm=True)
-        else:
-            composition.run("mz", "region", "disable", rm=True)
-    except UIError:
-        # Can return: status 404 Not Found
+        runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
+    except psycopg.errors.DatabaseError as e:
+        if skip_if_unavailable_label is None or isinstance(e, OperationalError):
+            raise
+        print(
+            f"^^^ +++ {skip_if_unavailable_label}: cluster size "
+            f"'{replica_size}' unavailable on this target "
+            f"({type(e).__name__}: {str(e).strip()}); skipping."
+        )
+        return False
+    runner.run_query("SET cluster = 'c'")
+    if smoke_test:
+        runner.run_query("SELECT * FROM t")
+    return True
+
+
+def _prepare_probe_table(runner: ScenarioRunner) -> None:
+    """(Re)create the tiny one-row table ``t`` used as a probe / smoke-test
+    target by the strong / envd_strong_scaling / envd_objects_scalability
+    runners."""
+    runner.run_query("DROP TABLE IF EXISTS t CASCADE")
+    runner.run_query("CREATE TABLE t (a int)")
+    runner.run_query("INSERT INTO t VALUES (1)")
+
+
+def _best_effort_drop(runner: ScenarioRunner, stmt: str, label: str) -> None:
+    """Run a DROP statement, swallowing any error as a WARNING.
+
+    Used in teardown paths where a previous failure may have left only
+    partial state and we want subsequent cleanup statements to still run.
+    """
+    try:
+        runner.run_query(stmt)
+    except Exception as e:
+        print(f"WARNING: failed to drop {label}: {e}")
+
+
+def _extend_incremental(
+    runner: ScenarioRunner,
+    *,
+    current_n: int,
+    target_n: int,
+    templates_for: Callable[[int], Iterable[str]],
+    label: str,
+) -> int:
+    """Idempotently create objects ``i ∈ (current_n, target_n]`` and return the
+    new ``current_n``.
+
+    Statements from ``templates_for`` must be idempotent
+    (``CREATE ... IF NOT EXISTS``) so retries in ``_bulk_run`` are safe. Used
+    by every scenario that builds a catalog of N objects incrementally
+    (envd_objects_scalability_*, cluster_object_limits_*).
+    """
+    if target_n <= current_n:
+        return current_n
+    stmts = [s for i in range(current_n + 1, target_n + 1) for s in templates_for(i)]
+    _bulk_run(runner, stmts, f"create {label} {current_n + 1}..{target_n}")
+    return target_n
+
+
+def _shrink_incremental(
+    runner: ScenarioRunner,
+    *,
+    current_n: int,
+    target_n: int,
+    drop_for: Callable[[int], str],
+    label: str,
+) -> int:
+    """Drop objects ``i ∈ (target_n, current_n]`` and return the new
+    ``current_n``. Inverse of ``_extend_incremental``."""
+    if target_n >= current_n:
+        return current_n
+    stmts = [drop_for(i) for i in range(target_n + 1, current_n + 1)]
+    _bulk_run(runner, stmts, f"drop {label} {target_n + 1}..{current_n}")
+    return target_n
+
+
+@dataclass(frozen=True)
+class ScalePoint:
+    """A single point in a scenario's sweep.
+
+    Each field is meaningful only for sweeps that vary it; the rest are
+    ``None``. The scenario interprets its fields in ``apply()`` to set up
+    the world (recreate the cluster, reconfigure envd, add objects). The
+    driver doesn't look at any field except ``label``.
+    """
+
+    label: str
+    # Replica size string, e.g. "100cc". Used in `CREATE CLUSTER c SIZE ...`.
+    cluster_size: str | None = None
+    # Integer index from `REPLICA_SCALES` (1, 2, 4, ...). Used by weak
+    # scaling to multiply the workload's input scale per cluster step.
+    replica_scale: int | None = None
+    # environmentd CPU cores for the EnvdCpuSweep.
+    envd_cpus: int | None = None
+    # Number of catalog objects for envd_objects_scalability /
+    # cluster_object_limits sweeps.
+    n: int | None = None
+
+
+class Scenario(ABC):
+    """A benchmark scenario: a sweep over scale points plus per-point
+    measurement.
+
+    Concrete subclasses fall into two shapes:
+      - Sweep wrappers (`StrongScalingSweep`, `WeakScalingSweep`,
+        `EnvdCpuSweep`, `EnvdObjectsSweep`) wrap an inner workload
+        (`ClusterScalingScenario` / `EnvdObjectsScalabilityScenario`) and
+        delegate per-point measurement to it.
+      - `ClusterObjectLimitsScenario` implements the protocol directly
+        because its measurement is an adaptive inner walk over N with
+        bisection.
+
+    Lifecycle driven by `run_scenario`:
+      1. `prepare(runner)` once.
+      2. For each `point` in `scale_points(target, max_scale)`:
+         a. `apply(runner, point) -> bool`. False = skip this point.
+         b. `measure(runner, point)`.
+         c. `cleanup_point(runner, point)` in a finally.
+      3. `teardown(runner)` once.
+    """
+
+    def version(self) -> str:
+        """Version recorded as ``scenario_version`` in result rows."""
+        return "1.0.0"
+
+    @abstractmethod
+    def name(self) -> str: ...
+    @abstractmethod
+    def mode(self) -> str: ...
+    @abstractmethod
+    def stream_key(self) -> str: ...
+    @abstractmethod
+    def scale_points(
+        self, target: "BenchTarget", max_scale: int
+    ) -> Iterable[ScalePoint]: ...
+    @abstractmethod
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool: ...
+    @abstractmethod
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None: ...
+
+    def prepare(self, runner: ScenarioRunner) -> None:
+        pass
+
+    def cleanup_point(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        pass
+
+    def teardown(self, runner: ScenarioRunner) -> None:
         pass
 
 
-def cloud_disable_enable_and_wait(
-    target: "BenchTarget",
-    environmentd_cpu_allocation: int | None = None,
-) -> None:
+class EnvdObjectsScalabilityTablesScenario(EnvdObjectsScalabilityScenario):
+    """N empty tables in the catalog. No controller load; pure catalog/adapter."""
+
+    def name(self) -> str:
+        return SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES
+
+    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
+        self._current_n = _extend_incremental(
+            runner,
+            current_n=self._current_n,
+            target_n=target_n,
+            templates_for=lambda i: (
+                f"CREATE TABLE IF NOT EXISTS {self.PAD_SCHEMA}.pad_t_{i} (a int, b text)",
+            ),
+            label="tables",
+        )
+
+
+class EnvdObjectsScalabilityMvsScenario(EnvdObjectsScalabilityScenario):
+    """N materialized views in the catalog, spread across pad clusters.
+
+    To bound per-cluster dataflow count, MVs are spread across multiple
+    single-replica pad clusters (`pad_c_0`, `pad_c_1`, ...), at most
+    `ENVD_OBJECTS_SCALABILITY_MVS_PER_CLUSTER` MVs per cluster.
+
+    Each MV is a trivial transformation of a single 1-row base table, with
+    the predicate parameterised on the index `i` so MVs are structurally
+    distinct (forcing separate dataflows).
+
+    Each MV reads directly from `base_t` — i.e. one persist source per
+    MV — as opposed to a topology where the table feeds one index, and
+    many MVs read from that index.
+    """
+
+    MVS_PER_CLUSTER: int = ENVD_OBJECTS_SCALABILITY_MVS_PER_CLUSTER
+    BASE_TABLE: str = "base_t"
+
+    def __init__(self, pad_replica_size: str) -> None:
+        super().__init__()
+        self._pad_replica_size = pad_replica_size
+        self._pad_clusters_created = 0
+
+    def name(self) -> str:
+        return SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS
+
+    def init(self, runner: ScenarioRunner) -> None:
+        # Drop any leftover pad clusters from a previous failed run.
+        # `%%` escapes the LIKE wildcard from psycopg's `%` placeholder syntax.
+        existing = runner.run_query(
+            "SELECT name FROM mz_clusters WHERE name LIKE 'pad_c_%%'",
+            fetch=True,
+        )
+        for row in existing or []:
+            runner.run_query(f"DROP CLUSTER IF EXISTS {row[0]} CASCADE")
+
+        super().init(runner)
+        runner.run_query(
+            f"CREATE TABLE {self.PAD_SCHEMA}.{self.BASE_TABLE} (id int, val text)"
+        )
+        runner.run_query(
+            f"INSERT INTO {self.PAD_SCHEMA}.{self.BASE_TABLE} VALUES (1, 'x')"
+        )
+
+    def _ensure_pad_cluster(self, runner: ScenarioRunner, cluster_idx: int) -> None:
+        while self._pad_clusters_created <= cluster_idx:
+            k = self._pad_clusters_created
+            print(f"  creating pad cluster pad_c_{k} (size {self._pad_replica_size})")
+            runner.run_query(f"DROP CLUSTER IF EXISTS pad_c_{k} CASCADE")
+            runner.run_query(
+                f"CREATE CLUSTER pad_c_{k} SIZE '{self._pad_replica_size}'"
+            )
+            self._pad_clusters_created += 1
+
+    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
+        # Build one pad cluster's worth at a time: create the pad cluster,
+        # then fill it up to MVS_PER_CLUSTER MVs before moving on.
+        while self._current_n < target_n:
+            cluster_idx = self._current_n // self.MVS_PER_CLUSTER
+            self._ensure_pad_cluster(runner, cluster_idx)
+            cluster_end = min(target_n, (cluster_idx + 1) * self.MVS_PER_CLUSTER)
+            self._current_n = _extend_incremental(
+                runner,
+                current_n=self._current_n,
+                target_n=cluster_end,
+                templates_for=lambda i, c=cluster_idx: (
+                    f"CREATE MATERIALIZED VIEW IF NOT EXISTS {self.PAD_SCHEMA}.pad_mv_{i} "
+                    f"IN CLUSTER pad_c_{c} "
+                    f"AS SELECT id, val FROM {self.PAD_SCHEMA}.{self.BASE_TABLE} "
+                    f"WHERE id < {i}",
+                ),
+                label=f"MVs on pad_c_{cluster_idx}",
+            )
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        # Drop the schema first so MVs (catalog entries) are removed; then
+        # drop the now-quiescent pad clusters.
+        super().teardown(runner)
+        for k in range(self._pad_clusters_created):
+            _best_effort_drop(
+                runner, f"DROP CLUSTER IF EXISTS pad_c_{k} CASCADE", f"pad_c_{k}"
+            )
+        self._pad_clusters_created = 0
+
+
+@dataclass(frozen=True)
+class ClusterObjectLimitsKind:
+    """Per-materialization-type knobs for a ClusterObjectLimitsScenario.
+
+    Each materialization (one "test object") is created from one or more SQL
+    statements (indexes need a view + a default index; MVs need a single
+    CREATE MATERIALIZED VIEW). Statement templates take ``{schema}``,
+    ``{base}``, and ``{i}`` placeholders; the ``WHERE id < {i}`` predicate
+    makes each view/MV structurally distinct so we get separate dataflows.
+    """
+
+    scenario_name: str
+    create_templates: tuple[str, ...]
+    drop_template: str
+    label: str
+    # Join clause linking mz_materialization_lag (aliased `l`) to the
+    # cluster name, filtered to cluster `c`. Differs because cluster_id is
+    # carried on mz_indexes vs mz_materialized_views.
+    lag_filter: str
+    # Sibling of `lag_filter` for mz_hydration_statuses (aliased `hs`). Used
+    # to count how many of our test objects on `c` are hydrated before we
+    # start sampling freshness.
+    hydration_filter: str
+    # Optional statements run once per cluster-size iteration (after the
+    # cluster, schema, and base table exist) to set up extra topology that
+    # the per-i `create_templates` then build on top of. Used by the
+    # `indexes_from_index` variant to pre-create a single root index that
+    # the N test indexes share. Statements take `{schema}` and `{base}`
+    # placeholders.
+    setup_statements: tuple[str, ...] = ()
+
+
+CLUSTER_OBJECT_LIMITS_INDEXES_FROM_PERSIST_SOURCES_KIND = ClusterObjectLimitsKind(
+    scenario_name=SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_PERSIST_SOURCES,
+    # Each (view, default index) pair is one independent index dataflow on
+    # `c`, reading directly from `base_t`'s persist shard — i.e. one
+    # persist source per test object. DROP VIEW CASCADE removes the
+    # dependent default index too. Compare against
+    # `cluster_object_limits_indexes_from_index`, which inserts a single
+    # root index in front so the N test indexes share one in-memory
+    # arrangement instead of N persist sources.
+    create_templates=(
+        "CREATE VIEW IF NOT EXISTS {schema}.v_{i} AS "
+        "SELECT id, val FROM {schema}.{base} WHERE id < {i}",
+        "CREATE DEFAULT INDEX IF NOT EXISTS IN CLUSTER c ON {schema}.v_{i}",
+    ),
+    drop_template="DROP VIEW IF EXISTS {schema}.v_{i} CASCADE",
+    label="indexed views",
+    lag_filter="""
+    JOIN mz_catalog.mz_indexes idx ON l.object_id = idx.id
+    JOIN mz_catalog.mz_clusters c ON idx.cluster_id = c.id
+    WHERE c.name = 'c'
+    """,
+    hydration_filter="""
+    JOIN mz_catalog.mz_indexes idx ON hs.object_id = idx.id
+    JOIN mz_catalog.mz_clusters c ON idx.cluster_id = c.id
+    WHERE c.name = 'c'
+    """,
+)
+
+# Variant with one root index between `base_t` and the N test indexes:
+# a single view `v_root` with an index on `c` sits in front of `base_t`,
+# and the N test indexes read from `v_root` instead of `base_t`. The
+# optimizer imports the root index's arrangement, so the whole topology
+# has one persist source regardless of N. That isolates "how many
+# compute-only dataflows can a cluster tick" from "how many persist
+# sources can it pull in parallel" — the latter dominates
+# `cluster_object_limits_indexes_from_persist_sources`. `base_t` is
+# still on the data path so frontier ticks propagate through the root
+# index into every test index.
+#
+# No analogous MV variant:
+# `cluster_object_limits_mvs_from_persist_sources` already covers the
+# persist-sink-breadth axis (each MV is its own sink), so a from-index
+# version wouldn't measure something new.
+CLUSTER_OBJECT_LIMITS_INDEXES_FROM_INDEX_KIND = ClusterObjectLimitsKind(
+    scenario_name=SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_INDEX,
+    setup_statements=(
+        "CREATE VIEW IF NOT EXISTS {schema}.v_root AS "
+        "SELECT id, val FROM {schema}.{base}",
+        "CREATE DEFAULT INDEX v_root_primary_idx IN CLUSTER c ON {schema}.v_root",
+    ),
+    create_templates=(
+        "CREATE VIEW IF NOT EXISTS {schema}.v_{i} AS "
+        "SELECT id, val FROM {schema}.v_root WHERE id < {i}",
+        "CREATE DEFAULT INDEX IF NOT EXISTS IN CLUSTER c ON {schema}.v_{i}",
+    ),
+    drop_template="DROP VIEW IF EXISTS {schema}.v_{i} CASCADE",
+    label="indexed views (from root index)",
+    # Exclude the shared root index from the freshness counts: it's
+    # topology, not one of the N test objects.
+    lag_filter="""
+    JOIN mz_catalog.mz_indexes idx ON l.object_id = idx.id
+    JOIN mz_catalog.mz_clusters c ON idx.cluster_id = c.id
+    WHERE c.name = 'c' AND idx.name <> 'v_root_primary_idx'
+    """,
+    hydration_filter="""
+    JOIN mz_catalog.mz_indexes idx ON hs.object_id = idx.id
+    JOIN mz_catalog.mz_clusters c ON idx.cluster_id = c.id
+    WHERE c.name = 'c' AND idx.name <> 'v_root_primary_idx'
+    """,
+)
+
+CLUSTER_OBJECT_LIMITS_MVS_FROM_PERSIST_SOURCES_KIND = ClusterObjectLimitsKind(
+    scenario_name=SCENARIO_CLUSTER_OBJECT_LIMITS_MVS_FROM_PERSIST_SOURCES,
+    create_templates=(
+        "CREATE MATERIALIZED VIEW IF NOT EXISTS {schema}.mv_{i} IN CLUSTER c "
+        "AS SELECT id, val FROM {schema}.{base} WHERE id < {i}",
+    ),
+    drop_template="DROP MATERIALIZED VIEW IF EXISTS {schema}.mv_{i}",
+    label="MVs",
+    lag_filter="""
+    JOIN mz_catalog.mz_materialized_views mv ON l.object_id = mv.id
+    JOIN mz_catalog.mz_clusters c ON mv.cluster_id = c.id
+    WHERE c.name = 'c'
+    """,
+    hydration_filter="""
+    JOIN mz_catalog.mz_materialized_views mv ON hs.object_id = mv.id
+    JOIN mz_catalog.mz_clusters c ON mv.cluster_id = c.id
+    WHERE c.name = 'c'
+    """,
+)
+
+
+class ClusterObjectLimitsScenario(Scenario):
+    """
+    Scenario for cluster_object_limits. Finds the maximum number of idle
+    materializations (indexes or materialized views, picked via ``kind``)
+    that one cluster can keep fresh.
+
+    Structure:
+      - A single one-row base table `base_t` (never updated) lives in
+        ``PAD_SCHEMA``. Frontiers advance over wall-clock time, so even with
+        no writes the cluster must keep ticking every materialization's
+        write_frontier.
+      - N structurally-distinct materializations on the measurement cluster
+        ``c``, all reading directly from ``base_t`` — i.e. one persist
+        source per materialization, as opposed to a topology where
+        ``base_t`` feeds one index and the N materializations read from
+        that. The materialization type (indexed view vs MV) and the
+        lag-query join are carried by ``kind``.
+      - The outer sweep is the cluster size: ``apply`` drops+recreates ``c``
+        and ``PAD_SCHEMA`` for each size. ``measure`` walks an N-list,
+        adding the delta of objects at each step and probing freshness via
+        ``mz_internal.mz_materialization_lag``. On the first unhealthy probe
+        we stop the walk and bisect the (last_healthy, first_unhealthy]
+        interval to narrow the cliff.
+    """
+
+    PAD_SCHEMA: str = "pad_schema"
+    BASE_TABLE: str = "base_t"
+    # Cluster used to probe `mz_materialization_lag`. Built-in catalog server
+    # cluster, so the probe does not add load to `c`.
+    PROBE_CLUSTER: str = "mz_catalog_server"
+
+    def __init__(
+        self,
+        kind: ClusterObjectLimitsKind,
+        sizes: list[int],
+        bisect_steps: int = CLUSTER_OBJECT_LIMITS_BISECT_STEPS,
+    ) -> None:
+        self._kind = kind
+        self._sizes = sizes
+        self._bisect_steps = bisect_steps
+        self._current_n = 0
+
+    # ----- Scenario protocol -----
+
+    def name(self) -> str:
+        return self._kind.scenario_name
+
+    def mode(self) -> str:
+        return "cluster_object_limits"
+
+    def stream_key(self) -> str:
+        return "cluster_object_limits"
+
+    def scale_points(
+        self, target: "BenchTarget", max_scale: int
+    ) -> Iterable[ScalePoint]:
+        for replica_scale in REPLICA_SCALES:
+            if replica_scale > max_scale:
+                break
+            for size in target.replica_sizes_for_scale(replica_scale):
+                yield ScalePoint(
+                    label=f"replica_size={size}",
+                    cluster_size=size,
+                    replica_scale=replica_scale,
+                )
+
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
+        assert point.cluster_size is not None
+        # (Re)create the test cluster. Skip the iteration if this
+        # cluster size isn't available on the target (not in
+        # `mz_cluster_replica_sizes`, or exceeds
+        # `max_credit_consumption_rate`).
+        if not _recreate_cluster_c(
+            runner,
+            point.cluster_size,
+            skip_if_unavailable_label=f"cluster_object_limits {self.name()}",
+        ):
+            return False
+        runner.replica_size = point.cluster_size
+        # Reset the pad schema and base table for this cluster-size iteration:
+        # each cluster-size run starts from a clean slate. The cluster drop
+        # cascades to remove on-cluster objects (indexes/MVs); dropping the
+        # schema removes the off-cluster views.
+        runner.run_query(f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE")
+        runner.run_query(f"CREATE SCHEMA {self.PAD_SCHEMA}")
+        runner.run_query(
+            f"CREATE TABLE {self.PAD_SCHEMA}.{self.BASE_TABLE} (id int, val text)"
+        )
+        runner.run_query(
+            f"INSERT INTO {self.PAD_SCHEMA}.{self.BASE_TABLE} VALUES (1, 'x')"
+        )
+        for stmt in self._kind.setup_statements:
+            runner.run_query(stmt.format(schema=self.PAD_SCHEMA, base=self.BASE_TABLE))
+        self._current_n = 0
+        return True
+
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        assert point.cluster_size is not None
+        self._walk_and_bisect(runner, point.cluster_size)
+
+    def cleanup_point(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        # Drop the schema (off-cluster views) and the cluster (on-cluster
+        # objects cascade) before moving to the next cluster size, to bound
+        # catalog growth across iterations.
+        _best_effort_drop(
+            runner,
+            f"DROP SCHEMA IF EXISTS {self.PAD_SCHEMA} CASCADE",
+            self.PAD_SCHEMA,
+        )
+        _best_effort_drop(runner, "DROP CLUSTER IF EXISTS c CASCADE", "cluster c")
+
+    def add_objects(self, runner: ScenarioRunner, target_n: int) -> None:
+        self._current_n = _extend_incremental(
+            runner,
+            current_n=self._current_n,
+            target_n=target_n,
+            templates_for=lambda i: tuple(
+                t.format(schema=self.PAD_SCHEMA, base=self.BASE_TABLE, i=i)
+                for t in self._kind.create_templates
+            ),
+            label=self._kind.label,
+        )
+
+    def remove_objects(self, runner: ScenarioRunner, target_n: int) -> None:
+        """Drop the test objects above ``target_n`` from cluster ``c``.
+
+        Inverse of ``add_objects``. Needed by the bisection refinement: after
+        walking forward past the cliff, we step back down to probe
+        intermediate N without rebuilding the catalog from scratch.
+        """
+        self._current_n = _shrink_incremental(
+            runner,
+            current_n=self._current_n,
+            target_n=target_n,
+            drop_for=lambda i: self._kind.drop_template.format(
+                schema=self.PAD_SCHEMA, i=i
+            ),
+            label=self._kind.label,
+        )
+
+    def probe_lag_ms(self, runner: ScenarioRunner) -> tuple[int, int, float]:
+        """Return (total, reporting, max_local_lag_ms) for our test objects.
+
+        `reporting` is the subset with non-NULL `local_lag`; the caller
+        treats unreported objects as not healthy.
+        """
+        rows = runner.run_query(
+            f"""
+            SELECT
+                count(*),
+                count(local_lag),
+                COALESCE(
+                    max(EXTRACT(EPOCH FROM local_lag) * 1000),
+                    0
+                )::float8
+            FROM mz_internal.mz_materialization_lag l
+            {self._kind.lag_filter}
+            """,
+            fetch=True,
+        )
+        assert rows is not None and len(rows) == 1
+        total, reporting, max_lag_ms = rows[0]
+        return int(total), int(reporting), float(max_lag_ms)
+
+    def probe_hydrated(self, runner: ScenarioRunner) -> tuple[int, int]:
+        """Return (total, hydrated) for our test objects on cluster ``c``.
+
+        Decoupled from `local_lag` so the freshness loop can wait for
+        objects to be hydrated first, then sample steady-state lag.
+        """
+        rows = runner.run_query(
+            f"""
+            SELECT
+                count(*),
+                count(*) FILTER (WHERE hs.hydrated)
+            FROM mz_internal.mz_hydration_statuses hs
+            {self._kind.hydration_filter}
+            """,
+            fetch=True,
+        )
+        assert rows is not None and len(rows) == 1
+        total, hydrated = rows[0]
+        return int(total), int(hydrated)
+
+    def _hydrate_and_sample(
+        self,
+        runner: ScenarioRunner,
+        target_n: int,
+        timeout_s: int,
+        samples: int,
+        sample_interval_s: float,
+        lag_threshold_ms: int,
+    ) -> tuple[float, str, int, int]:
+        """
+        Two-phase probe: wait for hydration, then take steady-state lag
+        samples. Returns (max_lag_ms, status, reporting, total), where
+        ``status`` is one of:
+          - "healthy": hydrated and steady-state lag below threshold
+          - "lag": hydrated but steady-state lag above threshold
+          - "hydration_timeout": Phase 1 timed out
+
+        Splitting the phases distinguishes "still hydrating" (transient
+        high lag is expected) from "hydrated but not keeping up" (the
+        steady-state lag check). If hydration times out, the probe is
+        unhealthy and Phase 2 doesn't run.
+
+        Probes run on the catalog-server cluster so they don't load `c`;
+        the SET is lifted out of the per-probe loop and restored on exit.
+        """
+        runner.run_query(f"SET cluster = '{self.PROBE_CLUSTER}'")
+        try:
+            # Phase 1: wait for all N objects to be hydrated.
+            deadline = time.time() + timeout_s
+            last_total = 0
+            last_hydrated = 0
+            while time.time() < deadline:
+                total, hydrated = self.probe_hydrated(runner)
+                last_total, last_hydrated = total, hydrated
+                if hydrated >= target_n:
+                    break
+                time.sleep(1.0)
+            else:
+                # Hydration didn't complete. Probe lag once for diagnostics
+                # so the CSV still carries a meaningful value.
+                _, reporting, max_lag_ms = self.probe_lag_ms(runner)
+                print(
+                    f"    hydration timeout: {last_hydrated}/{target_n} "
+                    f"hydrated after {timeout_s}s"
+                )
+                return max_lag_ms, "hydration_timeout", reporting, last_total
+
+            # Phase 2: steady-state lag sampling.
+            max_lag_over_samples = 0.0
+            worst_reporting = target_n
+            last_total = 0
+            for _ in range(samples):
+                time.sleep(sample_interval_s)
+                total, reporting, max_lag_ms = self.probe_lag_ms(runner)
+                last_total = total
+                worst_reporting = min(worst_reporting, reporting)
+                max_lag_over_samples = max(max_lag_over_samples, max_lag_ms)
+            healthy = (
+                worst_reporting == target_n and max_lag_over_samples < lag_threshold_ms
+            )
+            status = "healthy" if healthy else "lag"
+            return max_lag_over_samples, status, worst_reporting, last_total
+        finally:
+            runner.run_query("SET cluster = 'c'")
+
+    def _probe_and_record(
+        self,
+        runner: ScenarioRunner,
+        n: int,
+        lag_threshold_ms: int,
+        hydration_timeout_s: int,
+        first_probe_hydration_timeout_s: int,
+        samples: int,
+        sample_interval_s: float,
+        first_probe: bool = False,
+        refinement: bool = False,
+    ) -> bool:
+        runner.scale = n
+        timeout_s = (
+            first_probe_hydration_timeout_s if first_probe else hydration_timeout_s
+        )
+        max_lag_ms, status, reporting, total = self._hydrate_and_sample(
+            runner, n, timeout_s, samples, sample_interval_s, lag_threshold_ms
+        )
+        healthy = status == "healthy"
+        capped_lag_ms = min(max_lag_ms, CLUSTER_OBJECT_LIMITS_LAG_CAP_MS)
+        print(
+            f"    {'(bisect) ' if refinement else ''}"
+            f"N={n}: max_local_lag_ms={max_lag_ms:.1f} "
+            f"reporting={reporting}/{total} status={status}"
+        )
+        runner.add_result(
+            "freshness",
+            "max_local_lag_ms",
+            repetition=0,
+            size_bytes=None,
+            time_ms=int(capped_lag_ms),
+            healthy=1 if healthy else 0,
+            failure_mode=None if healthy else status,
+        )
+        return healthy
+
+    def _walk_and_bisect(self, runner: ScenarioRunner, replica_size: str) -> None:
+        """Walk the N-list and bisect the cliff for one cluster size.
+
+        Stops walking on the first unhealthy point (still recorded so the
+        cliff is visible). If `self._bisect_steps > 0` and a cliff was
+        found, bisect (last_healthy, first_unhealthy] that many times,
+        adding or dropping objects in place.
+        """
+
+        def probe(
+            n: int, *, first_probe: bool = False, refinement: bool = False
+        ) -> bool:
+            return self._probe_and_record(
+                runner,
+                n,
+                CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS,
+                CLUSTER_OBJECT_LIMITS_HYDRATION_TIMEOUT_S,
+                CLUSTER_OBJECT_LIMITS_FIRST_PROBE_HYDRATION_TIMEOUT_S,
+                CLUSTER_OBJECT_LIMITS_SAMPLES,
+                CLUSTER_OBJECT_LIMITS_SAMPLE_INTERVAL_S,
+                first_probe=first_probe,
+                refinement=refinement,
+            )
+
+        # Coarse pass: walk the N list, stop at the first unhealthy point.
+        last_healthy_n = 0
+        first_unhealthy_n: int | None = None
+        for i, n in enumerate(self._sizes):
+            print(
+                f"--- cluster_object_limits {self.name()}: "
+                f"size '{replica_size}', building up to N={n}"
+            )
+            self.add_objects(runner, n)
+            print(
+                f"--- cluster_object_limits {self.name()}: "
+                f"size '{replica_size}', probing freshness at N={n}"
+            )
+            # Only the very first probe after `_recreate_cluster_c` gets
+            # the generous cold-start budget; by the time we walk to
+            # larger N or bisect, the replica is warm.
+            if probe(n, first_probe=(i == 0)):
+                last_healthy_n = n
+            else:
+                first_unhealthy_n = n
+                print(
+                    f"    N={n}: unhealthy, stopping N-walk for size "
+                    f"'{replica_size}'"
+                )
+                break
+
+        # Refinement pass: bisect (last_healthy, first_unhealthy] to narrow
+        # the cliff. Each step adds or drops objects in place.
+        if first_unhealthy_n is not None and self._bisect_steps > 0:
+            lo, hi = last_healthy_n, first_unhealthy_n
+            for step in range(self._bisect_steps):
+                mid = (lo + hi) // 2
+                if mid <= lo:
+                    # Interval already minimal (hi - lo <= 1).
+                    break
+                print(
+                    f"--- cluster_object_limits {self.name()}: "
+                    f"size '{replica_size}', bisect step "
+                    f"{step + 1}/{self._bisect_steps} at N={mid} "
+                    f"(cliff in ({lo}, {hi}])"
+                )
+                # Exactly one of these does work; the other is a no-op.
+                self.add_objects(runner, mid)
+                self.remove_objects(runner, mid)
+                if probe(mid, refinement=True):
+                    lo = mid
+                else:
+                    hi = mid
+            print(
+                f"    bisect done for size '{replica_size}': " f"cliff in ({lo}, {hi}]"
+            )
+
+
+class _ClusterSizeSweepBase(Scenario):
+    """Common ``scale_points`` for sweeps over `REPLICA_SCALES` cluster sizes."""
+
+    _workload: ClusterScalingScenario
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        self._workload.teardown(runner)
+
+    def scale_points(
+        self, target: "BenchTarget", max_scale: int
+    ) -> Iterable[ScalePoint]:
+        for replica_scale in REPLICA_SCALES:
+            if replica_scale > max_scale:
+                break
+            for size in target.replica_sizes_for_scale(replica_scale):
+                yield ScalePoint(
+                    label=f"replica_size={size}",
+                    cluster_size=size,
+                    replica_scale=replica_scale,
+                )
+
+
+class StrongScalingSweep(_ClusterSizeSweepBase):
+    """Sweep cluster size with fixed dataset. Wraps a `ClusterScalingScenario`
+    workload: setup runs once in ``prepare``, the cluster is recreated for
+    each size in ``apply``, and ``measure`` defers to ``workload.run``."""
+
+    def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
+        self._name = name
+        self._workload = workload
+
+    def version(self) -> str:
+        return self._workload.VERSION
+
+    def name(self) -> str:
+        return self._name
+
+    def mode(self) -> str:
+        return "strong"
+
+    def stream_key(self) -> str:
+        return "cluster"
+
+    def prepare(self, runner: ScenarioRunner) -> None:
+        runner.scale = self._workload.scale
+        for q in self._workload.drop():
+            runner.run_query(q)
+        _prepare_probe_table(runner)
+        for q in self._workload.setup():
+            runner.run_query(q)
+        for n in self._workload.materialize_views():
+            runner.run_query(f"SELECT COUNT(*) > 0 FROM {n};")
+
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
+        assert point.cluster_size is not None
+        _recreate_cluster_c(runner, point.cluster_size, smoke_test=True)
+        runner.replica_size = point.cluster_size
+        return True
+
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        self._workload.run(runner)
+
+
+class WeakScalingSweep(_ClusterSizeSweepBase):
+    """Sweep cluster size AND dataset size in lockstep. The workload's setup
+    is rerun at each point with ``scale = initial_scale * replica_scale``."""
+
+    def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
+        self._name = name
+        self._workload = workload
+        self._initial_scale = workload.scale
+
+    def version(self) -> str:
+        return self._workload.VERSION
+
+    def name(self) -> str:
+        return self._name
+
+    def mode(self) -> str:
+        return "weak"
+
+    def stream_key(self) -> str:
+        return "cluster"
+
+    def prepare(self, runner: ScenarioRunner) -> None:
+        with runner.connection as cur:
+            cur.execute("DROP TABLE IF EXISTS t CASCADE;")
+            cur.execute("CREATE TABLE t (a int);")
+            cur.execute("INSERT INTO t VALUES (1);")
+
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
+        assert point.cluster_size is not None and point.replica_scale is not None
+        self._workload.replica_size = point.cluster_size
+        self._workload.scale = self._initial_scale * point.replica_scale
+        runner.scale = self._workload.scale
+        for q in self._workload.drop():
+            runner.run_query(q)
+        for q in self._workload.setup():
+            runner.run_query(q)
+        for n in self._workload.materialize_views():
+            runner.run_query(f"SELECT COUNT(*) > 0 FROM {n};")
+        print(f"--- Loading complete; creating cluster with size {point.cluster_size}")
+        _recreate_cluster_c(runner, point.cluster_size, smoke_test=True)
+        runner.replica_size = point.cluster_size
+        return True
+
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        self._workload.run(runner)
+
+
+class EnvdCpuSweep(Scenario):
+    """Sweep environmentd's CPU allocation at a fixed compute cluster size.
+    Wraps a `ClusterScalingScenario` workload. On Cloud, each scale point
+    recreates the region, so every point measures a freshly set up
+    environment. We reset envd's CPU allocation to the default in
+    ``teardown`` regardless of outcome to avoid accidentally burning
+    credits."""
+
+    # (So far, I haven't seen a difference between 16 and 32 in manual
+    # testing in cloud. When we start seeing a difference, consider
+    # extending to 64.)
+    ENVD_CPU_SCALES: list[int] = [1, 2, 4, 8, 16, 32]
+
+    def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
+        self._name = name
+        self._workload = workload
+        self._fixed_replica_size: str | None = None
+
+    def version(self) -> str:
+        return self._workload.VERSION
+
+    def name(self) -> str:
+        return self._name
+
+    def mode(self) -> str:
+        # Matches the historical "strong" mode tag for these scenarios
+        # (envd_qps_strong_scaling, copy_from_stdin_envd_strong_scaling).
+        return "strong"
+
+    def stream_key(self) -> str:
+        return "envd"
+
+    def scale_points(
+        self, target: "BenchTarget", max_scale: int
+    ) -> Iterable[ScalePoint]:
+        for cpus in self.ENVD_CPU_SCALES:
+            if cpus > max_scale:
+                break
+            yield ScalePoint(label=f"envd_cpus={cpus}", envd_cpus=cpus)
+
+    def prepare(self, runner: ScenarioRunner) -> None:
+        runner.scale = self._workload.scale
+        _prepare_probe_table(runner)
+        for q in self._workload.setup():
+            runner.run_query(q)
+        for n in self._workload.materialize_views():
+            runner.run_query(f"SELECT COUNT(*) > 0 FROM {n};")
+        self._fixed_replica_size = runner.target.replica_size_for_scale(1)
+
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
+        assert point.envd_cpus is not None
+        assert self._fixed_replica_size is not None
+        reconfigure_envd_cpus(runner.target, point.envd_cpus, runner)
+        # On Cloud the CPU change recreates the region, which drops the state that
+        # `prepare` set up. Re-preparing is cheap, and harmless on Docker, where the
+        # state survives the restart.
+        runner.connection.retryable(lambda: self.prepare(runner))
+        fixed_size = self._fixed_replica_size
+
+        def recreate() -> None:
+            _recreate_cluster_c(runner, fixed_size, smoke_test=True)
+
+        runner.connection.retryable(recreate)
+        # Record envd CPU cores for this step. (We intentionally do not set
+        # replica_size, because that would be fixed in this scenario, so
+        # there is no meaningful analysis to be done on that.)
+        runner.envd_cpus = point.envd_cpus
+        return True
+
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        self._workload.run(runner)
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        if isinstance(runner.target, CloudTarget):
+            print("--- Resetting Cloud environmentd CPUs to the default")
+            # Recreating rather than enabling on top of the existing region keeps the
+            # region out of the read-only limbo that a 0dt rollover would put it in, so
+            # whatever runs after this scenario finds a usable region.
+            cloud_recreate_region_with_envd_cpus(runner.target, 2)
+
+
+class EnvdObjectsSweep(Scenario):
+    """Sweep catalog object count (N) at a fixed compute cluster size.
+    Wraps an `EnvdObjectsScalabilityScenario` workload: catalog is built
+    incrementally, so transitioning to the next size adds only the delta."""
+
+    def __init__(
+        self,
+        name: str,
+        workload: EnvdObjectsScalabilityScenario,
+        sizes: list[int],
+    ) -> None:
+        self._name = name
+        self._workload = workload
+        self._sizes = sizes
+
+    def version(self) -> str:
+        return self._workload.VERSION
+
+    def name(self) -> str:
+        return self._name
+
+    def mode(self) -> str:
+        return "envd_objects_scalability"
+
+    def stream_key(self) -> str:
+        return "envd_objects"
+
+    def scale_points(
+        self, target: "BenchTarget", max_scale: int
+    ) -> Iterable[ScalePoint]:
+        for n in self._sizes:
+            yield ScalePoint(label=f"N={n}", n=n)
+
+    def prepare(self, runner: ScenarioRunner) -> None:
+        # (Re)create the fixed-size measurement cluster and a tiny one-row
+        # table used by the simple-peek measurement.
+        measurement_size = runner.target.replica_size_for_scale(1)
+        runner.replica_size = measurement_size
+        _recreate_cluster_c(runner, measurement_size)
+        _prepare_probe_table(runner)
+        self._workload.init(runner)
+
+    def apply(self, runner: ScenarioRunner, point: ScalePoint) -> bool:
+        assert point.n is not None
+        self._workload.add_objects(runner, point.n)
+        runner.scale = point.n
+        return True
+
+    def measure(self, runner: ScenarioRunner, point: ScalePoint) -> None:
+        self._workload.run(runner)
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        self._workload.teardown(runner)
+
+
+# TODO: We should factor the region helpers below out into a separate module.
+# (Similar `disable_region` functions also occur in other tests.)
+def disable_region(composition: Composition, hard: bool) -> None:
+    # `mz region disable` reports a region that does not exist as success (its
+    # `disable` maps the API's 404 to "Region already disabled"), so any failure
+    # here is a real one (auth, API error) and must surface.
+    print("Shutting down region ...")
+    if hard:
+        composition.run("mz", "region", "disable", "--hard", rm=True)
+    else:
+        composition.run("mz", "region", "disable", rm=True)
+
+
+def verify_region_disabled(composition: Composition, region: str) -> None:
+    """Fail unless `mz region list` reports `region` as disabled.
+
+    `mz region disable` returning is not proof: it can be answered by a stale
+    or failing API, and a region that survives a cleanup keeps costing money
+    and load until someone notices. "disabled" also covers a region whose
+    deletion is still pending, so the check proves that no enabled region is
+    left, not that the deletion has completed.
+    """
+    output = composition.run(
+        "mz", "region", "list", "--format", "json", rm=True, capture_and_print=True
+    ).stdout
+    # `mz region list` reports a cloud provider whose lookup failed as an
+    # `Error: ...` line on stdout before the JSON array, so parsing the whole
+    # output would fail on an unrelated provider's hiccup.
+    lines = output.strip().splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith("[")), None)
+    try:
+        if start is None:
+            raise ValueError("no JSON array in the output")
+        statuses = {
+            entry["region"]: entry["status"]
+            for entry in json.loads("\n".join(lines[start:]))
+        }
+    except (ValueError, KeyError, TypeError) as e:
+        raise UIError(f"unexpected `mz region list` output: {output!r}") from e
+    status = statuses.get(region)
+    if status is None:
+        raise UIError(f"region {region} missing from `mz region list` output")
+    if status != "disabled":
+        raise UIError(f"region {region} is still {status} after disable")
+
+
+def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
+    """
+    Run `mz region enable`, pinning environmentd's CPU allocation when one is given.
+
+    Enabling a region whose catalog still exists is a 0dt deployment: the new envd boots
+    read-only and only promotes, and starts serving, once the caught-up check passes. That
+    check includes a stability soak whose production default is ten minutes, during which a
+    soft-disabled region serves nothing at all. We turn the soak off for test regions, like
+    mzcompose does for Docker-based tests.
+    """
+    args = []
+
+    if envd_cpus is not None:
+        args += ["--environmentd-cpu-allocation", str(envd_cpus)]
+
+    if target.is_staging:
+        # Production Cloud forbids callers from injecting environmentd args and rejects
+        # `--environmentd-extra-arg` with a 403 Forbidden, so this is staging-only.
+        args += [
+            "--environmentd-extra-arg=--system-parameter-default=with_0dt_caught_up_check_stability_period=0s",
+            # Pin the image built for this PR. Production does not accept a
+            # custom version.
+            "--version",
+            staging_version(),
+        ]
+
+    target.composition.run("mz", "region", "enable", *args, rm=True)
+
+
+def cloud_disable_enable_and_wait(target: "BenchTarget") -> None:
     """
     Soft-disable and then enable the Cloud region, then wait for environmentd readiness.
 
@@ -1940,27 +3562,88 @@ def cloud_disable_enable_and_wait(
     already succeeded (with the old envd). Therefore, we do an `mz region disable` first, so
     that `wait_for_envd` can't succeed before the read-only env promotes.
 
-    When `environmentd_cpu_allocation` is provided, it is passed to `mz region enable` via
-    `--environmentd-cpu-allocation` to reconfigure environmentd's CPU allocation.
+    NOTE: `mz region disable` returns as soon as the region state flips to SoftDeleted,
+    while the data-plane teardown proceeds asynchronously. If we enabled while the old
+    envd were still serving, both `mz region enable`'s readiness check and our
+    `wait_for_envd` could pass against the old envd. Waiting for the old envd to stop
+    serving first makes a later successful connection prove that the new envd is up.
     """
+    assert isinstance(target, CloudTarget)
+
+    # If the region is currently serving, remember its hostname so we can observe the
+    # teardown below. When the region is already disabled, the lookup fails quickly and
+    # there is no teardown to wait for.
+    try:
+        host = target.composition.cloud_hostname(timeout_secs=10)
+    except UIError:
+        host = None
+
     disable_region(target.composition, hard=False)
 
-    if environmentd_cpu_allocation is None:
-        target.composition.run("mz", "region", "enable", rm=True)
-    else:
-        target.composition.run(
-            "mz",
-            "region",
-            "enable",
-            "--environmentd-cpu-allocation",
-            str(environmentd_cpu_allocation),
-            rm=True,
-        )
+    if host is not None:
+        wait_for_envd_down(target, host)
+
+    enable_region(target)
 
     time.sleep(10)
 
     assert "materialize.cloud" in target.composition.cloud_hostname()
     wait_for_envd(target)
+
+
+def cloud_recreate_region_with_envd_cpus(
+    target: "CloudTarget", envd_cpus: int, attempts: int = 3
+) -> None:
+    """
+    Recreate the Cloud region from scratch, with the given environmentd CPU allocation.
+
+    All state in the region is dropped, so the caller has to set up whatever the scenario
+    needs again.
+
+    We hard-disable rather than soft-disable on purpose. Enabling a region that still has
+    durable state is a 0dt rollout, and nothing serves SQL while we wait for the new envd to
+    catch up and promote, because the soft disable already took the old envd away. A hard
+    disable leaves no predecessor generation to catch up with, so the new envd promotes as
+    soon as it has booted, in about a minute.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            disable_region(target.composition, hard=True)
+            enable_region(target, envd_cpus=envd_cpus)
+            break
+        except UIError as e:
+            # A sweep does a dozen of these calls and the staging Cloud API returns the
+            # occasional 502 that surfaces despite the CLI's own retries. A retry starts
+            # over with the disable, so that a half-finished enable can't leave the
+            # region running with the previous allocation.
+            if attempt == attempts:
+                raise
+            print(
+                f"WARNING: recreating the region failed (attempt {attempt}/{attempts}): {e}"
+            )
+            time.sleep(30)
+
+    assert "materialize.cloud" in target.composition.cloud_hostname()
+    wait_for_envd(target)
+    assert_region_is_empty(target)
+
+
+def assert_region_is_empty(target: "CloudTarget") -> None:
+    """
+    Assert that the region we can talk to has no user tables.
+
+    Proves that we reached the freshly created region rather than an environmentd that
+    outlived the recreate: a leftover envd still has the scenario's tables. Neither
+    `mz region enable` (which only checks that something answers on the SQL port) nor a
+    successful query on its own can tell the two apart.
+    """
+    host = target.composition.cloud_hostname()
+    rows = cloud_sql(target, host, "SELECT count(*) FROM mz_tables WHERE id LIKE 'u%'")
+
+    assert rows, "could not count user tables in recreated region"
+    assert (
+        rows[0][0] == 0
+    ), f"recreated region still has {rows[0][0]} user table(s), we are talking to a stale environmentd"
 
 
 def reconfigure_envd_cpus(
@@ -1971,8 +3654,9 @@ def reconfigure_envd_cpus(
 
     - Docker target: recreate the local `materialized` container with a CPU limit equal to envd_cpus,
       wait for SQL readiness, and force the benchmark connection to reconnect.
-    - Cloud target: soft-disable/enable the region with the desired envd CPU allocation, wait for
-      SQL readiness, and force the benchmark connection to reconnect.
+    - Cloud target: recreate the region with the desired envd CPU allocation, wait for SQL
+      readiness, and force the benchmark connection to reconnect. The recreate drops all
+      state in the region, see `cloud_recreate_region_with_envd_cpus`.
     """
     if isinstance(target, DockerTarget):
         # For Docker target: restart `materialized` with a CPU limit equal to envd_cpus.
@@ -2003,9 +3687,10 @@ def reconfigure_envd_cpus(
             raise UIError(f"failed to apply Docker CPU override for environmentd: {e}")
     else:
         # Cloud target: reconfigure environmentd CPUs via `mz region`.
+        assert isinstance(target, CloudTarget)
         try:
             print(f"--- Reconfiguring Cloud environmentd CPUs to {envd_cpus}")
-            cloud_disable_enable_and_wait(target, environmentd_cpu_allocation=envd_cpus)
+            cloud_recreate_region_with_envd_cpus(target, envd_cpus)
         except Exception as e:
             raise UIError(
                 f"failed to apply Cloud CPU override for environmentd via 'mz region': {e}"
@@ -2018,63 +3703,263 @@ def reconfigure_envd_cpus(
         pass
 
 
-def wait_for_envd(target: "BenchTarget", timeout_secs: int = 300) -> None:
+def cloud_sql(
+    target: "CloudTarget", host: str, query: LiteralString
+) -> list[tuple[Any, ...]]:
     """
-    Wait until the environmentd SQL endpoint is ready.
+    Run `query` against the environmentd at `host` on a fresh connection and return its rows.
 
-    - Cloud: uses cloud hostname:6875, sslmode=require, and prefers the per-run
-      app password if available; falls back to MZ_CLI_APP_PASSWORD.
-    - Docker: probes SQL readiness via Composition.sql_query
+    Takes an explicit host rather than looking it up, because a recreated region gets a new
+    hostname and callers that probe for the *old* envd need to keep talking to the old one.
+    """
+    conn = psycopg.connect(
+        host=host,
+        port=6875,
+        user=target.username,
+        # Prefer the newly created app password when present, fall back to the CLI one.
+        password=target.new_app_password or target.app_password or "",
+        dbname="materialize",
+        sslmode="require",
+        connect_timeout=10,
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def _err_detail(err: Exception | None) -> str:
+    return f": {err}" if err is not None else ""
+
+
+def _await_probe(
+    probe: Callable[[], object],
+    what: str,
+    *,
+    until_ok: bool,
+    timeout_secs: int,
+    sustain_probes: int = 3,
+) -> float:
+    """
+    Poll `probe` until it has either succeeded or failed, per `until_ok`, `sustain_probes`
+    times in a row, and return how long that took. Raises `UIError` on timeout.
+
+    A single probe decides nothing in either direction. While a region rolls over, a
+    connection can land on the generation that is about to go away, and a single failure can
+    be a transient network error against an envd that is still serving fine.
+
+    `what` completes the sentence "waiting for ...", e.g. "environmentd to serve SQL".
+    """
+    start = time.time()
+    deadline = start + timeout_secs
+    last_report = start
+    streak = 0
+    last_err: Exception | None = None
+
+    while time.time() < deadline:
+        try:
+            probe()
+            ok = True
+            last_err = None
+        except Exception as e:
+            last_err = e
+            ok = False
+
+        streak = streak + 1 if ok == until_ok else 0
+        if streak >= sustain_probes:
+            return time.time() - start
+
+        now = time.time()
+        if now - last_report >= 30:
+            print(
+                f"  still waiting for {what} ({now - start:.0f}s){_err_detail(last_err)}"
+            )
+            last_report = now
+        time.sleep(2)
+
+    raise UIError(
+        f"timed out after {timeout_secs}s waiting for {what}{_err_detail(last_err)}"
+    )
+
+
+def wait_for_envd(target: "BenchTarget", timeout_secs: int = 600) -> None:
+    """
+    Wait until environmentd serves SQL, and report how long that took.
+
+    The elapsed time is worth printing: a region that only comes back after minutes is
+    promoting out of read-only mode, which none of the callers here expect.
     """
     if isinstance(target, CloudTarget):
         host = target.composition.cloud_hostname()
-        user = target.username
-        # Prefer the newly created app password when present; fall back to the CLI password.
-        password = target.new_app_password or target.app_password or ""
-        sslmode = "require"
-        print(
-            f"Waiting for cloud environmentd at {host}:6875 to come up with username {user} ..."
-        )
-        _wait_for_pg(
-            host=host,
-            user=user,
-            password=password,
-            port=6875,
-            query="SELECT 1",
-            expected=[(1,)],
-            timeout_secs=timeout_secs,
-            dbname="materialize",
-            sslmode=sslmode,
-        )
+        who = f"cloud environmentd at {host}:6875"
+        probe: Callable[[], object] = partial(cloud_sql, target, host, "SELECT 1")
     else:
-        # Docker target: use the composition helper to query the service via the
-        # host-mapped port on 127.0.0.1; the container hostname "materialized"
-        # is not resolvable from the host network when using psycopg directly.
-        print("Waiting for local environmentd (docker) at materialized:6875 ...")
-        deadline = time.time() + timeout_secs
-        last_err: Exception | None = None
-        while time.time() < deadline:
-            try:
-                target.composition.sql_query("SELECT 1", service="materialized")
-                return
-            except Exception as e:
-                last_err = e
-                time.sleep(1)
-        raise UIError(
-            f"materialized did not accept SQL connections within {timeout_secs}s after restart: {last_err}"
+        # The container hostname "materialized" does not resolve from the host network, so
+        # we go through the composition instead of connecting with psycopg.
+        who = "local environmentd (docker)"
+        probe = partial(
+            target.composition.sql_query, "SELECT 1", service="materialized"
         )
+
+    print(f"Waiting for {who} to come up ...")
+    elapsed = _await_probe(
+        probe, f"{who} to serve SQL", until_ok=True, timeout_secs=timeout_secs
+    )
+    print(f"{who} is serving SQL, after {elapsed:.0f}s")
+
+
+def wait_for_envd_down(
+    target: "CloudTarget", host: str, timeout_secs: int = 600
+) -> None:
+    """
+    Wait until the environmentd at `host` stops serving SQL.
+
+    Used after a soft `mz region disable` to observe that the teardown has reached the data
+    plane before the region is enabled again.
+    """
+    who = f"cloud environmentd at {host}:6875"
+    print(f"Waiting for {who} to go down ...")
+    _await_probe(
+        partial(cloud_sql, target, host, "SELECT 1"),
+        f"{who} to stop serving SQL",
+        until_ok=False,
+        timeout_secs=timeout_secs,
+    )
+
+
+# Parameters we expect to be in effect at workflow start (set by
+# `MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS` on Docker; set
+# server-side on cloud). Logged so we can verify the environment
+# matches what we configured.
+SYSTEM_PARAMETERS_TO_LOG: list[str] = [
+    "max_tables",
+    "max_materialized_views",
+    "max_objects_per_schema",
+    "max_clusters",
+    "max_credit_consumption_rate",
+    "memory_limiter_interval",
+]
+
+
+def log_environment_info(target: "BenchTarget") -> None:
+    """Print the environment id and key system parameters.
+
+    Best-effort: any error is logged and swallowed so a transient probe
+    failure does not abort the workflow.
+    """
+    print("--- Environment info")
+    try:
+        conn = target.new_connection()
+    except Exception as e:
+        print(f"  WARNING: could not open connection to log environment info: {e}")
+        return
+    try:
+        print_environment_id(conn, indent="  ")
+        with conn.cursor() as cur:
+            for param in SYSTEM_PARAMETERS_TO_LOG:
+                try:
+                    cur.execute(
+                        psycopg_sql.SQL("SHOW {}").format(psycopg_sql.Identifier(param))
+                    )
+                    row = cur.fetchone()
+                    val = row[0] if row else "<unknown>"
+                    print(f"  {param} = {val}")
+                except Exception as e:
+                    print(f"  WARNING: failed to SHOW {param}: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def add_target_arguments(parser: argparse.ArgumentParser) -> None:
+    """The arguments `workflow_default` and `workflow_ci_cleanup` share."""
+    parser.add_argument(
+        "--cleanup",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="Destroy the region when the workflow ends, and from CI's ci-cleanup after a cancel or timeout.",
+    )
+    # Required rather than defaulting to cloud-production: `ci-cleanup` runs
+    # unattended from the CI plugin's exit trap and destroys the target's
+    # region, so a missing or malformed target must fail loudly instead of
+    # quietly selecting production. Every CI step passes it explicitly.
+    parser.add_argument(
+        "--target",
+        required=True,
+        choices=["cloud-production", "cloud-staging", "docker"],
+        help="Target to deploy to.",
+    )
+
+
+def make_target(composition: Composition, target: str) -> tuple["BenchTarget", Mz]:
+    """The bench target for `--target`, with the `mz` service configured for it."""
+    if target == "cloud-production":
+        bench_target: BenchTarget = CloudTarget(
+            composition,
+            PRODUCTION_USERNAME,
+            PRODUCTION_APP_PASSWORD or "",
+            region=PRODUCTION_REGION,
+        )
+        mz = Mz(
+            region=PRODUCTION_REGION,
+            environment=PRODUCTION_ENVIRONMENT,
+            app_password=PRODUCTION_APP_PASSWORD or "",
+        )
+    elif target == "cloud-staging":
+        staging_username, staging_app_password = staging_credentials()
+        bench_target = CloudTarget(
+            composition,
+            staging_username,
+            staging_app_password,
+            region=STAGING_REGION,
+            is_staging=True,
+        )
+        mz = Mz(
+            region=STAGING_REGION,
+            environment=STAGING_ENVIRONMENT,
+            app_password=staging_app_password,
+        )
+    elif target == "docker":
+        bench_target = DockerTarget(composition)
+        mz = Mz(app_password="")
+    else:
+        raise ValueError(f"Unknown target: {target}")
+    return bench_target, mz
+
+
+def workflow_ci_cleanup(
+    composition: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Destroy the Cloud region of a run that did not get to its own cleanup.
+
+    The CI mzcompose plugin runs this workflow after `default` has exited, however
+    it exited, with the same arguments. A cancelled or timed-out job ends `default`
+    with SIGTERM, which skips its `finally` block, so for such a run this is the
+    only region cleanup there is. Only `--cleanup` and `--target` are read.
+    """
+    add_target_arguments(parser)
+    args, _ = parser.parse_known_args()
+    if not args.cleanup:
+        print("Not destroying the region: the run was started without --cleanup")
+        return
+    target, mz = make_target(composition, args.target)
+    if not isinstance(target, CloudTarget):
+        print(f"Nothing to clean up for --target={args.target}")
+        return
+    with composition.override(mz):
+        target.cleanup()
 
 
 def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -> None:
     """
     Run the bench workflow by default
     """
-    parser.add_argument(
-        "--cleanup",
-        default=False,
-        action=argparse.BooleanOptionalAction,
-        help="Destroy the region at the end of the workflow.",
-    )
+    add_target_arguments(parser)
     parser.add_argument(
         "--record",
         default=f"results_{int(time.time())}.csv",
@@ -2087,12 +3972,6 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         help="Analyze results after completing test. Dispatches to cluster-scale or envd-scale focused analyses based on the file suffix: `.cluster.csv` or `.envd.csv`.",
     )
     parser.add_argument(
-        "--target",
-        default="cloud-production",
-        choices=["cloud-production", "cloud-staging", "docker"],
-        help="Target to deploy to (default: cloud-production).",
-    )
-    parser.add_argument(
         "--max-scale",
         type=int,
         default=32,
@@ -2102,117 +3981,163 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         "--scale-tpch", type=float, default=8, help="TPCH scale factor."
     )
     parser.add_argument(
+        "--qps-concurrencies",
+        type=lambda s: [int(x) for x in s.split(",")],
+        default=QPS_CONCURRENCIES,
+    )
+    parser.add_argument(
+        "--qps-protocols",
+        type=lambda s: s.split(","),
+        default=["prepared"],
+        help="prepared (default), simple, or prepared,simple",
+    )
+    parser.add_argument(
+        "--qps-clusters",
+        type=int,
+        default=32,
+        help="Independently routed one-worker query clusters (Cloud size 50cc)",
+    )
+    parser.add_argument(
+        "--qps-duration",
+        type=float,
+        default=20,
+        help="Measurement seconds per concurrency/protocol/CPU point",
+    )
+    parser.add_argument(
+        "--qps-warmup",
+        type=float,
+        default=5,
+        help="Unmeasured warmup seconds per point",
+    )
+    parser.add_argument(
+        "--qps-query-timeout",
+        type=float,
+        default=30,
+        help="Startup and individual-query timeout seconds",
+    )
+    parser.add_argument(
         "--scale-tpch-queries", type=float, default=4, help="TPCH queries scale factor."
     )
     parser.add_argument(
         "--scale-auction", type=int, default=3, help="Auction scale factor."
     )
     parser.add_argument(
+        "--envd-objects-scalability-sizes",
+        type=lambda s: [int(x) for x in s.split(",") if x.strip()],
+        default=ENVD_OBJECTS_SCALABILITY_SIZES,
+        help=(
+            "Comma-separated list of catalog object counts to test for "
+            "envd_objects_scalability scenarios. Defaults to "
+            f"{','.join(str(n) for n in ENVD_OBJECTS_SCALABILITY_SIZES)}."
+        ),
+    )
+    parser.add_argument(
+        "--cluster-object-limits-max",
+        type=int,
+        default=CLUSTER_OBJECT_LIMITS_DEFAULT_MAX,
+        help=(
+            "Upper bound on N for cluster_object_limits scenarios when no "
+            "explicit --cluster-object-limits-sizes is given. Defaults to "
+            f"{CLUSTER_OBJECT_LIMITS_DEFAULT_MAX}."
+        ),
+    )
+    parser.add_argument(
+        "--cluster-object-limits-sizes",
+        type=lambda s: [int(x) for x in s.split(",") if x.strip()],
+        default=None,
+        help=(
+            "Comma-separated list of N (object-count) steps for the "
+            "cluster_object_limits scenarios. If omitted, defaults to a "
+            "geometric ramp up to 1000 then +1000 increments up to "
+            "--cluster-object-limits-max."
+        ),
+    )
+    parser.add_argument(
+        "--cluster-object-limits-bisect-steps",
+        type=int,
+        default=CLUSTER_OBJECT_LIMITS_BISECT_STEPS,
+        help=(
+            "After the coarse N-walk locates the cliff for a given cluster "
+            "size, bisect the (last_healthy, first_unhealthy) interval this "
+            "many times to narrow it. Set to 0 to disable refinement. "
+            f"Default: {CLUSTER_OBJECT_LIMITS_BISECT_STEPS}."
+        ),
+    )
+    parser.add_argument(
         "scenarios",
         nargs="*",
-        default=["all"],
-        choices=ALL_SCENARIOS + list(SCENARIO_GROUPS.keys()),
-        help="Scenarios to run, supports individual scenario names as well as 'all', 'cluster', 'environmentd'.",
+        choices=list(SCENARIOS_BY_NAME) + list(SCENARIO_GROUPS),
+        help="Scenarios to run, supports individual scenario names as well as 'all', 'cluster', 'envd_qps_scalability', 'envd_objects_scalability', 'cluster_object_limits'.",
     )
 
     args = parser.parse_args()
+    QpsSweep(
+        args.qps_concurrencies,
+        args.qps_protocols,
+        args.qps_clusters,
+        args.qps_duration,
+        args.qps_warmup,
+        args.qps_query_timeout,
+    )
 
     scenarios: set[str] = set()
-    for s in args.scenarios:
+    for s in args.scenarios or ["all"]:
         if s in SCENARIO_GROUPS:
             scenarios.update(SCENARIO_GROUPS[s])
-        else:
+        elif s in SCENARIOS_BY_NAME:
             scenarios.add(s)
-
-    unknown = scenarios - set(ALL_SCENARIOS)
-    if unknown:
-        raise ValueError(f"Unknown scenarios: {unknown}")
+        else:
+            raise ValueError(f"Unknown scenario: {s}")
     print(f"--- Running scenarios: {', '.join(scenarios)}")
 
-    if args.target == "cloud-production":
-        target: BenchTarget = CloudTarget(
-            composition, PRODUCTION_USERNAME, PRODUCTION_APP_PASSWORD or ""
+    # cluster_object_limits scenarios push the cluster to its idle-object
+    # limit; we only run them on staging or local Docker to avoid
+    # spill-over effects to real customer environments.
+    cluster_object_limits_requested = scenarios & set(
+        SCENARIO_GROUPS.get("cluster_object_limits", [])
+    )
+    if cluster_object_limits_requested and args.target == "cloud-production":
+        raise UIError(
+            "cluster_object_limits scenarios cannot run against "
+            "--target=cloud-production; use --target=cloud-staging or "
+            "--target=docker. Requested scenarios: "
+            f"{', '.join(sorted(cluster_object_limits_requested))}."
         )
-        mz = Mz(
-            region=PRODUCTION_REGION,
-            environment=PRODUCTION_ENVIRONMENT,
-            app_password=PRODUCTION_APP_PASSWORD or "",
-        )
-    elif args.target == "cloud-staging":
-        target: BenchTarget = CloudTarget(
-            composition, STAGING_USERNAME, STAGING_APP_PASSWORD or ""
-        )
-        mz = Mz(
-            region=STAGING_REGION,
-            environment=STAGING_ENVIRONMENT,
-            app_password=STAGING_APP_PASSWORD or "",
-        )
-    elif args.target == "docker":
-        target = DockerTarget(composition)
-        mz = Mz(app_password="")
-    else:
-        raise ValueError(f"Unknown target: {args.target}")
+
+    target, mz = make_target(composition, args.target)
 
     with composition.override(mz):
-        max_scale = args.max_scale
-        if target.max_scale() is not None:
-            max_scale = min(max_scale, target.max_scale())
+        target_max = target.max_scale()
+        max_scale = (
+            args.max_scale if target_max is None else min(args.max_scale, target_max)
+        )
 
         if args.cleanup:
             target.cleanup()
 
         target.initialize()
 
-        # Derive two result files (cluster and envd-focused) from the provided --record path
+        log_environment_info(target)
+
+        # Resolve the cluster_object_limits N-list once so each scenario
+        # factory can read `args.cluster_object_limits_sizes` directly.
+        if args.cluster_object_limits_sizes is None:
+            args.cluster_object_limits_sizes = default_cluster_object_limits_sizes(
+                args.cluster_object_limits_max
+            )
+
+        # Open one CSV per result-stream kind, keyed by `ResultStreamSpec.key`.
         base_name = os.path.splitext(args.record)[0]
-        cluster_path = f"{base_name}.cluster.csv"
-        envd_path = f"{base_name}.envd.csv"
+        streams: dict[str, OpenStream] = {
+            spec.key: _open_stream(spec, base_name) for spec in RESULT_STREAMS
+        }
 
-        cluster_file = open(cluster_path, "w", newline="")
-        envd_file = open(envd_path, "w", newline="")
-
-        # Traditional scenarios: cluster-focused schema
-        cluster_writer = csv.DictWriter(
-            cluster_file,
-            fieldnames=[
-                "scenario",
-                "scenario_version",
-                "scale",
-                "mode",
-                "category",
-                "test_name",
-                "cluster_size",
-                "repetition",
-                "size_bytes",
-                "time_ms",
-            ],
-            extrasaction="ignore",
-        )
-        cluster_writer.writeheader()
-
-        # Envd-focused scenarios: QPS schema
-        envd_writer = csv.DictWriter(
-            envd_file,
-            fieldnames=[
-                "scenario",
-                "scenario_version",
-                "scale",
-                "mode",
-                "category",
-                "test_name",
-                "envd_cpus",
-                "repetition",
-                "qps",
-            ],
-            extrasaction="ignore",
-        )
-        envd_writer.writeheader()
-
-        def process(scenario: str) -> None:
-            with composition.test_case(scenario):
+        def process(scenario_name: str) -> None:
+            with composition.test_case(scenario_name):
                 conn = ConnectionHandler(target.new_connection)
 
-                # This cluster is just for misc setup queries.
+                # Misc setup cluster for any ad-hoc queries the scenario runs
+                # before its own cluster `c` exists.
                 size = (
                     "50cc" if isinstance(target, CloudTarget) else "scale=1,workers=1"
                 )
@@ -2220,114 +4145,48 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                     cur.execute("DROP CLUSTER IF EXISTS quickstart;")
                     cur.execute(f"CREATE CLUSTER quickstart SIZE '{size}';".encode())
 
-                if scenario == SCENARIO_TPCH_STRONG:
-                    print("--- SCENARIO: Running TPC-H Index strong scaling")
-                    run_scenario_strong(
-                        scenario=TpchScenario(
-                            args.scale_tpch, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_TPCH_MV_STRONG:
-                    print(
-                        "--- SCENARIO: Running TPC-H Materialized view strong scaling"
-                    )
-                    run_scenario_strong(
-                        scenario=TpchScenarioMV(
-                            args.scale_tpch, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_TPCH_QUERIES_STRONG:
-                    print("--- SCENARIO: Running TPC-H Queries strong scaling")
-                    run_scenario_strong(
-                        scenario=TpchScenarioQueriesIndexedInputs(
-                            args.scale_tpch_queries, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_TPCH_QUERIES_WEAK:
-                    print("--- SCENARIO: Running TPC-H Queries weak scaling")
-                    run_scenario_weak(
-                        scenario=TpchScenarioQueriesIndexedInputs(
-                            args.scale_tpch_queries, None
-                        ),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_AUCTION_STRONG:
-                    print("--- SCENARIO: Running Auction strong scaling")
-                    run_scenario_strong(
-                        scenario=AuctionScenario(
-                            args.scale_auction, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_AUCTION_WEAK:
-                    print("--- SCENARIO: Running Auction weak scaling")
-                    run_scenario_weak(
-                        scenario=AuctionScenario(args.scale_auction, None),
-                        results_writer=cluster_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
-                if scenario == SCENARIO_QPS_ENVD_STRONG_SCALING:
-                    print("--- SCENARIO: Running QPS envd strong scaling")
-                    run_scenario_envd_strong_scaling(
-                        scenario=QpsEnvdStrongScalingScenario(
-                            1, target.replica_size_for_scale(1)
-                        ),
-                        results_writer=envd_writer,
-                        connection=conn,
-                        target=target,
-                        max_scale=max_scale,
-                    )
+                spec = SCENARIOS_BY_NAME[scenario_name]
+                scenario = spec.factory(args, target)
+                writer = streams[scenario.stream_key()].writer
+                print(f"--- SCENARIO: Running {spec.log_label}")
+                run_scenario(scenario, writer, conn, target, max_scale)
 
         test_failed = True
         try:
-            scenarios_list = buildkite.shard_list(sorted(list(scenarios)), lambda s: s)
-            composition.test_parts(scenarios_list, process)
-            test_failed = False
+            try:
+                scenarios_list = buildkite.shard_list(
+                    sorted(list(scenarios)), lambda s: s
+                )
+                composition.test_parts(scenarios_list, process)
+                test_failed = False
+            finally:
+                for stream in streams.values():
+                    stream.file.close()
+
+            # Upload, archive, and analyze each result stream uniformly. The
+            # cluster_object_limits stream's extra `healthy` / `failure_mode`
+            # columns are silently dropped on upload (CSV writer uses
+            # extrasaction="ignore"); to recover them, consult the artifact
+            # CSV directly.
+            for stream in streams.values():
+                stream.spec.upload(composition, stream.path, not test_failed)
+
+            assert not test_failed
+
+            if buildkite.is_in_buildkite():
+                for stream in streams.values():
+                    buildkite.upload_artifact(stream.path, cwd=MZ_ROOT, quiet=True)
+
+            if args.analyze:
+                for stream in streams.values():
+                    stream.spec.analyze(stream.path)
         finally:
-            cluster_file.close()
-            envd_file.close()
-            # Clean up
+            # Only after the results are out: the teardown can fail (a slow
+            # hard delete, a transient API error in its verify) and must not
+            # cost a multi-hour run its data. The CI plugin's `ci-cleanup`
+            # repeats the teardown after the workflow, however it ended.
             if args.cleanup:
                 target.cleanup()
-
-        upload_cluster_results_to_test_analytics(
-            composition, cluster_path, not test_failed
-        )
-        upload_environmentd_results_to_test_analytics(
-            composition, envd_path, not test_failed
-        )
-
-        assert not test_failed
-
-        if buildkite.is_in_buildkite():
-            # Upload both CSVs as artifacts
-            buildkite.upload_artifact(cluster_path, cwd=MZ_ROOT, quiet=True)
-            buildkite.upload_artifact(envd_path, cwd=MZ_ROOT, quiet=True)
-
-        if args.analyze:
-            # Analyze both files separately (each has its own schema)
-            analyze_cluster_results_file(cluster_path)
-            analyze_envd_results_file(envd_path)
 
 
 class BenchTarget:
@@ -2340,11 +4199,20 @@ class BenchTarget:
     @abstractmethod
     def cleanup(self) -> None: ...
     @abstractmethod
-    def replica_size_for_scale(self, scale: int) -> str:
+    def replica_sizes_for_scale(self, scale: int) -> list[str]:
         """
-        Returns the replica size for a given scale.
+        Returns all replica sizes to test at a given scale. Sweeps over
+        ``REPLICA_SCALES`` emit one ``ScalePoint`` per returned size so that
+        equivalent cc and M.1 cluster sizes can be compared side by side.
         """
         ...
+
+    def replica_size_for_scale(self, scale: int) -> str:
+        """
+        Returns the default (first) replica size for a given scale. Used for
+        setup-only clusters where a single size is sufficient.
+        """
+        return self.replica_sizes_for_scale(scale)[0]
 
     def max_scale(self) -> int | None:
         """
@@ -2353,10 +4221,10 @@ class BenchTarget:
         return None
 
     @abstractmethod
-    def dbbench_connection_flags(self) -> list[str]:
+    def qps_connection_flags(self) -> list[str]:
         """
-        Return dbbench connection flags appropriate for this target, excluding the
-        workload file path. The result should include driver, host, port, username,
+        Return connection flags for the QPS configuration's target adapter.
+        The result should include driver, host, port, username,
         optional password, database, and params (including sslmode and cluster=c).
         """
         ...
@@ -2364,14 +4232,21 @@ class BenchTarget:
 
 class CloudTarget(BenchTarget):
     def __init__(
-        self, composition: Composition, username: str, app_password: str
+        self,
+        composition: Composition,
+        username: str,
+        app_password: str,
+        region: str,
+        is_staging: bool = False,
     ) -> None:
         self.composition = composition
         self.username = username
+        self.region = region
         self.app_password = app_password
         self.new_app_password: str | None = None
+        self.is_staging = is_staging
 
-    def dbbench_connection_flags(self) -> list[str]:
+    def qps_connection_flags(self) -> list[str]:
         assert self.new_app_password is not None
         return [
             "-driver",
@@ -2424,19 +4299,30 @@ class CloudTarget(BenchTarget):
 
     def cleanup(self) -> None:
         disable_region(self.composition, hard=True)
+        verify_region_disabled(self.composition, self.region)
 
-    def replica_size_for_scale(self, scale: int) -> str:
-        """
-        Returns the replica size for a given scale.
-        """
-        return f"{scale}00cc"
+    # M.1 size with the same worker count as the {scale}00cc size. Scales
+    # above 8 have no available M.1 equivalent.
+    M1_REPLICA_SIZES: dict[int, str] = {
+        1: "M.1-xsmall",
+        2: "M.1-small",
+        4: "M.1-large",
+        8: "M.1-2xlarge",
+    }
+
+    def replica_sizes_for_scale(self, scale: int) -> list[str]:
+        sizes = [f"{scale}00cc"]
+        m1_size = self.M1_REPLICA_SIZES.get(scale)
+        if m1_size is not None:
+            sizes.append(m1_size)
+        return sizes
 
 
 class DockerTarget(BenchTarget):
     def __init__(self, composition: Composition) -> None:
         self.composition = composition
 
-    def dbbench_connection_flags(self) -> list[str]:
+    def qps_connection_flags(self) -> list[str]:
         return [
             "-driver",
             "postgres",
@@ -2457,310 +4343,341 @@ class DockerTarget(BenchTarget):
         self.composition.up("materialized")
 
     def new_connection(self) -> psycopg.Connection:
-        return self.composition.sql_connection()
+        return self.composition.sql_connection(user="mz_system", port=6877)
 
     def cleanup(self) -> None:
         print("Stopping local Materialize instance ...")
         self.composition.stop("materialized")
 
-    def replica_size_for_scale(self, scale: int) -> str:
+    def replica_sizes_for_scale(self, scale: int) -> list[str]:
         # 100cc == 2 workers
-        return f"scale=1,workers={2*scale}"
+        return [f"scale=1,workers={2*scale}"]
 
     def max_scale(self) -> int | None:
         return 16
 
 
-def run_scenario_strong(
+def run_scenario(
     scenario: Scenario,
     results_writer: csv.DictWriter,
     connection: ConnectionHandler,
     target: BenchTarget,
     max_scale: int,
 ) -> None:
-    """
-    Run a strong scaling scenario, where we increase the cluster size
-    and keep the data size constant.
-    """
+    """Run a `Scenario` end-to-end: prepare, sweep, teardown.
 
+    The scenario decides what to sweep (cluster size, envd CPUs, object
+    count) and how to measure each point; this driver just threads the
+    lifecycle calls. ``apply`` returning False skips a single point.
+    """
     runner = ScenarioRunner(
         scenario.name(),
-        scenario.VERSION,
-        scenario.scale,
-        "strong",
+        scenario.version(),
+        0,
+        scenario.mode(),
         connection,
         results_writer,
-        replica_size=None,
         target=target,
     )
-
-    for query in scenario.drop():
-        runner.run_query(query)
-
-    runner.run_query("DROP TABLE IF EXISTS t CASCADE;")
-    runner.run_query("CREATE TABLE t (a int);")
-    runner.run_query("INSERT INTO t VALUES (1);")
-
-    for query in scenario.setup():
-        runner.run_query(query)
-
-    for name in scenario.materialize_views():
-        runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
-
-    for replica_scale in [1, 2, 4, 8, 16, 32]:
-        if replica_scale > max_scale:
-            break
-        replica_size = target.replica_size_for_scale(replica_scale)
-        print(
-            f"--- Running strong scenario {scenario.name()} with replica size {replica_size}"
-        )
-        # Create a cluster with the specified size
-        runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
-        runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
-        runner.run_query("SET cluster = 'c';")
-        runner.run_query("SELECT * FROM t;")
-
-        runner.replica_size = replica_size
-
-        scenario.run(runner)
-
-
-def run_scenario_envd_strong_scaling(
-    scenario: Scenario,
-    results_writer: csv.DictWriter,
-    connection: ConnectionHandler,
-    target: BenchTarget,
-    max_scale: int,
-) -> None:
-    """
-    Run envd-focused scaling scenarios, where we keep the compute cluster size
-    fixed and scale the CPU resources available to environmentd instead.
-
-    For the Docker target, we change the CPU limit of the local `materialized`
-    container (which runs environmentd) before each scale point.
-    For the Cloud target, we reconfigure environmentd using `mz region enable`
-    with the `--environmentd-cpu-allocation` flag.
-    """
-
-    runner = ScenarioRunner(
-        scenario.name(),
-        scenario.VERSION,
-        scenario.scale,
-        "strong",
-        connection,
-        results_writer,
-        replica_size=None,
-        target=target,
-    )
-
-    # Prepare a tiny table for cluster availability checks.
-    for query in [
-        "DROP TABLE IF EXISTS t CASCADE;",
-        "CREATE TABLE t (a int);",
-        "INSERT INTO t VALUES (1);",
-    ]:
-        runner.run_query(query)
-
-    # Scenario-specific setup.
-    for query in scenario.setup():
-        runner.run_query(query)
-
-    for name in scenario.materialize_views():
-        runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
-
-    fixed_replica_size = target.replica_size_for_scale(1)
-
+    scenario.prepare(runner)
     try:
-        # (So far, I haven't seen a difference between 16 and 32 in manual testing in cloud. When we start seeing a
-        # difference, consider extending to 64.)
-        for envd_cpus in [1, 2, 4, 8, 16, 32]:
-            if envd_cpus > max_scale:
-                break
-
-            print(
-                f"--- Running envd-scaling scenario {scenario.name()} with envd_cpus={envd_cpus}; compute size fixed at {fixed_replica_size}"
-            )
-
-            reconfigure_envd_cpus(target, envd_cpus, runner)
-
-            # (Re)create a fixed-size compute cluster.
-            def recreate_cluster() -> None:
-                runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
-                runner.run_query(f"CREATE CLUSTER c SIZE '{fixed_replica_size}'")
-                runner.run_query("SET cluster = 'c';")
-                runner.run_query("SELECT * FROM t;")
-
-            runner.connection.retryable(recreate_cluster)
-
-            # Record envd CPU cores for this step. (We intentionally do not set replica_size, because that would be fixed
-            # in this scenario, so there is no meaningful analysis to be done on that.)
-            runner.envd_cpus = envd_cpus
-
-            scenario.run(runner)
+        for point in scenario.scale_points(target, max_scale):
+            print(f"--- {scenario.name()} ({scenario.mode()}): {point.label}")
+            proceed = scenario.apply(runner, point)
+            if not proceed:
+                continue
+            try:
+                scenario.measure(runner, point)
+            finally:
+                scenario.cleanup_point(runner, point)
     finally:
-        if isinstance(target, CloudTarget):
-            # We reset the cloud envd's core count in any case, to avoid accidentally burning a lot of money.
-            print("--- Resetting Cloud environmentd CPUs to the default")
-            target.composition.run(
-                "mz",
-                "region",
-                "enable",
-                "--environmentd-cpu-allocation",
-                "2",
-                rm=True,
-            )
+        scenario.teardown(runner)
 
 
-def run_scenario_weak(
-    scenario: Scenario,
-    results_writer: csv.DictWriter,
-    connection: ConnectionHandler,
-    target: BenchTarget,
-    max_scale: int,
-) -> None:
-    """
-    Run a weak scaling scenario, where we increase both the cluster size
-    and the data size.
+@dataclass(frozen=True)
+class ScenarioSpec:
+    """Registry entry for a single scenario.
+
+    ``factory`` builds the `Scenario` instance from CLI args + target.
+    ``groups`` lists the ``--scenarios`` group names this scenario belongs to.
+    The Scenario itself decides its result stream via ``stream_key()``.
     """
 
-    with connection as cur:
-        cur.execute("DROP TABLE IF EXISTS t CASCADE;")
-        cur.execute("CREATE TABLE t (a int);")
-        cur.execute("INSERT INTO t VALUES (1);")
-
-    initial_scale = scenario.scale
-
-    for replica_scale in [1, 2, 4, 8, 16, 32]:
-        if replica_scale > max_scale:
-            break
-        replica_size = target.replica_size_for_scale(replica_scale)
-        print(
-            f"--- Running weak scenario {scenario.name()} with replica size {replica_size}"
-        )
-        scenario.replica_size = replica_size
-        scenario.scale = initial_scale * replica_scale
-        runner = ScenarioRunner(
-            scenario.name(),
-            scenario.VERSION,
-            scenario.scale,
-            "weak",
-            connection,
-            results_writer,
-            replica_size,
-            target=target,
-        )
-        for query in scenario.drop():
-            runner.run_query(query)
-
-        for query in scenario.setup():
-            runner.run_query(query)
-
-        for name in scenario.materialize_views():
-            runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
-
-        # Create a cluster with the specified size
-        print(f"--- Loading complete; creating cluster with size {replica_size}")
-        runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
-        runner.run_query(f"CREATE CLUSTER c SIZE '{replica_size}'")
-        runner.run_query("SET cluster = 'c';")
-        runner.run_query("SELECT * FROM t;")
-
-        scenario.run(runner)
+    name: str
+    log_label: str
+    factory: Callable[[argparse.Namespace, BenchTarget], Scenario]
+    groups: tuple[str, ...] = ()
 
 
-def workflow_plot_cluster(
-    composition: Composition, parser: WorkflowArgumentParser
-) -> None:
-    """Analyze cluster-focused results."""
+SCENARIOS: list[ScenarioSpec] = [
+    ScenarioSpec(
+        SCENARIO_TPCH_STRONG,
+        "TPC-H Index strong scaling",
+        lambda a, t: StrongScalingSweep(
+            SCENARIO_TPCH_STRONG,
+            TpchScenario(a.scale_tpch, t.replica_size_for_scale(1)),
+        ),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_TPCH_MV_STRONG,
+        "TPC-H Materialized view strong scaling",
+        lambda a, t: StrongScalingSweep(
+            SCENARIO_TPCH_MV_STRONG,
+            TpchScenarioMV(a.scale_tpch, t.replica_size_for_scale(1)),
+        ),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_TPCH_QUERIES_STRONG,
+        "TPC-H Queries strong scaling",
+        lambda a, t: StrongScalingSweep(
+            SCENARIO_TPCH_QUERIES_STRONG,
+            TpchScenarioQueriesIndexedInputs(
+                a.scale_tpch_queries, t.replica_size_for_scale(1)
+            ),
+        ),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_TPCH_QUERIES_WEAK,
+        "TPC-H Queries weak scaling",
+        lambda a, t: WeakScalingSweep(
+            SCENARIO_TPCH_QUERIES_WEAK,
+            TpchScenarioQueriesIndexedInputs(a.scale_tpch_queries, None),
+        ),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_AUCTION_STRONG,
+        "Auction strong scaling",
+        lambda a, t: StrongScalingSweep(
+            SCENARIO_AUCTION_STRONG,
+            AuctionScenario(a.scale_auction, t.replica_size_for_scale(1)),
+        ),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_AUCTION_WEAK,
+        "Auction weak scaling",
+        lambda a, t: WeakScalingSweep(
+            SCENARIO_AUCTION_WEAK,
+            AuctionScenario(a.scale_auction, None),
+        ),
+        groups=("cluster", "cluster_compute"),
+    ),
+    ScenarioSpec(
+        SCENARIO_SOURCE_INGESTION_STRONG,
+        "Source ingestion scaling",
+        lambda a, t: StrongScalingSweep(
+            SCENARIO_SOURCE_INGESTION_STRONG,
+            SourceIngestionScenario(a.scale_auction, t.replica_size_for_scale(1)),
+        ),
+        groups=("cluster", "source_ingestion"),
+    ),
+    ScenarioSpec(
+        SCENARIO_QPS_ENVD_STRONG_SCALING,
+        "QPS envd strong scaling",
+        lambda a, t: EnvdCpuSweep(
+            SCENARIO_QPS_ENVD_STRONG_SCALING,
+            QpsEnvdStrongScalingScenario(
+                QpsSweep(
+                    a.qps_concurrencies,
+                    a.qps_protocols,
+                    a.qps_clusters,
+                    a.qps_duration,
+                    a.qps_warmup,
+                    a.qps_query_timeout,
+                )
+            ),
+        ),
+        groups=("envd_qps_scalability",),
+    ),
+    ScenarioSpec(
+        SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING,
+        "COPY FROM STDIN envd strong scaling",
+        lambda a, t: EnvdCpuSweep(
+            SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING,
+            CopyFromStdinEnvdStrongScalingScenario(1, t.replica_size_for_scale(1)),
+        ),
+        groups=("envd_qps_scalability",),
+    ),
+    ScenarioSpec(
+        SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES,
+        "envd scalability (tables)",
+        lambda a, t: EnvdObjectsSweep(
+            SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES,
+            EnvdObjectsScalabilityTablesScenario(),
+            sizes=a.envd_objects_scalability_sizes,
+        ),
+        groups=("envd_objects_scalability",),
+    ),
+    ScenarioSpec(
+        SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS,
+        "envd scalability (materialized views)",
+        lambda a, t: EnvdObjectsSweep(
+            SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS,
+            EnvdObjectsScalabilityMvsScenario(
+                pad_replica_size=t.replica_size_for_scale(2),
+            ),
+            sizes=a.envd_objects_scalability_sizes,
+        ),
+        groups=("envd_objects_scalability",),
+    ),
+    ScenarioSpec(
+        SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_PERSIST_SOURCES,
+        "cluster object limits (indexes, from persist sources)",
+        lambda a, t: ClusterObjectLimitsScenario(
+            CLUSTER_OBJECT_LIMITS_INDEXES_FROM_PERSIST_SOURCES_KIND,
+            sizes=a.cluster_object_limits_sizes,
+            bisect_steps=a.cluster_object_limits_bisect_steps,
+        ),
+        groups=("cluster_object_limits",),
+    ),
+    ScenarioSpec(
+        SCENARIO_CLUSTER_OBJECT_LIMITS_INDEXES_FROM_INDEX,
+        "cluster object limits (indexes, from root index)",
+        lambda a, t: ClusterObjectLimitsScenario(
+            CLUSTER_OBJECT_LIMITS_INDEXES_FROM_INDEX_KIND,
+            sizes=a.cluster_object_limits_sizes,
+            bisect_steps=a.cluster_object_limits_bisect_steps,
+        ),
+        groups=("cluster_object_limits",),
+    ),
+    ScenarioSpec(
+        SCENARIO_CLUSTER_OBJECT_LIMITS_MVS_FROM_PERSIST_SOURCES,
+        "cluster object limits (materialized views, from persist sources)",
+        lambda a, t: ClusterObjectLimitsScenario(
+            CLUSTER_OBJECT_LIMITS_MVS_FROM_PERSIST_SOURCES_KIND,
+            sizes=a.cluster_object_limits_sizes,
+            bisect_steps=a.cluster_object_limits_bisect_steps,
+        ),
+        groups=("cluster_object_limits",),
+    ),
+]
 
-    parser.add_argument(
-        "files",
-        nargs="*",
-        default="results_*.cluster.csv",
-        type=str,
-        help="Glob pattern of cluster result files to plot.",
-    )
+SCENARIOS_BY_NAME: dict[str, ScenarioSpec] = {s.name: s for s in SCENARIOS}
 
-    args = parser.parse_args()
-
-    for file in itertools.chain(*map(glob.iglob, args.files)):
-        analyze_cluster_results_file(str(file))
-
-
-def workflow_plot_envd(
-    composition: Composition, parser: WorkflowArgumentParser
-) -> None:
-    """Analyze environmentd-focused results."""
-
-    parser.add_argument(
-        "files",
-        nargs="*",
-        default="results_*.envd.csv",
-        type=str,
-        help="Glob pattern of envd result files to plot.",
-    )
-
-    args = parser.parse_args()
-
-    for file in itertools.chain(*map(glob.iglob, args.files)):
-        analyze_envd_results_file(str(file))
+# `SCENARIO_GROUPS` is the inverse of `ScenarioSpec.groups`, plus an "all"
+# group covering every scenario. Used to expand `--scenarios <group>`.
+SCENARIO_GROUPS: dict[str, list[str]] = {"all": [s.name for s in SCENARIOS]}
+for _spec in SCENARIOS:
+    for _g in _spec.groups:
+        SCENARIO_GROUPS.setdefault(_g, []).append(_spec.name)
+del _spec, _g
 
 
 def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> None:
-    """Analyze the results of the workflow."""
+    """Analyze the results of the workflow.
 
+    Dispatches each result file to the right analyzer by filename suffix
+    (`SUFFIX_ANALYZERS`). To plot only one kind, pass an explicit glob:
+    ``workflow_plot 'results_*.cluster.csv'``.
+    """
     parser.add_argument(
         "files",
         nargs="*",
-        default=["results_*.cluster.csv", "results_*.envd.csv"],
+        default=[f"results_*{suffix}" for suffix, _ in SUFFIX_ANALYZERS],
         type=str,
-        help="Glob pattern of result files to plot.",
+        help="Glob pattern(s) of result files to plot.",
     )
-
     args = parser.parse_args()
-
     for file in itertools.chain(*map(glob.iglob, args.files)):
         file_str = str(file)
         base_name = os.path.basename(file_str)
-        if base_name.endswith(".cluster.csv"):
-            analyze_cluster_results_file(file_str)
-        elif base_name.endswith(".envd.csv"):
-            analyze_envd_results_file(file_str)
+        for suffix, fn in SUFFIX_ANALYZERS:
+            if base_name.endswith(suffix):
+                fn(file_str)
+                break
         else:
             raise UIError(
-                f"Error: Filename '{file_str}' doesn't indicate whether it's a cluster or an envd results file (no .cluster/.envd suffix). Please use the explicit `plot-envd` or `plot-cluster` targets for such files."
+                f"Error: Filename '{file_str}' doesn't indicate which "
+                "result-stream kind it belongs to. Expected one of these "
+                f"suffixes: {', '.join(s for s, _ in SUFFIX_ANALYZERS)}."
             )
 
 
-def analyze_cluster_results_file(file: str) -> None:
-    print(f"--- Analyzing cluster results file {file} ...")
+# M.1 sizes are named tiers, so map each one to (credits/hour, workers).
+M1_SIZES: dict[str, tuple[float, int]] = {
+    "M.1-nano": (0.75, 1),
+    "M.1-micro": (1.5, 1),
+    "M.1-xsmall": (3, 2),
+    "M.1-small": (6, 4),
+    "M.1-medium": (9, 6),
+    "M.1-large": (12, 8),
+    "M.1-1.5xlarge": (18, 12),
+    "M.1-2xlarge": (24, 16),
+    "M.1-3xlarge": (36, 24),
+    "M.1-4xlarge": (48, 31),
+    "M.1-8xlarge": (96, 62),
+    "M.1-16xlarge": (192, 62),
+    "M.1-32xlarge": (384, 62),
+    "M.1-64xlarge": (768, 62),
+    "M.1-128xlarge": (1536, 62),
+}
 
-    def extract_cluster_size(s: str) -> float:
-        match = re.search(r"(\d+)(?:(cc)|(C))", s)
-        if match:
-            if match.group(2):  # 'cc' match
-                return float(match.group(1)) / 100.0
-            elif match.group(3):  # 'C' matches
-                return float(match.group(1))
-        match = re.search(r"(?:scale=)(\d+)(?:,workers=)(\d+)", s)
-        if match:
-            # We don't have credits in docker, so approximate it
-            # 100cc == 2 workers
-            if match.group(1) and match.group(2):
-                return float(match.group(1)) * float(match.group(2)) / 2
-        raise ValueError(f"Invalid cluster size format: {s}")
 
+def extract_cluster_size(s: str) -> float:
+    """Parse a `cluster_size` label (e.g. ``"100cc"``, ``"1600cc"``,
+    ``"1C"``, ``"M.1-large"``, ``"scale=1,workers=2"``) into a numeric
+    credits/hour value suitable for ordering and as a continuous x-axis.
+    """
+    if s in M1_SIZES:
+        return M1_SIZES[s][0]
+    match = re.search(r"(\d+)(?:(cc)|(C))", s)
+    if match:
+        if match.group(2):  # 'cc' match
+            return float(match.group(1)) / 100.0
+        elif match.group(3):  # 'C' matches
+            return float(match.group(1))
+    match = re.search(r"(?:scale=)(\d+)(?:,workers=)(\d+)", s)
+    if match:
+        # We don't have credits in docker, so approximate it
+        # 100cc == 2 workers
+        if match.group(1) and match.group(2):
+            return float(match.group(1)) * float(match.group(2)) / 2
+    raise ValueError(f"Invalid cluster size format: {s}")
+
+
+def extract_workers(s: str, credits_per_h: float) -> float:
+    if s in M1_SIZES:
+        return float(M1_SIZES[s][1])
+    return round(credits_per_h * 1.9375)
+
+
+def _open_results_for_plotting(
+    file: str, label: str
+) -> tuple[pd.DataFrame, str] | None:
+    """Header + empty-check + plot dir setup shared by every analyzer.
+
+    Returns ``(df, plot_dir)`` or ``None`` if the file is empty / nothing
+    further to plot.
+    """
+    print(f"--- Analyzing {label} results file {file} ...")
     df = pd.read_csv(file)
     if df.empty:
         print(f"^^^ +++ File {file} is empty, skipping")
+        return None
+    base_name = os.path.basename(file).split(".")[0]
+    plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
+    os.makedirs(plot_dir, exist_ok=True)
+    return df, plot_dir
+
+
+def analyze_cluster_results_file(file: str) -> None:
+    loaded = _open_results_for_plotting(file, "cluster")
+    if loaded is None:
         return
+    df, plot_dir = loaded
 
     # Cluster replica size as credits/hour
     df["credits_per_h"] = df["cluster_size"].map(extract_cluster_size)
     # Cluster replica size as centi-credits/s
     df["ccredit_per_s"] = df["credits_per_h"] / 3600 * 100
     # Number of timely workers
-    df["workers"] = round(df["credits_per_h"] * 1.9375)
+    df["workers"] = df.apply(
+        lambda r: extract_workers(r["cluster_size"], r["credits_per_h"]), axis=1
+    )
     # Throughput in MiB/s
     df["throughput_mb_per_s"] = df["size_bytes"] / df["time_ms"] * 1000 / 1024 / 1024
     # Throughput in MiB/s/worker
@@ -2774,10 +4691,6 @@ def analyze_cluster_results_file(file: str) -> None:
     # Cost in centi-credits: ccredit/s * s
     df["credit_time"] = df["ccredit_per_s"] * df["time_ms"] / 1000.0
 
-    base_name = os.path.basename(file).split(".")[0]
-    plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
-    os.makedirs(plot_dir, exist_ok=True)
-
     df_all = df
     # Plot the results
     for index in (
@@ -2785,7 +4698,7 @@ def analyze_cluster_results_file(file: str) -> None:
         .drop_duplicates()
         .itertuples(index=False)
     ):
-        (benchmark, category, mode) = (index.scenario, index.category, index.mode)
+        benchmark, category, mode = (index.scenario, index.category, index.mode)
         indexes = (
             (df_all["scenario"] == benchmark)
             & (df_all["category"] == category)
@@ -2818,15 +4731,10 @@ def analyze_cluster_results_file(file: str) -> None:
 
 
 def analyze_envd_results_file(file: str) -> None:
-    print(f"--- Analyzing envd results file {file} ...")
-    df = pd.read_csv(file)
-    if df.empty:
-        print(f"^^^ +++ File {file} is empty, skipping")
+    loaded = _open_results_for_plotting(file, "envd")
+    if loaded is None:
         return
-
-    base_name = os.path.basename(file).split(".")[0]
-    plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
-    os.makedirs(plot_dir, exist_ok=True)
+    df, plot_dir = loaded
 
     # TODO: this might be need to be modified if we have more than one repetitions in an envd results file.
     for (benchmark, category, mode), sub in df.groupby(
@@ -2837,15 +4745,152 @@ def analyze_envd_results_file(file: str) -> None:
         sub_q = sub[sub["qps"].notna() & (sub["qps"] > 0)]
         if sub_q.empty:
             raise UIError(f"No QPS data found for {title} in {file}")
+        sweep = (
+            sub_q[sub_q["concurrency"].notna()]
+            if "concurrency" in sub_q
+            else pd.DataFrame()
+        )
+        if not sweep.empty:
+            plot_qps_sweep(plot_dir, sweep, title, slug)
+        else:
+            plot(
+                plot_dir,
+                sub_q,
+                "qps",
+                f"{title} (QPS)",
+                f"{slug}_qps",
+                "QPS",
+                "Normalized QPS",
+                x="envd_cpus",
+            )
+
+
+def analyze_envd_objects_scalability_results_file(file: str) -> None:
+    """Plot adapter/envd latency vs catalog object count (N).
+
+    Each (scenario, category) pair yields one plot, with `scale` (=N) as the
+    x-axis (categorical bar chart, since the values span 1 to the configured
+    cap — 30k by default via `--envd-objects-scalability-sizes`). The
+    accompanying normalized plot is produced by the shared `plot()` helper.
+    """
+    loaded = _open_results_for_plotting(file, "envd_objects_scalability")
+    if loaded is None:
+        return
+    df, plot_dir = loaded
+
+    for (benchmark, category, mode), sub in df.groupby(
+        ["scenario", "category", "mode"]
+    ):
+        title = f"{str(benchmark).replace('_',' ')} - {str(category).replace('_',' ')} ({mode})"
+        slug = f"{benchmark}_{category}_{mode}".replace(" ", "_")
+        sub_t = sub[sub["time_ms"].notna()]
+        if sub_t.empty:
+            print(f"Warning: No time data for {title} in {file}")
+            continue
         plot(
             plot_dir,
-            sub_q,
-            "qps",
-            f"{title} (QPS)",
-            f"{slug}_qps",
-            "QPS",
-            "Normalized QPS",
-            x="envd_cpus",
+            sub_t,
+            "time_ms",
+            f"{title} (time)",
+            f"{slug}_time_ms",
+            "Time [ms]",
+            "Normalized time",
+            x="scale",
+        )
+
+
+def analyze_cluster_object_limits_results_file(file: str) -> None:
+    """Plot cluster_object_limits results.
+
+    For each scenario produce two plots:
+      - Max-healthy N vs cluster size (one bar per cluster size).
+      - Max local lag (ms) vs N, with one series per cluster size — shows the
+        cliff where freshness collapses.
+    """
+    loaded = _open_results_for_plotting(file, "cluster_object_limits")
+    if loaded is None:
+        return
+    df, plot_dir = loaded
+
+    for benchmark, sub in df.groupby("scenario"):
+        title_base = str(benchmark).replace("_", " ")
+        slug_base = str(benchmark)
+
+        # Max-healthy N per cluster size.
+        healthy = sub[sub["healthy"] == 1]
+        if healthy.empty:
+            print(
+                f"Warning: No healthy data points for {benchmark} in {file}; "
+                "skipping max-N plot"
+            )
+        else:
+            max_n = healthy.groupby("cluster_size")["scale"].max()
+            # Order by numeric cluster size (credits/h) so e.g. 1600cc sits
+            # between 800cc and 3200cc rather than between 100cc and 200cc.
+            max_n = max_n.reindex(sorted(max_n.index, key=extract_cluster_size))
+            df_max_n = max_n.to_frame(name="max_healthy_N")
+            ax = df_max_n.plot(
+                kind="bar",
+                figsize=(10, 6),
+                ylabel="Max healthy N",
+                title=f"{title_base} — max healthy N per cluster size",
+                grid=True,
+                legend=False,
+            )
+            ax.set_xlabel("cluster_size")
+            save_plot(
+                plot_dir,
+                df_max_n,
+                f"{title_base} max healthy N",
+                f"{slug_base}_max_healthy_n",
+            )
+
+        # Lag vs N, one series per cluster size (shows the cliff).
+        sub_t = sub[sub["time_ms"].notna()]
+        if sub_t.empty:
+            print(f"Warning: No lag data for {benchmark} in {file}")
+            continue
+        pivot = sub_t.pivot_table(
+            index="scale",
+            columns="cluster_size",
+            values="time_ms",
+            aggfunc="max",
+        ).sort_index()
+        filtered = pivot.dropna(axis=1, how="all")
+        if filtered.empty:
+            continue
+        # Order the per-cluster-size series by numeric cluster size so the
+        # legend reads small→large rather than alphanumerically.
+        filtered = filtered[sorted(filtered.columns, key=extract_cluster_size)]
+        ax = filtered.plot(
+            kind="line",
+            marker="o",
+            figsize=(12, 6),
+            ylabel=(
+                f"Max local lag [ms]"
+                f" (capped at {CLUSTER_OBJECT_LIMITS_LAG_CAP_MS} ms)"
+            ),
+            title=(
+                f"{title_base} — freshness lag vs N "
+                f"(values >{CLUSTER_OBJECT_LIMITS_LAG_CAP_MS} ms capped; "
+                f"healthy threshold {CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS} ms)"
+            ),
+            grid=True,
+        )
+        ax.set_xlabel("N (number of materializations on cluster c)")
+        ax.axhline(
+            CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS,
+            color="red",
+            linestyle="--",
+            linewidth=1,
+            label=f"healthy threshold ({CLUSTER_OBJECT_LIMITS_LAG_THRESHOLD_MS} ms)",
+        )
+        ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0))
+        save_plot(
+            plot_dir,
+            filtered,
+            f"{title_base} lag vs N",
+            f"{slug_base}_lag_vs_n",
         )
 
 
@@ -2884,6 +4929,53 @@ def upload_file(
         print(f"Saving plots to {file_paths}")
 
 
+def plot_qps_sweep(plot_dir: str, data: pd.DataFrame, title: str, slug: str) -> None:
+    """Plot QPS and latency against concurrency, with one series per CPU allocation."""
+    for protocol, protocol_df in data.groupby("protocol"):
+        for metric, label in [
+            ("qps", "Queries / second"),
+            ("mean_latency_ms", "Mean latency (ms)"),
+            ("p99_latency_ms", "p99 latency (ms)"),
+            ("max_latency_ms", "Maximum latency (ms)"),
+        ]:
+            if metric not in protocol_df or protocol_df[metric].isna().all():
+                continue
+            with mpl.rc_context(rc=mpl.rcParamsDefault):
+                fig, ax = plt.subplots(figsize=(10, 6))
+            for cpus, points in protocol_df.groupby("envd_cpus"):
+                points = points.sort_values("concurrency")
+                ax.plot(
+                    points["concurrency"],
+                    points[metric],
+                    "o-",
+                    label=f"{cpus} CPUs",
+                )
+                single = points[points["concurrency"] == 1]
+                if metric == "qps" and not single.empty:
+                    ax.plot(
+                        points["concurrency"],
+                        points["concurrency"]
+                        * 1000
+                        / single["mean_latency_ms"].iloc[0],
+                        ":",
+                        color=ax.lines[-1].get_color(),
+                        alpha=0.5,
+                        label=f"{cpus} CPUs ideal C / L1",
+                    )
+            ax.set_xscale("log", base=2)
+            ax.set_yscale("log")
+            ax.set_xlabel("Concurrent clients")
+            ax.set_ylabel(label)
+            ax.set_title(f"{title}: {protocol}")
+            ax.grid(True, which="both", color="#dddddd", linewidth=0.5)
+            ax.legend()
+            fig.tight_layout()
+            plot_path = os.path.join(plot_dir, f"{slug}_{protocol}_{metric}.png")
+            fig.savefig(plot_path, dpi=160, facecolor="white")
+            plt.close(fig)
+            upload_file([plot_path], f"{title}: {protocol} {label}")
+
+
 def plot(
     plot_dir: str,
     data: pd.DataFrame,
@@ -2897,11 +4989,10 @@ def plot(
     df2 = data.pivot_table(
         index=[x],
         columns=["test_name"],
-        values=[value],
+        values=value,
         aggfunc="min",
     ).sort_index(axis=1)
-    (level, _dropped) = labels_to_drop(df2)
-    filtered = df2.droplevel(level, axis=1).dropna(axis=1, how="all")
+    filtered = df2.dropna(axis=1, how="all")
     if filtered.empty:
         print(f"Warning: No data to plot for {title}")
         return
@@ -2936,19 +5027,6 @@ def plot(
         bbox_to_anchor=(1.0, 1.0),
     )
     save_plot(plot_dir, filtered, f"{title} (Normalized)", f"{slug}_normalized")
-
-
-def labels_to_drop(
-    data: pd.DataFrame,
-) -> tuple[list[Hashable], dict[str, str]]:
-    unique = []
-    dropped = {}
-    for level in range(data.columns.nlevels):
-        labels = data.columns.get_level_values(level)
-        if len(set(labels)) == 1:
-            unique.append(data.columns.names[level])
-            dropped[data.columns.names[level]] = labels[0]
-    return unique, dropped
 
 
 def upload_cluster_results_to_test_analytics(
@@ -3036,3 +5114,73 @@ def upload_environmentd_results_to_test_analytics(
     except Exception as e:
         # An error during an upload must never cause the build to fail
         test_analytics.on_upload_failed(e)
+
+
+@dataclass(frozen=True)
+class ResultStreamSpec:
+    """A result-file kind: suffix, CSV schema, analyzer, and uploader."""
+
+    key: str
+    suffix: str
+    fieldnames: list[str]
+    analyze: Callable[[str], None]
+    upload: Callable[[Composition, str, bool], None]
+
+
+# Order matters for suffix dispatch: longer suffixes first so
+# `.cluster_object_limits.csv` isn't shadowed by `.cluster.csv`.
+RESULT_STREAMS: list[ResultStreamSpec] = [
+    ResultStreamSpec(
+        "cluster_object_limits",
+        ".cluster_object_limits.csv",
+        CLUSTER_FIELDNAMES + ["healthy", "failure_mode"],
+        analyze_cluster_object_limits_results_file,
+        upload_cluster_results_to_test_analytics,
+    ),
+    ResultStreamSpec(
+        "envd_objects",
+        ".envd_objects_scalability.csv",
+        CLUSTER_FIELDNAMES,
+        analyze_envd_objects_scalability_results_file,
+        upload_cluster_results_to_test_analytics,
+    ),
+    ResultStreamSpec(
+        "cluster",
+        ".cluster.csv",
+        CLUSTER_FIELDNAMES,
+        analyze_cluster_results_file,
+        upload_cluster_results_to_test_analytics,
+    ),
+    ResultStreamSpec(
+        "envd",
+        ".envd.csv",
+        ENVD_FIELDNAMES,
+        analyze_envd_results_file,
+        upload_environmentd_results_to_test_analytics,
+    ),
+]
+
+RESULT_STREAMS_BY_KEY: dict[str, ResultStreamSpec] = {s.key: s for s in RESULT_STREAMS}
+
+# Back-compat alias for `_plot_files` / `workflow_plot`, which dispatch by
+# filename suffix.
+SUFFIX_ANALYZERS: list[tuple[str, Callable[[str], None]]] = [
+    (s.suffix, s.analyze) for s in RESULT_STREAMS
+]
+
+
+@dataclass
+class OpenStream:
+    """An opened CSV result file together with its writer and spec."""
+
+    spec: ResultStreamSpec
+    path: str
+    file: TextIO
+    writer: csv.DictWriter
+
+
+def _open_stream(spec: ResultStreamSpec, base_name: str) -> OpenStream:
+    path = f"{base_name}{spec.suffix}"
+    file = open(path, "w", newline="")
+    writer = _make_csv_writer(file, spec.fieldnames)
+    return OpenStream(spec, path, file, writer)

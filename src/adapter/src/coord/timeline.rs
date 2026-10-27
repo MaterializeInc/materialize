@@ -23,11 +23,8 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
-use mz_timestamp_oracle::postgres_oracle::{
-    PostgresTimestampOracle, PostgresTimestampOracleConfig,
-};
-use mz_timestamp_oracle::{self, TimestampOracle, WriteTimestamp};
-use timely::progress::Timestamp as TimelyTimestamp;
+use mz_timestamp_oracle::{self, TimestampOracle, TimestampOracleConfig, WriteTimestamp};
+use timely::progress::Timestamp as _;
 use tracing::{Instrument, debug, error, info};
 
 use crate::AdapterError;
@@ -72,12 +69,12 @@ impl TimelineContext {
 /// For each timeline we maintain a timestamp oracle, which is responsible for
 /// providing read (and sometimes write) timestamps, and a set of read holds which
 /// guarantee that those read timestamps are valid.
-pub(crate) struct TimelineState<T: TimelyTimestamp> {
-    pub(crate) oracle: Arc<dyn TimestampOracle<T> + Send + Sync>,
-    pub(crate) read_holds: ReadHolds<T>,
+pub(crate) struct TimelineState {
+    pub(crate) oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync>,
+    pub(crate) read_holds: ReadHolds,
 }
 
-impl<T: TimelyTimestamp> fmt::Debug for TimelineState<T> {
+impl fmt::Debug for TimelineState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TimelineState")
             .field("read_holds", &self.read_holds)
@@ -146,15 +143,7 @@ impl Coordinator {
         timestamp: Timestamp,
     ) -> impl Future<Output = ()> + Send + 'static {
         let now = self.now().into();
-
-        let upper_bound = upper_bound(&now);
-        if timestamp > upper_bound {
-            error!(
-                %now,
-                "Setting local read timestamp to {timestamp}, which is more than \
-                the desired upper bound {upper_bound}."
-            );
-        }
+        check_runaway_write_ts(&now, timestamp);
 
         let oracle = self.get_local_timestamp_oracle();
 
@@ -192,12 +181,12 @@ impl Coordinator {
     pub(crate) async fn ensure_timeline_state<'a>(
         &'a mut self,
         timeline: &'a Timeline,
-    ) -> &'a mut TimelineState<Timestamp> {
+    ) -> &'a mut TimelineState {
         Self::ensure_timeline_state_with_initial_time(
             timeline,
             Timestamp::minimum(),
             self.catalog().config().now.clone(),
-            self.pg_timestamp_oracle_config.clone(),
+            self.timestamp_oracle_config.clone(),
             &mut self.global_timelines,
             self.read_only_controllers,
         )
@@ -211,15 +200,12 @@ impl Coordinator {
         timeline: &'a Timeline,
         initially: Timestamp,
         now: NowFn,
-        pg_oracle_config: Option<PostgresTimestampOracleConfig>,
-        global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
+        oracle_config: Option<TimestampOracleConfig>,
+        global_timelines: &'a mut BTreeMap<Timeline, TimelineState>,
         read_only: bool,
-    ) -> &'a mut TimelineState<Timestamp> {
+    ) -> &'a mut TimelineState {
         if !global_timelines.contains_key(timeline) {
-            info!(
-                "opening a new CRDB/postgres TimestampOracle for timeline {:?}",
-                timeline,
-            );
+            info!("opening a new TimestampOracle for timeline {:?}", timeline,);
 
             let now_fn = if timeline == &Timeline::EpochMilliseconds {
                 now
@@ -235,23 +221,15 @@ impl Coordinator {
                 NowFn::from(|| Timestamp::minimum().into())
             };
 
-            let pg_oracle_config = pg_oracle_config.expect(
-                        "missing --timestamp-oracle-url even though the crdb-backed timestamp oracle was configured");
-
-            let batching_metrics = Arc::clone(&pg_oracle_config.metrics);
-
-            let pg_oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> = Arc::new(
-                PostgresTimestampOracle::open(
-                    pg_oracle_config,
-                    timeline.to_string(),
-                    initially,
-                    now_fn,
-                    read_only,
-                )
-                .await,
+            let oracle_config = oracle_config.expect(
+                "missing --timestamp-oracle-url even though the timestamp oracle was configured",
             );
 
-            let batching_oracle = BatchingTimestampOracle::new(batching_metrics, pg_oracle);
+            let oracle = oracle_config
+                .open(timeline.to_string(), initially, now_fn, read_only)
+                .await;
+
+            let batching_oracle = BatchingTimestampOracle::new(oracle_config.metrics(), oracle);
 
             let oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> =
                 Arc::new(batching_oracle);
@@ -293,24 +271,38 @@ impl Coordinator {
         became_empty
     }
 
-    pub(crate) fn remove_compute_ids_from_timeline<I>(&mut self, ids: I) -> Vec<Timeline>
-    where
-        I: IntoIterator<Item = (ComputeInstanceId, GlobalId)>,
-    {
-        let mut empty_timelines = BTreeSet::new();
-        for (compute_instance, id) in ids {
-            for (timeline, TimelineState { read_holds, .. }) in &mut self.global_timelines {
-                read_holds.remove_compute_collection(compute_instance, id);
-                if read_holds.is_empty() {
-                    empty_timelines.insert(timeline.clone());
-                }
-            }
-        }
-        empty_timelines.into_iter().collect()
+    /// Downgrades the [`EpochMilliseconds`](Timeline::EpochMilliseconds) timeline's read holds
+    /// to `read_ts`.
+    ///
+    /// `read_ts` must not exceed the local oracle's read frontier, i.e. it must come from the
+    /// oracle's `read_ts()` or from a write that was already applied with `apply_write`.
+    /// Downgrading past the oracle's read frontier could let compaction pass timestamps the
+    /// oracle can still serve reads at.
+    pub(crate) fn downgrade_local_read_holds(&mut self, read_ts: Timestamp) {
+        let TimelineState { read_holds, .. } = self
+            .global_timelines
+            .get_mut(&Timeline::EpochMilliseconds)
+            .expect("no realtime timeline");
+        read_holds.downgrade(read_ts);
     }
 
+    /// Advances all timelines other than [`EpochMilliseconds`](Timeline::EpochMilliseconds) to
+    /// their objects' uppers and downgrades their read holds accordingly.
+    ///
+    /// The `EpochMilliseconds` oracle is advanced by group commits, so it is not touched here.
+    /// Its read holds are downgraded separately via [`Self::downgrade_local_read_holds`].
     #[instrument(level = "debug")]
-    pub(crate) async fn advance_timelines(&mut self) {
+    pub(crate) async fn advance_custom_timelines(&mut self) {
+        // Common case: only the EpochMilliseconds timeline exists, nothing to do.
+        if !self
+            .global_timelines
+            .keys()
+            .any(|timeline| *timeline != Timeline::EpochMilliseconds)
+        {
+            return;
+        }
+
+        // Take the map so we can call `&self` methods while mutating the timeline states.
         let global_timelines = std::mem::take(&mut self.global_timelines);
         for (
             timeline,
@@ -320,9 +312,12 @@ impl Coordinator {
             },
         ) in global_timelines
         {
-            // Timeline::EpochMilliseconds is advanced in group commits and doesn't need to be
-            // manually advanced here.
-            if timeline != Timeline::EpochMilliseconds && !self.read_only_controllers {
+            if timeline == Timeline::EpochMilliseconds {
+                self.global_timelines
+                    .insert(timeline, TimelineState { oracle, read_holds });
+                continue;
+            }
+            if !self.read_only_controllers {
                 // For non realtime sources, we define now as the largest timestamp, not in
                 // advance of any object's upper. This is the largest timestamp that is closed
                 // to writes.
@@ -343,7 +338,7 @@ impl Coordinator {
                         now,
                     );
                 }
-            };
+            }
             let read_ts = oracle.read_ts().await;
             read_holds.downgrade(read_ts);
             self.global_timelines
@@ -352,13 +347,40 @@ impl Coordinator {
     }
 }
 
-/// Convenience function for calculating the current upper bound that we want to
-/// prevent the global timestamp from exceeding.
-fn upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
+/// The highest timestamp the `EpochMilliseconds` write timeline may be advanced to
+/// while the wall clock reads `now`.
+///
+/// A write above this is a runaway: the oracle is monotone and durable, so every later
+/// write and strict-serializable read on the timeline blocks until the wall clock catches
+/// up, across restarts. Group commit stays under it by allocating from the oracle, which
+/// clamps to the clock. A caller that chooses its own write timestamp has to be checked
+/// against it, see `GroupCommitter::commit_timestamped`.
+pub(crate) fn write_ts_upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
     const TIMESTAMP_INTERVAL_MS: u64 = 5000;
     const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
 
     now.saturating_add(TIMESTAMP_INTERVAL_MS * TIMESTAMP_INTERVAL_UPPER_BOUND)
+}
+
+/// Reports a write timestamp that is further ahead of `now` than
+/// [`write_ts_upper_bound`] allows, the signal that the `EpochMilliseconds` timeline has
+/// run away (e.g. after a wall-clock regression, or from a durably poisoned oracle).
+///
+/// This is a detector, not a guard: the timestamp has already been chosen, and every
+/// caller that can still refuse one checks the bound itself. It logs rather than fails,
+/// because every way left to reach it is a condition this process inherited. A durable
+/// runaway is re-applied to the oracle on every boot, and a backwards clock step is what
+/// the group committer's throttle waits out, so failing here would turn a stalled
+/// timeline into a crash loop.
+pub(crate) fn check_runaway_write_ts(now: &mz_repr::Timestamp, timestamp: mz_repr::Timestamp) {
+    let upper_bound = write_ts_upper_bound(now);
+    if timestamp > upper_bound {
+        error!(
+            %now,
+            "setting local write timestamp to {timestamp}, which is more than \
+            the desired upper bound {upper_bound}"
+        );
+    }
 }
 
 /// Return the set of ids in a timedomain and verify timeline correctness.

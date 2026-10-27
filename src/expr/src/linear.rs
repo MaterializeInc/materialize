@@ -12,6 +12,7 @@ use std::fmt::Display;
 use mz_repr::{Datum, Row};
 use serde::{Deserialize, Serialize};
 
+use crate::scalar::optimizable::OptimizableExpr;
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr};
 
@@ -29,13 +30,24 @@ use crate::{MirRelationExpr, MirScalarExpr};
 /// expressions in `self.expressions`, even though this is not something
 /// we can directly evaluate. The plan creation methods will defensively
 /// ensure that the right thing happens.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Ord, PartialOrd)]
-pub struct MapFilterProject {
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    Ord,
+    PartialOrd
+)]
+#[serde(bound(deserialize = "E: serde::de::DeserializeOwned"))]
+pub struct MapFilterProject<E: OptimizableExpr = MirScalarExpr> {
     /// A sequence of expressions that should be appended to the row.
     ///
     /// Many of these expressions may not be produced in the output,
     /// and may only be present as common subexpressions.
-    pub expressions: Vec<MirScalarExpr>,
+    pub expressions: Vec<E>,
     /// Expressions that must evaluate to `Datum::True` for the output
     /// row to be produced.
     ///
@@ -46,7 +58,7 @@ pub struct MapFilterProject {
     /// guarded evaluation of predicates.
     ///
     /// This list should be sorted by the first field.
-    pub predicates: Vec<(usize, MirScalarExpr)>,
+    pub predicates: Vec<(usize, E)>,
     /// A sequence of column identifiers whose data form the output row.
     pub projection: Vec<usize>,
     /// The expected number of input columns.
@@ -56,7 +68,7 @@ pub struct MapFilterProject {
     pub input_arity: usize,
 }
 
-impl Display for MapFilterProject {
+impl<E: OptimizableExpr + Display> Display for MapFilterProject<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "MapFilterProject(")?;
         writeln!(f, "  expressions:")?;
@@ -74,7 +86,7 @@ impl Display for MapFilterProject {
     }
 }
 
-impl MapFilterProject {
+impl<E: OptimizableExpr> MapFilterProject<E> {
     /// Create a no-op operator for an input of a supplied arity.
     pub fn new(input_arity: usize) -> Self {
         Self {
@@ -118,7 +130,7 @@ impl MapFilterProject {
     /// If fine manipulation is required, the predicates can be added manually.
     pub fn filter<I>(mut self, predicates: I) -> Self
     where
-        I: IntoIterator<Item = MirScalarExpr>,
+        I: IntoIterator<Item = E>,
     {
         for mut predicate in predicates {
             // Correct column references.
@@ -146,14 +158,14 @@ impl MapFilterProject {
         // We put literal errors at the end as a stop-gap to avoid erroring
         // before we are able to evaluate any predicates that might prevent it.
         self.predicates
-            .sort_by_key(|(position, predicate)| (predicate.is_literal_err(), *position));
+            .sort_by_key(|(position, predicate)| (E::is_literal_err(predicate), *position));
         self
     }
 
     /// Append the result of evaluating expressions to each row.
     pub fn map<I>(mut self, expressions: I) -> Self
     where
-        I: IntoIterator<Item = MirScalarExpr>,
+        I: IntoIterator<Item = E>,
     {
         for mut expression in expressions {
             // Correct column references.
@@ -177,7 +189,7 @@ impl MapFilterProject {
     }
 
     /// Like [`MapFilterProject::as_map_filter_project`], but consumes `self` rather than cloning.
-    pub fn into_map_filter_project(self) -> (Vec<MirScalarExpr>, Vec<MirScalarExpr>, Vec<usize>) {
+    pub fn into_map_filter_project(self) -> (Vec<E>, Vec<E>, Vec<usize>) {
         let predicates = self
             .predicates
             .into_iter()
@@ -190,10 +202,13 @@ impl MapFilterProject {
     ///
     /// In principle, this operator can be implemented as a sequence of
     /// more elemental operators, likely less efficiently.
-    pub fn as_map_filter_project(&self) -> (Vec<MirScalarExpr>, Vec<MirScalarExpr>, Vec<usize>) {
+    pub fn as_map_filter_project(&self) -> (Vec<E>, Vec<E>, Vec<usize>) {
         self.clone().into_map_filter_project()
     }
+}
 
+// Methods that are specific to MirScalarExpr (use MirRelationExpr or as_literal).
+impl MapFilterProject<MirScalarExpr> {
     /// Determines if a scalar expression must be equal to a literal datum.
     pub fn literal_constraint(&self, expr: &MirScalarExpr) -> Option<Datum<'_>> {
         for (_pos, predicate) in self.predicates.iter() {
@@ -312,9 +327,15 @@ impl MapFilterProject {
         // This is essentially the same code as `extract_non_errors_from_expr`, except the seemingly
         // superfluous outer if, which works around a borrow-checker issue:
         // https://github.com/rust-lang/rust/issues/54663
-        if matches!(expr, MirRelationExpr::Map { input: _, scalars } if scalars.iter().all(|s| !s.is_literal_err()))
-            || matches!(expr, MirRelationExpr::Filter { input: _, predicates } if predicates.iter().all(|p| !p.is_literal_err()))
-            || matches!(expr, MirRelationExpr::Project { .. })
+        if matches!(
+            expr,
+            MirRelationExpr::Map { input: _, scalars }
+                if scalars.iter().all(|s| !s.is_literal_err())
+        ) || matches!(
+            expr,
+            MirRelationExpr::Filter { input: _, predicates }
+                if predicates.iter().all(|p| !p.is_literal_err())
+        ) || matches!(expr, MirRelationExpr::Project { .. })
         {
             match expr {
                 MirRelationExpr::Map { input, scalars }
@@ -377,6 +398,15 @@ impl MapFilterProject {
             x => Self::new(x.arity()),
         }
     }
+}
+
+impl<E: OptimizableExpr> MapFilterProject<E> {
+    /// Returns `true` if any predicate in this MFP contains a temporal expression (`mz_now()`).
+    pub fn has_temporal_predicates(&self) -> bool {
+        self.predicates
+            .iter()
+            .any(|(_, predicate)| OptimizableExpr::contains_temporal(predicate))
+    }
 
     /// Extracts temporal predicates into their own `Self`.
     ///
@@ -395,12 +425,17 @@ impl MapFilterProject {
         // Assert that we no longer have temporal expressions to evaluate. This should only
         // occur if the optimization above results with temporal expressions yielded in the
         // output, which is out of spec for how the type is meant to be used.
-        assert!(!self.expressions.iter().any(|e| e.contains_temporal()));
+        assert!(
+            !self
+                .expressions
+                .iter()
+                .any(|e| OptimizableExpr::contains_temporal(e))
+        );
 
         // Extract temporal predicates from `self.predicates`.
         let mut temporal_predicates = Vec::new();
         self.predicates.retain(|(_position, predicate)| {
-            if predicate.contains_temporal() {
+            if OptimizableExpr::contains_temporal(predicate) {
                 temporal_predicates.push(predicate.clone());
                 false
             } else {
@@ -477,7 +512,7 @@ impl MapFilterProject {
                         let mut prev: BTreeSet<_> = mfps[0]
                             .expressions
                             .iter()
-                            .filter(|e| e.support().iter().max() < Some(&input_arity))
+                            .filter(|e| e.support().last() < Some(&input_arity))
                             .collect();
                         let mut next = BTreeSet::default();
                         for mfp in mfps[1..].iter() {
@@ -535,13 +570,13 @@ impl MapFilterProject {
                     }
                 }
                 // As before, but easier: predicates in common to all mfps.
-                let common_preds: Vec<MirScalarExpr> = {
+                let common_preds: Vec<E> = {
                     let input_arity = result_mfp.projection.len();
                     let mut prev: BTreeSet<_> = mfps[0]
                         .predicates
                         .iter()
                         .map(|(_, e)| e)
-                        .filter(|e| e.support().iter().max() < Some(&input_arity))
+                        .filter(|e| e.support().last() < Some(&input_arity))
                         .collect();
                     let mut next = BTreeSet::default();
                     for mfp in mfps[1..].iter() {
@@ -605,12 +640,12 @@ impl MapFilterProject {
     ///
     /// The main behavior is extract temporal predicates, which cannot be evaluated
     /// using the standard machinery.
-    pub fn into_plan(self) -> Result<plan::MfpPlan, String> {
+    pub fn into_plan(self) -> Result<plan::MfpPlan<E>, String> {
         plan::MfpPlan::create_from(self)
     }
 }
 
-impl MapFilterProject {
+impl<E: OptimizableExpr> MapFilterProject<E> {
     /// Partitions `self` into two instances, one of which can be eagerly applied.
     ///
     /// The `available` argument indicates which input columns are available (keys)
@@ -717,8 +752,8 @@ impl MapFilterProject {
             // we are certainly making sub-optimal decisions by pushing down all available
             // work.
             // TODO(mcsherry): establish better principles about what work to push down.
-            let is_available =
-                expr.support().into_iter().all(|i| available_expr[i]) && !expr.is_literal();
+            let is_available = expr.support().into_iter().all(|i| available_expr[i])
+                && !OptimizableExpr::is_literal(&expr);
             if is_available {
                 before_expr.push(expr);
             } else {
@@ -832,11 +867,18 @@ impl MapFilterProject {
 
     /// Lists input columns whose values are used in outputs.
     ///
+    /// You can use `BTreeSet::last()` to extract the maximum demanded column from the set.
+    ///
     /// It is entirely appropriate to determine the demand of an instance
     /// and then both apply a projection to the subject of the instance and
     /// `self.permute` this instance.
     pub fn demand(&self) -> BTreeSet<usize> {
-        let mut demanded = BTreeSet::new();
+        self.demand_with(BTreeSet::new())
+    }
+
+    /// Like [`Self::demand`], but also treats the columns in `demanded`, which
+    /// index the row of inputs followed by mapped values, as used.
+    fn demand_with(&self, mut demanded: BTreeSet<usize>) -> BTreeSet<usize> {
         for (_index, pred) in self.predicates.iter() {
             demanded.extend(pred.support());
         }
@@ -864,19 +906,12 @@ impl MapFilterProject {
         F: Fn(usize) -> usize,
     {
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
-        let map_len = map.len();
-        let action = |col: &mut usize| {
-            if self.input_arity <= *col && *col < self.input_arity + map_len {
-                *col = new_input_arity + (*col - self.input_arity);
-            } else {
-                *col = remap(*col);
-            }
-        };
+        let action = self.permute_action(&remap, new_input_arity);
         for expr in map.iter_mut() {
-            expr.visit_columns(action);
+            expr.visit_columns(&action);
         }
         for pred in filter.iter_mut() {
-            pred.visit_columns(action);
+            pred.visit_columns(&action);
         }
         for proj in project.iter_mut() {
             action(proj);
@@ -887,10 +922,31 @@ impl MapFilterProject {
             .filter(filter)
             .project(project)
     }
+
+    /// The column renaming [`Self::permute_fn`] applies to every reference into
+    /// the row of inputs followed by mapped values.
+    fn permute_action<'a, F>(
+        &self,
+        remap: &'a F,
+        new_input_arity: usize,
+    ) -> impl Fn(&mut usize) + use<'a, F, E>
+    where
+        F: Fn(usize) -> usize,
+    {
+        let input_arity = self.input_arity;
+        let map_len = self.expressions.len();
+        move |col: &mut usize| {
+            if input_arity <= *col && *col < input_arity + map_len {
+                *col = new_input_arity + (*col - input_arity);
+            } else {
+                *col = remap(*col);
+            }
+        }
+    }
 }
 
 // Optimization routines.
-impl MapFilterProject {
+impl<E: OptimizableExpr> MapFilterProject<E> {
     /// Optimize the internal expression evaluation order.
     ///
     /// This method performs several optimizations that are meant to streamline
@@ -940,7 +996,7 @@ impl MapFilterProject {
     pub fn optimize(&mut self) {
         // Track sizes and iterate as long as they decrease.
         let mut prev_size = None;
-        let mut self_size = usize::max_value();
+        let mut self_size = usize::MAX;
         // Continue as long as strict improvements occur.
         while prev_size.map(|p| self_size < p).unwrap_or(true) {
             // Lock in current size.
@@ -963,22 +1019,10 @@ impl MapFilterProject {
             for (index, expr) in self.expressions.iter_mut().enumerate() {
                 // If `expr` matches a filter equating it to a column < index + input_arity, rewrite it
                 for (_, predicate) in self.predicates.iter() {
-                    if let MirScalarExpr::CallBinary {
-                        func: crate::BinaryFunc::Eq(_),
-                        expr1,
-                        expr2,
-                    } = predicate
+                    if let Some(col) =
+                        E::equality_column_alias(predicate, expr, index + self.input_arity)
                     {
-                        if let MirScalarExpr::Column(c, name) = &**expr1 {
-                            if *c < index + self.input_arity && &**expr2 == expr {
-                                *expr = MirScalarExpr::Column(*c, name.clone());
-                            }
-                        }
-                        if let MirScalarExpr::Column(c, name) = &**expr2 {
-                            if *c < index + self.input_arity && &**expr1 == expr {
-                                *expr = MirScalarExpr::Column(*c, name.clone());
-                            }
-                        }
+                        *expr = col;
                     }
                 }
             }
@@ -1007,8 +1051,15 @@ impl MapFilterProject {
 
     /// Total expression sizes across all expressions.
     pub fn size(&self) -> usize {
-        self.expressions.iter().map(|e| e.size()).sum::<usize>()
-            + self.predicates.iter().map(|(_, e)| e.size()).sum::<usize>()
+        self.expressions
+            .iter()
+            .map(|e| OptimizableExpr::size(e))
+            .sum::<usize>()
+            + self
+                .predicates
+                .iter()
+                .map(|(_, e)| OptimizableExpr::size(e))
+                .sum::<usize>()
     }
 
     /// Place each certainly evaluated expression in its own column.
@@ -1160,7 +1211,7 @@ impl MapFilterProject {
 
         // Restore predicate order invariants.
         for (pos, pred) in self.predicates.iter_mut() {
-            *pos = pred.support().into_iter().max().map(|x| x + 1).unwrap_or(0);
+            *pos = pred.support().last().map(|x| *x + 1).unwrap_or(0);
         }
     }
 
@@ -1227,16 +1278,16 @@ impl MapFilterProject {
         let mut reference_count = vec![0; input_arity + self.expressions.len()];
         // Increment reference counts for each use
         for expr in self.expressions.iter() {
-            expr.visit_pre(|e| {
-                if let MirScalarExpr::Column(i, _name) = e {
-                    reference_count[*i] += 1;
+            expr.visit_pre(&mut |e| {
+                if let Some(i) = e.as_column() {
+                    reference_count[i] += 1;
                 }
             });
         }
         for (_, pred) in self.predicates.iter() {
-            pred.visit_pre(|e| {
-                if let MirScalarExpr::Column(i, _name) = e {
-                    reference_count[*i] += 1;
+            pred.visit_pre(&mut |e| {
+                if let Some(i) = e.as_column() {
+                    reference_count[i] += 1;
                 }
             });
         }
@@ -1249,7 +1300,8 @@ impl MapFilterProject {
         for expr in self.expressions.iter() {
             // An express may contain a temporal expression, or reference a column containing such.
             is_temporal.push(
-                expr.contains_temporal() || expr.support().into_iter().any(|col| is_temporal[col]),
+                OptimizableExpr::contains_temporal(expr)
+                    || expr.support().into_iter().any(|col| is_temporal[col]),
             );
         }
 
@@ -1258,7 +1310,7 @@ impl MapFilterProject {
         // or 2c. reference temporal expressions (which cannot be evaluated).
         let mut should_inline = vec![false; reference_count.len()];
         for i in (input_arity..reference_count.len()).rev() {
-            if let MirScalarExpr::Column(c, _) = self.expressions[i - input_arity] {
+            if let Some(c) = self.expressions[i - input_arity].as_column() {
                 should_inline[i] = true;
                 // The reference count of the referenced column should be
                 // incremented with the number of references
@@ -1275,7 +1327,7 @@ impl MapFilterProject {
         // We can only inline column references in `self.projection`, but we should.
         for proj in self.projection.iter_mut() {
             if *proj >= self.input_arity {
-                if let MirScalarExpr::Column(i, _) = self.expressions[*proj - self.input_arity] {
+                if let Some(i) = self.expressions[*proj - self.input_arity].as_column() {
                     // TODO(mgree) !!! propagate name information to projection
                     *proj = i;
                 }
@@ -1288,22 +1340,20 @@ impl MapFilterProject {
     pub fn perform_inlining(&mut self, should_inline: Vec<bool>) {
         for index in 0..self.expressions.len() {
             let (prior, expr) = self.expressions.split_at_mut(index);
-            #[allow(deprecated)]
-            expr[0].visit_mut_post_nolimit(&mut |e| {
-                if let MirScalarExpr::Column(i, _name) = e {
-                    if should_inline[*i] {
-                        *e = prior[*i - self.input_arity].clone();
+            expr[0].visit_mut_post(&mut |e| {
+                if let Some(i) = e.as_column() {
+                    if should_inline[i] {
+                        *e = prior[i - self.input_arity].clone();
                     }
                 }
             });
         }
         for (_index, pred) in self.predicates.iter_mut() {
             let expressions = &self.expressions;
-            #[allow(deprecated)]
-            pred.visit_mut_post_nolimit(&mut |e| {
-                if let MirScalarExpr::Column(i, _name) = e {
-                    if should_inline[*i] {
-                        *e = expressions[*i - self.input_arity].clone();
+            pred.visit_mut_post(&mut |e| {
+                if let Some(i) = e.as_column() {
+                    if should_inline[i] {
+                        *e = expressions[i - self.input_arity].clone();
                     }
                 }
             });
@@ -1409,83 +1459,49 @@ impl MapFilterProject {
 /// `(input_arity + pos)`, where `pos` is the position of the memoized part in
 /// `memoized_parts`, and `input_arity` is the arity of the input that `expr`
 /// refers to.
-pub fn memoize_expr(
-    expr: &mut MirScalarExpr,
-    memoized_parts: &mut Vec<MirScalarExpr>,
+pub fn memoize_expr<E: OptimizableExpr>(
+    expr: &mut E,
+    memoized_parts: &mut Vec<E>,
     input_arity: usize,
 ) {
-    #[allow(deprecated)]
-    expr.visit_mut_pre_post_nolimit(
-        &mut |e| {
-            // We should not eagerly memoize `if` branches that might not be taken.
-            // TODO: Memoize expressions in the intersection of `then` and `els`.
-            if let MirScalarExpr::If { cond, .. } = e {
-                return Some(vec![cond]);
-            }
-
-            // We should not eagerly memoize `COALESCE` expressions after the first,
-            // as they are only meant to be evaluated if the preceding expressions
-            // evaluate to NULL. We could memoize any preceding by expressions that
-            // are certain not to error.
-            if let MirScalarExpr::CallVariadic {
-                func: crate::VariadicFunc::Coalesce,
-                exprs,
-            } = e
-            {
-                return Some(exprs.iter_mut().take(1).collect());
-            }
-
-            // We should not deconstruct temporal filters, because `MfpPlan::create_from` expects
-            // those to be in a specific form. However, we _should_ attend to the expression that is
-            // on the opposite side of mz_now(), because it might be a complex expression in itself,
-            // and is ok to deconstruct.
-            if let Some((_func, other_side)) = e.as_mut_temporal_filter().ok() {
-                return Some(vec![other_side]);
-            }
-
-            None
-        },
-        &mut |e| {
-            match e {
-                MirScalarExpr::Literal(_, _) => {
-                    // Literals do not need to be memoized.
-                }
-                MirScalarExpr::Column(col, _) => {
-                    // Column references do not need to be memoized, but may need to be
-                    // updated if they reference a column reference themselves.
-                    if *col > input_arity {
-                        if let MirScalarExpr::Column(col2, _) = memoized_parts[*col - input_arity] {
-                            // We do _not_ propagate column names, since mis-associating names and column
-                            // references will be very confusing (and possibly bug-inducing).
-                            *col = col2;
-                        }
-                    }
-                }
-                _ => {
-                    // TODO: OOO (Optimizer Optimization Opportunity):
-                    // we are quadratic in expression size because of this .iter().position
-                    if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {
-                        // Any complex expression that already exists as a prior column can
-                        // be replaced by a reference to that column.
-                        *e = MirScalarExpr::column(input_arity + position);
-                    } else {
-                        // A complex expression that does not exist should be memoized, and
-                        // replaced by a reference to the column.
-                        memoized_parts.push(std::mem::replace(
-                            e,
-                            MirScalarExpr::column(input_arity + memoized_parts.len()),
-                        ));
-                    }
+    expr.visit_mut_pre_post(&mut |e| e.eager_children(), &mut |e| {
+        if E::is_literal(e) {
+            // Literals do not need to be memoized.
+            return;
+        }
+        if let Some(col) = e.as_column_mut() {
+            // Column references do not need to be memoized, but may need to be
+            // updated if they reference a column reference themselves.
+            if *col > input_arity {
+                if let Some(col2) = memoized_parts[*col - input_arity].as_column() {
+                    // Update the column index in place, preserving any name information.
+                    *col = col2;
                 }
             }
-        },
-    )
+            return;
+        }
+        // TODO: OOO (Optimizer Optimization Opportunity):
+        // we are quadratic in expression size because of this .iter().position
+        if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {
+            // Any complex expression that already exists as a prior column can
+            // be replaced by a reference to that column.
+            *e = E::column(input_arity + position);
+        } else {
+            // A complex expression that does not exist should be memoized, and
+            // replaced by a reference to the column.
+            memoized_parts.push(std::mem::replace(
+                e,
+                E::column(input_arity + memoized_parts.len()),
+            ));
+        }
+    });
 }
 
 pub mod util {
     use std::collections::BTreeMap;
 
     use crate::MirScalarExpr;
+    use crate::scalar::columns::Columns;
 
     #[allow(dead_code)]
     /// A triple of actions that map from rows to (key, val) pairs and back again.
@@ -1501,8 +1517,9 @@ pub mod util {
     /// Derive supporting logic to support transforming rows to (key, val) pairs,
     /// and back again.
     ///
-    /// We are given as input a list of key expressions and an input arity, and the
-    /// requirement the produced key should be the application of the key expressions.
+    /// We are given as input a list of mappings from columns to key indices, a key length,
+    /// and an input arity. (The produced key should be the application of the key expressions.)
+    ///
     /// To produce the `val` output, we will identify those input columns not found in
     /// the key expressions, and name all other columns.
     /// To reconstitute the original row, we identify the sequence of columns from the
@@ -1513,10 +1530,10 @@ pub mod util {
     /// of a row that should become the value associated with its key.
     ///
     /// The permutations and thinning expressions generated here will be tracked in
-    /// `dataflow::plan::AvailableCollections`; see the
+    /// `compute_types::plan::AvailableCollections`; see the
     /// documentation there for more details.
     pub fn permutation_for_arrangement(
-        key: &[MirScalarExpr],
+        key: &[impl Columns],
         unthinned_arity: usize,
     ) -> (Vec<usize>, Vec<usize>) {
         let columns_in_key: BTreeMap<_, _> = key
@@ -1524,6 +1541,7 @@ pub mod util {
             .enumerate()
             .filter_map(|(i, key_col)| key_col.as_column().map(|c| (c, i)))
             .collect();
+
         let mut input_cursor = key.len();
         let permutation = (0..unthinned_arity)
             .map(|c| {
@@ -1576,20 +1594,34 @@ pub mod util {
 }
 
 pub mod plan {
+    use std::collections::BTreeSet;
     use std::iter;
 
     use mz_repr::{Datum, Diff, Row, RowArena};
     use serde::{Deserialize, Serialize};
 
-    use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, UnaryFunc, func};
+    use crate::scalar::optimizable::OptimizableExpr;
+    use crate::{Columns, Eval};
+    use crate::{EvalError, MapFilterProject, MirScalarExpr};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
     #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
-    pub struct SafeMfpPlan {
-        pub(crate) mfp: MapFilterProject,
+    #[serde(bound(deserialize = "E: serde::de::DeserializeOwned"))]
+    pub struct SafeMfpPlan<E: OptimizableExpr = MirScalarExpr> {
+        pub(crate) mfp: MapFilterProject<E>,
     }
 
-    impl SafeMfpPlan {
+    impl<E: OptimizableExpr> SafeMfpPlan<E> {
+        /// Wrap a `MapFilterProject` in a `SafeMfpPlan`.
+        pub fn from_mfp(mfp: MapFilterProject<E>) -> Self {
+            Self { mfp }
+        }
+
+        /// Unwrap the inner `MapFilterProject`.
+        pub fn into_mfp(self) -> MapFilterProject<E> {
+            self.mfp
+        }
+
         /// Remaps references to input columns according to `remap`.
         ///
         /// Leaves other column references, e.g. to newly mapped columns, unchanged.
@@ -1599,6 +1631,14 @@ pub mod plan {
         {
             self.mfp.permute_fn(remap, new_arity);
         }
+
+        /// Returns true when `Self` is the identity.
+        pub fn is_identity(&self) -> bool {
+            self.mfp.is_identity()
+        }
+    }
+
+    impl<E: OptimizableExpr + Eval> SafeMfpPlan<E> {
         /// Evaluates the linear operator on a supplied list of datums.
         ///
         /// The arguments are the initial datums associated with the row,
@@ -1681,15 +1721,10 @@ pub mod plan {
             self.mfp.predicates.iter().any(|(_pos, e)| e.could_error())
                 || self.mfp.expressions.iter().any(|e| e.could_error())
         }
-
-        /// Returns true when `Self` is the identity.
-        pub fn is_identity(&self) -> bool {
-            self.mfp.is_identity()
-        }
     }
 
-    impl std::ops::Deref for SafeMfpPlan {
-        type Target = MapFilterProject;
+    impl<E: OptimizableExpr> std::ops::Deref for SafeMfpPlan<E> {
+        type Target = MapFilterProject<E>;
         fn deref(&self) -> &Self::Target {
             &self.mfp
         }
@@ -1704,17 +1739,42 @@ pub mod plan {
     /// They must directly constrain `MzNow` from below or above,
     /// by expressions that do not themselves contain `MzNow`.
     /// Conjunctions of such constraints are also ok.
-    #[derive(Clone, Debug, PartialEq)]
-    pub struct MfpPlan {
+    #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+    #[serde(bound(deserialize = "E: serde::de::DeserializeOwned"))]
+    pub struct MfpPlan<E: OptimizableExpr = MirScalarExpr> {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
-        pub(crate) mfp: SafeMfpPlan,
-        /// Expressions that when evaluated lower-bound `MzNow`.
-        pub(crate) lower_bounds: Vec<MirScalarExpr>,
-        /// Expressions that when evaluated upper-bound `MzNow`.
-        pub(crate) upper_bounds: Vec<MirScalarExpr>,
+        pub(crate) mfp: SafeMfpPlan<E>,
+        /// Expressions that when evaluated lower-bound or equal (<=) `MzNow`.
+        pub(crate) lower_bounds: Vec<E>,
+        /// Expressions that when evaluated strictly upper-bound `MzNow`.
+        pub(crate) upper_bounds: Vec<E>,
     }
 
-    impl MfpPlan {
+    impl<E: OptimizableExpr> MfpPlan<E> {
+        /// Construct an `MfpPlan` from its components.
+        pub fn from_parts(mfp: SafeMfpPlan<E>, lower_bounds: Vec<E>, upper_bounds: Vec<E>) -> Self {
+            Self {
+                mfp,
+                lower_bounds,
+                upper_bounds,
+            }
+        }
+
+        /// Deconstruct into components.
+        pub fn into_parts(self) -> (SafeMfpPlan<E>, Vec<E>, Vec<E>) {
+            (self.mfp, self.lower_bounds, self.upper_bounds)
+        }
+
+        /// Access the inner `SafeMfpPlan`.
+        pub fn safe_mfp(&self) -> &SafeMfpPlan<E> {
+            &self.mfp
+        }
+
+        /// Borrow all parts: `(safe_mfp, lower_bounds, upper_bounds)`.
+        pub fn as_parts(&self) -> (&SafeMfpPlan<E>, &[E], &[E]) {
+            (&self.mfp, &self.lower_bounds, &self.upper_bounds)
+        }
+
         /// Partitions `predicates` into non-temporal, and lower and upper temporal bounds.
         ///
         /// The first returned list is of predicates that do not contain `mz_now`.
@@ -1728,17 +1788,12 @@ pub mod plan {
         ///
         /// If any unsupported expression is found, for example one that uses `mz_now`
         /// in an unsupported position, an error is returned.
-        pub fn create_from(mut mfp: MapFilterProject) -> Result<Self, String> {
-            let mut lower_bounds = Vec::new();
-            let mut upper_bounds = Vec::new();
-
-            let mut temporal = Vec::new();
-
-            // Optimize, to ensure that temporal predicates are move in to `mfp.predicates`.
+        pub fn create_from(mut mfp: MapFilterProject<E>) -> Result<Self, String> {
             mfp.optimize();
 
+            let mut temporal = Vec::new();
             mfp.predicates.retain(|(_position, predicate)| {
-                if predicate.contains_temporal() {
+                if OptimizableExpr::contains_temporal(predicate) {
                     temporal.push(predicate.clone());
                     false
                 } else {
@@ -1746,39 +1801,7 @@ pub mod plan {
                 }
             });
 
-            for mut predicate in temporal.into_iter() {
-                let (func, expr2) = predicate.as_mut_temporal_filter()?;
-                let expr2 = expr2.clone();
-
-                // LogicalTimestamp <OP> <EXPR2> for several supported operators.
-                match func {
-                    BinaryFunc::Eq(_) => {
-                        lower_bounds.push(expr2.clone());
-                        upper_bounds.push(
-                            expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
-                        );
-                    }
-                    BinaryFunc::Lt(_) => {
-                        upper_bounds.push(expr2.clone());
-                    }
-                    BinaryFunc::Lte(_) => {
-                        upper_bounds.push(
-                            expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
-                        );
-                    }
-                    BinaryFunc::Gt(_) => {
-                        lower_bounds.push(
-                            expr2.call_unary(UnaryFunc::StepMzTimestamp(func::StepMzTimestamp)),
-                        );
-                    }
-                    BinaryFunc::Gte(_) => {
-                        lower_bounds.push(expr2.clone());
-                    }
-                    _ => {
-                        return Err(format!("Unsupported binary temporal operation: {:?}", func));
-                    }
-                }
-            }
+            let (lower_bounds, upper_bounds) = E::extract_temporal_bounds(temporal)?;
 
             Ok(Self {
                 mfp: SafeMfpPlan { mfp },
@@ -1787,11 +1810,45 @@ pub mod plan {
             })
         }
 
+        /// Lists input columns whose values are used in outputs or temporal bounds.
+        ///
+        /// As with [`MapFilterProject::demand`], callers may project their input
+        /// to these columns and then [`Self::permute_fn`] the plan to match.
+        pub fn demand(&self) -> BTreeSet<usize> {
+            let bounds = self.lower_bounds.iter().chain(&self.upper_bounds);
+            self.mfp
+                .mfp
+                .demand_with(bounds.flat_map(|e| e.support()).collect())
+        }
+
+        /// Update input column references, due to an input projection or permutation.
+        ///
+        /// See [`MapFilterProject::permute_fn`] for the contract on `remap`.
+        pub fn permute_fn<F>(&mut self, remap: F, new_arity: usize)
+        where
+            F: Fn(usize) -> usize,
+        {
+            // Bounds index the same row of inputs followed by mapped values as
+            // the plan's own expressions, so they take the same renaming. It
+            // must be computed before the inner plan is permuted.
+            let action = self.mfp.mfp.permute_action(&remap, new_arity);
+            for bound in self.lower_bounds.iter_mut().chain(&mut self.upper_bounds) {
+                bound.visit_columns(&action);
+            }
+            self.mfp.permute_fn(&remap, new_arity);
+        }
+
         /// Indicates if the planned `MapFilterProject` emits exactly its inputs as outputs.
         pub fn is_identity(&self) -> bool {
             self.mfp.mfp.is_identity()
                 && self.lower_bounds.is_empty()
                 && self.upper_bounds.is_empty()
+        }
+
+        /// Returns `true` if the plan contains temporal bounds
+        /// (i.e., predicates involving `mz_now()`).
+        pub fn has_temporal_bounds(&self) -> bool {
+            !self.lower_bounds.is_empty() || !self.upper_bounds.is_empty()
         }
 
         /// Returns `self`, and leaves behind an identity operator that acts on its output.
@@ -1811,7 +1868,7 @@ pub mod plan {
         ///
         /// If that is not possible, the original instance is returned as an error.
         #[allow(clippy::result_large_err)]
-        pub fn into_nontemporal(self) -> Result<SafeMfpPlan, Self> {
+        pub fn into_nontemporal(self) -> Result<SafeMfpPlan<E>, Self> {
             if self.lower_bounds.is_empty() && self.upper_bounds.is_empty() {
                 Ok(self.mfp)
             } else {
@@ -1823,139 +1880,12 @@ pub mod plan {
         /// scalar expressions in the plan.
         ///
         /// The order of iteration is unspecified.
-        pub fn iter_nontemporal_exprs(&mut self) -> impl Iterator<Item = &mut MirScalarExpr> {
+        pub fn iter_nontemporal_exprs(&mut self) -> impl Iterator<Item = &mut E> {
             iter::empty()
                 .chain(self.mfp.mfp.predicates.iter_mut().map(|(_, expr)| expr))
                 .chain(&mut self.mfp.mfp.expressions)
                 .chain(&mut self.lower_bounds)
                 .chain(&mut self.upper_bounds)
-        }
-
-        /// Evaluate the predicates, temporal and non-, and return times and differences for `data`.
-        ///
-        /// If `self` contains only non-temporal predicates, the result will either be `(time, diff)`,
-        /// or an evaluation error. If `self contains temporal predicates, the results can be times
-        /// that are greater than the input `time`, and may contain negated `diff` values.
-        ///
-        /// The `row_builder` is not cleared first, but emptied if the function
-        /// returns an iterator with any `Ok(_)` element.
-        pub fn evaluate<'b, 'a: 'b, E: From<EvalError>, V: Fn(&mz_repr::Timestamp) -> bool>(
-            &'a self,
-            datums: &'b mut Vec<Datum<'a>>,
-            arena: &'a RowArena,
-            time: mz_repr::Timestamp,
-            diff: Diff,
-            valid_time: V,
-            row_builder: &mut Row,
-        ) -> impl Iterator<
-            Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>,
-        > + use<E, V> {
-            match self.mfp.evaluate_inner(datums, arena) {
-                Err(e) => {
-                    return Some(Err((e.into(), time, diff))).into_iter().chain(None);
-                }
-                Ok(true) => {}
-                Ok(false) => {
-                    return None.into_iter().chain(None);
-                }
-            }
-
-            // Lower and upper bounds.
-            let mut lower_bound = time;
-            let mut upper_bound = None;
-
-            // Track whether we have seen a null in either bound, as this should
-            // prevent the record from being produced at any time.
-            let mut null_eval = false;
-
-            // Advance our lower bound to be at least the result of any lower bound
-            // expressions.
-            for l in self.lower_bounds.iter() {
-                match l.eval(datums, arena) {
-                    Err(e) => {
-                        return Some(Err((e.into(), time, diff)))
-                            .into_iter()
-                            .chain(None.into_iter());
-                    }
-                    Ok(Datum::MzTimestamp(d)) => {
-                        lower_bound = lower_bound.max(d);
-                    }
-                    Ok(Datum::Null) => {
-                        null_eval = true;
-                    }
-                    x => {
-                        panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
-                    }
-                }
-            }
-
-            // If the lower bound exceeds our `until` frontier, it should not appear in the output.
-            if !valid_time(&lower_bound) {
-                return None.into_iter().chain(None);
-            }
-
-            // If there are any upper bounds, determine the minimum upper bound.
-            for u in self.upper_bounds.iter() {
-                // We can cease as soon as the lower and upper bounds match,
-                // as the update will certainly not be produced in that case.
-                if upper_bound != Some(lower_bound) {
-                    match u.eval(datums, arena) {
-                        Err(e) => {
-                            return Some(Err((e.into(), time, diff)))
-                                .into_iter()
-                                .chain(None.into_iter());
-                        }
-                        Ok(Datum::MzTimestamp(d)) => {
-                            if let Some(upper) = upper_bound {
-                                upper_bound = Some(upper.min(d));
-                            } else {
-                                upper_bound = Some(d);
-                            };
-                            // Force the upper bound to be at least the lower
-                            // bound. The `is_some()` test should always be true
-                            // due to the above block, but maintain it here in
-                            // case that changes. It's hopefully optimized away.
-                            if upper_bound.is_some() && upper_bound < Some(lower_bound) {
-                                upper_bound = Some(lower_bound);
-                            }
-                        }
-                        Ok(Datum::Null) => {
-                            null_eval = true;
-                        }
-                        x => {
-                            panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
-                        }
-                    }
-                }
-            }
-
-            // If the upper bound exceeds our `until` frontier, it should not appear in the output.
-            if let Some(upper) = &mut upper_bound {
-                if !valid_time(upper) {
-                    upper_bound = None;
-                }
-            }
-
-            // Produce an output only if the upper bound exceeds the lower bound,
-            // and if we did not encounter a `null` in our evaluation.
-            if Some(lower_bound) != upper_bound && !null_eval {
-                row_builder
-                    .packer()
-                    .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
-                let upper_opt =
-                    upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
-                let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
-                lower.into_iter().chain(upper_opt)
-            } else {
-                None.into_iter().chain(None)
-            }
-        }
-
-        /// Returns true if evaluation could introduce an error on non-error inputs.
-        pub fn could_error(&self) -> bool {
-            self.mfp.could_error()
-                || self.lower_bounds.iter().any(|e| e.could_error())
-                || self.upper_bounds.iter().any(|e| e.could_error())
         }
 
         /// Indicates that `Self` ignores its input to the extent that it can be evaluated on `&[]`.
@@ -1967,6 +1897,320 @@ pub mod plan {
                 && self.upper_bounds.is_empty()
                 && self.mfp.mfp.projection.is_empty()
                 && self.mfp.mfp.predicates.is_empty()
+        }
+    }
+
+    impl MfpPlan<MirScalarExpr> {
+        /// Reconstruct a `MapFilterProject` by folding temporal bounds back as
+        /// `mz_now()` predicates.
+        ///
+        /// This is the inverse of `create_from`: the returned MFP, when passed
+        /// through `create_from`, will produce an equivalent `MfpPlan`.
+        ///
+        /// Lower bounds become `mz_now() >= expr` predicates;
+        /// upper bounds become `mz_now() < expr` predicates.
+        pub fn into_map_filter_project(self) -> MapFilterProject<MirScalarExpr> {
+            let (safe, lower_bounds, upper_bounds) = self.into_parts();
+            let mut mfp = safe.into_mfp();
+
+            let mz_now = MirScalarExpr::CallUnmaterializable(crate::UnmaterializableFunc::MzNow);
+
+            for lb in lower_bounds {
+                // mz_now() >= lb
+                let predicate = mz_now.clone().call_binary(lb, crate::func::Gte);
+                let support = predicate
+                    .support()
+                    .into_iter()
+                    .max()
+                    .map(|c| c + 1)
+                    .unwrap_or(0);
+                mfp.predicates.push((support, predicate));
+            }
+            for ub in upper_bounds {
+                // mz_now() < ub
+                let predicate = mz_now.clone().call_binary(ub, crate::func::Lt);
+                let support = predicate
+                    .support()
+                    .into_iter()
+                    .max()
+                    .map(|c| c + 1)
+                    .unwrap_or(0);
+                mfp.predicates.push((support, predicate));
+            }
+
+            mfp
+        }
+    }
+
+    impl<E: OptimizableExpr + Eval> MfpPlan<E> {
+        /// Evaluate the predicates, temporal and non-, and return times and differences for `data`.
+        ///
+        /// If `self` contains only non-temporal predicates, the result will either be `(time, diff)`,
+        /// or an evaluation error. If `self contains temporal predicates, the results can be times
+        /// that are greater than the input `time`, and may contain negated `diff` values.
+        ///
+        /// The `row_builder` is not cleared first, but emptied if the function
+        /// returns an iterator with any `Ok(_)` element.
+        pub fn evaluate<'b, 'a: 'b, Err: From<EvalError>, V: Fn(&mz_repr::Timestamp) -> bool>(
+            &'a self,
+            datums: &'b mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+            time: mz_repr::Timestamp,
+            diff: Diff,
+            valid_time: V,
+            row_builder: &mut Row,
+        ) -> impl Iterator<
+            Item = Result<(Row, mz_repr::Timestamp, Diff), (Err, mz_repr::Timestamp, Diff)>,
+        > + use<Err, V, E> {
+            match self.mfp.evaluate_inner(datums, arena) {
+                Err(e) => {
+                    return Some(Err((e.into(), time, diff))).into_iter().chain(None);
+                }
+                Ok(true) => {}
+                Ok(false) => {
+                    return None.into_iter().chain(None);
+                }
+            }
+            evaluate_temporal(
+                &self.lower_bounds,
+                &self.upper_bounds,
+                &self.mfp.mfp.projection,
+                datums,
+                arena,
+                time,
+                diff,
+                valid_time,
+                row_builder,
+            )
+        }
+
+        /// Returns true if evaluation could introduce an error on non-error inputs.
+        pub fn could_error(&self) -> bool {
+            self.mfp.could_error()
+                || self.lower_bounds.iter().any(|e| e.could_error())
+                || self.upper_bounds.iter().any(|e| e.could_error())
+        }
+    }
+
+    /// Applies temporal bounds to a row whose non-temporal predicates passed,
+    /// and projects it.
+    ///
+    /// `datums` holds every column the bounds and `projection` refer to.
+    pub(crate) fn evaluate_temporal<
+        E: Eval,
+        Err: From<EvalError>,
+        V: Fn(&mz_repr::Timestamp) -> bool,
+    >(
+        lower_bounds: &[E],
+        upper_bounds: &[E],
+        projection: &[usize],
+        datums: &[Datum],
+        arena: &RowArena,
+        time: mz_repr::Timestamp,
+        diff: Diff,
+        valid_time: V,
+        row_builder: &mut Row,
+    ) -> iter::Chain<
+        std::option::IntoIter<
+            Result<(Row, mz_repr::Timestamp, Diff), (Err, mz_repr::Timestamp, Diff)>,
+        >,
+        std::option::IntoIter<
+            Result<(Row, mz_repr::Timestamp, Diff), (Err, mz_repr::Timestamp, Diff)>,
+        >,
+    > {
+        // Lower and upper bounds.
+        let mut lower_bound = time;
+        let mut upper_bound = None;
+
+        // Track whether we have seen a null in either bound, as this should
+        // prevent the record from being produced at any time.
+        let mut null_eval = false;
+
+        // Advance our lower bound to be at least the result of any lower bound
+        // expressions.
+        for l in lower_bounds.iter() {
+            match l.eval(datums, arena) {
+                Err(e) => {
+                    return Some(Err((e.into(), time, diff))).into_iter().chain(None);
+                }
+                Ok(Datum::MzTimestamp(d)) => {
+                    lower_bound = lower_bound.max(d);
+                }
+                Ok(Datum::Null) => {
+                    null_eval = true;
+                }
+                x => {
+                    panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
+                }
+            }
+        }
+
+        // If the lower bound exceeds our `until` frontier, it should not appear in the output.
+        if !valid_time(&lower_bound) {
+            return None.into_iter().chain(None);
+        }
+
+        // If there are any upper bounds, determine the minimum upper bound.
+        for u in upper_bounds.iter() {
+            // We can cease as soon as the lower and upper bounds match,
+            // as the update will certainly not be produced in that case.
+            if upper_bound != Some(lower_bound) {
+                match u.eval(datums, arena) {
+                    Err(e) => {
+                        return Some(Err((e.into(), time, diff))).into_iter().chain(None);
+                    }
+                    Ok(Datum::MzTimestamp(d)) => {
+                        if let Some(upper) = upper_bound {
+                            upper_bound = Some(upper.min(d));
+                        } else {
+                            upper_bound = Some(d);
+                        };
+                        // Force the upper bound to be at least the lower
+                        // bound. The `is_some()` test should always be true
+                        // due to the above block, but maintain it here in
+                        // case that changes. It's hopefully optimized away.
+                        if upper_bound.is_some() && upper_bound < Some(lower_bound) {
+                            upper_bound = Some(lower_bound);
+                        }
+                    }
+                    Ok(Datum::Null) => {
+                        null_eval = true;
+                    }
+                    x => {
+                        panic!("Non-mz_timestamp value in temporal predicate: {:?}", x);
+                    }
+                }
+            }
+        }
+
+        // If the upper bound exceeds our `until` frontier, it should not appear in the output.
+        if let Some(upper) = &mut upper_bound {
+            if !valid_time(upper) {
+                upper_bound = None;
+            }
+        }
+
+        // Produce an output only if the upper bound exceeds the lower bound,
+        // and if we did not encounter a `null` in our evaluation.
+        if Some(lower_bound) != upper_bound && !null_eval {
+            row_builder
+                .packer()
+                .extend(projection.iter().map(|c| datums[*c]));
+            let upper_opt =
+                upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
+            let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
+            lower.into_iter().chain(upper_opt)
+        } else {
+            None.into_iter().chain(None)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
+
+    use crate::func;
+    use crate::{EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnmaterializableFunc};
+
+    fn ts(t: u64) -> Datum<'static> {
+        Datum::MzTimestamp(Timestamp::from(t))
+    }
+
+    /// Reads `ts | int | ts | int | ts | int`, maps `#6 = step_mz_timestamp(#4)`,
+    /// and keeps `(#3, #6)` while `#0 <= mz_now()`, `mz_now() < step_mz_timestamp(#2)`
+    /// and `mz_now() < #6`. Columns 0 and 2 are referenced only by bounds, the
+    /// map column by a bound and the projection, and columns 1 and 5 are unused.
+    fn temporal_plan() -> MfpPlan {
+        let mz_now = MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let step = |c| MirScalarExpr::column(c).call_unary(func::StepMzTimestamp);
+        let mfp = MapFilterProject::new(6)
+            .map([step(4)])
+            .filter([
+                mz_now
+                    .clone()
+                    .call_binary(MirScalarExpr::column(0), func::Gte),
+                mz_now.clone().call_binary(step(2), func::Lt),
+                mz_now.call_binary(MirScalarExpr::column(6), func::Lt),
+                MirScalarExpr::column(3).call_is_null().not(),
+            ])
+            .project([3, 6]);
+        let plan = MfpPlan::create_from(mfp).expect("plannable");
+        let (safe, lower, upper) = plan.as_parts();
+        assert_eq!(safe.expressions.len(), 1, "the map survives planning");
+        assert_eq!(lower, [MirScalarExpr::column(0)]);
+        assert!(upper.contains(&MirScalarExpr::column(6)), "{upper:?}");
+        plan
+    }
+
+    fn rows() -> Vec<Row> {
+        let int = |i| Datum::Int64(i);
+        vec![
+            Row::pack_slice(&[ts(3), int(10), ts(7), int(1), ts(9), int(20)]),
+            Row::pack_slice(&[ts(3), int(10), ts(9), int(1), ts(7), int(20)]),
+            Row::pack_slice(&[ts(0), int(11), ts(0), int(2), ts(4), int(21)]),
+            Row::pack_slice(&[ts(5), int(12), ts(2), int(3), ts(8), int(22)]),
+            Row::pack_slice(&[ts(1), int(13), ts(9), Datum::Null, ts(9), int(23)]),
+        ]
+    }
+
+    fn evaluate(
+        plan: &MfpPlan,
+        row: &[Datum],
+    ) -> Vec<Result<(Row, Timestamp, Diff), (EvalError, Timestamp, Diff)>> {
+        let arena = RowArena::new();
+        let mut datums = row.to_vec();
+        plan.evaluate(
+            &mut datums,
+            &arena,
+            Timestamp::from(0u64),
+            Diff::ONE,
+            |_| true,
+            &mut Row::default(),
+        )
+        .collect()
+    }
+
+    #[mz_ore::test]
+    fn mfp_plan_demand_includes_bounds() {
+        let plan = temporal_plan();
+        assert_eq!(plan.demand().into_iter().collect::<Vec<_>>(), [0, 2, 3, 4]);
+    }
+
+    #[mz_ore::test]
+    fn mfp_plan_permute_to_demanded_columns() {
+        let plan = temporal_plan();
+        let demand: Vec<usize> = plan.demand().into_iter().collect();
+        let mut permuted = plan.clone();
+        let position = |c: usize| demand.iter().position(|d| *d == c).expect("demanded");
+        permuted.permute_fn(position, demand.len());
+
+        for row in rows() {
+            let full: Vec<Datum> = row.iter().collect();
+            let narrow: Vec<Datum> = demand.iter().map(|c| full[*c]).collect();
+            assert_eq!(
+                evaluate(&permuted, &narrow),
+                evaluate(&plan, &full),
+                "{row:?}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn mfp_plan_truncate_to_max_demand() {
+        let plan = temporal_plan();
+        let max_demand = plan.demand().last().map(|c| c + 1).unwrap_or(0);
+        assert_eq!(max_demand, 5);
+        let mut truncated = plan.clone();
+        truncated.permute_fn(|c| c, max_demand);
+
+        for row in rows() {
+            let full: Vec<Datum> = row.iter().collect();
+            assert_eq!(
+                evaluate(&truncated, &full[..max_demand]),
+                evaluate(&plan, &full),
+                "{row:?}"
+            );
         }
     }
 }

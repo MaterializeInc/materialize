@@ -9,12 +9,14 @@
 
 //! Integration tests for pgwire functionality.
 
+#![recursion_limit = "256"]
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
 use std::time::Duration;
 
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
 use mz_environmentd::test_util::{self, PostgresErrorExt};
@@ -31,6 +33,7 @@ use postgres_array::{Array, Dimension};
 use tokio::sync::mpsc;
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_bind_params() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -194,6 +197,29 @@ fn test_bind_params() {
         let val: i32 = client.query_one("SELECT * FROM t", &[]).unwrap().get(0);
         assert_eq!(val, 42);
     }
+
+    // Test that `varchar_to_text` is properly handled (whether eliminated or no).
+    {
+        client.batch_execute("CREATE TABLE v (w varchar)").unwrap();
+        client.query("INSERT INTO v VALUES ($1)", &[&"aa"]).unwrap();
+        let stmt = client
+            .prepare("SELECT w, w::text, w::text::varchar FROM v WHERE w = $1")
+            .unwrap();
+        assert_eq!(stmt.columns().len(), 3);
+        assert_eq!(stmt.columns()[0].type_(), &Type::VARCHAR);
+        assert_eq!(stmt.columns()[1].type_(), &Type::TEXT);
+        assert_eq!(stmt.columns()[2].type_(), &Type::VARCHAR);
+        let row = client.query_one(&stmt, &[&"aa"]).unwrap();
+        assert_eq!(row.get::<_, String>(0), "aa");
+        assert_eq!(row.get::<_, String>(1), "aa");
+        assert_eq!(row.get::<_, String>(2), "aa");
+
+        let stmt = client
+            .prepare_typed("SELECT 'aa'::varchar::text = $1", &[Type::TEXT])
+            .unwrap();
+        let val: bool = client.query_one(&stmt, &[&"aa"]).unwrap().get(0);
+        assert_eq!(val, true);
+    }
 }
 
 #[mz_ore::test]
@@ -237,6 +263,7 @@ fn test_read_many_rows() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
 async fn test_conn_startup() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
@@ -406,7 +433,157 @@ async fn test_conn_startup() {
     }
 }
 
+// Startup-packet parameters must become the session defaults, like in
+// PostgreSQL, so that RESET and DISCARD ALL restore them rather than the
+// server defaults. Connection poolers rely on this. For example, pgbouncer's
+// default server_reset_query is DISCARD ALL, which must not rebind a pooled
+// connection to the default database.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
+async fn test_startup_params_survive_reset() {
+    let server = test_util::TestHarness::default().start().await;
+
+    async fn show(client: &tokio_postgres::Client, name: &str) -> String {
+        client
+            .query_one(&format!("SHOW {name}"), &[])
+            .await
+            .unwrap()
+            .get(0)
+    }
+
+    // Parameters passed directly in the startup packet.
+    {
+        let client = server
+            .connect()
+            .dbname("startup_db")
+            .application_name("startup_app")
+            .await
+            .unwrap();
+
+        client
+            .batch_execute("SET application_name = 'changed_app'")
+            .await
+            .unwrap();
+        assert_eq!(show(&client, "application_name").await, "changed_app");
+        client
+            .batch_execute("RESET application_name")
+            .await
+            .unwrap();
+        assert_eq!(show(&client, "application_name").await, "startup_app");
+
+        client
+            .batch_execute("SET database = other_db")
+            .await
+            .unwrap();
+        client.batch_execute("DISCARD ALL").await.unwrap();
+        assert_eq!(show(&client, "database").await, "startup_db");
+        assert_eq!(show(&client, "application_name").await, "startup_app");
+
+        client.batch_execute("RESET database").await.unwrap();
+        assert_eq!(show(&client, "database").await, "startup_db");
+    }
+
+    // Parameters passed via the `options` startup parameter.
+    {
+        let client = server
+            .connect()
+            .options("--search_path=custom_schema")
+            .await
+            .unwrap();
+
+        client.batch_execute("DISCARD ALL").await.unwrap();
+        assert_eq!(show(&client, "search_path").await, "custom_schema");
+    }
+
+    // Client-supplied startup parameters take precedence over role defaults,
+    // also as the reset value.
+    {
+        let client = server.connect().await.unwrap();
+        client
+            .batch_execute("ALTER ROLE materialize SET database = role_db")
+            .await
+            .unwrap();
+
+        let client = server.connect().dbname("client_db").await.unwrap();
+        assert_eq!(show(&client, "database").await, "client_db");
+        client.batch_execute("DISCARD ALL").await.unwrap();
+        assert_eq!(show(&client, "database").await, "client_db");
+
+        // Without a client-supplied database, the role default applies.
+        let client = server.connect().await.unwrap();
+        assert_eq!(show(&client, "database").await, "role_db");
+    }
+}
+
+// SQL-529: DISCARD ALL has to reset session variables over the extended query
+// protocol as well as the simple one. tokio-postgres `execute`/`query` run over
+// the extended protocol, while `batch_execute` runs over the simple one, so the
+// existing simple-protocol tests never caught this bug.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
+async fn test_discard_all_resets_over_extended_protocol() {
+    let server = test_util::TestHarness::default().start().await;
+
+    async fn show(client: &tokio_postgres::Client, name: &str) -> String {
+        client
+            .query_one(&format!("SHOW {name}"), &[])
+            .await
+            .unwrap()
+            .get(0)
+    }
+
+    // A plain SET is reset back to the compiled-in default.
+    {
+        let client = server.connect().await.unwrap();
+        client
+            .execute("SET extra_float_digits = 2", &[])
+            .await
+            .unwrap();
+        assert_eq!(show(&client, "extra_float_digits").await, "2");
+        client.execute("DISCARD ALL", &[]).await.unwrap();
+        assert_eq!(show(&client, "extra_float_digits").await, "1");
+    }
+
+    // A startup-supplied default survives DISCARD ALL rather than reverting to
+    // the compiled-in default.
+    {
+        let client = server
+            .connect()
+            .application_name("startup_app")
+            .await
+            .unwrap();
+        client
+            .execute("SET application_name = 'changed_app'", &[])
+            .await
+            .unwrap();
+        assert_eq!(show(&client, "application_name").await, "changed_app");
+        client.execute("DISCARD ALL", &[]).await.unwrap();
+        assert_eq!(show(&client, "application_name").await, "startup_app");
+    }
+
+    // A role-supplied default (ALTER ROLE ... SET) survives DISCARD ALL rather
+    // than reverting to the compiled-in default.
+    {
+        let client = server.connect().await.unwrap();
+        client
+            .execute("ALTER ROLE materialize SET database = role_db", &[])
+            .await
+            .unwrap();
+
+        let client = server.connect().await.unwrap();
+        assert_eq!(show(&client, "database").await, "role_db");
+        client
+            .execute("SET database = other_db", &[])
+            .await
+            .unwrap();
+        assert_eq!(show(&client, "database").await, "other_db");
+        client.execute("DISCARD ALL", &[]).await.unwrap();
+        assert_eq!(show(&client, "database").await, "role_db");
+    }
+}
+
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_conn_user() {
     let server = test_util::TestHarness::default().start_blocking();
 
@@ -441,6 +618,7 @@ fn test_conn_user() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_simple_query_no_hang() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -515,6 +693,7 @@ fn test_copy() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_arrays() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -568,6 +747,7 @@ fn test_arrays() {
 }
 
 #[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
 fn test_record_types() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -616,13 +796,14 @@ fn test_record_types() {
 }
 
 fn pg_test_inner(path: &Path, mz_flags: bool) {
+    pg_test_harness(path, mz_flags, test_util::TestHarness::default)
+}
+
+fn pg_test_harness(path: &Path, mz_flags: bool, harness: fn() -> test_util::TestHarness) {
     datadriven::walk(path.to_str().unwrap(), |tf| {
-        let server = test_util::TestHarness::default()
-            .unsafe_mode()
-            .start_blocking();
+        let server = harness().unsafe_mode().start_blocking();
         if mz_flags {
             server.enable_feature_flags(&[
-                "enable_copy_to_expr",
                 "enable_create_table_from_source",
                 "enable_load_generator_datums",
                 "enable_raise_statement",
@@ -635,7 +816,7 @@ fn pg_test_inner(path: &Path, mz_flags: bool) {
             tokio_postgres::config::Host::Tcp(host) => {
                 format!("{}:{}", host, config.get_ports()[0])
             }
-            _ => panic!("only tcp connections supported"),
+            tokio_postgres::config::Host::Unix(_) => panic!("only tcp connections supported"),
         };
         let user = config.get_user().unwrap();
         let timeout = Duration::from_secs(120);
@@ -680,6 +861,11 @@ fn test_pgtest_copy_from() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_copy_from_range() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from-range.pt"), false);
+}
+
+#[mz_ore::test]
 fn test_pgtest_copy() {
     pg_test_inner(Path::new("../../test/pgtest/copy.pt"), false);
 }
@@ -705,8 +891,18 @@ fn test_pgtest_empty() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_extra_float_digits() {
+    pg_test_inner(Path::new("../../test/pgtest/extra-float-digits.pt"), false);
+}
+
+#[mz_ore::test]
 fn test_pgtest_notice() {
     pg_test_inner(Path::new("../../test/pgtest/notice.pt"), false);
+}
+
+#[mz_ore::test]
+fn test_pgtest_nul() {
+    pg_test_inner(Path::new("../../test/pgtest/nul.pt"), false);
 }
 
 #[mz_ore::test]
@@ -741,6 +937,19 @@ fn test_pgtest_vars() {
 
 // Materialize's differences from Postgres' responses.
 #[mz_ore::test]
+fn test_pgtest_mz_affected() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/affected.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_copy_binary_unsupported() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/copy-binary-unsupported.pt"),
+        true,
+    );
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_copy_from_csv() {
     pg_test_inner(Path::new("../../test/pgtest-mz/copy-from-csv.pt"), true);
 }
@@ -766,8 +975,37 @@ fn test_pgtest_mz_desc() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_discard() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/discard.pt"), true);
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_notice() {
     pg_test_inner(Path::new("../../test/pgtest-mz/notice.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_numeric_binary_infinity() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/numeric-binary-infinity.pt"),
+        true,
+    );
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_numeric_binary_overflow() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/numeric-binary-overflow.pt"),
+        true,
+    );
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_time_binary_out_of_range() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/time-binary-out-of-range.pt"),
+        true,
+    );
 }
 
 #[mz_ore::test]
@@ -786,8 +1024,26 @@ fn test_pgtest_mz_raise() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_subscribe_dependency_dropped() {
+    pg_test_inner(
+        Path::new("../../test/pgtest-mz/subscribe-dependency-dropped.pt"),
+        true,
+    );
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_startup() {
     pg_test_inner(Path::new("../../test/pgtest-mz/startup.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_stray_copy() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/stray-copy.pt"), true);
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_set_local() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/set-local.pt"), true);
 }
 
 #[mz_ore::test]
@@ -798,4 +1054,243 @@ fn test_pgtest_mz_transactions() {
 #[mz_ore::test]
 fn test_pgtest_mz_vars() {
     pg_test_inner(Path::new("../../test/pgtest-mz/vars.pt"), true);
+}
+
+// Guard against .pt files silently losing test coverage when new files are
+// added to test/pgtest/ or test/pgtest-mz/ without a corresponding test wrapper.
+#[mz_ore::test]
+fn test_all_pt_files_have_test_wrappers() {
+    let source = include_str!("pgwire.rs");
+    for (dir, prefix) in [
+        ("../../test/pgtest", "test_pgtest_"),
+        ("../../test/pgtest-mz", "test_pgtest_mz_"),
+    ] {
+        let dir_path = Path::new(dir);
+        for entry in
+            std::fs::read_dir(dir_path).unwrap_or_else(|e| panic!("failed to read {dir}: {e}"))
+        {
+            let entry = entry.unwrap();
+            let file_name = entry.file_name();
+            let name = file_name.to_str().unwrap();
+            if !name.ends_with(".pt") {
+                continue;
+            }
+            let stem = name.trim_end_matches(".pt").replace('-', "_");
+            let expected_fn = format!("fn {prefix}{stem}(");
+            assert!(
+                source.contains(&expected_fn),
+                "no test wrapper found for {dir}/{name} — expected `{expected_fn})`",
+            );
+        }
+    }
+}
+
+// Test that encoding a message with too many columns (> i16::MAX) doesn't
+// corrupt the connection. The codec truncates the buffer when encoding fails,
+// ensuring no partial message is left in the buffer. See
+// https://github.com/MaterializeInc/database-issues/issues/9496
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_many_columns() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    let cols = (1..=32769)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let query = format!("SELECT {cols}");
+
+    // The query must fail because the server can't encode a RowDescription
+    // with more than i16::MAX columns. When encoding fails, `machine.run()`
+    // returns an error, and the catch-all handler in `protocol.rs` sends a
+    // FATAL ErrorResponse with "fields in row description, which exceeds ..."
+    // before closing the connection.
+    //
+    // However, the client non-deterministically sees either the FATAL
+    // ErrorResponse or just "connection closed". This is because the
+    // rust-postgres client's `poll_block_on` drains connection-level events
+    // before polling the query future: if the ErrorResponse and the TCP
+    // close (FIN) arrive in the same read, `poll_read` processes the
+    // ErrorResponse but then immediately hits EOF and returns
+    // `Err(Error::closed)`, which short-circuits `poll_block_on` before the
+    // query future can read the ErrorResponse from the channel.
+    //
+    // Both outcomes indicate the server handled the overflow gracefully (no
+    // partial/corrupt message in the buffer).
+    match client.simple_query(&query) {
+        Ok(_) => panic!("query with too many columns should have failed"),
+        Err(err) => {
+            let err_str = err.to_string_with_causes();
+            assert!(
+                err_str.contains("fields in row description, which exceeds")
+                    || err_str.contains("connection closed"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+}
+
+/// Writes a frontend message with type byte `typ`, filling in its length prefix.
+///
+/// `postgres_protocol`'s builders cap repeated groups at `i16::MAX` entries, so
+/// a message with more parameters than that must be assembled by hand.
+fn put_frontend_message<F: FnOnce(&mut BytesMut)>(buf: &mut BytesMut, typ: u8, body: F) {
+    buf.put_u8(typ);
+    let base = buf.len();
+    buf.put_u32(0);
+    body(buf);
+    let len = u32::try_from(buf.len() - base).unwrap();
+    buf[base..base + 4].copy_from_slice(&len.to_be_bytes());
+}
+
+/// Reads backend messages up to and including the `ReadyForQuery` that answers
+/// `Sync`.
+fn read_until_ready(stream: &mut TcpStream) -> Vec<postgres_protocol::message::backend::Message> {
+    use postgres_protocol::message::backend::Message;
+
+    let mut buf = BytesMut::new();
+    let mut chunk = [0; 1 << 13];
+    let mut msgs = Vec::new();
+    loop {
+        if let Some(msg) = Message::parse(&mut buf).unwrap() {
+            let ready = matches!(msg, Message::ReadyForQuery(_));
+            msgs.push(msg);
+            if ready {
+                return msgs;
+            }
+        } else {
+            let n = stream.read(&mut chunk).unwrap();
+            assert!(n > 0, "connection closed after {} messages", msgs.len());
+            buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+}
+
+// The counts that precede the repeated groups of Parse and Bind (parameter
+// types, format codes, parameter values) are decoded as unsigned, like
+// PostgreSQL does, so a client may send more than `i16::MAX` parameters.
+// Reading such a count as signed made it negative, which dropped the group and
+// left the decoder misaligned for the rest of the message. See SQL-491.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_many_bind_params() {
+    use postgres_protocol::message::backend::Message;
+    use postgres_protocol::message::frontend;
+
+    // One past `i16::MAX`. The wire format allows 65535, but a bind that large
+    // runs into the unrelated `MAX_REQUEST_SIZE` limit.
+    const PARAMS: usize = 32768;
+    const INT4_OID: u32 = 23;
+    // Bound to the last parameter, so the inserted row matches only if the
+    // decoder stayed aligned to the end of the parameter array.
+    const LAST_VALUE: i32 = 4242;
+
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE many_params (a int)")
+        .unwrap();
+
+    let mut stream = TcpStream::connect(server.sql_local_addr()).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(120)))
+        .unwrap();
+    let mut buf = BytesMut::new();
+    frontend::startup_message(
+        vec![
+            ("user", "materialize"),
+            ("database", DEFAULT_DATABASE_NAME),
+            ("options", "--welcome_message=off"),
+        ],
+        &mut buf,
+    )
+    .unwrap();
+    stream.write_all(&buf).unwrap();
+    read_until_ready(&mut stream);
+
+    // The shape from the report: pgjdbc's reWriteBatchedInserts rewrites a batch
+    // into one insert whose placeholder count exceeds `i16::MAX`.
+    let placeholders = (1..=PARAMS)
+        .map(|i| format!("${i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!("INSERT INTO many_params VALUES (coalesce({placeholders}))");
+
+    // The statement and portal are unnamed throughout, hence the bare `0`s.
+    buf.clear();
+    put_frontend_message(&mut buf, b'P', |buf| {
+        buf.put_u8(0);
+        buf.put_slice(sql.as_bytes());
+        buf.put_u8(0);
+        buf.put_u16(u16::try_from(PARAMS).unwrap());
+        for _ in 0..PARAMS {
+            buf.put_u32(INT4_OID);
+        }
+    });
+    put_frontend_message(&mut buf, b'D', |buf| {
+        buf.put_u8(b'S'); // the statement, to get a ParameterDescription back
+        buf.put_u8(0);
+    });
+    put_frontend_message(&mut buf, b'B', |buf| {
+        buf.put_u8(0);
+        buf.put_u8(0);
+        buf.put_u16(u16::try_from(PARAMS).unwrap());
+        for _ in 0..PARAMS {
+            buf.put_u16(1); // binary
+        }
+        buf.put_u16(u16::try_from(PARAMS).unwrap());
+        for _ in 1..PARAMS {
+            buf.put_i32(-1); // NULL
+        }
+        buf.put_i32(4);
+        buf.put_i32(LAST_VALUE);
+        buf.put_u16(0); // results in text
+    });
+    put_frontend_message(&mut buf, b'E', |buf| {
+        buf.put_u8(0);
+        buf.put_i32(0); // no row limit
+    });
+    frontend::sync(&mut buf);
+    stream.write_all(&buf).unwrap();
+
+    let mut described_params = None;
+    let mut tags = Vec::new();
+    for msg in read_until_ready(&mut stream) {
+        match msg {
+            Message::ErrorResponse(body) => {
+                let fields: Vec<_> = body
+                    .fields()
+                    .map(|f| Ok(String::from_utf8_lossy(f.value_bytes()).into_owned()))
+                    .collect()
+                    .unwrap();
+                panic!("unexpected error response: {fields:?}");
+            }
+            Message::ParameterDescription(body) => {
+                described_params = Some(body.parameters().count().unwrap());
+            }
+            Message::CommandComplete(body) => tags.push(body.tag().unwrap().to_string()),
+            _ => (),
+        }
+    }
+    assert_eq!(described_params, Some(PARAMS));
+    assert_eq!(tags, ["INSERT 0 1"]);
+
+    let row = client.query_one("SELECT a FROM many_params", &[]).unwrap();
+    assert_eq!(row.get::<_, i32>(0), LAST_VALUE);
+}
+
+/// How the frontend OCC read-then-write path behaves inside an extended-protocol
+/// pipeline: a write that reads nothing stages its rows and rolls back with the
+/// pipeline, one that reads persisted state is either refused or commits as its
+/// own transaction.
+#[mz_ore::test]
+fn test_pgtest_mz_frontend_occ_pipelined_dml() {
+    pg_test_harness(
+        Path::new("../../test/pgtest-mz/frontend-occ-pipelined-dml.pt"),
+        true,
+        test_util::TestHarness::default,
+    );
 }

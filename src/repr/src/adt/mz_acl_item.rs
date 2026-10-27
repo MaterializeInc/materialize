@@ -18,14 +18,17 @@ use std::str::FromStr;
 use crate::adt::system::Oid;
 use anyhow::{Error, anyhow};
 use bitflags::bitflags;
-use columnation::{Columnation, CopyRegion};
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::*;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -69,22 +72,35 @@ const CREATE_NETWORK_POLICY_STR: &str = "CREATENETWORKPOLICY";
 /// <https://github.com/postgres/postgres/blob/29a0ccbce97978e5d65b8f96c85a00611bb403c4/src/include/utils/acl.h#L46>
 pub const PUBLIC_ROLE_OID: Oid = Oid(0);
 
+/// A bit flag representing all the privileges that can be granted to a role.
+///
+/// Modeled after:
+/// <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/nodes/parsenodes.h#L74-L101>
+///
+/// The lower 32 bits are used for different privilege types.
+///
+/// The upper 32 bits indicate a grant option on the privilege for the current bit shifted
+/// right by 32 bits (Currently unimplemented in Materialize).
+///
+/// Privileges that exist in Materialize but not PostgreSQL start at the highest available bit
+/// and move down towards the PostgreSQL compatible bits. This is try to avoid collisions with
+/// privileges that PostgreSQL may add in the future.
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
+#[serde(from = "AclModeSerde", into = "AclModeSerde")]
+pub struct AclMode(u64);
+
 bitflags! {
-    /// A bit flag representing all the privileges that can be granted to a role.
-    ///
-    /// Modeled after:
-    /// https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/nodes/parsenodes.h#L74-L101
-    ///
-    /// The lower 32 bits are used for different privilege types.
-    ///
-    /// The upper 32 bits indicate a grant option on the privilege for the current bit shifted
-    /// right by 32 bits (Currently unimplemented in Materialize).
-    ///
-    /// Privileges that exist in Materialize but not PostgreSQL start at the highest available bit
-    /// and move down towards the PostgreSQL compatible bits. This is try to avoid collisions with
-    /// privileges that PostgreSQL may add in the future.
-    #[derive(Serialize, Deserialize)]
-    pub struct AclMode: u64 {
+    impl AclMode: u64 {
         // PostgreSQL compatible privileges.
         const INSERT = 1 << 0;
         const SELECT = 1 << 1;
@@ -101,6 +117,37 @@ bitflags! {
 
         // No additional privileges should be defined at a bit larger than 1 << 31. Those bits are
         // reserved for grant options.
+    }
+}
+
+/// The serde representation of [`AclMode`], `{"bits": <u64>}`, as derived by bitflags 1.
+#[derive(Serialize, Deserialize)]
+struct AclModeSerde {
+    bits: u64,
+}
+
+impl From<AclModeSerde> for AclMode {
+    fn from(AclModeSerde { bits }: AclModeSerde) -> Self {
+        AclMode::from_bits_retain(bits)
+    }
+}
+
+impl From<AclMode> for AclModeSerde {
+    fn from(acl_mode: AclMode) -> Self {
+        AclModeSerde {
+            bits: acl_mode.bits(),
+        }
+    }
+}
+
+// Matches the `Debug` output that bitflags 1 derived, for example `INSERT | SELECT`.
+impl fmt::Debug for AclMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_empty() {
+            f.write_str("(empty)")
+        } else {
+            bitflags::parser::to_writer(self, f)
+        }
     }
 }
 
@@ -235,27 +282,22 @@ impl fmt::Display for AclMode {
 impl RustType<ProtoAclMode> for AclMode {
     fn into_proto(&self) -> ProtoAclMode {
         ProtoAclMode {
-            acl_mode: self.bits,
+            acl_mode: self.bits(),
         }
     }
 
     fn from_proto(proto: ProtoAclMode) -> Result<Self, TryFromProtoError> {
-        Ok(AclMode {
-            bits: proto.acl_mode,
-        })
+        Ok(AclMode::from_bits_retain(proto.acl_mode))
     }
 }
 
-impl Columnation for AclMode {
-    type InnerRegion = CopyRegion<AclMode>;
-}
-
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for AclMode {
     type Parameters = ();
     type Strategy = BoxedStrategy<AclMode>;
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        proptest::bits::BitSetStrategy::masked(AclMode::all().bits)
+        proptest::bits::BitSetStrategy::masked(AclMode::all().bits())
             .prop_map(|bits| AclMode::from_bits(bits).expect("invalid proptest implementation"))
             .boxed()
     }
@@ -268,8 +310,18 @@ impl Arbitrary for AclMode {
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MzAclItem {
     /// Role that this item grants privileges to.
     pub grantee: RoleId,
@@ -316,7 +368,7 @@ impl MzAclItem {
         Ok(MzAclItem {
             grantee,
             grantor,
-            acl_mode: AclMode { bits: acl_mode },
+            acl_mode: AclMode::from_bits_retain(acl_mode),
         })
     }
 
@@ -385,10 +437,6 @@ impl RustType<ProtoMzAclItem> for MzAclItem {
             (_, _, None) => Err(TryFromProtoError::missing_field("ProtoMzAclItem::acl_mode")),
         }
     }
-}
-
-impl Columnation for MzAclItem {
-    type InnerRegion = CopyRegion<MzAclItem>;
 }
 
 /// An encoded packed variant of [`MzAclItem`].
@@ -516,8 +564,18 @@ impl FixedSizeCodec<MzAclItem> for PackedMzAclItem {
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AclItem {
     /// Role that this item grants privileges to.
     pub grantee: Oid,
@@ -569,7 +627,7 @@ impl AclItem {
         Ok(AclItem {
             grantee,
             grantor,
-            acl_mode: AclMode { bits: acl_mode },
+            acl_mode: AclMode::from_bits_retain(acl_mode),
         })
     }
 
@@ -646,10 +704,6 @@ impl RustType<ProtoAclItem> for AclItem {
     }
 }
 
-impl Columnation for AclItem {
-    type InnerRegion = CopyRegion<AclItem>;
-}
-
 /// An encoded packed variant of [`AclItem`].
 ///
 /// We uphold the variant that [`PackedAclItem`] sorts the same as [`AclItem`].
@@ -707,7 +761,17 @@ impl FixedSizeCodec<AclItem> for PackedAclItem {
 }
 
 /// A container of [`MzAclItem`]s that is optimized to look up an [`MzAclItem`] by the grantee.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize
+)]
 pub struct PrivilegeMap(
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")] BTreeMap<RoleId, Vec<MzAclItem>>,
 );
@@ -988,6 +1052,17 @@ fn test_mz_acl_item_binary_size() {
 }
 
 #[mz_ore::test]
+fn test_acl_mode_serde_and_debug() {
+    let acl_mode = AclMode::INSERT | AclMode::SELECT;
+    let json = serde_json::to_string(&acl_mode).unwrap();
+    assert_eq!(json, r#"{"bits":3}"#);
+    assert_eq!(serde_json::from_str::<AclMode>(&json).unwrap(), acl_mode);
+
+    assert_eq!(format!("{acl_mode:?}"), "INSERT | SELECT");
+    assert_eq!(format!("{:?}", AclMode::empty()), "(empty)");
+}
+
+#[mz_ore::test]
 fn test_acl_parsing() {
     let s = "42=rw/666";
     let acl: AclItem = s.parse().unwrap();
@@ -1134,6 +1209,7 @@ fn test_acl_item_binary_size() {
     assert_eq!(16, AclItem::binary_size());
 }
 
+#[cfg(test)]
 proptest! {
   #[mz_ore::test]
   #[cfg_attr(miri, ignore)] // slow
@@ -1153,6 +1229,7 @@ proptest! {
 }
 
 #[mz_ore::test]
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_acl_item_roundtrips() {
     fn roundtrip_acl_item(og: AclItem) {
         let packed = PackedAclItem::from_value(og);
@@ -1167,6 +1244,7 @@ fn proptest_packed_acl_item_roundtrips() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // slow
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_acl_item_sorts() {
     fn sort_acl_items(mut og: Vec<AclItem>) {
         let mut packed: Vec<_> = og.iter().copied().map(PackedAclItem::from_value).collect();
@@ -1184,6 +1262,7 @@ fn proptest_packed_acl_item_sorts() {
 }
 
 #[mz_ore::test]
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_mz_acl_item_roundtrips() {
     fn roundtrip_mz_acl_item(og: MzAclItem) {
         let packed = PackedMzAclItem::from_value(og);
@@ -1198,6 +1277,7 @@ fn proptest_packed_mz_acl_item_roundtrips() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // slow
+#[cfg(any(test, feature = "proptest"))]
 fn proptest_packed_mz_acl_item_sorts() {
     fn sort_mz_acl_items(mut og: Vec<MzAclItem>) {
         let mut packed: Vec<_> = og

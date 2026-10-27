@@ -21,7 +21,6 @@
 // The original source code is subject to the terms of the MIT license, a copy
 // of which can be found in the LICENSE file at the root of this repository.
 
-use std::i64;
 use std::io::Read;
 
 use serde_json::{Map, Value};
@@ -73,7 +72,7 @@ pub fn zig_i64(n: i64, buffer: &mut Vec<u8>) {
 
 pub fn zag_i32<R: Read>(reader: &mut R) -> Result<i32, AvroError> {
     let i = zag_i64(reader)?;
-    if i < i64::from(i32::min_value()) || i > i64::from(i32::max_value()) {
+    if i < i64::from(i32::MIN) || i > i64::from(i32::MAX) {
         Err(AvroError::Decode(DecodeError::I32OutOfRange(i)))
     } else {
         Ok(i as i32)

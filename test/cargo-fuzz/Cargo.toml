@@ -1,0 +1,76 @@
+# Shared workspace for every cargo-fuzz crate (`src/*/fuzz`).
+#
+# The fuzz crates are excluded from the root workspace because libFuzzer
+# requires a nightly toolchain and would break stable builds. They all share
+# THIS workspace rather than each being its own. A per-crate workspace has to
+# duplicate the parts of the root `Cargo.toml`'s `[patch.crates-io]` it needs,
+# which silently drifts out of sync with the root (e.g. a stale `iceberg-rust`
+# rev) and breaks builds. Sharing one workspace means a single
+# `[patch.crates-io]` to keep in sync with the root, one `Cargo.lock`, and no
+# per-crate duplication. Each fuzz crate points here via
+# `package.workspace = "../../../test/cargo-fuzz"`.
+#
+# `[patch.crates-io]` below mirrors the root `Cargo.toml`'s, minus the root
+# entries that no fuzz crate depends on (they would only trigger cargo's "patch
+# was not used in the crate graph" warning). `bin/lint-cargo` lists those
+# omissions and enforces that every other root entry is present here verbatim.
+# If a fuzz crate gains a dependency on an omitted crate, copy its entry from the
+# root and remove it from that list.
+
+[workspace]
+resolver = "2"
+members = [
+    "../../src/avro/fuzz",
+    "../../src/catalog-protos/fuzz",
+    "../../src/expr/fuzz",
+    "../../src/interchange/fuzz",
+    "../../src/mysql-util/fuzz",
+    "../../src/persist-client/fuzz",
+    "../../src/pgcopy/fuzz",
+    "../../src/pgrepr/fuzz",
+    "../../src/pgtz/fuzz",
+    "../../src/pgwire/fuzz",
+    "../../src/postgres-util/fuzz",
+    "../../src/repr/fuzz",
+    "../../src/sql-parser/fuzz",
+    "../../src/sql-server-util/fuzz",
+    "../../src/storage-types/fuzz",
+    "../../src/storage/fuzz",
+    "../../src/transform/fuzz",
+]
+
+[patch.crates-io]
+# Waiting on https://github.com/sfackler/rust-postgres/pull/752.
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
+
+# Upstream chrono-tz is unmaintained and stops at tzdata 2025b. The fork's
+# `mz_changes` branch carries current IANA data only, no code changes.
+chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "1463cc380e9a2d842b9ed12cbe5952f983dc2b4a" }
+
+# Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
+serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
+
+# Waiting on https://github.com/edenhill/librdkafka/pull/4051.
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+
+# Need to upstream a few PRs related to test builders.
+#
+# Note: All changes in our fork of tiberius should be pushed to the `mz_changes` branch.
+tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc22ed67d072c2d0110455da50539e1cd" }
+
+# Allows us to use bzip2-sys rather than the rust reimpl.
+# All changes should go to the `mz_changes` branch.
+# Once https://github.com/Nullus157/async-compression/pull/364 lands we can remove this.
+async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
+
+# Custom iceberg features for mz
+# All changes should go to the `mz_v0.10.x` branch.
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }

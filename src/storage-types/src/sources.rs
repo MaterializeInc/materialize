@@ -34,12 +34,16 @@ use mz_persist_types::stats::{
     StructStats,
 };
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
+use mz_repr::arb_row_for_relation;
 use mz_repr::{
     CatalogItemId, Datum, GlobalId, ProtoRelationDesc, ProtoRow, RelationDesc, Row,
-    RowColumnarDecoder, RowColumnarEncoder, arb_row_for_relation,
+    RowColumnarDecoder, RowColumnarEncoder,
 };
 use mz_sql_parser::ast::{Ident, IdentError, UnresolvedItemName};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::any;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::Strategy;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -57,6 +61,7 @@ use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::sql_server::SqlServerSourceExportDetails;
 
+pub mod casts;
 pub mod encoding;
 pub mod envelope;
 pub mod kafka;
@@ -88,8 +93,10 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     ///
     ///   Re-rendering/executing the source after making these modifications
     ///   adds and drops the subsource, respectively.
-    /// - This field includes the primary source's ID, which might need to be
-    ///   filtered out to understand which exports are explicit ingestion exports.
+    /// - For old-syntax sources this field includes the primary source's ID,
+    ///   which might need to be filtered out to understand which exports are
+    ///   explicit ingestion exports. New-syntax sources (with source tables)
+    ///   list only their exports here.
     /// - This field does _not_ include the remap collection, which is tracked
     ///   in its own field.
     pub source_exports: BTreeMap<GlobalId, SourceExport<S>>,
@@ -272,7 +279,17 @@ impl SourceTimestamp for MzOffset {
 /// way. Individual sources like Kafka or File sources should explicitly implement their own offset
 /// type that converts to/From MzOffsets. A 0-MzOffset denotes an empty stream.
 #[derive(
-    Copy, Clone, Default, Debug, PartialEq, PartialOrd, Eq, Ord, Hash, Serialize, Deserialize,
+    Copy,
+    Clone,
+    Default,
+    Debug,
+    PartialEq,
+    PartialOrd,
+    Eq,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
 )]
 pub struct MzOffset {
     pub offset: u64,
@@ -418,7 +435,17 @@ impl TotalOrder for MzOffset {}
 /// Some variants here have attached data used to differentiate incomparable
 /// instantiations. These attached data types should be expanded in the future
 /// if we need to tell apart more kinds of sources.
-#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Clone,
+    Debug,
+    Ord,
+    PartialOrd,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub enum Timeline {
     /// EpochMilliseconds means the timestamp is the number of milliseconds since
     /// the Unix epoch.
@@ -638,19 +665,14 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         }
         let Self {
             connection,
-            timestamp_interval,
+            // timestamp_interval is allowed to change via ALTER SOURCE
+            timestamp_interval: _,
         } = &self;
 
-        let compatibility_checks = [
-            (
-                connection.alter_compatible(id, &other.connection).is_ok(),
-                "connection",
-            ),
-            (
-                timestamp_interval == &other.timestamp_interval,
-                "timestamp_interval",
-            ),
-        ];
+        let compatibility_checks = [(
+            connection.alter_compatible(id, &other.connection).is_ok(),
+            "connection",
+        )];
 
         for (compatible, field) in compatibility_checks {
             if !compatible {
@@ -864,6 +886,7 @@ impl crate::AlterCompatible for SourceExportDetails {
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            (Self::SqlServer(s), Self::SqlServer(o)) => s.alter_compatible(id, o),
             (Self::LoadGenerator(s), Self::LoadGenerator(o)) => s.alter_compatible(id, o),
             _ => Err(AlterError { id }),
         };
@@ -885,13 +908,24 @@ impl crate::AlterCompatible for SourceExportDetails {
 /// to generate the appropriate `SourceExportDetails` struct during planning.
 /// NOTE that this is serialized as proto to the catalog, so any changes here
 /// must be backwards compatible or will require a migration.
+#[derive(Debug, Eq, PartialEq)]
 pub enum SourceExportStatementDetails {
     Postgres {
         table: mz_postgres_util::desc::PostgresTableDesc,
+        /// Whether the text-to-oid cast for this export accepts the full `u32`
+        /// range. Exports created before the cast was widened decode as
+        /// `false` and must keep the legacy `i32`-range cast forever, because
+        /// replication re-casts old tuples on delete and the persisted rows
+        /// were ingested under the legacy semantics.
+        cast_oid_full_range: bool,
+        /// An upper bound on the upstream WAL position whose schema `table`
+        /// describes. `None` for exports created before this was recorded.
+        initial_lsn: Option<MzOffset>,
     },
     MySql {
         table: mz_mysql_util::MySqlTableDesc,
         initial_gtid_set: String,
+        binlog_full_metadata: bool,
     },
     SqlServer {
         table: mz_sql_server_util::desc::SqlServerTableDesc,
@@ -907,21 +941,29 @@ pub enum SourceExportStatementDetails {
 impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetails {
     fn into_proto(&self) -> ProtoSourceExportStatementDetails {
         match self {
-            SourceExportStatementDetails::Postgres { table } => ProtoSourceExportStatementDetails {
+            SourceExportStatementDetails::Postgres {
+                table,
+                cast_oid_full_range,
+                initial_lsn,
+            } => ProtoSourceExportStatementDetails {
                 kind: Some(proto_source_export_statement_details::Kind::Postgres(
                     postgres::ProtoPostgresSourceExportStatementDetails {
                         table: Some(table.into_proto()),
+                        cast_oid_full_range: *cast_oid_full_range,
+                        initial_lsn: initial_lsn.map(|lsn| lsn.offset),
                     },
                 )),
             },
             SourceExportStatementDetails::MySql {
                 table,
                 initial_gtid_set,
+                binlog_full_metadata,
             } => ProtoSourceExportStatementDetails {
                 kind: Some(proto_source_export_statement_details::Kind::Mysql(
                     mysql::ProtoMySqlSourceExportStatementDetails {
                         table: Some(table.into_proto()),
                         initial_gtid_set: initial_gtid_set.clone(),
+                        binlog_full_metadata: *binlog_full_metadata,
                     },
                 )),
             },
@@ -962,6 +1004,8 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                 table: details
                     .table
                     .into_rust_if_some("ProtoPostgresSourceExportStatementDetails::table")?,
+                cast_oid_full_range: details.cast_oid_full_range,
+                initial_lsn: details.initial_lsn.map(MzOffset::from),
             },
             Some(Kind::Mysql(details)) => SourceExportStatementDetails::MySql {
                 table: details
@@ -969,6 +1013,7 @@ impl RustType<ProtoSourceExportStatementDetails> for SourceExportStatementDetail
                     .into_rust_if_some("ProtoMySqlSourceExportStatementDetails::table")?,
 
                 initial_gtid_set: details.initial_gtid_set,
+                binlog_full_metadata: details.binlog_full_metadata,
             },
             Some(Kind::SqlServer(details)) => SourceExportStatementDetails::SqlServer {
                 table: details
@@ -1110,6 +1155,7 @@ impl Codec for SourceData {
 }
 
 /// Given a [`RelationDesc`] returns an arbitrary [`SourceData`].
+#[cfg(any(test, feature = "proptest"))]
 pub fn arb_source_data_for_relation_desc(
     desc: &RelationDesc,
 ) -> impl Strategy<Value = SourceData> + use<> {
@@ -1601,7 +1647,7 @@ impl SourceDataColumnarEncoder {
                 SourceDataRowColumnarEncoder::EmptyRow
             }
         };
-        let err_encoder = BinaryBuilder::new();
+        let err_encoder = BinaryBuilder::with_capacity(0, 0);
 
         SourceDataColumnarEncoder {
             row_encoder,
@@ -1876,7 +1922,8 @@ mod tests {
                     .prop_map(move |datas| (desc.clone(), datas, read_desc.clone()))
             });
 
-        proptest!(|((config, (desc, source_datas, read_desc)) in (any::<EncodingConfig>(), strat))| {
+        let combined_strat = (any::<EncodingConfig>(), strat);
+        proptest!(|((config, (desc, source_datas, read_desc)) in combined_strat)| {
             roundtrip_source_data(&desc, source_datas, &read_desc, &config);
         });
     }

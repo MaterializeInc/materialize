@@ -9,18 +9,81 @@
 
 //! Generic HTTP oneshot source that will fetch a file from the public internet.
 
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use bytes::Bytes;
 use derivative::Derivative;
 use futures::TryStreamExt;
 use futures::stream::{BoxStream, StreamExt};
+use mz_ore::url::SensitiveUrl;
 use reqwest::Client;
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 use crate::oneshot_source::util::IntoRangeHeaderValue;
 use crate::oneshot_source::{
     Encoding, OneshotObject, OneshotSource, StorageErrorX, StorageErrorXContext, StorageErrorXKind,
 };
+
+/// reqwest DNS resolver that delegates to [`mz_ore::netio::resolve_address`].
+///
+/// Only the IP resolution step is overridden — reqwest still uses the URL's
+/// original hostname for SNI and TLS certificate validation, so HTTPS works
+/// normally.
+#[derive(Debug)]
+struct MzHttpResolver {
+    enforce_external_addresses: bool,
+}
+
+impl Resolve for MzHttpResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let enforce = self.enforce_external_addresses;
+        Box::pin(async move {
+            let ips = mz_ore::netio::resolve_address(name.as_str(), enforce).await?;
+            // reqwest substitutes the conventional port (80/443) when the
+            // SocketAddr's port is 0 and no explicit port was given in the URL.
+            let addrs: Addrs = Box::new(
+                ips.into_iter()
+                    .map(|ip| SocketAddr::new(ip, 0))
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+            );
+            Ok(addrs)
+        })
+    }
+}
+
+/// Build a reqwest [`Client`] for fetching `COPY FROM` URLs. This uses
+/// [`mz_ore::netio::resolve_address`] for DNS resolution.
+///
+/// Redirects are disabled: the custom DNS resolver re-validates hostnames on
+/// every hop, but reqwest skips DNS for IP-literal targets, so a redirect to
+/// `http://127.0.0.1/` would bypass the SSRF check. Refusing to follow
+/// redirects closes that hole.
+pub fn build_http_client(enforce_external_addresses: bool) -> Result<Client, reqwest::Error> {
+    Client::builder()
+        .dns_resolver(Arc::new(MzHttpResolver {
+            enforce_external_addresses,
+        }))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+}
+
+/// Returns an error unless `response` has a 2xx status. A 3xx gets a
+/// dedicated error because redirects are disabled on the HTTP client (see
+/// `build_http_client`). Any other status would otherwise let an error page
+/// body be ingested as data.
+fn check_success(response: &reqwest::Response) -> Result<(), StorageErrorX> {
+    let status = response.status();
+    if status.is_redirection() {
+        return Err(StorageErrorXKind::Redirect(status.as_u16()).into());
+    }
+    if !status.is_success() {
+        return Err(StorageErrorXKind::HttpStatus(status.as_u16()).into());
+    }
+    Ok(())
+}
 
 /// Generic oneshot source that fetches a file from a URL on the public internet.
 #[derive(Clone, Derivative)]
@@ -28,11 +91,11 @@ use crate::oneshot_source::{
 pub struct HttpOneshotSource {
     #[derivative(Debug = "ignore")]
     client: Client,
-    origin: Url,
+    origin: SensitiveUrl,
 }
 
 impl HttpOneshotSource {
-    pub fn new(client: Client, origin: Url) -> Self {
+    pub fn new(client: Client, origin: SensitiveUrl) -> Self {
         HttpOneshotSource { client, origin }
     }
 }
@@ -40,8 +103,8 @@ impl HttpOneshotSource {
 /// Object returned from an [`HttpOneshotSource`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpObject {
-    /// [`Url`] to access the file.
-    url: Url,
+    /// [`SensitiveUrl`] to access the file.
+    url: SensitiveUrl,
     /// Name of the file.
     filename: String,
     /// Size of this file reported by the [`Content-Length`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Length) header
@@ -78,6 +141,67 @@ pub enum HttpChecksum {
     LastModified(String),
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `reqwest::dns::Name` has no public constructor, so we exercise
+    /// [`MzHttpResolver`] through a fully-built [`Client`]. `localhost`
+    /// resolves via /etc/hosts on supported platforms and stays inside the
+    /// resolver path (an IP literal would short-circuit DNS entirely).
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn build_http_client_rejects_localhost_when_enforced() {
+        let client = build_http_client(true).expect("build client");
+        let err = client
+            .get("http://localhost:1/")
+            .send()
+            .await
+            .expect_err("request must fail at DNS resolution");
+        // Walk the error chain for the resolver's PrivateAddress message —
+        // reqwest wraps it inside its connect error, so a `to_string()` on
+        // the top-level error is not enough.
+        let mut found = false;
+        let mut current: &dyn std::error::Error = &err;
+        loop {
+            if current.to_string().to_lowercase().contains("private") {
+                found = true;
+                break;
+            }
+            match current.source() {
+                Some(src) => current = src,
+                None => break,
+            }
+        }
+        assert!(found, "expected private-address rejection, got: {err:?}");
+    }
+
+    /// With enforcement off the resolver returns the loopback IP, so the
+    /// request reaches the connect stage and fails for a different reason
+    /// (port 1 is not listening). The point is that DNS does *not* fail.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn build_http_client_allows_localhost_when_not_enforced() {
+        let client = build_http_client(false).expect("build client");
+        let err = client
+            .get("http://localhost:1/")
+            .send()
+            .await
+            .expect_err("port 1 should not be listening");
+        let mut current: &dyn std::error::Error = &err;
+        loop {
+            assert!(
+                !current.to_string().to_lowercase().contains("private"),
+                "expected a connect error, not a DNS rejection: {err:?}"
+            );
+            match current.source() {
+                Some(src) => current = src,
+                None => break,
+            }
+        }
+    }
+}
+
 impl OneshotSource for HttpOneshotSource {
     type Object = HttpObject;
     type Checksum = HttpChecksum;
@@ -89,10 +213,15 @@ impl OneshotSource for HttpOneshotSource {
         // canonically is the right thing do.
         let response = self
             .client
-            .head(self.origin.clone())
+            .head(self.origin.0.clone())
             .send()
             .await
             .context("HEAD request")?;
+
+        // Other HEAD failures fall back to GET below, which must succeed.
+        if response.status().is_redirection() {
+            return Err(StorageErrorXKind::Redirect(response.status().as_u16()).into());
+        }
 
         // Not all servers accept `HEAD` requests though, so we'll fallback to a `GET`
         // request and skip fetching the body.
@@ -103,10 +232,13 @@ impl OneshotSource for HttpOneshotSource {
 
                 let response = self
                     .client
-                    .get(self.origin.clone())
+                    .get(self.origin.0.clone())
                     .send()
                     .await
                     .context("GET request")?;
+
+                check_success(&response)?;
+
                 let headers = response.headers().clone();
 
                 // Immediately drop the response so we don't attempt to fetch the body.
@@ -171,7 +303,7 @@ impl OneshotSource for HttpOneshotSource {
         // TODO(cf1): Validate our checksum.
 
         let initial_response = async move {
-            let mut request = self.client.get(object.url);
+            let mut request = self.client.get(object.url.0);
 
             if let Some(range) = &range {
                 let value = range.into_range_header_value();
@@ -183,6 +315,7 @@ impl OneshotSource for HttpOneshotSource {
             // got back an HTTP 206?
 
             let response = request.send().await.context("get")?;
+            check_success(&response)?;
             let bytes_stream = response.bytes_stream().err_into();
 
             Ok::<_, StorageErrorX>(bytes_stream)

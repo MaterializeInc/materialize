@@ -5,6 +5,11 @@
     description: Value as type `T`
     url: /sql/functions/cast
 
+  - signature: TRY_CAST (cast_expr) -> T?
+    description: Value as type `T`, or _NULL_ if the conversion fails.
+    url: /sql/functions/cast#try_cast
+    version-added: v26.47
+
   - signature: 'coalesce(x: T...) -> T?'
     description: First non-_NULL_ arg, or _NULL_ if all are _NULL_.
 
@@ -30,6 +35,9 @@
 
       Returns `numeric` if `x` is `int`, `double` if `x` is `real`, else returns
       same type as `x`.
+
+      For `real` and `double precision` inputs, see [aggregate
+      precision](../types/float/#aggregate-precision).
 
   - signature: 'bool_and(x: T) -> T'
     description: _NULL_ if all values of `x` are _NULL_, otherwise true if all values of `x` are true, otherwise false.
@@ -85,6 +93,9 @@
 
       Returns `bigint` if `x` is `int` or `smallint`, `numeric` if `x` is `bigint` or `uint8`,
       `uint8` if `x` is `uint4` or `uint2`, else returns same type as `x`.
+
+      For `real` and `double precision` inputs, see [aggregate
+      precision](../types/float/#aggregate-precision).
 
   - signature: 'variance(x: T) -> U'
     description: |
@@ -500,6 +511,9 @@
       If `null_string` is supplied and is not NULL, fields matching that string
       are replaced by NULL.
 
+      If `s` is NULL, the result is NULL. If `s` is the empty string, the
+      result is an empty array (regardless of `delimiter` or `null_string`).
+
       For example: `string_to_array('xx~~yy~~zz', '~~', 'yy')` → `{xx,NULL,zz}`
 
 - type: Scalar
@@ -556,8 +570,20 @@
     description: "`true` if `s` returns zero rows."
 
   - signature: 'expression NOT IN(s: Query) -> bool'
-    description: "`s` must return exactly one column; `true` for each value in `expression`
-      if it does not match any elements of `s`."
+    description: |
+     `s` must return exactly one column; `true` for each value in `expression`
+     if it does not match any elements of `s`.
+
+     {{< note >}}
+
+     When evaluating a `WHERE fieldX NOT IN (<subquery>)` predicate involving
+     possible `NULL` values for `fieldX` or `<subquery>`, Materialize performs a
+     cross join between the outer relation and the subquery to preserve SQL
+     `NULL` semantics, which can significantly increase memory usage. If
+     possible, rewrite using [idiomatic Materialize
+     SQL](/transform-data/idiomatic-materialize-sql/not-in/).
+
+     {{< /note >}}
 
   - signature: 'expression bool_op SOME(s: Query) -> bool'
     description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean-operators)
@@ -878,7 +904,7 @@
     ROW`.
 
     {{< note >}}
-    {{% idiomatic-sql/materialize-window-functions %}}
+    {{% include-headless "/headless/materialize-window-functions" %}}
 
     See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/)
     for examples of rewriting window functions.
@@ -950,7 +976,6 @@
   functions:
   - signature: 'mz_environment_id() -> text'
     description: Returns a string containing a `uuid` uniquely identifying the Materialize environment.
-    unmaterializable: true
   - signature: 'mz_uptime() -> interval'
     description: Returns the length of time that the materialized process has been running.
     unmaterializable: true
@@ -959,6 +984,11 @@
     unmaterializable: true
   - signature: 'mz_version_num() -> int'
     description: Returns the server's version as an integer having the format `XXYYYZZ`, where `XX` is the major version, `YYY` is the minor version and `ZZ` is the patch version.
+    unmaterializable: true
+  - signature: 'mz_session_role_memberships() -> text[]'
+    description: |
+      Returns the names of the roles the current role is a member of, directly
+      or through other roles, including the current role itself.
     unmaterializable: true
   - signature: 'current_database() -> text'
     description: |

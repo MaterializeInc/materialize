@@ -20,7 +20,7 @@ Source defined as t0
 
 # Prune subterms with literal nulls based on
 # requirements derived from Filter predicates.
-apply pipeline=non_null_requirements
+apply pipeline=NonNullRequirements
 Filter #2 > #0
   Union
     Map (null::bigint)
@@ -38,7 +38,7 @@ Filter (#2 > #0)
 
 # Prune subterms with literal nulls based on
 # requirements derived from Map expressions.
-apply pipeline=non_null_requirements
+apply pipeline=NonNullRequirements
 Filter (#3 > 0)
   Map ((#2 + #0))
     Union
@@ -59,7 +59,7 @@ Filter (#3 > 0)
 
 # Prune subterms with literal nulls based on
 # requirements derived from FlatMap expressions.
-apply pipeline=non_null_requirements
+apply pipeline=NonNullRequirements
 FlatMap generate_series(#0, #1, #2)
   Union
     Negate
@@ -78,7 +78,7 @@ FlatMap generate_series(#0..=#2)
 
 # Prune subterms based on
 # requirements derived through Let bindings.
-apply pipeline=non_null_requirements
+apply pipeline=NonNullRequirements
 Return
   Filter #2 > 0
     Get l1
@@ -104,7 +104,7 @@ Return
 
 
 # Regression test for database-issues#1700
-apply pipeline=non_null_requirements
+apply pipeline=NonNullRequirements
 Filter #0 = #3
   FlatMap generate_series(#1)
     Map (null::bigint)
@@ -125,7 +125,7 @@ Filter (#0 = #3)
 #
 # Note: if we implement fixpoint-based handling of LetRec bindings, the
 # `Filter #2 > 0` under `l1` will not be needed any more.
-apply pipeline=non_null_requirements
+apply pipeline=NonNullRequirements
 Return
   Filter #0 < 7 AND #2 > 0
     Union

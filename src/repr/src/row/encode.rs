@@ -50,7 +50,7 @@ use crate::adt::datetime::PackedNaiveTime;
 use crate::adt::interval::PackedInterval;
 use crate::adt::jsonb::{JsonbPacker, JsonbRef};
 use crate::adt::mz_acl_item::{PackedAclItem, PackedMzAclItem};
-use crate::adt::numeric::{Numeric, PackedNumeric};
+use crate::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, Numeric, PackedNumeric};
 use crate::adt::range::{Range, RangeInner, RangeLowerBound, RangeUpperBound};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::proto_datum::DatumType;
@@ -1442,6 +1442,14 @@ impl RowColumnarEncoder {
 
                 // We name the Fields in Parquet with the column index, but for
                 // backwards compat use the column name for stats.
+                //
+                // NOTE: name-keyed stats are sound only while durable
+                // relations never carry duplicate column names (the planner
+                // enforces this) and a dropped column's name can never be
+                // reused by a later version (persist rejects schema
+                // migrations containing drops). Filter pushdown consults
+                // these stats by name; violating either invariant attaches
+                // one column's stats to another and yields wrong results.
                 let name = (col_idx.to_raw(), col_name.as_str().into());
 
                 (name, encoder)
@@ -1753,54 +1761,66 @@ fn array_to_decoder(
 }
 
 /// Small helper function to create a [`DatumColumnEncoder`] from a [`SqlScalarType`]
+///
+/// Every builder starts with zero capacity. Arrow's `new()` preallocates 1024 slots per builder,
+/// 2.7 MiB for a 360-leaf schema before any row is appended, and a persist writer can hold many
+/// encoders open at once.
 fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, anyhow::Error> {
     let encoder = match &col_ty {
-        SqlScalarType::Bool => DatumColumnEncoder::Bool(BooleanBuilder::new()),
-        SqlScalarType::PgLegacyChar => DatumColumnEncoder::U8(UInt8Builder::new()),
-        SqlScalarType::UInt16 => DatumColumnEncoder::U16(UInt16Builder::new()),
+        SqlScalarType::Bool => DatumColumnEncoder::Bool(BooleanBuilder::with_capacity(0)),
+        SqlScalarType::PgLegacyChar => DatumColumnEncoder::U8(UInt8Builder::with_capacity(0)),
+        SqlScalarType::UInt16 => DatumColumnEncoder::U16(UInt16Builder::with_capacity(0)),
         SqlScalarType::UInt32
         | SqlScalarType::Oid
         | SqlScalarType::RegClass
         | SqlScalarType::RegProc
-        | SqlScalarType::RegType => DatumColumnEncoder::U32(UInt32Builder::new()),
-        SqlScalarType::UInt64 => DatumColumnEncoder::U64(UInt64Builder::new()),
-        SqlScalarType::Int16 => DatumColumnEncoder::I16(Int16Builder::new()),
-        SqlScalarType::Int32 => DatumColumnEncoder::I32(Int32Builder::new()),
-        SqlScalarType::Int64 => DatumColumnEncoder::I64(Int64Builder::new()),
-        SqlScalarType::Float32 => DatumColumnEncoder::F32(Float32Builder::new()),
-        SqlScalarType::Float64 => DatumColumnEncoder::F64(Float64Builder::new()),
+        | SqlScalarType::RegType => DatumColumnEncoder::U32(UInt32Builder::with_capacity(0)),
+        SqlScalarType::UInt64 => DatumColumnEncoder::U64(UInt64Builder::with_capacity(0)),
+        SqlScalarType::Int16 => DatumColumnEncoder::I16(Int16Builder::with_capacity(0)),
+        SqlScalarType::Int32 => DatumColumnEncoder::I32(Int32Builder::with_capacity(0)),
+        SqlScalarType::Int64 => DatumColumnEncoder::I64(Int64Builder::with_capacity(0)),
+        SqlScalarType::Float32 => DatumColumnEncoder::F32(Float32Builder::with_capacity(0)),
+        SqlScalarType::Float64 => DatumColumnEncoder::F64(Float64Builder::with_capacity(0)),
         SqlScalarType::Numeric { .. } => DatumColumnEncoder::Numeric {
-            approx_values: Float64Builder::new(),
-            binary_values: BinaryBuilder::new(),
+            approx_values: Float64Builder::with_capacity(0),
+            binary_values: BinaryBuilder::with_capacity(0, 0),
             numeric_context: crate::adt::numeric::cx_datum().clone(),
         },
         SqlScalarType::String
         | SqlScalarType::PgLegacyName
         | SqlScalarType::Char { .. }
-        | SqlScalarType::VarChar { .. } => DatumColumnEncoder::String(StringBuilder::new()),
-        SqlScalarType::Bytes => DatumColumnEncoder::Bytes(BinaryBuilder::new()),
-        SqlScalarType::Date => DatumColumnEncoder::Date(Int32Builder::new()),
+        | SqlScalarType::VarChar { .. } => {
+            DatumColumnEncoder::String(StringBuilder::with_capacity(0, 0))
+        }
+        SqlScalarType::Bytes => DatumColumnEncoder::Bytes(BinaryBuilder::with_capacity(0, 0)),
+        SqlScalarType::Date => DatumColumnEncoder::Date(Int32Builder::with_capacity(0)),
         SqlScalarType::Time => {
-            DatumColumnEncoder::Time(FixedSizeBinaryBuilder::new(TIME_FIXED_BYTES))
+            DatumColumnEncoder::Time(FixedSizeBinaryBuilder::with_capacity(0, TIME_FIXED_BYTES))
         }
-        SqlScalarType::Timestamp { .. } => {
-            DatumColumnEncoder::Timestamp(FixedSizeBinaryBuilder::new(TIMESTAMP_FIXED_BYTES))
+        SqlScalarType::Timestamp { .. } => DatumColumnEncoder::Timestamp(
+            FixedSizeBinaryBuilder::with_capacity(0, TIMESTAMP_FIXED_BYTES),
+        ),
+        SqlScalarType::TimestampTz { .. } => DatumColumnEncoder::TimestampTz(
+            FixedSizeBinaryBuilder::with_capacity(0, TIMESTAMP_FIXED_BYTES),
+        ),
+        SqlScalarType::MzTimestamp => {
+            DatumColumnEncoder::MzTimestamp(UInt64Builder::with_capacity(0))
         }
-        SqlScalarType::TimestampTz { .. } => {
-            DatumColumnEncoder::TimestampTz(FixedSizeBinaryBuilder::new(TIMESTAMP_FIXED_BYTES))
-        }
-        SqlScalarType::MzTimestamp => DatumColumnEncoder::MzTimestamp(UInt64Builder::new()),
-        SqlScalarType::Interval => {
-            DatumColumnEncoder::Interval(FixedSizeBinaryBuilder::new(INTERVAL_FIXED_BYTES))
-        }
+        SqlScalarType::Interval => DatumColumnEncoder::Interval(
+            FixedSizeBinaryBuilder::with_capacity(0, INTERVAL_FIXED_BYTES),
+        ),
         SqlScalarType::Uuid => {
-            DatumColumnEncoder::Uuid(FixedSizeBinaryBuilder::new(UUID_FIXED_BYTES))
+            DatumColumnEncoder::Uuid(FixedSizeBinaryBuilder::with_capacity(0, UUID_FIXED_BYTES))
         }
-        SqlScalarType::AclItem => {
-            DatumColumnEncoder::AclItem(FixedSizeBinaryBuilder::new(ACL_ITEM_FIXED_BYTES))
+        SqlScalarType::AclItem => DatumColumnEncoder::AclItem(
+            FixedSizeBinaryBuilder::with_capacity(0, ACL_ITEM_FIXED_BYTES),
+        ),
+        SqlScalarType::MzAclItem => {
+            DatumColumnEncoder::MzAclItem(BinaryBuilder::with_capacity(0, 0))
         }
-        SqlScalarType::MzAclItem => DatumColumnEncoder::MzAclItem(BinaryBuilder::new()),
-        SqlScalarType::Range { .. } => DatumColumnEncoder::Range(BinaryBuilder::new()),
+        SqlScalarType::Range { .. } => {
+            DatumColumnEncoder::Range(BinaryBuilder::with_capacity(0, 0))
+        }
         SqlScalarType::Jsonb => DatumColumnEncoder::Jsonb {
             offsets: vec![0],
             buf: Vec::new(),
@@ -1814,7 +1834,10 @@ fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, 
             };
             let inner = scalar_type_to_encoder(element_type)?;
             DatumColumnEncoder::Array {
-                dims: ListBuilder::new(FixedSizeBinaryBuilder::new(ARRAY_DIMENSION_FIXED_BYTES)),
+                dims: ListBuilder::new(FixedSizeBinaryBuilder::with_capacity(
+                    0,
+                    ARRAY_DIMENSION_FIXED_BYTES,
+                )),
                 val_lengths: Vec::new(),
                 vals: Box::new(inner),
                 nulls: None,
@@ -1832,13 +1855,13 @@ fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, 
             let inner = scalar_type_to_encoder(&*value_type)?;
             DatumColumnEncoder::Map {
                 lengths: Vec::new(),
-                keys: StringBuilder::new(),
+                keys: StringBuilder::with_capacity(0, 0),
                 vals: Box::new(inner),
                 nulls: None,
             }
         }
         SqlScalarType::Record { fields, .. } if fields.is_empty() => {
-            DatumColumnEncoder::RecordEmpty(BooleanBuilder::new())
+            DatumColumnEncoder::RecordEmpty(BooleanBuilder::with_capacity(0))
         }
         SqlScalarType::Record { fields, .. } => {
             let encoders = fields
@@ -2121,7 +2144,21 @@ impl RowPacker<'_> {
                 .map_err(|err| err.to_string())?
             }
             Some(DatumType::Dict(x)) => self.push_dict_with(|row| -> Result<(), String> {
+                let mut prev_key: Option<&str> = None;
                 for e in x.elements.iter() {
+                    // Map keys must be unique and strictly ascending; iterating a
+                    // map that violates this trips a debug_assert. A crafted
+                    // proto can, so reject it as a decode error here instead.
+                    if let Some(prev) = prev_key
+                        && e.key.as_str() <= prev
+                    {
+                        return Err(format!(
+                            "dict keys must be unique and in ascending order, \
+                             but {:?} came after {:?}",
+                            e.key, prev,
+                        ));
+                    }
+                    prev_key = Some(e.key.as_str());
                     row.push(Datum::from(e.key.as_str()));
                     let val = e
                         .val
@@ -2134,6 +2171,24 @@ impl RowPacker<'_> {
             Some(DatumType::Numeric(x)) => {
                 // Reminder that special values like NaN, PosInf, and NegInf are
                 // represented as variants of ProtoDatumOther.
+                //
+                // `decPackedToNumber` (called via `Decimal::from_packed_bcd`)
+                // doesn't bounds-check its input: it segfaults on an empty bcd,
+                // and it writes one BCD digit per input nibble into `Numeric`'s
+                // fixed-size coefficient, overrunning it for a longer bcd. Both
+                // are reachable from untrusted proto bytes, so bound the length
+                // before descending into the FFI. `to_packed_bcd` never emits
+                // more than MAX_BCD_LEN bytes: one nibble per digit plus a sign
+                // nibble, rounded up to whole bytes.
+                const MAX_BCD_LEN: usize =
+                    mz_ore::cast::u8_to_usize(NUMERIC_DATUM_MAX_PRECISION) / 2 + 1;
+                if x.bcd.is_empty() || x.bcd.len() > MAX_BCD_LEN {
+                    return Err(format!(
+                        "ProtoNumeric.bcd length {} not in 1..={}",
+                        x.bcd.len(),
+                        MAX_BCD_LEN,
+                    ));
+                }
                 let n = Decimal::from_packed_bcd(&x.bcd, x.scale).map_err(|err| err.to_string())?;
                 self.push(Datum::from(n))
             }
@@ -2150,6 +2205,24 @@ impl RowPacker<'_> {
                             upper,
                         } = &**inner;
 
+                        // Range bounds must not be `Datum::Null`, because
+                        // `push_range_with` panics on that invariant. Reject
+                        // untrusted proto bytes that would push a `Null` bound
+                        // before calling it.
+                        let is_null_proto = |d: &ProtoDatum| {
+                            matches!(
+                                d.datum_type,
+                                Some(DatumType::Other(o))
+                                    if ProtoDatumOther::try_from(o)
+                                        == Ok(ProtoDatumOther::Null)
+                            )
+                        };
+                        if lower.as_deref().is_some_and(is_null_proto)
+                            || upper.as_deref().is_some_and(is_null_proto)
+                        {
+                            return Err("range bound cannot be Null".into());
+                        }
+
                         self.push_range_with(
                             RangeLowerBound {
                                 inclusive: *lower_inclusive,
@@ -2164,7 +2237,7 @@ impl RowPacker<'_> {
                                     .map(|d| |row: &mut RowPacker| row.try_push_proto(&*d)),
                             },
                         )
-                        .expect("decoding ProtoRow must succeed");
+                        .map_err(|err| err.to_string())?;
                     }
                 }
             }
@@ -2238,10 +2311,75 @@ mod tests {
     use crate::adt::interval::Interval;
     use crate::adt::numeric::Numeric;
     use crate::adt::timestamp::CheckedTimestamp;
-    use crate::fixed_length::ToDatumIter;
     use crate::relation::arb_relation_desc;
     use crate::{ColumnName, RowArena, SqlColumnType, arb_datum_for_column, arb_row_for_relation};
     use crate::{Datum, RelationDesc, Row, SqlScalarType};
+
+    #[mz_ore::test]
+    fn proto_row_invalid_range_is_error() {
+        // A ProtoRow with a range whose bounds have inconsistent datum kinds
+        // (or a null/extra bound) must decode to an error, not panic. The range
+        // packer used to `assert!` these invariants. Regression for the
+        // row_proto_roundtrip cargo-fuzz finding.
+        use prost::Message;
+        let bytes: &[u8] = &[
+            0x0a, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x03, 0xa2, 0x01,
+            0x00, 0x0a, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x20, 0xfa, 0x01, 0x1d, 0x1d, 0x9f, 0x00,
+            0x00, 0x00, 0xaa, 0x01, 0x00, 0x0a, 0x13, 0xf8, 0x01, 0x08, 0xaa, 0x0a, 0x03, 0xba,
+            0x01, 0x00, 0x22, 0x03, 0xba, 0x01, 0x00, 0x12, 0x03, 0xaa, 0x01, 0x00, 0x0a, 0x03,
+            0xaa, 0x01, 0x00,
+        ];
+        let proto = ProtoRow::decode(bytes).expect("crash input decodes as a proto");
+        let result: Result<Row, _> = proto.into_rust();
+        assert_err!(result);
+    }
+
+    #[mz_ore::test]
+    fn proto_row_unordered_dict_keys_is_error() {
+        // A ProtoRow with a dict whose keys are duplicated or not in ascending
+        // order must decode to an error, not panic. Iterating such a map trips
+        // a debug_assert. Regression for the row_proto_roundtrip cargo-fuzz
+        // finding.
+        use prost::Message;
+        let bytes: &[u8] = &[
+            0x0a, 0x32, 0x18, 0x4e, 0x18, 0x18, 0x68, 0x4e, 0xe8, 0x68, 0x57, 0xba, 0x01, 0x0a,
+            0x0a, 0x08, 0x60, 0xff, 0xff, 0x10, 0x12, 0x02, 0x10, 0x10, 0x99, 0x68, 0x0a, 0x18,
+            0x18, 0x4e, 0x18, 0x18, 0x68, 0x4e, 0xe8, 0x5b, 0x18, 0x68, 0x57, 0xba, 0x01, 0x0a,
+            0x0a, 0x08, 0x60, 0xff, 0xff, 0x10, 0x12, 0x02, 0x18, 0x10,
+        ];
+        let proto = ProtoRow::decode(bytes).expect("crash input decodes as a proto");
+        let result: Result<Row, _> = proto.into_rust();
+        assert_err!(result);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn proto_row_oversized_numeric_bcd_is_error() {
+        // A `ProtoNumeric` whose `bcd` holds more digits than `Numeric`'s
+        // coefficient can hold must decode to an error. `decPackedToNumber`
+        // writes one BCD digit per input nibble into the fixed-size
+        // coefficient without bounds-checking it, so a long `bcd` writes past
+        // the end of the `Decimal` and eventually segfaults.
+        for len in [21, 64, 4096] {
+            let mut bcd = vec![0x99u8; len];
+            // DECPPLUS, so the sign nibble check passes and the digit copy runs.
+            *bcd.last_mut().unwrap() = 0x9c;
+            let proto = ProtoRow {
+                datums: vec![ProtoDatum {
+                    datum_type: Some(DatumType::Numeric(ProtoNumeric { bcd, scale: 0 })),
+                }],
+            };
+            assert_err!(Row::try_from(&proto));
+        }
+
+        // The bound must not reject anything we encode: a numeric at max
+        // precision packs into exactly MAX_BCD_LEN bytes.
+        let mut cx = crate::adt::numeric::cx_datum();
+        let digits = "9".repeat(usize::from(NUMERIC_DATUM_MAX_PRECISION));
+        let n: Numeric = cx.parse(digits.as_str()).unwrap();
+        let row = Row::pack_slice(&[Datum::Numeric(OrderedDecimal(n))]);
+        assert_eq!(Row::try_from(&row.into_proto()).unwrap(), row);
+    }
 
     #[track_caller]
     fn roundtrip_datum<'a>(
@@ -2393,8 +2531,8 @@ mod tests {
                 a_prefix.cmp(b_prefix).is_le(),
                 "ordering should be consistent on preserves_order columns: {:#?}\n{:?}\n{:?}",
                 desc.iter().take(ordered_prefix_len).collect_vec(),
-                a.to_datum_iter().take(ordered_prefix_len).collect_vec(),
-                b.to_datum_iter().take(ordered_prefix_len).collect_vec()
+                a.iter().take(ordered_prefix_len).collect_vec(),
+                b.iter().take(ordered_prefix_len).collect_vec()
             );
         }
 

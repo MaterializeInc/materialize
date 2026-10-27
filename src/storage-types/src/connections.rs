@@ -11,23 +11,42 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use anyhow::{Context, anyhow};
-use aws_sdk_sts::config::ProvideCredentials;
+use async_trait::async_trait;
+use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
+use aws_sigv4::http_request::{SignableBody, SignableRequest, SigningSettings, sign};
+use aws_sigv4::sign::v4;
+// Aliased to avoid colliding with `mz_ccsr::tls::Identity`.
+use aws_smithy_runtime_api::client::identity::Identity as AwsIdentity;
+use base64::Engine;
+use http::{HeaderMap, HeaderName, HeaderValue};
 use iceberg::Catalog;
 use iceberg::CatalogBuilder;
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::TableIdent;
+use iceberg::io::{
+    GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA, GCS_USER_PROJECT,
+    S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY,
+};
 use iceberg_catalog_rest::{
-    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
+    OAuth2TokenProvider, REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RequestAuthenticator,
+    RestCatalogBuilder, TokenProvider,
+};
+use iceberg_storage_opendal::{
+    AwsCredential, CustomAwsCredentialLoader, CustomAzdlsCredentialLoader,
+    CustomGcsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
 };
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
 use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
-    BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
+    BrokerAddr, BrokerRewrite, HostMappingRules, MzClientContext, MzKafkaError, TunnelConfig,
+    TunnelingClientContext,
 };
 use mz_mysql_util::{MySqlConn, MySqlError};
 use mz_ore::assert_none;
@@ -35,29 +54,33 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::netio::resolve_address;
 use mz_ore::num::NonNeg;
+use mz_ore::str::StrExt;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_secrets::SecretsReader;
+use mz_sql_parser::ast::ConnectionRulePattern;
 use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
-use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
 use rdkafka::ClientContext;
 use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
+use reqsign_core::time::Timestamp;
+use reqwest_0_12::Request;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
 use tokio_postgres::config::SslMode;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::AlterCompatible;
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{
-    AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
+    AwsAuth, AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
 };
+use crate::connections::gcp::{GcpConnectionReference, GcpTokenProvider};
 use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
 use crate::dyncfgs::{
@@ -68,11 +91,201 @@ use crate::dyncfgs::{
 use crate::errors::{ContextCreationError, CsrConnectError};
 
 pub mod aws;
+pub mod gcp;
+mod iceberg_credentials;
 pub mod inline;
 pub mod string_or_secret;
 
-const REST_CATALOG_PROP_SCOPE: &str = "scope";
-const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
+/// The OAuth2 form field naming the scopes a token is requested for.
+///
+/// Materialize drives the OAuth2 exchange itself rather than through the `credential`,
+/// `oauth2-server-uri`, and `scope` catalog properties, so that one token object serves both
+/// catalog requests and storage-credential refreshes.
+const OAUTH2_PARAM_SCOPE: &str = "scope";
+
+const REST_CATALOG_PROP_OAUTH2_SERVER_URI: &str = "oauth2-server-uri";
+/// The prefix marking a catalog property that `iceberg-rust` turns into a header on every REST
+/// request, the same convention the Iceberg Java client uses.
+const REST_CATALOG_HEADER_PROP_PREFIX: &str = "header.";
+/// Requests catalog-vended storage credentials, carried as a header by way of
+/// [`REST_CATALOG_HEADER_PROP_PREFIX`].
+const REST_CATALOG_PROP_ACCESS_DELEGATION: &str = "header.X-Iceberg-Access-Delegation";
+
+/// A credential loader that wraps an aws-sdk-rust credentials provider for use with
+/// iceberg/OpenDAL. This allows us to provide refreshable credentials from the AWS SDK
+/// credential chain (including the full assume role chain) to OpenDAL's S3 implementation.
+///
+/// We use this instead of OpenDAL's built-in assume role support because Materialize
+/// has a runtime-defined credential chain (ambient → jump role → user role with external ID)
+/// that can't be expressed via OpenDAL's static configuration properties.
+#[derive(Debug)]
+struct AwsSdkCredentialLoader {
+    /// The underlying AWS SDK credentials provider. For assume role auth, this provider
+    /// already handles the full chain: ambient creds -> jump role -> user role.
+    provider: SharedCredentialsProvider,
+}
+
+impl AwsSdkCredentialLoader {
+    fn new(provider: SharedCredentialsProvider) -> Self {
+        Self { provider }
+    }
+}
+
+impl ProvideCredential for AwsSdkCredentialLoader {
+    type Credential = AwsCredential;
+
+    async fn provide_credential(
+        &self,
+        _ctx: &reqsign_core::Context,
+    ) -> reqsign_core::Result<Option<Self::Credential>> {
+        let creds = self.provider.provide_credentials().await.map_err(|e| {
+            warn!(
+                error = %e.display_with_causes(),
+                "failed to load AWS credentials for Iceberg FileIO from SDK provider"
+            );
+            reqsign_core::Error::credential_invalid(
+                "failed to load AWS credentials from SDK provider for Iceberg FileIO \
+                 (credential source may be temporarily unavailable)",
+            )
+            .with_source(e)
+        })?;
+
+        // Propagate the SDK's expiry whenever it reports one. reqsign treats a `None` expiry as
+        // "valid forever", so dropping it would leave OpenDAL signing with stale assume-role
+        // credentials rather than asking us for fresh ones.
+        let expires_in = creds.expiry().map(aws_expiry_to_timestamp).transpose()?;
+
+        Ok(Some(AwsCredential {
+            access_key_id: creds.access_key_id().to_string(),
+            secret_access_key: creds.secret_access_key().to_string(),
+            session_token: creds.session_token().map(|s| s.to_string()),
+            expires_in,
+        }))
+    }
+}
+
+/// Converts an AWS SDK credential expiry into reqsign's [`Timestamp`].
+///
+/// Both failure modes require a nonsensical expiry (before the Unix epoch, or beyond year
+/// 292278994), so they are reported as errors rather than silently dropped, which would make the
+/// credential look non-expiring.
+fn aws_expiry_to_timestamp(expiry: SystemTime) -> reqsign_core::Result<Timestamp> {
+    let millis = expiry
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|e| {
+            reqsign_core::Error::unexpected("AWS credential expiry precedes the Unix epoch")
+                .with_source(e)
+        })?
+        .as_millis();
+    let millis = i64::try_from(millis).map_err(|e| {
+        reqsign_core::Error::unexpected("AWS credential expiry overflows a millisecond timestamp")
+            .with_source(e)
+    })?;
+    Timestamp::from_millisecond(millis)
+}
+
+/// Signs each outgoing REST-catalog request with AWS SigV4.
+///
+/// Holds a [`SharedCredentialsProvider`] (not static `Credentials`) so each
+/// request signs with refreshable creds from Materialize's chain
+/// (ambient -> jump role -> user role w/ external ID).
+struct Sigv4Authenticator {
+    provider: SharedCredentialsProvider,
+    region: String,
+    /// The AWS signing name. `"s3tables"` for AWS S3 Tables REST catalog.
+    signing_name: String,
+}
+
+impl std::fmt::Debug for Sigv4Authenticator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sigv4Authenticator")
+            .field("region", &self.region)
+            .field("signing_name", &self.signing_name)
+            .finish_non_exhaustive()
+    }
+}
+
+fn sigv4_err(e: impl Into<anyhow::Error>) -> iceberg::Error {
+    iceberg::Error::new(iceberg::ErrorKind::DataInvalid, "AWS SigV4").with_source(e)
+}
+
+#[async_trait]
+impl RequestAuthenticator for Sigv4Authenticator {
+    async fn authenticate_request(&self, req: &mut Request) -> iceberg::Result<()> {
+        let creds = self
+            .provider
+            .provide_credentials()
+            .await
+            .map_err(sigv4_err)?;
+        let identity: AwsIdentity = creds.into();
+        let params = v4::SigningParams::builder()
+            .identity(&identity)
+            .region(&self.region)
+            .name(&self.signing_name)
+            .time(SystemTime::now())
+            .settings(SigningSettings::default())
+            .build()
+            .map_err(sigv4_err)?
+            .into();
+        let body: &[u8] = req
+            .body()
+            .map(|b| match b.as_bytes() {
+                Some(b) => Ok(b),
+                None => Err(iceberg::Error::new(
+                    iceberg::ErrorKind::FeatureUnsupported,
+                    "SigV4 Authenticator cannot sign a streaming request body.",
+                )),
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let headers = req
+            .headers()
+            .iter()
+            .map(|(k, v)| {
+                Ok((
+                    k.as_str(),
+                    v.to_str().map_err(|_| {
+                        iceberg::Error::new(
+                            iceberg::ErrorKind::DataInvalid,
+                            format!("header '{}' value is not all visible ASCII", k),
+                        )
+                    })?,
+                ))
+            })
+            .collect::<iceberg::Result<Vec<(&str, &str)>>>()?;
+        let signable = SignableRequest::new(
+            req.method().as_str(),
+            req.url().as_str(),
+            headers.into_iter(),
+            SignableBody::Bytes(body),
+        )
+        .map_err(sigv4_err)?;
+        let (instructions, _sig) = sign(signable, &params).map_err(sigv4_err)?.into_parts();
+        let (new_headers, new_query) = instructions.into_parts();
+        for header in new_headers {
+            let mut value = HeaderValue::from_str(header.value()).map_err(sigv4_err)?;
+            value.set_sensitive(header.sensitive());
+            req.headers_mut()
+                .insert(HeaderName::from_static(header.name()), value);
+        }
+        if !new_query.is_empty() {
+            let url = req.url_mut();
+            let mut pairs = url.query_pairs_mut();
+            for (name, value) in new_query {
+                pairs.append_pair(name, &value);
+            }
+        }
+        Ok(())
+    }
+
+    // SigV4 is stateless: nothing to cache, invalidate, or refresh.
+    async fn invalidate_cache(&self) -> iceberg::Result<()> {
+        Ok(())
+    }
+    async fn regenerate_cache(&self) -> iceberg::Result<()> {
+        Ok(())
+    }
+}
 
 /// An extension trait for [`SecretsReader`]
 #[async_trait::async_trait]
@@ -199,10 +412,12 @@ impl ConnectionContext {
 pub enum Connection<C: ConnectionAccess = InlinedConnection> {
     Kafka(KafkaConnection<C>),
     Csr(CsrConnection<C>),
+    GlueSchemaRegistry(GlueSchemaRegistryConnection<C>),
     Postgres(PostgresConnection<C>),
     Ssh(SshConnection),
     Aws(AwsConnection),
     AwsPrivatelink(AwsPrivatelinkConnection),
+    Gcp(gcp::GcpConnection),
     MySql(MySqlConnection<C>),
     SqlServer(SqlServerConnectionDetails<C>),
     IcebergCatalog(IcebergCatalogConnection<C>),
@@ -215,10 +430,14 @@ impl<R: ConnectionResolver> IntoInlineConnection<Connection, R>
         match self {
             Connection::Kafka(kafka) => Connection::Kafka(kafka.into_inline_connection(r)),
             Connection::Csr(csr) => Connection::Csr(csr.into_inline_connection(r)),
+            Connection::GlueSchemaRegistry(glue) => {
+                Connection::GlueSchemaRegistry(glue.into_inline_connection(r))
+            }
             Connection::Postgres(pg) => Connection::Postgres(pg.into_inline_connection(r)),
             Connection::Ssh(ssh) => Connection::Ssh(ssh),
             Connection::Aws(aws) => Connection::Aws(aws),
             Connection::AwsPrivatelink(awspl) => Connection::AwsPrivatelink(awspl),
+            Connection::Gcp(gcp) => Connection::Gcp(gcp),
             Connection::MySql(mysql) => Connection::MySql(mysql.into_inline_connection(r)),
             Connection::SqlServer(sql_server) => {
                 Connection::SqlServer(sql_server.into_inline_connection(r))
@@ -236,10 +455,12 @@ impl<C: ConnectionAccess> Connection<C> {
         match self {
             Connection::Kafka(conn) => conn.validate_by_default(),
             Connection::Csr(conn) => conn.validate_by_default(),
+            Connection::GlueSchemaRegistry(conn) => conn.validate_by_default(),
             Connection::Postgres(conn) => conn.validate_by_default(),
             Connection::Ssh(conn) => conn.validate_by_default(),
             Connection::Aws(conn) => conn.validate_by_default(),
             Connection::AwsPrivatelink(conn) => conn.validate_by_default(),
+            Connection::Gcp(conn) => conn.validate_by_default(),
             Connection::MySql(conn) => conn.validate_by_default(),
             Connection::SqlServer(conn) => conn.validate_by_default(),
             Connection::IcebergCatalog(conn) => conn.validate_by_default(),
@@ -257,12 +478,16 @@ impl Connection<InlinedConnection> {
         match self {
             Connection::Kafka(conn) => conn.validate(id, storage_configuration).await?,
             Connection::Csr(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::GlueSchemaRegistry(conn) => {
+                conn.validate(id, storage_configuration).await?
+            }
             Connection::Postgres(conn) => {
                 conn.validate(id, storage_configuration).await?;
             }
             Connection::Ssh(conn) => conn.validate(id, storage_configuration).await?,
             Connection::Aws(conn) => conn.validate(id, storage_configuration).await?,
             Connection::AwsPrivatelink(conn) => conn.validate(id, storage_configuration).await?,
+            Connection::Gcp(conn) => conn.validate(id, storage_configuration).await?,
             Connection::MySql(conn) => {
                 conn.validate(id, storage_configuration).await?;
             }
@@ -309,6 +534,13 @@ impl Connection<InlinedConnection> {
         }
     }
 
+    pub fn unwrap_gcp(self) -> <InlinedConnection as ConnectionAccess>::Gcp {
+        match self {
+            Self::Gcp(conn) => conn,
+            o => unreachable!("{o:?} is not a GCP connection"),
+        }
+    }
+
     pub fn unwrap_ssh(self) -> <InlinedConnection as ConnectionAccess>::Ssh {
         match self {
             Self::Ssh(conn) => conn,
@@ -320,6 +552,15 @@ impl Connection<InlinedConnection> {
         match self {
             Self::Csr(conn) => conn,
             o => unreachable!("{o:?} is not a Kafka connection"),
+        }
+    }
+
+    pub fn unwrap_glue_schema_registry(
+        self,
+    ) -> <InlinedConnection as ConnectionAccess>::GlueSchemaRegistry {
+        match self {
+            Self::GlueSchemaRegistry(conn) => conn,
+            o => unreachable!("{o:?} is not an AWS Glue Schema Registry connection"),
         }
     }
 
@@ -342,6 +583,10 @@ pub enum ConnectionValidationError {
     SqlServer(#[from] SqlServerConnectionValidationError),
     #[error(transparent)]
     Aws(#[from] AwsConnectionValidationError),
+    #[error(transparent)]
+    Gcp(#[from] gcp::GcpConnectionValidationError),
+    #[error(transparent)]
+    AwsPrivatelinkServiceName(#[from] InvalidAwsPrivatelinkServiceName),
     #[error("{}", .0.display_with_causes())]
     Other(#[from] anyhow::Error),
 }
@@ -354,6 +599,8 @@ impl ConnectionValidationError {
             ConnectionValidationError::MySql(e) => e.detail(),
             ConnectionValidationError::SqlServer(e) => e.detail(),
             ConnectionValidationError::Aws(e) => e.detail(),
+            ConnectionValidationError::Gcp(e) => e.detail(),
+            ConnectionValidationError::AwsPrivatelinkServiceName(_) => None,
             ConnectionValidationError::Other(_) => None,
         }
     }
@@ -365,6 +612,8 @@ impl ConnectionValidationError {
             ConnectionValidationError::MySql(e) => e.hint(),
             ConnectionValidationError::SqlServer(e) => e.hint(),
             ConnectionValidationError::Aws(e) => e.hint(),
+            ConnectionValidationError::Gcp(e) => e.hint(),
+            ConnectionValidationError::AwsPrivatelinkServiceName(e) => Some(e.hint()),
             ConnectionValidationError::Other(_) => None,
         }
     }
@@ -375,11 +624,15 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
         match (self, other) {
             (Self::Aws(s), Self::Aws(o)) => s.alter_compatible(id, o),
             (Self::AwsPrivatelink(s), Self::AwsPrivatelink(o)) => s.alter_compatible(id, o),
+            (Self::Gcp(s), Self::Gcp(o)) => s.alter_compatible(id, o),
             (Self::Ssh(s), Self::Ssh(o)) => s.alter_compatible(id, o),
             (Self::Csr(s), Self::Csr(o)) => s.alter_compatible(id, o),
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            (Self::SqlServer(s), Self::SqlServer(o)) => s.alter_compatible(id, o),
+            (Self::GlueSchemaRegistry(s), Self::GlueSchemaRegistry(o)) => s.alter_compatible(id, o),
+            (Self::IcebergCatalog(s), Self::IcebergCatalog(o)) => s.alter_compatible(id, o),
             _ => {
                 tracing::warn!(
                     "Connection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -392,14 +645,78 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
     }
 }
 
+/// Auth mechanism for Iceberg REST catalogs.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct RestIcebergCatalog {
-    /// For REST catalogs, the oauth2 credential in a `CLIENT_ID:CLIENT_SECRET` format
-    pub credential: StringOrSecret,
-    /// The oauth2 scope for REST catalogs
-    pub scope: Option<String>,
+pub enum IcebergCatalogAuth<C: ConnectionAccess = InlinedConnection> {
+    /// Use Iceberg catalog REST API's standard OAuth flow.
+    OAuth {
+        /// client_id:client_secret
+        credential: StringOrSecret,
+        /// OAuth2 scope
+        scope: Option<String>,
+        /// Where to exchange `credential` for a bearer token.
+        ///
+        /// `None` uses the endpoint the Iceberg REST specification defines relative to the
+        /// catalog URL, `<url>/v1/oauth/tokens`. Catalogs that host their token endpoint
+        /// elsewhere, or behind an auth gateway that will not serve an unauthenticated
+        /// exchange, need this override.
+        server_url: Option<String>,
+    },
+    Gcp(GcpConnectionReference<C>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct RestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
+    pub auth: IcebergCatalogAuth<C>,
     /// The warehouse for REST catalogs
     pub warehouse: Option<String>,
+    /// Which form of storage-access delegation to request from the catalog, if any.
+    ///
+    /// `None` means "do not request storage-access delegation".
+    /// If we do not have permission to request delegated access but request it anyway,
+    /// a catalog can reject our whole request,
+    /// even if we have our own storage credentials to fall back on.
+    pub access_delegation: Option<IcebergAccessDelegation>,
+    /// Which object store the catalog's tables live in.
+    ///
+    /// Defaults to S3. A REST catalog does not tell us this, so a table backed
+    /// by GCS or ADLS is unreadable until the connection says so.
+    pub storage_provider: IcebergStorageProvider,
+}
+
+/// The value Materialize sends in the Iceberg REST `X-Iceberg-Access-Delegation`
+/// header, naming how the catalog should grant access to table storage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum IcebergAccessDelegation {
+    /// Ask the catalog to mint temporary, table-scoped storage credentials.
+    VendedCredentials,
+}
+
+impl IcebergAccessDelegation {
+    /// The header value, as spelled in the Iceberg REST specification.
+    pub fn as_header_value(&self) -> &'static str {
+        match self {
+            IcebergAccessDelegation::VendedCredentials => "vended-credentials",
+        }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for RestIcebergCatalog<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        // Auth and access delegation are not considered for compatibility, because they can
+        // be changed without breaking existing tables.
+        if (self.warehouse != other.warehouse) || (self.storage_provider != other.storage_provider)
+        {
+            tracing::warn!(
+                "RestIcebergCatalog incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(AlterError { id })
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -408,6 +725,38 @@ pub struct S3TablesRestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
     pub aws_connection: AwsConnectionReference<C>,
     /// The warehouse for s3tables
     pub warehouse: String,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogAuth, R>
+    for IcebergCatalogAuth<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> IcebergCatalogAuth {
+        match self {
+            IcebergCatalogAuth::Gcp(x) => IcebergCatalogAuth::Gcp(x.into_inline_connection(&r)),
+            IcebergCatalogAuth::OAuth {
+                credential,
+                scope,
+                server_url,
+            } => IcebergCatalogAuth::OAuth {
+                credential,
+                scope,
+                server_url,
+            },
+        }
+    }
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<RestIcebergCatalog, R>
+    for RestIcebergCatalog<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> RestIcebergCatalog {
+        RestIcebergCatalog {
+            auth: self.auth.into_inline_connection(&r),
+            warehouse: self.warehouse,
+            access_delegation: self.access_delegation,
+            storage_provider: self.storage_provider,
+        }
+    }
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
@@ -421,15 +770,65 @@ impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for S3TablesRestIcebergCatalog<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self.aws_connection.connection_id != other.aws_connection.connection_id
+            || self.warehouse != other.warehouse
+        {
+            tracing::warn!(
+                "S3TablesRestIcebergCatalog incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(AlterError { id })
+        } else {
+            self.aws_connection
+                .connection
+                .alter_compatible(id, &other.aws_connection.connection)?;
+            Ok(())
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IcebergCatalogType {
     Rest,
     S3TablesRest,
 }
 
+/// Which object store holds the data files of a REST catalog's tables.
+///
+/// The catalog protocol says nothing about this: a REST catalog hands back
+/// storage locations and credentials, and the client has to already know how to
+/// talk to that store. So it is configured per connection rather than
+/// discovered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum IcebergStorageProvider {
+    S3,
+    Gcs,
+    Adls,
+}
+
+impl IcebergStorageProvider {
+    /// The name as spelled in SQL.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IcebergStorageProvider::S3 => "s3",
+            IcebergStorageProvider::Gcs => "gcs",
+            IcebergStorageProvider::Adls => "adls",
+        }
+    }
+}
+
+impl Default for IcebergStorageProvider {
+    fn default() -> Self {
+        IcebergStorageProvider::S3
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IcebergCatalogImpl<C: ConnectionAccess = InlinedConnection> {
-    Rest(RestIcebergCatalog),
+    Rest(RestIcebergCatalog<C>),
     S3TablesRest(S3TablesRestIcebergCatalog<C>),
 }
 
@@ -438,10 +837,27 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogImpl, R>
 {
     fn into_inline_connection(self, r: R) -> IcebergCatalogImpl {
         match self {
-            IcebergCatalogImpl::Rest(rest) => IcebergCatalogImpl::Rest(rest),
+            IcebergCatalogImpl::Rest(rest) => {
+                IcebergCatalogImpl::Rest(rest.into_inline_connection(r))
+            }
             IcebergCatalogImpl::S3TablesRest(s3tables) => {
                 IcebergCatalogImpl::S3TablesRest(s3tables.into_inline_connection(r))
             }
+        }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for IcebergCatalogImpl<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        match (self, other) {
+            (IcebergCatalogImpl::Rest(rest), IcebergCatalogImpl::Rest(other_rest)) => {
+                rest.alter_compatible(id, other_rest)
+            }
+            (
+                IcebergCatalogImpl::S3TablesRest(s3tables),
+                IcebergCatalogImpl::S3TablesRest(other_s3tables),
+            ) => s3tables.alter_compatible(id, other_s3tables),
+            _ => Err(AlterError { id }),
         }
     }
 }
@@ -451,12 +867,29 @@ pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
     /// The catalog impl impl of that catalog
     pub catalog: IcebergCatalogImpl<C>,
     /// Where the catalog is located
-    pub uri: reqwest::Url,
+    pub uri: reqwest_0_12::Url,
 }
 
-impl AlterCompatible for IcebergCatalogConnection {
-    fn alter_compatible(&self, id: GlobalId, _other: &Self) -> Result<(), AlterError> {
-        Err(AlterError { id })
+impl<C: ConnectionAccess> AlterCompatible for IcebergCatalogConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let compatibility_checks = [
+            (
+                self.catalog.alter_compatible(id, &other.catalog).is_ok(),
+                "catalog",
+            ),
+            (self.uri == other.uri, "uri"),
+        ];
+        for (is_ok, field) in compatibility_checks {
+            if !is_ok {
+                tracing::warn!(
+                    "IcebergCatalogConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -478,18 +911,27 @@ impl<C: ConnectionAccess> IcebergCatalogConnection<C> {
 }
 
 impl IcebergCatalogConnection<InlinedConnection> {
+    /// Connects to the catalog.
+    ///
+    /// `table` names the table this handle will be used against. It is needed only to keep
+    /// catalog-vended storage credentials refreshed, which the REST specification scopes to a
+    /// single table. Passing `None` leaves the connection on whatever credentials the catalog
+    /// supplies at `loadTable` time, which expire.
     pub async fn connect(
         &self,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
+        table: Option<&TableIdent>,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
         match self.catalog {
             IcebergCatalogImpl::S3TablesRest(ref s3tables) => {
+                // S3 Tables signs every request with SigV4 off a refreshable AWS provider, so it
+                // has no vended credential to keep alive.
                 self.connect_s3tables(s3tables, storage_configuration, in_task)
                     .await
             }
             IcebergCatalogImpl::Rest(ref rest) => {
-                self.connect_rest(rest, storage_configuration, in_task)
+                self.connect_rest(rest, storage_configuration, in_task, table)
                     .await
             }
         }
@@ -505,14 +947,14 @@ impl IcebergCatalogConnection<InlinedConnection> {
     pub fn s3tables_catalog(&self) -> Option<&S3TablesRestIcebergCatalog> {
         match &self.catalog {
             IcebergCatalogImpl::S3TablesRest(s3tables) => Some(s3tables),
-            _ => None,
+            IcebergCatalogImpl::Rest(_) => None,
         }
     }
 
     pub fn rest_catalog(&self) -> Option<&RestIcebergCatalog> {
         match &self.catalog {
             IcebergCatalogImpl::Rest(rest) => Some(rest),
-            _ => None,
+            IcebergCatalogImpl::S3TablesRest(_) => None,
         }
     }
 
@@ -522,57 +964,207 @@ impl IcebergCatalogConnection<InlinedConnection> {
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
+        let secret_reader = &storage_configuration.connection_context.secrets_reader;
         let aws_ref = &s3tables.aws_connection;
-        let aws_config = aws_ref
+
+        let aws_region = aws_ref
             .connection
-            .load_sdk_config(
-                &storage_configuration.connection_context,
-                aws_ref.connection_id,
-                in_task,
-            )
-            .await?;
+            .region
+            .clone()
+            .unwrap_or_else(|| "us-east-1".to_string());
 
-        let provider = aws_config
-            .credentials_provider()
-            .context("No credentials provider in AWS config")?;
-
-        let creds = provider
-            .provide_credentials()
-            .await
-            .context("Failed to get AWS credentials")?;
-
-        let access_key_id = creds.access_key_id();
-        let secret_access_key = creds.secret_access_key();
-
-        let aws_region = aws_config
-            .region()
-            .map(|r| r.as_ref())
-            .unwrap_or("us-east-1");
-
-        let props = vec![
-            (S3_REGION.to_string(), aws_region.to_string()),
+        let mut props = vec![
+            (S3_REGION.to_string(), aws_region.clone()),
             (S3_DISABLE_EC2_METADATA.to_string(), "true".to_string()),
-            (S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string()),
-            (
-                S3_SECRET_ACCESS_KEY.to_string(),
-                secret_access_key.to_string(),
-            ),
             (
                 REST_CATALOG_PROP_WAREHOUSE.to_string(),
                 s3tables.warehouse.clone(),
             ),
-            (
-                REST_CATALOG_PROP_URI.to_string(),
-                self.uri.to_string().clone(),
-            ),
+            (REST_CATALOG_PROP_URI.to_string(), self.uri.to_string()),
         ];
 
+        let aws_auth = aws_ref.connection.auth.clone();
+
+        if let AwsAuth::Credentials(creds) = &aws_auth {
+            props.push((
+                S3_ACCESS_KEY_ID.to_string(),
+                creds
+                    .access_key_id
+                    .get_string(in_task, secret_reader)
+                    .await?,
+            ));
+            props.push((
+                S3_SECRET_ACCESS_KEY.to_string(),
+                secret_reader.read_string(creds.secret_access_key).await?,
+            ));
+        }
+
+        // Sign REST catalog requests with the Materialize AWS credential chain
+        // via a custom `RequestAuthenticator`. For AssumeRole auth, also feed
+        // the chain to OpenDAL's S3 loader so data-file IO uses the same creds.
+        //
+        // For AssumeRole auth, the provider serves cached credentials that a
+        // background task keeps fresh, so no request through this catalog ever
+        // waits on STS. The task lives as long as the catalog holds the
+        // provider.
+        let credentials_provider = match &aws_auth {
+            // NOTE: This branch never contacts the connection's ENDPOINT.
+            // REST requests go to the catalog URI and the STS calls use the
+            // SDK defaults. The endpoint is still validated so a forbidden
+            // one is rejected rather than silently ignored.
+            AwsAuth::AssumeRole(assume_role) => {
+                aws_ref.connection.validate_endpoint(
+                    ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                )?;
+                assume_role
+                    .prefetch_credentials(
+                        &storage_configuration.connection_context,
+                        aws_ref.connection_id,
+                        storage_configuration.config_set(),
+                        format!("aws-connection-{}", aws_ref.connection_id),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to initialize AssumeRole credentials for S3 Tables Iceberg \
+                             catalog (catalog uri: {}, warehouse: {})",
+                            self.uri, s3tables.warehouse
+                        )
+                    })?
+            }
+            AwsAuth::Credentials(_) => {
+                let aws_config = aws_ref
+                    .connection
+                    .load_sdk_config(
+                        &storage_configuration.connection_context,
+                        aws_ref.connection_id,
+                        in_task,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to load AWS SDK config for S3 Tables Iceberg catalog \
+                             (connection id: {}, auth method: {}, catalog uri: {}, warehouse: {})",
+                            aws_ref.connection_id,
+                            aws_ref.connection.auth_method(),
+                            self.uri,
+                            s3tables.warehouse
+                        )
+                    })?;
+                aws_config
+                    .credentials_provider()
+                    .ok_or_else(|| anyhow!("aws_config missing credentials provider"))?
+            }
+        };
+
+        let authenticator = Arc::new(Sigv4Authenticator {
+            provider: credentials_provider.clone(),
+            region: aws_region.clone(),
+            signing_name: "s3tables".to_string(),
+        });
+
+        // N.B. We're using the AWS credentials from the catalog connection for the storage layer
+        //   even though the sink comes with its own (unused) AWS credentials for storage.
+        let customized_credential_load = if matches!(aws_auth, AwsAuth::AssumeRole(_)) {
+            Some(CustomAwsCredentialLoader::new(AwsSdkCredentialLoader::new(
+                credentials_provider,
+            )))
+        } else {
+            None
+        };
+
+        let storage_factory = Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load,
+        });
+
         let catalog = RestCatalogBuilder::default()
-            .with_aws_config(aws_config)
+            .with_storage_factory(storage_factory)
+            .with_authenticator(authenticator)
             .load("IcebergCatalog", props.into_iter().collect())
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create S3 Tables Iceberg catalog \
+                     (connection id: {}, catalog uri: {}, warehouse: {})",
+                    aws_ref.connection_id, self.uri, s3tables.warehouse
+                )
+            })?;
 
         Ok(Arc::new(catalog))
+    }
+
+    /// Collects the headers `iceberg-rust` puts on every catalog request out of the `header.*`
+    /// props it takes them from.
+    ///
+    /// The credential endpoints Materialize calls directly bypass the catalog client, so without
+    /// this they would reach the same server missing headers it may require, `x-goog-user-project`
+    /// on a GCP-hosted catalog among them.
+    fn catalog_headers(props: &BTreeMap<String, String>) -> Result<HeaderMap, anyhow::Error> {
+        props
+            .iter()
+            .filter_map(|(k, v)| {
+                k.strip_prefix(REST_CATALOG_HEADER_PROP_PREFIX)
+                    .map(|name| (name, v))
+            })
+            .map(|(name, value)| {
+                let name = HeaderName::try_from(name)
+                    .with_context(|| format!("invalid Iceberg catalog header name: {name}"))?;
+                let value = HeaderValue::try_from(value)
+                    .with_context(|| format!("invalid Iceberg catalog header value for {name}"))?;
+                Ok((name, value))
+            })
+            .collect()
+    }
+
+    /// Resolves the endpoint that vends storage credentials for `table`, or `None` if this
+    /// connection has no use for one.
+    ///
+    /// A loader built on the returned endpoint takes sole responsibility for storage credentials,
+    /// so `None` is the signal to leave the catalog's static `storage-credentials` props in force.
+    /// It means either that the connection did not ask for delegation, or that the caller named no
+    /// table, and the specification scopes vended credentials to a single table.
+    async fn vended_credential_endpoint(
+        &self,
+        rest: &RestIcebergCatalog,
+        client: &reqwest_0_12::Client,
+        token: &Arc<dyn TokenProvider>,
+        headers: &HeaderMap,
+        table: Option<&TableIdent>,
+    ) -> Result<Option<Url>, anyhow::Error> {
+        match (&rest.access_delegation, table) {
+            (Some(IcebergAccessDelegation::VendedCredentials), Some(table)) => Ok(Some(
+                iceberg_credentials::table_credentials_endpoint(
+                    &self.uri,
+                    client,
+                    token,
+                    headers,
+                    rest.warehouse.as_deref(),
+                    table,
+                )
+                .await?,
+            )),
+            _ => Ok(None),
+        }
+    }
+
+    /// Builds a GCS storage factory, refreshing vended credentials from `endpoint` if there is one.
+    fn gcs_storage_factory(
+        endpoint: Option<Url>,
+        client: &reqwest_0_12::Client,
+        token: &Arc<dyn TokenProvider>,
+        headers: &HeaderMap,
+    ) -> OpenDalStorageFactory {
+        OpenDalStorageFactory::Gcs {
+            customized_credential_load: endpoint.map(|endpoint| {
+                CustomGcsCredentialLoader::new(iceberg_credentials::VendedCredentialLoader::new(
+                    client.clone(),
+                    endpoint,
+                    Arc::clone(token),
+                    headers.clone(),
+                ))
+            }),
+        }
     }
 
     async fn connect_rest(
@@ -580,6 +1172,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
         rest: &RestIcebergCatalog,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
+        table: Option<&TableIdent>,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
         let mut props = BTreeMap::from([(
             REST_CATALOG_PROP_URI.to_string(),
@@ -590,21 +1183,200 @@ impl IcebergCatalogConnection<InlinedConnection> {
             props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
         }
 
-        let credential = rest
-            .credential
-            .get_string(
-                in_task,
-                &storage_configuration.connection_context.secrets_reader,
-            )
-            .await
-            .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
-        props.insert(REST_CATALOG_PROP_CREDENTIAL.to_string(), credential);
+        // One client for catalog requests, OAuth token requests, and credential refreshes, so all
+        // three share a connection pool. `iceberg-rust` would otherwise default to its own.
+        let client = reqwest_0_12::Client::new();
 
-        if let Some(scope) = &rest.scope {
-            props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());
+        // Catalog auth is configured through a combination of `props` and `.with_authenticator(...)`,
+        // which happen at different stages of the [`RestCatalogBuilder`] -> [`RestCatalog`]
+        // construction pipeline.
+        let (storage_factory, custom_authenticator) = match &rest.auth {
+            IcebergCatalogAuth::OAuth {
+                credential,
+                scope,
+                server_url,
+            } => {
+                let credential = credential
+                    .get_string(
+                        in_task,
+                        &storage_configuration.connection_context.secrets_reader,
+                    )
+                    .await
+                    .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
+
+                if let Some(server_url) = server_url {
+                    // The OAuth2 exchange POSTs the catalog credential to this URL, so a URL
+                    // aimed inside our own network turns the connection into a request forger
+                    // against, say, a cloud metadata endpoint. Resolve it and reject private
+                    // addresses, the same check every other host we dial directly gets.
+                    //
+                    // NOTE: the resolved addresses are only checked, not pinned. The catalog
+                    // client offers no hook to dial a pre-resolved address, so a name that
+                    // resolves differently between this check and the request slips through.
+                    // Kafka and Confluent Schema Registry connections do pin theirs.
+                    let url = Url::parse(server_url).with_context(|| {
+                        format!("invalid OAUTH2 SERVER URL for Iceberg catalog: {server_url}")
+                    })?;
+                    let host = url.host_str().ok_or_else(|| {
+                        anyhow!("OAUTH2 SERVER URL for Iceberg catalog has no host: {server_url}")
+                    })?;
+                    resolve_address(
+                        host,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
+                    )
+                    .await
+                    .with_context(|| {
+                        format!("OAUTH2 SERVER URL for Iceberg catalog is not resolvable to an external address: {server_url}")
+                    })?;
+
+                    props.insert(
+                        REST_CATALOG_PROP_OAUTH2_SERVER_URI.to_string(),
+                        server_url.clone(),
+                    );
+                }
+
+                // Materialize builds an OAuth2 provider shared across both catalog requests
+                // and the vended credentials refresh below.
+                let token_endpoint = match server_url {
+                    Some(server_url) => server_url.clone(),
+                    // Matches `iceberg-rust`'s default when no `oauth2-server-uri` is configured.
+                    None => format!(
+                        "{}/v1/oauth/tokens",
+                        self.uri.as_str().trim_end_matches('/')
+                    ),
+                };
+                let (client_id, client_secret) = match credential.split_once(':') {
+                    Some((client_id, client_secret)) => {
+                        (Some(client_id.to_string()), client_secret.to_string())
+                    }
+                    None => (None, credential),
+                };
+                let oauth_params = BTreeMap::from([(
+                    OAUTH2_PARAM_SCOPE.to_string(),
+                    // The default `iceberg-rust` applies when the connection names no scope.
+                    scope.clone().unwrap_or_else(|| "catalog".to_string()),
+                )]);
+                let token: Arc<dyn TokenProvider> = Arc::new(OAuth2TokenProvider::new(
+                    client.clone(),
+                    client_id,
+                    client_secret,
+                    token_endpoint,
+                    // The token request needs none of the catalog's headers, and
+                    // `OAuth2TokenProvider` sets the form content type itself.
+                    HeaderMap::new(),
+                    oauth_params.into_iter().collect(),
+                ));
+
+                let headers = Self::catalog_headers(&props)?;
+                let endpoint = self
+                    .vended_credential_endpoint(rest, &client, &token, &headers, table)
+                    .await?;
+
+                (
+                    // The catalog tells us where the data lives but not what
+                    // kind of store it is, so the connection has to say.
+                    match rest.storage_provider {
+                        // When used with MinIO, Polaris returns a config with:
+                        //   s3.access-key-id, s3.secret-access-key, s3.endpoint, ...
+                        // `iceberg-rust` forwards these props to `opendal`. When the catalog
+                        // vends instead, it returns per-table `storage-credentials` that
+                        // `iceberg-rust` wires into the same FileIO.
+                        // N.B. This is not confirmed to work with other catalog & storage implementations.
+                        IcebergStorageProvider::S3 => OpenDalStorageFactory::S3 {
+                            customized_credential_load: endpoint.map(|endpoint| {
+                                CustomAwsCredentialLoader::new(
+                                    iceberg_credentials::VendedCredentialLoader::new(
+                                        client.clone(),
+                                        endpoint,
+                                        Arc::clone(&token),
+                                        headers.clone(),
+                                    ),
+                                )
+                            }),
+                        },
+                        IcebergStorageProvider::Gcs => {
+                            Self::gcs_storage_factory(endpoint, &client, &token, &headers)
+                        }
+                        IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls {
+                            customized_credential_load: endpoint.map(|endpoint| {
+                                CustomAzdlsCredentialLoader::new(
+                                    iceberg_credentials::VendedCredentialLoader::new(
+                                        client.clone(),
+                                        endpoint,
+                                        Arc::clone(&token),
+                                        headers.clone(),
+                                    ),
+                                )
+                            }),
+                        },
+                    },
+                    // NOTE: We construct our own OAuth authenticator for the Catalog client instead of using the one built in.
+                    // This means we ignore auth overrides from `/v1/config` (e.g. `oauth2-server-uri`).
+                    // This is okay because users can set these configs from Mz SQL.
+                    Some(iceberg_catalog_rest::BearerTokenAuthenticator::new(token)),
+                )
+            }
+            IcebergCatalogAuth::Gcp(gcp_connection_reference) => {
+                let (creds_json, service_account) = gcp_connection_reference
+                    .connection
+                    .read_credentials(storage_configuration)
+                    .await
+                    .map_err(|e| anyhow!("failed to parse GCP service account JSON: {e}"))?;
+
+                props.insert(
+                    GCS_CREDENTIALS_JSON.to_owned(),
+                    base64::engine::general_purpose::STANDARD.encode(creds_json),
+                );
+                // We supplied a service account key. Don't look elsewhere for GCP credentials.
+                props.insert(GCS_DISABLE_VM_METADATA.to_owned(), "true".to_owned());
+                props.insert(GCS_DISABLE_CONFIG_LOAD.to_owned(), "true".to_owned());
+                if let Some(project_id) = service_account.project_id() {
+                    props.insert(GCS_USER_PROJECT.to_owned(), project_id.to_owned());
+                    props.insert(
+                        "header.x-goog-user-project".to_owned(),
+                        project_id.to_owned(),
+                    );
+                }
+
+                // The service account authenticates catalog requests whether or not the catalog
+                // vends storage credentials, and doubles as the token source for refreshing them.
+                let token: Arc<dyn TokenProvider> = Arc::new(GcpTokenProvider { service_account });
+                let headers = Self::catalog_headers(&props)?;
+                let endpoint = self
+                    .vended_credential_endpoint(rest, &client, &token, &headers, table)
+                    .await?;
+
+                (
+                    // A GCP-hosted catalog vends GCS credentials, so the storage provider is not
+                    // in question here the way it is for a generic REST catalog.
+                    //
+                    // NOTE: with delegation the service account key above stops governing storage
+                    // and only authenticates the catalog. That is not a change in precedence:
+                    // OpenDAL already preferred the vended token over a credential file, and a
+                    // loader only keeps that token from expiring.
+                    Self::gcs_storage_factory(endpoint, &client, &token, &headers),
+                    Some(iceberg_catalog_rest::BearerTokenAuthenticator::new(token)),
+                )
+            }
+        };
+
+        // Inserted after the storage factory is built, so that the loaders above carry only the
+        // headers the catalog client would send on an ordinary request. Each adds this one itself,
+        // since the credentials endpoint is the one request that always asks for delegation.
+        if let Some(delegation) = &rest.access_delegation {
+            props.insert(
+                REST_CATALOG_PROP_ACCESS_DELEGATION.to_string(),
+                delegation.as_header_value().to_string(),
+            );
         }
 
-        let catalog = RestCatalogBuilder::default()
+        let mut catalog = RestCatalogBuilder::default()
+            .with_storage_factory(Arc::new(storage_factory))
+            .with_client(client);
+        if let Some(auth) = custom_authenticator {
+            catalog = catalog.with_authenticator(Arc::new(auth));
+        }
+        let catalog = catalog
             .load("IcebergCatalog", props.into_iter().collect())
             .await
             .map_err(|e| anyhow!("failed to create Iceberg catalog: {e}"))?;
@@ -616,8 +1388,9 @@ impl IcebergCatalogConnection<InlinedConnection> {
         _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), ConnectionValidationError> {
+        // Validation only lists namespaces, so it needs no table-scoped credentials.
         let catalog = self
-            .connect(storage_configuration, InTask::No)
+            .connect(storage_configuration, InTask::No, None)
             .await
             .map_err(|e| {
                 ConnectionValidationError::Other(anyhow!("failed to connect to catalog: {e}"))
@@ -642,6 +1415,51 @@ impl AlterCompatible for AwsPrivatelinkConnection {
     fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
         // Every element of the AwsPrivatelinkConnection connection is configurable.
         Ok(())
+    }
+}
+
+/// A `SERVICE NAME` that cannot name an AWS VPC endpoint service.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvalidAwsPrivatelinkServiceName {
+    pub name: String,
+}
+
+impl fmt::Display for InvalidAwsPrivatelinkServiceName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid AWS PrivateLink service name {}",
+            self.name.quoted()
+        )
+    }
+}
+
+impl std::error::Error for InvalidAwsPrivatelinkServiceName {}
+
+impl InvalidAwsPrivatelinkServiceName {
+    /// Explains how to find the right value.
+    pub fn hint(&self) -> String {
+        "SERVICE NAME must name an AWS VPC endpoint service, for example \
+         `com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc`. Endpoint service names are \
+         listed in the AWS console under VPC > Endpoint services."
+            .into()
+    }
+}
+
+impl AwsPrivatelinkConnection {
+    /// Checks that `service_name` could name an AWS VPC endpoint service.
+    ///
+    /// Every endpoint service name starts with `com.amazonaws.`, whether the
+    /// service is customer-owned (`com.amazonaws.vpce.<region>.vpce-svc-<id>`)
+    /// or AWS-managed (`com.amazonaws.<region>.<service>`). Only the prefix is
+    /// checked, so a name AWS would accept is never rejected here.
+    pub fn check_service_name(service_name: &str) -> Result<(), InvalidAwsPrivatelinkServiceName> {
+        if service_name.starts_with("com.amazonaws.") {
+            return Ok(());
+        }
+        Err(InvalidAwsPrivatelinkServiceName {
+            name: service_name.to_string(),
+        })
     }
 }
 
@@ -755,6 +1573,11 @@ impl<C: ConnectionAccess> KafkaConnection<C> {
     ///
     /// The caller is responsible for providing the connection ID as it is not
     /// known to `KafkaConnection`.
+    ///
+    /// NOTE: the `mz_catalog.mz_kafka_connections` builtin materialized view
+    /// reconstructs the default (`_materialize-progress-<env>-<conn>`) in SQL
+    /// (see `MZ_KAFKA_CONNECTIONS` in `src/catalog/src/builtin/mz_catalog.rs`).
+    /// Keep the two in sync.
     pub fn progress_topic(
         &self,
         connection_context: &ConnectionContext,
@@ -779,6 +1602,13 @@ impl KafkaConnection {
     /// Generates a string that can be used as the base for a configuration ID
     /// (e.g., `client.id`, `group.id`, `transactional.id`) for a Kafka source
     /// or sink.
+    ///
+    /// NOTE: the `mz_catalog.mz_kafka_sources` builtin materialized view
+    /// reconstructs this exact `materialize-<env>-<conn>-<obj>` format in SQL
+    /// (see `MZ_KAFKA_SOURCES` in `src/catalog/src/builtin/mz_catalog.rs`).
+    /// The two must stay in sync. `test/testdrive/kafka-commit.td` guards this
+    /// by feeding the view's reconstructed value into `kafka-verify-commit`,
+    /// so a divergence here fails that test.
     pub fn id_base(
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
@@ -874,15 +1704,30 @@ impl KafkaConnection {
                     t.port.unwrap_or(9092)
                 )
             }
+            Tunnel::AwsPrivatelinks(_pl) => {
+                let algo = KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM
+                    .get(storage_configuration.config_set());
+                options.insert("ssl.endpoint.identification.algorithm".into(), algo.into());
+
+                if self.brokers.is_empty() {
+                    return Err(ContextCreationError::Other(anyhow::anyhow!(
+                        "at least one static broker is required when using BROKER or BROKERS"
+                    )));
+                }
+                self.brokers.iter().map(|b| &b.address).join(",")
+            }
             _ => self.brokers.iter().map(|b| &b.address).join(","),
         };
-        options.insert("bootstrap.servers".into(), brokers.into());
+        options.insert("bootstrap.servers".into(), brokers.clone().into());
         let security_protocol = match (self.tls.is_some(), self.sasl.is_some()) {
             (false, false) => "PLAINTEXT",
             (true, false) => "SSL",
             (false, true) => "SASL_PLAINTEXT",
             (true, true) => "SASL_SSL",
         };
+        info!(
+            "kafka: create_with_context bootstrap.servers={brokers}, security_protocol={security_protocol}"
+        );
         options.insert("security.protocol".into(), security_protocol.into());
         if let Some(tls) = &self.tls {
             if let Some(root_cert) = &tls.root_cert {
@@ -959,14 +1804,12 @@ impl KafkaConnection {
                         &storage_configuration.connection_context,
                         aws.connection_id,
                         in_task,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                     )
                     .await?,
             ),
         };
 
-        // TODO(roshan): Implement enforcement of external address validation once
-        // rdkafka client has been updated to support providing multiple resolved
-        // addresses for brokers
         let mut context = TunnelingClientContext::new(
             context,
             Handle::current(),
@@ -977,6 +1820,7 @@ impl KafkaConnection {
             storage_configuration.parameters.ssh_timeout_config,
             aws_config,
             in_task,
+            ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
         );
 
         match &self.default_tunnel {
@@ -984,10 +1828,15 @@ impl KafkaConnection {
                 // By default, don't offer a default override for broker address lookup.
             }
             Tunnel::AwsPrivatelink(pl) => {
-                context.set_default_tunnel(TunnelConfig::StaticHost(vpc_endpoint_host(
-                    pl.connection_id,
-                    None, // Default tunnel does not support availability zones.
-                )));
+                context.set_default_tunnel(TunnelConfig::StaticHost(
+                    // Possible bug: We have been ignoring the configured port.
+                    KafkaConnection::from_default_aws_privatelink(pl).host,
+                ));
+            }
+            Tunnel::AwsPrivatelinks(pl) => {
+                context.set_default_tunnel(TunnelConfig::Rules(
+                    KafkaConnection::from_aws_privatelinks(pl),
+                ));
             }
             Tunnel::Ssh(ssh_tunnel) => {
                 let secret = storage_configuration
@@ -1014,7 +1863,19 @@ impl KafkaConnection {
                 }));
             }
         }
+        info!(
+            "kafka: tunnel config set to {}",
+            match &self.default_tunnel {
+                Tunnel::Direct => "Direct".to_string(),
+                Tunnel::AwsPrivatelink(_) => "AwsPrivatelink (static host)".to_string(),
+                Tunnel::AwsPrivatelinks(pl) =>
+                    format!("AwsPrivatelinks ({} rules)", pl.rules.len()),
+                Tunnel::Ssh(_) => "Ssh".to_string(),
+            }
+        );
 
+        // Here, we preemptively rewrite broker addresses.
+        // In concept, this overlaps with 'TunnelingClientContext::resolve_broker_addr'.
         for broker in &self.brokers {
             let mut addr_parts = broker.address.splitn(2, ':');
             let addr = BrokerAddr {
@@ -1041,19 +1902,14 @@ impl KafkaConnection {
                     // in the `TunnelingClientContext`.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
-                    let host = mz_cloud_resources::vpc_endpoint_host(
-                        aws_privatelink.connection_id,
-                        aws_privatelink.availability_zone.as_deref(),
-                    );
-                    let port = aws_privatelink.port;
                     context.add_broker_rewrite(
                         addr,
-                        BrokerRewrite {
-                            host: host.clone(),
-                            port,
-                        },
+                        KafkaConnection::from_aws_privatelink(aws_privatelink),
                     );
                 }
+                Tunnel::AwsPrivatelinks(_) => unreachable!(
+                    "Individually predefined brokers do not use rule-based PrivateLinks routing."
+                ),
                 Tunnel::Ssh(ssh_tunnel) => {
                     // Ensure any SSH bastion address we connect to is resolved to an external address.
                     let ssh_host_resolved = resolve_address(
@@ -1086,7 +1942,9 @@ impl KafkaConnection {
             }
         }
 
-        Ok(config.create_with_context(context)?)
+        Ok(mz_kafka_util::client::create_with_context(
+            &config, context,
+        )?)
     }
 
     async fn validate(
@@ -1121,11 +1979,16 @@ impl KafkaConnection {
         // The downside of this approach is it produces a generic error message like
         // "metadata fetch error" with no additional details. The real networking
         // error is buried in the librdkafka logs, which are not visible to users.
+        info!("kafka: starting connection validation via fetch_metadata (timeout={timeout:?})");
         let result = mz_ore::task::spawn_blocking(|| "kafka_get_metadata", {
             let consumer = Arc::clone(&consumer);
             move || consumer.fetch_metadata(None, timeout)
         })
         .await;
+        info!(
+            "kafka: connection validation result: {}",
+            if result.is_ok() { "success" } else { "failed" },
+        );
         match result {
             Ok(_) => Ok(()),
             // The error returned by `fetch_metadata` does not provide any details which makes for
@@ -1151,6 +2014,48 @@ impl KafkaConnection {
                     None => Err(err.into()),
                 }
             }
+        }
+    }
+
+    /// The "default" PrivateLink connection is used for bootstrapping Kafka.
+    fn from_default_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(
+                pl.connection_id,
+                None, // Default tunnel does not support availability zones.
+            ),
+            port: pl.port,
+        }
+    }
+
+    /// The "not default" PrivateLink connections are used for routing to specific Kafka brokers.
+    fn from_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(pl.connection_id, pl.availability_zone.as_deref()),
+            port: pl.port,
+        }
+    }
+
+    fn from_aws_privatelink_rule(
+        AwsPrivatelinkRule { pattern, to }: &AwsPrivatelinkRule,
+    ) -> (mz_kafka_util::client::ConnectionRulePattern, BrokerRewrite) {
+        (
+            mz_kafka_util::client::ConnectionRulePattern {
+                prefix_wildcard: pattern.prefix_wildcard,
+                literal_match: pattern.literal_match.clone(),
+                suffix_wildcard: pattern.suffix_wildcard,
+            },
+            KafkaConnection::from_aws_privatelink(to),
+        )
+    }
+
+    fn from_aws_privatelinks(pl: &AwsPrivatelinks) -> HostMappingRules {
+        HostMappingRules {
+            rules: pl
+                .rules
+                .iter()
+                .map(KafkaConnection::from_aws_privatelink_rule)
+                .collect_vec(),
         }
     }
 }
@@ -1317,9 +2222,9 @@ impl CsrConnection {
                     .connect(
                         storage_configuration,
                         host,
-                        // Default to the default http port, but this
-                        // could default to 8081...
-                        self.url.port().unwrap_or(80),
+                        // Honor the URL scheme's default port (443 for https,
+                        // 80 for http) if no explicit port was provided.
+                        self.url.port_or_known_default().unwrap_or(80),
                         in_task,
                     )
                     .await
@@ -1371,6 +2276,9 @@ impl CsrConnection {
                     .collect();
                 client_config = client_config.resolve_to_addrs(host, &addrs)
             }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
+            }
         }
 
         Ok(client_config.build()?)
@@ -1410,6 +2318,103 @@ impl<C: ConnectionAccess> AlterCompatible for CsrConnection<C> {
             if !compatible {
                 tracing::warn!(
                     "CsrConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A connection to an AWS Glue Schema Registry.
+///
+/// AWS credentials, region, and endpoint are inherited from the referenced
+/// [`AwsConnection`]; this struct only carries the per-registry settings.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct GlueSchemaRegistryConnection<C: ConnectionAccess = InlinedConnection> {
+    /// The referenced AWS connection that supplies credentials, region, and
+    /// (optional) endpoint.
+    pub aws_connection: AwsConnectionReference<C>,
+    /// The Glue Schema Registry name within the AWS account/region.
+    pub registry_name: String,
+}
+
+impl<R: ConnectionResolver> IntoInlineConnection<GlueSchemaRegistryConnection, R>
+    for GlueSchemaRegistryConnection<ReferencedConnection>
+{
+    fn into_inline_connection(self, r: R) -> GlueSchemaRegistryConnection {
+        let GlueSchemaRegistryConnection {
+            aws_connection,
+            registry_name,
+        } = self;
+        GlueSchemaRegistryConnection {
+            aws_connection: aws_connection.into_inline_connection(&r),
+            registry_name,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> GlueSchemaRegistryConnection<C> {
+    fn validate_by_default(&self) -> bool {
+        // Matches CSR: default-validate so a bad registry name fails at
+        // `CREATE CONNECTION` rather than surfacing later on first use.
+        // Users can still opt out with `WITH (VALIDATE = false)`.
+        true
+    }
+}
+
+impl GlueSchemaRegistryConnection {
+    async fn validate(
+        &self,
+        _id: CatalogItemId,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<(), anyhow::Error> {
+        let enforce_external_addresses =
+            crate::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set());
+        let sdk_config = self
+            .aws_connection
+            .connection
+            .load_sdk_config(
+                &storage_configuration.connection_context,
+                self.aws_connection.connection_id,
+                // We are in a normal tokio context during validation.
+                InTask::No,
+                enforce_external_addresses,
+            )
+            .await?;
+        let client = mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build();
+        match client.get_registry(&self.registry_name).await {
+            Ok(_) => Ok(()),
+            Err(mz_aws_glue_schema_registry::GetRegistryError::NotFound) => Err(anyhow!(
+                "AWS Glue Schema Registry {:?} does not exist in the configured account/region",
+                self.registry_name
+            )),
+            Err(err) => Err(anyhow::Error::new(err).context(format!(
+                "failed to validate AWS Glue Schema Registry connection (registry={:?})",
+                self.registry_name
+            ))),
+        }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for GlueSchemaRegistryConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let GlueSchemaRegistryConnection {
+            registry_name,
+            // The referenced AWS connection itself may be swapped; matches
+            // the permissive policy of MySqlConnection / SqlServerConnection.
+            aws_connection: _,
+        } = self;
+
+        let compatibility_checks = [(registry_name == &other.registry_name, "registry_name")];
+
+        for (compatible, field) in compatibility_checks {
+            if !compatible {
+                tracing::warn!(
+                    "GlueSchemaRegistryConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
                     self,
                     other
                 );
@@ -1515,7 +2520,8 @@ impl PostgresConnection<InlinedConnection> {
             .port(self.port)
             .dbname(&self.database)
             .user(&self.user.get_string(in_task, secrets_reader).await?)
-            .ssl_mode(self.tls_mode);
+            .ssl_mode(self.tls_mode)
+            .application_name("materialize");
         if let Some(password) = self.password {
             let password = secrets_reader
                 .read_string_in_task_if(in_task, password)
@@ -1629,6 +2635,9 @@ impl PostgresConnection<InlinedConnection> {
                     connection_id: connection.connection_id,
                 }
             }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
+            }
         };
 
         Ok(mz_postgres_util::Config::new(
@@ -1718,7 +2727,7 @@ impl PostgresConnectionValidationError {
                     .into(),
             ),
             Self::ReplicationDisabled => Some("set max_wal_senders to a value > 0".into()),
-            _ => None,
+            Self::InsufficientWalLevel { .. } => None,
         }
     }
 }
@@ -1764,6 +2773,7 @@ pub enum Tunnel<C: ConnectionAccess = InlinedConnection> {
     Ssh(SshTunnel<C>),
     /// Via the specified AWS PrivateLink connection.
     AwsPrivatelink(AwsPrivatelink),
+    AwsPrivatelinks(AwsPrivatelinks),
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<ReferencedConnection> {
@@ -1772,6 +2782,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<Reference
             Tunnel::Direct => Tunnel::Direct,
             Tunnel::Ssh(ssh) => Tunnel::Ssh(ssh.into_inline_connection(r)),
             Tunnel::AwsPrivatelink(awspl) => Tunnel::AwsPrivatelink(awspl),
+            Tunnel::AwsPrivatelinks(x) => Tunnel::AwsPrivatelinks(x),
         }
     }
 }
@@ -1923,8 +2934,8 @@ impl MySqlConnection<InlinedConnection> {
                 .read_string_in_task_if(in_task, identity.key)
                 .await?;
             let cert = identity.cert.get_string(in_task, secrets_reader).await?;
-            let Pkcs12Archive { der, pass } =
-                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?;
+            let (der, pass) =
+                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?.into_parts();
 
             // Add client identity to SSLOpts
             ssl_opts = ssl_opts.map(|opts| {
@@ -1980,6 +2991,9 @@ impl MySqlConnection<InlinedConnection> {
                     connection_id: connection.connection_id,
                 }
             }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
+            }
         };
 
         let aws_config = match self.aws_connection.as_ref() {
@@ -1991,6 +3005,7 @@ impl MySqlConnection<InlinedConnection> {
                         &storage_configuration.connection_context,
                         aws_ref.connection_id,
                         in_task,
+                        ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
                     )
                     .await?,
             ),
@@ -2263,10 +3278,20 @@ impl SqlServerConnectionDetails<InlinedConnection> {
 
         // Prevent users from probing our internal network ports by trying to
         // connect to localhost, or another non-external IP.
-        let enfoce_external_addresses = ENFORCE_EXTERNAL_ADDRESSES.get(dyncfg);
+        let enforce_external_addresses = ENFORCE_EXTERNAL_ADDRESSES.get(dyncfg);
 
         let tunnel = match &self.tunnel {
-            Tunnel::Direct => mz_sql_server_util::config::TunnelConfig::Direct,
+            Tunnel::Direct => {
+                let resolved_addresses: Vec<SocketAddr> =
+                    resolve_address(&self.host, enforce_external_addresses)
+                        .await?
+                        .into_iter()
+                        .map(|ip| SocketAddr::new(ip, self.port))
+                        .collect();
+                mz_sql_server_util::config::TunnelConfig::Direct {
+                    resolved_addresses: resolved_addresses.into_boxed_slice(),
+                }
+            }
             Tunnel::Ssh(SshTunnel {
                 connection_id,
                 connection: ssh_connection,
@@ -2278,7 +3303,7 @@ impl SqlServerConnectionDetails<InlinedConnection> {
                 let key_pair = SshKeyPair::from_bytes(&secret).context("ssh key pair")?;
                 // Ensure any SSH-bastion host we connect to is resolved to an
                 // external address.
-                let addresses = resolve_address(&ssh_connection.host, enfoce_external_addresses)
+                let addresses = resolve_address(&ssh_connection.host, enforce_external_addresses)
                     .await
                     .context("ssh tunnel")?;
 
@@ -2305,6 +3330,9 @@ impl SqlServerConnectionDetails<InlinedConnection> {
                     connection_id: private_link_connection.connection_id,
                     port: self.port,
                 }
+            }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
             }
         };
 
@@ -2469,6 +3497,22 @@ impl AlterCompatible for AwsPrivatelink {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinks {
+    /// Route to brokers through PrivateLink connections according to these rules.
+    /// Exact-match rules (no wildcards) are used as bootstrap brokers.
+    /// Wildcard rules are applied dynamically to discovered brokers.
+    pub rules: Vec<AwsPrivatelinkRule>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinkRule {
+    /// Given a broker's host:port, should we use this route?
+    pub pattern: ConnectionRulePattern,
+    /// Route to the broker through this PrivateLink connection.
+    pub to: AwsPrivatelink,
+}
+
 /// Specifies an SSH tunnel connection.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SshTunnel<C: ConnectionAccess = InlinedConnection> {
@@ -2619,12 +3663,16 @@ impl AwsPrivatelinkConnection {
         &self,
         id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), ConnectionValidationError> {
+        // An endpoint for an unusable service name reports a misleading
+        // condition (missing availability zones), so check the name first.
+        Self::check_service_name(&self.service_name)?;
+
         let Some(ref cloud_resource_reader) = storage_configuration
             .connection_context
             .cloud_resource_reader
         else {
-            return Err(anyhow!("AWS PrivateLink connections are unsupported"));
+            return Err(anyhow!("AWS PrivateLink connections are unsupported").into());
         };
 
         // No need to optionally run this in a task, as we are just validating from envd.
@@ -2637,12 +3685,72 @@ impl AwsPrivatelinkConnection {
 
         match availability {
             Some(condition) if condition.status == "True" => Ok(()),
-            Some(condition) => Err(anyhow!("{}", condition.message)),
-            None => Err(anyhow!("Endpoint availability is unknown")),
+            Some(condition) => Err(anyhow!("{}", condition.message).into()),
+            None => Err(anyhow!("Endpoint availability is unknown").into()),
         }
     }
 
     fn validate_by_default(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_catalog_headers() {
+        let props = BTreeMap::from_iter(
+            [
+                (REST_CATALOG_PROP_URI, "https://catalog.example"),
+                (REST_CATALOG_PROP_WAREHOUSE, "wh"),
+                ("header.x-goog-user-project", "some-project"),
+                (REST_CATALOG_PROP_ACCESS_DELEGATION, "vended-credentials"),
+            ]
+            .map(|(k, v)| (k.to_string(), v.to_string())),
+        );
+
+        // Only `header.*` props become headers, and the prefix is stripped. Header names are
+        // matched case-insensitively, so the delegation prop's mixed-case spelling still lands.
+        let headers = IcebergCatalogConnection::catalog_headers(&props).expect("valid headers");
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers["x-goog-user-project"], "some-project");
+        assert_eq!(headers["x-iceberg-access-delegation"], "vended-credentials");
+
+        // A prop whose name is not a legal header is an error rather than a dropped header: it
+        // would otherwise mean silently talking to the catalog differently than asked.
+        let props = BTreeMap::from([("header.bad name".to_string(), "v".to_string())]);
+        assert!(IcebergCatalogConnection::catalog_headers(&props).is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_check_service_name() {
+        // Customer-owned and AWS-managed endpoint services are both accepted,
+        // as is anything else that could be an endpoint service name.
+        for name in [
+            "com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc",
+            "com.amazonaws.vpce.test.vpce-svc-e2e-test",
+            "com.amazonaws.us-east-1.s3",
+            "com.amazonaws.anything",
+        ] {
+            assert_eq!(
+                AwsPrivatelinkConnection::check_service_name(name),
+                Ok(()),
+                "expected {name} to be accepted"
+            );
+        }
+
+        for name in [
+            "",
+            "com.amazonaws",
+            "vpce-svc-0e123abc123198abc",
+            "my-db-lb-0123456789abcdef.elb.eu-central-1.amazonaws.com",
+            "db.internal.example.org",
+        ] {
+            let err = AwsPrivatelinkConnection::check_service_name(name)
+                .expect_err("service name should be rejected");
+            assert_eq!(err.name, name);
+        }
     }
 }

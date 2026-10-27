@@ -19,7 +19,7 @@ use anyhow::{anyhow, bail};
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures_util::{StreamExt, TryStreamExt, stream};
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::url::SensitiveUrl;
@@ -35,7 +35,7 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::cache::StateCache;
 use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, all_dyncfgs};
 use crate::cli::args::{StateArgs, StoreArgs, make_blob, make_consensus};
-use crate::cli::inspect::FAKE_OPAQUE_CODEC;
+use crate::critical::Opaque;
 use crate::internal::compact::{CompactConfig, CompactReq, Compactor};
 use crate::internal::encoding::Schemas;
 use crate::internal::gc::{GarbageCollector, GcReq};
@@ -263,21 +263,14 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
 
             if force_downgrade_since {
                 let (state, _maintenance) = machine
-                    .register_critical_reader::<crate::cli::inspect::O>(
+                    .register_critical_reader(
                         &crate::PersistClient::CONTROLLER_CRITICAL_SINCE,
+                        Opaque::encode(&crate::cli::inspect::O::default()),
                         "persist-cli finalize with force downgrade",
                     )
                     .await;
 
-                // HACK: Internally we have a check that the Opaque is using
-                // the correct codec. For the purposes of this command we want
-                // to side step that check so we set our reported codec to
-                // whatever the current state of the Shard is.
-                let expected_opaque = crate::cli::inspect::O::decode(state.opaque.0);
-                FAKE_OPAQUE_CODEC
-                    .lock()
-                    .expect("lockable")
-                    .clone_from(&state.opaque_codec);
+                let expected_opaque = state.opaque;
 
                 let (result, _maintenance) = machine
                     .compare_and_downgrade_since(
@@ -367,8 +360,8 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
     for mf in metric_families {
         for m in mf.get_metric() {
             let val = match mf.get_field_type() {
-                MetricType::COUNTER => m.get_counter().get_value(),
-                MetricType::GAUGE => m.get_gauge().get_value(),
+                MetricType::COUNTER => m.get_counter().value(),
+                MetricType::GAUGE => m.get_gauge().value(),
                 x => {
                     info!("unhandled {} metric type: {:?}", mf.name(), x);
                     continue;
@@ -387,7 +380,7 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
                     }
                     labels.push_str(lb.name());
                     labels.push_str(":");
-                    labels.push_str(lb.name());
+                    labels.push_str(lb.value());
                 }
                 labels.push_str("}");
             }
@@ -673,6 +666,7 @@ pub const CATALOG_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
     "persist_catalog_force_compaction_fuel",
     1024,
     "fuel to use in catalog dangerous_force_compaction task",
+    ParameterScope::Environment,
 );
 
 /// Exposed for `mz-catalog`.
@@ -680,6 +674,7 @@ pub const CATALOG_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new(
     "persist_catalog_force_compaction_wait",
     Duration::from_secs(60),
     "wait to use in catalog dangerous_force_compaction task",
+    ParameterScope::Environment,
 );
 
 /// Exposed for `mz-catalog`.
@@ -687,6 +682,7 @@ pub const EXPRESSION_CACHE_FORCE_COMPACTION_FUEL: Config<usize> = Config::new(
     "persist_expression_cache_force_compaction_fuel",
     131_072,
     "fuel to use in expression cache dangerous_force_compaction",
+    ParameterScope::Environment,
 );
 
 /// Exposed for `mz-catalog`.
@@ -694,6 +690,7 @@ pub const EXPRESSION_CACHE_FORCE_COMPACTION_WAIT: Config<Duration> = Config::new
     "persist_expression_cache_force_compaction_wait",
     Duration::from_secs(0),
     "wait to use in expression cache dangerous_force_compaction",
+    ParameterScope::Environment,
 );
 
 /// Attempts to compact all batches in a shard into a minimal number.

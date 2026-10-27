@@ -10,6 +10,7 @@
 use std::cmp;
 
 use anyhow::{Context, bail};
+use mz_postgres_util::query_one_prepared;
 use regex::Regex;
 use tokio::fs;
 
@@ -106,10 +107,14 @@ pub async fn run_set_from_sql(
     let var = cmd.args.string("var")?;
     cmd.args.done()?;
 
-    let row = state
+    let query = cmd.input.join("\n");
+    let statement = state
         .materialize
         .pgclient
-        .query_one(&cmd.input.join("\n"), &[])
+        .prepare(&query)
+        .await
+        .context("preparing query")?;
+    let row = query_one_prepared(&state.materialize.pgclient, &statement, &[])
         .await
         .context("running query")?;
     if row.columns().len() != 1 {

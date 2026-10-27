@@ -4,6 +4,7 @@ description: "Perform time-windowed computation over temporal data."
 aliases:
   - /guides/temporal-filters/
   - /sql/patterns/temporal-filters/
+  - /self-managed/v25.2/transform-data/patterns/temporal-filters/
 menu:
   main:
     parent: 'sql-patterns'
@@ -65,14 +66,14 @@ When creating a temporal filter using
 [`mz_now()`](/sql/functions/now_and_mz_now) in a `WHERE` or `HAVING` clause, the
 clause has the following shape:
 
-{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+{{< include-md file="content/headless/mz_now_clause_requirements.md" >}}
 
 ### `mz_now()` restrictions
 
 The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
 restrictions:
 
-- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+- {{< include-md file="content/headless/mz_now_clause_disjunction_restrictions.md" >}}
 
   To rewrite the query, see [Disjunction (OR)
   alternatives](http://localhost:1313/docs/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or).
@@ -289,6 +290,16 @@ Unfortunately, this record does not pass the filter and is excluded from process
 In conclusion: if you want to account for late arriving data up to some given time duration, you must adjust your temporal filter to allow for such records to make an appearance in the result set.
 This is often referred to as a **grace period**.
 
+<!--
+The temporal filter pushdown documentation is hidden while the optimization is
+being reworked: the guarantees described below do not currently hold for most
+temporal filters. The anchor is kept because pages across the docs, including
+published release notes, link to `#temporal-filter-pushdown`.
+-->
+<a id="temporal-filter-pushdown" name="temporal-filter-pushdown"></a>
+
+{{< hide >}}
+
 ## Temporal filter pushdown
 
 All of the queries in the previous examples only return results based on recently-added events.
@@ -324,3 +335,5 @@ Some common functions, such as casting from a string to a timestamp, can prevent
 {{< note >}}
 See the guide on [partitioning and filter pushdown](/transform-data/patterns/partition-by/) for a **private preview** feature that can make the filter pushdown optimization more predictable.
 {{< /note >}}
+
+{{< /hide >}}

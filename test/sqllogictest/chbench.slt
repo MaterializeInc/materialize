@@ -632,7 +632,7 @@ Explained Query:
             Filter ((#1{n_name} = "GERMANY") OR (#1{n_name} = "CAMBODIA")) // { arity: 4 }
               ReadIndex on=nation fk_nation_regionkey=[*** full scan ***] // { arity: 4 }
     Return // { arity: 4 }
-      Reduce group_by=[#0{su_nationkey}, substr(char_to_text(#3{c_state}), 1, 1), extract_year_d(#2{o_entry_d})] aggregates=[sum(#1{ol_amount})] // { arity: 4 }
+      Reduce group_by=[#0{su_nationkey}, substr(#3{c_state}, 1, 1), extract_year_d(#2{o_entry_d})] aggregates=[sum(#1{ol_amount})] // { arity: 4 }
         Project (#1{su_nationkey}, #13{ol_amount}, #19{o_entry_d}, #23{c_state}) // { arity: 4 }
           Filter (#29 <= 2012-01-02 00:00:00) AND (#29 >= 2007-01-02 00:00:00) AND (((#26{n_name} = "GERMANY") AND (#28{n_name} = "CAMBODIA")) OR ((#26{n_name} = "CAMBODIA") AND (#28{n_name} = "GERMANY"))) // { arity: 30 }
             Map (date_to_timestamp(#11{ol_delivery_d})) // { arity: 30 }
@@ -1205,7 +1205,7 @@ Explained Query:
           Project (#0{s_su_suppkey}) // { arity: 1 }
             Get l0 // { arity: 4 }
     Return // { arity: 4 }
-      Reduce group_by=[#1{i_name}, substr(char_to_text(#3{i_data}), 1, 3), #2{i_price}] aggregates=[count(distinct #0{s_su_suppkey})] // { arity: 4 }
+      Reduce group_by=[#1{i_name}, substr(#3{i_data}, 1, 3), #2{i_price}] aggregates=[count(distinct #0{s_su_suppkey})] // { arity: 4 }
         Project (#0{s_su_suppkey}..=#3{i_data}) // { arity: 4 }
           Join on=(#0{s_su_suppkey} = #4{s_su_suppkey}) type=differential // { arity: 5 }
             implementation
@@ -1619,7 +1619,7 @@ Explained Query:
     With
       cte l0 =
         Project (#0{c_id}..=#2{c_w_id}, #9{c_state}, #16{c_balance}, #22) // { arity: 6 }
-          Map (substr(char_to_text(#11{c_phone}), 1, 1)) // { arity: 23 }
+          Map (substr(#11{c_phone}, 1, 1)) // { arity: 23 }
             ReadIndex on=customer fk_customer_district=[*** full scan ***] // { arity: 22 }
       cte l1 =
         Project (#0{c_id}..=#4{c_balance}) // { arity: 5 }
@@ -1640,7 +1640,7 @@ Explained Query:
         Project (#0{c_id}..=#2{c_w_id}) // { arity: 3 }
           Get l1 // { arity: 5 }
     Return // { arity: 3 }
-      Reduce group_by=[substr(char_to_text(#0{c_state}), 1, 1)] aggregates=[count(*), sum(#1{c_balance})] // { arity: 3 }
+      Reduce group_by=[substr(#0{c_state}, 1, 1)] aggregates=[count(*), sum(#1{c_balance})] // { arity: 3 }
         Project (#3{c_state}, #4{c_balance}) // { arity: 2 }
           Join on=(#0{c_id} = #5{c_id} AND #1{c_d_id} = #6{c_d_id} AND #2{c_w_id} = #7{c_w_id}) type=differential // { arity: 8 }
             implementation

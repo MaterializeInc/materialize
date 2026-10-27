@@ -33,9 +33,7 @@ SHOW CREATE MATERIALIZED VIEW winning_bids;
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/show-create-materialized-view.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/show-create-materialized-view" %}}
 
 ## Related pages
 

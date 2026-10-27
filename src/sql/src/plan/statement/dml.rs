@@ -16,10 +16,9 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-
 use mz_arrow_util::builder::ArrowBuilder;
-use mz_expr::visit::Visit;
-use mz_expr::{MirRelationExpr, RowSetFinishing};
+use mz_expr::{ColumnOrder, RowSetFinishing};
+use mz_ore::error::ErrorExt;
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::separated;
@@ -42,7 +41,7 @@ use mz_storage_types::sinks::{
     MIN_S3_SINK_FILE_SIZE, S3SinkFormat, StorageSinkConnection,
 };
 
-use crate::ast::display::AstDisplay;
+use crate::ast::display::{AstDisplay, escaped_string_literal};
 use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
     DeleteStatement, ExplainPlanStatement, ExplainStage, Explainee, Ident, InsertStatement, Query,
@@ -53,21 +52,22 @@ use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
 use crate::plan::query::{
-    ExprContext, QueryLifetime, offset_into_value, plan_as_of_or_up_to, plan_expr,
+    ExprContext, QueryLifetime, negative_offset_error, offset_into_value, plan_as_of_or_up_to,
+    plan_expr,
 };
 use crate::plan::scope::Scope;
 use crate::plan::statement::show::ShowSelect;
 use crate::plan::statement::{StatementContext, StatementDesc, ddl};
 use crate::plan::{
     self, CopyFromFilter, CopyToPlan, CreateSinkPlan, ExplainPushdownPlan, ExplainSinkSchemaPlan,
-    ExplainTimestampPlan, HirRelationExpr, HirScalarExpr, side_effecting_func, transform_ast,
+    ExplainTimestampPlan, HirRelationExpr, side_effecting_func, transform_ast,
 };
 use crate::plan::{
     CopyFormat, CopyFromPlan, ExplainPlanPlan, InsertPlan, MutationKind, Params, Plan, PlanError,
     QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan, query,
 };
 use crate::plan::{CopyFromSource, with_options};
-use crate::session::vars::{self, ENABLE_COPY_FROM_REMOTE};
+use crate::session::vars::{self, DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -105,13 +105,13 @@ pub fn plan_insert(
 ) -> Result<Plan, PlanError> {
     let (id, mut expr, returning) =
         query::plan_insert_query(scx, table_name, columns, source, returning)?;
-    expr.bind_parameters(scx, QueryLifetime::OneShot, params)?;
+    expr.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
     let returning = returning
         .expr
         .into_iter()
         .map(|mut expr| {
-            expr.bind_parameters(scx, QueryLifetime::OneShot, params)?;
-            expr.lower_uncorrelated()
+            expr.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
+            expr.lower_uncorrelated(scx.catalog.system_vars())
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -167,11 +167,11 @@ pub fn plan_read_then_write(
         assignments,
     }: query::ReadThenWritePlan,
 ) -> Result<Plan, PlanError> {
-    selection.bind_parameters(scx, QueryLifetime::OneShot, params)?;
+    selection.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
-        set.bind_parameters(scx, QueryLifetime::OneShot, params)?;
-        let set = set.lower_uncorrelated()?;
+        set.bind_parameters_and_simplify_offset(scx, QueryLifetime::OneShot, params)?;
+        let set = set.lower_uncorrelated(scx.catalog.system_vars())?;
         assignments_outer.insert(idx, set);
     }
 
@@ -226,20 +226,7 @@ fn plan_select_inner(
         finishing,
         scope: _,
     } = query::plan_root_query(scx, select.query.clone(), lifetime)?;
-    expr.bind_parameters(scx, lifetime, params)?;
-
-    // OFFSET clauses in `expr` should become constants with the above binding of parameters.
-    // Let's check this and simplify them to literals.
-    expr.try_visit_mut_pre(&mut |expr| {
-        if let HirRelationExpr::TopK { offset, .. } = expr {
-            let offset_value = offset_into_value(offset.take())?;
-            *offset = HirScalarExpr::literal(Datum::Int64(offset_value), SqlScalarType::Int64);
-        }
-        Ok::<(), PlanError>(())
-    })?;
-    // (We don't need to simplify LIMIT clauses in `expr`, because we can handle non-constant
-    // expressions there. If they happen to be simplifiable to literals, then the optimizer will do
-    // so later.)
+    expr.bind_parameters_and_simplify_offset(scx, lifetime, params)?;
 
     // We need to concretize the `limit` and `offset` of the RowSetFinishing, so that we go from
     // `RowSetFinishing<HirScalarExpr, HirScalarExpr>` to `RowSetFinishing`.
@@ -249,32 +236,40 @@ fn plan_select_inner(
     let limit = match finishing.limit {
         None => None,
         Some(mut limit) => {
-            limit.bind_parameters(scx, lifetime, params)?;
-            // TODO: Call `try_into_literal_int64` instead of `as_literal`.
-            let Some(limit) = limit.as_literal() else {
-                sql_bail!(
-                    "Top-level LIMIT must be a constant expression, got {}",
-                    limit
-                )
-            };
-            match limit {
-                Datum::Null => None,
-                Datum::Int64(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
-                _ => {
-                    soft_panic_or_log!("Valid literal limit must be asserted in `plan_select`");
-                    sql_bail!("LIMIT must be a non-negative INT or NULL")
-                }
+            limit.bind_parameters_and_simplify_offset(scx, lifetime, params)?;
+            // Evaluate the expression to a literal instead of matching on a bare literal
+            // node. Parameter binding can leave the bound value wrapped in casts, e.g.
+            // `integer_to_bigint($1)`.
+            match limit
+                .try_into_nullable_literal_int64()
+                .map_err(|err| PlanError::InvalidLimit(err.to_string_with_causes()))?
+            {
+                None => None,
+                Some(v) if v >= 0 => NonNeg::<i64>::try_from(v).ok(),
+                Some(_) => sql_bail!("LIMIT must not be negative"),
             }
         }
     };
     let offset = {
         let mut offset = finishing.offset.clone();
-        offset.bind_parameters(scx, lifetime, params)?;
+        offset.bind_parameters_and_simplify_offset(scx, lifetime, params)?;
         let offset = offset_into_value(offset.take())?;
-        offset
-            .try_into()
-            .expect("checked in offset_into_value that it is not negative")
+        offset.try_into().map_err(|_| {
+            // We already checked in bind_parameters_and_simplify_offset / offset_into_value.
+            soft_panic_or_log!("unexpectedly negative OFFSET");
+            negative_offset_error(offset)
+        })?
     };
+
+    // Unmaterializable functions are evaluated based on various information (e.g., the catalog)
+    // during sequencing, without taking AS OF into account. This would be hard to fix, so for now
+    // we just disallow AS OF when there is an unmaterializable function in a query (except mz_now).
+    if scx.is_feature_flag_enabled(&DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF)
+        && select.as_of.is_some()
+        && expr.contains_unmaterializable_except_temporal()
+    {
+        bail_unsupported!("unmaterializable function (except `mz_now`) in an AS OF query");
+    }
 
     let plan = SelectPlan {
         source: expr,
@@ -579,6 +574,16 @@ generate_extracted_config!(
         EnableProjectionPushdownAfterRelationCse,
         Option<bool>,
         Default(None)
+    ),
+    (
+        EnableFixedCorrelatedCteLowering,
+        Option<bool>,
+        Default(None)
+    ),
+    (
+        EnableUnionCancellationAfterRelationCse,
+        Option<bool>,
+        Default(None)
     )
 );
 
@@ -620,24 +625,30 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
             types: v.types,
             // The ones that are initialized with `Default::default()` are not wired up to EXPLAIN.
             features: OptimizerFeatureOverrides {
-                enable_guard_subquery_tablefunc: Default::default(),
                 enable_eager_delta_joins: v.enable_eager_delta_joins,
                 enable_new_outer_join_lowering: v.enable_new_outer_join_lowering,
                 enable_variadic_left_join_lowering: v.enable_variadic_left_join_lowering,
                 enable_letrec_fixpoint_analysis: v.enable_letrec_fixpoint_analysis,
-                enable_consolidate_after_union_negate: Default::default(),
                 enable_reduce_mfp_fusion: Default::default(),
                 enable_cardinality_estimates: Default::default(),
                 persist_fast_path_limit: Default::default(),
                 reoptimize_imported_views: v.reoptimize_imported_views,
-                enable_reduce_reduction: Default::default(),
                 enable_join_prioritize_arranged: v.enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse: v
                     .enable_projection_pushdown_after_relation_cse,
+                enable_union_cancellation_after_relation_cse: v
+                    .enable_union_cancellation_after_relation_cse,
                 enable_less_reduce_in_eqprop: Default::default(),
                 enable_dequadratic_eqprop_map: Default::default(),
                 enable_eq_classes_withholding_errors: Default::default(),
                 enable_fast_path_plan_insights: Default::default(),
+                enable_cast_elimination: Default::default(),
+                enable_case_literal_transform: Default::default(),
+                enable_simplify_quantified_comparisons: Default::default(),
+                enable_simplify_from_less_existence: Default::default(),
+                enable_coalesce_case_transform: Default::default(),
+                enable_will_distinct_propagation: Default::default(),
+                enable_fixed_correlated_cte_lowering: v.enable_fixed_correlated_cte_lowering,
             },
         })
     }
@@ -756,6 +767,12 @@ fn plan_explainee(
 
             crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex { broken, plan })
         }
+        Explainee::Subscribe(stmt, broken) => {
+            let Plan::Subscribe(plan) = plan_subscribe(scx, *stmt, params, None)? else {
+                sql_bail!("expected SubscribePlan");
+            };
+            crate::plan::Explainee::Statement(ExplaineeStatement::Subscribe { broken, plan })
+        }
     };
 
     Ok(explainee)
@@ -856,7 +873,7 @@ pub fn plan_explain_schema(
                 "EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas"
             ),
         },
-        _ => unreachable!("plan_create_sink returns a CreateSinkPlan"),
+        _ => bail_internal!("plan_sink did not produce a CreateSink plan"),
     }
 }
 
@@ -870,6 +887,45 @@ pub fn plan_explain_pushdown(
     Ok(Plan::ExplainPushdown(ExplainPushdownPlan { explainee }))
 }
 
+// The `EXPLAIN ANALYZE ... CPU` queries attribute scheduling time to LIR nodes through each
+// node's operator span in `mz_lir_mapping`. A span includes the regions the node renders into,
+// and a region's `elapsed_ns` already contains the time of the operators inside it, so only the
+// span's outermost operators count: its operators at the smallest address depth. Channels have
+// their scope's address and no elapsed time, so the join with `mz_dataflow_operators` keeps them
+// out of the depth comparison. This relies on each span being recorded at a single scope level,
+// see `render_letfree_plan` in mz-compute.
+const LIR_SPAN_OPERATORS_CTE: (&str, &str) = (
+    "lir_span_operators",
+    r#"
+  SELECT mlm.global_id AS global_id,
+         mlm.lir_id AS lir_id,
+         valid_id AS id,
+         list_length(mda.address) AS depth
+    FROM            mz_introspection.mz_lir_mapping mlm
+         CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+               JOIN mz_introspection.mz_dataflow_operators mdo
+                 ON (mdo.id = valid_id)
+               JOIN mz_introspection.mz_dataflow_addresses mda
+                 ON (mda.id = valid_id)"#,
+);
+
+/// Per LIR node and worker, the scheduling time of the node's outermost operators. Reads
+/// `LIR_SPAN_OPERATORS_CTE`, which must precede it.
+const LIR_CPU_PER_WORKER_CTE: (&str, &str) = (
+    "lir_cpu_per_worker",
+    r#"
+  SELECT lso.global_id AS global_id,
+         lso.lir_id AS lir_id,
+         mse.worker_id AS worker_id,
+         SUM(mse.elapsed_ns) AS worker_ns
+    FROM            lir_span_operators lso
+               JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+                 ON (mse.id = lso.id)
+   WHERE (lso.global_id, lso.lir_id, lso.depth) IN
+         (SELECT global_id, lir_id, MIN(depth) FROM lir_span_operators GROUP BY global_id, lir_id)
+GROUP BY lso.global_id, lso.lir_id, mse.worker_id"#,
+);
+
 pub fn plan_explain_analyze_object(
     scx: &StatementContext,
     statement: ExplainAnalyzeObjectStatement<Aug>,
@@ -882,12 +938,22 @@ pub fn plan_explain_analyze_object(
         .full_name_str();
     let explainee = plan_explainee(scx, statement.explainee, params)?;
 
-    match explainee {
-        plan::Explainee::Index(_index_id) => (),
-        plan::Explainee::MaterializedView(_item_id) => (),
-        _ => {
-            return Err(sql_err!("EXPLAIN ANALYZE queries for this explainee type",));
+    let check_ownership = |item_id: &CatalogItemId, item_type: &str| -> Result<(), PlanError> {
+        if scx.catalog.restrict_to_user_objects() {
+            let item = scx.catalog.get_item(item_id);
+            if item.owner_id() != *scx.catalog.active_role_id() {
+                let full_name = scx.catalog.resolve_full_name(item.name());
+                return Err(sql_err!("must be owner of {item_type} {full_name}"));
+            }
         }
+        Ok(())
+    };
+    match &explainee {
+        plan::Explainee::Index(item_id) => check_ownership(item_id, "INDEX")?,
+        plan::Explainee::MaterializedView(item_id) => {
+            check_ownership(item_id, "MATERIALIZED VIEW")?
+        }
+        _ => return Err(sql_err!("EXPLAIN ANALYZE queries for this explainee type",)),
     };
 
     // generate SQL query
@@ -899,14 +965,17 @@ pub fn plan_explain_analyze_object(
              JOIN {from} USING (lir_id)
              JOIN mz_introspection.mz_mappable_objects mo
                ON (mlm.global_id = mo.global_id)
-       WHERE     mo.name = '{plan.explainee_name}'
+       WHERE     mo.name = {escaped explainee_name}
              AND {predicates}
        ORDER BY lir_id DESC
     */
-    let mut ctes = Vec::with_capacity(4); // max 2 per ExplainAnalyzeComputationProperty
+    let mut ctes = Vec::with_capacity(5); // max 3 per ExplainAnalyzeComputationProperty
     let mut columns = vec!["REPEAT(' ', nesting * 2) || operator AS operator"];
     let mut from = vec!["mz_introspection.mz_lir_mapping mlm"];
-    let mut predicates = vec![format!("mo.name = '{}'", explainee_name)];
+    let mut predicates = vec![format!(
+        "mo.name = {}",
+        escaped_string_literal(&explainee_name)
+    )];
     let mut order_by = vec!["mlm.lir_id DESC"];
 
     match statement.properties {
@@ -959,7 +1028,9 @@ GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
                             from.push("LEFT JOIN per_worker_memory pwm USING (global_id, lir_id)");
 
                             if let Some(worker_id) = worker_id {
-                                predicates.push(format!("pwm.worker_id = {worker_id}"));
+                                predicates.push(format!(
+                                    "(pwm.worker_id = {worker_id} OR pwm.worker_id IS NULL OR {worker_id} IS NULL)"
+                                ));
                             } else {
                                 worker_id = Some("pwm.worker_id");
                                 columns.push("pwm.worker_id AS worker_id");
@@ -984,39 +1055,26 @@ GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
                         }
                     }
                     ExplainAnalyzeComputationProperty::Cpu => {
+                        ctes.extend([LIR_SPAN_OPERATORS_CTE, LIR_CPU_PER_WORKER_CTE]);
                         ctes.push((
                             "summary_cpu",
                             r#"
-  SELECT mlm.global_id AS global_id,
-         mlm.lir_id AS lir_id,
-         SUM(mse.elapsed_ns) AS total_ns,
-         CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
-    FROM            mz_introspection.mz_lir_mapping mlm
-         CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
-               JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-                 ON (mse.id = valid_id)
-GROUP BY mlm.global_id, mlm.lir_id"#,
+  SELECT global_id,
+         lir_id,
+         SUM(worker_ns) AS total_ns,
+         SUM(worker_ns) / COUNT(*) AS avg_ns
+    FROM lir_cpu_per_worker
+GROUP BY global_id, lir_id"#,
                         ));
                         from.push("LEFT JOIN summary_cpu sc USING (global_id, lir_id)");
 
                         if skew {
-                            ctes.push((
-                                "per_worker_cpu",
-                                r#"
-  SELECT mlm.global_id AS global_id,
-         mlm.lir_id AS lir_id,
-         mse.worker_id AS worker_id,
-         SUM(mse.elapsed_ns) AS worker_ns
-    FROM            mz_introspection.mz_lir_mapping mlm
-         CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
-               JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-                 ON (mse.id = valid_id)
-GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
-                            ));
-                            from.push("LEFT JOIN per_worker_cpu pwc USING (global_id, lir_id)");
+                            from.push("LEFT JOIN lir_cpu_per_worker pwc USING (global_id, lir_id)");
 
                             if let Some(worker_id) = worker_id {
-                                predicates.push(format!("pwc.worker_id = {worker_id}"));
+                                predicates.push(format!(
+                                    "(pwc.worker_id = {worker_id} OR pwc.worker_id IS NULL OR {worker_id} IS NULL)"
+                                ));
                             } else {
                                 worker_id = Some("pwc.worker_id");
                                 columns.push("pwc.worker_id AS worker_id");
@@ -1085,7 +1143,8 @@ ORDER BY {order_by}"#
 
         Ok(Plan::Select(SelectPlan::immediate(rows, typ)))
     } else {
-        let (show_select, _resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        let (show_select, resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        scx.record_sql_impl_ids(&resolved_ids);
         show_select.plan()
     }
 }
@@ -1139,7 +1198,9 @@ pub fn plan_explain_analyze_cluster(
                     let mut set_worker_id = false;
                     if let Some(worker_id) = worker_id {
                         // join condition if we're showing skew for more than one property
-                        predicates.push(format!("om.worker_id = {worker_id}"));
+                        predicates.push(format!(
+                            "(om.worker_id = {worker_id} OR om.worker_id IS NULL OR {worker_id} IS NULL)"
+                        ));
                     } else {
                         worker_id = Some("om.worker_id");
                         columns.push("om.worker_id AS worker_id");
@@ -1236,10 +1297,10 @@ GROUP BY om.global_id"#));
                     ]);
 
                     order_by.extend([
-                        "max_operator_memory_ratio DESC",
-                        "max_operator_records_ratio DESC",
-                        "worker_memory DESC",
-                        "worker_records DESC",
+                        "max_operator_memory_ratio DESC NULLS LAST",
+                        "max_operator_records_ratio DESC NULLS LAST",
+                        "om.worker_memory DESC NULLS LAST",
+                        "worker_records DESC NULLS LAST",
                     ]);
 
                     if set_worker_id {
@@ -1277,49 +1338,37 @@ GROUP BY pomt.global_id
                         "pg_size_pretty(omt.total_memory) AS total_memory",
                         "omt.total_records AS total_records",
                     ]);
-                    order_by.extend(["total_memory DESC", "total_records DESC"]);
+                    order_by.extend([
+                        "omt.total_memory DESC NULLS LAST",
+                        "total_records DESC NULLS LAST",
+                    ]);
                 }
             }
             ExplainAnalyzeComputationProperty::Cpu => {
+                ctes.extend([LIR_SPAN_OPERATORS_CTE, LIR_CPU_PER_WORKER_CTE]);
                 if skew {
                     let mut set_worker_id = false;
                     if let Some(worker_id) = worker_id {
                         // join condition if we're showing skew for more than one property
-                        predicates.push(format!("oc.worker_id = {worker_id}"));
+                        predicates.push(format!(
+                            "(oc.worker_id = {worker_id} OR oc.worker_id IS NULL OR {worker_id} IS NULL)"
+                        ));
                     } else {
                         worker_id = Some("oc.worker_id");
                         columns.push("oc.worker_id AS worker_id");
                         set_worker_id = true; // we'll add ourselves to `order_by` later
                     };
 
-                    // computes the average memory per LIR operator (for per operator ratios)
+                    // computes the average CPU per LIR operator (for per operator ratios)
                     ctes.push((
-    "per_operator_cpu_summary",
-    r#"
-SELECT mlm.global_id AS global_id,
-       mlm.lir_id AS lir_id,
-       SUM(mse.elapsed_ns) AS total_ns,
-       CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
-FROM       mz_introspection.mz_lir_mapping mlm
-CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
-      JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-        ON (mse.id = valid_id)
-GROUP BY mlm.global_id, mlm.lir_id"#,
-));
-
-                    // computes the CPU per worker in a per operator way
-                    ctes.push((
-                        "per_operator_cpu_per_worker",
+                        "per_operator_cpu_summary",
                         r#"
-SELECT mlm.global_id AS global_id,
-       mlm.lir_id AS lir_id,
-       mse.worker_id AS worker_id,
-       SUM(mse.elapsed_ns) AS worker_ns
-FROM       mz_introspection.mz_lir_mapping mlm
-CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
-      JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-        ON (mse.id = valid_id)
-GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
+SELECT global_id,
+       lir_id,
+       SUM(worker_ns) AS total_ns,
+       SUM(worker_ns) / COUNT(*) AS avg_ns
+FROM lir_cpu_per_worker
+GROUP BY global_id, lir_id"#,
                     ));
 
                     // computes CPU ratios per worker per operator
@@ -1330,7 +1379,7 @@ SELECT pocpw.global_id AS global_id,
        pocpw.lir_id AS lir_id,
        pocpw.worker_id AS worker_id,
        CASE WHEN pocpw.worker_id IS NOT NULL AND pocs.avg_ns <> 0 THEN ROUND(pocpw.worker_ns / pocs.avg_ns, 2) ELSE NULL END AS cpu_ratio
-FROM      per_operator_cpu_per_worker pocpw
+FROM      lir_cpu_per_worker pocpw
      JOIN per_operator_cpu_summary pocs
      USING (global_id, lir_id)
 "#,
@@ -1344,7 +1393,7 @@ SELECT pocpw.global_id AS global_id,
        pocpw.worker_id AS worker_id,
        MAX(pomr.cpu_ratio) AS max_operator_cpu_ratio,
        SUM(pocpw.worker_ns) AS worker_ns
-FROM      per_operator_cpu_per_worker pocpw
+FROM      lir_cpu_per_worker pocpw
      JOIN per_operator_cpu_ratios pomr
      USING (global_id, worker_id, lir_id)
 GROUP BY pocpw.global_id, pocpw.worker_id
@@ -1371,7 +1420,10 @@ GROUP BY oc.global_id"#,));
                         "oac.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed",
                     ]);
 
-                    order_by.extend(["max_operator_cpu_ratio DESC", "worker_elapsed DESC"]);
+                    order_by.extend([
+                        "max_operator_cpu_ratio DESC NULLS LAST",
+                        "worker_elapsed DESC NULLS LAST",
+                    ]);
 
                     if set_worker_id {
                         order_by.push("worker_id");
@@ -1381,14 +1433,9 @@ GROUP BY oc.global_id"#,));
                     ctes.push((
                         "per_operator_cpu_totals",
                         r#"
-    SELECT mlm.global_id AS global_id,
-           mlm.lir_id AS lir_id,
-           SUM(mse.elapsed_ns) AS total_ns
-    FROM        mz_introspection.mz_lir_mapping mlm
-     CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
-           JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
-             ON (mse.id = valid_id)
-    GROUP BY mlm.global_id, mlm.lir_id"#,
+SELECT global_id, lir_id, SUM(worker_ns) AS total_ns
+FROM lir_cpu_per_worker
+GROUP BY global_id, lir_id"#,
                     ));
 
                     ctes.push((
@@ -1404,7 +1451,7 @@ GROUP BY poct.global_id
                     from.push("LEFT JOIN object_cpu_totals oct USING (global_id)");
                     columns
                         .push("oct.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed");
-                    order_by.extend(["total_elapsed DESC"]);
+                    order_by.extend(["total_elapsed DESC NULLS LAST"]);
                 }
             }
         }
@@ -1451,7 +1498,8 @@ ORDER BY {order_by}"#
 
         Ok(Plan::Select(SelectPlan::immediate(rows, typ)))
     } else {
-        let (show_select, _resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        let (show_select, resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        scx.record_sql_impl_ids(&resolved_ids);
         show_select.plan()
     }
 }
@@ -1489,32 +1537,6 @@ pub fn plan_explain_timestamp(
         raw_plan,
         when,
     }))
-}
-
-/// Plans and decorrelates a [`Query`]. Like [`query::plan_root_query`], but
-/// returns an [`MirRelationExpr`], which cannot include correlated expressions.
-#[deprecated = "Use `query::plan_root_query` and use `HirRelationExpr` in `~Plan` structs."]
-pub fn plan_query(
-    scx: &StatementContext,
-    query: Query<Aug>,
-    params: &Params,
-    lifetime: QueryLifetime,
-) -> Result<query::PlannedRootQuery<MirRelationExpr>, PlanError> {
-    let query::PlannedRootQuery {
-        mut expr,
-        desc,
-        finishing,
-        scope,
-    } = query::plan_root_query(scx, query, lifetime)?;
-    expr.bind_parameters(scx, lifetime, params)?;
-
-    Ok(query::PlannedRootQuery {
-        // No metrics passed! One more reason not to use this deprecated function.
-        expr: expr.lower(scx.catalog.system_vars(), None)?,
-        desc,
-        finishing,
-        scope,
-    })
 }
 
 generate_extracted_config!(SubscribeOption, (Snapshot, bool), (Progress, bool));
@@ -1650,7 +1672,19 @@ pub fn plan_subscribe(
         }
         SubscribeRelation::Query(query) => {
             #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in Subscribe
-            let query = plan_query(scx, query, params, QueryLifetime::Subscribe)?;
+            let query::PlannedRootQuery {
+                mut expr,
+                desc,
+                finishing,
+                scope,
+            } = query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
+            expr.bind_parameters_and_simplify_offset(scx, QueryLifetime::Subscribe, params)?;
+            let query = query::PlannedRootQuery {
+                expr,
+                desc,
+                finishing,
+                scope,
+            };
             // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
             // finishing should have already been turned into a `TopK` by
             // `plan_query` / `plan_root_query`, upon seeing the `QueryLifetime::Subscribe`.
@@ -1710,6 +1744,7 @@ pub fn plan_subscribe(
             if !map_exprs.is_empty() {
                 return Err(PlanError::InvalidKeysInSubscribeEnvelopeUpsert);
             }
+            check_distinct_key_columns(&order_by, &output_columns)?;
             plan::SubscribeOutput::EnvelopeUpsert {
                 order_by_keys: order_by,
             }
@@ -1735,6 +1770,7 @@ pub fn plan_subscribe(
             if !map_exprs.is_empty() {
                 return Err(PlanError::InvalidKeysInSubscribeEnvelopeDebezium);
             }
+            check_distinct_key_columns(&order_by, &output_columns)?;
             plan::SubscribeOutput::EnvelopeDebezium {
                 order_by_keys: order_by,
             }
@@ -1786,6 +1822,23 @@ pub fn plan_subscribe(
         emit_progress: progress.unwrap_or(false),
         output,
     }))
+}
+
+/// Ensures each `ColumnOrder` in `order_by` references a distinct column,
+/// returning `DuplicateKeyColumnInSubscribeEnvelope` on the first repeat.
+fn check_distinct_key_columns(
+    order_by: &[ColumnOrder],
+    output_columns: &[(usize, &mz_repr::ColumnName)],
+) -> Result<(), PlanError> {
+    let mut seen = BTreeSet::new();
+    for co in order_by {
+        if !seen.insert(co.column) {
+            return Err(PlanError::DuplicateKeyColumnInSubscribeEnvelope {
+                column_name: output_columns[co.column].1.to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub fn describe_copy_from_table(
@@ -1863,8 +1916,10 @@ fn plan_copy_to_expr(
             ))
         }
         CopyFormat::Parquet => {
-            // Validate that the output desc can be formatted as parquet
-            ArrowBuilder::validate_desc(&desc).map_err(|e| sql_err!("{}", e))?;
+            // Validate that the output desc can be formatted as parquet.
+            // COPY TO does not apply any type overrides, so pass `|_| None`.
+            ArrowBuilder::validate_desc_for_parquet(&desc, |_| None)
+                .map_err(|e| sql_err!("{}", e))?;
             S3SinkFormat::Parquet
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
@@ -1917,7 +1972,7 @@ fn plan_copy_from(
     target: &CopyTarget<Aug>,
     table_name: ResolvedItemName,
     columns: Vec<Ident>,
-    format: CopyFormat,
+    format: Option<CopyFormat>,
     options: CopyOptionExtracted,
 ) -> Result<Plan, PlanError> {
     fn only_available_with_csv<T>(option: Option<T>, param: &str) -> Result<(), PlanError> {
@@ -1930,8 +1985,6 @@ fn plan_copy_from(
     let source = match target {
         CopyTarget::Stdin => CopyFromSource::Stdin,
         CopyTarget::Expr(from) => {
-            scx.require_feature_flag(&ENABLE_COPY_FROM_REMOTE)?;
-
             // Converting the expr to an HirScalarExpr
             let mut from_expr = from.clone();
             transform_ast::transform(scx, &mut from_expr)?;
@@ -1968,6 +2021,20 @@ fn plan_copy_from(
             }
         }
         CopyTarget::Stdout => bail_never_supported!("COPY FROM {} not supported", target),
+    };
+
+    // COPY FROM a URL or S3 bucket only supports CSV and Parquet. Unlike COPY
+    // FROM STDIN there's no sensible default format, so one must be specified
+    // explicitly. Reject unsupported formats here in planning; the coordinator
+    // relies on this and would otherwise soft-panic.
+    let format = match &source {
+        CopyFromSource::Stdin => format.unwrap_or(CopyFormat::Text),
+        CopyFromSource::Url(_) | CopyFromSource::AwsS3 { .. } => match format {
+            None => sql_bail!("COPY FROM <expr> requires a FORMAT option"),
+            Some(CopyFormat::Text) => bail_unsupported!("FORMAT TEXT"),
+            Some(CopyFormat::Binary) => bail_unsupported!("FORMAT BINARY"),
+            Some(format @ (CopyFormat::Csv | CopyFormat::Parquet)) => format,
+        },
     };
 
     let params = match format {
@@ -2087,8 +2154,17 @@ pub fn plan_copy(
             if options.quote.is_some() {
                 sql_bail!("COPY TO does not support QUOTE option yet");
             }
+            if options.escape.is_some() {
+                sql_bail!("COPY TO does not support ESCAPE option yet");
+            }
             if options.null.is_some() {
                 sql_bail!("COPY TO does not support NULL option yet");
+            }
+            // `HEADER false` is the default and already honored; only an
+            // enabled header is unimplemented. Silently accepting it would
+            // make clients strip the first data row as a presumed header.
+            if options.header == Some(true) {
+                sql_bail!("COPY TO does not support HEADER option yet");
             }
             match relation {
                 CopyRelation::Named { .. } => sql_bail!("named with COPY TO STDOUT unsupported"),
@@ -2107,25 +2183,12 @@ pub fn plan_copy(
             }
         }
         (CopyDirection::From, target) => match relation {
-            CopyRelation::Named { name, columns } => plan_copy_from(
-                scx,
-                target,
-                name,
-                columns,
-                format.unwrap_or(CopyFormat::Text),
-                options,
-            ),
+            CopyRelation::Named { name, columns } => {
+                plan_copy_from(scx, target, name, columns, format, options)
+            }
             _ => sql_bail!("COPY FROM {} not supported", target),
         },
         (CopyDirection::To, CopyTarget::Expr(to_expr)) => {
-            // System users are always allowed to use this feature, even when
-            // the flag is disabled, so that we can dogfood for analytics in
-            // production environments. The feature is stable enough that we're
-            // not worried about it crashing.
-            if !scx.catalog.active_role_id().is_system() {
-                scx.require_feature_flag(&vars::ENABLE_COPY_TO_EXPR)?;
-            }
-
             let format = match format {
                 Some(inner) => inner,
                 _ => sql_bail!("COPY TO <expr> requires a FORMAT option"),
@@ -2155,7 +2218,9 @@ pub fn plan_copy(
                     }
                     stmt
                 }
-                _ => sql_bail!("COPY {} {} not supported", direction, target),
+                CopyRelation::Subscribe(_) => {
+                    sql_bail!("COPY {} {} not supported", direction, target)
+                }
             };
 
             let (plan, desc) = plan_select_inner(scx, stmt, &Params::empty(), None)?;

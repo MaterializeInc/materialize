@@ -1,0 +1,59 @@
+# libFuzzer dictionary for protobuf round-trip fuzz targets.
+#
+# Protobuf is self-describing through field tags: tag = (field_number << 3) |
+# wire_type, where wire_type is 0=varint, 1=i64, 2=len-delimited, 5=i32.
+# Seeding the mutator with single-byte tags for the low field numbers (which
+# cover almost every real message) lets it assemble structurally-valid messages
+# instead of bouncing off "invalid wire type" / "unexpected EOF" early-outs.
+
+# Field 1
+"\x08"
+"\x09"
+"\x0a"
+"\x0d"
+# Field 2
+"\x10"
+"\x12"
+# Field 3
+"\x18"
+"\x1a"
+# Field 4
+"\x20"
+"\x22"
+# Field 5
+"\x28"
+"\x2a"
+# Field 6
+"\x30"
+"\x32"
+# Field 7
+"\x38"
+"\x3a"
+# Field 8
+"\x40"
+"\x42"
+# Field 9
+"\x48"
+"\x4a"
+# Field 10
+"\x50"
+"\x52"
+# Fields 11-15 (varint + len-delimited)
+"\x58"
+"\x5a"
+"\x60"
+"\x62"
+"\x68"
+"\x6a"
+"\x70"
+"\x72"
+"\x78"
+"\x7a"
+# Two-byte tag prefix for field numbers >= 16
+"\x80\x01"
+"\x82\x01"
+# Common small varint payloads / length prefixes
+"\x00"
+"\x01"
+"\x02"
+"\xff\xff\xff\xff\x0f"

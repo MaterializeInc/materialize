@@ -12,10 +12,8 @@ Use `ALTER CLUSTER REPLICA` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Rename" >}}
-
-### Rename
 
 To rename a cluster replica:
 
@@ -27,8 +25,6 @@ You cannot rename replicas in system clusters.
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
-
-### Change owner
 
 To change the owner of a cluster replica:
 
@@ -42,8 +38,7 @@ To change the owner of a cluster replica:
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/alter-cluster-replica.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-cluster-replica" %}}
 
 ## Example
 

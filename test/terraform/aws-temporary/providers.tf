@@ -10,18 +10,18 @@
 terraform {
   required_version = ">= 1.8"
 
+  # helm and kubernetes take their versions from the modules' caps, so a
+  # constraint here could only conflict with them.
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.0"
     }
     kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.0"
+      source = "hashicorp/kubernetes"
     }
     helm = {
-      source  = "hashicorp/helm"
-      version = "~> 2.0"
+      source = "hashicorp/helm"
     }
     random = {
       source  = "hashicorp/random"
@@ -29,13 +29,17 @@ terraform {
     }
     kubectl = {
       source  = "alekc/kubectl"
-      version = "~> 2.0"
+      version = "~> 2.4"
     }
   }
 }
 
 provider "aws" {
   region = var.aws_region
+
+  default_tags {
+    tags = var.tags
+  }
 }
 
 # The ECR public authorization token endpoint isn't in all regions,
@@ -50,6 +54,7 @@ data "aws_ecrpublic_authorization_token" "token" {
 }
 
 data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
 
 provider "kubernetes" {
   host                   = module.eks.cluster_endpoint
@@ -87,4 +92,9 @@ provider "kubectl" {
 
   load_config_file  = false
   apply_retry_count = 30
+
+  # lazy_load defers kubeconfig resolution until first use (strict since
+  # alekc/kubectl v2.3.0); needed because the cluster and its kubectl_manifest
+  # resources are created in the same root module.
+  lazy_load = true
 }

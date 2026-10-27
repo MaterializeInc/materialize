@@ -9,6 +9,7 @@
 
 use std::str::FromStr;
 
+use anyhow::bail;
 use serde::Deserialize;
 
 use mz_cloud_resources::crd::{
@@ -42,13 +43,13 @@ pub fn create_certificate(
     cert_name: String,
     secret_name: String,
     additional_dns_names: Option<Vec<String>>,
-    algorithm: CertificatePrivateKeyAlgorithm,
-    size: Option<i64>,
-) -> Option<Certificate> {
+    algorithm_hint: CertificatePrivateKeyAlgorithm,
+    size_hint: Option<i64>,
+) -> anyhow::Result<Option<Certificate>> {
     let default_spec = default_spec.unwrap_or_else(MaterializeCertSpec::default);
     let mz_cert_spec = mz_cert_spec.unwrap_or_else(MaterializeCertSpec::default);
     let Some(issuer_ref) = mz_cert_spec.issuer_ref.or(default_spec.issuer_ref) else {
-        return None;
+        return Ok(None);
     };
     let mut secret_template = mz_cert_spec
         .secret_template
@@ -69,17 +70,44 @@ pub fn create_certificate(
     if let Some(names) = additional_dns_names {
         dns_names.extend(names);
     }
-    Some(Certificate {
+    let private_key_algorithm = mz_cert_spec
+        .private_key_algorithm
+        .or(default_spec.private_key_algorithm)
+        .unwrap_or(algorithm_hint);
+    let private_key_size = match private_key_algorithm {
+        CertificatePrivateKeyAlgorithm::Rsa => {
+            let size = mz_cert_spec
+                .private_key_size
+                .or(default_spec.private_key_size)
+                .unwrap_or_else(|| size_hint.unwrap_or(4096));
+            if size < 2048 {
+                bail!("RSA key size must be at least 2048 bits");
+            }
+            Some(size)
+        }
+        CertificatePrivateKeyAlgorithm::Ecdsa => {
+            let size = mz_cert_spec
+                .private_key_size
+                .or(default_spec.private_key_size)
+                .unwrap_or_else(|| size_hint.unwrap_or(256));
+            if ![256, 384, 521].contains(&size) {
+                bail!("ECDSA key size must be one of 256, 384, or 521 bits");
+            }
+            Some(size)
+        }
+        CertificatePrivateKeyAlgorithm::Ed25519 => None,
+    };
+    Ok(Some(Certificate {
         metadata: resource.managed_resource_meta(cert_name),
         spec: CertificateSpec {
             dns_names: Some(dns_names),
             duration: mz_cert_spec.duration.or(default_spec.duration),
             issuer_ref,
             private_key: Some(CertificatePrivateKey {
-                algorithm: Some(algorithm),
+                algorithm: Some(private_key_algorithm),
                 encoding: Some(CertificatePrivateKeyEncoding::Pkcs8),
                 rotation_policy: Some(CertificatePrivateKeyRotationPolicy::Always),
-                size,
+                size: private_key_size,
             }),
             renew_before: mz_cert_spec.renew_before.or(default_spec.renew_before),
             secret_name,
@@ -87,7 +115,7 @@ pub fn create_certificate(
             ..Default::default()
         },
         status: None,
-    })
+    }))
 }
 
 pub fn issuer_ref_defined(
@@ -102,4 +130,14 @@ pub fn issuer_ref_defined(
             .as_ref()
             .and_then(|spec| spec.issuer_ref.as_ref())
             .is_some()
+}
+
+pub fn resolved_dns_names(
+    defaults: &Option<MaterializeCertSpec>,
+    overrides: &Option<MaterializeCertSpec>,
+) -> Option<Vec<String>> {
+    overrides
+        .as_ref()
+        .and_then(|spec| spec.dns_names.clone())
+        .or_else(|| defaults.as_ref().and_then(|spec| spec.dns_names.clone()))
 }

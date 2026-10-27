@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,20 +9,18 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/select_table_alias
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/select_table_alias
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET unsafe_enable_table_keys = true
-----
-COMPLETE 0
 
 # Tests for SELECT with table aliasing.
 
@@ -101,10 +99,10 @@ foo1 foo2 c
 
 # Verify we can't resolve columns using overridden table or colum names.
 
-query error column "abc.foo1" does not exist
+query error column "abc\.foo1" does not exist
 SELECT abc.foo1 FROM abc AS foo (foo1)
 
-query error column "abc.b" does not exist
+query error column "abc\.b" does not exist
 SELECT abc.b FROM abc AS foo (foo1)
 
 query error column "foo.a" does not exist
@@ -133,27 +131,29 @@ foo1 foo2
 1 3
 2 5
 
-# NOTE(benesch): rowid is a CockroachDB-ism that we are unlikely to support.
-#
-# statement ok
-# SELECT rowid, foo.rowid FROM ab AS foo (foo1, foo2)
-#
-# query error no data source matches prefix: ab
-# SELECT ab.rowid FROM ab AS foo (foo1)
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+SELECT rowid, foo.rowid FROM ab AS foo (foo1, foo2)
+
+query error column "ab\.rowid" does not exist
+SELECT ab.rowid FROM ab AS foo (foo1)
 
 query error foo has 2 columns available but 3 columns specified
 SELECT * FROM ab AS foo (foo1, foo2, foo3)
 
-# TODO(benesch): support scalar functions in table position.
-#
-# query T colnames
-# SELECT * FROM length('abc') AS x
-# ----
-# x
-# 3
-#
-# query T colnames
-# TABLE ROWS FROM length('abc') AS x
-# ----
-# x
-# 3
+# Not supported by Materialize.
+onlyif cockroach
+query T colnames
+SELECT * FROM to_english(3) AS x
+----
+x
+three
+
+# Not supported by Materialize.
+onlyif cockroach
+query T colnames
+TABLE ROWS FROM (to_english(3)) AS x;
+----
+x
+three

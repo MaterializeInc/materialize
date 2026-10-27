@@ -9,6 +9,7 @@
 
 from dataclasses import dataclass
 from random import Random
+from typing import Any
 
 from materialize.checks.actions import Action, Initialize, Manipulate, Validate
 from materialize.checks.checks import Check
@@ -19,6 +20,7 @@ from materialize.checks.mzcompose_actions import (
     ConfigureMz,
     KillClusterdCompute,
     KillMz,
+    SetupIcebergTesting,
     SetupSqlServerTesting,
     StartClusterdCompute,
     StartMz,
@@ -52,10 +54,20 @@ class Scenario:
         executor: Executor,
         features: Features,
         seed: str | None = None,
+        additional_system_parameter_defaults: dict[str, str] | None = None,
+        default_replication_factor: int = 2,
     ) -> None:
-        self._checks = checks
+        # Copy the list since checks() shuffles it in place.
+        self._checks = list(checks)
         self.executor = executor
         self.features = features
+        # Applied by StartMz on top of any action-specific parameters so that
+        # --system-param and --default-replication-factor reach every Mz
+        # instance started by a scenario.
+        self.additional_system_parameter_defaults = (
+            additional_system_parameter_defaults or {}
+        )
+        self.default_replication_factor = default_replication_factor
         self.rng = None if seed is None else Random(seed)
         self._base_version = MzVersion.parse_cargo()
 
@@ -90,6 +102,7 @@ class Scenario:
             actions.insert(0, ConfigureMz(self))
 
         sql_server_testing_setup = False
+        iceberg_setup = self.base_version() < MzVersion.parse_mz("v26.10.0-dev")
         for index, action in enumerate(actions):
             # Implicitly call configure to raise version-dependent limits
             if isinstance(action, StartMz) and not action.deploy_generation:
@@ -103,6 +116,13 @@ class Scenario:
                         SetupSqlServerTesting(self, mz_service=action.mz_service),
                     )
                     sql_server_testing_setup = True
+                if not iceberg_setup:
+                    # Can only be run once
+                    actions.insert(
+                        index + 1,
+                        SetupIcebergTesting(self, mz_service=action.mz_service),
+                    )
+                    iceberg_setup = True
             elif isinstance(action, ReplaceEnvironmentdStatefulSet):
                 actions.insert(index + 1, ConfigureMz(self))
 
@@ -297,8 +317,9 @@ class SystemVarChange(Scenario):
         features: Features,
         seed: str | None,
         change_entries: list[SystemVarChangeEntry],
+        **kwargs: Any,
     ):
-        super().__init__(checks, executor, features, seed)
+        super().__init__(checks, executor, features, seed, **kwargs)
         self.change_entries = change_entries
 
     def actions(self) -> list[Action]:

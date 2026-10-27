@@ -20,10 +20,7 @@ def schema() -> str:
 @externally_idempotent(False)
 class AlterIndex(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schema()
-            + dedent(
-                """
+        return Testdrive(schema() + dedent("""
                 > CREATE TABLE alter_index_table (f1 STRING);
                 > CREATE DEFAULT INDEX ON alter_index_table;
                 > INSERT INTO alter_index_table SELECT 'A' || generate_series FROM generate_series(1,10000);
@@ -40,9 +37,7 @@ class AlterIndex(Check):
                   ENVELOPE NONE
 
                 > CREATE DEFAULT INDEX ON alter_index_source
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -84,9 +79,7 @@ class AlterIndex(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT LEFT(f1,1), COUNT(*), COUNT(DISTINCT f1) FROM alter_index_table GROUP BY LEFT(f1,1);
                 A 10000 10000
                 B 10000 10000
@@ -100,6 +93,4 @@ class AlterIndex(Check):
                 C 10000 10000
                 D 10000 10000
                 E 10000 10000
-           """
-            )
-        )
+           """))

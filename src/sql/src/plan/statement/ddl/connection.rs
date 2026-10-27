@@ -23,43 +23,49 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
     ConnectionDefaultAwsPrivatelink, ConnectionOption, ConnectionOptionName, CreateConnectionType,
     KafkaBroker, KafkaBrokerAwsPrivatelinkOption, KafkaBrokerAwsPrivatelinkOptionName,
-    KafkaBrokerTunnel,
+    KafkaBrokerTunnel, KafkaMatchingBrokerRule,
 };
 use mz_ssh_util::keys::SshKeyPair;
 use mz_storage_types::connections::aws::{
     AwsAssumeRole, AwsAuth, AwsConnection, AwsConnectionReference, AwsCredentials,
 };
+use mz_storage_types::connections::gcp::{GcpConnection, GcpConnectionReference};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
-    AwsPrivatelink, AwsPrivatelinkConnection, CsrConnection, CsrConnectionHttpAuth,
-    IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType, KafkaConnection,
-    KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection, MySqlSslMode,
-    PostgresConnection, RestIcebergCatalog, S3TablesRestIcebergCatalog, SqlServerConnectionDetails,
-    SshConnection, SshTunnel, TlsIdentity, Tunnel,
+    AwsPrivatelink, AwsPrivatelinkConnection, AwsPrivatelinkRule, CsrConnection,
+    CsrConnectionHttpAuth, GlueSchemaRegistryConnection, IcebergAccessDelegation,
+    IcebergCatalogAuth, IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType,
+    IcebergStorageProvider, KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions,
+    MySqlConnection, MySqlSslMode, PostgresConnection, RestIcebergCatalog,
+    S3TablesRestIcebergCatalog, SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity,
+    Tunnel,
 };
 
 use crate::names::Aug;
 use crate::plan::statement::{Connection, ResolvedItemName};
 use crate::plan::with_options::{self};
 use crate::plan::{ConnectionDetails, PlanError, SshKey, StatementContext};
-use crate::session::vars::{self, ENABLE_AWS_MSK_IAM_AUTH};
+use crate::session::vars;
 
 generate_extracted_config!(
     ConnectionOption,
+    (AccessDelegation, IcebergAccessDelegation),
+    (StorageProvider, IcebergStorageProvider),
     (AccessKeyId, StringOrSecret),
     (AssumeRoleArn, String),
     (AssumeRoleSessionName, String),
     (AvailabilityZones, Vec<String>),
     (AwsConnection, with_options::Object),
     (AwsPrivatelink, ConnectionDefaultAwsPrivatelink<Aug>),
-    // (AwsPrivatelink, with_options::Object),
     (Broker, Vec<KafkaBroker<Aug>>),
-    (Brokers, Vec<KafkaBroker<Aug>>),
+    (Brokers, with_options::BrokersList),
     (Credential, StringOrSecret),
     (Database, String),
     (Endpoint, String),
+    (GcpConnection, with_options::Object),
     (Host, String),
+    (Oauth2ServerUrl, String),
     (Password, with_options::Secret),
     (Port, u16),
     (ProgressTopic, String),
@@ -67,12 +73,14 @@ generate_extracted_config!(
     (PublicKey1, String),
     (PublicKey2, String),
     (Region, String),
+    (Registry, String),
     (SaslMechanisms, String),
     (SaslPassword, with_options::Secret),
     (SaslUsername, StringOrSecret),
     (Scope, String),
     (SecretAccessKey, with_options::Secret),
     (SecurityProtocol, String),
+    (ServiceAccountKey, with_options::Secret),
     (ServiceName, String),
     (SshTunnel, with_options::Object),
     (SslCertificate, StringOrSecret),
@@ -116,6 +124,8 @@ pub(super) fn validate_options_per_connection_type(
         ]
         .as_slice(),
         CreateConnectionType::AwsPrivatelink => &[AvailabilityZones, Port, ServiceName],
+        CreateConnectionType::GlueSchemaRegistry => &[AwsConnection, Registry],
+        CreateConnectionType::Gcp => &[ServiceAccountKey],
         CreateConnectionType::Csr => &[
             AwsPrivatelink,
             Password,
@@ -184,10 +194,14 @@ pub(super) fn validate_options_per_connection_type(
             User,
         ],
         CreateConnectionType::IcebergCatalog => &[
+            AccessDelegation,
             AwsConnection,
             CatalogType,
             Credential,
+            GcpConnection,
+            Oauth2ServerUrl,
             Scope,
+            StorageProvider,
             Url,
             Warehouse,
         ],
@@ -313,13 +327,29 @@ impl ConnectionOptionExtracted {
                 }
                 ConnectionDetails::AwsPrivatelink(connection)
             }
+            CreateConnectionType::Gcp => {
+                let credentials_json = self
+                    .service_account_key
+                    .ok_or_else(|| sql_err!("SERVICE ACCOUNT KEY option is required"))?
+                    .into();
+                ConnectionDetails::Gcp(GcpConnection { credentials_json })
+            }
             CreateConnectionType::Kafka => {
                 let (tls, sasl) = plan_kafka_security(scx, &self)?;
+                let (static_brokers, matching_rules) = self.get_brokers_and_rules(scx)?;
+
+                if !matching_rules.is_empty() {
+                    scx.require_feature_flag(&vars::ENABLE_KAFKA_BROKER_MATCHING_RULES)?;
+                }
 
                 ConnectionDetails::Kafka(KafkaConnection {
-                    brokers: self.get_brokers(scx)?,
-                    default_tunnel: scx
-                        .build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?,
+                    brokers: static_brokers,
+                    default_tunnel: build_tunnel_definition(
+                            scx,
+                            self.ssh_tunnel,
+                            self.aws_privatelink,
+                            if matching_rules.is_empty() { None } else { Some(matching_rules) },
+                        )?,
                     progress_topic: self.progress_topic,
                     progress_topic_options: KafkaTopicOptions {
                         // We only allow configuring the progress topic replication factor for now.
@@ -334,7 +364,7 @@ impl ConnectionOptionExtracted {
                         }).transpose()?,
                         topic_config: btreemap! {
                             "cleanup.policy".to_string() => "compact".to_string(),
-                            "segment.bytes".to_string() => "134217728".to_string(), // 128 MB
+                            "segment.bytes".to_string() => "134217728".to_string(), // 128 MiB
                         },
                     },
                     options: BTreeMap::new(),
@@ -377,7 +407,12 @@ impl ConnectionOptionExtracted {
                         )
                     }
                 }
-                let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
+                let tunnel = build_tunnel_definition(
+                    scx,
+                    self.ssh_tunnel,
+                    self.aws_privatelink,
+                    None, /* Rule-based PrivateLink is not supported for CSR. */
+                )?;
 
                 ConnectionDetails::Csr(CsrConnection {
                     url,
@@ -385,6 +420,21 @@ impl ConnectionOptionExtracted {
                     tls_identity,
                     http_auth,
                     tunnel,
+                })
+            }
+            CreateConnectionType::GlueSchemaRegistry => {
+                let aws_connection = get_aws_connection_reference(scx, &self)?
+                    .ok_or_else(|| sql_err!("AWS CONNECTION option is required"))?;
+                let registry_name = self
+                    .registry
+                    .ok_or_else(|| sql_err!("REGISTRY option is required"))?;
+                if registry_name.is_empty() {
+                    sql_bail!("invalid CONNECTION: REGISTRY must not be empty");
+                }
+
+                ConnectionDetails::GlueSchemaRegistry(GlueSchemaRegistryConnection {
+                    aws_connection,
+                    registry_name,
                 })
             }
             CreateConnectionType::Postgres => {
@@ -419,7 +469,12 @@ impl ConnectionOptionExtracted {
                         )
                     }
                 }
-                let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
+                let tunnel = build_tunnel_definition(
+                    scx,
+                    self.ssh_tunnel,
+                    self.aws_privatelink,
+                    None, /* Rule-based PrivateLink is not supported for Postgres. */
+                )?;
 
                 ConnectionDetails::Postgres(PostgresConnection {
                     database: self
@@ -520,7 +575,12 @@ impl ConnectionOptionExtracted {
                         )
                     }
                 }
-                let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
+                let tunnel = build_tunnel_definition(
+                    scx,
+                    self.ssh_tunnel,
+                    self.aws_privatelink,
+                    None, /* Rule-based PrivateLink is not supported for MySQL. */
+                )?;
 
                 ConnectionDetails::MySql(MySqlConnection {
                     password: self.password.map(|password| password.into()),
@@ -539,8 +599,6 @@ impl ConnectionOptionExtracted {
                 })
             }
             CreateConnectionType::SqlServer => {
-                scx.require_feature_flag(&vars::ENABLE_SQL_SERVER_SOURCE)?;
-
                 let aws_connection = get_aws_connection_reference(scx, &self)?;
                 if aws_connection.is_some() && self.password.is_some() {
                     sql_bail!(
@@ -594,7 +652,12 @@ impl ConnectionOptionExtracted {
                 //
                 // See: <https://learn.microsoft.com/en-us/sql/database-engine/configure-windows/configure-a-server-to-listen-on-a-specific-tcp-port?view=sql-server-ver16>
                 let port = self.port.unwrap_or(1433_u16);
-                let tunnel = scx.build_tunnel_definition(self.ssh_tunnel, self.aws_privatelink)?;
+                let tunnel = build_tunnel_definition(
+                    scx,
+                    self.ssh_tunnel,
+                    self.aws_privatelink,
+                    None, /* Rule-based PrivateLink is not supported for SQL Server. */
+                )?;
 
                 ConnectionDetails::SqlServer(SqlServerConnectionDetails {
                     host: self
@@ -632,9 +695,30 @@ impl ConnectionOptionExtracted {
                 let warehouse = self.warehouse.clone();
                 let credential = self.credential.clone();
                 let aws_connection = get_aws_connection_reference(scx, &self)?;
+                let gcp_connection = get_gcp_connection_reference(scx, &self)?;
 
                 let catalog = match catalog_type {
                     IcebergCatalogType::S3TablesRest => {
+                        if gcp_connection.is_some() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support GCP CONNECTION"
+                            );
+                        }
+                        if self.oauth2_server_url.is_some() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support OAUTH2 SERVER URL"
+                            );
+                        }
+                        if self.access_delegation.is_some() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support ACCESS DELEGATION"
+                            );
+                        }
+                        if self.storage_provider.is_some() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support STORAGE PROVIDER"
+                            );
+                        }
                         let Some(warehouse) = warehouse else {
                             sql_bail!(
                                 "invalid CONNECTION: ICEBERG s3tablesrest connections must specify WAREHOUSE"
@@ -652,16 +736,67 @@ impl ConnectionOptionExtracted {
                         })
                     }
                     IcebergCatalogType::Rest => {
-                        let Some(credential) = credential else {
+                        if aws_connection.is_some() {
                             sql_bail!(
-                                "invalid CONNECTION: ICEBERG rest connections require a CREDENTIAL"
+                                "invalid CONNECTION: ICEBERG rest connections do not support AWS CONNECTION.\n\nTry s3tablesrest instead."
                             );
+                        }
+                        let auth = match (credential, gcp_connection) {
+                            (Some(_), Some(_)) => sql_bail!(
+                                "invalid CONNECTION: ICEBERG rest connections may set CREDENTIAL or GCP CONNECTION, not both"
+                            ),
+                            (Some(credential), None) => IcebergCatalogAuth::OAuth {
+                                credential,
+                                scope: self.scope.clone(),
+                                server_url: self.oauth2_server_url.clone(),
+                            },
+                            (None, Some(gcp_connection)) => {
+                                if self.oauth2_server_url.is_some() {
+                                    sql_bail!(
+                                        "invalid CONNECTION: OAUTH2 SERVER URL applies to CREDENTIAL auth, not GCP CONNECTION"
+                                    );
+                                }
+                                // A GCP connection authenticates to GCS, so the
+                                // store is already determined. Reject a
+                                // contradicting value rather than silently
+                                // overriding it.
+                                if let Some(provider) = self.storage_provider
+                                    && provider != IcebergStorageProvider::Gcs
+                                {
+                                    sql_bail!(
+                                        "invalid CONNECTION: ICEBERG GCP CONNECTION implies STORAGE PROVIDER 'gcs', not '{}'",
+                                        provider.as_str()
+                                    );
+                                }
+                                /// All BigLake Iceberg REST Catalogs use the same catalog URI.
+                                const BIGLAKE_CATALOG_URI: &str =
+                                    "https://biglake.googleapis.com/iceberg/v1/restcatalog";
+                                if uri.to_string() != BIGLAKE_CATALOG_URI {
+                                    sql_bail!(
+                                        "GCP connection can only be used with '{}'",
+                                        BIGLAKE_CATALOG_URI
+                                    );
+                                }
+                                IcebergCatalogAuth::Gcp(gcp_connection)
+                            }
+                            (None, None) => sql_bail!(
+                                "invalid CONNECTION: ICEBERG rest connections require a CREDENTIAL or GCP CONNECTION"
+                            ),
+                        };
+
+                        // A GCP connection only authenticates to GCS, so it
+                        // fixes the store regardless of what was written.
+                        let storage_provider = if matches!(auth, IcebergCatalogAuth::Gcp(_)) {
+                            IcebergStorageProvider::Gcs
+                        } else {
+                            self.storage_provider.unwrap_or_default()
                         };
 
                         IcebergCatalogImpl::Rest(RestIcebergCatalog {
-                            credential,
-                            scope: self.scope.clone(),
+                            auth,
                             warehouse,
+                            access_delegation: self.access_delegation,
+                            storage_provider,
                         })
                     }
                 };
@@ -673,76 +808,64 @@ impl ConnectionOptionExtracted {
         Ok(connection)
     }
 
-    pub fn get_brokers(
+    pub fn get_brokers_and_rules(
         &self,
         scx: &StatementContext,
-    ) -> Result<Vec<mz_storage_types::connections::KafkaBroker<ReferencedConnection>>, PlanError>
-    {
-        let mut brokers = match (&self.broker, &self.brokers, &self.aws_privatelink) {
-            (Some(v), None, None) => v.to_vec(),
-            (None, Some(v), None) => v.to_vec(),
-            (None, None, Some(_)) => vec![],
+    ) -> Result<
+        (
+            Vec<mz_storage_types::connections::KafkaBroker<ReferencedConnection>>,
+            Vec<KafkaMatchingBrokerRule<Aug>>,
+        ),
+        PlanError,
+    > {
+        // Collect all static broker sources and matching rules.
+        let mut all_brokers: Vec<KafkaBroker<Aug>> = vec![];
+        let mut matching_rules: Vec<KafkaMatchingBrokerRule<Aug>> = vec![];
+
+        // Check exclusions and extract brokers
+        match (&self.broker, &self.brokers, &self.aws_privatelink) {
+            // BROKER
+            (Some(broker), None, None) => all_brokers.extend(broker.iter().cloned()),
+            // BROKERS
+            (None, Some(broker_list), None) => {
+                all_brokers.extend(broker_list.static_entries.iter().cloned());
+                matching_rules.extend(broker_list.matching_rules.iter().cloned());
+            }
+            // AWS PRIVATELINK
+            (None, None, Some(_privatelink)) => {
+                // Noting to do here
+            }
+            // noting - invalid
             (None, None, None) => {
                 sql_bail!("invalid CONNECTION: must set one of BROKER, BROKERS, or AWS PRIVATELINK")
             }
+            // exclusive keywords provided
             _ => sql_bail!(
                 "invalid CONNECTION: can only set one of BROKER, BROKERS, or AWS PRIVATELINK"
             ),
         };
 
+        // MATCHING rules require at least one static broker for bootstrapping.
+        if !matching_rules.is_empty() && all_brokers.is_empty() {
+            sql_bail!(
+                "invalid CONNECTION: BROKERS must contain at least one static broker address"
+            );
+        }
+
         // NOTE: we allow broker configurations to be mixed and matched. If/when we support
         // a top-level `SSH TUNNEL` configuration, we will need additional assertions.
-
         let mut out = vec![];
-        for broker in &mut brokers {
+        for broker in &all_brokers {
             if broker.address.contains(',') {
-                sql_bail!("invalid CONNECTION: cannot specify multiple Kafka broker addresses in one string.\n\n
-Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'kafka:9093')");
+                sql_bail!(
+                    "invalid CONNECTION: cannot specify multiple Kafka broker addresses in one string.\n\nInstead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'kafka:9093')"
+                );
             }
 
             let tunnel = match &broker.tunnel {
                 KafkaBrokerTunnel::Direct => Tunnel::Direct,
                 KafkaBrokerTunnel::AwsPrivatelink(aws_privatelink) => {
-                    let KafkaBrokerAwsPrivatelinkOptionExtracted {
-                        availability_zone,
-                        port,
-                        seen: _,
-                    } = KafkaBrokerAwsPrivatelinkOptionExtracted::try_from(
-                        aws_privatelink.options.clone(),
-                    )?;
-
-                    let id = match &aws_privatelink.connection {
-                        ResolvedItemName::Item { id, .. } => id,
-                        _ => sql_bail!(
-                            "internal error: Kafka PrivateLink connection was not resolved"
-                        ),
-                    };
-                    let entry = scx.catalog.get_item(id);
-                    match entry.connection()? {
-                        Connection::AwsPrivatelink(connection) => {
-                            if let Some(az) = &availability_zone {
-                                if !connection.availability_zones.contains(az) {
-                                    sql_bail!(
-                                        "AWS PrivateLink availability zone {} does not match any of the \
-                                      availability zones on the AWS PrivateLink connection {}",
-                                        az.quoted(),
-                                        scx.catalog
-                                            .resolve_full_name(entry.name())
-                                            .to_string()
-                                            .quoted()
-                                    )
-                                }
-                            }
-                            Tunnel::AwsPrivatelink(AwsPrivatelink {
-                                connection_id: *id,
-                                availability_zone,
-                                port,
-                            })
-                        }
-                        _ => {
-                            sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item)
-                        }
-                    }
+                    Tunnel::AwsPrivatelink(plan_privatelink(scx, aws_privatelink)?)
                 }
                 KafkaBrokerTunnel::SshTunnel(ssh) => {
                     let id = match &ssh {
@@ -770,7 +893,7 @@ Instead, specify BROKERS using multiple strings, e.g. BROKERS ('kafka:9092', 'ka
             });
         }
 
-        Ok(out)
+        Ok((out, matching_rules))
     }
 }
 
@@ -790,6 +913,24 @@ fn get_aws_connection_reference(
             connection: id,
         }),
         _ => sql_bail!("{} is not an AWS connection", item.name().item),
+    })
+}
+fn get_gcp_connection_reference(
+    scx: &StatementContext,
+    conn_options: &ConnectionOptionExtracted,
+) -> Result<Option<GcpConnectionReference<ReferencedConnection>>, PlanError> {
+    let Some(gcp_connection_id) = conn_options.gcp_connection else {
+        return Ok(None);
+    };
+
+    let id = CatalogItemId::from(gcp_connection_id);
+    let item = scx.catalog.get_item(&id);
+    Ok(match item.connection()? {
+        Connection::Gcp(_) => Some(GcpConnectionReference {
+            connection_id: id,
+            connection: id,
+        }),
+        _ => sql_bail!("{} is not a GCP connection", item.name().item),
     })
 }
 
@@ -875,15 +1016,12 @@ fn plan_kafka_security(
         SecurityProtocol::SaslPlaintext | SecurityProtocol::SaslSsl => {
             outstanding.remove(&ConnectionOptionName::AwsConnection);
             match get_aws_connection_reference(scx, v)? {
-                Some(aws) => {
-                    scx.require_feature_flag(&ENABLE_AWS_MSK_IAM_AUTH)?;
-                    Some(KafkaSaslConfig {
-                        mechanism: "OAUTHBEARER".into(),
-                        username: "".into(),
-                        password: None,
-                        aws: Some(aws),
-                    })
-                }
+                Some(aws) => Some(KafkaSaslConfig {
+                    mechanism: "OAUTHBEARER".into(),
+                    username: "".into(),
+                    password: None,
+                    aws: Some(aws),
+                }),
                 None => {
                     outstanding.remove(&ConnectionOptionName::SaslMechanisms);
                     outstanding.remove(&ConnectionOptionName::SaslUsername);
@@ -926,4 +1064,107 @@ fn plan_kafka_security(
     }
 
     Ok((tls, sasl))
+}
+pub fn plan_default_privatelink(
+    scx: &StatementContext,
+    pl: &mz_sql_parser::ast::ConnectionDefaultAwsPrivatelink<Aug>,
+) -> Result<AwsPrivatelink, PlanError> {
+    let id = pl.connection.item_id().clone();
+    let entry = scx.catalog.get_item(&id);
+    match entry.connection()? {
+        Connection::AwsPrivatelink(_) => Ok(AwsPrivatelink {
+            connection_id: id,
+            // By default we do not specify an availability zone for the tunnel.
+            availability_zone: None,
+            // We always use the port as specified by the top-level connection.
+            port: pl.port,
+        }),
+        _ => sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item),
+    }
+}
+
+pub fn plan_privatelink(
+    scx: &StatementContext,
+    pl: &mz_sql_parser::ast::KafkaBrokerAwsPrivatelink<Aug>,
+) -> Result<AwsPrivatelink, PlanError> {
+    let KafkaBrokerAwsPrivatelinkOptionExtracted {
+        availability_zone,
+        port,
+        seen: _,
+    } = KafkaBrokerAwsPrivatelinkOptionExtracted::try_from(pl.options.clone())?;
+
+    let id = match &pl.connection {
+        ResolvedItemName::Item { id, .. } => id,
+        _ => sql_bail!("internal error: Kafka PrivateLink connection was not resolved"),
+    };
+    let entry = scx.catalog.get_item(id);
+    match entry.connection()? {
+        Connection::AwsPrivatelink(connection) => {
+            if let Some(az) = &availability_zone {
+                if !connection.availability_zones.contains(az) {
+                    sql_bail!(
+                        "AWS PrivateLink availability zone {} does not match any of the \
+                                      availability zones on the AWS PrivateLink connection {}",
+                        az.quoted(),
+                        scx.catalog
+                            .resolve_full_name(entry.name())
+                            .to_string()
+                            .quoted()
+                    )
+                }
+            }
+            Ok(AwsPrivatelink {
+                connection_id: *id,
+                availability_zone,
+                port,
+            })
+        }
+        _ => {
+            sql_bail!("{} is not an AWS PRIVATELINK connection", entry.name().item)
+        }
+    }
+}
+
+pub(crate) fn build_tunnel_definition(
+    scx: &StatementContext,
+    ssh_tunnel: Option<with_options::Object>,
+    aws_privatelink: Option<ConnectionDefaultAwsPrivatelink<Aug>>,
+    matching_rules: Option<Vec<KafkaMatchingBrokerRule<Aug>>>,
+) -> Result<Tunnel<ReferencedConnection>, PlanError> {
+    Ok(match (ssh_tunnel, aws_privatelink, matching_rules) {
+        (None, None, None) => Tunnel::Direct,
+        (Some(ssh_tunnel), None, None) => {
+            let id = CatalogItemId::from(ssh_tunnel);
+            let ssh_tunnel = scx.catalog.get_item(&id);
+            match ssh_tunnel.connection()? {
+                Connection::Ssh(_connection) => Tunnel::Ssh(SshTunnel {
+                    connection_id: id,
+                    connection: id,
+                }),
+                _ => sql_bail!("{} is not an SSH connection", ssh_tunnel.name().item),
+            }
+        }
+        (None, Some(aws_privatelink), None) => {
+            Tunnel::AwsPrivatelink(plan_default_privatelink(scx, &aws_privatelink)?)
+        }
+        (None, None, Some(rules)) => {
+            if rules.is_empty() {
+                sql_bail!("BROKERS MATCHING rules list cannot be empty");
+            }
+
+            let rules = rules
+                .iter()
+                .map(|rule| {
+                    Ok(AwsPrivatelinkRule {
+                        pattern: rule.pattern.clone(),
+                        to: plan_privatelink(scx, &rule.tunnel)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, PlanError>>()?;
+            Tunnel::AwsPrivatelinks(mz_storage_types::connections::AwsPrivatelinks { rules })
+        }
+        _ => {
+            sql_bail!("cannot specify both SSH TUNNEL and AWS PRIVATELINK");
+        }
+    })
 }

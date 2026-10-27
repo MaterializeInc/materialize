@@ -67,8 +67,7 @@ class CreatePostgresCdcTable(Action):
             assert self.postgres_cdc_table.postgres_table is not None
             name = self.postgres_cdc_table.name
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     $ postgres-execute connection=postgres://postgres:postgres@postgres
 
                     CREATE PUBLICATION {name}_publication FOR TABLE {self.postgres_cdc_table.postgres_table.name};
@@ -87,8 +86,7 @@ class CreatePostgresCdcTable(Action):
                       FROM POSTGRES CONNECTION {name}_connection (PUBLICATION '{name}_publication');
 
                     > CREATE TABLE {name} FROM SOURCE {name}_source (REFERENCE {self.postgres_cdc_table.postgres_table.name});
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 

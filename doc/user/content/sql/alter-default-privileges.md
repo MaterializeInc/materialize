@@ -19,9 +19,8 @@ default privilege.
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "GRANT" >}}
-### GRANT
 
 `ALTER DEFAULT PRIVILEGES` defines default privileges that will be applied to
 objects created by a role in the future. It does not affect any existing
@@ -37,7 +36,6 @@ set of roles or by all roles.
 
 {{< /tab >}}
 {{< tab "REVOKE" >}}
-### REVOKE
 
 {{< note >}}
 `ALTER DEFAULT PRIVILEGES` cannot be used to revoke the default owner privileges
@@ -101,7 +99,7 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO managers;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-default-privileges.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-default-privileges" %}}
 
 ## Useful views
 

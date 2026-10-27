@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use mz_ore::bytes::SegmentedBytes;
 use rand::prelude::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use tracing::trace;
 
 use crate::location::{
@@ -202,12 +202,11 @@ impl Consensus for UnreliableConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         self.handle
             .run_op("compare_and_set", || {
-                self.consensus.compare_and_set(key, expected, new)
+                self.consensus.compare_and_set(key, new)
             })
             .await
     }
@@ -223,7 +222,7 @@ impl Consensus for UnreliableConsensus {
             .await
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         self.handle
             .run_op("truncate", || self.consensus.truncate(key, seqno))
             .await

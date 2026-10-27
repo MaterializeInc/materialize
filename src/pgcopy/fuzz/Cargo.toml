@@ -1,0 +1,29 @@
+# Fuzz crate for mz-pgcopy: decode untrusted `COPY ... FROM` data. COPY input
+# arrives verbatim from a client, and the text/CSV field splitting plus the
+# per-type value decoding are hand-written byte/text parsers sitting at the
+# trust boundary, so any panic/SEGV reachable from the data is an availability
+# bug.
+#
+# Excluded from the main workspace because libFuzzer requires nightly Rust.
+
+[package]
+workspace = "../../../test/cargo-fuzz"
+name = "mz-pgcopy-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mz-pgcopy = { path = ".." }
+mz-pgrepr = { path = "../../pgrepr" }
+
+[[bin]]
+name = "copy_decode"
+path = "fuzz_targets/copy_decode.rs"
+test = false
+doc = false
+bench = false

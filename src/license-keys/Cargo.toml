@@ -14,32 +14,36 @@ required-features = ["signing"]
 name = "sign"
 required-features = ["signing"]
 
+[[example]]
+name = "sign-intermediate"
+required-features = ["signing"]
+
 [dependencies]
-anyhow = "1.0.100"
-jsonwebtoken = "9.3.1"
-serde = { version = "1.0.219", features = ["derive"] }
+anyhow.workspace = true
+jsonwebtoken.workspace = true
+serde.workspace = true
 
-aws-sdk-kms = { version = "1.96.0", default-features = false, features = ["rt-tokio"], optional = true }
-base64 = { version = "0.22.1", optional = true }
-pem = { version = "3.0.6", optional = true }
-serde_json = { version = "1.0.145", optional = true }
-sha2 = { version = "0.10.9", optional = true }
-uuid = { version = "1.19.0", features = ["v4"], optional = true }
-
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+aws-sdk-kms = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+pem = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+aws-lc-rs = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true, features = ["v4"] }
 
 [dev-dependencies]
-clap = { version = "4.5.23", features = ["derive"] }
+aws-lc-rs.workspace = true
+clap.workspace = true
 mz-aws-util = { path = "../aws-util" }
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+pem.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 
 [features]
-default = ["workspace-hack"]
-signing = ["aws-sdk-kms", "base64", "pem", "serde_json", "sha2", "uuid"]
+default = []
+signing = ["aws-sdk-kms", "aws-lc-rs", "base64", "pem", "serde_json", "uuid"]
+utoipa = ["dep:utoipa"]
 
 [lints]
 workspace = true
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
-development = ["tokio", "mz-aws-util"]

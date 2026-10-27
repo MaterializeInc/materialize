@@ -25,6 +25,7 @@ import urllib.parse
 import psycopg
 
 from materialize import MZ_ROOT
+from materialize.mz_env_util import connect_and_print_environment_id
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import (
     _wait_for_pg,
@@ -35,7 +36,6 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.redpanda_cloud import RedpandaCloud
 from materialize.ui import UIError
@@ -145,19 +145,15 @@ class Redpanda:
         )
         cloud_conn.autocommit = True
         cloud_cursor = cloud_conn.cursor()
-        cloud_cursor.execute(
-            f"""CREATE CONNECTION privatelink_conn
+        cloud_cursor.execute(f"""CREATE CONNECTION privatelink_conn
             TO AWS PRIVATELINK (
                 SERVICE NAME '{self.aws_private_link}',
                 AVAILABILITY ZONES ('use1-az2')
-            );""".encode()
-        )
-        cloud_cursor.execute(
-            """SELECT principal
+            );""".encode())
+        cloud_cursor.execute("""SELECT principal
             FROM mz_aws_privatelink_connections plc
             JOIN mz_connections c on plc.id = c.id
-            WHERE c.name = 'privatelink_conn';"""
-        )
+            WHERE c.name = 'privatelink_conn';""")
         results = cloud_cursor.fetchone()
         assert results
         privatelink_principal = results[0]
@@ -201,7 +197,6 @@ class Redpanda:
 
 
 SERVICES = [
-    CockroachOrPostgresMetadata(),
     Materialized(
         # We use materialize/environmentd and not materialize/materialized here
         # in order to ensure a perfect match to the container that should be
@@ -213,6 +208,14 @@ SERVICES = [
             "--orchestrator=process",
             "--orchestrator-process-secrets-directory=/mzdata/secrets",
             "--orchestrator-process-scratch-directory=/scratch",
+        ],
+        healthcheck=[
+            "CMD",
+            "/busybox/wget",
+            "-q",
+            "-O",
+            "-",
+            "http://localhost:6878/api/readyz",
         ],
         # We can not restart this container at will, as it does not have clusterd
         sanity_restart=False,
@@ -251,6 +254,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
+    if not os.getenv("BUILDKITE_COMMIT"):
+        raise UIError(
+            "BUILDKITE_COMMIT must be set (and valid) when running cloud-canary"
+        )
+
     files = list(
         itertools.chain.from_iterable(
             [
@@ -276,6 +284,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         assert "materialize.cloud" in c.cloud_hostname()
         wait_for_cloud(c)
+
+        connect_and_print_environment_id(c.cloud_hostname(), USERNAME, APP_PASSWORD)
 
         if args.version_check:
             version_check(c)

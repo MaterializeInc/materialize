@@ -28,6 +28,9 @@
 //!   failure), `handle_introspection_subscribe_batch` reacts on the corresponding error responses
 //!   by reinstalling the failed introspection subscribes.
 
+use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
+
 use anyhow::bail;
 use derivative::Derivative;
 use mz_adapter_types::dyncfgs::ENABLE_INTROSPECTION_SUBSCRIBES;
@@ -72,6 +75,13 @@ pub(super) struct IntrospectionSubscribe {
     /// introspection data around in the meantime makes for a better UX than removing it.
     #[derivative(Debug = "ignore")]
     deferred_write: Option<StorageWriteOp>,
+    /// When this subscribe first appended data to the target storage collection, if it has.
+    ///
+    /// Until then, the target collection may still contain rows written by a previous incarnation
+    /// of this subscribe (before an environmentd restart, or before the target replica
+    /// reconnected). Consumers that must not observe such stale rows, like the
+    /// `mz_object_arrangement_size_history` snapshots, use this to judge per-replica freshness.
+    first_data_at: Option<Instant>,
 }
 
 impl IntrospectionSubscribe {
@@ -88,18 +98,27 @@ impl IntrospectionSubscribe {
 }
 
 impl Coordinator {
+    /// Every `(cluster, replica)` pair currently in the catalog.
+    ///
+    /// The set a per-replica feature (introspection subscribes, curated metric sinks) must install
+    /// onto the replicas that already exist when the coordinator starts. Shared so those callers
+    /// cannot drift on what "all replicas" means.
+    pub(super) fn all_cluster_replicas(&self) -> Vec<(ClusterId, ReplicaId)> {
+        self.catalog
+            .clusters()
+            .flat_map(|cluster| {
+                cluster
+                    .replicas()
+                    .map(move |replica| (cluster.id, replica.replica_id))
+            })
+            .collect()
+    }
+
     /// Installs introspection subscribes on all existing replicas.
     ///
     /// Meant to be invoked during coordinator bootstrapping.
     pub(super) async fn bootstrap_introspection_subscribes(&mut self) {
-        let mut cluster_replicas = Vec::new();
-        for cluster in self.catalog.clusters() {
-            for replica in cluster.replicas() {
-                cluster_replicas.push((cluster.id, replica.replica_id));
-            }
-        }
-
-        for (cluster_id, replica_id) in cluster_replicas {
+        for (cluster_id, replica_id) in self.all_cluster_replicas() {
             self.install_introspection_subscribes(cluster_id, replica_id)
                 .await;
         }
@@ -144,6 +163,7 @@ impl Coordinator {
             replica_id,
             spec,
             deferred_write: None,
+            first_data_at: None,
         };
         self.introspection_subscribes.insert(id, subscribe);
 
@@ -169,7 +189,7 @@ impl Coordinator {
             .map(|id| self.catalog().resolve_item_id(id))
             .collect();
         let validity = PlanValidity::new(
-            self.catalog.transient_revision(),
+            &self.catalog,
             dependencies,
             Some(cluster_id),
             Some(replica_id),
@@ -203,7 +223,9 @@ impl Coordinator {
 
         let vars = self.catalog().system_config();
         let overrides = self.catalog.get_cluster(cluster_id).config.features();
-        let optimizer_config = optimize::OptimizerConfig::from(vars).override_from(&overrides);
+        let optimizer_config = optimize::OptimizerConfig::from(vars)
+            .override_from(&overrides)
+            .override_from(&self.cluster_scoped_optimizer_overrides(cluster_id));
 
         let mut optimizer = optimize::subscribe::Optimizer::new(
             self.owned_catalog(),
@@ -224,11 +246,11 @@ impl Coordinator {
             move || {
                 span.in_scope(|| {
                     // MIR ⇒ MIR optimization (global)
-                    let global_mir_plan = optimizer.catch_unwind_optimize(plan.from)?;
+                    let global_mir_plan = optimizer.catch_unwind_optimize(plan)?;
                     // Add introduced indexes as validity dependencies.
                     let id_bundle = global_mir_plan.id_bundle(cluster_id);
                     let item_ids = id_bundle.iter().map(|id| catalog.resolve_item_id(&id));
-                    validity.extend_dependencies(item_ids);
+                    validity.extend_dependencies(&catalog, item_ids);
 
                     let stage = IntrospectionSubscribeStage::TimestampOptimizeLir(
                         IntrospectionSubscribeTimestampOptimizeLir {
@@ -408,6 +430,9 @@ impl Coordinator {
         // Ensure that the contents of the target storage collection are cleaned when the new
         // subscribe starts reporting data.
         subscribe.deferred_write = Some(subscribe.delete_write_op());
+        // Until then, the collection serves the previous subscribe's data, which the replica may
+        // have invalidated by restarting.
+        subscribe.first_data_at = None;
 
         self.introspection_subscribes.insert(new_id, subscribe);
         self.sequence_introspection_subscribe(new_id, spec, cluster_id, replica_id)
@@ -449,11 +474,13 @@ impl Coordinator {
         let replica_id = subscribe.replica_id.to_string();
         let mut new_updates = Vec::with_capacity(updates.len());
         let mut new_row = Row::default();
-        for (_time, row, diff) in updates {
-            let mut packer = new_row.packer();
-            packer.push(Datum::String(&replica_id));
-            packer.extend_by_row(&row);
-            new_updates.push((new_row.clone(), diff));
+        for collection in updates {
+            for (row, _time, diff) in collection.iter() {
+                let mut packer = new_row.packer();
+                packer.push(Datum::String(&replica_id));
+                packer.extend_by_row_ref(row);
+                new_updates.push((new_row.clone(), diff));
+            }
         }
 
         // If we have a pending deferred write, we need to apply it _before_ the append of the new
@@ -464,12 +491,51 @@ impl Coordinator {
                 .update_introspection_collection(subscribe.spec.introspection_type, op);
         }
 
+        subscribe.first_data_at.get_or_insert_with(Instant::now);
+
         self.controller.storage.update_introspection_collection(
             subscribe.spec.introspection_type,
             StorageWriteOp::Append {
                 updates: new_updates,
             },
         );
+    }
+
+    /// Invalidates introspection-subscribe freshness for the given replica.
+    ///
+    /// Called when a cluster event reports one of the replica's processes offline or restarted.
+    /// The target collections may keep serving data written for the previous incarnation of the
+    /// replica, and the subscribe failures that will reinstall them can arrive after further
+    /// consumers of `fresh_introspection_replicas` have run. Freshness returns once a subscribe
+    /// delivers data again.
+    pub(super) fn invalidate_introspection_freshness(&mut self, replica_id: ReplicaId) {
+        for subscribe in self.introspection_subscribes.values_mut() {
+            if subscribe.replica_id == replica_id {
+                subscribe.first_data_at = None;
+            }
+        }
+    }
+
+    /// Returns the IDs of replicas whose introspection subscribe of the given type first
+    /// delivered data at least `margin` ago.
+    ///
+    /// Rows for other replicas in the corresponding storage collection are not trustworthy: they
+    /// either predate this environmentd process or were written before the replica reconnected,
+    /// and may describe a previous incarnation of the replica. The margin accounts for the
+    /// subscribe's first append becoming visible to readers only asynchronously (the collection
+    /// manager flushes writes in batches, and snapshot reads use an oracle timestamp that trails
+    /// the wall clock).
+    pub(super) fn fresh_introspection_replicas(
+        &self,
+        introspection_type: IntrospectionType,
+        margin: Duration,
+    ) -> BTreeSet<String> {
+        self.introspection_subscribes
+            .values()
+            .filter(|s| s.spec.introspection_type == introspection_type)
+            .filter(|s| s.first_data_at.is_some_and(|at| at.elapsed() >= margin))
+            .map(|s| s.replica_id.to_string())
+            .collect()
     }
 }
 
@@ -521,7 +587,8 @@ impl SubscribeSpec {
     fn to_plan(&self, catalog: &dyn SessionCatalog) -> Result<SubscribePlan, anyhow::Error> {
         let parsed = mz_sql::parse::parse(self.sql)?.into_element();
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, parsed.ast)?;
-        let plan = mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
+        let (plan, _sql_impl_ids) =
+            mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
         match plan {
             Plan::Subscribe(plan) => Ok(plan),
             _ => bail!("unexpected plan type: {plan:?}"),
@@ -562,6 +629,49 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
                 bool_and(hydrated) AS hydrated
             FROM mz_introspection.mz_compute_operator_hydration_statuses_per_worker
             GROUP BY export_id, lir_id
+        )",
+    },
+    // Per-object arrangement sizes, one row per `(object_id, replica)`,
+    // populating `mz_object_arrangement_sizes`.
+    //
+    // `mz_arrangement_heap_size_raw` and `mz_arrangement_batcher_size_raw` are
+    // differential logs where each `+1` row represents one byte of heap delta;
+    // after consolidation, `COUNT(*)` is the current arrangement size in bytes.
+    //
+    // Sizes are quantized to the nearest 10 MiB: the heap-size collection
+    // wiggles by a few bytes per second from ordinary allocator activity, and
+    // emitting exact bytes would push a downstream update on every wiggle.
+    // Arrangements below 5 MiB quantize to a size of 0. They are kept rather
+    // than dropped so that every arranged object is present in the collection.
+    //
+    // `mz_dataflow_addresses.address[1]` is the root of each operator's address
+    // tree, which equals the owning `dataflow_id` — so we can go addresses →
+    // operator → dataflow without joining `mz_dataflow_operator_dataflows`.
+    //
+    // Joining on `ce.dataflow_id` assumes one dataflow exports a single object;
+    // if that stops holding, the same arrangement bytes would be attributed
+    // to multiple `export_id`s and we'd need to revisit the granularity.
+    //
+    // Transient export IDs (`t*`) are ephemeral dataflows (peeks, subscribes,
+    // including this one); we drop them to avoid self-feedback churn.
+    SubscribeSpec {
+        introspection_type: IntrospectionType::ComputeObjectArrangementSizes,
+        sql: "SUBSCRIBE (
+            SELECT
+                ce.export_id AS object_id,
+                ((COUNT(*) + 5242880) / 10485760 * 10485760)::int8 AS size
+            FROM mz_introspection.mz_compute_exports AS ce
+            JOIN (
+                SELECT addrs.address[1] AS dataflow_id, addrs.id AS operator_id
+                FROM mz_introspection.mz_dataflow_addresses addrs
+            ) AS od ON od.dataflow_id = ce.dataflow_id
+            JOIN (
+                SELECT operator_id FROM mz_introspection.mz_arrangement_heap_size_raw
+                UNION ALL
+                SELECT operator_id FROM mz_introspection.mz_arrangement_batcher_size_raw
+            ) AS rs ON rs.operator_id = od.operator_id
+            WHERE ce.export_id NOT LIKE 't%'
+            GROUP BY ce.export_id
         )",
     },
 ];

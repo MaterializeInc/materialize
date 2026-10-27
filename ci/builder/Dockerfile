@@ -7,10 +7,18 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+FROM node:26-trixie-slim AS node
+
+# Node 25 dropped corepack from the distribution, but the console pins its
+# package manager through `packageManager` in console/package.json and CI drives
+# yarn through `corepack enable`. Reinstall it here so that the stages copying
+# `/usr/local/lib/node_modules` below still find `corepack/dist/corepack.js`.
+RUN npm install -g corepack
+
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM ubuntu:resolute-20251101 AS ci-builder-min
+FROM debian:13-slim AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -39,29 +47,31 @@ ARG XZ_OPT=-T0
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
-    docker.io \
+    docker-cli \
     eatmydata \
     gdb \
     git \
     gnupg2 \
-    libxml2-16 \
     pigz \
     python3 \
-    python3.13-venv \
+    python3-venv \
     zstd \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/* \
+    && sed -i 's/^UID_MIN.*/UID_MIN\t500/' /etc/login.defs
 
 RUN curl -fsSL https://github.com/trufflesecurity/trufflehog/releases/download/v3.91.0/trufflehog_3.91.0_linux_$ARCH_GO.tar.gz > trufflehog.tar.gz \
     && if [ $ARCH_GO = amd64 ]; then echo '694c5c8791c9a30d8ee295cbe991fc6e7c5f4bd8f5dbe8ada100dfe2ece9a628 trufflehog.tar.gz' | sha256sum --check; fi \
     && if [ $ARCH_GO = arm64 ]; then echo '58f627f07e7b94c5269db2958c57209f190a7f15c01d8126eac9b3b1d7ae23b3 trufflehog.tar.gz' | sha256sum --check; fi \
-    && tar -xzf trufflehog.tar.gz -C /usr/local/bin trufflehog
+    && tar -xzf trufflehog.tar.gz -C /usr/local/bin trufflehog \
+    && rm trufflehog.tar.gz
 
 # Install Python dependencies. These are necessary to run some of our base tooling.
 COPY requirements.txt /workdir/
 RUN curl -LsSf https://astral.sh/uv/0.9.10/install.sh | UV_INSTALL_DIR=/usr/local/bin UV_UNMANAGED_INSTALL=1 sh \
-    && uv pip install --system --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt
+    && uv pip install --system --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt \
+    && rm -rf /root/.cache/uv
 
 # Install extra tools not available in apt repositories.
 
@@ -87,7 +97,7 @@ RUN \
     # Newer docker compose versions change the output format in services.log,
     # making it hard to use a regex in ci_annotate_errors.py to tell which test
     # an error comes from.
-    && curl -fsSL https://github.com/docker/compose/releases/download/v2.15.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL https://github.com/docker/compose/releases/download/v5.0.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
     && curl -fsSL https://github.com/christian-korneck/docker-pushrm/releases/download/v1.9.0/docker-pushrm_linux_$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-pushrm \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
@@ -105,14 +115,10 @@ RUN \
     && rust/install.sh --components=cargo \
     && rm -rf rust.asc rust.tar.gz rust
 
-# Remove Ubuntu user causing UID collisions.
-# https://bugs.launchpad.net/cloud-images/+bug/2005129
-RUN userdel -r ubuntu
-
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
 # Stage 2: Build a full CI Builder image that can be used for any CI job.
-FROM ci-builder-min as ci-builder-full
+FROM ci-builder-min AS ci-builder-full
 
 ARG ARCH_GCC
 ARG ARCH_GO
@@ -120,7 +126,7 @@ ARG ARCH_GO
 WORKDIR /workdir
 
 # Install dependencies needed by any CI job. Not all of these are available in
-# the Ubuntu repositories.
+# the Debian repositories.
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     autoconf \
     automake \
@@ -130,7 +136,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     clang \
     cmake \
     curl \
-    docker.io \
+    docker-cli \
     gcc \
     g++ \
     gdb \
@@ -138,15 +144,15 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     gnupg2 \
     jq \
     lcov \
-    libc-dbg \
+    libc6-dbg \
     libclang-common-18-dev \
     libclang-dev \
-    libclang-rt-18-dev \
+    libclang-rt-19-dev \
     libpq-dev \
+    libxml2 \
     lld \
     llvm \
     make \
-    npm \
     openssh-client \
     pkg-config \
     postgresql-client \
@@ -162,18 +168,34 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
+# The `-22` here must match the LLVM version of the rustc in rust-version (root
+# Cargo.toml). Bump both together, or cross-language LTO fails to link (the
+# linker cannot read newer bitcode).
+COPY apt-llvm.asc .
+
+RUN gpg --dearmor < apt-llvm.asc > /etc/apt/keyrings/apt-llvm.gpg \
+    && rm apt-llvm.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] http://apt.llvm.org/trixie/ llvm-toolchain-trixie-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
+    && apt-get update \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    clang-22 \
+    lld-22 \
+    llvm-22 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
+
+RUN printf '#!/bin/sh\nexec /usr/bin/clang-22 --ld-path=/usr/bin/ld.lld-22 "$@"\n' > /usr/local/bin/clang-lld-22 \
+    && chmod +x /usr/local/bin/clang-lld-22
+
 # Install Node.js LTS, for our Python typechecker. This is up here because we don't
 # expect it to change often.
-
-COPY nodesource.asc .
-
-RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
-    && rm nodesource.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_25.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && corepack enable
 
 RUN curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.11.0/shellcheck \
@@ -219,6 +241,10 @@ RUN mkdir rust \
     && mkdir -p /usr/local/lib/rustlib/src/rust \
     && tar -xzf rust-src.tar.gz -C /usr/local/lib/rustlib/src/rust --strip-components=1 \
     && rm -f rust-src.asc rust-src.tar.gz \
+    # Trim Rust source tree: only library/ is needed (for cargo miri setup). \
+    # Delete compiler/, src/, tests/, tools/, etc. to save ~500-700 MB. \
+    && find /usr/local/lib/rustlib/src/rust -mindepth 1 -maxdepth 1 \
+        -type d ! -name library -exec rm -rf {} + \
     && case $RUST_COMPONENTS in *miri*) \
     PATH=$PATH:/root/.cargo/bin cargo miri setup \
     ;; \
@@ -228,17 +254,24 @@ RUN mkdir rust \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
     && rm -rf rust.asc rust.tar.gz rust \
-    && cargo install --root /usr/local --version "=0.8.2" --locked cargo-about \
-    && cargo install --root /usr/local --version "=3.6.2" --locked cargo-deb \
-    && cargo install --root /usr/local --version "=0.18.9" --locked cargo-deny \
+    && cargo install --root /usr/local --version "=0.9.0" --locked --features=cli cargo-about \
+    && cargo install --root /usr/local --version "=3.7.0" --locked cargo-deb \
+    && cargo install --root /usr/local --version "=0.19.8" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
-    && cargo install --root /usr/local --version "=0.9.36" --locked cargo-hakari \
-    && cargo install --root /usr/local --version "=0.9.114" --locked cargo-nextest \
-    && cargo install --root /usr/local --version "=0.6.21" --locked cargo-llvm-cov \
-    && cargo install --root /usr/local --version "=0.1.60" --locked --features=vendored-openssl cargo-udeps \
-    && cargo install --root /usr/local --version "=0.12.0" --locked --no-default-features --features=s3,openssl/vendored sccache \
+    && cargo install --root /usr/local --version "=0.9.137" --locked cargo-nextest \
+    && cargo install --root /usr/local --version "=0.8.7" --locked cargo-llvm-cov \
+    && cargo install --root /usr/local --version "=0.1.61" --locked --features=vendored-openssl cargo-udeps \
     && cargo install --root /usr/local --version "=0.4.0" --locked cargo-binutils \
-    && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack
+    && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack \
+    && if [ "$RUST_VERSION" = "nightly" ]; then \
+           # NOTE: no --locked, unlike the installs above. cargo-fuzz 0.13.1's \
+           # bundled Cargo.lock pins deps that fail on the pinned nightly \
+           # (yanked futures-util/zip, plus a crate using the perma-unstable \
+           # `rustc_layout_scalar_valid_range_*` attribute). Let cargo resolve \
+           # compatible versions instead. \
+           cargo install --root /usr/local --version "=0.13.1" cargo-fuzz; \
+       fi \
+    && rm -rf /cargo/registry /cargo/git
 
 # Shims for sanitizers
 COPY sanshim/$ARCH_GCC /sanshim
@@ -247,13 +280,15 @@ COPY sanshim/$ARCH_GCC /sanshim
 # so using the same command here should ensure it's installed and cached in the
 # right place
 COPY pyright-version.sh /workdir/
-RUN npx pyright@$(sh /workdir/pyright-version.sh) --help
+RUN npx pyright@$(sh /workdir/pyright-version.sh) --help \
+    && npm cache clean --force 2>/dev/null || true
 
 # Install APT repo generator.
 
 RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.8/deb-s3-0.11.8.gem > deb-s3.gem \
-    && gem install ./deb-s3.gem \
-    && rm deb-s3.gem
+    && gem install ./deb-s3.gem --no-document \
+    && rm deb-s3.gem \
+    && rm -rf /root/.local/share/gem/cache
 
 # Install the AWS CLI.
 
@@ -272,11 +307,19 @@ RUN arch_gcloud=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm/" -e "s/amd64/x86_64/
     && rm gcloud.tar.gz \
     && CLOUDSDK_CORE_DISABLE_PROMPTS=1 /opt/google-cloud-sdk/install.sh --path-update false \
     && /opt/google-cloud-sdk/bin/gcloud config set disable_usage_reporting false \
-    && /opt/google-cloud-sdk/bin/gcloud components install gke-gcloud-auth-plugin
+    && /opt/google-cloud-sdk/bin/gcloud components install gke-gcloud-auth-plugin \
+    # Clean up gcloud SDK: remove backup copies, bundled Python (system Python exists), caches \
+    && rm -rf /opt/google-cloud-sdk/.install/.backup \
+    && rm -rf /opt/google-cloud-sdk/platform/bundledpythonunix \
+    && find /opt/google-cloud-sdk -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true \
+    && rm -rf /root/.cache/pip
 
 # Install docs site dependencies. These are towards the end for the same reason
 # as the Python dependencies. These are only supported on x86_64 at the moment.
 # See: https://discourse.gohugo.io/t/how-to-install-hugo-extended-on-linux-arm/28098/4
+#
+# On every Hugo version bump, compare doc/user/layouts/sitemap.xml with the new
+# version's built-in sitemap template, which it copies, and port any changes.
 
 RUN if [ $ARCH_GCC = x86_64 ]; then \
     curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.17.0/htmltest_0.17.0_linux_amd64.tar.gz > htmltest.tar.gz \
@@ -291,16 +334,15 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
 
 # Install KinD, kubectl, helm & helm-docs
 
-# TODO(def-) Upgrading kind/kubectl seems to cause Cloudtest failures
-RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
     && chmod +x /usr/local/bin/kind \
-    && if [ $ARCH_GO = amd64 ]; then echo 'c72eda46430f065fb45c5f70e7c957cc9209402ef309294821978677c8fb3284 /usr/local/bin/kind' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo '03d45095dbd9cc1689f179a3e5e5da24b77c2d1b257d7645abf1b4174bebcf2a /usr/local/bin/kind' | sha256sum --check; fi
+    && if [ $ARCH_GO = amd64 ]; then echo '50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54 /usr/local/bin/kind' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d /usr/local/bin/kind' | sha256sum --check; fi
 
-RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
+RUN curl -fsSL https://dl.k8s.io/release/v1.34.10/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl \
-    && if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
+    && if [ $ARCH_GO = amd64 ]; then echo '95bd70842bd11a524d24acd5b68726899e3488e153e45e2b4ae846545beda050 /usr/local/bin/kubectl' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '52d3aeefea32fdfa3671ccd636be5da463ddfd0a2fc09d7bcbaedcff4c76cad5 /usr/local/bin/kubectl' | sha256sum --check; fi
 
 RUN curl -fsSL https://get.helm.sh/helm-v4.0.0-linux-$ARCH_GO.tar.gz > helm.tar.gz \
     && if [ $ARCH_GO = amd64 ]; then echo 'c77e9e7c1cc96e066bd240d190d1beed9a6b08060b2043ef0862c4f865eca08f helm.tar.gz' | sha256sum --check; fi \
@@ -346,28 +388,189 @@ RUN curl -fsSL https://amazon-inspector-sbomgen.s3.amazonaws.com/1.8.2/linux/$AR
     && if [ $ARCH_GO = arm64 ]; then echo '449a49e222a2bdffe0353435d7b04b0556b35a391c7b9714ce46d1a5382bc3e2 inspector-sbomgen.zip' | sha256sum --check; fi \
     && unzip inspector-sbomgen.zip \
     && mv inspector-sbomgen-1.8.2/linux/$ARCH_GO/inspector-sbomgen /usr/local/bin \
-    && chmod +x /usr/local/bin/inspector-sbomgen
+    && chmod +x /usr/local/bin/inspector-sbomgen \
+    && rm -rf inspector-sbomgen.zip inspector-sbomgen-1.8.2
 
 RUN arch_zizmor=$(echo "$ARCH_GCC" | sed -e "s/amd64/x86_64/") \
-    && curl -fsSL https://github.com/zizmorcore/zizmor/releases/download/v1.18.0/zizmor-$arch_zizmor-unknown-linux-gnu.tar.gz > zizmor.tar.gz \
-    && if [ $arch_zizmor = x86_64 ]; then echo '8e7901319ab7b71c38d6d388a48e02ff65791e5971b2ee6577c9b5c3ab44c65f zizmor.tar.gz' | sha256sum --check; fi \
-    && if [ $arch_zizmor = aarch64 ]; then echo '4cd5d20dc43398ee229d65cd32a68725d396fe2b423030fb6a9971100ce54da5 zizmor.tar.gz' | sha256sum --check; fi \
+    && curl -fsSL https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-$arch_zizmor-unknown-linux-gnu.tar.gz > zizmor.tar.gz \
+    && if [ $arch_zizmor = x86_64 ]; then echo 'e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a zizmor.tar.gz' | sha256sum --check; fi \
+    && if [ $arch_zizmor = aarch64 ]; then echo '7ff1dce33bdd18fd2a4affe63bdd47efcccca97b2cec1c1863ec26e9e2647540 zizmor.tar.gz' | sha256sum --check; fi \
     && tar xvf zizmor.tar.gz \
-    && mv zizmor /usr/local/bin
+    && mv zizmor /usr/local/bin \
+    && rm zizmor.tar.gz
+
+# Install a pinned libduckdb for libduckdb-sys to link against via
+# `DUCKDB_LIB_DIR`, so builds don't download it. The testdrive image copies it
+# from here (`builder-files` in src/testdrive/ci/mzbuild.yml). The version must
+# match the libduckdb-sys crate (1.MAJOR_MINOR_PATCH.x encodes DuckDB
+# MAJOR.MINOR.PATCH), which bin/lint-versions checks. ldconfig makes it
+# loadable by test binaries, since Cargo only adds library paths inside the
+# target dir to their search path.
+RUN curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.5.6/libduckdb-linux-$ARCH_GO.zip > libduckdb.zip \
+    && if [ $ARCH_GO = amd64 ]; then echo 'b845005f5132a7d8180057c35e14a7626632258782f871a90861b19c1c03841b libduckdb.zip' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'b72ed9f05003f5e9d2015f7ceada6416b377d9dd33169cdde3c9e33897856eee libduckdb.zip' | sha256sum --check; fi \
+    && unzip libduckdb.zip libduckdb.so -d /usr/local/lib \
+    && ldconfig \
+    && rm libduckdb.zip
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
 ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
-ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-Wl,-O3 -Clink-arg=-fuse-ld=lld -Csymbol-mangling-version=v0 -Ctarget-cpu=$RUST_CPU_TARGET -Ctarget-feature=$RUST_TARGET_FEATURES --cfg=tokio_unstable"
+ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zstd -Clink-arg=-Wl,-O3 -Clink-arg=-fuse-ld=lld -Clink-arg=-Wl,--icf=all -Csymbol-mangling-version=v0 -Ctarget-cpu=$RUST_CPU_TARGET -Ctarget-feature=$RUST_TARGET_FEATURES --cfg=tokio_unstable"
 ENV PATH=/opt/google-cloud-sdk/bin:$PATH
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=1
 ENV HELM_PLUGINS=/usr/local/share/helm/plugins
+ENV DUCKDB_LIB_DIR=/usr/local/lib
 
 # Set up for a persistent volume to hold Cargo metadata, so that crate metadata
 # does not need to be refetched on every compilation.
 ENV CARGO_HOME=/cargo
 RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
+
+# Stage 3: Build a lightweight CI Builder image for console/playwright jobs.
+FROM debian:13-slim AS ci-builder-console
+
+ARG ARCH_GCC
+ARG ARCH_GO
+
+WORKDIR /workdir
+
+ENV RUST_BACKTRACE=1
+ENV PYTHONUNBUFFERED=1
+ENV MZ_DEV_CI_BUILDER=1
+ENV DOCKER_BUILDKIT=1
+
+ARG XZ_OPT=-T0
+
+RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    dnsmasq \
+    docker-cli \
+    eatmydata \
+    gettext-base \
+    git \
+    gnupg2 \
+    jq \
+    libatomic1 \
+    openssh-client \
+    perl \
+    python3 \
+    python3-venv \
+    python-is-python3 \
+    sudo \
+    libasound2t64 \
+    libatk1.0-0t64 \
+    libatk-bridge2.0-0t64 \
+    libatspi2.0-0t64 \
+    libcairo2 \
+    libcups2t64 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libx11-6 \
+    libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    gstreamer1.0-libav \
+    libcairo-gobject2 \
+    libenchant-2-2 \
+    libepoxy0 \
+    libevent-2.1-7t64 \
+    libflite1 \
+    libgdk-pixbuf-2.0-0 \
+    libgles2 \
+    libgstreamer1.0-0 \
+    libgstreamer-gl1.0-0 \
+    libgstreamer-plugins-bad1.0-0 \
+    libgstreamer-plugins-base1.0-0 \
+    libgtk-3-0t64 \
+    libharfbuzz-icu0 \
+    libhyphen0 \
+    libicu76 \
+    libjpeg62-turbo \
+    liblcms2-2 \
+    libmanette-0.2-0 \
+    libopus0 \
+    libpangocairo-1.0-0 \
+    libsecret-1-0 \
+    libvpx9 \
+    libwebp7 \
+    libwebpdemux2 \
+    libwoff1 \
+    libxml2 \
+    libxslt1.1 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/* \
+    && sed -i 's/^UID_MIN.*/UID_MIN\t500/' /etc/login.defs
+
+RUN curl -fsSL https://github.com/MaterializeInc/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
+    | tar xz -C / --strip-components 1
+
+RUN mkdir -p /usr/local/lib/docker/cli-plugins \
+    && curl -fsSL https://github.com/docker/compose/releases/download/v5.0.1/docker-compose-linux-$ARCH_GCC > /usr/local/lib/docker/cli-plugins/docker-compose \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL https://github.com/docker/buildx/releases/download/v0.30.1/buildx-v0.30.1.linux-$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-buildx \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
+
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && corepack enable
+
+RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+    && chmod +x /usr/local/bin/kind \
+    && if [ $ARCH_GO = amd64 ]; then echo '50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54 /usr/local/bin/kind' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d /usr/local/bin/kind' | sha256sum --check; fi
+
+RUN curl -fsSL https://dl.k8s.io/release/v1.34.10/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && if [ $ARCH_GO = amd64 ]; then echo '95bd70842bd11a524d24acd5b68726899e3488e153e45e2b4ae846545beda050 /usr/local/bin/kubectl' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '52d3aeefea32fdfa3671ccd636be5da463ddfd0a2fc09d7bcbaedcff4c76cad5 /usr/local/bin/kubectl' | sha256sum --check; fi
+
+# Use Helm 3 (not 4) because the cloud repo's bin/kind-create uses relative
+# file paths for vendored charts, which Helm 4 rejects as invalid URLs.
+RUN curl -fsSL https://get.helm.sh/helm-v3.16.2-linux-$ARCH_GO.tar.gz > helm.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo '9318379b847e333460d33d291d4c088156299a26cd93d570a7f5d0c36e50b5bb helm.tar.gz' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '1888301aeb7d08a03b6d9f4d2b73dcd09b89c41577e80e3455c113629fc657a4 helm.tar.gz' | sha256sum --check; fi \
+    && tar -xf helm.tar.gz -C /usr/local/bin --strip-components=1 linux-$ARCH_GO/helm \
+    && rm helm.tar.gz
+
+# Install just cargo (no rustc) — cloud scripts use it to read crate metadata.
+COPY rust.asc .
+
+ARG RUST_DATE
+ARG RUST_VERSION
+
+RUN gpg --import rust.asc \
+    && rm rust.asc \
+    && echo "trusted-key 85AB96E6FA1BE5FE" >> ~/.gnupg/gpg.conf \
+    && mkdir rust \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-$ARCH_GCC-unknown-linux-gnu.tar.gz > rust.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-$RUST_VERSION-$ARCH_GCC-unknown-linux-gnu.tar.gz.asc > rust.asc \
+    && gpg --verify rust.asc rust.tar.gz \
+    && tar -xzf rust.tar.gz -C rust --strip-components=1 \
+    && rust/install.sh --components=cargo \
+    && rm -rf rust.asc rust.tar.gz rust
+
+COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
+
+# Allow passwordless sudo for the CI user (created at runtime by autouseradd).
+RUN echo "ALL ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ci \
+    && chmod 0440 /etc/sudoers.d/ci
+
+ENTRYPOINT ["autouseradd", "--user", "materialize"]

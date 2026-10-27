@@ -1,0 +1,457 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# -----------------------------------------------------------------------------
+# Tests for LIR-level temporal bucketing applied to the *input arrangement*
+# of `Reduce`. See `agent-notes/temporal-bucketing-reduce/plan.md`.
+#
+# Without the `input_bucketing_strategy` field, a `Temporal Filter ->
+# GroupAggregate` pattern would have no LIR node to attach bucketing to,
+# because `Reduce` builds its internal arrangement inside `render_reduce`
+# via `KeyValPlan`, bypassing `ensure_collections`.
+# -----------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE events (k INT NOT NULL, event_time TIMESTAMP NOT NULL);
+
+# Firing: temporal filter directly above a GROUP BY in a materialized view.
+# Lowering should set `input_bucketing_strategy=TemporalBucketing` on the Reduce.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW mv_firing AS
+SELECT k, count(*)
+FROM events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+GROUP BY k;
+----
+materialize.public.mv_firing:
+  Reduce::Accumulable
+    simple_aggrs[0]=(0, count(*))
+    temporal_bucketing_strategy=TemporalBucketing
+    key_plan=id
+    val_plan
+      project=(#1)
+      map=(true)
+    Get::Collection materialize.public.events
+      raw=true
+
+Source materialize.public.events
+  project=(#0)
+  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+
+Target cluster: quickstart
+
+EOF
+
+# Idempotency: a temporal-filter view materialized as an index already absorbs
+# the future-update flag. A downstream Reduce reading from the indexed `Get`
+# must NOT re-bucket; the pretty-printer omits `input_bucketing_strategy` when
+# it is the default `Direct`.
+statement ok
+CREATE VIEW v_recent AS
+SELECT k FROM events WHERE event_time + INTERVAL '45 day' > mz_now();
+
+statement ok
+CREATE DEFAULT INDEX ON v_recent;
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW mv_idempotent AS
+SELECT k, count(*) FROM v_recent GROUP BY k;
+----
+materialize.public.mv_idempotent:
+  Reduce::Accumulable
+    simple_aggrs[0]=(0, count(*))
+    input_key=#0{k}
+    key_plan=id
+    val_plan
+      project=(#1)
+      map=(true)
+    Get::PassArrangements materialize.public.v_recent
+      raw=false
+      arrangements[0]={ key=[#0{k}], permutation=id, thinning=() }
+
+Used Indexes:
+  - materialize.public.v_recent_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Nested aggregation: an inner Reduce::Hierarchical sits directly above a
+# temporal-filter MFP and gets bucketed. The outer `count(*)` Reduce is
+# optimized away here, but the test still pins down that the inner Reduce
+# gets `input_bucketing_strategy=TemporalBucketing`.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW mv_rearm AS
+SELECT bucket, count(*) FROM (
+  SELECT k AS bucket, count(*) AS n, max(event_time) AS m
+  FROM events
+  WHERE event_time + INTERVAL '45 day' > mz_now()
+  GROUP BY k
+) sub
+WHERE m + INTERVAL '1 day' > mz_now()
+GROUP BY bucket;
+----
+materialize.public.mv_rearm:
+  Mfp
+    project=(#0, #2)
+    map=(1)
+    TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{m} + 1 day))
+    input_key=#0
+    Reduce::Hierarchical
+      aggr_funcs=[max]
+      buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
+      temporal_bucketing_strategy=TemporalBucketing
+      key_plan
+        project=(#0)
+      val_plan
+        project=(#1)
+      Get::Collection materialize.public.events
+        raw=true
+
+Source materialize.public.events
+  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+
+Target cluster: quickstart
+
+EOF
+
+# -----------------------------------------------------------------------------
+# Tests for extended LIR-level temporal bucketing on TopK, Union, and
+# Threshold (follow-up to the Reduce-only commit). See
+# `agent-notes/temporal-bucketing-reduce/increase-coverage.md`.
+# -----------------------------------------------------------------------------
+
+# TopK firing: temporal filter directly under a `SELECT ... ORDER BY ... LIMIT`.
+# Lowering should set `temporal_bucketing_strategy=TemporalBucketing` on the
+# TopK and clear the future-updates flag at that site so the parent does not
+# also bucket.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW mv_topk_firing AS
+SELECT k, event_time
+FROM events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+ORDER BY event_time
+LIMIT 5;
+----
+materialize.public.mv_topk_firing:
+  TopK::Basic order_by=[#1 asc nulls_last] limit=5
+    temporal_bucketing_strategy=TemporalBucketing
+    Get::Collection materialize.public.events
+      raw=true
+
+Source materialize.public.events
+  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+
+Target cluster: quickstart
+
+EOF
+
+# TopK idempotency: when the input is an already-bucketed indexed view, the
+# TopK should NOT re-bucket; the pretty-printer omits the field when it is
+# `Direct`.
+statement ok
+CREATE VIEW v_topk_input AS
+SELECT k, event_time FROM events WHERE event_time + INTERVAL '45 day' > mz_now();
+
+statement ok
+CREATE DEFAULT INDEX ON v_topk_input;
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW mv_topk_idempotent AS
+SELECT k, event_time FROM v_topk_input ORDER BY event_time LIMIT 5;
+----
+materialize.public.mv_topk_idempotent:
+  TopK::Basic order_by=[#1 asc nulls_last] limit=5
+    ArrangeBy
+      input_key=[#0{k}, #1{event_time}]
+      raw=true
+      Get::PassArrangements materialize.public.v_topk_input
+        raw=false
+        arrangements[0]={ key=[#0{k}, #1{event_time}], permutation=id, thinning=() }
+
+Used Indexes:
+  - materialize.public.v_topk_input_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# Union firing: `EXCEPT ALL` lowers to a `Union` over a `Negate` input, which
+# triggers consolidation. With at least one input carrying future updates,
+# the per-input `temporal_bucketing_strategies` should include
+# `TemporalBucketing`.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW mv_union_firing AS
+SELECT k FROM events WHERE event_time + INTERVAL '45 day' > mz_now()
+EXCEPT ALL
+SELECT k FROM events WHERE event_time + INTERVAL '90 day' > mz_now();
+----
+materialize.public.mv_union_firing:
+  Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+    ArrangeBy
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      Union consolidate_output=true
+        temporal_bucketing_strategies=[TemporalBucketing, TemporalBucketing]
+        Get::Collection materialize.public.events
+          project=(#0)
+          TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
+          raw=true
+        Negate
+          Get::Collection materialize.public.events
+            project=(#0)
+            TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 90 days))
+            raw=true
+
+Target cluster: quickstart
+
+EOF
+
+# `EXCEPT` (distinct) lowers to `Distinct -> Union -> Threshold`, so each leg
+# already terminates in a `Reduce::Distinct` that consumes the future-updates
+# flag itself (via the precursor `Reduce`-input bucketing). By the time data
+# reaches the `Union` and `Threshold`, `has_future_updates` is already cleared,
+# so neither the `Union` per-input strategies nor the `Threshold` synthetic
+# `ArrangeBy` wrap fire as bucketing sites here -- bucketing lands on the
+# inner `Reduce::Distinct` operators instead.
+#
+# This means the `Threshold` flag-clear code in `lowering.rs` is currently
+# unreachable from any SQL surface (`EXCEPT` strips the flag via `Distinct`;
+# `EXCEPT ALL` consumes it at the consolidating `Union` per-input bucketing).
+# We keep the `Threshold` flag-clear logic as defense-in-depth for future MIR
+# producers, but no fixture exercises it.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW mv_except_distinct_buckets_at_reduce AS
+SELECT k FROM events WHERE event_time + INTERVAL '45 day' > mz_now()
+EXCEPT
+SELECT k FROM events WHERE event_time + INTERVAL '90 day' > mz_now();
+----
+materialize.public.mv_except_distinct_buckets_at_reduce:
+  Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+    ArrangeBy
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      Union consolidate_output=true
+        ArrangeBy
+          input_key=[#0]
+          raw=true
+          Reduce::Distinct
+            temporal_bucketing_strategy=TemporalBucketing
+            key_plan=id
+            val_plan
+              project=()
+            Get::Collection materialize.public.events
+              project=(#0)
+              TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
+              raw=true
+        Negate
+          ArrangeBy
+            input_key=[#0]
+            raw=true
+            Reduce::Distinct
+              temporal_bucketing_strategy=TemporalBucketing
+              key_plan=id
+              val_plan
+                project=()
+              Get::Collection materialize.public.events
+                project=(#0)
+                TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 90 days))
+                raw=true
+
+Target cluster: quickstart
+
+EOF
+
+# -----------------------------------------------------------------------------
+# Runtime tests. These assert that the bucketed dataflows still produce the
+# correct logical results. There is one fixture per site that applies
+# bucketing, because each site hands the bucketer a differently shaped stream:
+# the keyed `(key, val)` stream in `render_reduce`, the TopK input, a
+# consolidating `Union` whose legs carry different strategies, and the
+# arrangement loop in `ensure_collections`.
+# -----------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE rt_events (k INT NOT NULL, event_time TIMESTAMP NOT NULL)
+
+# Far-future event times so the temporal predicates hold regardless of the
+# wall clock at query time, keeping the results deterministic. The k=4 row
+# expired long ago, so every fixture must drop it: its retraction time precedes
+# the dataflow's as_of, which is the case a leaking bucketer would get wrong.
+statement ok
+INSERT INTO rt_events VALUES
+  (1, '2999-01-01 00:00:00'),
+  (1, '2999-01-02 00:00:00'),
+  (2, '2999-01-03 00:00:00'),
+  (3, '2999-01-04 00:00:00'),
+  (4, '2000-01-01 00:00:00')
+
+statement ok
+CREATE TABLE rt_other (k INT NOT NULL)
+
+statement ok
+INSERT INTO rt_other VALUES (2), (99)
+
+# Bucketed Reduce: temporal filter above a GROUP BY. `render_reduce` buckets the
+# keyed `(key, val)` stream itself, so this reaches `reduce.rs` rather than
+# either arrangement site.
+statement ok
+CREATE MATERIALIZED VIEW rt_reduce AS
+SELECT k, count(*)
+FROM rt_events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+GROUP BY k
+
+query II rowsort
+SELECT * FROM rt_reduce
+----
+1  2
+2  1
+3  1
+
+# Bucketed TopK: temporal filter under ORDER BY ... LIMIT. Buckets the TopK
+# input in `top_k.rs`.
+statement ok
+CREATE MATERIALIZED VIEW rt_topk AS
+SELECT k
+FROM rt_events
+WHERE event_time + INTERVAL '45 day' > mz_now()
+ORDER BY event_time
+LIMIT 3
+
+query I rowsort
+SELECT * FROM rt_topk
+----
+1
+1
+2
+
+# Mixed Union: `EXCEPT ALL` of a temporal-filtered leg (bucketed) against a
+# plain relation (Direct) lowers to a consolidating `Union` with per-input
+# strategies `[TemporalBucketing, Direct]`, so `concat_many` sees one bucketed
+# leg and one that skipped the bucketer.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW rt_union AS
+SELECT k FROM rt_events WHERE event_time + INTERVAL '45 day' > mz_now()
+EXCEPT ALL
+SELECT k FROM rt_other
+----
+materialize.public.rt_union:
+  Threshold::Basic ensure_arrangement={ key=[#0], permutation=id, thinning=() }
+    ArrangeBy
+      raw=false
+      arrangements[0]={ key=[#0], permutation=id, thinning=() }
+      Union consolidate_output=true
+        temporal_bucketing_strategies=[TemporalBucketing, Direct]
+        Get::Collection materialize.public.rt_events
+          raw=true
+        Negate
+          Get::PassArrangements materialize.public.rt_other
+            raw=true
+
+Source materialize.public.rt_events
+  project=(#0)
+  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+Source materialize.public.rt_other
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+CREATE MATERIALIZED VIEW rt_union AS
+SELECT k FROM rt_events WHERE event_time + INTERVAL '45 day' > mz_now()
+EXCEPT ALL
+SELECT k FROM rt_other
+
+query I rowsort
+SELECT * FROM rt_union
+----
+1
+1
+3
+
+# Bucketed arrangement: an index on a temporal-filtered view. `ensure_collections`
+# buckets in the loop that builds the requested arrangements, and hands the result
+# to `arrange_collection`. The index is the terminal consumer, so this covers the
+# bucketer feeding the arrangement and not the passthrough collection, which has
+# no reader in this shape. The plan is pinned because the site is only reached
+# while the `ArrangeBy` carries `strategy=TemporalBucketing`.
+statement ok
+CREATE VIEW rt_indexed AS
+SELECT k FROM rt_events WHERE event_time + INTERVAL '45 day' > mz_now()
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
+CREATE DEFAULT INDEX ON rt_indexed
+----
+materialize.public.rt_indexed_primary_idx:
+  ArrangeBy
+    strategy=TemporalBucketing
+    raw=true
+    arrangements[0]={ key=[#0{k}], permutation=id, thinning=() }
+    Get::PassArrangements materialize.public.rt_indexed
+      raw=true
+
+materialize.public.rt_indexed:
+  Get::Collection materialize.public.rt_events
+    raw=true
+
+Source materialize.public.rt_events
+  project=(#0)
+  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+CREATE DEFAULT INDEX ON rt_indexed
+
+query I rowsort
+SELECT k FROM rt_indexed
+----
+1
+1
+2
+3
+
+# A single-time SUBSCRIBE (`AS OF` the maximum timestamp, no `UP TO`) keeps `mz_now()`
+# symbolic. Over a monotonic source, its TopK turns monotonic with consolidation relaxed,
+# so it must not also keep `TemporalBucketing`, or `render_topk` trips a soft assertion.
+
+statement ok
+CREATE SOURCE rt_counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '20ms', UP TO 5)
+
+statement ok
+CREATE TABLE rt_counter_tbl FROM SOURCE rt_counter
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE rt_c CURSOR FOR SUBSCRIBE (
+  SELECT counter FROM rt_counter_tbl WHERE mz_now() < counter LIMIT 5
+) AS OF 18446744073709551615
+
+statement ok
+FETCH ALL rt_c WITH (timeout = '5s')
+
+statement ok
+COMMIT

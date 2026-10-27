@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE insert_same_table (f1 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE insert_same_table REPLICA IDENTITY FULL;
 INSERT INTO insert_same_table VALUES (0);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.insert_same_table
 

@@ -52,7 +52,7 @@ mv_div_by_zero   r1 1
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
 idx1_div_by_zero r1 3
-idx2_div_by_zero r1 3
+idx2_div_by_zero r1 1
 mv_div_by_zero   r1 3
 
 > DELETE FROM zeros
@@ -73,7 +73,7 @@ mv_div_by_zero   r1 3
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
 idx1_div_by_zero r1 2
-idx2_div_by_zero r1 2
+idx2_div_by_zero r1 1
 mv_div_by_zero   r1 2
 
 > ALTER CLUSTER test SET (REPLICATION FACTOR 2)
@@ -85,8 +85,8 @@ mv_div_by_zero   r1 2
   WHERE c.count != 0
 idx1_div_by_zero r1 2
 idx1_div_by_zero r2 2
-idx2_div_by_zero r1 2
-idx2_div_by_zero r2 2
+idx2_div_by_zero r1 1
+idx2_div_by_zero r2 1
 mv_div_by_zero   r1 2
 mv_div_by_zero   r2 2
 
@@ -100,7 +100,7 @@ mv_div_by_zero   r2 2
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
 idx1_div_by_zero r1 2
-idx2_div_by_zero r1 2
+idx2_div_by_zero r1 1
 mv_div_by_zero   r1 2
 
 # Test that error logging is retracted when objects are dropped.
@@ -112,7 +112,7 @@ mv_div_by_zero   r1 2
   JOIN mz_objects o ON c.object_id = o.id
   JOIN mz_cluster_replicas r ON c.replica_id = r.id
   WHERE c.count != 0
-idx2_div_by_zero r1 2
+idx2_div_by_zero r1 1
 mv_div_by_zero   r1 2
 
 > DROP MATERIALIZED VIEW mv_div_by_zero

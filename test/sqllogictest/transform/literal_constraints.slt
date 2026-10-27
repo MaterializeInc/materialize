@@ -162,7 +162,7 @@ Explained Query:
   With
     cte l0 =
       Reduce::Accumulable
-        simple_aggrs[0]=(0, 0, count(*))
+        simple_aggrs[0]=(0, count(*))
         key_plan=id
         val_plan
           project=(#0)
@@ -225,6 +225,10 @@ Used Indexes:
   - materialize.public.idx_t1_a_b (*** full scan ***)
 
 Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
 
@@ -1024,7 +1028,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE v = 'xxx';
 ----
 Explained Query (fast path):
-  Project (#1{a}..=#4{v})
+  Project (#1{a}..=#3{c}, #0{v})
     ReadIndex on=materialize.public.foo idx_foo_v_cast=[lookup value=("xxx")]
 
 Used Indexes:
@@ -1260,17 +1264,17 @@ WHERE (a,b,c) IN ((15, 16, 17), (25, 26, 111), (35, 36, 111));
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[sum((((#0{a} * #1{b}) * #2{c}) * #3{d}))] // { arity: 1, types: "(bigint?)", keys: "([])" }
-        Project (#0{a}..=#3{d}) // { arity: 4, types: "(integer, integer, integer, integer?)", keys: "([1], [2])" }
-          ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(integer, integer, integer, integer?, integer, integer, integer)", keys: "([1], [2])" }
-  Return // { arity: 1, types: "(bigint?)", keys: "([])" }
-    Union // { arity: 1, types: "(bigint?)", keys: "([])" }
-      Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
-      Map (null) // { arity: 1, types: "(bigint?)", keys: "()" }
+      Reduce aggregates=[sum((((#0{a} * #1{b}) * #2{c}) * #3{d}))] // { arity: 1, types: "(r_int64?)", keys: "([])" }
+        Project (#0{a}..=#3{d}) // { arity: 4, types: "(r_int32, r_int32, r_int32, r_int32?)", keys: "([1], [2])" }
+          ReadIndex on=materialize.public.t4 idx_t4_a_b_c=[lookup values=[(15, 16, 17); (25, 26, 111); (35, 36, 111)]] // { arity: 7, types: "(r_int32, r_int32, r_int32, r_int32?, r_int32, r_int32, r_int32)", keys: "([1], [2])" }
+  Return // { arity: 1, types: "(r_int64?)", keys: "([])" }
+    Union // { arity: 1, types: "(r_int64?)", keys: "([])" }
+      Get l0 // { arity: 1, types: "(r_int64?)", keys: "([])" }
+      Map (null) // { arity: 1, types: "(r_int64?)", keys: "()" }
         Union // { arity: 0, types: "()", keys: "()" }
           Negate // { arity: 0, types: "()", keys: "()" }
             Project () // { arity: 0, types: "()", keys: "([])" }
-              Get l0 // { arity: 1, types: "(bigint?)", keys: "([])" }
+              Get l0 // { arity: 1, types: "(r_int64?)", keys: "([])" }
           Constant // { arity: 0, types: "()", keys: "([])" }
             - ()
 
@@ -1412,3 +1416,77 @@ LIMIT 3 OFFSET 1;
 2  l2
 1  a
 1  l1
+
+# Regression test: `text_to_"char"` and `text_to_bytea` are non-injective and
+# must NOT be treated as uniqueness-preserving by cast inversion in
+# `invert_casts_on_expr_eq_literal_inner` (called from `CanonicalizeMfp` and
+# `literal_constraints`). Otherwise `f(col) = lit` is rewritten to
+# `col = f_inv(lit)` where `f_inv` collapses distinct literals, returning rows
+# whose `col::text` does not actually equal the literal.
+
+statement ok
+CREATE TABLE t_char_cast (c "char")
+
+statement ok
+INSERT INTO t_char_cast VALUES ('a'::"char")
+
+statement ok
+CREATE DEFAULT INDEX ON t_char_cast
+
+# 'a'::"char"::text = 'a' which does NOT equal 'abc' — expect 0 rows.
+query T rowsort
+SELECT c FROM t_char_cast WHERE c::text = 'abc'
+----
+
+# Sanity check: the truthful predicate still matches.
+query T rowsort
+SELECT c FROM t_char_cast WHERE c::text = 'a'
+----
+a
+
+statement ok
+CREATE TABLE t_bytea_cast (b bytea)
+
+statement ok
+INSERT INTO t_bytea_cast VALUES (E'\\x41'::bytea)
+
+statement ok
+CREATE DEFAULT INDEX ON t_bytea_cast
+
+# bytea_to_text always formats as hex ('\x41'), so b::text != 'A' — expect 0 rows.
+query T rowsort
+SELECT b FROM t_bytea_cast WHERE b::text = 'A'
+----
+
+# Sanity check: hex-formatted literal that round-trips truthfully.
+# (Sqllogictest formats a one-byte bytea 0x41 as the raw byte, i.e. `A`.)
+query T rowsort
+SELECT b FROM t_bytea_cast WHERE b::text = '\x41'
+----
+A
+
+# Regression test: `uint4_to_uint2`, `uint4_to_smallint`, and `uint4_to_integer`
+# are injective but partial (they error for `u32` values above the target range).
+# Cast inversion in `invert_casts_on_expr_eq_literal_inner` must NOT rewrite
+# `cast(col) = lit` into an `IndexedFilter` lookup on `col`, because the lookup
+# skips the cast and silently drops the out-of-range error. Each query below must
+# error on the row 3000000000, not complete with it filtered out. The literals
+# are typed to the target so the cast stays single-layered and the rewrite fires.
+
+statement ok
+CREATE TABLE t_uint_cast (u uint4)
+
+statement ok
+INSERT INTO t_uint_cast VALUES (3000000000)
+
+statement ok
+CREATE DEFAULT INDEX ON t_uint_cast
+
+query error "3000000000" integer out of range
+SELECT u FROM t_uint_cast WHERE u::int4 = 5
+
+query error "3000000000" smallint out of range
+SELECT u FROM t_uint_cast WHERE u::int2 = 5::int2
+
+query error "3000000000" uint2 out of range
+SELECT u FROM t_uint_cast WHERE u::uint2 = 5::uint2

@@ -31,7 +31,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use futures::Stream;
 use futures_util::StreamExt;
 use itertools::Itertools;
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_panic_or_log;
@@ -41,7 +41,7 @@ use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::arrow::{ArrayBound, ProtoArrayData};
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
 use mz_persist_types::schema::{SchemaId, backward_compatible};
-use mz_persist_types::{Codec, Codec64, Opaque};
+use mz_persist_types::{Codec, Codec64};
 use mz_proto::ProtoType;
 use mz_proto::RustType;
 use proptest_derive::Arbitrary;
@@ -54,10 +54,10 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 use uuid::Uuid;
 
-use crate::critical::CriticalReaderId;
+use crate::critical::{CriticalReaderId, Opaque};
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{
-    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, parse_id,
+    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataKey, MetadataMap, parse_id,
 };
 use crate::internal::gc::GcReq;
 use crate::internal::machine::retry_external;
@@ -92,6 +92,7 @@ pub(crate) const ROLLUP_THRESHOLD: Config<usize> = Config::new(
     "persist_rollup_threshold",
     128,
     "The number of seqnos between rollups.",
+    ParameterScope::Environment,
 );
 
 /// Determines how long to wait before an active rollup is considered
@@ -100,6 +101,7 @@ pub(crate) const ROLLUP_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
     "persist_rollup_fallback_threshold_ms",
     5000,
     "The number of milliseconds before a worker claims an already claimed rollup.",
+    ParameterScope::Environment,
 );
 
 /// Feature flag the new active rollup tracking mechanism.
@@ -108,6 +110,7 @@ pub(crate) const ROLLUP_USE_ACTIVE_ROLLUP: Config<bool> = Config::new(
     "persist_rollup_use_active_rollup",
     true,
     "Whether to use the new active rollup tracking mechanism.",
+    ParameterScope::Environment,
 );
 
 /// Determines how long to wait before an active GC is considered
@@ -116,6 +119,7 @@ pub(crate) const GC_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
     "persist_gc_fallback_threshold_ms",
     900000,
     "The number of milliseconds before a worker claims an already claimed GC.",
+    ParameterScope::Environment,
 );
 
 /// See the config description string.
@@ -123,6 +127,7 @@ pub(crate) const GC_MIN_VERSIONS: Config<usize> = Config::new(
     "persist_gc_min_versions",
     32,
     "The number of un-GCd versions that may exist in state before we'll trigger a GC.",
+    ParameterScope::Environment,
 );
 
 /// See the config description string.
@@ -130,6 +135,7 @@ pub(crate) const GC_MAX_VERSIONS: Config<usize> = Config::new(
     "persist_gc_max_versions",
     128_000,
     "The maximum number of versions to GC in a single GC run.",
+    ParameterScope::Environment,
 );
 
 /// Feature flag the new active GC tracking mechanism.
@@ -138,12 +144,14 @@ pub(crate) const GC_USE_ACTIVE_GC: Config<bool> = Config::new(
     "persist_gc_use_active_gc",
     false,
     "Whether to use the new active GC tracking mechanism.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const ENABLE_INCREMENTAL_COMPACTION: Config<bool> = Config::new(
     "persist_enable_incremental_compaction",
-    false,
+    true,
     "Whether to enable incremental compaction.",
+    ParameterScope::Environment,
 );
 
 /// A token to disambiguate state commands that could not otherwise be
@@ -200,24 +208,12 @@ pub struct LeasedReaderState<T> {
     pub debug: HandleDebugState,
 }
 
-#[derive(Arbitrary, Clone, Debug, PartialEq, Serialize)]
-#[serde(into = "u64")]
-pub struct OpaqueState(pub [u8; 8]);
-
-impl From<OpaqueState> for u64 {
-    fn from(value: OpaqueState) -> Self {
-        u64::from_le_bytes(value.0)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CriticalReaderState<T> {
     /// The since capability of this reader.
     pub since: Antichain<T>,
     /// An opaque token matched on by compare_and_downgrade_since.
-    pub opaque: OpaqueState,
-    /// The [Codec64] used to encode [Self::opaque].
-    pub opaque_codec: String,
+    pub opaque: Opaque,
     /// For debugging.
     pub debug: HandleDebugState,
 }
@@ -694,9 +690,12 @@ impl<T: Timestamp + Codec64 + Sync> RunPart<T> {
                     yield Cow::Borrowed(p);
                 }
                 RunPart::Many(r) => {
-                    let fetched = r.get(shard_id, blob, metrics).await.ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                    let fetched = r.get(shard_id, blob, metrics).await
+                        .ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
                     for run_part in fetched.parts {
-                        for await batch_part in run_part.part_stream(shard_id, blob, metrics).boxed() {
+                        for await batch_part in
+                            run_part.part_stream(shard_id, blob, metrics).boxed()
+                        {
                             yield Cow::Owned(batch_part?.into_owned());
                         }
                     }
@@ -824,6 +823,30 @@ pub struct RunMeta {
     /// Additional unstructured metadata.
     #[serde(skip_serializing_if = "MetadataMap::is_empty")]
     pub(crate) meta: MetadataMap,
+}
+
+/// Metadata key for [RunMeta::bounds_truncated].
+const RUN_META_BOUNDS_TRUNCATED: MetadataKey<bool> = MetadataKey::new("truncated");
+
+impl RunMeta {
+    /// Whether this run's parts may hold updates outside the registered desc
+    /// of the batch that contains them.
+    ///
+    /// Set when a batch is appended under a desc narrower than the one it was
+    /// written with (truncation). Readers filter such updates out against the
+    /// registered desc, but per-part statistics like `diffs_sum` are computed
+    /// at write time over everything physically in the part, so accounting
+    /// that compares those statistics against data seen through a read must
+    /// skip runs with this bit set.
+    pub(crate) fn bounds_truncated(&self) -> bool {
+        self.meta.get(RUN_META_BOUNDS_TRUNCATED).unwrap_or(false)
+    }
+
+    /// Marks this run as possibly holding updates outside its batch's
+    /// registered desc. See [Self::bounds_truncated].
+    pub(crate) fn set_bounds_truncated(&mut self) {
+        self.meta.set(RUN_META_BOUNDS_TRUNCATED, true);
+    }
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -1027,15 +1050,15 @@ impl<T> HollowBatch<T> {
             run_splits.is_strictly_sorted(),
             "run indices should be strictly increasing"
         );
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             run_splits.first().map_or(true, |i| *i > 0),
             "run indices should be positive"
         );
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             run_splits.last().map_or(true, |i| *i < parts.len()),
             "run indices should be valid indices into parts"
         );
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             parts.is_empty() || run_meta.len() == run_splits.len() + 1,
             "all metadata should correspond to a run"
         );
@@ -1170,7 +1193,7 @@ impl<T: Timestamp + TotalOrder> HollowBatch<T> {
             return Err(format!(
                 "batch since {:?} != minimum antichain {:?}",
                 self.desc.since().elements(),
-                &[T::minimum()],
+                [T::minimum()],
             ));
         }
         for part in self.parts.iter() {
@@ -1292,14 +1315,18 @@ pub enum HollowBlobRef<'a, T> {
 }
 
 /// A rollup that is currently being computed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize
+)]
 pub struct ActiveRollup {
     pub seqno: SeqNo,
     pub start_ms: u64,
 }
 
 /// A garbage collection request that is currently being computed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize
+)]
 pub struct ActiveGc {
     pub seqno: SeqNo,
     pub start_ms: u64,
@@ -1413,6 +1440,31 @@ where
         let applied = match self.rollups.get(&rollup_seqno) {
             Some(x) => x.key == rollup.key,
             None => {
+                // PER-16: refuse to insert a rollup at a seqno that GC has
+                // already physically removed. `apply_unbatched_idempotent_cmd`
+                // replays the captured `(rollup_seqno, rollup)` tuple on
+                // every retry. If the original CAS committed indeterminately
+                // and a concurrent GC then removed the rollup, the retry
+                // would otherwise observe an empty map entry and re-insert
+                // the same `PartialRollupKey` at the same seqno, producing
+                // a second Insert (and, later, a second Delete) for that
+                // key in the diff stream and tripping the `assert!` in
+                // `find_removable_blobs`.
+                //
+                // We use the smallest seqno currently in `self.rollups` as
+                // the GC watermark. GC's `remove_rollups` always keeps the
+                // latest rollup `<= seqno_since` and removes the older
+                // ones, so the surviving minimum is strictly above every
+                // seqno that has been removed. (Unlike `last_gc_req`, this
+                // is only advanced by an actual physical removal, not by
+                // `maybe_gc` deciding to *request* one — `last_gc_req` runs
+                // ahead of removals and would falsely reject legitimate
+                // late `add_rollup` calls for older seqnos.)
+                if let Some(min_kept) = self.rollups.keys().next() {
+                    if rollup_seqno < *min_kept {
+                        return Continue(false);
+                    }
+                }
                 self.active_rollup = None;
                 self.rollups.insert(rollup_seqno, rollup.to_owned());
                 true
@@ -1428,22 +1480,31 @@ where
         &mut self,
         remove_rollups: &[(SeqNo, PartialRollupKey)],
     ) -> ControlFlow<NoOpStateTransition<Vec<SeqNo>>, Vec<SeqNo>> {
-        if remove_rollups.is_empty() || self.is_tombstone() {
+        if self.is_tombstone() {
             return Break(NoOpStateTransition(vec![]));
         }
 
-        //This state transition is called at the end of the GC process, so we
-        //need to unset the `active_gc` field.
-        self.active_gc = None;
+        // This state transition is called at the end of the GC process, so we
+        // need to unset the `active_gc` field.
+        let active_gc_was_set = self.active_gc.take().is_some();
+
+        if remove_rollups.is_empty() {
+            return if active_gc_was_set {
+                Continue(vec![])
+            } else {
+                Break(NoOpStateTransition(vec![]))
+            };
+        }
 
         let mut removed = vec![];
         for (seqno, key) in remove_rollups {
             let removed_key = self.rollups.remove(seqno);
-            debug_assert!(
+            mz_ore::soft_assert_no_log!(
                 removed_key.as_ref().map_or(true, |x| &x.key == key),
-                "{} vs {:?}",
-                key,
-                removed_key
+                "rollup at {} to be removed has key {:?} in state, but GC asked to remove {}",
+                seqno,
+                removed_key,
+                key
             );
 
             if removed_key.is_some() {
@@ -1499,10 +1560,11 @@ where
         Continue((reader_state, self.seqno_since(seqno)))
     }
 
-    pub fn register_critical_reader<O: Opaque + Codec64>(
+    pub fn register_critical_reader(
         &mut self,
         hostname: &str,
         reader_id: &CriticalReaderId,
+        opaque: Opaque,
         purpose: &str,
     ) -> ControlFlow<NoOpStateTransition<CriticalReaderState<T>>, CriticalReaderState<T>> {
         let state = CriticalReaderState {
@@ -1511,8 +1573,7 @@ where
                 purpose: purpose.to_owned(),
             },
             since: self.trace.since().clone(),
-            opaque: OpaqueState(Codec64::encode(&O::initial())),
-            opaque_codec: O::codec_name(),
+            opaque,
         };
 
         // We expire all readers if the upper and since both advance to the
@@ -1628,13 +1689,6 @@ where
             .schemas
             .last_key_value()
             .expect("all shards have a schema");
-        if *current_id != expected {
-            return Break(NoOpStateTransition(CaESchema::ExpectedMismatch {
-                schema_id: *current_id,
-                key: K::decode_schema(&current.key),
-                val: V::decode_schema(&current.val),
-            }));
-        }
 
         let current_key = K::decode_schema(&current.key);
         let current_key_dt = EncodedSchemas::decode_data_type(&current.key_data_type);
@@ -1644,13 +1698,29 @@ where
         let key_dt = data_type(key_schema);
         let val_dt = data_type(val_schema);
 
-        // If the schema is exactly the same as the current one, no-op.
+        // If the schema is exactly the same as the current one, no-op. NOTE:
+        // this check has to come before the `expected` one, otherwise the
+        // command is not idempotent: `apply_unbatched_idempotent_cmd` retries
+        // indeterminate errors, so a CaS that committed but lost its response
+        // gets re-run against state that already carries its own evolution.
+        //
+        // Returning Ok when `*current_id != expected` is safe: register_schema
+        // never mints two ids for the same content, so a content match is the
+        // current schema and a stale `expected` just lags the committed retry.
         if current_key == *key_schema
             && current_key_dt == key_dt
             && current_val == *val_schema
             && current_val_dt == val_dt
         {
             return Break(NoOpStateTransition(CaESchema::Ok(*current_id)));
+        }
+
+        if *current_id != expected {
+            return Break(NoOpStateTransition(CaESchema::ExpectedMismatch {
+                schema_id: *current_id,
+                key: current_key,
+                val: current_val,
+            }));
         }
 
         let key_fn = backward_compatible(&current_key_dt, &key_dt);
@@ -1819,13 +1889,13 @@ where
             )
         }
 
-        debug_assert_eq!(self.trace.upper(), batch.desc.upper());
+        mz_ore::soft_assert_eq_no_log!(self.trace.upper(), batch.desc.upper());
         writer_state.most_recent_write_token = idempotency_token.clone();
         // The writer's most recent upper should only go forward.
         assert!(
             PartialOrder::less_equal(&writer_state.most_recent_write_upper, batch.desc.upper()),
             "{:?} vs {:?}",
-            &writer_state.most_recent_write_upper,
+            writer_state.most_recent_write_upper,
             batch.desc.upper()
         );
         writer_state
@@ -1877,7 +1947,7 @@ where
         &mut self,
         reader_id: &LeasedReaderId,
         seqno: SeqNo,
-        outstanding_seqno: Option<SeqNo>,
+        outstanding_seqno: SeqNo,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<NoOpStateTransition<Since<T>>, Since<T>> {
@@ -1905,18 +1975,15 @@ where
             reader_state.last_heartbeat_timestamp_ms,
         );
 
-        let seqno = match outstanding_seqno {
-            Some(outstanding_seqno) => {
-                assert!(
-                    outstanding_seqno >= reader_state.seqno,
-                    "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
+        let seqno = {
+            assert!(
+                outstanding_seqno >= reader_state.seqno,
+                "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
                     is behind current reader_state ({:?})",
-                    outstanding_seqno,
-                    reader_state.seqno,
-                );
-                std::cmp::min(outstanding_seqno, seqno)
-            }
-            None => seqno,
+                outstanding_seqno,
+                reader_state.seqno,
+            );
+            std::cmp::min(outstanding_seqno, seqno)
         };
 
         reader_state.seqno = seqno;
@@ -1934,14 +2001,14 @@ where
         Continue(Since(reader_current_since))
     }
 
-    pub fn compare_and_downgrade_since<O: Opaque + Codec64>(
+    pub fn compare_and_downgrade_since(
         &mut self,
         reader_id: &CriticalReaderId,
-        expected_opaque: &O,
-        (new_opaque, new_since): (&O, &Antichain<T>),
+        expected_opaque: &Opaque,
+        (new_opaque, new_since): (&Opaque, &Antichain<T>),
     ) -> ControlFlow<
-        NoOpStateTransition<Result<Since<T>, (O, Since<T>)>>,
-        Result<Since<T>, (O, Since<T>)>,
+        NoOpStateTransition<Result<Since<T>, (Opaque, Since<T>)>>,
+        Result<Since<T>, (Opaque, Since<T>)>,
     > {
         // We expire all readers if the upper and since both advance to the
         // empty antichain. Gracefully handle this. At the same time,
@@ -1955,18 +2022,17 @@ where
         }
 
         let reader_state = self.critical_reader(reader_id);
-        assert_eq!(reader_state.opaque_codec, O::codec_name());
 
-        if &O::decode(reader_state.opaque.0) != expected_opaque {
+        if reader_state.opaque != *expected_opaque {
             // No-op, but still commit the state change so that this gets
             // linearized.
             return Continue(Err((
-                Codec64::decode(reader_state.opaque.0),
+                reader_state.opaque.clone(),
                 Since(reader_state.since.clone()),
             )));
         }
 
-        reader_state.opaque = OpaqueState(Codec64::encode(new_opaque));
+        reader_state.opaque = new_opaque.clone();
         if PartialOrder::less_equal(&reader_state.since, new_since) {
             reader_state.since.clone_from(new_since);
             self.update_since();
@@ -1976,33 +2042,6 @@ where
             // advanced. we may someday need to revisit this branch when it's possible
             // for two `since` frontiers to be incomparable.
             Continue(Ok(Since(reader_state.since.clone())))
-        }
-    }
-
-    pub fn heartbeat_leased_reader(
-        &mut self,
-        reader_id: &LeasedReaderId,
-        heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
-        // We expire all readers if the upper and since both advance to the
-        // empty antichain. Gracefully handle this. At the same time,
-        // short-circuit the cmd application so we don't needlessly create new
-        // SeqNos.
-        if self.is_tombstone() {
-            return Break(NoOpStateTransition(false));
-        }
-
-        match self.leased_readers.get_mut(reader_id) {
-            Some(reader_state) => {
-                reader_state.last_heartbeat_timestamp_ms = std::cmp::max(
-                    heartbeat_timestamp_ms,
-                    reader_state.last_heartbeat_timestamp_ms,
-                );
-                Continue(true)
-            }
-            // No-op, but we still commit the state change so that this gets
-            // linearized (maybe we're looking at old state).
-            None => Continue(false),
         }
     }
 
@@ -2184,7 +2223,7 @@ where
         self.leased_readers.clear();
         self.critical_readers.clear();
 
-        debug_assert!(self.is_tombstone());
+        mz_ore::soft_assert_no_log!(self.is_tombstone());
 
         // Now that we're in a "tombstone" state -- ie. nobody can read the data from a shard or write to
         // it -- the actual contents of our batches no longer matter.
@@ -2447,12 +2486,8 @@ where
 
                 let batch_size = x.encoded_size_bytes();
                 for x in x.parts.iter() {
-                    if x.ts_rewrite().is_some() {
-                        ret.rewrite_part_count += 1;
-                    }
                     if x.is_inline() {
                         ret.inline_part_count += 1;
-                        ret.inline_part_bytes += x.inline_bytes();
                     }
                 }
                 ret.largest_batch_bytes = std::cmp::max(ret.largest_batch_bytes, batch_size);
@@ -2742,8 +2777,19 @@ fn serialize_part_stats<S: Serializer>(
     val: &Option<LazyPartStats>,
     s: S,
 ) -> Result<S::Ok, S::Error> {
-    let val = val.as_ref().map(|x| x.decode().key);
-    val.serialize(s)
+    // These bytes come from blob and are never validated on the way in, so a
+    // malformed or newer-version encoding reaches here intact. Report it as
+    // absent rather than panicking, and keep the field's shape stable for
+    // consumers of the inspect-state output by logging the failure instead of
+    // serializing a differently typed value in its place.
+    let stats = val.as_ref().and_then(|x| match x.try_decode() {
+        Ok(stats) => Some(stats.key),
+        Err(err) => {
+            tracing::warn!("undecodable part stats, reporting as absent: {err}");
+            None
+        }
+    });
+    stats.serialize(s)
 }
 
 fn serialize_diffs_sum<S: Serializer>(val: &Option<[u8; 8]>, s: S) -> Result<S::Ok, S::Error> {
@@ -2807,14 +2853,12 @@ impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
 pub struct StateSizeMetrics {
     pub hollow_batch_count: usize,
     pub batch_part_count: usize,
-    pub rewrite_part_count: usize,
     pub num_updates: usize,
     pub largest_batch_bytes: usize,
     pub state_batches_bytes: usize,
     pub state_rollups_bytes: usize,
     pub state_rollup_count: usize,
     pub inline_part_count: usize,
-    pub inline_part_bytes: usize,
 }
 
 #[derive(Default)]
@@ -3053,19 +3097,19 @@ pub(crate) mod tests {
         )
     }
 
-    pub fn any_critical_reader_state<T: Arbitrary>() -> impl Strategy<Value = CriticalReaderState<T>>
+    pub fn any_critical_reader_state<T>() -> impl Strategy<Value = CriticalReaderState<T>>
+    where
+        T: Arbitrary,
     {
         Strategy::prop_map(
             (
                 any::<Option<T>>(),
-                any::<OpaqueState>(),
-                any::<String>(),
+                any::<Opaque>(),
                 any::<HandleDebugState>(),
             ),
-            |(since, opaque, opaque_codec, debug)| CriticalReaderState {
+            |(since, opaque, debug)| CriticalReaderState {
                 since: since.map_or_else(Antichain::new, Antichain::from_elem),
                 opaque,
-                opaque_codec,
                 debug,
             },
         )
@@ -3231,7 +3275,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -3243,7 +3287,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -3255,7 +3299,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(1),
                 now()
             ),
@@ -3280,7 +3324,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader2,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(3),
                 now()
             ),
@@ -3292,7 +3336,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(5),
                 now()
             ),
@@ -3324,7 +3368,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader3,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(10),
                 now()
             ),
@@ -3366,56 +3410,72 @@ pub(crate) mod tests {
         let reader = CriticalReaderId::new();
         let _ = state
             .collections
-            .register_critical_reader::<u64>("", &reader, "");
+            .register_critical_reader("", &reader, Opaque::encode(&0u64), "");
 
         // The shard global since == 0 initially.
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(0));
         // The initial opaque value should be set.
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
-            u64::initial()
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
+            u64::MIN
         );
 
         // Greater
         assert_eq!(
-            state.collections.compare_and_downgrade_since::<u64>(
+            state.collections.compare_and_downgrade_since(
                 &reader,
-                &u64::initial(),
-                (&1, &Antichain::from_elem(2)),
+                &Opaque::encode(&0u64),
+                (&Opaque::encode(&1u64), &Antichain::from_elem(2)),
             ),
             Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
             1
         );
         // Equal (no-op)
         assert_eq!(
-            state.collections.compare_and_downgrade_since::<u64>(
+            state.collections.compare_and_downgrade_since(
                 &reader,
-                &1,
-                (&2, &Antichain::from_elem(2)),
+                &Opaque::encode(&1u64),
+                (&Opaque::encode(&2u64), &Antichain::from_elem(2)),
             ),
             Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
             2
         );
         // Less (no-op)
         assert_eq!(
-            state.collections.compare_and_downgrade_since::<u64>(
+            state.collections.compare_and_downgrade_since(
                 &reader,
-                &2,
-                (&3, &Antichain::from_elem(1)),
+                &Opaque::encode(&2u64),
+                (&Opaque::encode(&3u64), &Antichain::from_elem(1)),
             ),
             Continue(Ok(Since(Antichain::from_elem(2))))
         );
         assert_eq!(state.collections.trace.since(), &Antichain::from_elem(2));
         assert_eq!(
-            u64::decode(state.collections.critical_reader(&reader).opaque.0),
+            state
+                .collections
+                .critical_reader(&reader)
+                .opaque
+                .decode::<u64>(),
             3
         );
     }
@@ -3624,7 +3684,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 SeqNo::minimum(),
-                None,
+                SeqNo::minimum(),
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -4434,5 +4494,74 @@ pub(crate) mod tests {
             let parsed = RunId::from_str(&runid_str);
             prop_assert_eq!(parsed, Ok(runid));
         });
+    }
+
+    /// Regression for PER-16. `add_rollup` must refuse to (re-)insert a
+    /// rollup at a seqno that GC has already physically removed.
+    /// Without this guard, an `apply_unbatched_idempotent_cmd` retry of
+    /// `add_rollup` that runs after a concurrent GC removed the rollup's
+    /// original map entry will re-insert it under the same key, producing
+    /// duplicate Insert events in the diff stream and (later) duplicate
+    /// Delete events that trip the `assert!` in `gc.rs`'s
+    /// `find_removable_blobs`.
+    ///
+    /// This test reaches the bug state via the public
+    /// `add_rollup` → `add_rollup` (newer) → `remove_rollups` (the older
+    /// one) → `add_rollup` (retry of the older one) sequence, mirroring
+    /// how a delayed retry of an indeterminate add_rollup commit can race
+    /// a concurrent GC pass that has since added a newer rollup and
+    /// removed the older one.
+    #[mz_ore::test]
+    fn add_rollup_idempotent_across_gc_removal() {
+        let mut state = TypedState::<String, String, u64, i64>::new(
+            DUMMY_BUILD_INFO.semver_version(),
+            ShardId::new(),
+            "".to_owned(),
+            0,
+        );
+
+        let older_seqno = SeqNo(10);
+        let older = HollowRollup {
+            key: PartialRollupKey::new(older_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        let newer_seqno = SeqNo(20);
+        let newer = HollowRollup {
+            key: PartialRollupKey::new(newer_seqno, &RollupId::new()),
+            encoded_size_bytes: None,
+        };
+        let add_older = |state: &mut StateCollections<u64>| state.add_rollup((older_seqno, &older));
+
+        // First attempt commits the older rollup.
+        assert_eq!(add_older(&mut state.collections), Continue(true));
+        // A repeat at the same seqno with the same key is the pre-existing
+        // idempotent no-op and should report applied=true.
+        assert_eq!(add_older(&mut state.collections), Continue(true));
+        assert_eq!(state.collections.rollups.len(), 1);
+
+        // The shard keeps making progress and a later command commits a
+        // newer rollup. This is what gives GC something to keep when it
+        // later removes the older entry.
+        assert_eq!(
+            state.collections.add_rollup((newer_seqno, &newer)),
+            Continue(true),
+        );
+
+        // The GC worker, having found a kept rollup at `newer_seqno`,
+        // commits the removal of the older one. State.rollups now only
+        // contains the kept rollup; the older entry is gone.
+        let _ = state
+            .collections
+            .remove_rollups(&[(older_seqno, older.key.clone())]);
+        assert!(!state.collections.rollups.contains_key(&older_seqno));
+        assert!(state.collections.rollups.contains_key(&newer_seqno));
+
+        // The retry replays the same captured `(older_seqno, older)`
+        // tuple. Even though no entry references the key anymore,
+        // re-inserting it must be refused: `older_seqno` falls below the
+        // smallest live rollup seqno, which is the GC watermark.
+        assert_eq!(add_older(&mut state.collections), Continue(false));
+        assert!(!state.collections.rollups.contains_key(&older_seqno));
+        assert_eq!(state.collections.rollups.len(), 1);
     }
 }

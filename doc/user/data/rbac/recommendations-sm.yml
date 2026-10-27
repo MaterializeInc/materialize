@@ -7,12 +7,12 @@
 - recommendation: "Restrict the granting of `CREATEROLE` privilege"
   description: |
 
-    {{< include-md file="shared-content/rbac-sm/createrole-consideration.md" >}}
+    {{% include-headless "/headless/rbac-sm/createrole-consideration" %}}
 
 - recommendation: "Use Reusable Roles for Privilege Assignment"
   description: |
 
-    {{< include-md file="shared-content/rbac-sm/use-resusable-roles.md" >}}
+    {{% include-headless "/headless/rbac-sm/use-resusable-roles" %}}
 
     See also [Manage database roles](/security/self-managed/access-control/manage-roles/).
 
@@ -20,7 +20,7 @@
 
   description: |
 
-    {{< include-md file="shared-content/rbac-sm/audit-remove-roles.md" >}}
+    {{% include-headless "/headless/rbac-sm/audit-remove-roles" %}}
 
     See also [Show roles in
     system](/security/self-managed/access-control/manage-roles/#show-roles-in-system)

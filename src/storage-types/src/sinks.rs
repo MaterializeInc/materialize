@@ -18,6 +18,7 @@ use mz_expr::MirScalarExpr;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
@@ -30,6 +31,7 @@ use crate::connections::inline::{
 };
 use crate::connections::{ConnectionContext, KafkaConnection, KafkaTopicOptions};
 use crate::controller::AlterError;
+use crate::wire_format::WireFormat;
 
 pub mod s3_oneshot_sink;
 
@@ -124,8 +126,11 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkEnvelope {
+    /// Only used for Kafka.
     Debezium,
     Upsert,
+    /// Only used for Iceberg.
+    Append,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -181,6 +186,9 @@ impl<R: ConnectionResolver> IntoInlineConnection<StorageSinkConnection, R>
 
 impl<C: ConnectionAccess> StorageSinkConnection<C> {
     /// returns an option to not constrain ourselves in the future
+    ///
+    /// NOTE: `mz_sinks` digs this out of `create_sql` instead. Note the iceberg
+    /// case reports the catalog connection, not the optional AWS one.
     pub fn connection_id(&self) -> Option<CatalogItemId> {
         use StorageSinkConnection::*;
         match self {
@@ -193,6 +201,9 @@ impl<C: ConnectionAccess> StorageSinkConnection<C> {
     }
 
     /// Returns the name of the sink connection.
+    ///
+    /// NOTE: `mz_sinks.type` comes from `create_sql`, not from here, so the two
+    /// sets of strings have to stay identical.
     pub fn name(&self) -> &'static str {
         use StorageSinkConnection::*;
         match self {
@@ -453,7 +464,15 @@ pub enum KafkaSinkFormatType<C: ConnectionAccess = InlinedConnection> {
     Avro {
         schema: String,
         compatibility_level: Option<mz_ccsr::CompatibilityLevel>,
-        csr_connection: C::Csr,
+        /// The registry schema name to publish under. `None` means derive it
+        /// from the topic (`{topic}-key` / `{topic}-value`). Only ever `Some`
+        /// for Glue, where the user may override the name. Confluent always
+        /// uses the topic-derived subject.
+        #[serde(default)]
+        schema_name: Option<String>,
+        /// Wire-format dispatch and the registry to publish to. Sinks
+        /// require a registry
+        wire_format: WireFormat<C>,
     },
     Json,
     Text,
@@ -472,6 +491,8 @@ impl<C: ConnectionAccess> KafkaSinkFormatType<C> {
 }
 
 impl<C: ConnectionAccess> KafkaSinkFormat<C> {
+    /// NOTE: the `mz_sinks` `format` column reimplements this in SQL, in
+    /// `parse_catalog_create_sql`. Change both or they drift.
     pub fn get_format_name<'a>(&'a self) -> Cow<'a, str> {
         // For legacy reasons, if the key-format is none or the key & value formats are
         // both the same (either avro or json), we return the value format name,
@@ -503,18 +524,19 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
-                    csr_connection,
+                    schema_name,
+                    wire_format,
                 },
                 KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
-                    csr_connection: other_csr_connection,
+                    schema_name: other_schema_name,
+                    wire_format: other_wire_format,
                 },
             ) => {
                 if schema != other_schema
-                    || csr_connection
-                        .alter_compatible(id, other_csr_connection)
-                        .is_err()
+                    || schema_name != other_schema_name
+                    || wire_format.alter_compatible(id, other_wire_format).is_err()
                 {
                     tracing::warn!(
                         "KafkaSinkFormat::Avro incompatible at value_format:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -542,18 +564,19 @@ impl<C: ConnectionAccess> KafkaSinkFormat<C> {
                 Some(KafkaSinkFormatType::Avro {
                     schema,
                     compatibility_level: _,
-                    csr_connection,
+                    schema_name,
+                    wire_format,
                 }),
                 Some(KafkaSinkFormatType::Avro {
                     schema: other_schema,
                     compatibility_level: _,
-                    csr_connection: other_csr_connection,
+                    schema_name: other_schema_name,
+                    wire_format: other_wire_format,
                 }),
             ) => {
                 if schema != other_schema
-                    || csr_connection
-                        .alter_compatible(id, other_csr_connection)
-                        .is_err()
+                    || schema_name != other_schema_name
+                    || wire_format.alter_compatible(id, other_wire_format).is_err()
                 {
                     tracing::warn!(
                         "KafkaSinkFormat::Avro incompatible at key_format:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -599,11 +622,13 @@ impl<R: ConnectionResolver> IntoInlineConnection<KafkaSinkFormatType, R>
             KafkaSinkFormatType::Avro {
                 schema,
                 compatibility_level,
-                csr_connection,
+                schema_name,
+                wire_format,
             } => KafkaSinkFormatType::Avro {
                 schema,
                 compatibility_level,
-                csr_connection: r.resolve_connection(csr_connection).unwrap_csr(),
+                schema_name,
+                wire_format: wire_format.into_inline_connection(r),
             },
             KafkaSinkFormatType::Json => KafkaSinkFormatType::Json,
             KafkaSinkFormatType::Text => KafkaSinkFormatType::Text,
@@ -636,12 +661,70 @@ pub struct S3UploadInfo {
 pub const MIN_S3_SINK_FILE_SIZE: ByteSize = ByteSize::mb(16);
 pub const MAX_S3_SINK_FILE_SIZE: ByteSize = ByteSize::gb(4);
 
-#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+/// Column name appended by MODE APPEND Iceberg sinks to record the diff (+1/−1).
+pub const ICEBERG_APPEND_DIFF_COLUMN: &str = "_mz_diff";
+/// Column name appended by MODE APPEND Iceberg sinks to record the logical timestamp.
+pub const ICEBERG_APPEND_TIMESTAMP_COLUMN: &str = "_mz_timestamp";
+
+/// The precision needed to store all UInt64 values in a Decimal128.
+/// UInt64 max value is 18,446,744,073,709,551,615 which has 20 digits.
+pub const ICEBERG_UINT64_DECIMAL_PRECISION: u8 = 20;
+
+/// Type overrides for Iceberg-compatible Arrow schemas.
+///
+/// Iceberg doesn't support unsigned integer types or interval natively, so we
+/// map them to compatible types:
+/// - `UInt8`, `UInt16` -> `Int32`
+/// - `UInt32` -> `Int64`
+/// - `UInt64` -> `Decimal128(20, 0)`
+/// - `MzTimestamp` (which uses UInt64) -> `Decimal128(20, 0)`
+/// - `Interval` -> string (`LargeUtf8`)
+/// - `Uuid` -> string (`Utf8`). Unity Catalog does not support fixed binary types, so we use string
+///  instead of `FixedSizeBinary(16)`.
+///
+/// Pass this to `mz_arrow_util::builder::desc_to_schema_with_overrides`
+/// when producing the Arrow schema for an iceberg sink, and to
+/// `mz_arrow_util::builder::ArrowBuilder::validate_desc_for_parquet` to
+/// validate the desc before sink creation.
+pub fn iceberg_type_overrides(
+    scalar_type: &mz_repr::SqlScalarType,
+) -> Option<(arrow::datatypes::DataType, String)> {
+    use arrow::datatypes::DataType;
+    use mz_repr::SqlScalarType;
+    match scalar_type {
+        SqlScalarType::UInt16 => Some((DataType::Int32, "uint2".to_string())),
+        SqlScalarType::UInt32 => Some((DataType::Int64, "uint4".to_string())),
+        SqlScalarType::UInt64 => Some((
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
+            "uint8".to_string(),
+        )),
+        SqlScalarType::MzTimestamp => Some((
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
+            "mz_timestamp".to_string(),
+        )),
+        SqlScalarType::Interval => Some((DataType::LargeUtf8, "interval".to_string())),
+        SqlScalarType::Uuid => Some((DataType::Utf8, "uuid".to_string())),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct IcebergSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub catalog_connection_id: CatalogItemId,
     pub catalog_connection: C::IcebergCatalog,
-    pub aws_connection_id: CatalogItemId,
-    pub aws_connection: C::Aws,
+
+    /// We allow users to specify a separate (from the catalog) connection
+    /// for the storage layer, but we currently ignore it.
+    /// S3 Tables uses the same AWS connection for catalog and storage.
+    /// BigLake/Lakehouse uses the same GCP connection for catalog and storage.
+    ///
+    /// TODO(kynan): Once we need separate storage creds, make this generic.
+    ///   And check that the [`IcebergSinkConnection::alter_compatible`]
+    ///   implementation still handles `storage_connection` acceptably.
+    pub storage_connection_id: Option<CatalogItemId>,
+    pub storage_connection: Option<C::Aws>,
+
     /// A natural key of the sinked relation (view or source).
     pub relation_key_indices: Option<Vec<usize>>,
     /// The user-specified key for the sink.
@@ -662,8 +745,8 @@ impl<C: ConnectionAccess> IcebergSinkConnection<C> {
         let IcebergSinkConnection {
             catalog_connection_id: connection_id,
             catalog_connection,
-            aws_connection_id,
-            aws_connection,
+            storage_connection_id,
+            storage_connection,
             relation_key_indices,
             key_desc_and_indices,
             namespace,
@@ -681,15 +764,24 @@ impl<C: ConnectionAccess> IcebergSinkConnection<C> {
                     .is_ok(),
                 "catalog_connection",
             ),
+            // We don't use `storage_connection_id` and `storage_connection`,
+            // so allow them to be removed.
             (
-                aws_connection_id == &other.aws_connection_id,
-                "aws_connection_id",
+                other.storage_connection_id.is_none()
+                    || storage_connection_id == &other.storage_connection_id,
+                "storage_connection_id",
             ),
             (
-                aws_connection
-                    .alter_compatible(id, &other.aws_connection)
-                    .is_ok(),
-                "aws_connection",
+                match &other.storage_connection {
+                    None => true, // Removing a storage connection OR not adding a storage connection.
+                    Some(after) => {
+                        match storage_connection {
+                            None => false, // Adding a storage connection where there wasn't one before.
+                            Some(before) => before.alter_compatible(id, after).is_ok(),
+                        }
+                    }
+                },
+                "storage_connection",
             ),
             (
                 relation_key_indices == &other.relation_key_indices,
@@ -725,8 +817,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
         let IcebergSinkConnection {
             catalog_connection_id,
             catalog_connection,
-            aws_connection_id,
-            aws_connection,
+            storage_connection_id,
+            storage_connection,
             relation_key_indices,
             key_desc_and_indices,
             namespace,
@@ -737,8 +829,8 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
             catalog_connection: r
                 .resolve_connection(catalog_connection)
                 .unwrap_iceberg_catalog(),
-            aws_connection_id,
-            aws_connection: r.resolve_connection(aws_connection).unwrap_aws(),
+            storage_connection_id,
+            storage_connection: storage_connection.map(|c| r.resolve_connection(c).unwrap_aws()),
             relation_key_indices,
             key_desc_and_indices,
             namespace,

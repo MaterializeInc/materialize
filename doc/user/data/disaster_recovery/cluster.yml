@@ -72,4 +72,4 @@ rows:
     RTO (RF1 - single AZ): |
       ~1 hour (time to check pointers).
     RTO (RF2 - multiple AZs): |
-      High/Significant. Consider using a [regional failover strategy](/manage/disaster-recovery/#level-3-a-duplicate-materialize-environment-inter-region-resilience).
+      High/Significant. Consider using a [regional failover strategy](/materialize-cloud/disaster-recovery/#level-3-a-duplicate-materialize-environment-inter-region-resilience).

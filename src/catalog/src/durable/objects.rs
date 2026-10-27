@@ -11,7 +11,8 @@
 //! into two categories.
 //!
 //! The key-value objects are a one-to-one mapping of the protobuf objects used to save catalog
-//! data durably. They can be converted to and from protobuf via the [`mz_proto::RustType`] trait.
+//! data durably. They can be converted to and from protobuf via the
+//! [`RustType`](crate::durable::objects::serialization::RustType) trait.
 //! These objects should not be exposed anywhere outside the [`crate::durable`] module.
 //!
 //! The other type of objects combine the information from keys and values into a single struct,
@@ -30,6 +31,7 @@ pub(crate) mod state_update;
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use mz_audit_log::VersionedEvent;
 use mz_controller::clusters::ReplicaLogging;
@@ -44,12 +46,21 @@ use mz_sql::catalog::{
     RoleMembership, RoleVars,
 };
 use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
-use mz_sql::plan::{ClusterSchedule, NetworkPolicyRule};
+use mz_sql::plan::{AutoScalingStrategy, ClusterSchedule, NetworkPolicyRule, OnTimeoutAction};
+#[cfg(test)]
 use proptest_derive::Arbitrary;
+use uuid::Uuid;
 
 use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
 use crate::durable::Epoch;
 use crate::durable::objects::serialization::proto;
+
+/// A proptest strategy for [`Uuid`]s, which don't implement `Arbitrary`.
+#[cfg(test)]
+fn any_uuid() -> impl proptest::strategy::Strategy<Value = Uuid> {
+    use proptest::strategy::Strategy;
+    proptest::arbitrary::any::<u128>().prop_map(Uuid::from_u128)
+}
 
 // Structs used to pass information to outside modules.
 
@@ -64,7 +75,7 @@ use crate::durable::objects::serialization::proto;
 /// convert the types used in [`RustType`] to a more consumable and
 /// condensed type.
 ///
-/// [`RustType`]: mz_proto::RustType
+/// [`RustType`]: crate::durable::objects::serialization::RustType
 pub trait DurableType: Sized {
     type Key;
     type Value;
@@ -347,9 +358,96 @@ pub struct ClusterVariantManaged {
     pub size: String,
     pub availability_zones: Vec<String>,
     pub logging: ReplicaLogging,
+    /// Whether arrangements on this cluster's replicas request dictionary compression.
+    pub arrangement_compression: bool,
     pub replication_factor: u32,
     pub optimizer_feature_overrides: BTreeMap<String, String>,
     pub schedule: ClusterSchedule,
+    /// User-configured autoscaling policy, distinct from the in-flight runtime
+    /// records below.
+    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
+    /// Latest graceful reconfiguration record, if one has been written.
+    pub reconfiguration: Option<ReconfigurationState>,
+    /// In-flight hydration burst the controller is running.
+    pub burst: Option<BurstState>,
+}
+
+/// The canonical name of the `index`-th (zero-based) replica of a managed
+/// cluster.
+///
+/// A managed cluster's replicas are derived from its `replication_factor`: for a
+/// factor of N they are named `r1` through `rN`.
+///
+/// The catalog-open reconciler that materializes builtin replicas converges on
+/// this rule, `CREATE CLUSTER` names its replicas by it, and the
+/// unmanaged-to-managed conversion validates the existing names against it. The
+/// cluster controller deliberately does not: its `ReplicaNameGen` picks names
+/// that avoid the observed set, which is why it drops by observed id rather
+/// than by derived name.
+pub fn managed_cluster_replica_name(index: u32) -> String {
+    format!("r{}", index + 1)
+}
+
+/// The latest graceful reconfiguration: the config shape the cluster is moving
+/// to or most recently moved toward, plus its deadline and terminal state.
+///
+/// `ALTER` writes this record with [`ReconfigurationStatus::InProgress`] and
+/// returns. The realized config (`cluster.size`, ...) is advanced by the
+/// controller only at cut-over. When the reconfiguration settles, the controller
+/// retains the record with a terminal status so readers can inspect the latest
+/// outcome without reconstructing it from the audit log.
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReconfigurationState {
+    pub target: ReconfigurationTarget,
+    pub deadline: mz_repr::Timestamp,
+    /// The action the controller applies if `deadline` passes before the
+    /// target hydrates. Success takes precedence: a hydrated target cuts over
+    /// regardless of this field.
+    pub on_timeout: OnTimeoutAction,
+    pub status: ReconfigurationStatus,
+}
+
+/// The lifecycle status of the latest graceful reconfiguration.
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub enum ReconfigurationStatus {
+    /// The controller is converging the cluster onto the target shape.
+    InProgress,
+    /// The realized config reached the target shape.
+    Finalized,
+    /// The deadline fired under rollback and the realized config stayed put.
+    TimedOut,
+    /// The user retargeted the reconfiguration back to the realized shape.
+    Cancelled,
+    /// The controller could not create the target replicas within the budget.
+    ResourceExhausted,
+}
+
+impl ReconfigurationState {
+    /// Whether this record should still drive target-replica convergence.
+    pub fn is_in_progress(&self) -> bool {
+        matches!(self.status, ReconfigurationStatus::InProgress)
+    }
+}
+
+/// The full config shape a reconfiguration is moving the cluster to, so a
+/// combined size + replication-factor + availability-zone change is one record.
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReconfigurationTarget {
+    pub size: String,
+    pub replication_factor: u32,
+    pub availability_zones: Vec<String>,
+    pub logging: ReplicaLogging,
+    pub arrangement_compression: bool,
+}
+
+/// An active hydration burst the controller is running.
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct BurstState {
+    pub burst_size: String,
+    pub linger_duration: Duration,
+    /// Start of the current observed readiness period for the steady set.
+    /// Cleared after a failed readiness check.
+    pub steady_ready_at: Option<mz_repr::Timestamp>,
 }
 
 #[derive(Clone, Debug, Ord, PartialOrd, PartialEq, Eq)]
@@ -454,6 +552,7 @@ impl DurableType for ClusterReplica {
 pub struct ReplicaConfig {
     pub location: ReplicaLocation,
     pub logging: ReplicaLogging,
+    pub arrangement_compression: bool,
 }
 
 impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
@@ -461,6 +560,7 @@ impl From<mz_controller::clusters::ReplicaConfig> for ReplicaConfig {
         Self {
             location: config.location.into(),
             logging: config.compute.logging,
+            arrangement_compression: config.compute.arrangement_compression,
         }
     }
 }
@@ -473,8 +573,16 @@ pub enum ReplicaLocation {
     },
     Managed {
         size: String,
-        /// `Some(az)` if the AZ was specified by the user and must be respected;
-        availability_zone: Option<String>,
+        /// The availability zones the replica was provisioned under.
+        ///
+        /// For a replica of a managed cluster this is the cluster's
+        /// `AVAILABILITY ZONES` pool at provision time; the cluster controller
+        /// compares it against a cluster's target `availability_zones` to tell
+        /// realized- from target-shape replicas (including an
+        /// `AVAILABILITY ZONES` divergence). For a replica of an unmanaged
+        /// cluster it is the user-pinned `AVAILABILITY ZONE`, as a zero- or
+        /// one-element list. Empty when no zones constrain placement.
+        availability_zones: Vec<String>,
         internal: bool,
         billed_as: Option<String>,
         pending: bool,
@@ -504,15 +612,7 @@ impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {
                 },
             ) => ReplicaLocation::Managed {
                 size,
-                availability_zone:
-                    if let mz_controller::clusters::ManagedReplicaAvailabilityZones::FromReplica(
-                        Some(az),
-                    ) = availability_zones
-                    {
-                        Some(az)
-                    } else {
-                        None
-                    },
+                availability_zones,
                 internal,
                 billed_as,
                 pending,
@@ -532,6 +632,9 @@ pub struct Item {
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
     pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
+    /// `Some(uuid)` marks a temporary item owned by, and only visible to, the
+    /// session with that UUID. `None` is a normal durable item.
+    pub ephemeral_owner_session: Option<Uuid>,
 }
 
 impl Item {
@@ -556,6 +659,7 @@ impl DurableType for Item {
                 owner_id: self.owner_id,
                 privileges: self.privileges,
                 extra_versions: self.extra_versions,
+                ephemeral_owner_session: self.ephemeral_owner_session,
             },
         )
     }
@@ -571,6 +675,7 @@ impl DurableType for Item {
             owner_id: value.owner_id,
             privileges: value.privileges,
             extra_versions: value.extra_versions,
+            ephemeral_owner_session: value.ephemeral_owner_session,
         }
     }
 
@@ -586,7 +691,8 @@ pub struct SourceReferences {
     pub references: Vec<SourceReference>,
 }
 
-#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, Arbitrary)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SourceReference {
     pub name: String,
     pub namespace: Option<String>,
@@ -1020,6 +1126,98 @@ impl DurableType for SystemConfiguration {
     }
 }
 
+/// A single cluster-coherent scoped system-parameter override: parameter `name`
+/// has value `value` on the cluster `cluster_id`.
+///
+/// This is the in-memory shape of the durable `cluster_system_configurations`
+/// collection that backs cluster-coherent scoped feature flags. The collection
+/// — keyed by `(ClusterId, name)` — is the analog of `system_configurations`
+/// (`ALTER SYSTEM`), but for per-cluster values; it is written solely by the
+/// system-parameter sync loop, and the coordinator's in-memory working copy is
+/// maintained from it on every catalog update.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ClusterSystemConfiguration {
+    pub cluster_id: ClusterId,
+    pub name: String,
+    pub value: String,
+}
+
+impl DurableType for ClusterSystemConfiguration {
+    type Key = ClusterSystemConfigurationKey;
+    type Value = ClusterSystemConfigurationValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            ClusterSystemConfigurationKey {
+                cluster_id: self.cluster_id,
+                name: self.name,
+            },
+            ClusterSystemConfigurationValue { value: self.value },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            cluster_id: key.cluster_id,
+            name: key.name,
+            value: value.value,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ClusterSystemConfigurationKey {
+            cluster_id: self.cluster_id,
+            name: self.name.clone(),
+        }
+    }
+}
+
+/// A single replica-local scoped system-parameter override: parameter `name`
+/// has value `value` on the replica `replica_id`.
+///
+/// This is the in-memory shape of the durable `replica_system_configurations`
+/// collection that backs replica-local scoped feature flags. The collection —
+/// keyed by `(ReplicaId, name)` — is the analog of `system_configurations`
+/// (`ALTER SYSTEM`), but for per-replica values; it is written solely by the
+/// system-parameter sync loop, and the coordinator's in-memory working copy is
+/// maintained from it on every catalog update.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ReplicaSystemConfiguration {
+    pub replica_id: ReplicaId,
+    pub name: String,
+    pub value: String,
+}
+
+impl DurableType for ReplicaSystemConfiguration {
+    type Key = ReplicaSystemConfigurationKey;
+    type Value = ReplicaSystemConfigurationValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            ReplicaSystemConfigurationKey {
+                replica_id: self.replica_id,
+                name: self.name,
+            },
+            ReplicaSystemConfigurationValue { value: self.value },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            replica_id: key.replica_id,
+            name: key.name,
+            value: value.value,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ReplicaSystemConfigurationKey {
+            replica_id: self.replica_id,
+            name: self.name.clone(),
+        }
+    }
+}
+
 impl DurableType for MzAclItem {
     type Key = SystemPrivilegesKey;
     type Value = SystemPrivilegesValue;
@@ -1153,6 +1351,10 @@ pub struct Snapshot {
     pub system_object_mappings: BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
     pub system_configurations:
         BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
+    pub cluster_system_configurations:
+        BTreeMap<proto::ClusterSystemConfigurationKey, proto::ClusterSystemConfigurationValue>,
+    pub replica_system_configurations:
+        BTreeMap<proto::ReplicaSystemConfigurationKey, proto::ReplicaSystemConfigurationValue>,
     pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
     pub source_references: BTreeMap<proto::SourceReferencesKey, proto::SourceReferencesValue>,
     pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
@@ -1172,7 +1374,8 @@ impl Snapshot {
 ///
 /// Every time a new process takes over, the `epoch` should be incremented.
 /// Every time a new version is deployed, the `deploy` generation should be incremented.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct FenceToken {
     pub(crate) deploy_generation: u64,
     pub(crate) epoch: Epoch,
@@ -1265,12 +1468,14 @@ pub struct ClusterReplicaValue {
     pub(crate) owner_id: RoleId,
 }
 
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct DatabaseKey {
     pub(crate) id: DatabaseId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct DatabaseValue {
     pub(crate) name: String,
     pub(crate) owner_id: RoleId,
@@ -1278,23 +1483,27 @@ pub struct DatabaseValue {
     pub(crate) oid: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SourceReferencesKey {
     pub(crate) source_id: CatalogItemId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SourceReferencesValue {
     pub(crate) references: Vec<SourceReference>,
     pub(crate) updated_at: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+#[derive(Clone, Copy, Debug, PartialOrd, PartialEq, Eq, Ord, Hash)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SchemaKey {
     pub(crate) id: SchemaId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct SchemaValue {
     pub(crate) database_id: Option<DatabaseId>,
     pub(crate) name: String,
@@ -1303,12 +1512,14 @@ pub struct SchemaValue {
     pub(crate) oid: u32,
 }
 
-#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug, Arbitrary)]
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ItemKey {
     pub(crate) id: CatalogItemId,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct ItemValue {
     pub(crate) schema_id: SchemaId,
     pub(crate) name: String,
@@ -1318,6 +1529,8 @@ pub struct ItemValue {
     pub(crate) oid: u32,
     pub(crate) global_id: GlobalId,
     pub(crate) extra_versions: BTreeMap<RelationVersion, GlobalId>,
+    #[cfg_attr(test, proptest(strategy = "proptest::option::of(any_uuid())"))]
+    pub(crate) ephemeral_owner_session: Option<Uuid>,
 }
 
 impl ItemValue {
@@ -1333,9 +1546,9 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
     let mut tokens = create_sql.split_whitespace();
     assert_eq!(tokens.next(), Some("CREATE"));
 
-    // Read away TEMPORARY, if any.
+    // Read away item type modifiers, if any.
     let next_token = match tokens.next() {
-        Some("TEMPORARY") => tokens.next(),
+        Some("TEMPORARY") | Some("REPLACEMENT") => tokens.next(),
         token => token,
     };
 
@@ -1348,9 +1561,9 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
             assert_eq!(tokens.next(), Some("VIEW"));
             CatalogItemType::MaterializedView
         }
-        Some("CONTINUAL") => {
-            assert_eq!(tokens.next(), Some("TASK"));
-            CatalogItemType::ContinualTask
+        Some("METRIC") => {
+            assert_eq!(tokens.next(), Some("SINK"));
+            CatalogItemType::MetricSink
         }
         Some("INDEX") => CatalogItemType::Index,
         Some("TYPE") => CatalogItemType::Type,
@@ -1367,7 +1580,8 @@ pub struct CommentKey {
     pub(crate) sub_component: Option<usize>,
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord, Arbitrary)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct CommentValue {
     pub(crate) comment: String,
 }
@@ -1452,6 +1666,28 @@ pub struct ServerConfigurationValue {
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct ClusterSystemConfigurationKey {
+    pub(crate) cluster_id: ClusterId,
+    pub(crate) name: String,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ClusterSystemConfigurationValue {
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct ReplicaSystemConfigurationKey {
+    pub(crate) replica_id: ReplicaId,
+    pub(crate) name: String,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ReplicaSystemConfigurationValue {
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct DefaultPrivilegesKey {
     pub(crate) role_id: RoleId,
     pub(crate) database_id: Option<DatabaseId>,
@@ -1492,7 +1728,7 @@ pub struct RoleAuthValue {
 
 #[cfg(test)]
 mod test {
-    use mz_proto::{ProtoType, RustType};
+    use crate::durable::objects::serialization::{ProtoType, RustType};
     use proptest::prelude::*;
 
     use super::{

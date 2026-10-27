@@ -16,39 +16,7 @@ Webhook sources expose a [public URL](#webhook-url) that allows your application
 
 ## Syntax
 
-```mzsql
-CREATE SOURCE [IF NOT EXISTS] <src_name>
-[ IN CLUSTER <cluster_name> ]
-FROM WEBHOOK
-  BODY FORMAT <TEXT | JSON [ARRAY] | BYTES>
-  [ INCLUDE HEADER <header_name> AS <column_alias> [BYTES]  |
-    INCLUDE HEADERS [ ( [NOT] <header_name> [, [NOT] <header_name> ... ] ) ]
-  ][...]
-  [ CHECK (
-      [ WITH ( <BODY|HEADERS|SECRET <secret_name>> [AS <alias>] [BYTES] [, ...])]
-      <check_expression>
-    )
-  ]
-```
-
-
-### `webhook_check_option`
-
-Field                            | Use
----------------------------------|--------------------------
-  _src_name_                     | The name for the source.
- **IN CLUSTER** _cluster_name_   | The [cluster](/sql/create-cluster) to maintain this source.
- **INCLUDE HEADER**              | Map a header value from a request into a column.
- **INCLUDE HEADERS**             | Include a column named `'headers'` of type `map[text => text]` containing the headers of the request.
- **CHECK**                       | Specify a boolean expression that is used to validate each request received by the source.
-
-### `CHECK WITH` options
-
-Field                  | Type                | Description
------------------------|---------------------|--------------
-`BODY`                 | `text` or `bytea`   | Provide a `body` column to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the data type can be changed to `bytea` with the optional **BYTES** keyword.
-`HEADERS`              | `map[text=>text]` or `map[text=>bytea]` | Provide a column `'headers'` to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the data type can be changed to `map[text => bytea]` with the optional **BYTES** keyword.
-`SECRET` _secret_name_ | `text` or `bytea`    | Securely provide a [`SECRET`](/sql/create-secret) to the check expression. The `constant_time_eq` validation function **does not support** fully qualified secret names: if the secret is in a different namespace to the source, the column can be renamed with the optional **AS** _alias_ statement. The data type can also be changed to `bytea` using the optional **BYTES** keyword.
+{{% include-syntax file="examples/create_source_webhook" example="syntax" %}}
 
 ## Supported formats
 
@@ -82,7 +50,7 @@ https://<HOST>/api/webhook/<database>/<schema>/<src_name>
 
 A breakdown of each component is as follows:
 
-- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize console](/console/).
+- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize console](/developer-tools/console/).
 - `<database>`: The name of the database where the source is created (default is `materialize`).
 - `<schema>`: The schema name where the source gets created (default is `public`).
 - `<src_name>`: The name you provided for your source at the time of creation.
@@ -348,11 +316,15 @@ SELECT COUNT(body) FROM webhook_source_ndjson;
 
 Webhook sources apply the following limits to received requests:
 
-* The maximum size of the request body is **`2MB`**. Requests larger than this
+* The maximum size of the request body is **`5MB`**. Requests larger than this
   will fail with `413 Payload Too Large`.
-* The rate of concurrent requests/second across **all** webhook sources
+* The maximum number of concurrent requests across **all** webhook sources
   is **500**. Trying to connect when the server is at capacity will fail with
   `429 Too Many Requests`.
+* A `CHECK` expression may use at most **`20MB`** of temporary memory while
+  validating a single request. A `CHECK` that needs more, for example one that
+  builds a large string out of the request body, will fail with
+  `400 Bad Request`.
 * Requests that contain a header name specified more than once will be rejected
   with `401 Unauthorized`.
 
@@ -403,6 +375,10 @@ Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
 top of your webhook source that maps the individual fields to columns with the
 required data types. To avoid doing this tedious task manually, you can use
 [this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
+
+To get `NULL` instead of an error for values that do not convert, use
+[`TRY_CAST`](/sql/functions/cast/#try_cast), for example
+`TRY_CAST(body->>'quantity' AS int)`.
 
 ### Related pages
 

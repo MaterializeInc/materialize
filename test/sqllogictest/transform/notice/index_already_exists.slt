@@ -114,6 +114,15 @@ FROM
   mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
 ----
 
+# Verify the notice row is actually retracted from the
+# underlying builtin table (not just hidden by the JOIN).
+query I
+SELECT count(*)
+FROM mz_internal.mz_optimizer_notices
+WHERE notice_type = 'An identical index already exists'
+----
+0
+
 
 # CREATE INDEX for an identical index that emits the optimizer notice.
 statement ok
@@ -190,6 +199,31 @@ WHERE
   idx.name = 't_idx3'
 ----
 
-# This further tests `drop_plans_and_metainfos`
+# Create a new duplicate index that emits a notice, so that we can
+# test that DROP SCHEMA ... CASCADE retracts the notice along with
+# dropping the index via cascade.
+statement ok
+CREATE INDEX t_idx4 ON t(a + 7);
+
+# Sanity: the notice for `t_idx4` is present.
+query I
+SELECT count(*)
+FROM mz_internal.mz_optimizer_notices
+WHERE notice_type = 'An identical index already exists'
+----
+1
+
+# This further tests `drop_optimizer_notices`, specifically that it
+# works for `DROP ... CASCADE`, which drops the index (that has the
+# notice attached) indirectly via dropping the schema.
 statement ok
 DROP SCHEMA notices CASCADE;
+
+# Verify that the cascade drop retracted the notice from the
+# builtin table.
+query I
+SELECT count(*)
+FROM mz_internal.mz_optimizer_notices
+WHERE notice_type = 'An identical index already exists'
+----
+0

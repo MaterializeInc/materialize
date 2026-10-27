@@ -19,20 +19,28 @@ cd "$(dirname "$0")/../../../.."
 
 if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     pyright_version=$(sh ci/builder/pyright-version.sh)
-    typecheck_cmd="npx --yes pyright@$pyright_version --warnings"
 
-    python_folders=(ci misc/python)
+    python_files_list=$(mktemp)
+    dbt_files_list=$(mktemp)
+    ruff_files_list=$(mktemp)
+    trap 'rm -f "$python_files_list" "$dbt_files_list" "$ruff_files_list"' EXIT
+    # Type-check every tracked Python file except two kinds. dbt-materialize
+    # keeps compatibility with older Python versions and has its own check
+    # below. The MCP server packages declare dependencies in their own
+    # pyproject.toml that the repository venv does not install, so pyright
+    # cannot resolve their imports.
+    git_files '*.py' \
+        | grep -v -e '^misc/dbt-materialize/' -e '^misc/mcp-materialize/mcp_materialize/' -e '^misc/mcp-materialize/tests/' -e '^misc/mcp-materialize-agents/mcp_materialize_agents/' \
+        > "$python_files_list"
+    git_files 'misc/dbt-materialize/*.py' > "$dbt_files_list"
 
-    compose_files=$(git_files "**/mzcompose.py" | grep -v "test/")
+    try xargs npx --yes "pyright@$pyright_version" --warnings --threads 4 < "$python_files_list"
 
-    # NOTE: we actually _want_ the word-splitting behavior on `typecheck_cmd` below,
-    # so turn off the warning
-    # shellcheck disable=SC2086
-    try $typecheck_cmd "${python_folders[@]}" $compose_files "test/"
-
-    try bin/pyactivate -m ruff --extend-exclude=misc/dbt-materialize .
+    # Lint tracked files only, see `_ruff_cmd` in `misc/python/materialize/cli/fmt.py`.
+    git_files '*.py' '*.pyi' '*.ipynb' | grep -v '^misc/dbt-materialize/' > "$ruff_files_list"
+    try xargs bin/pyactivate -m ruff check < "$ruff_files_list"
     # We need to maintain compatibility with older Python versions for this
-    try bin/pyactivate -m ruff --target-version=py38 misc/dbt-materialize
+    try xargs bin/pyactivate -m ruff check --target-version=py38 < "$dbt_files_list"
 fi
 
 try_status_report

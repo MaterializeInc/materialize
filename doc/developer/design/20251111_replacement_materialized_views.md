@@ -62,7 +62,7 @@ A replacement materialized view allows users to stage the change of definition a
 The user can then inspect the replacement, and decide to apply or discard it.
 
 We add the following SQL syntax:
-* `CREATE MATERIALIZED VIEW replacement_name REPLACING mv_name AS SELECT ...`
+* `CREATE REPLACEMENT MATERIALIZED VIEW replacement_name FOR mv_name AS SELECT ...`
     Creates a replacement for the specified materialized view with the new definition.
     The usual properties for materialized views apply, such as the cluster and its options.
 * `ALTER MATERIALIZED VIEW mv_name APPLY REPLACEMENT replacement_name`
@@ -225,10 +225,3 @@ process, you are responsible for getting answers to these open
 questions. All open questions should be answered by the time a design
 document is merged.
 -->
-
-### SQL syntax
-
-The current proposal uses the term `REPLACING` in the `CREATE MATERIALIZED VIEW` statement.
-An alternative is to use `AS REPLACEMENT FOR mv_name`, which might be more explicit.
-We could also consider the term `REPLACE`, but that might be confused with `CREATE OR REPLACE`.
-Alternatively, we could use `REPLACES` instead of `REPLACING`.

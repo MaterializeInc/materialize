@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use k8s_controller::{Outcome, TraceMetadata};
 use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec},
@@ -25,22 +26,20 @@ use k8s_openapi::{
         apis::meta::v1::{Condition, LabelSelector, Time},
         util::intstr::IntOrString,
     },
+    jiff::Timestamp,
 };
 use kube::{
     Api, Client, Resource, ResourceExt,
-    api::{ObjectMeta, PostParams},
-    runtime::{
-        controller::Action,
-        reflector::{ObjectRef, Store},
-    },
+    api::{DeleteParams, ObjectMeta, PostParams},
+    runtime::{conditions::is_deployment_completed, controller::Action, wait::await_condition},
 };
 use maplit::btreemap;
 use serde::Serialize;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{apply_resource, make_reflector},
+    k8s::{apply_resource, get_resource, recommended_k8s_labels, replace_resource},
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -52,6 +51,11 @@ use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_ore::{cli::KeyValueArg, instrument};
 use mz_server_core::listeners::AuthenticatorKind;
 
+/// The name identifying this controller in its reconciliation metrics and in
+/// the reporter of the events it publishes.
+pub const CONTROLLER_NAME: &str = "console";
+
+#[derive(Clone)]
 pub struct Config {
     pub enable_security_context: bool,
     pub enable_prometheus_scrape_annotations: bool,
@@ -75,6 +79,8 @@ pub struct Config {
 struct AppConfig {
     version: String,
     auth: AppConfigAuth,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    balancerd_dns_names: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -84,28 +90,23 @@ struct AppConfigAuth {
 
 pub struct Context {
     config: Config,
-    deployments: Store<Deployment>,
 }
 
 impl Context {
-    pub async fn new(config: Config, client: Client) -> Self {
-        Self {
-            config,
-            deployments: make_reflector(client).await,
-        }
+    pub fn new(config: Config) -> Self {
+        Self { config }
     }
 
     async fn sync_deployment_status(
         &self,
         client: &Client,
         console: &Console,
-    ) -> Result<(), kube::Error> {
-        let namespace = console.namespace().unwrap();
+    ) -> Result<(), Error> {
+        let namespace = console.namespace();
         let console_api: Api<Console> = Api::namespaced(client.clone(), &namespace);
+        let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
 
-        let Some(deployment) = self
-            .deployments
-            .get(&ObjectRef::new(&console.deployment_name()).within(&namespace))
+        let Some(deployment) = get_resource(&deployment_api, &console.deployment_name()).await?
         else {
             return Ok(());
         };
@@ -140,7 +141,7 @@ impl Context {
         status.conditions = vec![Condition {
             type_: "Ready".to_string(),
             status: ready_str.to_string(),
-            last_transition_time: Time(chrono::offset::Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             message: format!(
                 "console deployment is{} ready",
                 if ready { "" } else { " not" }
@@ -155,7 +156,7 @@ impl Context {
             .replace_status(
                 &console.name_unchecked(),
                 &PostParams::default(),
-                serde_json::to_vec(&new_console).unwrap(),
+                &new_console,
             )
             .await?;
 
@@ -208,7 +209,10 @@ impl Context {
         network_policies
     }
 
-    fn create_console_external_certificate(&self, console: &Console) -> Option<Certificate> {
+    fn create_console_external_certificate(
+        &self,
+        console: &Console,
+    ) -> anyhow::Result<Option<Certificate>> {
         create_certificate(
             self.config
                 .default_certificate_specs
@@ -219,12 +223,13 @@ impl Context {
             console.external_certificate_name(),
             console.external_certificate_secret_name(),
             None,
-            CertificatePrivateKeyAlgorithm::Rsa,
-            Some(4096),
+            CertificatePrivateKeyAlgorithm::Ecdsa,
+            Some(256),
         )
     }
 
     fn create_console_app_configmap_object(&self, console: &Console) -> ConfigMap {
+        let balancerd_dns_names = console.spec.balancerd.dns_names.clone();
         let version: String = console
             .spec
             .console_image_ref
@@ -234,6 +239,7 @@ impl Context {
             .to_owned();
         let app_config_json = serde_json::to_string(&AppConfig {
             version,
+            balancerd_dns_names,
             auth: AppConfigAuth {
                 mode: console.spec.authenticator_kind,
             },
@@ -401,10 +407,13 @@ ssl_certificate_key /nginx/tls/tls.key;",
             ..Default::default()
         };
 
+        let match_labels = pod_template_labels.clone();
+        pod_template_labels.extend(recommended_k8s_labels("console".into()));
+
         let deployment_spec = DeploymentSpec {
             replicas: Some(console.replicas()),
             selector: LabelSelector {
-                match_labels: Some(pod_template_labels.clone()),
+                match_labels: Some(match_labels),
                 ..Default::default()
             },
             template: PodTemplateSpec {
@@ -472,6 +481,104 @@ ssl_certificate_key /nginx/tls/tls.key;",
             status: None,
         }
     }
+
+    // TODO: remove this once everyone is upgraded to an orchestratord
+    // version with the separate console operator
+    async fn fix_deployment(
+        &self,
+        deployment_api: &Api<Deployment>,
+        new_deployment: &Deployment,
+    ) -> Result<(), Error> {
+        let Some(mut existing_deployment) =
+            get_resource(deployment_api, &new_deployment.name_unchecked()).await?
+        else {
+            return Ok(());
+        };
+
+        if existing_deployment.spec.as_ref().unwrap().selector
+            == new_deployment.spec.as_ref().unwrap().selector
+        {
+            return Ok(());
+        }
+
+        warn!("found existing deployment with old label selector, fixing");
+
+        // this is sufficient because the new labels are a superset of the
+        // old labels, so the existing label selector should still be valid
+        existing_deployment
+            .spec
+            .as_mut()
+            .unwrap()
+            .template
+            .metadata
+            .as_mut()
+            .unwrap()
+            .labels = new_deployment
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .metadata
+            .as_ref()
+            .unwrap()
+            .labels
+            .clone();
+
+        // using await_condition is not ideal in a controller loop, but this
+        // is very temporary and will only ever happen once, so this feels
+        // simpler than trying to introduce an entire state machine here
+        replace_resource(deployment_api, &existing_deployment).await?;
+        await_condition(
+            deployment_api.clone(),
+            &existing_deployment.name_unchecked(),
+            |deployment: Option<&Deployment>| {
+                let observed_generation = deployment
+                    .and_then(|deployment| deployment.status.as_ref())
+                    .and_then(|status| status.observed_generation)
+                    .unwrap_or(0);
+                let current_generation = deployment
+                    .and_then(|deployment| deployment.meta().generation)
+                    .unwrap_or(0);
+                let previous_generation = existing_deployment.meta().generation.unwrap_or(0);
+                observed_generation == current_generation
+                    && current_generation > previous_generation
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+        await_condition(
+            deployment_api.clone(),
+            &existing_deployment.name_unchecked(),
+            is_deployment_completed(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+        // delete the deployment but leave the pods around (via
+        // DeleteParams::orphan)
+        match kube::runtime::wait::delete::delete_and_finalize(
+            deployment_api.clone(),
+            &existing_deployment.name_unchecked(),
+            &DeleteParams::orphan(),
+        )
+        .await
+        {
+            Ok(_) => {}
+            Err(kube::runtime::wait::delete::Error::Delete(kube::Error::Api(e)))
+                if e.code == 404 =>
+            {
+                // the resource already doesn't exist
+            }
+            Err(e) => return Err(anyhow::anyhow!(e).into()),
+        }
+
+        // now, the normal apply of the new deployment (in the main loop)
+        // will take over the existing pods from the old deployment we just
+        // deleted, since we already updated the pod labels to be the same as
+        // the new label selector
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -484,8 +591,10 @@ impl k8s_controller::Context for Context {
         &self,
         client: Client,
         console: &Self::Resource,
+        metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         if console.status.is_none() {
+            let step = metadata.step("initialize_status");
             let console_api: Api<Console> =
                 Api::namespaced(client.clone(), &console.meta().namespace.clone().unwrap());
             let mut new_console = console.clone();
@@ -494,46 +603,67 @@ impl k8s_controller::Context for Context {
                 .replace_status(
                     &console.name_unchecked(),
                     &PostParams::default(),
-                    serde_json::to_vec(&new_console).unwrap(),
+                    &new_console,
                 )
                 .await?;
+            step.finish(Outcome::Completed);
             // Updating the status should trigger a reconciliation
             // which will include a status this time.
             return Ok(None);
         }
 
-        let namespace = console.namespace().unwrap();
+        let namespace = console.namespace();
         let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client.clone(), &namespace);
         let configmap_api: Api<ConfigMap> = Api::namespaced(client.clone(), &namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), &namespace);
 
+        let step = metadata.step("network_policies");
         trace!("creating new network policies");
         let network_policies = self.create_network_policies(console);
         for network_policy in &network_policies {
             apply_resource(&network_policy_api, network_policy).await?;
         }
+        step.finish(if network_policies.is_empty() {
+            Outcome::Skipped
+        } else {
+            Outcome::Completed
+        });
 
+        let step = metadata.step("configmap");
         trace!("creating new console configmap");
         let console_configmap = self.create_console_app_configmap_object(console);
         apply_resource(&configmap_api, &console_configmap).await?;
+        step.finish(Outcome::Completed);
 
+        let step = metadata.step("deployment");
         trace!("creating new console deployment");
         let console_deployment = self.create_console_deployment_object(console);
+        self.fix_deployment(&deployment_api, &console_deployment)
+            .await?;
         apply_resource(&deployment_api, &console_deployment).await?;
+        step.finish(Outcome::Completed);
 
+        let step = metadata.step("service");
         trace!("creating new console service");
         let console_service = self.create_console_service_object(console);
         apply_resource(&service_api, &console_service).await?;
+        step.finish(Outcome::Completed);
 
-        let console_external_certificate = self.create_console_external_certificate(console);
+        let step = metadata.step("certificate");
+        let console_external_certificate = self.create_console_external_certificate(console)?;
         if let Some(certificate) = &console_external_certificate {
             trace!("creating new console external certificate");
             apply_resource(&certificate_api, certificate).await?;
+            step.finish(Outcome::Completed);
+        } else {
+            step.finish(Outcome::Skipped);
         }
 
+        let step = metadata.step("sync_status");
         self.sync_deployment_status(&client, console).await?;
+        step.finish(Outcome::Completed);
 
         Ok(None)
     }

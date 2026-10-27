@@ -13,6 +13,10 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-try cargo clippy --all-targets -- -D warnings
+RESULT=0
+{ stdbuf --output=L --error=L cargo clippy --all-targets -- -D warnings |& tee run.log; } || RESULT=$?
 
-try_status_report
+if [[ $RESULT -ne 0 ]]; then
+  bin/clear-corrupted-cargo-target-dir run.log
+  exit $RESULT
+fi

@@ -1,0 +1,255 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural lockdown tests for mz_catalog.mz_default_privileges.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 6 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_default_privileges' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+role_id  text  false
+database_id  text  true
+schema_id  text  true
+object_type  text  false
+grantee  text  false
+privileges  text  false
+
+# --- Pre-populated rows -------------------------------------------------------
+
+# Bootstrap defaults: the PUBLIC role (id='p') gets USAGE ('U') on TYPE / SCHEMA
+# / CLUSTER / DATABASE from mz_system (s2 for cluster/schema/database, p for
+# type). database_id and schema_id are NULL for all bootstrap rows.
+query TTTTTT rowsort
+SELECT * FROM mz_default_privileges
+----
+p  NULL  NULL  cluster  s2  U
+p  NULL  NULL  database  s2  U
+p  NULL  NULL  schema  s2  U
+p  NULL  NULL  type  p  U
+
+# --- OID stability ------------------------------------------------------------
+
+# mz_default_privileges must continue to be addressable by its persistent OID.
+query I
+SELECT count(*) FROM mz_objects
+WHERE name = 'mz_default_privileges'
+  AND schema_id IN (SELECT id FROM mz_schemas WHERE name = 'mz_catalog')
+----
+1
+
+# --- Object type coverage -----------------------------------------------------
+
+# Exercise ALTER DEFAULT PRIVILEGES across object types covered by the syntax.
+# After conversion the new MV must lower each ObjectType to the same string the
+# old populator produced (`object_type.to_string().to_lowercase()`).
+
+statement ok
+CREATE ROLE r_obj
+
+statement ok
+GRANT r_obj TO materialize
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_obj GRANT SELECT ON TABLES TO PUBLIC
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_obj GRANT USAGE ON TYPES TO PUBLIC
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_obj GRANT CREATE ON SCHEMAS TO PUBLIC
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_obj GRANT CREATE ON DATABASES TO PUBLIC
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_obj GRANT USAGE ON CLUSTERS TO PUBLIC
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_obj GRANT USAGE ON CONNECTIONS TO PUBLIC
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_obj GRANT USAGE ON SECRETS TO PUBLIC
+
+# Lock down all object_type strings for a single owning role.
+query T rowsort
+SELECT object_type
+FROM mz_default_privileges
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'r_obj')
+----
+cluster
+connection
+database
+schema
+secret
+table
+type
+
+# --- AclMode coverage ---------------------------------------------------------
+
+# Privileges column is the PostgreSQL ACL char-code string. Exercise enough
+# bits to verify the populator/encoder matches AclMode::Display.
+
+statement ok
+CREATE ROLE r_acl
+
+statement ok
+GRANT r_acl TO materialize
+
+# USAGE → 'U'
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_acl GRANT USAGE ON SCHEMAS TO PUBLIC
+
+# SELECT,INSERT,UPDATE,DELETE on TABLES → 'arwd'
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_acl GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO PUBLIC
+
+# CREATE on DATABASES → 'C'
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_acl GRANT CREATE ON DATABASES TO PUBLIC
+
+query TT rowsort
+SELECT object_type, privileges
+FROM mz_default_privileges
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'r_acl')
+----
+database  C
+schema  U
+table  arwd
+
+# --- Nullable database_id / schema_id ----------------------------------------
+
+statement ok
+CREATE DATABASE d_dp
+
+statement ok
+CREATE SCHEMA d_dp.s_dp
+
+statement ok
+CREATE ROLE r_scope
+
+statement ok
+GRANT r_scope TO materialize
+
+# IN DATABASE → database_id non-null, schema_id NULL.
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_scope IN DATABASE d_dp GRANT SELECT ON TABLES TO PUBLIC
+
+# IN SCHEMA → database_id NULL, schema_id non-null.
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_scope IN SCHEMA d_dp.s_dp GRANT SELECT ON TABLES TO PUBLIC
+
+# No IN clause → both NULL.
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_scope GRANT INSERT ON TABLES TO PUBLIC
+
+# IN DATABASE sets database_id only. IN SCHEMA sets both database_id and
+# schema_id (a schema is always database-qualified).
+query TTT rowsort
+SELECT
+    (database_id IS NULL)::text,
+    (schema_id IS NULL)::text,
+    privileges
+FROM mz_default_privileges
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'r_scope')
+----
+false  false  r
+false  true  r
+true  true  a
+
+# --- PUBLIC grantee -----------------------------------------------------------
+
+# grantee='p' indicates the PUBLIC pseudo-role. Most grants in this file are
+# TO PUBLIC, plus the single PUBLIC-granted bootstrap row (type). The other
+# three bootstrap rows (cluster/database/schema) grant to the system role 's2'.
+query I
+SELECT count(*) FROM mz_default_privileges WHERE grantee = 'p'
+----
+14
+
+# --- FOR ALL ROLES (role_id='p') ---------------------------------------------
+
+statement ok
+CREATE ROLE r_grantee
+
+# FOR ALL ROLES requires superuser.
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO r_grantee
+----
+COMPLETE 0
+
+# FOR ALL ROLES sets role_id to the PUBLIC pseudo-role 'p'.
+query TT
+SELECT role_id, object_type
+FROM mz_default_privileges
+WHERE grantee = (SELECT id FROM mz_roles WHERE name = 'r_grantee')
+----
+p  table
+
+# --- REVOKE round-trip --------------------------------------------------------
+
+statement ok
+CREATE ROLE r_rt
+
+statement ok
+GRANT r_rt TO materialize
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_rt GRANT SELECT ON TABLES TO PUBLIC
+
+query I
+SELECT count(*) FROM mz_default_privileges
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'r_rt')
+----
+1
+
+statement ok
+ALTER DEFAULT PRIVILEGES FOR ROLE r_rt REVOKE SELECT ON TABLES FROM PUBLIC
+
+query I
+SELECT count(*) FROM mz_default_privileges
+WHERE role_id = (SELECT id FROM mz_roles WHERE name = 'r_rt')
+----
+0
+
+# --- NOT NULL invariants ------------------------------------------------------
+
+query I
+SELECT count(*) FROM mz_default_privileges
+WHERE role_id IS NULL OR object_type IS NULL OR grantee IS NULL OR privileges IS NULL
+----
+0
+
+# --- PUBLIC SELECT permission preserved ---------------------------------------
+
+# A non-superuser role can SELECT from mz_default_privileges. (PUBLIC_SELECT
+# access must survive the conversion to MV.)
+statement ok
+CREATE ROLE r_reader LOGIN
+
+simple conn=mz_system,user=mz_system
+GRANT r_reader TO materialize
+----
+COMPLETE 0
+
+simple conn=reader,user=r_reader
+SELECT count(*) >= 0 FROM mz_default_privileges
+----
+t
+COMPLETE 1

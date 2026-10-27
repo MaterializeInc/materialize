@@ -27,6 +27,10 @@ class Field:
     name: str
     data_type: type[DataType]
     is_key: bool
+    # When True, an Avro-backed executor encodes this field as a `["null", T]`
+    # union instead of the bare type `T`, exercising union schema resolution in
+    # the source decode path. Keys are never nullable.
+    nullable: bool
     # value_fn can be used to encode a value which is stored in this field, for example:
     # import uuid
     # namespace = uuid.uuid4()
@@ -39,11 +43,14 @@ class Field:
         data_type: type[DataType],
         is_key: bool,
         value_fn: Callable[[Any], Any] | None = None,
+        nullable: bool = False,
     ):
         self.name = name
         self.data_type = data_type
         self.is_key = is_key
+        self.nullable = nullable
         self.value_fn = value_fn or identity
 
     def __repr__(self) -> str:
-        return f"Field({'key' if self.is_key else 'value'}, {self.name}: {self.data_type.__name__})"
+        nullable = ", nullable" if self.nullable else ""
+        return f"Field({'key' if self.is_key else 'value'}, {self.name}: {self.data_type.__name__}{nullable})"

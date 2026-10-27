@@ -38,6 +38,7 @@ CREATE SCHEMA public;
 
 DROP PUBLICATION IF EXISTS mz_source;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
+DO $do$ BEGIN IF current_setting('server_version_num')::int >= 180000 THEN EXECUTE 'ALTER PUBLICATION mz_source SET (publish_generated_columns = ''stored'')'; END IF; END $do$;
 
 CREATE TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO pk_table VALUES (1, 'one');
@@ -136,6 +137,8 @@ CREATE TABLE conflict_schema.another_enum_table ("колона" another_enum);
 INSERT INTO conflict_schema.another_enum_table VALUES ('var2'), ('var3');
 ALTER TABLE conflict_schema.another_enum_table REPLICA IDENTITY FULL;
 
+ANALYZE;
+
 DROP PUBLICATION IF EXISTS mz_source_narrow;
 
 CREATE PUBLICATION mz_source_narrow FOR TABLE enum_table, public.another_enum_table, pk_table;
@@ -145,6 +148,8 @@ CREATE SCHEMA another_schema;
 CREATE TABLE another_schema.another_table (f1 TEXT);
 ALTER TABLE another_schema.another_table REPLICA IDENTITY FULL;
 INSERT INTO another_schema.another_table VALUES ('123');
+
+ANALYZE;
 
 DROP PUBLICATION IF EXISTS another_publication;
 
@@ -156,7 +161,6 @@ CREATE PUBLICATION another_publication FOR TABLE another_schema.another_table;
 # $ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=materialize_% active=false
 
 # Sneak in a test for pg_source_snapshot_statement_timeout, pg_source_wal_sender_timeout
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET pg_source_snapshot_statement_timeout = 1000;
 ALTER SYSTEM SET pg_source_wal_sender_timeout = 0;
@@ -327,21 +331,23 @@ public          nonpk_table
 public          types_table
 public          nulls_table
 public          multipart_pk
-public          "\"space table\""
+public          "space table"
 public          tstzrange_table
-public          "\"таблица\""
+public          таблица
 public          array_types_table
 public          trailing_space_pk
 public          escaped_text_table
 public          trailing_space_nopk
-public          "\"\"\"literal_quotes\"\"\""
+public          "\"literal_quotes\""
 conflict_schema conflict_table
 
-# Ensure all ingestion export subsources have an ID greater than the primary source ID
+# Ensure all ingestion export subsources have an ID greater than the primary source ID.
+# We compare IDs as integers because the string `id` column (e.g. 'u9', 'u10') doesn't
+# sort correctly with lexicographic comparison across different digit counts.
 > SELECT bool_and(primary_source_id < subsource_id)
   FROM
-      (SELECT id AS primary_source_id FROM mz_sources WHERE type = 'postgres')
-          CROSS JOIN (SELECT id AS subsource_id FROM mz_tables WHERE source_id IS NOT NULL);
+      (SELECT substr(id, 2)::integer AS primary_source_id FROM mz_sources WHERE type = 'postgres')
+          CROSS JOIN (SELECT substr(id, 2)::integer AS subsource_id FROM mz_tables WHERE source_id IS NOT NULL);
 true
 
 > SELECT status FROM mz_internal.mz_source_statuses WHERE name = 'mz_source';
@@ -367,6 +373,9 @@ $ unset-regex
 1 one
 2 two
 3 three
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_stat_activity WHERE backend_type = 'walsender' AND application_name = 'materialize') THEN RAISE EXCEPTION 'no walsender with application_name materialize'; END IF; END $$
 
 > SELECT * FROM nonpk_table;
 1 1
@@ -720,8 +729,14 @@ var1
 
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
-> SHOW CREATE TABLE enum_table
+>[version<2600700] SHOW CREATE TABLE enum_table
 materialize.public.enum_table "CREATE TABLE materialize.public.enum_table (a pg_catalog.text) FROM SOURCE materialize.public.enum_source (REFERENCE = postgres.public.enum_table) WITH (TEXT COLUMNS = (a), <DETAILS>);"
+
+>[2600700<=version<2603000] SHOW CREATE TABLE enum_table
+materialize.public.enum_table "CREATE TABLE materialize.public.enum_table (a pg_catalog.text)\nFROM SOURCE materialize.public.enum_source (REFERENCE = postgres.public.enum_table)\nWITH (\n    TEXT COLUMNS = (a),\n    <DETAILS>\n);"
+
+>[version>=2603000] SHOW CREATE TABLE enum_table
+materialize.public.enum_table "CREATE TABLE materialize.public.enum_table\nFROM SOURCE materialize.public.enum_source (REFERENCE = postgres.public.enum_table)\nWITH (TEXT COLUMNS = (a));"
 
 # Test that TEXT COLUMN types can change
 $ postgres-execute connection=postgres://postgres:postgres@postgres

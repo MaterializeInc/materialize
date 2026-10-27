@@ -27,11 +27,11 @@
 //! messages sent and received.
 //!
 //! Supported `send` types:
-//! - [`Query`](struct.Query.html)
-//! - [`Parse`](struct.Parse.html)
-//! - [`Describe`](struct.Describe.html)
-//! - [`Bind`](struct.Bind.html)
-//! - [`Execute`](struct.Execute.html)
+//! - [`Query`]
+//! - [`Parse`]
+//! - [`Describe`]
+//! - [`Bind`]
+//! - [`Execute`]
 //! - `Sync`
 //!
 //! Supported `until` arguments:
@@ -43,6 +43,9 @@
 //! The default is `CMS` (code, message, severity). For example: `until
 //! err_field_typs=SC` would return the severity and code fields in any
 //! ErrorResponse message.
+//! - `parameter_status` names the parameters whose `ParameterStatus` messages
+//! are recorded. All others are skipped. For example `until
+//! parameter_status=application_name`.
 //!
 //! For example, to execute a simple prepared statement:
 //! ```pgtest
@@ -135,7 +138,12 @@ impl PgConn {
             Message::AuthenticationOk => {}
             _ => bail!("expected AuthenticationOk"),
         };
-        conn.until(vec!["ReadyForQuery"], vec!['C', 'S', 'M'], BTreeSet::new())?;
+        conn.until(
+            vec!["ReadyForQuery"],
+            vec!['C', 'S', 'M'],
+            BTreeSet::new(),
+            &BTreeSet::new(),
+        )?;
         Ok(conn)
     }
 
@@ -150,6 +158,7 @@ impl PgConn {
         until: Vec<&str>,
         err_field_typs: Vec<char>,
         ignore: BTreeSet<String>,
+        parameter_status: &BTreeSet<String>,
     ) -> anyhow::Result<Vec<String>> {
         let mut msgs = Vec::with_capacity(until.len());
         for expect in until {
@@ -296,7 +305,19 @@ impl PgConn {
                             parameters: body.parameters().collect().unwrap(),
                         })?,
                     ),
-                    Message::ParameterStatus(_) => continue,
+                    Message::ParameterStatus(body) => {
+                        let name = body.name()?;
+                        if !parameter_status.contains(name) {
+                            continue;
+                        }
+                        (
+                            "ParameterStatus",
+                            serde_json::to_string(&ParameterStatus {
+                                name: name.to_string(),
+                                value: body.value()?.to_string(),
+                            })?,
+                        )
+                    }
                     Message::NoData => ("NoData", "".to_string()),
                     Message::EmptyQueryResponse => ("EmptyQueryResponse", "".to_string()),
                     _ => ("UNKNOWN", format!("'{}'", ch)),
@@ -414,9 +435,10 @@ impl PgTest {
         until: Vec<&str>,
         err_field_typs: Vec<char>,
         ignore: BTreeSet<String>,
+        parameter_status: &BTreeSet<String>,
     ) -> anyhow::Result<Vec<String>> {
         let conn = self.get_conn(conn, options)?;
-        conn.until(until, err_field_typs, ignore)
+        conn.until(until, err_field_typs, ignore, parameter_status)
     }
 }
 
@@ -456,6 +478,12 @@ pub struct ParameterDescription {
 #[derive(Serialize)]
 pub struct CommandComplete {
     pub tag: String,
+}
+
+#[derive(Serialize)]
+pub struct ParameterStatus {
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Serialize)]
@@ -534,14 +562,27 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
                         "Sync" => frontend::sync(buf),
                         "Bind" => {
                             let v: Bind = serde_json::from_str(args).unwrap();
-                            let values = v.values.unwrap_or_default();
+                            // Parameter values as raw bytes. `binary_values`
+                            // supplies them verbatim, which (together with
+                            // `param_formats`) is what lets a test exercise the
+                            // binary parameter format; otherwise `values` are
+                            // sent as UTF-8 text, matching historical behavior.
+                            let values: Vec<Vec<u8>> = match v.binary_values {
+                                Some(binary_values) => binary_values,
+                                None => v
+                                    .values
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(String::into_bytes)
+                                    .collect(),
+                            };
                             if frontend::bind(
                                 &v.portal.unwrap_or_else(|| "".into()),
                                 &v.statement.unwrap_or_else(|| "".into()),
-                                vec![], // formats
-                                values, // values
-                                |t, buf| {
-                                    buf.put_slice(t.as_bytes());
+                                v.param_formats.unwrap_or_default(), // formats
+                                values,                              // values
+                                |bytes: Vec<u8>, buf| {
+                                    buf.put_slice(&bytes);
                                     Ok(IsNull::No)
                                 }, // serializer
                                 v.result_formats.unwrap_or_default(),
@@ -605,14 +646,26 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
                         ignore.insert(v);
                     }
                 }
+                let parameter_status: BTreeSet<String> = args
+                    .remove("parameter_status")
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
                 if !args.is_empty() {
                     panic!("extra until arguments: {:?}", args);
                 }
                 format!(
                     "{}\n",
-                    pgt.until(conn, options, lines.collect(), err_field_typs, ignore)
-                        .unwrap()
-                        .join("\n")
+                    pgt.until(
+                        conn,
+                        options,
+                        lines.collect(),
+                        err_field_typs,
+                        ignore,
+                        &parameter_status,
+                    )
+                    .unwrap()
+                    .join("\n")
                 )
             }
             _ => panic!("unknown directive {}", tc.input),
@@ -641,6 +694,12 @@ pub struct Bind {
     pub portal: Option<String>,
     pub statement: Option<String>,
     pub values: Option<Vec<String>>,
+    /// Parameter format codes (0 = text, 1 = binary). Empty/absent means all
+    /// parameters use the text format, as before.
+    pub param_formats: Option<Vec<i16>>,
+    /// Raw parameter values, sent verbatim. Use this instead of `values` to put
+    /// arbitrary bytes (e.g. a binary-format parameter) on the wire.
+    pub binary_values: Option<Vec<Vec<u8>>>,
     pub result_formats: Option<Vec<i16>>,
 }
 

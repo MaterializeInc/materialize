@@ -61,22 +61,13 @@ class SetupSshTunnels(Action):
 
     def execute(self, e: Executor) -> None:
         connection_count = 4
-        self.handle = e.testdrive(
-            "\n".join(
-                [
-                    dedent(
-                        f"""
+        self.handle = e.testdrive("\n".join([dedent(f"""
                         > CREATE CONNECTION IF NOT EXISTS ssh_tunnel_{i} TO SSH TUNNEL (
                             HOST 'ssh-bastion-host',
                             USER 'mz',
                             PORT 22
                             );
-                        """
-                    )
-                    for i in range(connection_count)
-                ]
-            )
-        )
+                        """) for i in range(connection_count)]))
 
         for i in range(connection_count):
             public_key = self.mz.environmentd.sql_query(

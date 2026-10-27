@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::ops::ControlFlow::{Break, Continue};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
 use bytes::Bytes;
@@ -55,7 +56,7 @@ use crate::{Metrics, PersistConfig, ShardId};
 /// The following invariants are maintained at all times:
 /// - A shard is initialized iff there is at least one version of it in
 ///   Consensus.
-/// - The first version of state is written to `SeqNo(1)`. Each successive state
+/// - The first version of state is written to `SeqNo(0)`. Each successive state
 ///   version is assigned its predecessor's SeqNo +1.
 /// - `current`: The latest version of state. By definition, the largest SeqNo
 ///   present in Consensus.
@@ -164,12 +165,16 @@ impl StateVersions {
 
         // Shard is not initialized, try initializing it.
         let (initial_state, initial_diff) = self.write_initial_rollup(shard_metrics).await;
+        assert_eq!(
+            initial_state.seqno(),
+            SeqNo::minimum(),
+            "initial state should have the initial seqno"
+        );
         let (cas_res, _diff) =
             retry_external(&self.metrics.retries.external.maybe_init_cas, || async {
                 self.try_compare_and_set_current(
                     "maybe_init_shard",
                     shard_metrics,
-                    None,
                     &initial_state,
                     &initial_diff,
                 )
@@ -221,7 +226,6 @@ impl StateVersions {
         &self,
         cmd_name: &str,
         shard_metrics: &ShardMetrics,
-        expected: Option<SeqNo>,
         new_state: &TypedState<K, V, T, D>,
         diff: &StateDiff<T>,
     ) -> Result<(CaSResult, VersionedData), Indeterminate>
@@ -253,11 +257,7 @@ impl StateVersions {
         let payload_len = new.data.len();
         let cas_res = retry_determinate(
             &self.metrics.retries.determinate.apply_unbatched_cmd_cas,
-            || async {
-                self.consensus
-                    .compare_and_set(&path, expected, new.clone())
-                    .await
-            },
+            || async { self.consensus.compare_and_set(&path, new.clone()).await },
         )
         .instrument(debug_span!("apply_unbatched_cmd::cas", payload_len))
         .await
@@ -275,8 +275,6 @@ impl StateVersions {
                     new_state
                 );
 
-                shard_metrics.set_since(new_state.since());
-                shard_metrics.set_upper(new_state.upper());
                 shard_metrics.seqnos_since_last_rollup.set(
                     new_state
                         .seqno
@@ -288,17 +286,11 @@ impl StateVersions {
                     .set(u64::cast_from(new_state.spine_batch_count()));
                 let size_metrics = new_state.size_metrics();
                 shard_metrics
-                    .schema_registry_version_count
-                    .set(u64::cast_from(new_state.collections.schemas.len()));
-                shard_metrics
                     .hollow_batch_count
                     .set(u64::cast_from(size_metrics.hollow_batch_count));
                 shard_metrics
                     .batch_part_count
                     .set(u64::cast_from(size_metrics.batch_part_count));
-                shard_metrics
-                    .rewrite_part_count
-                    .set(u64::cast_from(size_metrics.rewrite_part_count));
                 shard_metrics
                     .update_count
                     .set(u64::cast_from(size_metrics.num_updates));
@@ -321,29 +313,16 @@ impl StateVersions {
                     .encoded_diff_size
                     .inc_by(u64::cast_from(payload_len));
                 shard_metrics
-                    .live_writers
-                    .set(u64::cast_from(new_state.collections.writers.len()));
-                shard_metrics
-                    .rewrite_part_count
-                    .set(u64::cast_from(size_metrics.rewrite_part_count));
-                shard_metrics
                     .inline_part_count
                     .set(u64::cast_from(size_metrics.inline_part_count));
-                shard_metrics
-                    .inline_part_bytes
-                    .set(u64::cast_from(size_metrics.inline_part_bytes));
-                shard_metrics.stale_version.set(
-                    if new_state
+                shard_metrics.stale.store(
+                    new_state
                         .state
                         .collections
                         .version
                         .cmp_precedence(&self.cfg.build_version)
-                        .is_lt()
-                    {
-                        1
-                    } else {
-                        0
-                    },
+                        .is_lt(),
+                    Ordering::Relaxed,
                 );
 
                 let spine_metrics = new_state.collections.trace.spine_metrics();
@@ -372,8 +351,8 @@ impl StateVersions {
                         // Carefully avoid any String allocs by splitting.
                         let (writer_key, _) = key.0.split_once('/')?;
                         match &writer_key[..1] {
-                            "w" => Some(("old", part.encoded_size_bytes())),
-                            "n" => Some((&writer_key[1..], part.encoded_size_bytes())),
+                            "w" => Some("old"),
+                            "n" => Some(&writer_key[1..]),
                             _ => None,
                         }
                     });
@@ -386,7 +365,7 @@ impl StateVersions {
                     "apply_unbatched_cmd {} {} lost the CaS race, retrying: {:?}",
                     new_state.shard_id(),
                     cmd_name,
-                    expected,
+                    new_state.seqno.previous(),
                 );
                 Ok((CaSResult::ExpectationMismatch, new))
             }
@@ -733,7 +712,8 @@ impl StateVersions {
             self.cfg.hostname.clone(),
             (self.cfg.now)(),
         );
-        let rollup_seqno = empty_state.seqno.next();
+        let mut initial_state = empty_state.clone_for_rollup();
+        let rollup_seqno = initial_state.seqno();
         let rollup = HollowRollup {
             key: PartialRollupKey::new(rollup_seqno, &RollupId::new()),
             // Chicken-and-egg problem here. We don't know the size of the
@@ -741,10 +721,10 @@ impl StateVersions {
             // itself.
             encoded_size_bytes: None,
         };
-        let (applied, initial_state) = match empty_state
-            .clone_apply(&self.cfg, &mut |_, _, state| {
-                state.add_rollup((rollup_seqno, &rollup))
-            }) {
+        let applied = match initial_state
+            .collections
+            .add_rollup((rollup_seqno, &rollup))
+        {
             Continue(x) => x,
             Break(NoOpStateTransition(_)) => {
                 panic!("initial state transition should not be a no-op")

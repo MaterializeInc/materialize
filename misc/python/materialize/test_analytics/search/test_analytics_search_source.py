@@ -80,8 +80,7 @@ class TestAnalyticsDataSource:
         )
 
         result_rows = self.test_analytics_db.build_annotations.query_data(
-            dedent(
-                f"""
+            dedent(f"""
             SELECT
                 bae.build_number,
                 bae.pipeline,
@@ -103,8 +102,7 @@ class TestAnalyticsDataSource:
             ORDER BY
                 {order_clause}
             LIMIT {max_entries}
-            """
-            ),
+            """),
             verbose=False,
             statement_timeout="5s",
         )

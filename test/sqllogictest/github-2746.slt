@@ -110,32 +110,9 @@ Explained Query:
             delta_stage[0]
               lookup={ relation=1, key=[] }
               stream={ key=[], thinning=(#0, #1) }
-            source={ relation=0, key=[] }
-          plan_path[1]
-            delta_stage[1]
-              closure
-                project=(#0)
-                filter=(((#3{l_receiptdate} = 1997-07-06) OR (date_to_timestamp(#2{l_commitdate}) = (#1{o_orderdate} - 7 days))))
-              lookup={ relation=0, key=[] }
-              stream={ key=[], thinning=(#0, #1) }
-            delta_stage[0]
-              lookup={ relation=2, key=[#0] }
-              stream={ key=[#0], thinning=() }
-            source={ relation=1, key=[] }
-          plan_path[2]
-            delta_stage[1]
-              closure
-                project=(#0)
-                filter=(((#3{l_receiptdate} = 1997-07-06) OR (date_to_timestamp(#2{l_commitdate}) = (#1{o_orderdate} - 7 days))))
-              lookup={ relation=0, key=[] }
-              stream={ key=[], thinning=(#0, #1) }
-            delta_stage[0]
-              lookup={ relation=1, key=[#0] }
-              stream={ key=[#0], thinning=(#1) }
-            source={ relation=2, key=[#0] }
+            source={ relation=0, raw }
           ArrangeBy
             raw=true
-            arrangements[0]={ key=[], permutation=id, thinning=(#0, #1) }
             Get::Collection materialize.public.lineitem
               project=(#1, #2)
               raw=true

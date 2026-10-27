@@ -13,20 +13,17 @@ from materialize.checks.checks import Check
 
 class UnifiedCluster(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            """
+        return Testdrive("""
             >[version>=13800] CREATE CLUSTER shared_cluster_compute_first SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
             >[version<13800] CREATE CLUSTER shared_cluster_compute_first SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
             >[version>=13800] CREATE CLUSTER shared_cluster_storage_first SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
             >[version<13800] CREATE CLUSTER shared_cluster_storage_first SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-            """
-        )
+            """)
 
     def manipulate(self) -> list[Testdrive]:
         return [
             # Create either a source or a view as first object in cluster
-            Testdrive(
-                """
+            Testdrive("""
                 > CREATE SOURCE shared_cluster_storage_first_source
                   IN CLUSTER shared_cluster_storage_first
                   FROM LOAD GENERATOR COUNTER
@@ -39,12 +36,10 @@ class UnifiedCluster(Check):
                 > CREATE DEFAULT INDEX
                   IN CLUSTER shared_cluster_compute_first
                   ON shared_cluster_compute_first_mv
-                """
-            ),
+                """),
             # Create the other type of object as a second object in the cluster that
             # now already contains an object
-            Testdrive(
-                """
+            Testdrive("""
                 > CREATE SOURCE shared_cluster_compute_first_source
                   IN CLUSTER shared_cluster_compute_first
                   FROM LOAD GENERATOR COUNTER
@@ -57,13 +52,11 @@ class UnifiedCluster(Check):
                 > CREATE DEFAULT INDEX
                   IN CLUSTER shared_cluster_storage_first
                   ON shared_cluster_storage_first_mv
-                """
-            ),
+                """),
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            """
+        return Testdrive("""
             > SELECT COUNT(*) > 0 FROM shared_cluster_storage_first_source_tbl;
             true
 
@@ -92,5 +85,4 @@ class UnifiedCluster(Check):
             ! DROP CLUSTER shared_cluster_storage_first;
             contains: cannot drop cluster "shared_cluster_storage_first" because other objects depend on it
 
-            """
-        )
+            """)

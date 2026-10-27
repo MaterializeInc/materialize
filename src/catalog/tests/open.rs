@@ -7,28 +7,35 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#![recursion_limit = "256"]
+
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 use std::time::Duration;
 
 use mz_catalog::durable::initialize::USER_VERSION_KEY;
+use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, Snapshot};
 use mz_catalog::durable::{
     BUILTIN_MIGRATION_SHARD_KEY, CATALOG_VERSION, CatalogError, Database, DurableCatalogError,
     DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError,
-    MOCK_AUTHENTICATION_NONCE_KEY, Schema, TestCatalogStateBuilder, test_bootstrap_args,
+    MOCK_AUTHENTICATION_NONCE_KEY, Metrics, Schema, TestCatalogStateBuilder, Transaction,
+    test_bootstrap_args,
 };
 use mz_catalog_protos::objects::{SettingKey, SettingValue};
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::{PersistClient, PersistLocation};
 use mz_persist_types::ShardId;
-use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};
+use mz_sql::names::SchemaId;
 use uuid::Uuid;
 
 /// A new type for [`Snapshot`] that excludes fields that change often from the debug output. It's
@@ -93,6 +100,8 @@ impl Debug for StableSnapshot<'_> {
             source_references,
             system_object_mappings,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             system_privileges,
             storage_collection_metadata,
@@ -122,6 +131,14 @@ impl Debug for StableSnapshot<'_> {
             .field("source_references", source_references)
             .field("system_object_mappings", system_object_mappings)
             .field("system_configurations", system_configurations)
+            .field(
+                "cluster_system_configurations",
+                cluster_system_configurations,
+            )
+            .field(
+                "replica_system_configurations",
+                replica_system_configurations,
+            )
             .field("default_privileges", default_privileges)
             .field("system_privileges", system_privileges)
             .field("storage_collection_metadata", storage_collection_metadata)
@@ -151,8 +168,7 @@ async fn test_is_initialized(state_builder: TestCatalogStateBuilder) {
     let state = openable_state1
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     state.expire().await;
 
     let mut openable_state2 = state_builder.unwrap_build().await;
@@ -196,8 +212,7 @@ async fn test_get_deployment_generation(state_builder: TestCatalogStateBuilder) 
         let state = openable_state
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
         state.expire().await;
     }
 
@@ -255,8 +270,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .await
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
         Box::new(state).expire().await;
     }
@@ -269,8 +283,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .await
             .open_savepoint(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
         // Drain initial updates.
         let _ = state
             .sync_to_current_updates()
@@ -281,7 +294,6 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
 
         // Perform writes.
         let mut txn = state.transaction().await.unwrap();
-        let mut ids = Vec::new();
         let mut db_schemas = Vec::new();
         for i in 0..10 {
             let (db_id, db_oid) = txn
@@ -301,7 +313,6 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
                     &HashSet::new(),
                 )
                 .unwrap();
-            ids.push((db_id.clone(), schema_id.clone()));
             db_schemas.push((
                 Database {
                     id: db_id.clone(),
@@ -375,8 +386,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
             .await
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
         // Write should not have persisted.
         let db = state
             .snapshot()
@@ -421,8 +431,7 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     // Drain initial updates.
     let _ = state
         .sync_to_current_updates()
@@ -470,12 +479,388 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
 
     let snapshot = read_only_state.snapshot().await.unwrap();
     let role = snapshot.roles.get(&proto::RoleKey {
-        id: Some(role_id.into_proto()),
+        id: role_id.into_proto(),
     });
     assert_eq!(&role.unwrap().name, "joe");
 
     Box::new(read_only_state).expire().await;
     Box::new(state).expire().await;
+}
+
+/// The ids of all items in a catalog snapshot.
+fn item_ids(snapshot: &Snapshot) -> Vec<CatalogItemId> {
+    snapshot
+        .items
+        .keys()
+        .map(|key| CatalogItemId::from_proto(key.gid.clone()).unwrap())
+        .collect()
+}
+
+/// Inserts a view item. A `Some` owner session tags the item as temporary.
+fn insert_view(
+    txn: &mut Transaction<'_>,
+    id: CatalogItemId,
+    schema_id: SchemaId,
+    name: &str,
+    ephemeral_owner_session: Option<Uuid>,
+) {
+    let CatalogItemId::User(raw_id) = id else {
+        panic!("tests only insert user items");
+    };
+    txn.insert_item(
+        id,
+        u32::try_from(20_000 + raw_id).expect("small"),
+        GlobalId::User(raw_id),
+        schema_id,
+        name,
+        format!("CREATE VIEW {name} AS SELECT 1"),
+        RoleId::User(1),
+        vec![],
+        BTreeMap::new(),
+        ephemeral_owner_session,
+    )
+    .unwrap();
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_open_reclaims_ephemeral_items() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_open_reclaims_ephemeral_items(state_builder).await;
+}
+
+/// Temporary items are durable, tagged with the UUID of the session that
+/// created them, so a process that dies without running its session-close
+/// cleanup leaves them behind. Opening the catalog with write intent fences out
+/// every previous owner, which means every session that could own one is dead,
+/// so that open reclaims them. This is the only thing standing between a
+/// `kill -9` and a permanently leaked catalog item.
+///
+/// A read-only open must not reclaim anything: during a zero-downtime deploy the
+/// follower reads the leader's catalog while the leader's sessions are still
+/// live and still own their temporary items.
+async fn test_open_reclaims_ephemeral_items(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+    let owner_session = Uuid::from_u128(1);
+    let ephemeral_id = CatalogItemId::User(200);
+    let normal_id = CatalogItemId::User(100);
+
+    // A session creates a temporary item, next to a normal one, and the process
+    // then dies without closing the session.
+    {
+        let mut state = state_builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap();
+        let _ = state
+            .sync_to_current_updates()
+            .await
+            .expect("unable to sync");
+
+        let mut txn = state.transaction().await.unwrap();
+        insert_view(&mut txn, normal_id, SchemaId::User(1), "keep", None);
+        // Temporary items are parented to a sentinel schema id shared by
+        // every session.
+        insert_view(
+            &mut txn,
+            ephemeral_id,
+            SchemaId::User(0),
+            "tt",
+            Some(owner_session),
+        );
+        let _ = txn.get_and_commit_op_updates();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
+
+        let snapshot = state.snapshot().await.unwrap();
+        assert!(item_ids(&snapshot).contains(&ephemeral_id));
+        Box::new(state).expire().await;
+    }
+
+    // A read-only open leaves it alone. Checked before the writable open below,
+    // which is what removes it.
+    {
+        let mut read_only_state = state_builder
+            .clone()
+            .unwrap_build()
+            .await
+            .open_read_only(&test_bootstrap_args())
+            .await
+            .unwrap();
+        let ids = item_ids(&read_only_state.snapshot().await.unwrap());
+        assert!(
+            ids.contains(&ephemeral_id),
+            "read-only open reclaimed an ephemeral item"
+        );
+        Box::new(read_only_state).expire().await;
+    }
+
+    // Opening with write intent reclaims it, and only it.
+    {
+        let mut state = state_builder
+            .unwrap_build()
+            .await
+            .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+            .await
+            .unwrap();
+        let ids = item_ids(&state.snapshot().await.unwrap());
+        assert!(
+            !ids.contains(&ephemeral_id),
+            "writable open did not reclaim the ephemeral item"
+        );
+        assert!(
+            ids.contains(&normal_id),
+            "writable open reclaimed a non-ephemeral item"
+        );
+        Box::new(state).expire().await;
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_open_reclaims_late_ephemeral_items() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_open_reclaims_late_ephemeral_items(state_builder).await;
+}
+
+/// During a zero-downtime deploy the outgoing leader keeps serving sessions
+/// while the incoming generation opens the catalog, so a temporary item can
+/// become durable after the incoming opener has synced its initial snapshot
+/// but before its fence lands. The open must reclaim items it did not know
+/// about when the opener was built, since reclamation runs on the state synced
+/// by the fence loop, not on the build-time snapshot.
+async fn test_open_reclaims_late_ephemeral_items(state_builder: TestCatalogStateBuilder) {
+    let owner_session = Uuid::from_u128(1);
+    let ephemeral_id = CatalogItemId::User(200);
+    let deploy_generation = 0;
+
+    // The outgoing leader.
+    let mut state = state_builder
+        .clone()
+        .with_deploy_generation(deploy_generation)
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+
+    // The incoming generation syncs its snapshot of the catalog here, before
+    // the temporary item below exists. Building does not fence anyone, only
+    // the open below does.
+    let unopened = state_builder
+        .with_deploy_generation(deploy_generation + 1)
+        .unwrap_build()
+        .await;
+
+    // A session on the still unfenced leader creates a temporary item.
+    let mut txn = state.transaction().await.unwrap();
+    insert_view(
+        &mut txn,
+        ephemeral_id,
+        SchemaId::User(0),
+        "tt",
+        Some(owner_session),
+    );
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+    assert!(
+        item_ids(&state.snapshot().await.unwrap()).contains(&ephemeral_id),
+        "the temporary item must be durable before the promotion"
+    );
+
+    // Promotion. The open fences the leader and reclaims the item the opener
+    // never saw at build time.
+    let mut new_state = unopened
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let ids = item_ids(&new_state.snapshot().await.unwrap());
+    assert!(
+        !ids.contains(&ephemeral_id),
+        "open did not reclaim an ephemeral item committed after the opener was built"
+    );
+
+    // The outgoing leader is fenced.
+    let err = state.transaction().await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(
+                FenceError::DeployGeneration { .. }
+            ))
+        ),
+        "unexpected err: {err:?}"
+    );
+    Box::new(new_state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_fenced_ephemeral_item_write() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_fenced_ephemeral_item_write(state_builder).await;
+}
+
+/// A fenced-out catalog cannot durably create a temporary item. Once the fence
+/// from a newer deploy generation lands, the old owner's in-flight commit is
+/// rejected wholesale, so the item never becomes durable and there is nothing
+/// for the new generation to reclaim.
+async fn test_fenced_ephemeral_item_write(state_builder: TestCatalogStateBuilder) {
+    let owner_session = Uuid::from_u128(1);
+    let ephemeral_id = CatalogItemId::User(200);
+    let deploy_generation = 0;
+
+    let mut state = state_builder
+        .clone()
+        .with_deploy_generation(deploy_generation)
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+
+    // A session starts creating a temporary item but has not committed yet.
+    let mut txn = state.transaction().await.unwrap();
+    insert_view(
+        &mut txn,
+        ephemeral_id,
+        SchemaId::User(0),
+        "tt",
+        Some(owner_session),
+    );
+    let _ = txn.get_and_commit_op_updates();
+
+    // A newer generation opens before the commit lands.
+    let mut new_state = state_builder
+        .with_deploy_generation(deploy_generation + 1)
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+
+    // The commit is rejected by the fence.
+    let commit_ts = txn.upper();
+    let err = txn.commit(commit_ts).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CatalogError::Durable(DurableCatalogError::Fence(
+                FenceError::DeployGeneration { .. }
+            ))
+        ),
+        "unexpected err: {err:?}"
+    );
+
+    // The item never became durable.
+    let ids = item_ids(&new_state.snapshot().await.unwrap());
+    assert!(
+        !ids.contains(&ephemeral_id),
+        "rejected ephemeral item write became durable"
+    );
+    Box::new(new_state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_sync_of_upper_progress_skips_consolidation() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_sync_of_upper_progress_skips_consolidation(state_builder).await;
+}
+
+/// The incoming generation's fence loop in `open_inner` syncs before every compare-and-append,
+/// while the serving leader advances the catalog upper on every group commit. If each of those
+/// syncs consolidated the whole snapshot, an attempt on a large catalog would outlast the
+/// leader's next advance, and the fence would starve until the leader stalled.
+async fn test_sync_of_upper_progress_skips_consolidation(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+    let mut leader = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    // `transaction` fails while updates from opening are unconsumed.
+    let _ = leader
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let mut reader = state_builder
+        .with_metrics(Arc::clone(&metrics))
+        .unwrap_build()
+        .await
+        .open_read_only(&test_bootstrap_args())
+        .await
+        .unwrap();
+    // Consume the updates from opening, so the next sync returns only new ones.
+    let _ = reader
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+
+    let consolidations = metrics.snapshot_consolidations.get();
+    for _ in 0..3 {
+        let upper = leader.current_upper().await;
+        leader.advance_upper(upper.step_forward()).await.unwrap();
+    }
+    let updates = reader
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+    assert_eq!(
+        updates,
+        Vec::new(),
+        "the leader's upper advances carried no content"
+    );
+    assert_eq!(
+        metrics.snapshot_consolidations.get(),
+        consolidations,
+        "a sync that applied no updates consolidated the snapshot"
+    );
+
+    // A sync that does apply an update still consolidates.
+    let mut txn = leader.transaction().await.unwrap();
+    insert_view(
+        &mut txn,
+        CatalogItemId::User(300),
+        SchemaId::User(0),
+        "v",
+        None,
+    );
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+    let updates = reader
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+    assert_ne!(updates, Vec::new());
+    assert!(
+        metrics.snapshot_consolidations.get() > consolidations,
+        "a sync that applied updates did not consolidate the snapshot"
+    );
+
+    Box::new(reader).expire().await;
+    Box::new(leader).expire().await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -497,8 +882,7 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             // Use `NOW_ZERO` for consistent timestamps in the snapshots.
             .open(NOW_ZERO().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
 
         assert_eq!(state.epoch(), Epoch::new(2).expect("known to be non-zero"));
         // Check initial snapshot.
@@ -530,8 +914,7 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .await
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
 
         // Because of the ad-hoc migration for `migration_version`, reopening the catalog does
         // change this version currently.
@@ -558,8 +941,7 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .await
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
 
         assert_eq!(state.epoch(), Epoch::new(4).expect("known to be non-zero"));
         assert_eq!(state.snapshot().await.unwrap(), snapshot);
@@ -593,8 +975,7 @@ async fn test_persist_unopened_deploy_generation_fencing() {
             .await
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
         // drain catalog updates.
         let _ = state.sync_to_current_updates().await.unwrap();
         let mut txn = state.transaction().await.unwrap();
@@ -623,8 +1004,7 @@ async fn test_persist_unopened_deploy_generation_fencing() {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     // Unopened catalog should be fenced now with a deploy generation fence.
     let err = openable_state
@@ -691,8 +1071,7 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     // Open catalog, which will bump the epoch.
     let _state = state_builder
@@ -701,8 +1080,7 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     // Opened catalog should be fenced now with an epoch fence.
     let err = state.snapshot().await.unwrap_err();
@@ -741,8 +1119,7 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     // Open catalog, which will bump the epoch AND deploy generation.
     let _state = state_builder
@@ -752,8 +1129,7 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     // Opened catalog should be fenced now with an epoch fence.
     let err = state.snapshot().await.unwrap_err();
@@ -796,8 +1172,7 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     // Drain updates.
     let _ = state.sync_to_current_updates().await;
     let mut txn = state.transaction().await.unwrap();
@@ -811,8 +1186,7 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     // Drain updates.
     let _ = state.sync_to_current_updates().await;
 
@@ -838,8 +1212,7 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     // Committing results in a deploy generation fence error.
     let commit_ts = txn.upper();
@@ -879,8 +1252,7 @@ async fn test_persist_version_fencing() {
         let _persist_state = persist_openable_state
             .open(SYSTEM_TIME().into(), &test_bootstrap_args())
             .await
-            .unwrap()
-            .0;
+            .unwrap();
 
         persist_cache.cfg.build_version = reader_version.clone();
         let persist_client = persist_cache
@@ -949,8 +1321,7 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
     let state_handle = mz_ore::task::spawn(|| "state", async move {
         // Eventually this state should get fenced by the open below.
         let err = run_state(&mut state).await.unwrap_err();
@@ -967,8 +1338,7 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 
     state_handle.await;
 
@@ -978,6 +1348,5 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap()
-        .0;
+        .unwrap();
 }

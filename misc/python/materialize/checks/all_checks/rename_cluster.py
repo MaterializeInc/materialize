@@ -45,9 +45,7 @@ class RenameCluster(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET cluster=rename_cluster_new1
 
                 > SET cluster=rename_cluster_new2
@@ -65,6 +63,4 @@ class RenameCluster(Check):
 
                 > SELECT * FROM rename_cluster2_view;
                 234
-           """
-            )
-        )
+           """))

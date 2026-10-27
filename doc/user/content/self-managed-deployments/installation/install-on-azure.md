@@ -1,6 +1,6 @@
 ---
 title: "Install on Azure"
-description: "Install Materialize on Azure using the new Terraform module."
+description: "Install Materialize on Azure using the Terraform module."
 menu:
   main:
     parent: "installation"
@@ -11,19 +11,18 @@ menu:
 Materialize provides a set of modular [Terraform
 modules](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
 that can be used to deploy all services required for Materialize to run on Azure.
-The module is intended to provide a simple set of examples on how to deploy
-Materialize. It can be used as is or modules can be taken from the example and
-integrated with existing DevOps tooling.
+These modules serve as composable building blocks that you can integrate into
+existing DevOps workflows, either as a full set or individually.
 
 {{% self-managed/materialize-components-sentence %}} The example on this page
 deploys a complete Materialize environment on Azure using the modular Terraform
 setup from this repository.
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
 
 ## What Gets Created
 
@@ -49,7 +48,7 @@ This example provisions the following infrastructure:
 
 | Resource | Description |
 |----------|-------------|
-| AKS Cluster | Version 1.32 with Cilium networking (network plugin: azure, data plane: cilium, policy: cilium) |
+| AKS Cluster | Version 1.34 with Cilium networking (network plugin: azure, data plane: cilium, policy: cilium) |
 | Default Node Pool | Standard_D4pds_v6 VMs, autoscaling 2-5 nodes, labeled for generic workloads |
 | Materialize Node Pool | Standard_E4pds_v6 VMs with 100GB disk, autoscaling 2-5 nodes, swap enabled, dedicated taints for Materialize workloads |
 | Managed Identities | AKS cluster identity (used by AKS control plane to provision Azure resources like load balancers and network interfaces) and Workload identity (used by Materialize pods for secure, passwordless authentication to Azure Storage) |
@@ -88,6 +87,35 @@ This example provisions the following infrastructure:
 | Instance | Single Materialize instance in the `materialize-environment` namespace |
 | Load Balancers | Azure Load Balancers for access to Materialize {{< yaml-table data="self_managed/default_ports" >}}  |
 
+### Observability
+
+On by default starting with v11.0.0 of the Materialize Terraform Modules.
+Whenever `enable_observability` is `true`,
+the following are created as well:
+
+| Resource | Description |
+|----------|-------------|
+| Monitoring stack | Grafana, Thanos, Loki, Grafana Alloy, and Alertmanager in the `monitoring` namespace, with the Materialize dashboards pre-installed |
+| Blob Containers | Dedicated containers for metrics and logs |
+| Grafana PostgreSQL Flexible Server | `B_Standard_B1ms` server holding Grafana's own state (users, API tokens, annotations, dashboard versions) |
+| Grafana Load Balancer | Internal Azure Load Balancer for reaching Grafana, allowlisted to `ingress_cidr_blocks` |
+
+This stack requires v10.0.0 or later of the Materialize Terraform Modules,
+which replaced an earlier Prometheus-and-Grafana pair. The Grafana database
+and load balancer were added in v10.1.0, and are both billable. Starting with
+v11.0.0, `enable_observability` defaults to `true`, so set it to `false` if you
+do not want the stack. For what the stack stores and where else it can send
+it, see [How logs and metrics are
+stored](/observability/self-managed/storage/). For reaching Grafana, see
+[Grafana](/observability/self-managed/grafana/).
+
+{{< note >}}
+Alertmanager installs with a default set of alert rules but no receiver, so no
+one is notified until you configure one. Starting with v15.0.0 of the
+Materialize Terraform Modules, you configure receivers on the `monitoring`
+module. See [Alerting](/observability/self-managed/alerting/).
+{{< /note >}}
+
 ## Prerequisites
 
 ### Azure Account Requirements
@@ -112,11 +140,25 @@ An active Azure subscription with appropriate permissions to create:
 
 ## Getting started: Simple example
 
-{{< warning >}}
+{{< note >}}
 
 {{< self-managed/terraform-disclaimer >}}
 
-{{< /warning >}}
+{{< /note >}}
+
+
+{{< tip >}}
+
+* {{% self-managed/terraform-simple-example-tip %}}
+
+* The simple example used in this tutorial enables [Password
+authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v10.1.0/azure/examples/simple/main.tf#L429)
+for the Materialize instance. To use a different authentication method, update
+[`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v10.1.0/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind).
+See [Authentication](/security/self-managed/authentication/) for the supported
+authentication mechanisms.
+
+{{< /tip >}}
 
 ### Step 1: Set Up the Environment
 
@@ -160,13 +202,18 @@ An active Azure subscription with appropriate permissions to create:
 
 1. Create a `terraform.tfvars` file with the following variables:
 
-   - `subscription_id`: Azure subscription ID
-   - `resource_group_name`: Name for the resource group to create (e.g.
-     `mz-demo-rg`)
-   - `name_prefix`: Prefix for all resource names (e.g., `simple-demo`)
-   - `location`: Azure region for deployment (e.g., `westus2`)
-   - `license_key`: Materialize license key
-   - `tags`: Map of tags to apply to resources
+   | Variable      | Description                 |
+   | -----------   | ----------------------------|
+   | `subscription_id`     | Azure subscription ID. |
+   | `resource_group_name` | Name for the resource group to create (e.g., `mz-demo-rg`). |
+   | `name_prefix`         | Prefix for all resource names (e.g., `simple-demo`). |
+   | `location`            | Azure region for deployment (e.g., `westus2`). |
+   | `license_key`         | Materialize license key. |
+   | `crd_version`         | CRD API version to use for the Materialize instance: `v1` (default starting with Materialize Terraform Modules v4.0.0) or `v1alpha1`. |
+   | `tags`                | Map of tags to apply to resources. |
+
+   {{% include-from-yaml data="self_managed/installation"
+   name="installation-tfvars-crd-version-tip" %}}
 
    ```hcl
    subscription_id     = "your-subscription-id"
@@ -174,13 +221,23 @@ An active Azure subscription with appropriate permissions to create:
    name_prefix         = "simple-demo"
    location            = "westus2"
    license_key         = "your-materialize-license-key"
+   crd_version = "v1"   # Default starting with Materialize Terraform Modules v4.0.0. v1 requires Materialize v26.30+.
    tags = {
      environment = "demo"
    }
    # internal_load_balancer = false   # default = true (internal load balancer). You can set to false = public load balancer.
    # ingress_cidr_blocks = ["x.x.x.x/n", ...]
    # k8s_apiserver_authorized_networks  = ["x.x.x.x/n", ...]
+   # enable_observability = false   # default = true (install the observability stack).
+   # grafana_host = "grafana.example.com"   # Only used when enable_observability = true.
    ```
+
+   {{< note >}}
+   With `enable_observability` on, the modules also create a
+   `B_Standard_B1ms` PostgreSQL Flexible Server for Grafana's own state and an
+   internal load balancer to reach Grafana on. Both are billable. See
+   [Grafana](/observability/self-managed/grafana/).
+   {{< /note >}}
 
    {{% include-from-yaml data="self_managed/installation"
    name="installation-tfvars-variables-optional" %}}
@@ -237,6 +294,10 @@ An active Azure subscription with appropriate permissions to create:
 1. Check the status of your deployment:
    {{% include-from-yaml data="self_managed/installation"
    name="installation-verify-status" %}}
+
+1. Check the CRD version of the Materialize manifest.
+   {{% include-from-yaml data="self_managed/crd_version_checks"
+   name="check-crd-version-tf" %}}
 
 ### Step 5: Connect to Materialize
 
@@ -346,6 +407,8 @@ Autoscaling: Uses Azure's native cluster autoscaler that integrates directly wit
 {{< /note >}}
 
 See also:
+- [Configuring System
+  Parameters](/self-managed-deployments/configuration-system-parameters/)
 - [Materialize Operator
   Configuration](/self-managed-deployments/operator-configuration/)
 - [Materialize CRD Field
@@ -357,5 +420,5 @@ See also:
 
 ## See Also
 
-- [Materialize Operator Configuration](/installation/configuration/)
-- [Troubleshooting](/installation/troubleshooting/)
+- [Troubleshooting](/self-managed-deployments/troubleshooting/)
+- [Security](/security/self-managed/)

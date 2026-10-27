@@ -10,15 +10,18 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use thiserror::Error;
 use timely::PartialOrder;
-use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
+use timely::progress::{Antichain, ChangeBatch};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::error::SendError;
 
-pub type ChangeTx<T> = Arc<
-    dyn Fn(GlobalId, ChangeBatch<T>) -> Result<(), SendError<(GlobalId, ChangeBatch<T>)>>
+pub type ChangeTx = Arc<
+    dyn Fn(
+            GlobalId,
+            ChangeBatch<Timestamp>,
+        ) -> Result<(), SendError<(GlobalId, ChangeBatch<Timestamp>)>>
         + Send
         + Sync,
 >;
@@ -29,18 +32,18 @@ pub type ChangeTx<T> = Arc<
 ///
 /// This [ReadHold] is safe to drop. The installed read hold will be returned to
 /// the issuer behind the scenes.
-pub struct ReadHold<T: TimelyTimestamp> {
+pub struct ReadHold {
     /// Identifies that collection that we have a hold on.
     id: GlobalId,
 
     /// The times at which we hold.
-    since: Antichain<T>,
+    since: Antichain<Timestamp>,
 
     /// For communicating changes to this read hold back to whoever issued it.
-    change_tx: ChangeTx<T>,
+    change_tx: ChangeTx,
 }
 
-impl<T: TimelyTimestamp> Debug for ReadHold<T> {
+impl Debug for ReadHold {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReadHold")
             .field("id", &self.id)
@@ -49,21 +52,29 @@ impl<T: TimelyTimestamp> Debug for ReadHold<T> {
     }
 }
 
+/// The issuer of a [`ReadHold`] has hung up, so the hold can no longer be cloned.
+///
+/// This is only expected during process shutdown, when the tokio runtime drops tasks in
+/// arbitrary order and the issuer task can disappear while holds still exist.
+#[derive(Error, Debug)]
+#[error("read hold issuer for collection {0} has hung up")]
+pub struct ReadHoldIssuerHungUp(pub GlobalId);
+
 /// Errors for manipulating read holds.
 #[derive(Error, Debug)]
-pub enum ReadHoldDowngradeError<T> {
+pub enum ReadHoldDowngradeError {
     /// The new frontier is not beyond the current since.
     #[error("since violation: new frontier {frontier:?} is not beyond current since {since:?}")]
     SinceViolation {
         /// The frontier to downgrade to.
-        frontier: Antichain<T>,
+        frontier: Antichain<Timestamp>,
         /// The since of the collection.
-        since: Antichain<T>,
+        since: Antichain<Timestamp>,
     },
 }
 
-impl<T: TimelyTimestamp> ReadHold<T> {
-    pub fn new(id: GlobalId, since: Antichain<T>, change_tx: ChangeTx<T>) -> Self {
+impl ReadHold {
+    pub fn new(id: GlobalId, since: Antichain<Timestamp>, change_tx: ChangeTx) -> Self {
         Self {
             id,
             since,
@@ -73,8 +84,8 @@ impl<T: TimelyTimestamp> ReadHold<T> {
 
     pub fn with_channel(
         id: GlobalId,
-        since: Antichain<T>,
-        channel_tx: UnboundedSender<(GlobalId, ChangeBatch<T>)>,
+        since: Antichain<Timestamp>,
+        channel_tx: UnboundedSender<(GlobalId, ChangeBatch<Timestamp>)>,
     ) -> Self {
         let tx = Arc::new(move |id, changes| channel_tx.send((id, changes)));
         Self::new(id, since, tx)
@@ -89,7 +100,7 @@ impl<T: TimelyTimestamp> ReadHold<T> {
     /// of the collection identified by `id`. This does not mean that the
     /// overall since of the collection is what we report here. Only that it is
     /// _at least_ held back to the reported frontier by this read hold.
-    pub fn since(&self) -> &Antichain<T> {
+    pub fn since(&self) -> &Antichain<Timestamp> {
         &self.since
     }
 
@@ -99,7 +110,7 @@ impl<T: TimelyTimestamp> ReadHold<T> {
     ///
     /// Panics when trying to merge a [ReadHold] for a different collection
     /// (different [GlobalId]).
-    pub fn merge_assign(&mut self, mut other: ReadHold<T>) {
+    pub fn merge_assign(&mut self, mut other: ReadHold) {
         assert_eq!(
             self.id, other.id,
             "can only merge ReadHolds for the same ID"
@@ -134,8 +145,8 @@ impl<T: TimelyTimestamp> ReadHold<T> {
     /// holding.
     pub fn try_downgrade(
         &mut self,
-        frontier: Antichain<T>,
-    ) -> Result<(), ReadHoldDowngradeError<T>> {
+        frontier: Antichain<Timestamp>,
+    ) -> Result<(), ReadHoldDowngradeError> {
         if PartialOrder::less_than(&frontier, &self.since) {
             return Err(ReadHoldDowngradeError::SinceViolation {
                 frontier,
@@ -162,10 +173,16 @@ impl<T: TimelyTimestamp> ReadHold<T> {
         self.try_downgrade(Antichain::new())
             .expect("known to succeed");
     }
-}
 
-impl<T: TimelyTimestamp> Clone for ReadHold<T> {
-    fn clone(&self) -> Self {
+    /// Clones this [ReadHold], returning an `Err` when the issuer of the read
+    /// hold has hung up, in which case the clone would not actually hold back
+    /// the since of the collection.
+    ///
+    /// The issuer hanging up is only expected during process shutdown, when
+    /// the tokio runtime drops tasks in arbitrary order. Callers that may run
+    /// concurrently with shutdown can use this method to handle that case
+    /// gracefully, instead of panicking via [Clone::clone].
+    pub fn try_clone(&self) -> Result<Self, ReadHoldIssuerHungUp> {
         if self.id.is_user() {
             tracing::trace!("cloning ReadHold on {}: {:?}", self.id, self.since);
         }
@@ -178,28 +195,55 @@ impl<T: TimelyTimestamp> Clone for ReadHold<T> {
         if !changes.is_empty() {
             // We do care about sending here. If the other end hung up we don't
             // really have a read hold anymore.
-            match (self.change_tx)(self.id.clone(), changes) {
-                Ok(_) => (),
-                Err(e) => {
-                    panic!("cannot clone ReadHold: {}", e);
-                }
-            }
+            (self.change_tx)(self.id.clone(), changes)
+                .map_err(|_| ReadHoldIssuerHungUp(self.id))?;
         }
 
-        Self {
+        Ok(Self {
             id: self.id.clone(),
             since: self.since.clone(),
             change_tx: Arc::clone(&self.change_tx),
+        })
+    }
+}
+
+impl Clone for ReadHold {
+    fn clone(&self) -> Self {
+        match self.try_clone() {
+            Ok(clone) => clone,
+            Err(e) => panic!("cannot clone ReadHold: {}", e),
         }
     }
 }
 
-impl<T: TimelyTimestamp> Drop for ReadHold<T> {
+impl Drop for ReadHold {
     fn drop(&mut self) {
         if self.id.is_user() {
             tracing::trace!("dropping ReadHold on {}: {:?}", self.id, self.since);
         }
 
         self.release();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn try_clone_after_issuer_hung_up() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let hold =
+            ReadHold::with_channel(GlobalId::User(1), Antichain::from_elem(Timestamp::MIN), tx);
+
+        let clone = hold.try_clone().expect("issuer is alive");
+        drop(clone);
+
+        // Once the issuer has hung up, cloning must fail instead of producing
+        // a hold that doesn't actually hold back the since.
+        drop(rx);
+        assert!(hold.try_clone().is_err());
     }
 }

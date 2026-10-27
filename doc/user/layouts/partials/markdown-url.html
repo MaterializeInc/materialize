@@ -1,0 +1,29 @@
+{{- /*
+  Returns the URL of a page's Markdown rendition, the file the `skill` output
+  format writes into <baseURL>/markdown-docs/ on the second Hugo pass (see
+  ci/deploy_website/website.sh).
+
+  Arguments (dict):
+    page      (required) the Page to link to
+    absolute  (optional) prefix the URL with scheme://host
+
+  baseURL is a bare path in the production and preview builds ("/docs",
+  "/materialize/$PR"), so .Permalink cannot yield an absolute URL. An absolute
+  URL takes its scheme and host from the site-origin partial.
+
+  Usage:
+    {{ partial "markdown-url.html" (dict "page" .) }}
+    {{ partial "markdown-url.html" (dict "page" $p "absolute" true) }}
+*/ -}}
+{{- $basePath := (urls.Parse site.BaseURL).Path -}}
+{{- if not (strings.HasSuffix $basePath "/") -}}{{- $basePath = printf "%s/" $basePath -}}{{- end -}}
+{{- /*
+  In the Markdown pass, RelPermalink already ends in the skill format's
+  index.md; drop it so the URL is the same from either pass.
+*/ -}}
+{{- $pagePath := .page.RelPermalink | strings.TrimPrefix $basePath | strings.TrimSuffix "index.md" -}}
+{{- $url := printf "%smarkdown-docs/%sindex.md" $basePath $pagePath -}}
+{{- if .absolute -}}
+  {{- $url = printf "%s%s" (partial "site-origin.html" .) $url -}}
+{{- end -}}
+{{- return $url -}}

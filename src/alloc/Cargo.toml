@@ -19,17 +19,16 @@ mz-prof-http = { path = "../prof-http", default-features = false }
 # whatever reason).
 #
 # See: https://github.com/jemalloc/jemalloc/issues/956#issuecomment-316224733
-tikv-jemallocator = { version = "0.6", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"], optional = true }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+tikv-jemallocator = { workspace = true, optional = true }
 
 [features]
-default = ["workspace-hack"]
+default = []
 # Whether to use jemalloc instead of the system allocator.
 jemalloc = ["tikv-jemallocator", "mz-prof", "mz-prof-http/jemalloc"]
 
-[package.metadata.cargo-udeps.ignore]
+[package.metadata.unused-deps]
 # The only reason we depend on mz-prof-http from this package is so that we can
 # force its `jemalloc` option to be enabled when this package's is, which makes
 # all the Materialize binaries correctly serve heap profiling tools at the
 # `/prof` endpoints.
-normal = ["workspace-hack", "mz-prof-http"]
+ignore = ["mz-prof-http"]

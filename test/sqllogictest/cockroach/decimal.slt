@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,20 +9,18 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/decimal
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/decimal
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET unsafe_enable_table_keys = true
-----
-COMPLETE 0
 
 # The following tests have results equivalent to Postgres (differences
 # in string representation and number of decimals returned, but otherwise
@@ -30,12 +28,16 @@ COMPLETE 0
 # (http://gopkg.in/inf.v0) is what we used to use, but it had various problems
 # (for example, all the test cases below), and was replaced with apd.
 
+# Not supported by Materialize.
+onlyif cockroach
 # inf returns 0
 query R
 SELECT (1.4238790346995263e-40::DECIMAL / 6.011482313728436e+41::DECIMAL)
 ----
 2.3685988919035999994E-82
 
+# Not supported by Materialize.
+onlyif cockroach
 # inf returns -108.4851126682386588
 query R
 SELECT ln(7.682705743584112e-48::DECIMAL)
@@ -46,39 +48,39 @@ SELECT ln(7.682705743584112e-48::DECIMAL)
 query R
 SELECT sqrt(9.789765531128956e-34::DECIMAL)
 ----
-3.1288601009199749773E-17
+0.000000000000000031288608150571351357789
 
 # inf returns 0.1547300000000000
 query R
 SELECT pow(4.727998800941528e-14::DECIMAL, 0.06081860494226844::DECIMAL)
 ----
-0.15472926640705911955
+0.154729266407059119548130274175564532946
 
 # inf returns 0, 0
 query RR
 SELECT pow(sqrt(1e-10::DECIMAL), 2), sqrt(pow(1e-5::DECIMAL, 2))
 ----
-1E-10  0.00001
+0.0000000001  0.00001
 
 # inf returns 1e-16, 0, 2e-16
 query RRR
 SELECT 1e-16::DECIMAL / 2, 1e-16::DECIMAL / 3, 1e-16::DECIMAL / 2 * 2
 ----
-5E-17  3.3333333333333333333E-17  1.0E-16
+0.00000000000000005  0.000000000000000033333333333333333333333  0.0000000000000001
 
 # inf returns 1e-8, 0, 0, 0
 query RRRR
 SELECT pow(1e-4::DECIMAL, 2), pow(1e-5::DECIMAL, 2), pow(1e-8::DECIMAL, 2), pow(1e-9::DECIMAL, 2)
 ----
-1E-8  1E-10  1E-16  1E-18
+0.00000001  0.0000000001  0.0000000000000001  0.000000000000000001
 
 # inf returns argument too large
 query R
 SELECT pow(1e-10::DECIMAL, 2)
 ----
-1E-20
+0.00000000000000000001
 
-# inf panics (materialize#13051)
+# inf panics (#13051)
 query RR
 SELECT 'NaN'::FLOAT::DECIMAL, 'NaN'::DECIMAL
 ----
@@ -96,16 +98,18 @@ INSERT INTO t VALUES (0.000::decimal, 0.00::decimal), (1.00::decimal, 1.00::deci
 query RR
 SELECT * FROM t ORDER BY d
 ----
-0.000  0.0
-1.00   1.0
-2.0    2.0
-3      3.0
+0  0
+1  1
+2  2
+3  3
 
 # Ensure trailing zeros are kept in an index.
 
 statement ok
 CREATE TABLE t2 (d decimal, v decimal(3, 1), primary key (d, v))
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO t2 VALUES
   (1.00::decimal, 1.00::decimal),
@@ -119,39 +123,43 @@ INSERT INTO t2 VALUES
 query RR
 SELECT * FROM t2 ORDER BY d
 ----
-NaN        NaN
--Infinity  -Infinity
-0.0000     0.0
-1.00       1.0
-2.0        2.0
-3          3.0
-Infinity   Infinity
+
 
 # Ensure uniqueness in PK columns with +/- NaN and 0.
 
-statement error duplicate key value
+statement error invalid input syntax for type numeric: "\-NaN"
 INSERT INTO t2 VALUES ('-NaN'::decimal, '-NaN'::decimal)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error duplicate key value
 INSERT INTO t2 VALUES (0, 0)
 
 # Ensure NaN cannot be signaling or negative.
 
+# Not supported by Materialize.
+onlyif cockroach
 query RRRR
 SELECT 'NaN'::decimal, '-NaN'::decimal, 'sNaN'::decimal, '-sNaN'::decimal
 ----
 NaN NaN NaN NaN
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT * FROM t2 WHERE d IS NaN and v IS NaN
 ----
 NaN NaN
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT * FROM t2 WHERE d = 'Infinity' and v = 'Infinity'
 ----
 Infinity Infinity
 
+# Not supported by Materialize.
+onlyif cockroach
 query RR
 SELECT * FROM t2 WHERE d = '-Infinity' and v = '-Infinity'
 ----
@@ -159,9 +167,13 @@ SELECT * FROM t2 WHERE d = '-Infinity' and v = '-Infinity'
 
 # Ensure special values are handled correctly.
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE s (d decimal null, index (d))
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO s VALUES
   (null),
@@ -173,6 +185,8 @@ INSERT INTO s VALUES
   (1),
   (-1)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO s VALUES
   ('-0'::decimal),
@@ -181,6 +195,8 @@ INSERT INTO s VALUES
   ('-0.00E-1'::decimal),
   ('-0.0E-3'::decimal)
 
+# Not supported by Materialize.
+onlyif cockroach
 query R rowsort
 SELECT * FROM s WHERE d = 0
 ----
@@ -191,17 +207,23 @@ SELECT * FROM s WHERE d = 0
 0.000
 0.0000
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT * FROM s WHERE d IS NAN
 ----
 NaN
 NaN
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT * FROM s WHERE d = 'inf'::decimal
 ----
 Infinity
 
+# Not supported by Materialize.
+onlyif cockroach
 query R
 SELECT * FROM s WHERE d = 'NaN'
 ----
@@ -211,6 +233,8 @@ NaN
 # In the following tests, the various zero values all compare equal to
 # each other so we must use two ORDER BY clauses to obtain a stable result.
 
+# Not supported by Materialize.
+onlyif cockroach
 # Check the ordering of decimal values.
 query R
 SELECT d FROM s ORDER BY d, d::TEXT
@@ -229,9 +253,11 @@ NaN
 1
 Infinity
 
+# Not supported by Materialize.
+onlyif cockroach
 # Just test the NaN-ness of the values.
 query RBBB
-SELECT d, d IS NaN, d = 'NaN', isnan(d) FROM s@{FORCE_INDEX=primary} ORDER BY d, d::TEXT
+SELECT d, d IS NaN, d = 'NaN', isnan(d) FROM s@{FORCE_INDEX=s_pkey} ORDER BY d, d::TEXT
 ----
 NULL       NULL   NULL   NULL
 NaN        true   true   true
@@ -247,6 +273,8 @@ NaN        true   true   true
 1          false  false  false
 Infinity   false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 # Just test the NaN-ness of the values in secondary index
 query RBBB
 SELECT d, d IS NaN, d = 'NaN', isnan(d) FROM s@{FORCE_INDEX=s_d_idx} ORDER BY d, d::TEXT
@@ -265,8 +293,10 @@ NaN        true   true   true
 1          false  false  false
 Infinity   false  false  false
 
+# Not supported by Materialize.
+onlyif cockroach
 query RB
-select d, d > 'NaN' from s@{FORCE_INDEX=primary} where d > 'NaN' ORDER BY d, d::TEXT
+select d, d > 'NaN' from s@{FORCE_INDEX=s_pkey} where d > 'NaN' ORDER BY d, d::TEXT
 ----
 -Infinity  true
 -1         true
@@ -279,6 +309,8 @@ select d, d > 'NaN' from s@{FORCE_INDEX=primary} where d > 'NaN' ORDER BY d, d::
 1          true
 Infinity   true
 
+# Not supported by Materialize.
+onlyif cockroach
 query RB
 select d, d > 'NaN' from s@{FORCE_INDEX=s_d_idx} where d > 'NaN' ORDER BY d, d::TEXT
 ----
@@ -293,10 +325,14 @@ select d, d > 'NaN' from s@{FORCE_INDEX=s_d_idx} where d > 'NaN' ORDER BY d, d::
 1          true
 Infinity   true
 
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that decimals don't lose trailing 0s even when used for an index.
 statement ok
 CREATE INDEX idx ON s (d)
 
+# Not supported by Materialize.
+onlyif cockroach
 query R rowsort
 SELECT * FROM s@idx WHERE d = 0
 ----
@@ -307,6 +343,8 @@ SELECT * FROM s@idx WHERE d = 0
 0.000
 0.0000
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO s VALUES
   ('10'::decimal),
@@ -317,8 +355,10 @@ INSERT INTO s VALUES
   ('1000000E-5'::decimal),
   ('1.0000000E+1'::decimal)
 
+# Not supported by Materialize.
+onlyif cockroach
 query R rowsort
-SELECT * FROM s@primary WHERE d = 10
+SELECT * FROM s@s_pkey WHERE d = 10
 ----
 10
 10.0
@@ -328,6 +368,8 @@ SELECT * FROM s@primary WHERE d = 10
 10.00000
 10.000000
 
+# Not supported by Materialize.
+onlyif cockroach
 query R rowsort
 SELECT * FROM s@idx WHERE d = 10
 ----
@@ -342,32 +384,335 @@ SELECT * FROM s@idx WHERE d = 10
 query R
 SELECT 1.00::decimal(6,4)
 ----
-1.0000
+1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error value with precision 6, scale 4 must round to an absolute value less than 10\^2
 SELECT 101.00::decimal(6,4)
 
-statement error scale \(6\) must be between 0 and precision \(4\)
+statement error scale for type numeric must be between 0 and precision 4
 SELECT 101.00::decimal(4,6)
 
+# Not supported by Materialize.
+onlyif cockroach
 statement error value with precision 2, scale 2 must round to an absolute value less than 1
 SELECT 1::decimal(2, 2)
 
-# Regression test for materialize#16081
+# Regression test for #16081
 
-statement ok
+statement
 CREATE TABLE a (b DECIMAL)
 
-statement ok
+# Not supported by Materialize.
+onlyif cockroach
+statement
 INSERT INTO a VALUES (142378208485490985369999605144727062141206925976498256305323716858805588894693616552055968571135475510700810219028167653516982373238641332965927953273383572708760984694356069974208844865675206339235758647159337463780100273189720943242182911961627806424621091859596571173867825568394327041453823674373002756096)
 
 query R
 SELECT * FROM a
 ----
-142378208485490985369999605144727062141206925976498256305323716858805588894693616552055968571135475510700810219028167653516982373238641332965927953273383572708760984694356069974208844865675206339235758647159337463780100273189720943242182911961627806424621091859596571173867825568394327041453823674373002756096
 
+
+# Not supported by Materialize.
+onlyif cockroach
 # Verify that NaNs are returned instead of invalid operation.
 query R
 SELECT 'inf'::decimal + '-inf'::decimal
 ----
 NaN
+
+# Regression test for #40327
+query R
+SELECT 1.0 / 'Infinity' + 2 FROM a;
+----
+
+
+query R
+SELECT 2.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+----
+2
+
+# Test with infinity. Many of these tests come from
+# https://github.com/postgres/postgres/commit/a57d312a7706321d850faa048a562a0c0c01b835
+
+# Not supported by Materialize.
+onlyif cockroach
+query RR
+SELECT var_pop('inf'::numeric), var_samp('inf'::numeric)
+----
+NaN  NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query RR
+SELECT stddev_pop('inf'::numeric), stddev_samp('inf'::numeric)
+----
+NaN  NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+query RRR
+SELECT sum(x::numeric), avg(x::numeric), var_pop(x::numeric)
+FROM (VALUES ('1'), ('infinity')) v(x)
+----
+Infinity  Infinity  NaN
+
+# Not supported by Materialize.
+onlyif cockroach
+query RRR
+SELECT sum(x::numeric), avg(x::numeric), var_pop(x::numeric)
+FROM (VALUES ('infinity'), ('1')) v(x)
+----
+Infinity  Infinity  NaN
+
+# Not supported by Materialize.
+onlyif cockroach
+query RRR
+SELECT sum(x::numeric), avg(x::numeric), var_pop(x::numeric)
+FROM (VALUES ('infinity'), ('infinity')) v(x)
+----
+Infinity  Infinity  NaN
+
+# Not supported by Materialize.
+onlyif cockroach
+query RRR
+SELECT sum(x::numeric), avg(x::numeric), var_pop(x::numeric)
+FROM (VALUES ('-infinity'), ('infinity')) v(x)
+----
+NaN  NaN  NaN
+
+# Not supported by Materialize.
+onlyif cockroach
+query RRR
+SELECT sum(x::numeric), avg(x::numeric), var_pop(x::numeric)
+FROM (VALUES ('-infinity'), ('-infinity')) v(x)
+----
+-Infinity  -Infinity  NaN
+
+# Not supported by Materialize.
+onlyif cockroach
+query RRRRR
+WITH v(x) AS
+  (VALUES('0'::numeric),('1'::numeric),('-1'::numeric),('4.2'::numeric),('inf'::numeric),('-inf'::numeric),('nan'::numeric))
+SELECT x1, x2,
+  x1 + x2 AS sum,
+  x1 - x2 AS diff,
+  x1 * x2 AS prod
+FROM v AS v1(x1), v AS v2(x2)
+----
+0          0          0          0          0
+0          1          1          -1         0
+0          -1         -1         1          -0
+0          4.2        4.2        -4.2       0.0
+0          Infinity   Infinity   -Infinity  NaN
+0          -Infinity  -Infinity  Infinity   NaN
+0          NaN        NaN        NaN        NaN
+1          0          1          1          0
+1          1          2          0          1
+1          -1         0          2          -1
+1          4.2        5.2        -3.2       4.2
+1          Infinity   Infinity   -Infinity  Infinity
+1          -Infinity  -Infinity  Infinity   -Infinity
+1          NaN        NaN        NaN        NaN
+-1         0          -1         -1         -0
+-1         1          0          -2         -1
+-1         -1         -2         0          1
+-1         4.2        3.2        -5.2       -4.2
+-1         Infinity   Infinity   -Infinity  -Infinity
+-1         -Infinity  -Infinity  Infinity   Infinity
+-1         NaN        NaN        NaN        NaN
+4.2        0          4.2        4.2        0.0
+4.2        1          5.2        3.2        4.2
+4.2        -1         3.2        5.2        -4.2
+4.2        4.2        8.4        0.0        17.64
+4.2        Infinity   Infinity   -Infinity  Infinity
+4.2        -Infinity  -Infinity  Infinity   -Infinity
+4.2        NaN        NaN        NaN        NaN
+Infinity   0          Infinity   Infinity   NaN
+Infinity   1          Infinity   Infinity   Infinity
+Infinity   -1         Infinity   Infinity   -Infinity
+Infinity   4.2        Infinity   Infinity   Infinity
+Infinity   Infinity   Infinity   NaN        Infinity
+Infinity   -Infinity  NaN        Infinity   -Infinity
+Infinity   NaN        NaN        NaN        NaN
+-Infinity  0          -Infinity  -Infinity  NaN
+-Infinity  1          -Infinity  -Infinity  -Infinity
+-Infinity  -1         -Infinity  -Infinity  Infinity
+-Infinity  4.2        -Infinity  -Infinity  -Infinity
+-Infinity  Infinity   NaN        -Infinity  -Infinity
+-Infinity  -Infinity  -Infinity  NaN        Infinity
+-Infinity  NaN        NaN        NaN        NaN
+NaN        0          NaN        NaN        NaN
+NaN        1          NaN        NaN        NaN
+NaN        -1         NaN        NaN        NaN
+NaN        4.2        NaN        NaN        NaN
+NaN        Infinity   NaN        NaN        NaN
+NaN        -Infinity  NaN        NaN        NaN
+NaN        NaN        NaN        NaN        NaN
+
+# Not supported by Materialize.
+onlyif cockroach
+query RRRRR
+WITH v(x) AS
+  (VALUES('0'::numeric),('1'::numeric),('-1'::numeric),('4.2'::numeric),('inf'::numeric),('-inf'::numeric),('nan'::numeric))
+SELECT x1, x2,
+  x1 / x2 AS quot,
+  x1 % x2 AS mod,
+  div(x1, x2) AS div
+FROM v AS v1(x1), v AS v2(x2) WHERE x2 != 0
+----
+0          1          0                        0     0
+0          -1         -0                       0     -0
+0          4.2        0E+1                     0.0   0
+0          Infinity   0E-2019                  0     0
+0          -Infinity  -0E-2019                 0     -0
+0          NaN        NaN                      NaN   NaN
+1          1          1.0000000000000000000    0     1
+1          -1         -1.0000000000000000000   0     -1
+1          4.2        0.23809523809523809524   1.0   0
+1          Infinity   0E-2019                  1     0
+1          -Infinity  -0E-2019                 1     -0
+1          NaN        NaN                      NaN   NaN
+-1         1          -1.0000000000000000000   -0    -1
+-1         -1         1.0000000000000000000    -0    1
+-1         4.2        -0.23809523809523809524  -1.0  -0
+-1         Infinity   -0E-2019                 -1    -0
+-1         -Infinity  0E-2019                  -1    0
+-1         NaN        NaN                      NaN   NaN
+4.2        1          4.2000000000000000000    0.2   4
+4.2        -1         -4.2000000000000000000   0.2   -4
+4.2        4.2        1.0000000000000000000    0.0   1
+4.2        Infinity   0E-2019                  4.2   0
+4.2        -Infinity  -0E-2019                 4.2   -0
+4.2        NaN        NaN                      NaN   NaN
+Infinity   1          Infinity                 NaN   Infinity
+Infinity   -1         -Infinity                NaN   -Infinity
+Infinity   4.2        Infinity                 NaN   Infinity
+Infinity   Infinity   NaN                      NaN   NaN
+Infinity   -Infinity  NaN                      NaN   NaN
+Infinity   NaN        NaN                      NaN   NaN
+-Infinity  1          -Infinity                NaN   -Infinity
+-Infinity  -1         Infinity                 NaN   Infinity
+-Infinity  4.2        -Infinity                NaN   -Infinity
+-Infinity  Infinity   NaN                      NaN   NaN
+-Infinity  -Infinity  NaN                      NaN   NaN
+-Infinity  NaN        NaN                      NaN   NaN
+NaN        1          NaN                      NaN   NaN
+NaN        -1         NaN                      NaN   NaN
+NaN        4.2        NaN                      NaN   NaN
+NaN        Infinity   NaN                      NaN   NaN
+NaN        -Infinity  NaN                      NaN   NaN
+NaN        NaN        NaN                      NaN   NaN
+
+statement error invalid input syntax for type numeric: "inf"
+SELECT 'inf'::numeric / '0'
+
+statement error invalid input syntax for type numeric: "\-inf"
+SELECT '-inf'::numeric / '0'
+
+# Not supported by Materialize.
+onlyif cockroach
+query R
+SELECT 'Infinity'::float8::numeric
+----
+Infinity
+
+# Not supported by Materialize.
+onlyif cockroach
+query R
+SELECT '-Infinity'::float8::numeric
+----
+-Infinity
+
+query F
+SELECT 'NaN'::numeric::float8
+----
+NaN
+
+# Not supported by Materialize.
+onlyif cockroach
+query F
+SELECT 'Infinity'::numeric::float8
+----
+Infinity
+
+# Not supported by Materialize.
+onlyif cockroach
+query F
+SELECT '-Infinity'::numeric::float8
+----
+-Infinity
+
+statement error "NaN" smallint out of range
+SELECT 'NaN'::numeric::int2
+
+statement error invalid input syntax for type numeric: "\-Infinity"
+SELECT '-Infinity'::numeric::int8
+
+statement error function "width_bucket" does not exist
+SELECT width_bucket('inf', 3.0, 4.0, 888)
+
+statement error function "width_bucket" does not exist
+SELECT width_bucket(2.0, 3.0, '-inf', 888)
+
+statement error function "width_bucket" does not exist
+SELECT width_bucket(0, '-inf', 4.0, 888)
+
+# Not supported by Materialize.
+onlyif cockroach
+query RRR
+select exp('nan'::numeric), exp('inf'::numeric), exp('-inf'::numeric)
+----
+NaN  Infinity  0
+
+# Not supported by Materialize.
+onlyif cockroach
+query R
+WITH v(x) AS
+(VALUES (' inf '), (' +inf '), (' -inf '), (' Infinity '), (' +inFinity '), (' -INFINITY '))
+SELECT x1::decimal
+FROM v AS v1(x1)
+----
+Infinity
+Infinity
+-Infinity
+Infinity
+Infinity
+-Infinity
+
+statement ok
+CREATE TABLE t71926(no_typmod decimal, precision decimal(5), precision_and_width decimal(5,3))
+
+# Not supported by Materialize.
+onlyif cockroach
+query TI
+SELECT attname, atttypmod FROM pg_attribute WHERE attrelid = 't71926'::regclass::oid AND atttypid = 'decimal'::regtype::oid
+----
+no_typmod            -1
+precision            327684
+precision_and_width  327687
+
+# Regression test for #86790
+statement ok
+CREATE TABLE t86790 (x INT8 NOT NULL)
+
+statement ok
+INSERT INTO t86790 VALUES (-4429772553778622992)
+
+query R
+SELECT (x / 1)::DECIMAL FROM t86790
+----
+-4429772553778622992
+
+statement ok
+SET testing_optimizer_disable_rule_probability = 1
+
+# The results should be the same as the previous SELECT.
+query R
+SELECT (x / 1)::DECIMAL FROM t86790
+----
+-4429772553778622992
+
+statement ok
+RESET testing_optimizer_disable_rule_probability

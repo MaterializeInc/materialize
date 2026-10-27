@@ -11,16 +11,15 @@ use mz_repr::{Diff, Row};
 use mz_storage_client::client::AppendOnlyUpdate;
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_types::controller::StorageError;
-use timely::progress::Timestamp;
 use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 
 pub type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
 
 /// Spawn a task sinking introspection updates produced by the compute controller to storage.
-pub fn spawn_introspection_sink<T: Timestamp>(
+pub fn spawn_introspection_sink(
     mut rx: mpsc::UnboundedReceiver<IntrospectionUpdates>,
-    storage_controller: &dyn StorageController<Timestamp = T>,
+    storage_controller: &dyn StorageController,
 ) {
     let sink = IntrospectionSink::new(storage_controller);
 
@@ -35,33 +34,33 @@ pub fn spawn_introspection_sink<T: Timestamp>(
     });
 }
 
-type Notifier<T> = oneshot::Sender<Result<(), StorageError<T>>>;
-type AppendOnlySender<T> = mpsc::UnboundedSender<(Vec<AppendOnlyUpdate>, Notifier<T>)>;
-type DifferentialSender<T> = mpsc::UnboundedSender<(StorageWriteOp, Notifier<T>)>;
+type Notifier = oneshot::Sender<Result<(), StorageError>>;
+type AppendOnlySender = mpsc::UnboundedSender<(Vec<AppendOnlyUpdate>, Notifier)>;
+type DifferentialSender = mpsc::UnboundedSender<(StorageWriteOp, Notifier)>;
 
 /// A sink for introspection updates produced by the compute controller.
 ///
 /// The sender is connected to the storage controller's CollectionManager, which writes received
 /// updates to persist.
 #[derive(Debug)]
-struct IntrospectionSink<T> {
+struct IntrospectionSink {
     /// Sender for [`IntrospectionType::Frontiers`] updates.
-    frontiers_tx: DifferentialSender<T>,
+    frontiers_tx: DifferentialSender,
     /// Sender for [`IntrospectionType::ReplicaFrontiers`] updates.
-    replica_frontiers_tx: DifferentialSender<T>,
+    replica_frontiers_tx: DifferentialSender,
     /// Sender for [`IntrospectionType::ComputeDependencies`] updates.
-    compute_dependencies_tx: DifferentialSender<T>,
+    compute_dependencies_tx: DifferentialSender,
     /// Sender for [`IntrospectionType::ComputeMaterializedViewRefreshes`] updates.
-    compute_materialized_view_refreshes_tx: DifferentialSender<T>,
+    compute_materialized_view_refreshes_tx: DifferentialSender,
     /// Sender for [`IntrospectionType::WallclockLagHistory`] updates.
-    wallclock_lag_history_tx: AppendOnlySender<T>,
+    wallclock_lag_history_tx: AppendOnlySender,
     /// Sender for [`IntrospectionType::WallclockLagHistogram`] updates.
-    wallclock_lag_histogram_tx: AppendOnlySender<T>,
+    wallclock_lag_histogram_tx: AppendOnlySender,
 }
 
-impl<T: Timestamp> IntrospectionSink<T> {
+impl IntrospectionSink {
     /// Create a new `IntrospectionSink`.
-    pub fn new(storage_controller: &dyn StorageController<Timestamp = T>) -> Self {
+    pub fn new(storage_controller: &dyn StorageController) -> Self {
         use IntrospectionType::*;
         Self {
             frontiers_tx: storage_controller.differential_introspection_tx(Frontiers),
@@ -80,12 +79,12 @@ impl<T: Timestamp> IntrospectionSink<T> {
 
     /// Send a batch of updates of the given introspection type.
     pub fn send(&self, type_: IntrospectionType, updates: Vec<(Row, Diff)>) {
-        let send_append_only = |tx: &AppendOnlySender<_>, updates: Vec<_>| {
+        let send_append_only = |tx: &AppendOnlySender, updates: Vec<_>| {
             let updates = updates.into_iter().map(AppendOnlyUpdate::Row).collect();
             let (notifier, _) = oneshot::channel();
             let _ = tx.send((updates, notifier));
         };
-        let send_differential = |tx: &DifferentialSender<_>, updates: Vec<_>| {
+        let send_differential = |tx: &DifferentialSender, updates: Vec<_>| {
             let op = StorageWriteOp::Append { updates };
             let (notifier, _) = oneshot::channel();
             let _ = tx.send((op, notifier));

@@ -8,10 +8,17 @@
 // by the Apache License, Version 2.0.
 
 mod copy_to_s3_oneshot;
+#[cfg(feature = "bench")]
+pub mod correction;
+#[cfg(not(feature = "bench"))]
 mod correction;
-mod correction_v2;
+#[cfg(feature = "bench")]
+pub mod correction_v2;
+#[cfg(not(feature = "bench"))]
+pub(crate) mod correction_v2;
 mod materialized_view;
+mod materialized_view_v2;
+mod metric_sink;
 mod refresh;
+mod shared_batch;
 mod subscribe;
-
-pub(crate) use correction::ConsolidatingVec;

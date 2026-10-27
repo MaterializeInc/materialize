@@ -21,6 +21,7 @@ use mz_expr::ColumnOrder;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::bucketing_of_expected_group_size;
+use crate::plan::scalar::LirScalarExpr;
 
 /// A plan encapsulating different variants to compute a TopK operation.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
@@ -48,7 +49,7 @@ impl TopKPlan {
         group_key: Vec<usize>,
         order_key: Vec<ColumnOrder>,
         offset: usize,
-        limit: Option<mz_expr::MirScalarExpr>,
+        limit: Option<LirScalarExpr>,
         arity: usize,
         monotonic: bool,
         expected_group_size: Option<u64>,
@@ -60,6 +61,7 @@ impl TopKPlan {
             TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                 group_key,
                 order_key,
+                arity,
                 must_consolidate: false,
             })
         } else if monotonic && offset == 0 {
@@ -101,6 +103,7 @@ impl TopKPlan {
                         TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                             group_key: plan.group_key.clone(),
                             order_key: plan.order_key.clone(),
+                            arity: plan.arity,
                             must_consolidate,
                         })
                     } else {
@@ -124,11 +127,12 @@ impl TopKPlan {
     }
 
     /// Return the limit of the TopK, if any.
-    pub fn limit(&self) -> Option<&mz_expr::MirScalarExpr> {
+    pub fn limit(&self) -> Option<&LirScalarExpr> {
         match self {
             TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                 group_key: _,
                 order_key: _,
+                arity: _,
                 must_consolidate: _,
             }) => None,
             TopKPlan::MonotonicTopK(MonotonicTopKPlan {
@@ -171,6 +175,8 @@ pub struct MonotonicTop1Plan {
     pub group_key: Vec<usize>,
     /// Ordering that is used within each group.
     pub order_key: Vec<mz_expr::ColumnOrder>,
+    /// The number of columns in the input (equal to the output arity).
+    pub arity: usize,
     /// True if the input is not physically monotonic, and the operator must perform
     /// consolidation to remove potential negations. The operator implementation is
     /// free to consolidate as late as possible while ensuring correctness, so it is
@@ -190,7 +196,7 @@ pub struct MonotonicTopKPlan {
     pub order_key: Vec<mz_expr::ColumnOrder>,
     /// Optionally, an upper bound on the per-group ordinal position of the
     /// records to produce from each group.
-    pub limit: Option<mz_expr::MirScalarExpr>,
+    pub limit: Option<LirScalarExpr>,
     /// The number of columns in the input and output.
     pub arity: usize,
     /// True if the input is not physically monotonic, and the operator must perform
@@ -212,7 +218,7 @@ pub struct BasicTopKPlan {
     pub order_key: Vec<mz_expr::ColumnOrder>,
     /// Optionally, an upper bound on the per-group ordinal position of the
     /// records to produce from each group.
-    pub limit: Option<mz_expr::MirScalarExpr>,
+    pub limit: Option<LirScalarExpr>,
     /// A lower bound on the per-group ordinal position of the records to
     /// produce from each group.
     ///

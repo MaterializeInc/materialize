@@ -28,6 +28,7 @@ use mz_persist::unreliable::{UnreliableBlob, UnreliableConsensus, UnreliableHand
 use mz_persist_client::async_runtime::IsolatedRuntime;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
+use mz_persist_client::critical::Opaque;
 use mz_persist_client::metrics::Metrics as PersistMetrics;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::rpc::PubSubClientConnection;
@@ -75,6 +76,7 @@ impl Transactor {
             mz_txn_wal::all_dyncfgs(client.dyncfgs().clone()),
             Arc::new(TxnMetrics::new(&MetricsRegistry::new())),
             txns_id,
+            Opaque::encode(&0u64),
         )
         .await;
         oracle.apply_write(init_ts.into()).await;
@@ -373,11 +375,12 @@ impl Service for TransactorService {
 
         let mut config =
             PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
-        {
-            // We only use the Postgres tuned queries when connected to vanilla
-            // Postgres, so we always want to enable them for testing.
+        if args.consensus_read_committed {
+            // On vanilla Postgres the lock-based tuned queries are always used; enable READ
+            // COMMITTED to exercise the isolation they are designed to run under. Gated because
+            // it panics against CockroachDB consensus, which requires SERIALIZABLE.
             let mut updates = ConfigUpdates::default();
-            updates.add(&mz_persist::postgres::USE_POSTGRES_TUNED_QUERIES, true);
+            updates.add(&mz_persist::postgres::PG_CONSENSUS_READ_COMMITTED, true);
             config.apply_from(&updates);
         }
 
@@ -391,7 +394,6 @@ impl Service for TransactorService {
                     blob_uri,
                     Box::new(config.clone()),
                     metrics.s3_blob.clone(),
-                    Arc::clone(&config.configs),
                 )
                 .await
                 .expect("blob_uri should be valid");

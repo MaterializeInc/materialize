@@ -68,15 +68,11 @@ def defs(
             require_ssl=db_require_ssl,
         )
     ) as db:
-        output_template = string.Template(
-            textwrap.dedent(
-                """
+        output_template = string.Template(textwrap.dedent("""
                 -- id: $id
                 -- oid: $oid
                 $create_sql
-                """
-            ).lstrip()
-        )
+                """).lstrip())
 
         # Extract materialized view definitions
         # -------------------------------------

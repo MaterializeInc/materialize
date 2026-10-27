@@ -11,6 +11,7 @@
 
 use std::fmt::Debug;
 use std::ops::{RangeBounds, RangeFrom, RangeInclusive};
+use std::time::Duration;
 
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::bytes::ByteSize;
@@ -19,11 +20,15 @@ use super::{Value, Var, VarError};
 
 pub static NUMERIC_NON_NEGATIVE: NumericNonNegNonNan = NumericNonNegNonNan;
 
+pub static NON_ZERO_DURATION: NonZeroDuration = NonZeroDuration;
+
 pub static NUMERIC_BOUNDED_0_1_INCLUSIVE: NumericInRange<RangeInclusive<f64>> =
     NumericInRange(0.0f64..=1.0);
 
 pub static BYTESIZE_AT_LEAST_1MB: ByteSizeInRange<RangeFrom<ByteSize>> =
     ByteSizeInRange(ByteSize::mb(1)..);
+
+pub static U32_AT_LEAST_1: U32InRange<RangeFrom<u32>> = U32InRange(1..);
 
 #[derive(Debug)]
 pub enum ValueConstraint {
@@ -115,6 +120,25 @@ impl DomainConstraint for NumericNonNegNonNan {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+pub struct NonZeroDuration;
+
+impl DomainConstraint for NonZeroDuration {
+    type Value = Duration;
+
+    fn check(&self, var: &dyn Var, d: &Duration) -> Result<(), VarError> {
+        if d.is_zero() {
+            Err(VarError::InvalidParameterValue {
+                name: var.name(),
+                invalid_values: vec![format!("{:?}", d)],
+                reason: "only supports non-zero durations".to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct NumericInRange<R>(pub R);
 
 impl<R> DomainConstraint for NumericInRange<R>
@@ -170,6 +194,28 @@ where
             Err(VarError::InvalidParameterValue {
                 name: var.name(),
                 invalid_values: vec![size.to_string()],
+                reason: format!("only supports values in range {:?}", self.0),
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct U32InRange<R>(pub R);
+
+impl<R> DomainConstraint for U32InRange<R>
+where
+    R: RangeBounds<u32> + std::fmt::Debug + Send + Sync + 'static,
+{
+    type Value = u32;
+
+    fn check(&self, var: &dyn Var, n: &u32) -> Result<(), VarError> {
+        if self.0.contains(n) {
+            Ok(())
+        } else {
+            Err(VarError::InvalidParameterValue {
+                name: var.name(),
+                invalid_values: vec![n.to_string()],
                 reason: format!("only supports values in range {:?}", self.0),
             })
         }

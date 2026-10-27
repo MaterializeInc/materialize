@@ -10,7 +10,8 @@
 MZFROM prod-base
 
 RUN apt-get update \
-    && apt-get -qy install ca-certificates postgresql-client tini
+    && apt-get -qy install --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY mz /usr/local/bin/
 

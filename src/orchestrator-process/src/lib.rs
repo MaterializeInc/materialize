@@ -30,7 +30,6 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use futures::stream::{BoxStream, FuturesUnordered};
 use itertools::Itertools;
-use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
 use mz_orchestrator::scheduling_config::ServiceSchedulingConfig;
 use mz_orchestrator::{
@@ -43,10 +42,11 @@ use mz_ore::error::ErrorExt;
 use mz_ore::netio::UnixSocketAddr;
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
+use nix::sys::signal::Signal;
 use scopeguard::defer;
 use serde::Serialize;
 use sha1::{Digest, Sha1};
-use sysinfo::{Pid, PidExt, Process, ProcessExt, ProcessRefreshKind, System, SystemExt};
+use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::fs::remove_dir_all;
 use tokio::net::{TcpListener, UnixStream};
 use tokio::process::{Child, Command};
@@ -369,6 +369,13 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         result_rx.await.expect("worker task not dropped")
     }
 
+    async fn flush(&self) -> Result<(), anyhow::Error> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::Flush { result_tx });
+        result_rx.await.expect("worker task not dropped");
+        Ok(())
+    }
+
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         let mut initial_events = vec![];
         let mut service_event_rx = {
@@ -379,6 +386,7 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
                         service_id: service_id.clone(),
                         process_id: u64::cast_from(process_id),
                         status: process_state.status.into(),
+                        restart_count: process_state.restart_count,
                         time: process_state.status_time,
                     });
                 }
@@ -431,6 +439,9 @@ enum WorkerCommand {
     },
     ListServices {
         result_tx: oneshot::Sender<Result<Vec<String>, anyhow::Error>>,
+    },
+    Flush {
+        result_tx: oneshot::Sender<()>,
     },
     FetchServiceMetrics {
         id: String,
@@ -499,6 +510,10 @@ impl OrchestratorWorker {
                     let _ = result_tx.send(self.list_services().await);
                     Ok(())
                 }
+                Flush { result_tx } => {
+                    let _ = result_tx.send(());
+                    Ok(())
+                }
                 FetchServiceMetrics { id, result_tx } => {
                     let _ = result_tx.send(self.fetch_service_metrics(&id));
                     Ok(())
@@ -528,8 +543,11 @@ impl OrchestratorWorker {
             let (cpu_nano_cores, memory_bytes) = match pid {
                 None => (None, None),
                 Some(pid) => {
-                    self.system
-                        .refresh_process_specifics(pid, ProcessRefreshKind::new().with_cpu());
+                    self.system.refresh_processes_specifics(
+                        ProcessesToUpdate::Some(&[pid]),
+                        true,
+                        ProcessRefreshKind::nothing().with_cpu().with_memory(),
+                    );
                     match self.system.process(pid) {
                         None => (None, None),
                         Some(process) => {
@@ -558,6 +576,7 @@ impl OrchestratorWorker {
                 disk_bytes: None,
                 heap_bytes: None,
                 heap_limit: None,
+                swap_bytes: None,
             });
         }
         Ok(metrics)
@@ -696,6 +715,7 @@ impl OrchestratorWorker {
                     _handle: handle.abort_on_drop(),
                     status: ProcessStatus::NotReady,
                     status_time: Utc::now(),
+                    restart_count: 0,
                     labels: labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
                     tcp_proxy_addrs,
                 });
@@ -719,10 +739,10 @@ impl OrchestratorWorker {
         // Drop the supervisor for the service, if it exists. If this service
         // was under supervision, this will kill all processes associated with
         // it.
-        {
+        let supervised = {
             let mut supervisors = self.services.lock().expect("lock poisoned");
-            supervisors.remove(id);
-        }
+            supervisors.remove(id).is_some()
+        };
 
         // If the service was orphaned by a prior incarnation of the
         // orchestrator, it won't have been under supervision and therefore will
@@ -734,6 +754,19 @@ impl OrchestratorWorker {
                 if path.extension() == Some(OsStr::new("pid")) {
                     let mut system = System::new();
                     let Some(process) = find_process_from_pid_file(&mut system, &path).await else {
+                        // Dropping the supervisor may already have killed a
+                        // supervised process. An orphan that cannot be found
+                        // either exited or runs in a PID namespace this
+                        // orchestrator cannot see, e.g., another container
+                        // sharing the data directory. Its run directory is
+                        // deleted below, so warn while there is a trace.
+                        if !supervised {
+                            warn!(
+                                "not terminating orphaned process for {full_id}: no live process \
+                                 matches {}",
+                                path.display()
+                            );
+                        }
                         continue;
                     };
                     let pid = process.pid();
@@ -811,6 +844,8 @@ impl OrchestratorWorker {
         };
 
         async move {
+            // Holds AbortOnDropHandles to keep proxy tasks alive.
+            #[allow(clippy::collection_is_never_read)]
             let mut proxy_handles = vec![];
             for port in ports {
                 if let Some(tcp_listener) = port.tcp_proxy_listener {
@@ -857,11 +892,10 @@ impl OrchestratorWorker {
                     .await
                 {
                     Ok(status) => {
-                        if propagate_crashes && did_process_crash(status) {
-                            panic!(
-                                "{full_id}-{i} crashed; aborting because propagate_crashes is enabled"
-                            );
-                        }
+                        assert!(
+                            !(propagate_crashes && did_process_crash(status)),
+                            "{full_id}-{i} crashed; aborting because propagate_crashes is enabled"
+                        );
                         error!("{full_id}-{i} exited: {:?}; relaunching in 5s", status);
                     }
                     Err(e) => {
@@ -956,6 +990,7 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
         return;
     };
     let pid = process.pid();
+    let start_time = process.start_time();
 
     info!(%pid, "discovered existing process for {name}");
     state_updater.update_state(ProcessStatus::Ready { pid });
@@ -970,9 +1005,22 @@ async fn supervise_existing_process(state_updater: &ProcessStateUpdater, pid_fil
         }
     }
 
-    // Periodically check if the process has terminated.
+    // Periodically check if the process has terminated. Verify start_time
+    // on each iteration to detect PID reuse.
     let mut system = System::new();
-    while system.refresh_process_specifics(pid, ProcessRefreshKind::new()) {
+    loop {
+        let refreshed = system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        if refreshed == 0 {
+            break;
+        }
+        match system.process(pid) {
+            Some(p) if p.start_time() == start_time => {}
+            _ => break,
+        }
         time::sleep(Duration::from_secs(5)).await;
     }
 
@@ -1036,15 +1084,25 @@ fn did_process_crash(status: ExitStatus) -> bool {
     // Likely not exhaustive. Feel free to add additional tests for other
     // indications of a crashed child process, as those conditions are
     // discovered.
-    matches!(
-        status.signal(),
-        Some(SIGABRT | SIGBUS | SIGSEGV | SIGTRAP | SIGILL)
-    )
+    status.signal().is_some_and(|s| {
+        matches!(
+            Signal::try_from(s),
+            Ok(Signal::SIGABRT
+                | Signal::SIGBUS
+                | Signal::SIGSEGV
+                | Signal::SIGTRAP
+                | Signal::SIGILL)
+        )
+    })
 }
 
 async fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
     let mut system = System::new();
-    system.refresh_process_specifics(pid, ProcessRefreshKind::new());
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
     let start_time = system.process(pid).map_or(0, |p| p.start_time());
     fs::write(pid_file, format!("{pid}\n{start_time}\n")).await?;
     Ok(())
@@ -1067,7 +1125,11 @@ async fn find_process_from_pid_file<'a>(
     let Ok(start_time) = u64::from_str(start_time) else {
         return None;
     };
-    system.refresh_process_specifics(pid, ProcessRefreshKind::new());
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
     let process = system.process(pid)?;
     // Checking the start time protects against killing an unrelated process due
     // to PID reuse.
@@ -1106,7 +1168,7 @@ async fn tcp_proxy(
                         .context("proxying")
                 }));
             }
-            Some(Err(e)) = conns.next() => {
+            Some(result) = conns.next() => if let Err(e) = result {
                 warn!("{name}: tcp proxy connection failed: {}", e.display_with_causes());
             }
         }
@@ -1131,12 +1193,21 @@ impl ProcessStateUpdater {
             return;
         };
         let status_time = Utc::now();
+        // Count each transition to NotReady as a restart. The process
+        // orchestrator always relaunches a process that exits, so a death is a
+        // restart. This is monotonic for a given `ProcessState` and changes on
+        // every restart, which is what the 0dt caught-up check needs. It only
+        // resets to zero if the whole service is dropped and recreated.
+        if matches!(status, ProcessStatus::NotReady) {
+            process_state.restart_count += 1;
+        }
         process_state.status = status;
         process_state.status_time = status_time;
         let _ = self.service_event_tx.send(ServiceEvent {
             service_id: self.id.to_string(),
             process_id: u64::cast_from(self.i),
             status: status.into(),
+            restart_count: process_state.restart_count,
             time: status_time,
         });
     }
@@ -1147,6 +1218,9 @@ struct ProcessState {
     _handle: AbortOnDropHandle<()>,
     status: ProcessStatus,
     status_time: DateTime<Utc>,
+    /// Number of times this process has died and been relaunched. Monotonic for
+    /// the lifetime of this `ProcessState`. See [`ProcessStateUpdater::update_state`].
+    restart_count: u64,
     labels: BTreeMap<String, String>,
     tcp_proxy_addrs: BTreeMap<String, SocketAddr>,
 }
@@ -1197,7 +1271,7 @@ struct AddressedTcpListener {
     local_addr: SocketAddr,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct ProcessService {
     run_dir: PathBuf,
     scale: NonZero<u16>,

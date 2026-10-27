@@ -35,7 +35,8 @@ Database password      | App-specific password.
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+{{% include-from-yaml data="examples/alter_cluster"
+name="configure-cluster" %}}
 
 ## Known limitations
 
@@ -60,7 +61,7 @@ When using Looker with Materialize, be aware of the following limitations:
       ```
 
    b. Via the Materialize Console:
-      - Go to [Materialize Console](/console/)
+      - Go to [Materialize Console](/developer-tools/console/)
       - Navigate to Query History
       - Filter by 'Running' queries
       - Click on the query you want to cancel

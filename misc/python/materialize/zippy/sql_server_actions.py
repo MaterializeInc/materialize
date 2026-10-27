@@ -35,30 +35,14 @@ class SqlServerStart(Action):
         setup_sql_server_testing(c)
 
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
                 $ sql-server-execute name=sql-server
                 USE test;
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
-
-
-class SqlServerStop(Action):
-    """Stop the SQL Server instance."""
-
-    @classmethod
-    def requires(cls) -> set[type[Capability]]:
-        return {SqlServerRunning}
-
-    def withholds(self) -> set[type[Capability]]:
-        return {SqlServerRunning}
-
-    def run(self, c: Composition, state: State) -> None:
-        c.kill("sql-server")
 
 
 class SqlServerRestart(Action):
@@ -89,8 +73,7 @@ class CreateSqlServerTable(Action):
 
         if len(existing_sql_server_tables) == 0:
             self.new_sql_server_table = True
-            # A PK is now required for Debezium
-            this_sql_server_table.has_pk = True
+            this_sql_server_table.has_pk = random.choice([True, False])
 
             self.sql_server_table = this_sql_server_table
         elif len(existing_sql_server_tables) == 1:
@@ -105,8 +88,7 @@ class CreateSqlServerTable(Action):
         if self.new_sql_server_table:
             primary_key = "PRIMARY KEY" if self.sql_server_table.has_pk else ""
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     $ sql-server-connect name=sql-server
                     server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
                     $ sql-server-execute name=sql-server
@@ -114,8 +96,7 @@ class CreateSqlServerTable(Action):
                     CREATE TABLE {self.sql_server_table.name} (f1 INTEGER {primary_key});
                     EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = '{self.sql_server_table.name}', @role_name = 'SA', @supports_net_changes = 0;
                     INSERT INTO {self.sql_server_table.name} VALUES ({self.sql_server_table.watermarks.max});
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -150,15 +131,13 @@ class SqlServerInsert(SqlServerDML):
         prev_max = self.sql_server_table.watermarks.max
         self.sql_server_table.watermarks.max = prev_max + self.delta
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
                 $ sql-server-execute name=sql-server
                 USE test;
                 INSERT INTO {self.sql_server_table.name} (f1) SELECT n FROM (SELECT TOP ({self.sql_server_table.watermarks.max} - {prev_max}) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) + {prev_max} AS n FROM sys.objects AS o1 CROSS JOIN sys.objects AS o2) AS numbers;
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -170,15 +149,13 @@ class SqlServerShiftForward(SqlServerDML):
         if not self.sql_server_table.has_pk:
             self.sql_server_table.watermarks.shift(self.delta)
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     $ sql-server-connect name=sql-server
                     server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
                     $ sql-server-execute name=sql-server
                     USE test;
                     UPDATE {self.sql_server_table.name} SET f1 = f1 + {self.delta};
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -190,15 +167,13 @@ class SqlServerShiftBackward(SqlServerDML):
         if not self.sql_server_table.has_pk:
             self.sql_server_table.watermarks.shift(-self.delta)
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     $ sql-server-connect name=sql-server
                     server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
                     $ sql-server-execute name=sql-server
                     USE test;
                     UPDATE {self.sql_server_table.name} SET f1 = f1 - {self.delta};
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -212,15 +187,13 @@ class SqlServerDeleteFromHead(SqlServerDML):
             self.sql_server_table.watermarks.min,
         )
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
                 $ sql-server-execute name=sql-server
                 USE test;
                 DELETE FROM {self.sql_server_table.name} WHERE f1 > {self.sql_server_table.watermarks.max};
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -234,14 +207,12 @@ class SqlServerDeleteFromTail(SqlServerDML):
             self.sql_server_table.watermarks.max,
         )
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
                 $ sql-server-execute name=sql-server
                 USE test;
                 DELETE FROM {self.sql_server_table.name} WHERE f1 < {self.sql_server_table.watermarks.min};
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )

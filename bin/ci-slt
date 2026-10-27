@@ -15,4 +15,4 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-exec ci/slt/slt.sh "$@"
+exec bin/mzcompose --find sqllogictest run fast-tests "$@"

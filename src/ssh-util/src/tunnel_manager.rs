@@ -161,7 +161,7 @@ impl SshTunnelManager {
                     .await?;
 
                     // Successful connection, so defuse the scope guard.
-                    let _ = ScopeGuard::into_inner(guard);
+                    ScopeGuard::into_inner(guard);
 
                     // Record the tunnel handle for future threads.
                     let handle = Arc::new(handle);

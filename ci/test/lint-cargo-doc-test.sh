@@ -18,4 +18,5 @@ RESULT=0
 
 if [[ $RESULT -ne 0 ]]; then
   bin/clear-corrupted-cargo-target-dir run.log
+  exit $RESULT
 fi

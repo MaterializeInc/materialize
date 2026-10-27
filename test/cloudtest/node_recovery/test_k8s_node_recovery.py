@@ -94,12 +94,10 @@ def populate(
     create_cluster_statement_sql = "\n".join(create_cluster_statements)
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             > DROP MATERIALIZED VIEW IF EXISTS mv;
             > DROP SOURCE IF EXISTS source CASCADE;
-            """
-        )
+            """)
         + dedent(drop_cluster_statement_sql)
         + "\n"
         + dedent(create_cluster_statement_sql)
@@ -156,8 +154,7 @@ def validate_state(
         is_last_run = run + 1 == max_run_count
         try:
             mz.testdrive.run(
-                input=dedent(
-                    f"""
+                input=dedent(f"""
                     > SET TRANSACTION_ISOLATION TO '{isolation_level}';
 
                     > SELECT COUNT(*) {comparison_operator} {reached_index} FROM source_tbl; -- validate source with isolation {isolation_level}
@@ -165,8 +162,7 @@ def validate_state(
 
                     > SELECT COUNT(*) {comparison_operator} {reached_index} FROM mv; -- validate mv with isolation {isolation_level}
                     true
-                    """
-                ),
+                    """),
                 default_timeout=f"{testdrive_run_timeout_in_sec}s",
                 no_reset=True,
                 suppress_command_error_output=not is_last_run,
@@ -400,12 +396,10 @@ def test_envd_on_failing_node(mz: MaterializeApplication) -> None:
     # all connections / queries should fail initially
     try:
         mz.testdrive.run(
-            input=dedent(
-                """
+            input=dedent("""
                 > SELECT COUNT(*) > 0 FROM mz_tables;
                 true
-                """
-            ),
+                """),
             default_timeout=f"{TD_TIMEOUT_SHORT}s",
             no_reset=True,
             suppress_command_error_output=True,

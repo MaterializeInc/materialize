@@ -14,32 +14,29 @@ name = "upsert_open_loop"
 bench = false
 
 [dependencies]
-anyhow = "1.0.100"
-async-stream = "0.3.6"
-async-trait = "0.1.89"
-aws-credential-types = { version = "1.2.7", features = ["hardcoded-credentials"] }
-aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
-arrow = { version = "57", default-features = false }
-bytes = { version = "1.10.1", features = ["serde"] }
-bytesize = "2.1.0"
-bincode = "1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-clap = { version = "4.5.23", features = ["derive", "env"] }
-columnation = "0.1.0"
-crossbeam-channel = "0.5.15"
-csv-core = { version = "0.1.13" }
-dec = "0.4.8"
-differential-dataflow = "0.18.0"
-fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.31"
-iceberg = "0.7.0"
-indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
-itertools = { version = "0.14.0" }
-maplit = "1.0.2"
-mysql_async = { version = "0.36.1", default-features = false, features = ["minimal", "binlog"] }
-mysql_common = { version = "0.35.5", default-features = false, features = ["chrono"] }
+anyhow.workspace = true
+async-stream.workspace = true
+async-trait.workspace = true
+arrow.workspace = true
+bytemuck.workspace = true
+bytes = { workspace = true, features = ["serde"] }
+bincode.workspace = true
+chrono.workspace = true
+columnar.workspace = true
+columnation.workspace = true
+crossbeam-channel.workspace = true
+dec.workspace = true
+differential-dataflow.workspace = true
+fail.workspace = true
+futures.workspace = true
+iceberg.workspace = true
+indexmap.workspace = true
+itertools.workspace = true
+maplit.workspace = true
+mysql_async.workspace = true
+mysql_common.workspace = true
 mz-arrow-util = { path = "../arrow-util" }
-mz-build-info = { path = "../build-info" }
+mz-aws-glue-schema-registry = { path = "../aws-glue-schema-registry" }
 mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-dyncfg = { path = "../dyncfg" }
@@ -49,14 +46,14 @@ mz-cluster = { path = "../cluster" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-mysql-util = { path = "../mysql-util" }
-mz-ore = { path = "../ore", features = ["async", "tracing", "chrono", "metrics", "columnation"] }
-mz-persist = { path = "../persist" }
+mz-ore = { path = "../ore", features = ["async", "tracing", "chrono", "metrics", "columnar", "columnation"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-pgcopy = { path = "../pgcopy" }
 mz-postgres-util = { path = "../postgres-util" }
 mz-repr = { path = "../repr" }
 mz-rocksdb = { path = "../rocksdb" }
+mz-row-spine = { path = "../row-spine" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util" }
 mz-ssh-util = { path = "../ssh-util" }
@@ -65,53 +62,47 @@ mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-parquet = { version = "57", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
-pin-project = "1.1.10"
-postgres-replication = { version = "0.6.7" }
-prometheus = { version = "0.14.0", default-features = false }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+parquet.workspace = true
+pin-project.workspace = true
+postgres-replication.workspace = true
+prometheus.workspace = true
 # Loadgen sources need reproducible randomness, so we need to continue using
 # the old version of `rand`.
-rand-8 = { package = "rand", version = "0.8.5" }
-rdkafka = { version = "0.29.0", features = [
-    "cmake-build",
-    "ssl-vendored",
-    "libz-static",
-    "zstd",
-] }
-regex = { version = "1.12.2" }
-rocksdb = { version = "0.24.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
-seahash = "4"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.145" }
-serde_bytes = { version = "0.11.19" }
-sha2 = "0.10.9"
-tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
-timely = "0.25.1"
-tokio = { version = "1.48.0", features = ["fs", "rt", "sync", "test-util"] }
-tokio-postgres = { version = "0.7.15", features = ["serde"] }
-tokio-stream = "0.1.17"
-tokio-util = { version = "0.7.17", features = ["io"] }
-tracing = "0.1.43"
-thiserror = { version = "2.0.17" }
-uuid = { version = "1.19.0", features = ["serde", "v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-arrow-ipc = "57"
+rand-8.workspace = true
+rdkafka.workspace = true
+regex.workspace = true
+rocksdb.workspace = true
+seahash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_bytes.workspace = true
+sha2.workspace = true
+sqlparser.workspace = true
+tiberius.workspace = true
+timely.workspace = true
+tokio.workspace = true
+tokio-postgres = { workspace = true, features = ["serde"] }
+tokio-stream.workspace = true
+tokio-util = { workspace = true, features = ["io"] }
+tracing.workspace = true
+thiserror.workspace = true
+uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]
-async-trait = "0.1.89"
-axum = "0.7.5"
-clap = { version = "4.5.23", features = ["derive", "env"] }
-humantime = "2.3.0"
+async-trait.workspace = true
+axum.workspace = true
+clap = { workspace = true, features = ["env"] }
+humantime.workspace = true
+mz-build-info = { path = "../build-info" }
+mz-persist = { path = "../persist" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-itertools = "0.14.0"
-tempfile = "3.23.0"
-tokio = { version = "1.48.0", features = ["test-util"] }
+itertools.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
 
 [features]
-default = ["workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-# only used on linux
-normal = ["inotify", "workspace-hack", "rocksdb"]
+default = []
+# Exposes the in-memory upsert backend and `FuzzUpsertParts` so the fuzz crate
+# can drive the upsert state machine. Not enabled in production builds.
+fuzzing = []

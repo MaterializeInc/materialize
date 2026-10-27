@@ -22,12 +22,12 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
-use mz_compute_client::controller::ComputeControllerTimestamp;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_UNIFIED_CLUSTER,
+    TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -78,6 +78,8 @@ pub struct ReplicaAllocation {
     pub memory_limit: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
+    /// The CPU limit for each process in the replica.
+    pub cpu_request: Option<CpuLimit>,
     /// The disk limit for each process in the replica.
     pub disk_limit: Option<DiskLimit>,
     /// The number of processes in the replica.
@@ -94,6 +96,16 @@ pub struct ReplicaAllocation {
     /// T-shirt size.
     #[serde(default = "default_true")]
     pub is_cc: bool,
+    /// The size *family* this size belongs to, e.g. the size `D.1-xsmall`
+    /// belongs to family `D` and the legacy t-shirt sizes belong to family
+    /// `legacy`. The family is the coarse axis and is *not* a prefix of the size
+    /// name in general. Used as the
+    /// `replica_size_family` attribute when evaluating replica-local scoped
+    /// feature flags (see the scoped feature flags design). When unset, the
+    /// family falls back to a value derived from [`Self::is_cc`] via
+    /// [`ReplicaAllocation::family`].
+    #[serde(default)]
+    pub family: Option<String>,
     /// Whether instances of this type use swap as the spill-to-disk mechanism.
     #[serde(default)]
     pub swap_enabled: bool,
@@ -103,6 +115,24 @@ pub struct ReplicaAllocation {
     /// Additional node selectors.
     #[serde(default)]
     pub selectors: BTreeMap<String, String>,
+}
+
+impl ReplicaAllocation {
+    /// The name of the size family this allocation belongs to, used as the
+    /// `replica_size_family` attribute when evaluating replica-local scoped
+    /// feature flags.
+    ///
+    /// Falls back to a value derived from [`Self::is_cc`] when [`Self::family`]
+    /// is unset: `"cc"` for modern sizes and `"legacy"` for the legacy t-shirt
+    /// sizes. This keeps the legacy family targetable even before every size
+    /// gains an explicit `family` in the size configuration.
+    pub fn family(&self) -> &str {
+        match &self.family {
+            Some(family) => family.as_str(),
+            None if self.is_cc => "cc",
+            None => "legacy",
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -142,8 +172,10 @@ fn test_replica_allocation_deserialization() {
             disabled: false,
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
+            cpu_request: None,
             cpu_exclusive: false,
             is_cc: true,
+            family: None,
             swap_enabled: true,
             scale: NonZero::new(16).unwrap(),
             workers: NonZero::new(1).unwrap(),
@@ -177,8 +209,10 @@ fn test_replica_allocation_deserialization() {
             disabled: true,
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
+            cpu_request: None,
             cpu_exclusive: true,
             is_cc: true,
+            family: None,
             swap_enabled: false,
             scale: NonZero::new(1).unwrap(),
             workers: NonZero::new(1).unwrap(),
@@ -193,6 +227,40 @@ fn test_replica_allocation_deserialization() {
     assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
     let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#;
     assert_ok!(serde_json::from_str::<ReplicaAllocation>(data));
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+fn test_replica_allocation_family() {
+    let parse = |json: &str| -> ReplicaAllocation {
+        serde_json::from_str(json).expect("deserialization from JSON succeeds")
+    };
+
+    // An explicit `family` is used verbatim.
+    assert_eq!(
+        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "family": "D"}"#).family(),
+        "D"
+    );
+    // Without an explicit `family`, modern (`is_cc`) sizes fall back to "cc".
+    // `is_cc` defaults to true.
+    assert_eq!(
+        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#).family(),
+        "cc"
+    );
+    // Without an explicit `family`, legacy (non-`is_cc`) sizes fall back to
+    // "legacy".
+    assert_eq!(
+        parse(r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "is_cc": false}"#).family(),
+        "legacy"
+    );
+    // An explicit family wins even for a legacy size.
+    assert_eq!(
+        parse(
+            r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "is_cc": false, "family": "legacy-special"}"#
+        )
+        .family(),
+        "legacy-special"
+    );
 }
 
 /// Configures the location of a cluster replica.
@@ -222,7 +290,7 @@ impl ReplicaLocation {
             ReplicaLocation::Managed(ManagedReplicaLocation { billed_as, .. }) => {
                 billed_as.as_deref()
             }
-            _ => None,
+            ReplicaLocation::Unmanaged(_) => None,
         }
     }
 
@@ -245,20 +313,22 @@ impl ReplicaLocation {
         }
     }
 
-    /// A pending replica is created as part of an alter cluster of an managed
-    /// cluster. the configuration of a pending replica will not match that of
-    /// the clusters until the alter has been finalized promoting the pending
-    /// replicas and setting this value to false.
+    /// Whether the replica is durably marked `pending`.
+    ///
+    /// Vestigial: no path creates one anymore. A crash on a version that still
+    /// staged reconfigurations through overlap replicas could have left one
+    /// behind, and the catalog-open migration reaps those.
     pub fn pending(&self) -> bool {
         match self {
             ReplicaLocation::Managed(ManagedReplicaLocation { pending, .. }) => *pending,
-            _ => false,
+            ReplicaLocation::Unmanaged(_) => false,
         }
     }
 }
 
 /// The "role" of a cluster, which is currently used to determine the
 /// severity of alerts for problems with its replicas.
+#[derive(Debug, Clone)]
 pub enum ClusterRole {
     /// The existence and proper functioning of the cluster's replicas is
     /// business-critical for Materialize.
@@ -283,18 +353,6 @@ pub struct UnmanagedReplicaLocation {
     pub computectl_addrs: Vec<String>,
 }
 
-/// Information about availability zone constraints for replicas.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ManagedReplicaAvailabilityZones {
-    /// Specified if the `Replica` is from `MANAGED` cluster,
-    /// and specifies if there is an `AVAILABILITY ZONES`
-    /// constraint. Empty lists are represented as `None`.
-    FromCluster(Option<Vec<String>>),
-    /// Specified if the `Replica` is from a non-`MANAGED` cluster,
-    /// and specifies if there is a specific `AVAILABILITY ZONE`.
-    FromReplica(Option<String>),
-}
-
 /// The location of a managed replica.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ManagedReplicaLocation {
@@ -306,22 +364,19 @@ pub struct ManagedReplicaLocation {
     pub internal: bool,
     /// Optional SQL size parameter used for billing.
     pub billed_as: Option<String>,
-    /// The replica's availability zones, if specified.
+    /// The availability zones the replica may be placed in; empty means
+    /// unconstrained.
     ///
-    /// This is either the replica's specific `AVAILABILITY ZONE`,
-    /// or the zones placed here during replica concretization
-    /// from the `MANAGED` cluster config.
+    /// For a replica of a managed cluster this is the cluster's
+    /// `AVAILABILITY ZONES` pool; for a replica of an unmanaged cluster it is
+    /// the single user-pinned `AVAILABILITY ZONE`, as a zero- or one-element
+    /// list.
     ///
-    /// We skip serialization (which is used for some validation
-    /// in tests) as the latter case is a "virtual" piece of information,
-    /// that exists only at runtime.
-    ///
-    /// An empty list of availability zones is concretized as `None`,
-    /// as the on-disk serialization of `MANAGED CLUSTER AVAILABILITY ZONES`
-    /// is an empty list if none are specified
+    /// Not serialized: this is re-derived from the cluster config at
+    /// concretization, not read back from a durable record.
     #[serde(skip)]
-    pub availability_zones: ManagedReplicaAvailabilityZones,
-    /// Whether the replica is pending reconfiguration
+    pub availability_zones: Vec<String>,
+    /// See [`ReplicaLocation::pending`].
     pub pending: bool,
 }
 
@@ -345,13 +400,13 @@ pub struct ClusterEvent {
     pub replica_id: ReplicaId,
     pub process_id: ProcessId,
     pub status: ClusterStatus,
+    /// Cumulative restart count of the process, propagated from the orchestrator.
+    /// See [`mz_orchestrator::ServiceEvent::restart_count`].
+    pub restart_count: u64,
     pub time: DateTime<Utc>,
 }
 
-impl<T> Controller<T>
-where
-    T: ComputeControllerTimestamp,
-{
+impl Controller {
     /// Creates a cluster with the specified identifier and configuration.
     ///
     /// A cluster is a combination of a storage instance and a compute instance.
@@ -370,16 +425,16 @@ where
     }
 
     /// Updates the workload class for a cluster.
-    pub fn update_cluster_workload_class(
-        &mut self,
-        id: ClusterId,
-        workload_class: Option<String>,
-    ) -> Result<(), anyhow::Error> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance does not exist in the StorageController or the ComputeController.
+    pub fn update_cluster_workload_class(&mut self, id: ClusterId, workload_class: Option<String>) {
         self.storage
             .update_instance_workload_class(id, workload_class.clone());
         self.compute
-            .update_instance_workload_class(id, workload_class)?;
-        Ok(())
+            .update_instance_workload_class(id, workload_class)
+            .expect("instance exists");
     }
 
     /// Drops the specified cluster.
@@ -438,6 +493,11 @@ where
                     ctl_addrs: service.addresses("computectl"),
                 };
                 metrics_task = Some(metrics_task_join_handle);
+
+                // Register the replica for HTTP proxying.
+                let http_addresses = service.addresses("internal-http");
+                self.replica_http_locator
+                    .register_replica(cluster_id, replica_id, http_addresses);
             }
         }
 
@@ -469,6 +529,15 @@ where
         // provisioned.
         self.deprovision_replica(cluster_id, replica_id, self.deploy_generation)?;
         self.metrics_tasks.remove(&replica_id);
+
+        // Remove HTTP addresses from the locator.
+        self.replica_http_locator
+            .remove_replica(cluster_id, replica_id);
+
+        // The coordinator only re-pushes the override map when the scoped
+        // configuration itself changes, so a dropped replica's entry would
+        // otherwise be retained until the next such change.
+        self.replica_dyncfg_overrides.remove(&replica_id);
 
         self.compute.drop_replica(cluster_id, replica_id)?;
         self.storage.drop_replica(cluster_id, replica_id);
@@ -556,6 +625,7 @@ where
             }
         }
 
+        self.orchestrator.flush().await?;
         Ok(())
     }
 
@@ -575,6 +645,7 @@ where
                 replica_id,
                 process_id: event.process_id,
                 status: event.status,
+                restart_count: event.restart_count,
                 time: event.time,
             };
 
@@ -632,18 +703,30 @@ where
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let secrets_args = self.secrets_args.to_flags();
 
-        // TODO(teskje): use the same values as for compute?
+        // These configure the replica's process rather than environmentd's, so
+        // they are `ParameterScope::Replica` and must be read through this
+        // replica's scoped overrides. They are baked into the process
+        // configuration at provisioning time, so a later change to either the
+        // environment-wide value or the override reaches the replica only when
+        // it is next provisioned.
+        let overrides = self.replica_dyncfg_overrides.get(&replica_id);
+        // Storage and compute arrangements share one maintenance policy, so a
+        // unified replica runs both kinds of arrangement under the same reach.
+        let arrangement_exert_proportionality =
+            ARRANGEMENT_EXERT_PROPORTIONALITY.get_with_overrides(&self.dyncfg, overrides);
         let storage_proto_timely_config = TimelyConfig {
-            arrangement_exert_proportionality: 1337,
+            arrangement_exert_proportionality,
             ..Default::default()
         };
         let compute_proto_timely_config = TimelyConfig {
-            arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY.get(&self.dyncfg),
-            enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg),
-            enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC.get(&self.dyncfg),
-            zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
+            arrangement_exert_proportionality,
+            enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get_with_overrides(&self.dyncfg, overrides),
+            enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC
+                .get_with_overrides(&self.dyncfg, overrides),
+            zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get_with_overrides(&self.dyncfg, overrides),
             ..Default::default()
         };
+        let unified_cluster = ENABLE_UNIFIED_CLUSTER.get_with_overrides(&self.dyncfg, overrides);
 
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
@@ -667,6 +750,7 @@ where
         let service = self.orchestrator.ensure_service(
             &service_name,
             ServiceConfig {
+                app_name: "clusterd".into(),
                 image: self.clusterd_image.clone(),
                 init_container_image: self.init_container_image.clone(),
                 args: Box::new(move |assigned| {
@@ -728,6 +812,9 @@ where
                     if location.allocation.cpu_exclusive && enable_worker_core_affinity {
                         args.push("--worker-core-affinity".into());
                     }
+                    if unified_cluster {
+                        args.push("--unified-cluster".into());
+                    }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());
                     }
@@ -775,12 +862,14 @@ where
                     },
                 ],
                 cpu_limit: location.allocation.cpu_limit,
+                cpu_request: location.allocation.cpu_request,
                 memory_limit,
                 memory_request,
                 scale: location.allocation.scale,
                 labels: BTreeMap::from([
                     ("replica-id".into(), replica_id.to_string()),
                     ("cluster-id".into(), cluster_id.to_string()),
+                    ("generation".into(), self.deploy_generation.to_string()),
                     ("type".into(), "cluster".into()),
                     ("replica-role".into(), role_label.into()),
                     ("workers".into(), location.allocation.workers.to_string()),
@@ -794,16 +883,27 @@ where
                     ),
                 ]),
                 annotations: BTreeMap::from([
-                    ("replica-name".into(), replica_name),
+                    (
+                        "replica-name".into(),
+                        format!("{cluster_name}.{replica_name}"),
+                    ),
                     ("cluster-name".into(), cluster_name),
                 ]),
-                availability_zones: match location.availability_zones {
-                    ManagedReplicaAvailabilityZones::FromCluster(azs) => azs,
-                    ManagedReplicaAvailabilityZones::FromReplica(az) => az.map(|z| vec![z]),
-                },
+                // An empty list means no AZ constraint; a non-empty one pins
+                // placement to those zones.
+                availability_zones: Some(location.availability_zones).filter(|azs| !azs.is_empty()),
                 // This provides the orchestrator with some label selectors that
                 // are used to constraint the scheduling of replicas, based on
                 // its internal configuration.
+                //
+                // Selectors include `generation` so that scheduling constraints
+                // (anti-affinity, topology spread) only consider pods of the same
+                // deploy generation. Otherwise, during a generation rollout, the
+                // new-generation pods would be constrained by the placement of
+                // old-generation pods that are about to be torn down, which can
+                // prevent the new pods from scheduling (e.g., when only one AZ
+                // has capacity but it is already occupied by an old-generation
+                // pod).
                 other_replicas_selector: vec![
                     LabelSelector {
                         label_name: "cluster-id".to_string(),
@@ -818,14 +918,28 @@ where
                             value: replica_id.to_string(),
                         },
                     },
-                ],
-                replicas_selector: vec![LabelSelector {
-                    label_name: "cluster-id".to_string(),
-                    // Select ALL replicas.
-                    logic: LabelSelectionLogic::Eq {
-                        value: cluster_id.to_string(),
+                    LabelSelector {
+                        label_name: "generation".into(),
+                        logic: LabelSelectionLogic::Eq {
+                            value: self.deploy_generation.to_string(),
+                        },
                     },
-                }],
+                ],
+                replicas_selector: vec![
+                    LabelSelector {
+                        label_name: "cluster-id".to_string(),
+                        // Select ALL replicas.
+                        logic: LabelSelectionLogic::Eq {
+                            value: cluster_id.to_string(),
+                        },
+                    },
+                    LabelSelector {
+                        label_name: "generation".into(),
+                        logic: LabelSelectionLogic::Eq {
+                            value: self.deploy_generation.to_string(),
+                        },
+                    },
+                ],
                 disk_limit,
                 node_selector: location.allocation.selectors,
             },

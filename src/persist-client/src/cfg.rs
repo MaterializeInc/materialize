@@ -10,17 +10,25 @@
 #![allow(missing_docs)]
 
 //! The tunable knobs for persist.
+//!
+//! Persist configs are `ParameterScope::Environment` as a class, including the
+//! ones only ever read on `clusterd`. The same client code runs in
+//! `environmentd`, and every copy of it acts on shared durable state, so a
+//! replica-scoped persist config could not reach the `environmentd` client and
+//! a rollout targeting replicas would leave a shard's other writer on the old
+//! value indefinitely. Declare new persist configs `Environment` too.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mz_build_info::BuildInfo;
-use mz_dyncfg::{Config, ConfigDefault, ConfigSet, ConfigUpdates};
+use mz_dyncfg::{Config, ConfigDefault, ConfigSet, ConfigUpdates, ParameterScope};
 use mz_ore::instrument;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
+use mz_persist::s3::{BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT, BlobHttpPool};
 use mz_postgres_client::PostgresClientKnobs;
 use proptest_derive::Arbitrary;
 use semver::Version;
@@ -281,6 +289,15 @@ pub(crate) const MiB: usize = 1024 * 1024;
 
 /// Adds the full set of all persist [Config]s.
 ///
+/// Persist configs are [`ParameterScope::Environment`] by default, because a
+/// persist client runs in every `clusterd` process and the per-replica dyncfg
+/// push reaches its `ConfigSet` (the compute worker applies the pushed updates
+/// to `persist_clients.cfg()`). `environmentd`'s own persist clients read the
+/// same configs and see the environment-wide value, which is what "replica-
+/// local" means for a config that both processes run. The exceptions are the
+/// configs read only from `environmentd`'s catalog and expression cache, which
+/// are [`ParameterScope::Environment`].
+///
 /// TODO(cfg): Consider replacing this with a static global registry powered by
 /// something like the `ctor` or `inventory` crate. This would involve managing
 /// the footgun of a Config being linked into one binary but not the other.
@@ -299,16 +316,24 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&BLOB_OPERATION_ATTEMPT_TIMEOUT)
         .add(&BLOB_CONNECT_TIMEOUT)
         .add(&BLOB_READ_TIMEOUT)
+        .add(&SHARD_METRICS)
+        .add(&PER_SHARD_METRICS_ENABLE_REGEX)
+        .add(&SHARD_INFO_METRIC)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_SIZE)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
         .add(&crate::cfg::CRDB_TCP_USER_TIMEOUT)
+        .add(&crate::cfg::CRDB_KEEPALIVES_IDLE)
+        .add(&crate::cfg::CRDB_KEEPALIVES_INTERVAL)
+        .add(&crate::cfg::CRDB_KEEPALIVES_RETRIES)
         .add(&crate::cfg::USE_CRITICAL_SINCE_TXN)
         .add(&crate::cfg::USE_CRITICAL_SINCE_CATALOG)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SOURCE)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SNAPSHOT)
+        .add(&crate::cfg::SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES)
+        .add(&crate::cfg::SOURCE_FETCH_CONCURRENCY)
         .add(&BATCH_BUILDER_MAX_OUTSTANDING_PARTS)
         .add(&COMPACTION_HEURISTIC_MIN_INPUTS)
         .add(&COMPACTION_HEURISTIC_MIN_PARTS)
@@ -317,6 +342,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&GC_BLOB_DELETE_CONCURRENCY_LIMIT)
         .add(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT)
         .add(&USAGE_STATE_FETCH_CONCURRENCY_LIMIT)
+        .add(&crate::cache::STATE_UPDATE_LEASE_TIMEOUT)
         .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_FUEL)
         .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_WAIT)
         .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_FUEL)
@@ -367,6 +393,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_PREFIX)
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_SUFFIX)
         .add(&crate::fetch::PART_DECODE_FORMAT)
+        .add(&crate::fetch::PART_DECODE_BATCH_ROWS)
         .add(&crate::write::COMBINE_INLINE_WRITES)
         .add(&crate::write::VALIDATE_PART_BOUNDS_ON_WRITE)
 }
@@ -381,11 +408,13 @@ impl PersistConfig {
 
 /// Sets the maximum size of the connection pool that is used by consensus.
 ///
-/// Requires a restart of the process to take effect.
+/// Applies to existing pools without a restart. Each pool picks up a changed
+/// value the next time a connection is requested from it.
 pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
     "persist_consensus_connection_pool_max_size",
     50,
     "The maximum size the connection pool to Postgres/CRDB will grow to.",
+    ParameterScope::Environment,
 );
 
 /// Sets the maximum amount of time we'll wait to acquire a connection from
@@ -396,6 +425,7 @@ const CONSENSUS_CONNECTION_POOL_MAX_WAIT: Config<Duration> = Config::new(
     "persist_consensus_connection_pool_max_wait",
     Duration::from_secs(60),
     "The amount of time we'll wait for a connection to become available.",
+    ParameterScope::Environment,
 );
 
 /// The minimum TTL of a connection to Postgres/CRDB before it is proactively
@@ -407,6 +437,7 @@ const CONSENSUS_CONNECTION_POOL_TTL: Config<Duration> = Config::new(
     "\
     The minimum TTL of a Consensus connection to Postgres/CRDB before it is \
     proactively terminated",
+    ParameterScope::Environment,
 );
 
 /// The minimum time between TTLing connections to Postgres/CRDB. This delay is
@@ -420,6 +451,7 @@ const CONSENSUS_CONNECTION_POOL_TTL_STAGGER: Config<Duration> = Config::new(
     "persist_consensus_connection_pool_ttl_stagger",
     Duration::from_secs(6),
     "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
+    ParameterScope::Environment,
 );
 
 /// The duration to wait for a Consensus Postgres/CRDB connection to be made
@@ -428,6 +460,7 @@ pub const CRDB_CONNECT_TIMEOUT: Config<Duration> = Config::new(
     "crdb_connect_timeout",
     Duration::from_secs(5),
     "The time to connect to CockroachDB before timing out and retrying.",
+    ParameterScope::Environment,
 );
 
 /// The TCP user timeout for a Consensus Postgres/CRDB connection. Specifies the
@@ -440,6 +473,32 @@ pub const CRDB_TCP_USER_TIMEOUT: Config<Duration> = Config::new(
     The TCP timeout for connections to CockroachDB. Specifies the amount of \
     time that transmitted data may remain unacknowledged before the TCP \
     connection is forcibly closed.",
+    ParameterScope::Environment,
+);
+
+pub const CRDB_KEEPALIVES_IDLE: Config<Duration> = Config::new(
+    "crdb_keepalives_idle",
+    Duration::from_secs(10),
+    "\
+    The amount of idle time before a TCP keepalive packet is sent on CRDB \
+    connections.",
+    ParameterScope::Environment,
+);
+
+pub const CRDB_KEEPALIVES_INTERVAL: Config<Duration> = Config::new(
+    "crdb_keepalives_interval",
+    Duration::from_secs(5),
+    "The time interval between TCP keepalive probes on CRDB connections.",
+    ParameterScope::Environment,
+);
+
+pub const CRDB_KEEPALIVES_RETRIES: Config<u32> = Config::new(
+    "crdb_keepalives_retries",
+    5,
+    "\
+    The maximum number of TCP keepalive probes that will be sent before \
+    dropping a CRDB connection.",
+    ParameterScope::Environment,
 );
 
 /// Migrate the txns code to use the critical since when opening a new read handle.
@@ -447,6 +506,7 @@ pub const USE_CRITICAL_SINCE_TXN: Config<bool> = Config::new(
     "persist_use_critical_since_txn",
     true,
     "Use the critical since (instead of the overall since) when initializing a subscribe.",
+    ParameterScope::Environment,
 );
 
 /// Migrate the catalog to use the critical since when opening a new read handle.
@@ -454,6 +514,7 @@ pub const USE_CRITICAL_SINCE_CATALOG: Config<bool> = Config::new(
     "persist_use_critical_since_catalog",
     false,
     "Use the critical since (instead of the overall since) for the Persist-backed catalog.",
+    ParameterScope::Environment,
 );
 
 /// Migrate the persist source to use the critical since when opening a new read handle.
@@ -461,6 +522,31 @@ pub const USE_CRITICAL_SINCE_SOURCE: Config<bool> = Config::new(
     "persist_use_critical_since_source",
     false,
     "Use the critical since (instead of the overall since) in the Persist source.",
+    ParameterScope::Environment,
+);
+
+/// While the source is catching up to the shard upper observed at hydration,
+/// coalesce per-batch frontier downgrades until at least this many encoded
+/// bytes have been emitted at the held capability. `0` disables coalescing and
+/// restores the per-batch behavior.
+pub const SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES: Config<usize> = Config::new(
+    "persist_source_hydration_frontier_coalesce_bytes",
+    0,
+    "While catching up to the hydration-time upper, the persist source coalesces \
+     frontier downgrades until this many encoded bytes have been emitted (0 disables).",
+    ParameterScope::Environment,
+);
+
+/// Maximum number of part fetches the persist source issues concurrently, per
+/// worker. Concurrent fetches amortize the blob-store round-trip, which
+/// dominates when there are many small parts (e.g. a fine-grained hydration
+/// replay). `1` keeps the previous serial behavior.
+pub const SOURCE_FETCH_CONCURRENCY: Config<usize> = Config::new(
+    "persist_source_fetch_concurrency",
+    1,
+    "Maximum number of part fetches the persist source issues concurrently per worker \
+     (1 = serial).",
+    ParameterScope::Environment,
 );
 
 /// Migrate snapshots to use the critical since when opening a new read handle.
@@ -468,6 +554,7 @@ pub const USE_CRITICAL_SINCE_SNAPSHOT: Config<bool> = Config::new(
     "persist_use_critical_since_snapshot",
     false,
     "Use the critical since (instead of the overall since) when taking snapshots in the controller or in fast-path peeks.",
+    ParameterScope::Environment,
 );
 
 /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
@@ -477,6 +564,7 @@ pub const BATCH_BUILDER_MAX_OUTSTANDING_PARTS: Config<usize> = Config::new(
     "persist_batch_builder_max_outstanding_parts",
     2,
     "The number of writes a batch builder can have outstanding before we slow down the writer.",
+    ParameterScope::Environment,
 );
 
 /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
@@ -486,6 +574,7 @@ pub const COMPACTION_HEURISTIC_MIN_INPUTS: Config<usize> = Config::new(
     "persist_compaction_heuristic_min_inputs",
     8,
     "Don't skip compaction if we have more than this many hollow batches as input.",
+    ParameterScope::Environment,
 );
 
 /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
@@ -495,6 +584,7 @@ pub const COMPACTION_HEURISTIC_MIN_PARTS: Config<usize> = Config::new(
     "persist_compaction_heuristic_min_parts",
     8,
     "Don't skip compaction if we have more than this many parts as input.",
+    ParameterScope::Environment,
 );
 
 /// In Compactor::compact_and_apply, we do the compaction (don't skip it)
@@ -504,6 +594,7 @@ pub const COMPACTION_HEURISTIC_MIN_UPDATES: Config<usize> = Config::new(
     "persist_compaction_heuristic_min_updates",
     1024,
     "Don't skip compaction if we have more than this many updates as input.",
+    ParameterScope::Environment,
 );
 
 /// The upper bound on compaction's memory consumption. The value must be at
@@ -514,6 +605,7 @@ pub const COMPACTION_MEMORY_BOUND_BYTES: Config<usize> = Config::new(
     "persist_compaction_memory_bound_bytes",
     1024 * MiB,
     "Attempt to limit compaction to this amount of memory.",
+    ParameterScope::Environment,
 );
 
 /// The maximum number of concurrent blob deletes during garbage collection.
@@ -521,6 +613,7 @@ pub const GC_BLOB_DELETE_CONCURRENCY_LIMIT: Config<usize> = Config::new(
     "persist_gc_blob_delete_concurrency_limit",
     32,
     "Limit the number of concurrent deletes GC can perform to this threshold.",
+    ParameterScope::Environment,
 );
 
 /// The # of diffs to initially scan when fetching the latest consensus state, to
@@ -536,6 +629,7 @@ pub const STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT: Config<usize> = Config::new(
     "persist_state_versions_recent_live_diffs_limit",
     30 * 128,
     "Fetch this many diffs when fetching recent diffs.",
+    ParameterScope::Environment,
 );
 
 /// The maximum number of concurrent state fetches during usage computation.
@@ -543,6 +637,7 @@ pub const USAGE_STATE_FETCH_CONCURRENCY_LIMIT: Config<usize> = Config::new(
     "persist_usage_state_fetch_concurrency_limit",
     8,
     "Limit the concurrency in of fetching in the perioding Persist-storage-usage calculation.",
+    ParameterScope::Environment,
 );
 
 impl PostgresClientKnobs for PersistConfig {
@@ -569,6 +664,23 @@ impl PostgresClientKnobs for PersistConfig {
     fn tcp_user_timeout(&self) -> Duration {
         CRDB_TCP_USER_TIMEOUT.get(self)
     }
+
+    fn keepalives_idle(&self) -> Duration {
+        CRDB_KEEPALIVES_IDLE.get(self)
+    }
+
+    fn keepalives_interval(&self) -> Duration {
+        CRDB_KEEPALIVES_INTERVAL.get(self)
+    }
+
+    fn keepalives_retries(&self) -> u32 {
+        CRDB_KEEPALIVES_RETRIES.get(self)
+    }
+
+    fn statement_timeout(&self) -> Duration {
+        // Persist consensus does not use a server-side statement timeout.
+        Duration::ZERO
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Arbitrary, Serialize, Deserialize)]
@@ -580,6 +692,19 @@ pub struct RetryParameters {
 }
 
 impl RetryParameters {
+    pub fn persist_defaults() -> Self {
+        Self {
+            fixed_sleep: Duration::ZERO,
+            // Chosen to meet the following arbitrary criteria: a power of two
+            // that's close to the AWS Aurora latency of 6ms.
+            initial_backoff: Duration::from_millis(4),
+            multiplier: 2,
+            // Chosen to meet the following arbitrary criteria: between 10s and
+            // 60s.
+            clamp: Duration::from_secs(16),
+        }
+    }
+
     pub(crate) fn into_retry(self, now: SystemTime) -> Retry {
         let seed = now
             .duration_since(UNIX_EPOCH)
@@ -598,24 +723,126 @@ pub(crate) const BLOB_OPERATION_TIMEOUT: Config<Duration> = Config::new(
     "persist_blob_operation_timeout",
     Duration::from_secs(180),
     "Maximum time allowed for a network call, including retry attempts.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const BLOB_OPERATION_ATTEMPT_TIMEOUT: Config<Duration> = Config::new(
     "persist_blob_operation_attempt_timeout",
     Duration::from_secs(90),
     "Maximum time allowed for a single network call.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const BLOB_CONNECT_TIMEOUT: Config<Duration> = Config::new(
     "persist_blob_connect_timeout",
     Duration::from_secs(7),
     "Maximum time to wait for a socket connection to be made.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const BLOB_READ_TIMEOUT: Config<Duration> = Config::new(
     "persist_blob_read_timeout",
     Duration::from_secs(10),
     "Maximum time to wait to read the first byte of a response, including connection time.",
+    ParameterScope::Environment,
+);
+
+/// Which persist shard metrics this process exports, one of the
+/// [`ShardMetricsExport`] values.
+///
+/// Read on every metrics scrape, so a change takes effect on the next scrape.
+/// A scrape reads it twice, once collecting the aggregates and once filtering
+/// the families, so a change between the two mixes the modes for that scrape.
+pub const SHARD_METRICS: Config<&'static str> = Config::new(
+    "persist_shard_metrics",
+    ShardMetricsExport::default().as_str(),
+    "Which persist shard metrics to export: 'per_shard' (the `mz_persist_shard_*` families \
+    with one series per shard), 'summary' (their bounded `_percentile`, `_sum`, `_topk` and \
+    per-version aggregates), 'both', or 'none'. Shard counts and process-level counters are \
+    always exported.",
+    ParameterScope::Environment,
+);
+
+/// The values of [`SHARD_METRICS`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShardMetricsExport {
+    None,
+    Summary,
+    PerShard,
+    Both,
+}
+
+impl ShardMetricsExport {
+    pub const ALL: [Self; 4] = [Self::None, Self::Summary, Self::PerShard, Self::Both];
+
+    /// The value [`SHARD_METRICS`] defaults to, whose series count is bounded
+    /// by the per-version aggregates rather than the shard count.
+    pub const fn default() -> Self {
+        Self::Summary
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Summary => "summary",
+            Self::PerShard => "per_shard",
+            Self::Both => "both",
+        }
+    }
+
+    /// Parses a value of [`SHARD_METRICS`], or `None` if it is unrecognized.
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.as_str() == s)
+    }
+
+    /// Parses a value of [`SHARD_METRICS`], falling back to the default if it
+    /// is unrecognized.
+    ///
+    /// Silent: both callers run per scrape, so a typo would log forever.
+    /// `PerShardMetricsFilter` reports it once per change instead.
+    pub fn from_str_lossy(s: &str) -> Self {
+        Self::parse(s).unwrap_or_else(Self::default)
+    }
+
+    pub fn get(configs: &ConfigSet) -> Self {
+        Self::from_str_lossy(&SHARD_METRICS.get(configs))
+    }
+
+    /// Whether to export the per-shard families.
+    pub fn per_shard(self) -> bool {
+        matches!(self, Self::PerShard | Self::Both)
+    }
+
+    /// Whether to export the bounded aggregates of the per-shard families.
+    pub fn summary(self) -> bool {
+        matches!(self, Self::Summary | Self::Both)
+    }
+}
+
+/// Per-shard series to keep exporting while [`SHARD_METRICS`] leaves the
+/// per-shard families out.
+///
+/// A series is kept if its `shard` or `name` label matches this regex. The
+/// match is unanchored, so `s1` also matches `s10`: use `^...$` for an exact
+/// match. Empty keeps none, as does an invalid regex.
+pub const PER_SHARD_METRICS_ENABLE_REGEX: Config<&'static str> = Config::new(
+    "persist_per_shard_metrics_enable_regex",
+    "",
+    "While `persist_shard_metrics` is 'summary' or 'none', keep exporting the per-shard series \
+    whose `shard` or `name` label matches this regex (unanchored). Empty or invalid keeps \
+    none.",
+    ParameterScope::Environment,
+);
+
+/// Whether to export `mz_persist_shard_info`, one series per shard, so that
+/// dashboards can list the shards when [`SHARD_METRICS`] leaves the per-shard
+/// families out.
+pub const SHARD_INFO_METRIC: Config<bool> = Config::new(
+    "persist_shard_info_metric",
+    false,
+    "Whether to export `mz_persist_shard_info`, which lists this process's shards by `shard` \
+    and `name` with one series each.",
+    ParameterScope::Environment,
 );
 
 impl BlobKnobs for PersistConfig {
@@ -637,6 +864,14 @@ impl BlobKnobs for PersistConfig {
 
     fn is_cc_active(&self) -> bool {
         self.is_cc_active
+    }
+
+    fn http_pool(&self) -> BlobHttpPool {
+        BlobHttpPool::get(self)
+    }
+
+    fn http_pool_max_in_flight_per_client(&self) -> usize {
+        BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT.get(self)
     }
 }
 

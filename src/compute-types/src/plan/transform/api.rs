@@ -7,14 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Utilities for transformation of [crate::plan::Plan] structures.
+//! Utilities for transformation of [crate::plan::LirRelationExpr] structures.
 
 use std::collections::BTreeSet;
 
 use mz_ore::stack::RecursionLimitError;
 use mz_repr::GlobalId;
 
-use crate::plan::Plan;
+use crate::plan::LirRelationExpr;
 use crate::plan::interpret::{BoundedLattice, FoldMut, Interpreter};
 
 /// The type of configuration options passed to all [Transform::transform] calls
@@ -25,12 +25,12 @@ pub struct TransformConfig {
     pub monotonic_ids: BTreeSet<GlobalId>,
 }
 
-/// A transform for [crate::plan::Plan] nodes.
-pub trait Transform<T = mz_repr::Timestamp> {
+/// A transform for [crate::plan::LirRelationExpr] nodes.
+pub trait Transform {
     /// TODO(database-issues#7533): Add documentation.
     fn name(&self) -> &'static str;
 
-    /// Transform a [Plan] using the given [TransformConfig].
+    /// Transform a [LirRelationExpr] using the given [TransformConfig].
     ///
     /// The default implementation of method just handles plan tracing and
     /// delegates to the [Transform::do_transform] method. Clients should
@@ -39,7 +39,7 @@ pub trait Transform<T = mz_repr::Timestamp> {
     fn transform(
         &self,
         config: &TransformConfig,
-        plan: &mut Plan<T>,
+        plan: &mut LirRelationExpr,
     ) -> Result<(), RecursionLimitError> {
         let _span = tracing::span!(target: "optimizer",
             tracing::Level::TRACE,
@@ -54,19 +54,19 @@ pub trait Transform<T = mz_repr::Timestamp> {
     fn do_transform(
         &self,
         config: &TransformConfig,
-        plan: &mut Plan<T>,
+        plan: &mut LirRelationExpr,
     ) -> Result<(), RecursionLimitError>;
 }
 
 /// TODO(database-issues#7533): Add documentation.
-pub trait BottomUpTransform<T = mz_repr::Timestamp> {
+pub trait BottomUpTransform {
     /// A type representing analysis information to be associated with each
     /// sub-term and exposed to the transformation action callback.
     type Info: BoundedLattice + Clone;
 
     /// A type responsible for synthesizing the [Self::Info] associated with
     /// each sub-term.
-    type Interpreter<'a>: Interpreter<T, Domain = Self::Info>;
+    type Interpreter<'a>: Interpreter<Domain = Self::Info>;
 
     /// The name for this transform.
     fn name(&self) -> &'static str;
@@ -74,14 +74,14 @@ pub trait BottomUpTransform<T = mz_repr::Timestamp> {
     /// Derive a [Self::Interpreter] instance from the [TransformConfig].
     fn interpreter(config: &TransformConfig) -> Self::Interpreter<'_>;
 
-    /// A callback for manipulating the root of the given [Plan] using the
+    /// A callback for manipulating the root of the given [LirRelationExpr] using the
     /// [Self::Info] derived for itself and its children.
-    fn action(plan: &mut Plan<T>, plan_info: &Self::Info, input_infos: &[Self::Info]);
+    fn action(plan: &mut LirRelationExpr, plan_info: &Self::Info, input_infos: &[Self::Info]);
 }
 
-impl<A, T> Transform<T> for A
+impl<A> Transform for A
 where
-    A: BottomUpTransform<T>,
+    A: BottomUpTransform,
 {
     fn name(&self) -> &'static str {
         self.name()
@@ -90,7 +90,7 @@ where
     fn do_transform(
         &self,
         config: &TransformConfig,
-        plan: &mut Plan<T>,
+        plan: &mut LirRelationExpr,
     ) -> Result<(), RecursionLimitError> {
         let mut fold = FoldMut::new(Self::interpreter(config), Self::action);
         fold.apply(plan).map(|_| ())

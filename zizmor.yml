@@ -13,7 +13,12 @@ rules:
   dangerous-triggers:
     ignore:
       - cla.yml
+      - linear_links.yml
       - slack_notify_design_doc.yml
       - slack_notify_labeled.yml
       - slack_notify_qa_risky.yml
       - slack_notify_sql_parser.yml
+  # Concurrency groups would cancel or queue independent runs of event-driven
+  # workflows, such as back-to-back CLA comments, without a benefit.
+  concurrency-limits:
+    disable: true

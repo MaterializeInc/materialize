@@ -10,7 +10,6 @@
 # Tests for COPY TO expr.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_copy_to_expr = true;
 
 # Prepare table data
 > CREATE TABLE t (a int);
@@ -50,7 +49,7 @@ contains:FORMAT BINARY not yet supported
     AWS CONNECTION = aws_conn,
     FORMAT = 'csv'
   );
-contains:only 's3://...' urls are supported as COPY TO target
+contains:only 's3://...' and 'gs://...' urls are supported as COPY TO target
 
 ! COPY t TO NULL
   WITH (

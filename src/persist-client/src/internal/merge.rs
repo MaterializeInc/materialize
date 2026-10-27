@@ -163,7 +163,6 @@ impl<T> DerefMut for MergeTree<T> {
 #[derive(Debug)]
 pub enum Pending<T> {
     Writing(JoinHandle<T>),
-    Blocking,
     Finished(T),
 }
 
@@ -176,25 +175,38 @@ impl<T: Send + 'static> Pending<T> {
         matches!(self, Self::Finished(_))
     }
 
+    /// Wait for the value, consuming `self`.
     pub async fn into_result(self) -> T {
         match self {
             Pending::Writing(h) => h.await,
-            Pending::Blocking => panic!("block_until_ready cancelled?"),
             Pending::Finished(t) => t,
         }
     }
 
+    /// Wait for the value and store it, so that later calls resolve without waiting.
+    ///
+    /// Cancel safe: the spawned task keeps running and the handle is retained, so a `Pending`
+    /// whose `block_until_ready` was dropped mid-await still yields its value from a later
+    /// `block_until_ready` or `into_result`.
     pub async fn block_until_ready(&mut self) {
-        let pending = mem::replace(self, Self::Blocking);
-        let value = pending.into_result().await;
+        let value = match self {
+            // Await through the borrow rather than taking the handle out: taking it would have to
+            // leave a placeholder behind, and cancellation at this await point would make that
+            // placeholder permanent.
+            Pending::Writing(handle) => handle.await,
+            Pending::Finished(_) => return,
+        };
         *self = Pending::Finished(value);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use futures::poll;
     use mz_ore::cast::CastLossy;
+    use tokio::sync::oneshot;
+
+    use super::*;
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
@@ -259,5 +271,28 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A `Pending` whose `block_until_ready` is cancelled mid-await still resolves later. Callers
+    /// reach that await through ordinary cancellable futures, and the value must survive it.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_create1`
+    async fn test_pending_survives_cancellation() {
+        let (tx, rx) = oneshot::channel();
+        let mut pending = Pending::new(mz_ore::task::spawn(|| "pending-test", async move {
+            rx.await.expect("sender not dropped")
+        }));
+
+        // The task cannot complete before the send below, so this poll is guaranteed to suspend at
+        // the await inside `block_until_ready`. Dropping the future there is the cancellation.
+        {
+            let mut blocked = Box::pin(pending.block_until_ready());
+            assert!(poll!(&mut blocked).is_pending());
+        }
+
+        tx.send(42).expect("receiver not dropped");
+        pending.block_until_ready().await;
+        assert!(pending.is_finished());
+        assert_eq!(pending.into_result().await, 42);
     }
 }

@@ -25,13 +25,13 @@ More granular permissions for the service account can then be configured using
 - The new account creation is not finished until the first time you connect with
 the account.
 
-- {{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+- {{% include-headless "/headless/rbac-cloud/service-account-creation" %}}
 
 {{</ note >}}
 
 ## Materialize Console
 
-1. [Log in to the Materialize Console](/console/).
+1. [Log in to the Materialize Console](/developer-tools/console/).
 
 1. In the side navigation bar, click **+ Create New** > **App Password**.
 
@@ -59,7 +59,7 @@ the account.
 - The new account creation is not finished until the first time you connect with
   the account.
 
-- {{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+- {{% include-headless "/headless/rbac-cloud/service-account-creation" %}}
 
    {{</ note >}}
 
@@ -76,7 +76,7 @@ If you have `psql` installed:
 1. From a terminal, connect using the psql command displayed.
 1. When prompted for the password, enter the app's password.
 
-{{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+{{% include-headless "/headless/rbac-cloud/service-account-creation" %}}
 
       {{</ tab >}}
       {{< tab "Other clients" >}}
@@ -86,7 +86,7 @@ To use a different client to connect,
 
 1. Update the client to use these details and connect.
 
-{{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+{{% include-headless "/headless/rbac-cloud/service-account-creation" %}}
 
       {{</ tab >}}
       {{</ tabs >}}
@@ -142,8 +142,8 @@ To use a different client to connect,
     ```
 
 For general guidance on using the Materialize Terraform provider to manage
-resources in your region, see the [reference documentation](/manage/terraform/).
+resources in your region, see the [reference documentation](/developer-tools/terraform/).
 
 ## Next steps
 
-{{< include-md file="shared-content/rbac-cloud/account-creation-next-steps.md" >}}
+{{% include-headless "/headless/rbac-cloud/account-creation-next-steps" %}}

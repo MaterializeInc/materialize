@@ -6,6 +6,7 @@ menu:
     parent: "mysql"
     name: "Self-hosted"
     identifier: "mysql-self-hosted"
+    weight: 50
 ---
 
 This page shows you how to stream data from a self-hosted MySQL database to
@@ -64,7 +65,7 @@ Select the option that works best for you.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](/console/), or your preferred SQL
+1. In the [SQL Shell](/developer-tools/console/), or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -95,7 +96,7 @@ traffic from the bastion host.
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the [SQL Shell](/console/), or your preferred
+    1. In the [SQL Shell](/developer-tools/console/), or your preferred
        SQL client connected to Materialize, get the static egress IP addresses for
        the Materialize region you are running in:
 
@@ -117,8 +118,7 @@ traffic from the bastion host.
 
 {{< tab "Self-Managed">}}
 
-{{% include-md
-file="shared-content/self-managed/configure-network-security-intro.md" %}}
+{{% include-headless "/headless/self-managed-deployments/configure-network-security-intro" %}}
 
 {{< tabs >}}
 
@@ -189,11 +189,7 @@ your networking configuration.
 
 ### 3. Start ingesting data
 
-{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="create-source" %}}
-
-{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="create-source-options" %}}
-
-{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="schema-changes" %}}
+{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="ingest-data-step" %}}
 
 ### 4. Monitor the ingestion status
 
@@ -209,5 +205,8 @@ your networking configuration.
 
 ## Considerations
 
-{{% include-from-yaml data="mysql_source_details"
-name="mysql-considerations" %}}
+{{% include-headless "/headless/mysql-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="mysql" %}}

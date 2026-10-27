@@ -14,8 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use mz_expr::Eval;
 use mz_ore::cast::CastFrom;
-use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
+use mz_repr::{Datum, Diff, Row, RowArena};
 use mz_secrets::SecretsReader;
 use mz_secrets::cache::CachingSecretsReader;
 use mz_sql::plan::{WebhookBodyFormat, WebhookHeaders, WebhookValidation, WebhookValidationSecret};
@@ -24,7 +25,7 @@ use mz_storage_client::statistics::WebhookStatistics;
 use mz_storage_types::controller::StorageError;
 use tokio::sync::Semaphore;
 
-use crate::optimize::dataflows::{ExprPrepStyle, prep_scalar_expr};
+use crate::optimize::dataflows::{ExprPrep, ExprPrepWebhookValidation};
 
 /// Errors returns when attempting to append to a webhook.
 #[derive(thiserror::Error, Debug)]
@@ -55,7 +56,7 @@ pub enum AppendWebhookError {
     #[error("internal error: {0:?}")]
     InternalError(#[from] anyhow::Error),
     #[error("internal storage failure! {0:?}")]
-    StorageError(#[from] StorageError<mz_repr::Timestamp>),
+    StorageError(#[from] StorageError),
 }
 
 /// Contains all of the components necessary for running webhook validation.
@@ -75,11 +76,17 @@ impl AppendWebhookValidator {
         }
     }
 
+    /// Runs the validation expression against one request.
+    ///
+    /// `memory_budget` caps the temporary storage the expression may allocate. The expression is
+    /// user-authored and runs in `environmentd`, so without a cap proportionate to the request one
+    /// `CHECK` can turn a bounded body into an unbounded amount of heap on a shared process.
     pub async fn eval(
         self,
         body: bytes::Bytes,
         headers: Arc<BTreeMap<String, String>>,
         received_at: DateTime<Utc>,
+        memory_budget: usize,
     ) -> Result<bool, AppendWebhookError> {
         let AppendWebhookValidator {
             validation,
@@ -113,22 +120,18 @@ impl AppendWebhookValidator {
         //
         // Note: we do this outside the closure, because otherwise there are some odd catch unwind
         // boundary errors, and this shouldn't be too computationally expensive.
-        prep_scalar_expr(
-            &mut expression,
-            ExprPrepStyle::WebhookValidation { now: received_at },
-        )
-        .map_err(|err| {
-            tracing::error!(?err, "failed to evaluate current time");
-            AppendWebhookError::ValidationError
-        })?;
+        ExprPrepWebhookValidation { now: received_at }
+            .prep_scalar_expr(&mut expression)
+            .map_err(|err| {
+                tracing::error!(?err, "failed to evaluate current time");
+                AppendWebhookError::ValidationError
+            })?;
 
         // Create a closure to run our validation, this allows lifetimes and unwind boundaries to
         // work.
         let validate = move || {
             // Gather our Datums for evaluation
-            //
-            // TODO(parkmycar): Re-use the RowArena when we implement rate limiting.
-            let temp_storage = RowArena::default();
+            let temp_storage = RowArena::with_budget(memory_budget);
             let mut datums = Vec::with_capacity(
                 body_columns.len() + header_columns.len() + secret_contents.len(),
             );
@@ -247,7 +250,7 @@ pub struct AppendWebhookResponse {
 /// gets modified.
 #[derive(Clone, Debug)]
 pub struct WebhookAppender {
-    tx: MonotonicAppender<Timestamp>,
+    tx: MonotonicAppender,
     guard: WebhookAppenderGuard,
     // Shared statistics related to this webhook.
     stats: Arc<WebhookStatistics>,
@@ -294,7 +297,7 @@ impl WebhookAppender {
     }
 
     pub(crate) fn new(
-        tx: MonotonicAppender<Timestamp>,
+        tx: MonotonicAppender,
         guard: WebhookAppenderGuard,
         stats: Arc<WebhookStatistics>,
     ) -> Self {

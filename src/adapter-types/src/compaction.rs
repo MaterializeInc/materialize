@@ -65,7 +65,7 @@ impl CompactionWindow {
     }
 }
 
-impl From<CompactionWindow> for ReadPolicy<Timestamp> {
+impl From<CompactionWindow> for ReadPolicy {
     fn from(value: CompactionWindow) -> Self {
         let time = match value {
             CompactionWindow::Default => DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,

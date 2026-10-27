@@ -3,11 +3,13 @@ title: "System catalog"
 description: "The system catalog stores metadata about your Materialize instance."
 menu:
   main:
-    parent: reference
+    parent: sql
     name: System catalog
     identifier: 'system-catalog'
-    weight: 160
+    weight: 120
 disable_list: true
+aliases:
+  - /reference/system-catalog/
 ---
 
 Materialize exposes a system catalog that contains metadata about the running

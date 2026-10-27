@@ -1,13 +1,13 @@
 - key: balancerd.affinity
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/affinity
+  notationtype: k8s/affinity
+  autodefault: '``{}``'
+  default: ""
   autodescription: Affinity to use for balancerd pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 252
+  linenumber: 372
   dependency: ""
   isglobal: false
 - key: balancerd.defaultResources.limits
@@ -19,7 +19,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 258
+  linenumber: 381
   dependency: ""
   isglobal: false
 - key: balancerd.defaultResources.requests
@@ -31,7 +31,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 262
+  linenumber: 385
   dependency: ""
   isglobal: false
 - key: balancerd.enabled
@@ -43,103 +43,115 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 248
+  linenumber: 364
   dependency: ""
   isglobal: false
 - key: balancerd.nodeSelector
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/nodeSelector
+  notationtype: k8s/nodeSelector
+  autodefault: '``{}``'
+  default: ""
   autodescription: Node selector to use for balancerd pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 250
+  linenumber: 368
   dependency: ""
   isglobal: false
 - key: balancerd.tolerations
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/tolerations
+  notationtype: k8s/tolerations
+  autodefault: '``{}``'
+  default: ""
   autodescription: Tolerations to use for balancerd pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 254
+  linenumber: 376
   dependency: ""
   isglobal: false
 - key: clusterd.affinity
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/affinity
+  notationtype: k8s/affinity
+  autodefault: '``{}``'
+  default: ""
   autodescription: Affinity to use for clusterd pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 242
+  linenumber: 352
   dependency: ""
   isglobal: false
 - key: clusterd.nodeSelector
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/nodeSelector
+  notationtype: k8s/nodeSelector
+  autodefault: '``{}``'
+  default: ""
   autodescription: Node selector to use for all clusterd pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 232
+  linenumber: 336
+  dependency: ""
+  isglobal: false
+- key: clusterd.priorityClassName
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: PriorityClass to use for clusterd pods spawned by the operator. The PriorityClass must already exist. Kubernetes rejects a pod that names one it cannot resolve, so a typo here stops these pods being created at all.
+  description: PriorityClass to use for clusterd pods spawned by the operator. The PriorityClass must already exist. Kubernetes rejects a pod that names one it cannot resolve, so a typo here stops these pods being created at all.
+  section: ""
+  column: 3
+  linenumber: 360
   dependency: ""
   isglobal: false
 - key: clusterd.scratchfsNodeSelector
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{"materialize.cloud/scratch-fs":"true"}`'
+  type: k8s/nodeSelector
+  notationtype: k8s/nodeSelector
+  autodefault: '``{"materialize.cloud/scratch-fs": "true"}``'
+  default: ""
   autodescription: Additional node selector to use for clusterd pods when using an LVM scratch disk. This will be merged with the values in `nodeSelector`.
   description: ""
   section: ""
   column: 3
-  linenumber: 235
+  linenumber: 341
   dependency: ""
   isglobal: false
 - key: clusterd.swapNodeSelector
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{"materialize.cloud/swap":"true"}`'
+  type: k8s/nodeSelector
+  notationtype: k8s/nodeSelector
+  autodefault: '``{"materialize.cloud/swap": "true"}``'
+  default: ""
   autodescription: Additional node selector to use for clusterd pods when using swap. This will be merged with the values in `nodeSelector`.
   description: ""
   section: ""
   column: 3
-  linenumber: 239
+  linenumber: 347
   dependency: ""
   isglobal: false
 - key: clusterd.tolerations
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/tolerations
+  notationtype: k8s/tolerations
+  autodefault: '``{}``'
+  default: ""
   autodescription: Tolerations to use for clusterd pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 244
+  linenumber: 356
   dependency: ""
   isglobal: false
 - key: console.affinity
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/affinity
+  notationtype: k8s/affinity
+  autodefault: '``{}``'
+  default: ""
   autodescription: Affinity to use for console pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 274
+  linenumber: 401
   dependency: ""
   isglobal: false
 - key: console.defaultResources.limits
@@ -151,7 +163,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 280
+  linenumber: 410
   dependency: ""
   isglobal: false
 - key: console.defaultResources.requests
@@ -163,7 +175,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 284
+  linenumber: 414
   dependency: ""
   isglobal: false
 - key: console.enabled
@@ -175,7 +187,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 268
+  linenumber: 391
   dependency: ""
   isglobal: false
 - key: console.imageTagMapOverride
@@ -187,43 +199,43 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 270
+  linenumber: 393
   dependency: ""
   isglobal: false
 - key: console.nodeSelector
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/nodeSelector
+  notationtype: k8s/nodeSelector
+  autodefault: '``{}``'
+  default: ""
   autodescription: Node selector to use for console pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 272
+  linenumber: 397
   dependency: ""
   isglobal: false
 - key: console.tolerations
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/tolerations
+  notationtype: k8s/tolerations
+  autodefault: '``{}``'
+  default: ""
   autodescription: Tolerations to use for console pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 276
+  linenumber: 405
   dependency: ""
   isglobal: false
 - key: environmentd.affinity
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/affinity
+  notationtype: k8s/affinity
+  autodefault: '``{}``'
+  default: ""
   autodescription: Affinity to use for environmentd pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 214
+  linenumber: 309
   dependency: ""
   isglobal: false
 - key: environmentd.defaultResources.limits
@@ -235,7 +247,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 220
+  linenumber: 322
   dependency: ""
   isglobal: false
 - key: environmentd.defaultResources.requests
@@ -247,31 +259,43 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 224
+  linenumber: 326
   dependency: ""
   isglobal: false
 - key: environmentd.nodeSelector
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/nodeSelector
+  notationtype: k8s/nodeSelector
+  autodefault: '``{}``'
+  default: ""
   autodescription: Node selector to use for environmentd pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 212
+  linenumber: 305
+  dependency: ""
+  isglobal: false
+- key: environmentd.priorityClassName
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`""`'
+  autodescription: PriorityClass to use for environmentd pods spawned by the operator. The PriorityClass must already exist. Kubernetes rejects a pod that names one it cannot resolve, so a typo here stops these pods being created at all.
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 317
   dependency: ""
   isglobal: false
 - key: environmentd.tolerations
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/tolerations
+  notationtype: k8s/tolerations
+  autodefault: '``{}``'
+  default: ""
   autodescription: Tolerations to use for environmentd pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 216
+  linenumber: 313
   dependency: ""
   isglobal: false
 - key: networkPolicies.egress.cidrs
@@ -283,7 +307,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 340
+  linenumber: 474
   dependency: ""
   isglobal: false
 - key: networkPolicies.egress.enabled
@@ -295,7 +319,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 338
+  linenumber: 472
   dependency: ""
   isglobal: false
 - key: networkPolicies.enabled
@@ -307,7 +331,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 325
+  linenumber: 459
   dependency: ""
   isglobal: false
 - key: networkPolicies.ingress.cidrs
@@ -319,7 +343,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 334
+  linenumber: 468
   dependency: ""
   isglobal: false
 - key: networkPolicies.ingress.enabled
@@ -331,7 +355,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 332
+  linenumber: 466
   dependency: ""
   isglobal: false
 - key: networkPolicies.internal.enabled
@@ -343,7 +367,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 328
+  linenumber: 462
   dependency: ""
   isglobal: false
 - key: observability.enabled
@@ -355,7 +379,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 306
+  linenumber: 440
   dependency: ""
   isglobal: false
 - key: observability.podMetrics.enabled
@@ -367,7 +391,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 311
+  linenumber: 445
   dependency: ""
   isglobal: false
 - key: observability.prometheus.scrapeAnnotations.enabled
@@ -379,7 +403,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 315
+  linenumber: 449
   dependency: ""
   isglobal: false
 - key: operator.additionalMaterializeCRDColumns
@@ -391,19 +415,31 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 29
+  linenumber: 77
   dependency: ""
   isglobal: false
 - key: operator.affinity
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/affinity
+  notationtype: k8s/affinity
+  autodefault: '``{}``'
+  default: ""
   autodescription: Affinity to use for the operator pod
   description: ""
   section: ""
   column: 3
-  linenumber: 192
+  linenumber: 280
+  dependency: ""
+  isglobal: false
+- key: operator.args.enableDatabaseNetworkPolicies
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`false`'
+  autodescription: Whether to allow `CREATE NETWORK POLICY` and `ALTER NETWORK POLICY` in environmentd. Network policies match on client IP, which self-managed deployments generally do not preserve (port-forwards and most ingress setups present a proxy address), so they are disabled by default.
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 63
   dependency: ""
   isglobal: false
 - key: operator.args.enableInternalStatementLogging
@@ -415,7 +451,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 24
+  linenumber: 39
   dependency: ""
   isglobal: false
 - key: operator.args.enableLicenseKeyChecks
@@ -427,7 +463,19 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 26
+  linenumber: 58
+  dependency: ""
+  isglobal: false
+- key: operator.args.installV1CRD
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`false`'
+  autodescription: Whether to install the v1 version of the Materialize CRD and the conversion webhook that converts between v1 and v1alpha1. When false, only the v1alpha1 CRD version is installed and no webhook serving certificate or service is created.
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 68
   dependency: ""
   isglobal: false
 - key: operator.args.startupLogFilter
@@ -439,7 +487,91 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 23
+  linenumber: 38
+  dependency: ""
+  isglobal: false
+- key: operator.args.statementLoggingMaxSampleRate
+  type: float
+  notationtype: ""
+  autodefault: ""
+  default: '`0.99`'
+  autodescription: Caps the fraction of statements recorded in query history, via environmentd's `statement_logging_max_sample_rate`. This is the rate Materialize Cloud runs at. Sampling costs CPU on environmentd, but the volume written is bounded by `statementLoggingTargetDataRate` rather than by this, so lowering this gives up query history completeness without lowering the ceiling on what statement logging stores. Set it to `0` to disable statement logging entirely, or to `null` to inherit environmentd's default.
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 48
+  dependency: ""
+  isglobal: false
+- key: operator.args.statementLoggingTargetDataRate
+  type: int
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Caps the sustained volume statement logging writes, in bytes per second, via environmentd's `statement_logging_target_data_rate`. This is what actually bounds how fast query history grows, and the recorded history is retained for the lifetime of the environment, so lower it on environments with limited storage. Must be greater than 0. Set it to `null` to inherit environmentd's default of 2071 bytes per second, which is the rate Materialize Cloud runs at.
+  description: Caps the sustained volume statement logging writes, in bytes per second, via environmentd's `statement_logging_target_data_rate`. This is what actually bounds how fast query history grows, and the recorded history is retained for the lifetime of the environment, so lower it on environments with limited storage. Must be greater than 0. Set it to `null` to inherit environmentd's default of 2071 bytes per second, which is the rate Materialize Cloud runs at.
+  section: ""
+  column: 5
+  linenumber: 56
+  dependency: ""
+  isglobal: false
+- key: operator.args.webhookCertReloadInterval
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: How often orchestratord reloads its webhook TLS certificate from disk and, when the CA changes, refreshes the conversion webhook's CA bundle. Must be shorter than the certificate's lifetime. Accepts a humantime duration (e.g. "1h", "30m"). Leave null to use the binary default. Only used if `installV1CRD` is true.
+  description: How often orchestratord reloads its webhook TLS certificate from disk and, when the CA changes, refreshes the conversion webhook's CA bundle. Must be shorter than the certificate's lifetime. Accepts a humantime duration (e.g. "1h", "30m"). Leave null to use the binary default. Only used if `installV1CRD` is true.
+  section: ""
+  column: 5
+  linenumber: 74
+  dependency: ""
+  isglobal: false
+- key: operator.certificate.caDuration
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"87600h"`'
+  autodescription: Lifetime of the root CA that signs the webhook serving certificate, when `source` is "cert-manager". The serving certificate is signed by this CA, so the CA outlives individual serving-certificate rotations.
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 96
+  dependency: ""
+  isglobal: false
+- key: operator.certificate.caRenewBefore
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"8760h"`'
+  autodescription: How long before the root CA expires to renew it. Must be less than `caDuration`.
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 99
+  dependency: ""
+  isglobal: false
+- key: operator.certificate.secretName
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Name of a secret in the operator's namespace containing ca.crt, tls.crt, and tls.key entries. Only used if `source` is "secret".
+  description: Name of a secret in the operator's namespace containing ca.crt, tls.crt, and tls.key entries. Only used if `source` is "secret".
+  section: ""
+  column: 5
+  linenumber: 91
+  dependency: ""
+  isglobal: false
+- key: operator.certificate.source
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"cert-manager"`'
+  autodescription: Where to obtain the certificate for orchestratord. Valid values are 'cert-manager' and 'secret'. Only used if `operator.args.installV1CRD` is true.
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 89
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.aws.accountID
@@ -451,7 +583,7 @@
   description: ""
   section: ""
   column: 9
-  linenumber: 51
+  linenumber: 116
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.aws.enabled
@@ -463,7 +595,7 @@
   description: ""
   section: ""
   column: 9
-  linenumber: 49
+  linenumber: 114
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.aws.iam.roles.connection
@@ -475,7 +607,7 @@
   description: ""
   section: ""
   column: 13
-  linenumber: 57
+  linenumber: 122
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.aws.iam.roles.environment
@@ -487,19 +619,67 @@
   description: ""
   section: ""
   column: 13
-  linenumber: 55
+  linenumber: 120
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.providers.gcp
   type: object
   notationtype: ""
   autodefault: ""
-  default: '`{"enabled":false}`'
-  autodescription: GCP Configuration (placeholder for future use)
+  default: '`{"enabled":false,"nodeUpgradeRolloutTrigger":{"clusterLocation":"","clusterName":"","enabled":false,"notificationSubscription":"","watchedNodePools":[]}}`'
+  autodescription: GCP Configuration
   description: ""
   section: ""
   column: 7
-  linenumber: 60
+  linenumber: 125
+  dependency: ""
+  isglobal: false
+- key: operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.clusterLocation
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`""`'
+  autodescription: The location (region or zone) of the GKE cluster.
+  description: ""
+  section: ""
+  column: 11
+  linenumber: 144
+  dependency: ""
+  isglobal: false
+- key: operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.clusterName
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`""`'
+  autodescription: The name of the GKE cluster.
+  description: ""
+  section: ""
+  column: 11
+  linenumber: 142
+  dependency: ""
+  isglobal: false
+- key: operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.notificationSubscription
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`""`'
+  autodescription: The Pub/Sub subscription receiving GKE cluster notifications for this cluster, in `projects/{project}/subscriptions/{subscription}` form. The cluster must be configured to publish upgrade notifications to the corresponding topic, and the operator's service account must be able to subscribe to it and to read the cluster's node pools.
+  description: ""
+  section: ""
+  column: 11
+  linenumber: 140
+  dependency: ""
+  isglobal: false
+- key: operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.watchedNodePools
+  type: list
+  notationtype: ""
+  autodefault: ""
+  default: '`[]`'
+  autodescription: The node pools to watch. An empty list watches all node pools.
+  description: ""
+  section: ""
+  column: 11
+  linenumber: 146
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.region
@@ -511,7 +691,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 43
+  linenumber: 108
   dependency: ""
   isglobal: false
 - key: operator.cloudProvider.type
@@ -523,7 +703,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 40
+  linenumber: 105
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultReplicationFactor.analytics
@@ -535,7 +715,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 187
+  linenumber: 271
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultReplicationFactor.probe
@@ -547,7 +727,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 185
+  linenumber: 269
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultReplicationFactor.support
@@ -559,7 +739,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 186
+  linenumber: 270
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultReplicationFactor.system
@@ -571,7 +751,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 184
+  linenumber: 268
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.analytics
@@ -583,7 +763,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 182
+  linenumber: 266
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.catalogServer
@@ -595,7 +775,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 181
+  linenumber: 265
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.default
@@ -607,7 +787,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 177
+  linenumber: 261
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.probe
@@ -619,7 +799,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 179
+  linenumber: 263
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.support
@@ -631,7 +811,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 180
+  linenumber: 264
   dependency: ""
   isglobal: false
 - key: operator.clusters.defaultSizes.system
@@ -643,7 +823,7 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 178
+  linenumber: 262
   dependency: ""
   isglobal: false
 - key: operator.clusters.swap_enabled
@@ -655,7 +835,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 69
+  linenumber: 153
   dependency: ""
   isglobal: false
 - key: operator.image.pullPolicy
@@ -686,7 +866,7 @@
   type: string
   notationtype: ""
   autodefault: ""
-  default: '`"v26.4.0"`'
+  default: '`"v26.47.0"`'
   autodescription: The tag/version of the operator image to be used
   description: ""
   section: ""
@@ -695,15 +875,51 @@
   dependency: ""
   isglobal: false
 - key: operator.nodeSelector
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/nodeSelector
+  notationtype: k8s/nodeSelector
+  autodefault: '``{}``'
+  default: ""
   autodescription: Node selector to use for the operator pod
   description: ""
   section: ""
   column: 3
-  linenumber: 190
+  linenumber: 276
+  dependency: ""
+  isglobal: false
+- key: operator.podDisruptionBudget.enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`true`'
+  autodescription: Whether to create a PodDisruptionBudget for the operator. Only created when `replicas` is greater than 1, since a budget over a single replica either blocks node drains or protects nothing.
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 30
+  dependency: ""
+  isglobal: false
+- key: operator.podDisruptionBudget.maxUnavailable
+  type: int
+  notationtype: ""
+  autodefault: ""
+  default: '`1`'
+  autodescription: Maximum number of operator pods that may be unavailable at once during voluntary disruptions. Expressed as a maximum rather than a minimum so that node drains are never blocked outright, they are only serialized.
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 34
+  dependency: ""
+  isglobal: false
+- key: operator.replicas
+  type: int
+  notationtype: ""
+  autodefault: ""
+  default: '`2`'
+  autodescription: Number of operator replicas. The operator uses leader election so that only one replica reconciles at a time. Running more than one replica avoids downtime of the CRD conversion webhook during rollouts and node drains.
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 24
   dependency: ""
   isglobal: false
 - key: operator.resources.limits
@@ -715,7 +931,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 201
+  linenumber: 292
   dependency: ""
   isglobal: false
 - key: operator.resources.requests
@@ -727,7 +943,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 197
+  linenumber: 288
   dependency: ""
   isglobal: false
 - key: operator.secretsController
@@ -739,19 +955,19 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 208
+  linenumber: 299
   dependency: ""
   isglobal: false
 - key: operator.tolerations
-  type: object
-  notationtype: ""
-  autodefault: ""
-  default: '`{}`'
+  type: k8s/tolerations
+  notationtype: k8s/tolerations
+  autodefault: '``{}``'
+  default: ""
   autodescription: Tolerations to use for the operator pod
   description: ""
   section: ""
   column: 3
-  linenumber: 194
+  linenumber: 284
   dependency: ""
   isglobal: false
 - key: rbac.create
@@ -763,7 +979,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 291
+  linenumber: 421
   dependency: ""
   isglobal: false
 - key: schedulerName
@@ -775,7 +991,19 @@
   description: Optionally use a non-default kubernetes scheduler.
   section: ""
   column: 1
-  linenumber: 294
+  linenumber: 424
+  dependency: ""
+  isglobal: false
+- key: serviceAccount.annotations
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{}`'
+  autodescription: Annotations to add to the service account, e.g. `iam.gke.io/gcp-service-account` to link it to a GCP service account via workload identity.
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 435
   dependency: ""
   isglobal: false
 - key: serviceAccount.create
@@ -787,7 +1015,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 299
+  linenumber: 429
   dependency: ""
   isglobal: false
 - key: serviceAccount.name
@@ -799,7 +1027,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 301
+  linenumber: 431
   dependency: ""
   isglobal: false
 - key: storage.storageClass.allowVolumeExpansion
@@ -811,7 +1039,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 381
+  linenumber: 515
   dependency: ""
   isglobal: false
 - key: storage.storageClass.create
@@ -823,7 +1051,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 367
+  linenumber: 501
   dependency: ""
   isglobal: false
 - key: storage.storageClass.name
@@ -835,7 +1063,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 370
+  linenumber: 504
   dependency: ""
   isglobal: false
 - key: storage.storageClass.parameters
@@ -847,7 +1075,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 376
+  linenumber: 510
   dependency: ""
   isglobal: false
 - key: storage.storageClass.provisioner
@@ -859,7 +1087,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 373
+  linenumber: 507
   dependency: ""
   isglobal: false
 - key: storage.storageClass.reclaimPolicy
@@ -871,7 +1099,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 382
+  linenumber: 516
   dependency: ""
   isglobal: false
 - key: storage.storageClass.volumeBindingMode
@@ -883,7 +1111,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 383
+  linenumber: 517
   dependency: ""
   isglobal: false
 - key: telemetry.enabled
@@ -895,31 +1123,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 318
-  dependency: ""
-  isglobal: false
-- key: telemetry.segmentApiKey
-  type: string
-  notationtype: ""
-  autodefault: ""
-  default: '`"hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A"`'
-  autodescription: ""
-  description: ""
-  section: ""
-  column: 3
-  linenumber: 319
-  dependency: ""
-  isglobal: false
-- key: telemetry.segmentClientSide
-  type: bool
-  notationtype: ""
-  autodefault: ""
-  default: '`true`'
-  autodescription: ""
-  description: ""
-  section: ""
-  column: 3
-  linenumber: 320
+  linenumber: 452
   dependency: ""
   isglobal: false
 - key: tls.defaultCertificateSpecs
@@ -931,6 +1135,6 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 344
+  linenumber: 478
   dependency: ""
   isglobal: false

@@ -21,33 +21,36 @@ use std::time::Duration;
 use differential_dataflow::capture::{Message, Progress};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
+use mz_interchange::avro::WriterSchemaProvider;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::errors::{CsrConnectError, DecodeError, DecodeErrorKind};
-use mz_storage_types::sources::encoding::{AvroEncoding, DataEncoding, RegexEncoding};
+use mz_storage_types::sources::encoding::{
+    AvroEncoding, CsvDecoderState, DataEncoding, RegexEncoding,
+};
+use mz_storage_types::wire_format::WireFormat;
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use regex::Regex;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{Map, Operator};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::vec::Map;
 use timely::progress::Timestamp;
 use timely::scheduling::SyncActivator;
 use tracing::error;
 
 use crate::decode::avro::AvroDecoderState;
-use crate::decode::csv::CsvDecoderState;
 use crate::decode::protobuf::ProtobufDecoderState;
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::decode::DecodeMetricDefs;
 use crate::source::types::{DecodeResult, SourceOutput};
 
 mod avro;
-mod csv;
 mod protobuf;
 
 /// Decode delimited CDCv2 messages.
@@ -55,9 +58,12 @@ mod protobuf;
 /// This not only literally decodes the avro-encoded messages, but
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
-pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: Timestamp>(
-    input: &VecCollection<G, DecodeResult<FromTime>, Diff>,
-) -> (VecCollection<G, Row, Diff>, PressOnDropButton) {
+pub fn render_decode_cdcv2<'scope, FromTime: Timestamp>(
+    input: &VecCollection<'scope, mz_repr::Timestamp, DecodeResult<FromTime>, Diff>,
+) -> (
+    VecCollection<'scope, mz_repr::Timestamp, Row, Diff>,
+    PressOnDropButton,
+) {
     let channel_rx = Rc::new(RefCell::new(VecDeque::new()));
     let activator_set: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
 
@@ -65,7 +71,8 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
     let channel_tx = Rc::clone(&channel_rx);
     let activator_get = Rc::clone(&activator_set);
     let pact = Exchange::new(|(x, _, _): &(DecodeResult<FromTime>, _, _)| x.key.hashed());
-    input.inner.sink(pact, "CDCv2Unpack", move |(input, _)| {
+    let input2 = input.inner.clone();
+    input2.sink(pact, "CDCv2Unpack", move |(input, _)| {
         input.for_each(|_time, data| {
             // The inputs are rows containing two columns that encode an enum, i.e only one of them
             // is ever set while the other is unset. This is the convention we follow in our Avro
@@ -346,25 +353,56 @@ async fn get_decoder(
     let decoder = match encoding {
         DataEncoding::Avro(AvroEncoding {
             schema,
-            csr_connection,
-            confluent_wire_format,
+            reference_schemas,
+            wire_format,
         }) => {
-            let csr_client = match csr_connection {
-                None => None,
-                Some(csr_connection) => {
-                    let csr_client = csr_connection
-                        .connect(storage_configuration, InTask::Yes)
-                        .await?;
-                    Some(csr_client)
+            let writer_schemas = match wire_format {
+                WireFormat::None => WriterSchemaProvider::None,
+                WireFormat::Confluent { registry } => {
+                    let client = match registry {
+                        None => None,
+                        Some(csr_connection) => Some(
+                            csr_connection
+                                .connect(storage_configuration, InTask::Yes)
+                                .await?,
+                        ),
+                    };
+                    WriterSchemaProvider::confluent(client)
+                }
+                WireFormat::Glue { registry } => {
+                    let client_with_registry = match registry {
+                        None => None,
+                        Some(glue_connection) => {
+                            let enforce_external_addresses =
+                                mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+                                    .get(storage_configuration.config_set());
+                            let sdk_config = glue_connection
+                                .aws_connection
+                                .connection
+                                .load_sdk_config(
+                                    &storage_configuration.connection_context,
+                                    glue_connection.aws_connection.connection_id,
+                                    InTask::Yes,
+                                    enforce_external_addresses,
+                                )
+                                .await?;
+                            let client =
+                                mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build();
+                            Some((client, glue_connection.registry_name.clone()))
+                        }
+                    };
+                    WriterSchemaProvider::glue(client_with_registry)
                 }
             };
             let state = avro::AvroDecoderState::new(
                 &schema,
-                csr_client,
+                &reference_schemas,
+                writer_schemas,
                 debug_name.to_string(),
-                confluent_wire_format,
             )
-            .expect("Failed to create avro decoder, even though we validated ccsr client creation in purification.");
+            .expect(
+                "avro decoder construction is infallible once writer-schema setup has succeeded",
+            );
             DataDecoder {
                 inner: DataDecoderInner::Avro(state),
                 metrics,
@@ -453,16 +491,16 @@ async fn decode_delimited(
 /// often lets us, for example, detect when Avro decoding has gone off the rails
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
-pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
-    input: &VecCollection<G, SourceOutput<FromTime>, Diff>,
+pub fn render_decode_delimited<'scope, T: Timestamp, FromTime: Timestamp>(
+    input: VecCollection<'scope, T, SourceOutput<FromTime>, Diff>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: String,
     metrics: DecodeMetricDefs,
     storage_configuration: StorageConfiguration,
 ) -> (
-    VecCollection<G, DecodeResult<FromTime>, Diff>,
-    Stream<G, HealthStatusMessage>,
+    VecCollection<'scope, T, DecodeResult<FromTime>, Diff>,
+    StreamVec<'scope, T, HealthStatusMessage>,
 ) {
     let op_name = format!(
         "{}{}DecodeDelimited",
@@ -477,7 +515,7 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
     let mut builder = AsyncOperatorBuilder::new(op_name, input.scope());
 
     let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let mut input = builder.new_input_for(&input.inner, Exchange::new(dist), &output_handle);
+    let mut input = builder.new_input_for(input.inner, Exchange::new(dist), &output_handle);
 
     let (_, transient_errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {

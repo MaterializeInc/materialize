@@ -105,7 +105,7 @@ DROP TYPE IF EXISTS int4_list;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-type.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-type" %}}
 
 ## Related pages
 

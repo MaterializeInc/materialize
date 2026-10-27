@@ -294,17 +294,11 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 "Dataflow: group_by_in_top_1" "ArrangeBy[[Column(0)]]"
 "Dataflow: group_by_in_top_1" "ArrangeBy[[Column(0)]]"
 "Dataflow: group_by_in_top_1" "Arranged DistinctBy"
-"Dataflow: group_by_in_top_1" "Arranged DistinctBy"
 "Dataflow: group_by_in_top_1" "Arranged MonotonicTop1 partial [val: empty]"
 "Dataflow: group_by_in_top_1" DistinctBy
-"Dataflow: group_by_in_top_1" DistinctBy
-"Dataflow: group_by_in_top_1" DistinctByErrorCheck
 "Dataflow: group_by_in_top_1" DistinctByErrorCheck
 "Dataflow: group_by_in_top_1" MonotonicTop1
-"Dataflow: group_by_limit" "Arranged DistinctBy"
 "Dataflow: group_by_limit" "Arranged MonotonicTop1 partial [val: empty]"
-"Dataflow: group_by_limit" DistinctBy
-"Dataflow: group_by_limit" DistinctByErrorCheck
 "Dataflow: group_by_limit" MonotonicTop1
 "Dataflow: group_by_order_by_in_top_1" "ArrangeBy[[Column(0)]]"
 "Dataflow: group_by_order_by_in_top_1" "ArrangeBy[[Column(0)]]"
@@ -320,3 +314,35 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} timestamp=5
 "Dataflow: order_by_desc_limit" MonotonicTop1
 "Dataflow: order_by_limit" "Arranged MonotonicTop1 partial [val: empty]"
 "Dataflow: order_by_limit" MonotonicTop1
+"Dataflow: group_by_in_top_1" "Arrange bundle err"
+"Dataflow: group_by_in_top_1" "Arrange bundle err"
+"Dataflow: group_by_in_top_1" "Arrange errors"
+"Dataflow: group_by_in_top_1" "Distinct errors"
+"Dataflow: group_by_in_top_1" "Distinct errors[[Column(0)]]"
+"Dataflow: group_by_in_top_1" "Distinct errors[[Column(0)]]"
+"Dataflow: group_by_limit" "Arrange bundle err"
+"Dataflow: group_by_limit" "Distinct errors[[]]"
+"Dataflow: group_by_order_by_in_top_1" "Arrange bundle err"
+"Dataflow: group_by_order_by_in_top_1" "Arrange bundle err"
+"Dataflow: group_by_order_by_in_top_1" "Arrange errors"
+"Dataflow: group_by_order_by_in_top_1" "Distinct errors"
+"Dataflow: group_by_order_by_in_top_1" "Distinct errors[[Column(0)]]"
+"Dataflow: group_by_order_by_in_top_1" "Distinct errors[[Column(0)]]"
+"Dataflow: limit_only" "Arrange bundle err"
+"Dataflow: limit_only" "Distinct errors[[]]"
+"Dataflow: order_by_desc_limit" "Arrange bundle err"
+"Dataflow: order_by_desc_limit" "Distinct errors[[]]"
+"Dataflow: order_by_limit" "Arrange bundle err"
+"Dataflow: order_by_limit" "Distinct errors[[]]"
+"Dataflow: group_by_in_top_1" "Arrange errors"
+"Dataflow: group_by_in_top_1" "Distinct errors"
+"Dataflow: group_by_limit" "Arrange errors"
+"Dataflow: group_by_limit" "Distinct errors"
+"Dataflow: group_by_order_by_in_top_1" "Arrange errors"
+"Dataflow: group_by_order_by_in_top_1" "Distinct errors"
+"Dataflow: limit_only" "Arrange errors"
+"Dataflow: limit_only" "Distinct errors"
+"Dataflow: order_by_desc_limit" "Arrange errors"
+"Dataflow: order_by_desc_limit" "Distinct errors"
+"Dataflow: order_by_limit" "Arrange errors"
+"Dataflow: order_by_limit" "Distinct errors"

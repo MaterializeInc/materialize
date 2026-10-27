@@ -71,7 +71,9 @@ $ kafka-create-topic topic=empty-at-zero partitions=1
   FORMAT JSON
   ENVELOPE UPSERT
 
-$ kafka-verify-data sink=materialize.public.empty_at_zero format=json
+# This topic doubles as the sink's progress topic, so it also carries progress
+# records that this command cannot decode. Exempt it from the exhaustion check.
+$ kafka-verify-data sink=materialize.public.empty_at_zero format=json exhaustive=false
 {"column1": 1}
 
 # Ensure that sinks can be created against a progress topic that is empty with a
@@ -99,5 +101,7 @@ $ kafka-delete-records topic=empty-at-nonzero partition=0 offset=3
   FORMAT JSON
   ENVELOPE UPSERT
 
-$ kafka-verify-data sink=materialize.public.empty_at_nonzero format=json
+# This topic doubles as the sink's progress topic, so it also carries progress
+# records that this command cannot decode. Exempt it from the exhaustion check.
+$ kafka-verify-data sink=materialize.public.empty_at_nonzero format=json exhaustive=false
 {"column1": 1}

@@ -24,6 +24,7 @@ from materialize.scalability.operation.scalability_operation import (
 )
 from materialize.scalability.workload.workload import WorkloadWithContext
 from materialize.scalability.workload.workload_markers import DdlWorkload
+from materialize.scalability.workload.workload_version import WorkloadVersion
 
 
 class CreateAndDropTableWorkload(WorkloadWithContext, DdlWorkload):
@@ -57,7 +58,10 @@ class CreateAndDropTableWithMvWorkload(WorkloadWithContext, DdlWorkload):
 
 
 class CreateAndReplaceViewWorkload(WorkloadWithContext, DdlWorkload):
-    """Creates n materialized views, a materialized view based on these, and then drops all MVs."""
+    """Creates n views, a view based on these, and then drops all views."""
+
+    def version(self) -> WorkloadVersion:
+        return WorkloadVersion.create(1, 1, 0)
 
     def amend_data_before_execution(self, data: OperationData) -> None:
         data.push("view_seed", data.get("worker_id"))
@@ -75,12 +79,6 @@ class CreateAndReplaceViewWorkload(WorkloadWithContext, DdlWorkload):
                     CreateViewXOnSeries(
                         materialized=False, additional_name_suffix="_3"
                     ),
-                    CreateViewXOnSeries(
-                        materialized=False, additional_name_suffix="_4"
-                    ),
-                    CreateViewXOnSeries(
-                        materialized=False, additional_name_suffix="_5"
-                    ),
                     CreateViewXOnViewOnSeries(
                         materialized=False,
                         additional_name_suffix="_merge",
@@ -88,16 +86,12 @@ class CreateAndReplaceViewWorkload(WorkloadWithContext, DdlWorkload):
                             "_1",
                             "_2",
                             "_3",
-                            "_4",
-                            "_5",
                         ],
                     ),
                     DropViewX(materialized=False, additional_name_suffix="_merge"),
                     DropViewX(materialized=False, additional_name_suffix="_1"),
                     DropViewX(materialized=False, additional_name_suffix="_2"),
                     DropViewX(materialized=False, additional_name_suffix="_3"),
-                    DropViewX(materialized=False, additional_name_suffix="_4"),
-                    DropViewX(materialized=False, additional_name_suffix="_5"),
                 ]
             )
         ]

@@ -26,6 +26,8 @@ CREATE TABLE person (name TEXT, current_mood mood);
 INSERT INTO person VALUES ('Moe', 'happy');
 ALTER TABLE person REPLICA IDENTITY FULL;
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE SOURCE mz_source FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');

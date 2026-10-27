@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,19 +9,21 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/ordinality
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/ordinality
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
-
-# not supported yet
-halt
 
 mode cockroach
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI colnames
 SELECT * FROM (VALUES ('a'), ('b')) WITH ORDINALITY AS x(name, i)
 ----
@@ -29,6 +31,8 @@ name i
 a 1
 b 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query I colnames
 SELECT ordinality FROM (VALUES ('a'), ('b')) WITH ORDINALITY
 ----
@@ -37,27 +41,32 @@ ordinality
 2
 
 statement ok
-CREATE TABLE foo (x CHAR PRIMARY KEY)
+CREATE TABLE foo (x CHAR PRIMARY KEY); INSERT INTO foo(x) VALUES ('a'), ('b')
 
-statement ok
-INSERT INTO foo(x) VALUES ('a'), ('b')
-
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT * FROM foo WITH ORDINALITY
 ----
 a 1
 b 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT * FROM foo WITH ORDINALITY LIMIT 1
 ----
 a 1
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT max(ordinality) FROM foo WITH ORDINALITY
 ----
 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TITI rowsort
 SELECT * FROM foo WITH ORDINALITY AS a, foo WITH ORDINALITY AS b
 ----
@@ -66,39 +75,72 @@ a 1 b 2
 b 2 a 1
 b 2 b 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT * FROM (SELECT x||x FROM foo) WITH ORDINALITY
 ----
 aa 1
 bb 2
 
-query TII
-SELECT * FROM (SELECT x, ordinality*2 FROM foo WITH ORDINALITY AS a) JOIN foo WITH ORDINALITY AS b USING (x)
+# Not supported by Materialize.
+onlyif cockroach
+query TII rowsort
+SELECT * FROM (SELECT x, ordinality*2 FROM foo WITH ORDINALITY AS a) JOIN foo WITH ORDINALITY AS b USING(x)
 ----
 a 2 1
 b 4 2
 
+# Not supported by Materialize.
+onlyif cockroach
+query TI
+SELECT * FROM (SELECT * FROM foo ORDER BY x DESC) WITH ORDINALITY LIMIT 1
+----
+b 1
+
+# Not supported by Materialize.
+onlyif cockroach
+query TI
+SELECT * FROM (SELECT * FROM foo ORDER BY x) WITH ORDINALITY ORDER BY x DESC LIMIT 1
+----
+b 2
+
+# Not supported by Materialize.
+onlyif cockroach
+query TI
+SELECT * FROM (SELECT * FROM foo ORDER BY x) WITH ORDINALITY ORDER BY ordinality DESC LIMIT 1
+----
+b 2
+
 statement ok
 INSERT INTO foo(x) VALUES ('c')
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT * FROM foo WITH ORDINALITY WHERE x > 'a'
 ----
 b 2
 c 3
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT * FROM foo WITH ORDINALITY WHERE ordinality > 1 ORDER BY ordinality DESC
 ----
 c 3
 b 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI
 SELECT * FROM (SELECT * FROM foo WHERE x > 'a') WITH ORDINALITY
 ----
 b 1
 c 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT ordinality = row_number() OVER () FROM foo WITH ORDINALITY
 ----
@@ -106,6 +148,16 @@ true
 true
 true
 
-# Regression test for cockroach#33659
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #33659
 statement ok
 TABLE [SHOW ZONE CONFIGURATIONS] WITH ORDINALITY
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #41760
+query TI
+SELECT * FROM (SELECT * FROM foo LIMIT 1) WITH ORDINALITY
+----
+a 1

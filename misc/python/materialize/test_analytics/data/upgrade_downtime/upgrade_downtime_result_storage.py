@@ -35,8 +35,7 @@ class UpgradeDowntimeResultStorage(BaseDataStorage):
 
         for result_entry in results:
             # TODO: remove NULL castings when database-issues#8100 is resolved
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                 INSERT INTO upgrade_downtime_result
                 (
                     build_job_id,
@@ -54,7 +53,6 @@ class UpgradeDowntimeResultStorage(BaseDataStorage):
                     {result_entry.downtime_initial},
                     {result_entry.downtime_upgrade}
                 ;
-                """
-            )
+                """)
 
         self.database_connector.add_update_statements(sql_statements)

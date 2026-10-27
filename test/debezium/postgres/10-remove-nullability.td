@@ -19,6 +19,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_remove_nullability (f1 INTEGER);
 ALTER TABLE alter_remove_nullability REPLICA IDENTITY FULL;
 INSERT INTO alter_remove_nullability VALUES (123),(234);
+ANALYZE;
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

@@ -13,11 +13,12 @@ use std::ops::Rem;
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::AsCollection;
+use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
+use mz_ore::now::NowFn;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{
@@ -25,16 +26,21 @@ use mz_storage_types::sources::load_generator::{
     LoadGeneratorSourceConnection,
 };
 use mz_storage_types::sources::{MzOffset, SourceExportDetails, SourceTimestamp};
-use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
+use mz_timely_util::containers::stack::FueledBuilder;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Partition;
-use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
+use timely::dataflow::{Scope, StreamVec};
+use timely::progress::{Antichain, Timestamp};
 use tokio::time::{Instant, interval_at};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{Probe, SignaledFuture, SourceRender, StackedCollection};
+use crate::source::types::{
+    FuelSize, Probe, ResumeUppers, SignaledFuture, SourceRender, StackedCollection,
+};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod auction;
@@ -131,16 +137,19 @@ impl GeneratorKind {
         }
     }
 
-    fn render<G: Scope<Timestamp = MzOffset>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: Scope<'scope, MzOffset>,
         config: &RawSourceCreationConfig,
-        committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        committed_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
-        Stream<G, HealthStatusMessage>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, MzOffset, Infallible>,
+        StreamVec<'scope, MzOffset, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
         // figure out which output types from the generator belong to which output indexes
@@ -199,17 +208,19 @@ impl SourceRender for LoadGeneratorSourceConnection {
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Generator;
 
-    fn render<G: Scope<Timestamp = MzOffset>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: Scope<'scope, MzOffset>,
         config: &RawSourceCreationConfig,
-        committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        committed_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
-        Stream<G, HealthStatusMessage>,
-        Option<Stream<G, Probe<MzOffset>>>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, MzOffset, HealthStatusMessage>,
+        StreamVec<'scope, MzOffset, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         let generator_kind = GeneratorKind::new(
@@ -218,42 +229,57 @@ impl SourceRender for LoadGeneratorSourceConnection {
             self.as_of,
             self.up_to,
         );
-        let (updates, uppers, health, button) =
+        let (updates, progress, health, button) =
             generator_kind.render(scope, config, committed_uppers, start_signal);
 
-        (updates, uppers, health, None, button)
+        let probe_stream = synthesize_probes(
+            config.id,
+            progress,
+            config.timestamp_interval,
+            config.now_fn.clone(),
+        );
+
+        (updates, health, probe_stream, button)
     }
 }
 
-fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
+fn render_simple_generator<'scope>(
     generator: Box<dyn Generator>,
     tick_micros: Option<u64>,
     as_of: MzOffset,
     up_to: MzOffset,
-    scope: &G,
+    scope: Scope<'scope, MzOffset>,
     config: &RawSourceCreationConfig,
-    committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    committed_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
-    BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Stream<G, Infallible>,
-    Stream<G, HealthStatusMessage>,
+    BTreeMap<GlobalId, StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>>,
+    StreamVec<'scope, MzOffset, Infallible>,
+    StreamVec<'scope, MzOffset, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 ) {
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (data_output, stream) = builder.new_output::<FueledBuilder<
+        CapacityContainerBuilder<
+            Vec<(
+                (usize, Result<SourceMessage, DataflowError>),
+                MzOffset,
+                Diff,
+            )>,
+        >,
+    >>();
     let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
     let partition_count = u64::cast_from(export_ids.len());
     let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
         partition_count,
-        |((output, data), time, diff): &(
+        |((output, data), time, diff): (
             (usize, Result<SourceMessage, DataflowError>),
             MzOffset,
             Diff,
         )| {
-            let output = u64::cast_from(*output);
-            (output, (data.clone(), time.clone(), diff.clone()))
+            let output = u64::cast_from(output);
+            (output, (data, time, diff))
         },
     );
     let mut data_collections = BTreeMap::new();
@@ -319,11 +345,11 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 
             let mut committed_uppers = std::pin::pin!(committed_uppers);
 
-            // If we are just starting up, report 0 as our `offset_committed`.
-            let mut offset_committed = if resume_offset.offset == 0 {
-                Some(0)
+            // Each export's `offset_committed`. If we are just starting up, report 0.
+            let mut offsets_committed: BTreeMap<_, _> = if resume_offset.offset == 0 {
+                source_statistics.keys().map(|id| (*id, 0)).collect()
             } else {
-                None
+                BTreeMap::new()
             };
 
             while let Some((output_type, event)) = rows.next() {
@@ -365,9 +391,9 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                         // Since those are not required downstream we eagerly ignore them here.
                         if resume_offset <= offset {
                             for (&output, message) in outputs.iter().repeat_clone(message) {
-                                data_output
-                                    .give_fueled(&cap, ((output, message), offset, diff))
-                                    .await;
+                                let update = ((output, message), offset, diff);
+                                let size = update.fuel_size();
+                                data_output.give_fueled(&cap, update, size).await;
                             }
                         }
                     }
@@ -412,11 +438,13 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                                     _tick = tick_interval.tick() => {
                                         break;
                                     }
-                                    Some(frontier) = committed_uppers.next() => {
-                                        if let Some(offset) = frontier.as_option() {
-                                            // Offset N means we have committed N offsets (offsets are
-                                            // 0-indexed)
-                                            offset_committed = Some(offset.offset);
+                                    Some(uppers) = committed_uppers.next() => {
+                                        for (id, frontier) in uppers.exports {
+                                            if let Some(offset) = frontier.into_option() {
+                                                // Offset N means we have committed N offsets (offsets are
+                                                // 0-indexed)
+                                                offsets_committed.insert(id, offset.offset);
+                                            }
                                         }
                                     }
                                 }
@@ -425,14 +453,14 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
                             // TODO(guswynn): generators have various definitions of "snapshot", so
                             // we are not going to implement snapshot progress statistics for them
                             // right now, but will come back to it.
-                            if let Some(offset_committed) = offset_committed {
-                                for stats in source_statistics.values() {
-                                    stats.set_offset_committed(offset_committed);
+                            for (id, offset_committed) in &offsets_committed {
+                                if let Some(stats) = source_statistics.get(id) {
+                                    stats.set_offset_committed(*offset_committed);
                                     // technically we could have _known_ a larger offset
                                     // than the one that has been committed, but we can
                                     // never recover that known amount on restart, so we
                                     // just advance these in lock step.
-                                    stats.set_offset_known(offset_committed);
+                                    stats.set_offset_known(*offset_committed);
                                 }
                             }
                         }
@@ -449,4 +477,66 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
         health_stream,
         vec![button.press_on_drop()],
     )
+}
+
+/// Synthesizes a probe stream that produces the frontier of the given progress stream at the given
+/// interval.
+///
+/// This is used as a fallback for sources that don't support probing the frontier of the upstream
+/// system.
+fn synthesize_probes<'scope, T: timely::progress::Timestamp>(
+    source_id: GlobalId,
+    progress: StreamVec<'scope, T, Infallible>,
+    interval: Duration,
+    now_fn: NowFn,
+) -> StreamVec<'scope, T, Probe<T>> {
+    let scope = progress.scope();
+
+    let active_worker = usize::cast_from(source_id.hashed()) % scope.peers();
+    let is_active_worker = active_worker == scope.index();
+
+    let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
+    let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
+    let mut input = op.new_input_for(progress, Pipeline, &output);
+
+    op.build(|caps| async move {
+        if !is_active_worker {
+            return;
+        }
+
+        let [cap] = caps.try_into().expect("one capability per output");
+
+        let mut ticker = super::probe::Ticker::new(move || interval, now_fn.clone());
+
+        let minimum_frontier = Antichain::from_elem(Timestamp::minimum());
+        let mut frontier = minimum_frontier.clone();
+        loop {
+            tokio::select! {
+                event = input.next() => match event {
+                    Some(AsyncEvent::Progress(progress)) => frontier = progress,
+                    Some(AsyncEvent::Data(..)) => unreachable!(),
+                    None => break,
+                },
+                // We only report a probe if the source upper frontier is not the minimum frontier.
+                // This makes it so the first remap binding corresponds to the snapshot of the
+                // source, and because the first binding always maps to the minimum *target*
+                // frontier we guarantee that the source will never appear empty.
+                probe_ts = ticker.tick(), if frontier != minimum_frontier => {
+                    let probe = Probe {
+                        probe_ts,
+                        upstream_frontier: frontier.clone(),
+                    };
+                    output.give(&cap, probe);
+                }
+            }
+        }
+
+        let probe = Probe {
+            probe_ts: now_fn().into(),
+            upstream_frontier: Antichain::new(),
+        };
+        output.give(&cap, probe);
+    });
+
+    output_stream
 }

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import json
+from contextlib import nullcontext
 from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 
@@ -16,7 +16,11 @@ from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
 from materialize.docker import image_registry
 from materialize.mz_version import MzVersion
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.listener_config import (
+    resolve_listeners_config_path,
+)
 from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
 from materialize.mzcompose.services.ssh_bastion_host import (
     setup_default_ssh_test_connection,
@@ -41,6 +45,9 @@ class StartMz(MzcomposeAction):
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] = {},
         system_parameter_version: MzVersion | None = None,
+        soft_assertions: bool = True,
+        builtin_system_cluster_replication_factor: int | None = None,
+        builtin_probe_cluster_replication_factor: int | None = None,
         mz_service: str | None = None,
         platform: str | None = None,
         healthcheck: list[str] | None = None,
@@ -56,6 +63,13 @@ class StartMz(MzcomposeAction):
         self.system_parameter_defaults = system_parameter_defaults
         self.additional_system_parameter_defaults = additional_system_parameter_defaults
         self.system_parameter_version = system_parameter_version or tag
+        self.soft_assertions = soft_assertions
+        self.builtin_system_cluster_replication_factor = (
+            builtin_system_cluster_replication_factor
+        )
+        self.builtin_probe_cluster_replication_factor = (
+            builtin_probe_cluster_replication_factor
+        )
         self.healthcheck = healthcheck
         self.mz_service = mz_service
         self.platform = platform
@@ -75,25 +89,38 @@ class StartMz(MzcomposeAction):
         )
         print(f"Starting Mz using image {image}, mz_service {self.mz_service}")
 
-        listeners_config_path = (
-            f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive.json"
+        # SASL listeners arrived in v0.158.0, so only newer versions get the
+        # sasl variant.
+        config_name = (
+            "testdrive_sasl"
+            if not self.tag or self.tag >= MzVersion.parse_mz("v0.158.0-dev")
+            else "testdrive"
+        )
+        listeners_config_path = resolve_listeners_config_path(
+            self.tag or MzVersion.parse_cargo(), config_name
         )
 
-        if not self.tag or self.tag >= MzVersion.parse_mz("v0.158.0-dev"):
-            listeners_config_path = (
-                f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive_sasl.json"
-            )
+        # Scenario-level parameters come from the command line
+        # (--system-param) and win over action-specific ones.
+        additional_system_parameter_defaults = {
+            **self.additional_system_parameter_defaults,
+            **self.scenario.additional_system_parameter_defaults,
+        }
 
         mz = Materialized(
             name=self.mz_service,
             image=image,
+            # TODO: Switch to default (CockroachOrPostgresMetadata) when
+            # https://linear.app/materializeinc/issue/SS-284 is solved
+            metadata_store="postgres-metadata",
             external_metadata_store=True,
             external_blob_store=True,
             blob_store_is_azure=self.scenario.features.azurite_enabled(),
             environment_extra=self.environment_extra,
             system_parameter_defaults=self.system_parameter_defaults,
-            additional_system_parameter_defaults=self.additional_system_parameter_defaults,
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
             system_parameter_version=self.system_parameter_version,
+            soft_assertions=self.soft_assertions,
             sanity_restart=False,
             platform=self.platform,
             healthcheck=self.healthcheck,
@@ -101,8 +128,10 @@ class StartMz(MzcomposeAction):
             restart=self.restart,
             force_migrations=self.force_migrations,
             publish=self.publish,
-            default_replication_factor=2,
+            default_replication_factor=self.scenario.default_replication_factor,
             support_external_clusterd=True,
+            builtin_system_cluster_replication_factor=self.builtin_system_cluster_replication_factor,
+            builtin_probe_cluster_replication_factor=self.builtin_probe_cluster_replication_factor,
             listeners_config_path=listeners_config_path,
         )
 
@@ -146,14 +175,12 @@ class ConfigureMz(MzcomposeAction):
         self.scenario = scenario
 
     def execute(self, e: Executor) -> None:
-        input = dedent(
-            """
+        input = dedent("""
             # Run any query to have the materialize user implicitly created if
             # it didn't exist yet. Required for the GRANT later.
             > SELECT 1;
             1
-            """
-        )
+            """)
 
         system_settings = {
             "ALTER SYSTEM SET max_tables = 1000;",
@@ -187,19 +214,20 @@ class ConfigureMz(MzcomposeAction):
             )
 
         kafka_broker = "BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT"
-        input += dedent(
-            f"""
+        input += dedent(f"""
             > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA {kafka_broker}
 
             > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
-            """
-        )
+            """)
 
         self.handle = e.testdrive(input=input, mz_service=self.mz_service)
-        e.system_settings.update(system_settings)
+        self.applied_settings = system_settings
 
     def join(self, e: Executor) -> None:
         e.join(self.handle)
+        # Only record the settings as applied once the testdrive fragment that
+        # applies them has actually succeeded.
+        e.system_settings.update(self.applied_settings)
 
 
 class SetupSqlServerTesting(MzcomposeAction):
@@ -216,6 +244,29 @@ class SetupSqlServerTesting(MzcomposeAction):
         e.join(self.handle)
 
 
+class SetupIcebergTesting(MzcomposeAction):
+    def __init__(self, scenario: "Scenario", mz_service: str | None = None) -> None:
+        self.handle: Any | None = None
+        self.mz_service = mz_service
+        self.scenario = scenario
+
+    def execute(self, e: Executor) -> None:
+        c = e.mzcompose_composition()
+        iceberg_credentials = setup_polaris_for_iceberg(c)
+        input = dedent(
+            f"""
+            > CREATE VIEW iceberg_credentials AS SELECT '{iceberg_credentials[0]}' AS user, '{iceberg_credentials[1]}' AS key;
+            > CREATE SECRET iceberg_secret AS '{iceberg_credentials[1]}'
+            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '{iceberg_credentials[0]}', SECRET ACCESS KEY = SECRET iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
+            > CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://polaris:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');"""
+        )
+
+        self.handle = e.testdrive(input=input, mz_service=self.mz_service)
+
+    def join(self, e: Executor) -> None:
+        e.join(self.handle)
+
+
 class KillMz(MzcomposeAction):
     def __init__(
         self, mz_service: str = "materialized", capture_logs: bool = False
@@ -227,8 +278,17 @@ class KillMz(MzcomposeAction):
         c = e.mzcompose_composition()
 
         # Don't fail since we are careful to explicitly kill and collect logs
-        # of the services thus started
-        with c.override(Materialized(name=self.mz_service), fail_on_new_service=False):
+        # of the services thus started. A service the composition already
+        # defines needs no override. Overriding re-acquires its image, which
+        # exits in CI once a scenario has changed the materialized fingerprint,
+        # e.g. with BumpVersion.
+        with (
+            nullcontext()
+            if self.mz_service in c.compose["services"]
+            else c.override(
+                Materialized(name=self.mz_service), fail_on_new_service=False
+            )
+        ):
             c.kill(self.mz_service, wait=True)
 
             if self.capture_logs:
@@ -262,10 +322,23 @@ class UseClusterdCompute(MzcomposeAction):
             port=6877,
             user="mz_system",
         )
+
+        # Drop all existing replicas so that quickstart runs solely on
+        # clusterd_compute_1. A leftover orchestrated replica would keep
+        # serving queries and mask failures of the unorchestrated one.
+        replica_names = [row[0] for row in c.sql_query("""
+                SELECT mz_cluster_replicas.name
+                FROM mz_cluster_replicas
+                JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+                WHERE mz_clusters.name = 'quickstart'
+                """)]
+        drop_replicas = "\n".join(
+            f"DROP CLUSTER REPLICA quickstart.{name};" for name in replica_names
+        )
         c.sql(
-            """
+            f"""
             ALTER CLUSTER quickstart SET (MANAGED = false);
-            DROP CLUSTER REPLICA quickstart.r1;
+            {drop_replicas}
             CREATE CLUSTER REPLICA quickstart.r1
                 STORAGECTL ADDRESSES ['clusterd_compute_1:2100'],
                 STORAGE ADDRESSES ['clusterd_compute_1:2103'],
@@ -366,36 +439,32 @@ class DropCreateDefaultReplica(MzcomposeAction):
 class WaitReadyMz(MzcomposeAction):
     """Wait until environmentd is ready, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#get-apileaderstatus"""
 
-    def __init__(self, mz_service: str = "materialized") -> None:
+    def __init__(
+        self, mz_service: str = "materialized", timeout: int | None = None
+    ) -> None:
         self.mz_service = mz_service
+        self.timeout = timeout
 
     def execute(self, e: Executor) -> None:
         e.mzcompose_composition().await_mz_deployment_status(
-            DeploymentStatus.READY_TO_PROMOTE, self.mz_service
+            DeploymentStatus.READY_TO_PROMOTE, self.mz_service, timeout=self.timeout
         )
 
 
 class PromoteMz(MzcomposeAction):
     """Promote environmentd to leader, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#post-apileaderpromote"""
 
-    def __init__(self, mz_service: str = "materialized") -> None:
+    def __init__(
+        self, mz_service: str = "materialized", *, retire_mz_service: str | None
+    ) -> None:
+        """See `Composition.promote_mz` for `retire_mz_service`."""
         self.mz_service = mz_service
+        self.retire_mz_service = retire_mz_service
 
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        result = json.loads(
-            c.exec(
-                self.mz_service,
-                "curl",
-                "-s",
-                "-X",
-                "POST",
-                "http://127.0.0.1:6878/api/leader/promote",
-                capture=True,
-            ).stdout
-        )
-        assert result["result"] == "Success", f"Unexpected result {result}"
+        c.promote_mz(self.mz_service, retire_mz_service=self.retire_mz_service)
 
         # Wait until new Materialize is ready to handle queries
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, self.mz_service)

@@ -11,10 +11,10 @@
 //!
 //! The format adheres to the following conventions:
 //! 1. In general, every line that starts with an uppercase character
-//!    corresponds to a [`Plan`] variant.
+//!    corresponds to a [`LirRelationExpr`] variant.
 //! 2. Whenever the variant has an attached `~Plan`, the printed name is
 //!    `$V::$P` where `$V` identifies the variant and `$P` the plan.
-//! 3. The fields of a `~Plan` struct attached to a [`Plan`] are rendered as if
+//! 3. The fields of a `~Plan` struct attached to a [`LirRelationExpr`] are rendered as if
 //!    they were part of the variant themself.
 //! 4. Non-recursive parameters of each sub-plan are written as `$key=$val`
 //!    pairs on the same line or as lowercase `$key` fields on indented lines.
@@ -24,30 +24,33 @@ use std::fmt;
 use std::ops::Deref;
 
 use itertools::Itertools;
+use mz_expr::Id;
+use mz_expr::MfpPlan;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
-use mz_expr::{Id, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::{IndentLike, StrExt, separated};
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
-    CompactScalarSeq, CompactScalars, ExplainConfig, Indices, PlanRenderingContext,
+    CompactScalarSeq, CompactScalars, ExplainConfig, ExprHumanizer, Indices, PlanRenderingContext,
 };
 
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
 use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
 use crate::plan::reduce::{
-    AccumulablePlan, BasicPlan, BucketedPlan, CollationPlan, HierarchicalPlan, MonotonicPlan,
-    SingleBasicPlan,
+    AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, MonotonicPlan, SingleBasicPlan,
 };
+use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::ThresholdPlan;
-use crate::plan::{AvailableCollections, LirId, Plan, PlanNode};
+use crate::plan::{
+    ArrangementStrategy, AvailableCollections, LirId, LirRelationExpr, LirRelationNode,
+};
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for LirRelationExpr {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -57,7 +60,7 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for Plan {
     }
 }
 
-impl Plan {
+impl LirRelationExpr {
     // NOTE: This code needs to be kept in sync with the `Display` instance for
     // `RenderPlan:ExprHumanizer`.
     //
@@ -66,9 +69,9 @@ impl Plan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
-        use PlanNode::*;
+        use LirRelationNode::*;
 
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let annotations = PlanAnnotations::new(ctx.config.clone(), self);
@@ -122,7 +125,7 @@ impl Plan {
                         if !mfp.is_identity() {
                             writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
-                            mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                            fmt_mfp_default_text(mfp, &mode, f, ctx)?;
                             ctx.indent += 1;
                         }
 
@@ -137,7 +140,7 @@ impl Plan {
                         if !mfp.is_identity() {
                             writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
-                            mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                            fmt_mfp_default_text(mfp, &mode, f, ctx)?;
                             ctx.indent += 1;
                         }
 
@@ -150,7 +153,7 @@ impl Plan {
                         if !mfp.is_identity() {
                             writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                             ctx.indent += 1;
-                            mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                            fmt_mfp_default_text(mfp, &mode, f, ctx)?;
                             ctx.indent += 1;
                         }
 
@@ -214,7 +217,7 @@ impl Plan {
                 ctx.indent.set();
 
                 ctx.indent += 1;
-                mode.expr(mfp, None).fmt_default_text(f, ctx)?;
+                fmt_mfp_default_text(mfp, &mode, f, ctx)?;
 
                 // one more nesting level if we showed anything for the MFP
                 if !mfp.is_identity() {
@@ -231,10 +234,10 @@ impl Plan {
                 mfp_after,
             } => {
                 ctx.indent.set();
-                if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
+                if !mfp_after.is_identity() {
                     writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                     ctx.indent += 1;
-                    mode.expr(mfp_after, None).fmt_default_text(f, ctx)?;
+                    fmt_mfp_default_text(mfp_after, &mode, f, ctx)?;
                     ctx.indent += 1;
                 }
 
@@ -255,22 +258,51 @@ impl Plan {
                 use crate::plan::join::JoinPlan;
                 match plan {
                     JoinPlan::Linear(plan) => {
-                        write!(f, "{}→Differential Join", ctx.indent)?;
-                        write!(f, " %{}", plan.source_relation)?;
-                        for dsp in &plan.stage_plans {
-                            write!(f, " » %{}", dsp.lookup_relation)?;
-                        }
+                        let label = if plan.has_cross_stage() {
+                            "→Differential Cross Join"
+                        } else {
+                            "→Differential Join"
+                        };
+                        write!(f, "{}{label} ", ctx.indent)?;
+                        fmt_join_chain(
+                            f,
+                            ctx.humanizer,
+                            &mode,
+                            inputs,
+                            plan.source_relation,
+                            plan.source_key.as_ref(),
+                            plan.stage_plans
+                                .iter()
+                                .map(|s| (s.lookup_relation, &s.lookup_key)),
+                        )?;
                         writeln!(f, "{annotations}")?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     JoinPlan::Delta(plan) => {
-                        write!(f, "{}→Delta Join", ctx.indent)?;
+                        // A single path only survives when the plan was reduced to a one-shot
+                        // (single-time) join, e.g. a `SELECT`. Call it out so this plan is not
+                        // mistaken for the multi-path plan an index or materialized view would use.
+                        let one_shot = plan.path_plans.len() == 1;
+                        let label = match (one_shot, plan.has_cross_stage()) {
+                            (true, true) => "→One-Shot Delta Cross Join",
+                            (true, false) => "→One-Shot Delta Join",
+                            (false, true) => "→Delta Cross Join",
+                            (false, false) => "→Delta Join",
+                        };
+                        write!(f, "{}{label}", ctx.indent)?;
                         for dpp in &plan.path_plans {
-                            write!(f, " [%{}", dpp.source_relation)?;
-
-                            for dsp in &dpp.stage_plans {
-                                write!(f, " » %{}", dsp.lookup_relation)?;
-                            }
+                            write!(f, " [")?;
+                            fmt_join_chain(
+                                f,
+                                ctx.humanizer,
+                                &mode,
+                                inputs,
+                                dpp.source_relation,
+                                dpp.source_key.as_ref(),
+                                dpp.stage_plans
+                                    .iter()
+                                    .map(|s| (s.lookup_relation, &s.lookup_key)),
+                            )?;
                             write!(f, "]")?;
                         }
                         writeln!(f, "{annotations}")?;
@@ -291,32 +323,47 @@ impl Plan {
                 key_val_plan,
                 plan,
                 mfp_after,
+                temporal_bucketing_strategy,
             } => {
                 ctx.indent.set();
-                if !mfp_after.expressions.is_empty() || !mfp_after.predicates.is_empty() {
+                if !mfp_after.is_identity() {
                     writeln!(f, "{}→Fused with Child Map/Filter/Project", ctx.indent)?;
                     ctx.indent += 1;
-                    mode.expr(mfp_after, None).fmt_default_text(f, ctx)?;
+                    mode.expr(mfp_after.deref(), None)
+                        .fmt_default_text(f, ctx)?;
                     ctx.indent += 1;
                 }
+
+                let temporally_bucketed = matches!(
+                    temporal_bucketing_strategy,
+                    ArrangementStrategy::TemporalBucketing
+                );
 
                 use crate::plan::reduce::ReducePlan;
                 match plan {
                     ReducePlan::Distinct => {
-                        writeln!(f, "{}→Distinct GroupAggregate{annotations}", ctx.indent)?;
+                        write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
+                        writeln!(f, "Distinct GroupAggregate{annotations}")?;
                     }
                     ReducePlan::Accumulable(plan) => {
-                        writeln!(f, "{}→Accumulable GroupAggregate{annotations}", ctx.indent)?;
+                        write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
+                        writeln!(f, "Accumulable GroupAggregate{annotations}")?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                     ReducePlan::Hierarchical(
                         plan @ HierarchicalPlan::Bucketed(BucketedPlan { buckets, .. }),
                     ) => {
-                        write!(
-                            f,
-                            "{}→Bucketed Hierarchical GroupAggregate (buckets: ",
-                            ctx.indent
-                        )?;
+                        write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
+                        write!(f, "Bucketed Hierarchical GroupAggregate (buckets:")?;
                         for bucket in buckets {
                             write!(f, " {bucket}")?;
                         }
@@ -329,6 +376,9 @@ impl Plan {
                         }),
                     ) => {
                         write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
                         if *must_consolidate {
                             write!(f, "Consolidating ")?;
                         }
@@ -350,21 +400,13 @@ impl Plan {
                                 ctx.indent += 1;
                             }
                         }
-                        writeln!(
-                            f,
-                            "{}→Non-incremental GroupAggregate{annotations}",
-                            ctx.indent
-                        )?;
+                        write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
+                        writeln!(f, "Non-incremental GroupAggregate{annotations}")?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                         ctx.indent.reset();
-                    }
-                    ReducePlan::Collation(plan) => {
-                        writeln!(
-                            f,
-                            "{}→Collated Multi-GroupAggregate{annotations}",
-                            ctx.indent
-                        )?;
-                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
 
@@ -383,11 +425,22 @@ impl Plan {
 
                 ctx.indent.reset();
             }
-            TopK { input, top_k_plan } => {
+            TopK {
+                input,
+                top_k_plan,
+                temporal_bucketing_strategy,
+            } => {
+                let temporally_bucketed = matches!(
+                    temporal_bucketing_strategy,
+                    ArrangementStrategy::TemporalBucketing
+                );
                 use crate::plan::top_k::TopKPlan;
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
                         write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
                         if plan.must_consolidate {
                             write!(f, "Consolidating ")?;
                         }
@@ -396,7 +449,7 @@ impl Plan {
                         ctx.indented(|ctx| {
                             if plan.group_key.len() > 0 {
                                 let group_by = CompactScalars(mode.seq(&plan.group_key, None));
-                                writeln!(f, "{}Group By{group_by}", ctx.indent)?;
+                                writeln!(f, "{}Group By {group_by}", ctx.indent)?;
                             }
                             if plan.order_key.len() > 0 {
                                 let order_by = separated(", ", mode.seq(&plan.order_key, None));
@@ -407,6 +460,9 @@ impl Plan {
                     }
                     TopKPlan::MonotonicTopK(plan) => {
                         write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
                         if plan.must_consolidate {
                             write!(f, "Consolidating ")?;
                         }
@@ -415,7 +471,7 @@ impl Plan {
                         ctx.indented(|ctx| {
                             if plan.group_key.len() > 0 {
                                 let group_by = CompactScalars(mode.seq(&plan.group_key, None));
-                                writeln!(f, "{}Group By{group_by}", ctx.indent)?;
+                                writeln!(f, "{}Group By {group_by}", ctx.indent)?;
                             }
                             if plan.order_key.len() > 0 {
                                 let order_by = separated(", ", mode.seq(&plan.order_key, None));
@@ -429,12 +485,16 @@ impl Plan {
                         })?;
                     }
                     TopKPlan::Basic(plan) => {
-                        writeln!(f, "{}→Non-monotonic TopK{annotations}", ctx.indent)?;
+                        write!(f, "{}→", ctx.indent)?;
+                        if temporally_bucketed {
+                            write!(f, "Temporally-Bucketed ")?;
+                        }
+                        writeln!(f, "Non-monotonic TopK{annotations}")?;
 
                         ctx.indented(|ctx| {
                             if plan.group_key.len() > 0 {
                                 let group_by = CompactScalars(mode.seq(&plan.group_key, None));
-                                writeln!(f, "{}Group By{group_by}", ctx.indent)?;
+                                writeln!(f, "{}Group By {group_by}", ctx.indent)?;
                             }
                             if plan.order_key.len() > 0 {
                                 let order_by = separated(", ", mode.seq(&plan.order_key, None));
@@ -478,8 +538,15 @@ impl Plan {
             Union {
                 inputs,
                 consolidate_output,
+                temporal_bucketing_strategies,
             } => {
+                let any_temporally_bucketed = temporal_bucketing_strategies
+                    .iter()
+                    .any(|s| matches!(s, ArrangementStrategy::TemporalBucketing));
                 write!(f, "{}→", ctx.indent)?;
+                if any_temporally_bucketed {
+                    write!(f, "Temporally-Bucketed ")?;
+                }
                 if *consolidate_output {
                     write!(f, "Consolidating ")?;
                 }
@@ -497,6 +564,7 @@ impl Plan {
                 input,
                 input_mfp,
                 forms,
+                strategy: _,
             } => {
                 ctx.indent.set();
                 if forms.raw && forms.arranged.is_empty() {
@@ -523,7 +591,7 @@ impl Plan {
                 if !input_mfp.is_identity() {
                     ctx.indent += 1;
                     writeln!(f, "{}→Fused with Parent Map/Filter/Project", ctx.indent)?;
-                    ctx.indented(|ctx| mode.expr(input_mfp, None).fmt_default_text(f, ctx))?;
+                    ctx.indented(|ctx| fmt_mfp_default_text(input_mfp, &mode, f, ctx))?;
                 }
 
                 ctx.indent += 1;
@@ -538,9 +606,9 @@ impl Plan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
-        use PlanNode::*;
+        use LirRelationNode::*;
 
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let annotations = PlanAnnotations::new(ctx.config.clone(), self);
@@ -553,7 +621,7 @@ impl Plan {
                         ctx.indented(|ctx| {
                             fmt_text_constant_rows(
                                 f,
-                                rows.iter().map(|(data, _, diff)| (data, diff)),
+                                rows.iter().map(|(data, _, diff)| (&data.0, diff)),
                                 &mut ctx.indent,
                                 ctx.config.redacted,
                             )
@@ -604,7 +672,7 @@ impl Plan {
                     GetPlan::Arrangement(key, val, mfp) => {
                         writeln!(f, "{}Get::Arrangement {}{}", ctx.indent, id, annotations)?;
                         ctx.indent += 1;
-                        mode.expr(mfp, None).fmt_text(f, ctx)?;
+                        fmt_mfp_verbose_text(mfp, &mode, f, ctx)?;
                         {
                             let key = mode.seq(key, None);
                             let key = CompactScalars(key);
@@ -618,7 +686,7 @@ impl Plan {
                     GetPlan::Collection(mfp) => {
                         writeln!(f, "{}Get::Collection {}{}", ctx.indent, id, annotations)?;
                         ctx.indent += 1;
-                        mode.expr(mfp, None).fmt_text(f, ctx)?;
+                        fmt_mfp_verbose_text(mfp, &mode, f, ctx)?;
                     }
                 }
 
@@ -680,7 +748,7 @@ impl Plan {
             } => {
                 writeln!(f, "{}Mfp{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {
-                    mode.expr(mfp, None).fmt_text(f, ctx)?;
+                    fmt_mfp_verbose_text(mfp, &mode, f, ctx)?;
                     if let Some((key, val)) = input_key_val {
                         {
                             let key = mode.seq(key, None);
@@ -717,7 +785,7 @@ impl Plan {
                     }
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}mfp_after", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| fmt_mfp_verbose_text(mfp_after, &mode, f, ctx))?;
                     }
                     input.fmt_text(f, ctx)
                 })?;
@@ -747,6 +815,7 @@ impl Plan {
                 key_val_plan,
                 plan,
                 mfp_after,
+                temporal_bucketing_strategy,
             } => {
                 use crate::plan::reduce::ReducePlan;
                 match plan {
@@ -765,16 +834,19 @@ impl Plan {
                         writeln!(f, "{}Reduce::Basic{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
-                    ReducePlan::Collation(plan) => {
-                        writeln!(f, "{}Reduce::Collation{}", ctx.indent, annotations)?;
-                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-                    }
                 }
                 ctx.indented(|ctx| {
                     if let Some(key) = input_key {
                         let key = mode.seq(key, None);
                         let key = CompactScalars(key);
                         writeln!(f, "{}input_key={}", ctx.indent, key)?;
+                    }
+                    if !matches!(temporal_bucketing_strategy, ArrangementStrategy::Direct) {
+                        writeln!(
+                            f,
+                            "{}temporal_bucketing_strategy={}",
+                            ctx.indent, temporal_bucketing_strategy
+                        )?;
                     }
                     if key_val_plan.key_plan.deref().is_identity() {
                         writeln!(f, "{}key_plan=id", ctx.indent)?;
@@ -796,13 +868,17 @@ impl Plan {
                     }
                     if !mfp_after.is_identity() {
                         writeln!(f, "{}mfp_after", ctx.indent)?;
-                        ctx.indented(|ctx| mode.expr(mfp_after, None).fmt_text(f, ctx))?;
+                        ctx.indented(|ctx| mode.expr(mfp_after.deref(), None).fmt_text(f, ctx))?;
                     }
 
                     input.fmt_text(f, ctx)
                 })?;
             }
-            TopK { input, top_k_plan } => {
+            TopK {
+                input,
+                top_k_plan,
+                temporal_bucketing_strategy,
+            } => {
                 use crate::plan::top_k::TopKPlan;
                 match top_k_plan {
                     TopKPlan::MonotonicTop1(plan) => {
@@ -863,7 +939,16 @@ impl Plan {
                     }
                 }
                 writeln!(f, "{}", annotations)?;
-                ctx.indented(|ctx| input.fmt_text(f, ctx))?;
+                ctx.indented(|ctx| {
+                    if !matches!(temporal_bucketing_strategy, ArrangementStrategy::Direct) {
+                        writeln!(
+                            f,
+                            "{}temporal_bucketing_strategy={}",
+                            ctx.indent, temporal_bucketing_strategy
+                        )?;
+                    }
+                    input.fmt_text(f, ctx)
+                })?;
             }
             Negate { input } => {
                 writeln!(f, "{}Negate{}", ctx.indent, annotations)?;
@@ -888,6 +973,7 @@ impl Plan {
             Union {
                 inputs,
                 consolidate_output,
+                temporal_bucketing_strategies,
             } => {
                 if *consolidate_output {
                     writeln!(
@@ -899,6 +985,21 @@ impl Plan {
                     writeln!(f, "{}Union{}", ctx.indent, annotations)?;
                 }
                 ctx.indented(|ctx| {
+                    if temporal_bucketing_strategies
+                        .iter()
+                        .any(|s| !matches!(s, ArrangementStrategy::Direct))
+                    {
+                        let strategies = temporal_bucketing_strategies
+                            .iter()
+                            .map(|s| format!("{}", s))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        writeln!(
+                            f,
+                            "{}temporal_bucketing_strategies=[{}]",
+                            ctx.indent, strategies
+                        )?;
+                    }
                     for input in inputs.iter() {
                         input.fmt_text(f, ctx)?;
                     }
@@ -910,6 +1011,7 @@ impl Plan {
                 input,
                 input_mfp,
                 forms,
+                strategy,
             } => {
                 writeln!(f, "{}ArrangeBy{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {
@@ -918,7 +1020,10 @@ impl Plan {
                         let key = CompactScalars(key);
                         writeln!(f, "{}input_key=[{}]", ctx.indent, key)?;
                     }
-                    mode.expr(input_mfp, None).fmt_text(f, ctx)?;
+                    if !matches!(strategy, ArrangementStrategy::Direct) {
+                        writeln!(f, "{}strategy={:?}", ctx.indent, strategy)?;
+                    }
+                    fmt_mfp_verbose_text(input_mfp, &mode, f, ctx)?;
                     forms.fmt_text(f, ctx)?;
                     // Render input
                     input.fmt_text(f, ctx)
@@ -930,11 +1035,74 @@ impl Plan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for AvailableCollections {
+/// Format the temporal bounds of an `MfpPlan` as `mz_now()` inequalities.
+///
+/// Renders as `TemporalFilter: <lowers> <= mz_now() < <uppers>`, omitting
+/// the `<lowers> <=` or `< <uppers>` parts when the corresponding bound
+/// list is empty.
+///
+/// Format an `MfpPlan` using concise (default) syntax: project/filter/map + temporal bounds.
+fn fmt_mfp_default_text(
+    mfp_plan: &MfpPlan<LirScalarExpr>,
+    mode: &HumanizedExplain,
+    f: &mut fmt::Formatter<'_>,
+    ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
+) -> fmt::Result {
+    mode.expr(mfp_plan.safe_mfp().deref(), None)
+        .fmt_default_text(f, ctx)?;
+    fmt_temporal_bounds(mfp_plan, mode, f, ctx)
+}
+
+/// Format an `MfpPlan` using verbose syntax: project/filter/map + temporal bounds.
+fn fmt_mfp_verbose_text(
+    mfp_plan: &MfpPlan<LirScalarExpr>,
+    mode: &HumanizedExplain,
+    f: &mut fmt::Formatter<'_>,
+    ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
+) -> fmt::Result {
+    mode.expr(mfp_plan.safe_mfp().deref(), None)
+        .fmt_text(f, ctx)?;
+    fmt_temporal_bounds(mfp_plan, mode, f, ctx)
+}
+
+/// Render temporal bounds as `TemporalFilter: <lowers> <= mz_now() < <uppers>`.
+///
+/// TODO(mgree): It is possible to recover equalities (`mz_now() = expr`) and
+/// other, finer-grained relationships from the bound expressions, but for now
+/// we just display `<=` and `<`.
+#[allow(clippy::needless_pass_by_ref_mut)]
+fn fmt_temporal_bounds(
+    mfp_plan: &MfpPlan<LirScalarExpr>,
+    mode: &HumanizedExplain,
+    f: &mut fmt::Formatter<'_>,
+    ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
+) -> fmt::Result {
+    let (_, lower_bounds, upper_bounds) = mfp_plan.as_parts();
+
+    if lower_bounds.is_empty() && upper_bounds.is_empty() {
+        return Ok(());
+    }
+
+    write!(f, "{}TemporalFilter: ", ctx.indent)?;
+    if !lower_bounds.is_empty() {
+        let lowers = lower_bounds.iter().map(|b| mode.expr(b, None));
+        write!(f, "{} <= ", separated(", ", lowers))?;
+    }
+    write!(f, "mz_now()")?;
+    if !upper_bounds.is_empty() {
+        let uppers = upper_bounds.iter().map(|b| mode.expr(b, None));
+        write!(f, " < {}", separated(", ", uppers))?;
+    }
+    writeln!(f)?;
+
+    Ok(())
+}
+
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for AvailableCollections {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -947,7 +1115,7 @@ impl AvailableCollections {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let plural = if self.arranged.len() == 1 { "" } else { "s" };
         write!(
@@ -979,7 +1147,7 @@ impl AvailableCollections {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         // raw field
         let raw = &self.raw;
@@ -995,11 +1163,94 @@ impl AvailableCollections {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearJoinPlan {
+/// Format a join implementation chain like `%0:t[#0{a}] » %1:u[#0{c}] » %2[×]`.
+///
+/// Each position is rendered as `%pos:name` when an underlying [`LirRelationNode::Get`] can be
+/// dug out of the corresponding input plan (see [`humanize_input_name`]),
+/// otherwise just `%pos`. `[×]` (U+00D7) marks a cross product (empty lookup
+/// key). A `None` `source_key` renders the source position with no bracketed
+/// suffix.
+fn fmt_join_chain<'a, I>(
+    f: &mut fmt::Formatter<'_>,
+    humanizer: &dyn ExprHumanizer,
+    mode: &HumanizedExplain,
+    inputs: &[LirRelationExpr],
+    source_relation: usize,
+    source_key: Option<&'a Vec<LirScalarExpr>>,
+    stages: I,
+) -> fmt::Result
+where
+    I: IntoIterator<Item = (usize, &'a Vec<LirScalarExpr>)>,
+{
+    write!(
+        f,
+        "{}",
+        humanize_input_name(humanizer, &inputs[source_relation], source_relation)
+    )?;
+    if let Some(key) = source_key {
+        fmt_join_key_brackets(f, mode, key)?;
+    }
+    for (lookup_relation, lookup_key) in stages {
+        write!(
+            f,
+            " » {}",
+            humanize_input_name(humanizer, &inputs[lookup_relation], lookup_relation)
+        )?;
+        fmt_join_key_brackets(f, mode, lookup_key)?;
+    }
+    Ok(())
+}
+
+/// Render `[k1, k2, …]` for a non-empty join key, or `[×]` for a cross product.
+fn fmt_join_key_brackets(
+    f: &mut fmt::Formatter<'_>,
+    mode: &HumanizedExplain,
+    key: &Vec<LirScalarExpr>,
+) -> fmt::Result {
+    if key.is_empty() {
+        write!(f, "[×]")
+    } else {
+        let key = CompactScalars(mode.seq(key, None));
+        write!(f, "[{key}]")
+    }
+}
+
+/// Render a join input as `%pos:name` if we can dig a `Get` out of `plan`,
+/// otherwise just `%pos`. Mirrors `dig_name_from_expr` in
+/// `src/expr/src/explain/text.rs` for the MIR `EXPLAIN OPTIMIZED PLAN` output.
+fn humanize_input_name(
+    humanizer: &dyn ExprHumanizer,
+    plan: &LirRelationExpr,
+    pos: usize,
+) -> String {
+    fn dig(humanizer: &dyn ExprHumanizer, plan: &LirRelationExpr) -> Option<String> {
+        use crate::plan::LirRelationNode::*;
+        match &plan.node {
+            Get { id, .. } => match id {
+                Id::Local(lid) => Some(lid.to_string()),
+                Id::Global(gid) => Some(
+                    humanizer
+                        .humanize_id_unqualified(*gid)
+                        .unwrap_or_else(|| gid.to_string()),
+                ),
+            },
+            // Transparent wrappers: keep digging.
+            ArrangeBy { input, .. } => dig(humanizer, input),
+            Mfp { input, .. } => dig(humanizer, input),
+            _ => None,
+        }
+    }
+    match dig(humanizer, plan) {
+        Some(name) => format!("%{pos}:{name}"),
+        None => format!("%{pos}"),
+    }
+}
+
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for LinearJoinPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1009,31 +1260,30 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearJoinPlan {
     }
 }
 impl LinearJoinPlan {
+    /// True iff at least one stage is a cross product (empty lookup key).
+    fn has_cross_stage(&self) -> bool {
+        self.stage_plans.iter().any(|s| s.lookup_key.is_empty())
+    }
+
     #[allow(clippy::needless_pass_by_ref_mut)]
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
-        for (i, plan) in self.stage_plans.iter().enumerate().rev() {
-            let lookup_relation = &plan.lookup_relation;
-            write!(f, "{}Join stage {i} in %{lookup_relation}", ctx.indent)?;
-            if !plan.lookup_key.is_empty() {
-                let lookup_key = CompactScalarSeq(&plan.lookup_key);
-                writeln!(f, " with lookup key {lookup_key}",)?;
-            } else {
-                writeln!(f)?;
-            }
-            if plan.closure.maps_or_filters() {
-                ctx.indented(|ctx| plan.closure.fmt_default_text(f, ctx))?;
+        // Per-stage closures (natural 0..N order). The header chain already
+        // shows each stage's position + key, so we only emit a block when
+        // there's a non-identity closure to attribute to that stage.
+        for stage in self.stage_plans.iter() {
+            if stage.closure.maps_or_filters() {
+                writeln!(f, "{}after %{}:", ctx.indent, stage.lookup_relation)?;
+                ctx.indented(|ctx| stage.closure.fmt_default_text(f, ctx))?;
             }
         }
         if let Some(final_closure) = &self.final_closure {
             if final_closure.maps_or_filters() {
-                ctx.indented(|ctx| {
-                    writeln!(f, "{}Final closure:", ctx.indent)?;
-                    ctx.indented(|ctx| final_closure.fmt_default_text(f, ctx))
-                })?;
+                writeln!(f, "{}Final closure:", ctx.indent)?;
+                ctx.indented(|ctx| final_closure.fmt_default_text(f, ctx))?;
             }
         }
         Ok(())
@@ -1042,7 +1292,7 @@ impl LinearJoinPlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let plan = self;
@@ -1069,24 +1319,24 @@ impl LinearJoinPlan {
                 writeln!(
                     f,
                     "{}source={{ relation={}, key=[{}] }}",
-                    ctx.indent, &plan.source_relation, source_key
+                    ctx.indent, plan.source_relation, source_key
                 )?
             }
             None => writeln!(
                 f,
-                "{}source={{ relation={}, key=[] }}",
-                ctx.indent, &plan.source_relation
+                "{}source={{ relation={}, raw }}",
+                ctx.indent, plan.source_relation
             )?,
         };
         Ok(())
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for LinearStagePlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for LinearStagePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1100,7 +1350,7 @@ impl LinearStagePlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         // NB this code path should not be live, as fmt_default_text for
         // `LinearJoinPlan` prints out each stage already
@@ -1120,7 +1370,7 @@ impl LinearStagePlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
 
@@ -1152,11 +1402,11 @@ impl LinearStagePlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaJoinPlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for DeltaJoinPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1166,13 +1416,31 @@ impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaJoinPlan {
     }
 }
 impl DeltaJoinPlan {
+    /// True iff any stage in any path is a cross product.
+    fn has_cross_stage(&self) -> bool {
+        self.path_plans
+            .iter()
+            .any(|p| p.stage_plans.iter().any(|s| s.lookup_key.is_empty()))
+    }
+
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
-        for (i, plan) in self.path_plans.iter().enumerate() {
-            writeln!(f, "{}Delta join path for input %{i}", ctx.indent)?;
+        // The header chain already shows each path's positions + keys, so we
+        // only print a `path %src:` block when at least one of its stage
+        // closures or its final closure is non-identity.
+        for plan in self.path_plans.iter() {
+            let has_stage_closure = plan.stage_plans.iter().any(|s| s.closure.maps_or_filters());
+            let has_final_closure = plan
+                .final_closure
+                .as_ref()
+                .is_some_and(|c| c.maps_or_filters());
+            if !has_stage_closure && !has_final_closure {
+                continue;
+            }
+            writeln!(f, "{}path %{}:", ctx.indent, plan.source_relation)?;
             ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
         }
         Ok(())
@@ -1181,7 +1449,7 @@ impl DeltaJoinPlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         for (i, plan) in self.path_plans.iter().enumerate() {
             writeln!(f, "{}plan_path[{}]", ctx.indent, i)?;
@@ -1191,11 +1459,11 @@ impl DeltaJoinPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaPathPlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for DeltaPathPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1210,38 +1478,18 @@ impl DeltaPathPlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
-        for (
-            i,
-            DeltaStagePlan {
-                lookup_key,
-                lookup_relation,
-                closure,
-                ..
-            },
-        ) in self.stage_plans.iter().enumerate()
-        {
-            if !lookup_key.is_empty() {
-                let lookup_key = CompactScalarSeq(lookup_key);
-                writeln!(
-                    f,
-                    "{}stage {i} for %{lookup_relation}: lookup key {lookup_key}",
-                    ctx.indent
-                )?;
-            } else {
-                writeln!(f, "{}stage %{i} for  %{lookup_relation}", ctx.indent)?;
-            }
-            if closure.maps_or_filters() {
-                ctx.indented(|ctx| closure.fmt_default_text(f, ctx))?;
+        for stage in self.stage_plans.iter() {
+            if stage.closure.maps_or_filters() {
+                writeln!(f, "{}after %{}:", ctx.indent, stage.lookup_relation)?;
+                ctx.indented(|ctx| stage.closure.fmt_default_text(f, ctx))?;
             }
         }
         if let Some(final_closure) = &self.final_closure {
             if final_closure.maps_or_filters() {
-                ctx.indented(|ctx| {
-                    writeln!(f, "{}Final closure:", ctx.indent)?;
-                    ctx.indented(|ctx| final_closure.fmt_default_text(f, ctx))
-                })?;
+                writeln!(f, "{}Final closure:", ctx.indent)?;
+                ctx.indented(|ctx| final_closure.fmt_default_text(f, ctx))?;
             }
         }
         Ok(())
@@ -1250,7 +1498,7 @@ impl DeltaPathPlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let plan = self;
@@ -1268,25 +1516,31 @@ impl DeltaPathPlan {
             writeln!(f, "{}initial_closure", ctx.indent)?;
             ctx.indented(|ctx| plan.initial_closure.fmt_text(f, ctx))?;
         }
-        {
-            let source_relation = &plan.source_relation;
-            let source_key = mode.seq(&plan.source_key, None);
-            let source_key = CompactScalars(source_key);
-            writeln!(
+        match &plan.source_key {
+            Some(source_key) => {
+                let source_key = mode.seq(source_key, None);
+                let source_key = CompactScalars(source_key);
+                writeln!(
+                    f,
+                    "{}source={{ relation={}, key=[{}] }}",
+                    ctx.indent, plan.source_relation, source_key
+                )?
+            }
+            None => writeln!(
                 f,
-                "{}source={{ relation={}, key=[{}] }}",
-                ctx.indent, source_relation, source_key
-            )?;
-        }
+                "{}source={{ relation={}, raw }}",
+                ctx.indent, plan.source_relation
+            )?,
+        };
         Ok(())
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for DeltaStagePlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for DeltaStagePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1300,7 +1554,7 @@ impl DeltaStagePlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         // NB this code path should not be live, as fmt_default_text for
         // `DeltaPathPlan` prints out each stage already
@@ -1316,7 +1570,7 @@ impl DeltaStagePlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let plan = self;
@@ -1349,11 +1603,11 @@ impl DeltaStagePlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for JoinClosure {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for JoinClosure {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1366,11 +1620,12 @@ impl JoinClosure {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
-        if !self.before.expressions.is_empty() || !self.before.predicates.is_empty() {
-            mode.expr(self.before.deref(), None).fmt_text(f, ctx)?;
+        if !self.before.is_identity() {
+            mode.expr(self.before.deref(), None)
+                .fmt_default_text(f, ctx)?;
         }
         if !self.ready_equivalences.is_empty() {
             let equivalences = separated(
@@ -1387,7 +1642,7 @@ impl JoinClosure {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         mode.expr(self.before.deref(), None).fmt_text(f, ctx)?;
@@ -1404,11 +1659,11 @@ impl JoinClosure {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for AccumulablePlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for AccumulablePlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1422,7 +1677,7 @@ impl AccumulablePlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
 
@@ -1430,7 +1685,7 @@ impl AccumulablePlan {
             let simple_aggrs = self
                 .simple_aggrs
                 .iter()
-                .map(|(_i_aggs, _i_datum, agg)| mode.expr(agg, None));
+                .map(|(_i_datum, agg)| mode.expr(agg, None));
             let simple_aggrs = separated(", ", simple_aggrs);
             writeln!(f, "{}Simple aggregates: {simple_aggrs}", ctx.indent)?;
         }
@@ -1439,7 +1694,7 @@ impl AccumulablePlan {
             let distinct_aggrs = self
                 .distinct_aggrs
                 .iter()
-                .map(|(_i_aggs, _i_datum, agg)| mode.expr(agg, None));
+                .map(|(_i_datum, agg)| mode.expr(agg, None));
             let distinct_aggrs = separated(", ", distinct_aggrs);
             writeln!(f, "{}Distinct aggregates: {distinct_aggrs}", ctx.indent)?;
         }
@@ -1450,7 +1705,7 @@ impl AccumulablePlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         // full_aggrs (skipped because they are repeated in simple_aggrs ∪ distinct_aggrs)
@@ -1460,26 +1715,26 @@ impl AccumulablePlan {
         //     writeln!(f)?;
         // }
         // simple_aggrs
-        for (i, (i_aggs, i_datum, agg)) in self.simple_aggrs.iter().enumerate() {
+        for (i, (i_datum, agg)) in self.simple_aggrs.iter().enumerate() {
             let agg = mode.expr(agg, None);
             write!(f, "{}simple_aggrs[{}]=", ctx.indent, i)?;
-            writeln!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
+            writeln!(f, "({}, {})", i_datum, agg)?;
         }
         // distinct_aggrs
-        for (i, (i_aggs, i_datum, agg)) in self.distinct_aggrs.iter().enumerate() {
+        for (i, (i_datum, agg)) in self.distinct_aggrs.iter().enumerate() {
             let agg = mode.expr(agg, None);
             write!(f, "{}distinct_aggrs[{}]=", ctx.indent, i)?;
-            writeln!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
+            writeln!(f, "({}, {})", i_datum, agg)?;
         }
         Ok(())
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for HierarchicalPlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for HierarchicalPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1493,7 +1748,7 @@ impl HierarchicalPlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         let aggr_funcs = mode.seq(self.aggr_funcs(), None);
@@ -1505,7 +1760,7 @@ impl HierarchicalPlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
@@ -1513,8 +1768,6 @@ impl HierarchicalPlan {
                 let aggr_funcs = mode.seq(&plan.aggr_funcs, None);
                 let aggr_funcs = separated(", ", aggr_funcs);
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
-                let skips = separated(", ", &plan.skips);
-                writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
                 writeln!(f, "{}monotonic", ctx.indent)?;
                 if plan.must_consolidate {
                     writeln!(f, "{}must_consolidate", ctx.indent)?;
@@ -1524,8 +1777,6 @@ impl HierarchicalPlan {
                 let aggr_funcs = mode.seq(&plan.aggr_funcs, None);
                 let aggr_funcs = separated(", ", aggr_funcs);
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
-                let skips = separated(", ", &plan.skips);
-                writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
                 let buckets = separated(", ", &plan.buckets);
                 writeln!(f, "{}buckets=[{}]", ctx.indent, buckets)?;
             }
@@ -1534,11 +1785,11 @@ impl HierarchicalPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for BasicPlan {
+impl DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for BasicPlan {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1552,12 +1803,11 @@ impl BasicPlan {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
             BasicPlan::Single(SingleBasicPlan {
-                index: _,
                 expr,
                 fused_unnest_list: _,
             }) => {
@@ -1568,7 +1818,7 @@ impl BasicPlan {
                 let mode = HumanizedExplain::new(ctx.config.redacted);
                 write!(f, "{}Aggregations:", ctx.indent)?;
 
-                for (_, agg) in aggs.iter() {
+                for agg in aggs.iter() {
                     let agg = mode.expr(agg, None);
                     write!(f, " {agg}")?;
                 }
@@ -1582,12 +1832,11 @@ impl BasicPlan {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
             BasicPlan::Single(SingleBasicPlan {
-                index,
                 expr,
                 fused_unnest_list,
             }) => {
@@ -1597,16 +1846,12 @@ impl BasicPlan {
                 } else {
                     ""
                 };
-                writeln!(
-                    f,
-                    "{}aggr=({}, {}{})",
-                    ctx.indent, index, agg, fused_unnest_list
-                )?;
+                writeln!(f, "{}aggr=({}{})", ctx.indent, agg, fused_unnest_list)?;
             }
             BasicPlan::Multiple(aggs) => {
-                for (i, (i_datum, agg)) in aggs.iter().enumerate() {
+                for (i, agg) in aggs.iter().enumerate() {
                     let agg = mode.expr(agg, None);
-                    writeln!(f, "{}aggrs[{}]=({}, {})", ctx.indent, i, i_datum, agg)?;
+                    writeln!(f, "{}aggrs[{}]={}", ctx.indent, i, agg)?;
                 }
             }
         }
@@ -1614,87 +1859,16 @@ impl BasicPlan {
     }
 }
 
-impl DisplayText<PlanRenderingContext<'_, Plan>> for CollationPlan {
-    fn fmt_text(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
-    ) -> fmt::Result {
-        if ctx.config.verbose_syntax {
-            self.fmt_verbose_text(f, ctx)
-        } else {
-            self.fmt_default_text(f, ctx)
-        }
-    }
-}
-
-impl CollationPlan {
-    #[allow(clippy::needless_pass_by_ref_mut)]
-    fn fmt_default_text(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
-    ) -> fmt::Result {
-        if let Some(plan) = &self.accumulable {
-            writeln!(f, "{}Accumulable sub-aggregation", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.hierarchical {
-            writeln!(f, "{}Hierarchical sub-aggregation", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.basic {
-            writeln!(f, "{}Non-incremental sub-aggregation", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        Ok(())
-    }
-
-    fn fmt_verbose_text(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
-    ) -> fmt::Result {
-        {
-            use crate::plan::reduce::ReductionType;
-            let aggregate_types = &self
-                .aggregate_types
-                .iter()
-                .map(|reduction_type| match reduction_type {
-                    ReductionType::Accumulable => "a".to_string(),
-                    ReductionType::Hierarchical => "h".to_string(),
-                    ReductionType::Basic => "b".to_string(),
-                })
-                .collect::<Vec<_>>();
-            let aggregate_types = separated(", ", aggregate_types);
-            writeln!(f, "{}aggregate_types=[{}]", ctx.indent, aggregate_types)?;
-        }
-        if let Some(plan) = &self.accumulable {
-            writeln!(f, "{}accumulable", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.hierarchical {
-            writeln!(f, "{}hierarchical", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.basic {
-            writeln!(f, "{}basic", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        Ok(())
-    }
-}
-
 /// Helper struct for rendering an arrangement.
 struct Arrangement<'a> {
-    key: &'a Vec<MirScalarExpr>,
+    key: &'a Vec<LirScalarExpr>,
     permutation: Permutation<'a>,
     thinning: &'a Vec<usize>,
 }
 
-impl<'a> From<&'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> for Arrangement<'a> {
+impl<'a> From<&'a (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>)> for Arrangement<'a> {
     fn from(
-        (key, permutation, thinning): &'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>),
+        (key, permutation, thinning): &'a (Vec<LirScalarExpr>, Vec<usize>, Vec<usize>),
     ) -> Self {
         Arrangement {
             key,
@@ -1704,11 +1878,11 @@ impl<'a> From<&'a (Vec<MirScalarExpr>, Vec<usize>, Vec<usize>)> for Arrangement<
     }
 }
 
-impl<'a> DisplayText<PlanRenderingContext<'_, Plan>> for Arrangement<'a> {
+impl<'a> DisplayText<PlanRenderingContext<'_, LirRelationExpr>> for Arrangement<'a> {
     fn fmt_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
+        ctx: &mut PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         if ctx.config.verbose_syntax {
             self.fmt_verbose_text(f, ctx)
@@ -1723,7 +1897,7 @@ impl<'a> Arrangement<'a> {
     fn fmt_default_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &PlanRenderingContext<'_, Plan>,
+        ctx: &PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         if !self.key.is_empty() {
@@ -1739,7 +1913,7 @@ impl<'a> Arrangement<'a> {
     fn fmt_verbose_text(
         &self,
         f: &mut fmt::Formatter<'_>,
-        ctx: &PlanRenderingContext<'_, Plan>,
+        ctx: &PlanRenderingContext<'_, LirRelationExpr>,
     ) -> fmt::Result {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         // prepare key
@@ -1784,11 +1958,11 @@ struct PlanAnnotations {
 
 // The current implementation deviates from the `AnnotatedPlan` used in `Mir~`-based plans. This is
 // fine, since at the moment the only attribute we are going to explain is the `node_id`, which at
-// the moment is kept inline with the `Plan` variants. If at some point in the future we want to
+// the moment is kept inline with the `LirRelationExpr` variants. If at some point in the future we want to
 // start deriving and printing attributes that are derived ad-hoc, however, we might want to adopt
 // `AnnotatedPlan` here as well.
 impl PlanAnnotations {
-    fn new(config: ExplainConfig, plan: &Plan) -> Self {
+    fn new(config: ExplainConfig, plan: &LirRelationExpr) -> Self {
         let node_id = plan.lir_id;
         Self { config, node_id }
     }

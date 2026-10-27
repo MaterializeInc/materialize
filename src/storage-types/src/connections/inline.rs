@@ -77,6 +77,14 @@ pub trait ConnectionAccess: Clone + Debug + Eq + PartialEq + Serialize + 'static
         + Serialize
         + for<'a> Deserialize<'a>
         + AlterCompatible;
+    type Gcp: Clone
+        + Debug
+        + Eq
+        + PartialEq
+        + Hash
+        + Serialize
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
     type Ssh: Clone
         + Debug
         + Eq
@@ -86,6 +94,14 @@ pub trait ConnectionAccess: Clone + Debug + Eq + PartialEq + Serialize + 'static
         + for<'a> Deserialize<'a>
         + AlterCompatible;
     type Csr: Clone
+        + Debug
+        + Eq
+        + PartialEq
+        + Hash
+        + Serialize
+        + for<'a> Deserialize<'a>
+        + AlterCompatible;
+    type GlueSchemaRegistry: Clone
         + Debug
         + Eq
         + PartialEq
@@ -129,8 +145,10 @@ impl ConnectionAccess for ReferencedConnection {
     type Kafka = CatalogItemId;
     type Pg = CatalogItemId;
     type Aws = CatalogItemId;
+    type Gcp = CatalogItemId;
     type Ssh = CatalogItemId;
     type Csr = CatalogItemId;
+    type GlueSchemaRegistry = CatalogItemId;
     type MySql = CatalogItemId;
     type SqlServer = CatalogItemId;
     type IcebergCatalog = CatalogItemId;
@@ -144,8 +162,10 @@ impl ConnectionAccess for InlinedConnection {
     type Kafka = super::KafkaConnection;
     type Pg = super::PostgresConnection;
     type Aws = super::aws::AwsConnection;
+    type Gcp = super::gcp::GcpConnection;
     type Ssh = super::SshConnection;
     type Csr = super::CsrConnection;
+    type GlueSchemaRegistry = super::GlueSchemaRegistryConnection;
     type MySql = super::MySqlConnection;
     type SqlServer = super::SqlServerConnectionDetails;
     type IcebergCatalog = super::IcebergCatalogConnection;

@@ -19,6 +19,7 @@ pub async fn run_wait_topic(
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
     let topic = cmd.args.string("topic")?;
+    cmd.args.done()?;
 
     println!("Waiting for Kafka topic {} to exist", topic);
     Retry::default()

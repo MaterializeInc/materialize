@@ -48,25 +48,19 @@ async def test_basic_tool(materialize_pool):
     async with materialize_pool.connection() as conn:
         await conn.set_autocommit(True)
         async with conn.cursor() as cur:
-            await cur.execute(
-                """CREATE OR REPLACE VIEW tools.my_tool AS
-                SELECT 1 AS id, 'hello' AS result;"""
-            )
+            await cur.execute("""CREATE OR REPLACE VIEW tools.my_tool AS
+                SELECT 1 AS id, 'hello' AS result;""")
             await cur.execute("CREATE INDEX my_tool_id_idx ON tools.my_tool (id);")
             await cur.execute("COMMENT ON VIEW tools.my_tool IS 'Get result from id';")
 
-            await cur.execute(
-                """CREATE OR REPLACE VIEW tools.missing_comment AS
-                SELECT 1 AS id, 'goodbye' AS result;"""
-            )
+            await cur.execute("""CREATE OR REPLACE VIEW tools.missing_comment AS
+                SELECT 1 AS id, 'goodbye' AS result;""")
             await cur.execute(
                 "CREATE INDEX missing_comment_id_idx ON tools.missing_comment (id);"
             )
 
-            await cur.execute(
-                """CREATE OR REPLACE VIEW tools.missing_idx AS
-                SELECT 1 AS id, 'not it' AS result;"""
-            )
+            await cur.execute("""CREATE OR REPLACE VIEW tools.missing_idx AS
+                SELECT 1 AS id, 'not it' AS result;""")
             await cur.execute(
                 "COMMENT ON VIEW tools.missing_idx IS 'Get result from id';"
             )
@@ -134,8 +128,7 @@ async def test_type_handling_keys(materialize_pool):
     async with materialize_pool.connection() as conn:
         await conn.set_autocommit(True)
         async with conn.cursor() as cur:
-            await cur.execute(
-                """
+            await cur.execute("""
             CREATE OR REPLACE VIEW tools.all_types AS
             SELECT
                 1::smallint                                  AS smallint_col,
@@ -158,8 +151,7 @@ async def test_type_handling_keys(materialize_pool):
                 decode('DEADBEEF', 'hex')::bytea             AS bytea_col,
                 '{"a": 1, "b": [1, 2, 3]}'::jsonb            AS jsonb_col,
                 '550e8400-e29b-41d4-a716-446655440000'::uuid AS uuid_col;
-                """
-            )
+                """)
             await cur.execute("CREATE DEFAULT INDEX all_types_idx ON tools.all_types;")
             await cur.execute("COMMENT ON VIEW tools.all_types IS 'All types';")
 
@@ -227,8 +219,7 @@ async def test_type_handling_values(materialize_pool):
     async with materialize_pool.connection() as conn:
         await conn.set_autocommit(True)
         async with conn.cursor() as cur:
-            await cur.execute(
-                """
+            await cur.execute("""
             CREATE OR REPLACE VIEW tools.all_types AS
             SELECT
                 1                                            AS id,
@@ -252,8 +243,7 @@ async def test_type_handling_values(materialize_pool):
                 decode('DEADBEEF', 'hex')::bytea             AS bytea_col,
                 '{"a": 1, "b": [1, 2, 3]}'::jsonb            AS jsonb_col,
                 '550e8400-e29b-41d4-a716-446655440000'::uuid AS uuid_col;
-                """
-            )
+                """)
             await cur.execute("CREATE INDEX all_types_idx ON tools.all_types (id);")
             await cur.execute("COMMENT ON VIEW tools.all_types IS 'All types';")
 

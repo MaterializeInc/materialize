@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,18 +9,18 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/alias_types
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/alias_types
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
-
-# Not currently supporting these esoteric PostgreSQL-only types.
-halt
 
 statement ok
 CREATE TABLE aliases (
@@ -33,13 +33,8 @@ CREATE TABLE aliases (
 query TT colnames
 SHOW CREATE TABLE aliases
 ----
-table_name  create_statement
-aliases     CREATE TABLE aliases (
-            a OID NULL,
-            b NAME NULL,
-            FAMILY "primary" (a, rowid),
-            FAMILY fam_1_b (b)
-)
+name create_sql
+materialize.public.aliases  CREATE␠TABLE␠materialize.public.aliases␠(a␠pg_catalog.oid,␠b␠pg_catalog.name);
 
 statement ok
 INSERT INTO aliases VALUES (100, 'abc')
@@ -47,14 +42,15 @@ INSERT INTO aliases VALUES (100, 'abc')
 statement ok
 INSERT INTO aliases VALUES (2, 'def')
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO aliases VALUES ('bool'::REGTYPE, ('ghi':::STRING)::NAME)
 
 query OT
 SELECT a, b FROM aliases ORDER BY a
 ----
-2    def
-16   ghi
+2  def
 100  abc
 
 query TT
@@ -66,19 +62,16 @@ query T
 SELECT b || 'cat' FROM aliases ORDER BY a
 ----
 defcat
-ghicat
 abccat
 
 query T
 SELECT reverse(b) FROM aliases ORDER BY a
 ----
 fed
-ihg
 cba
 
 query I
 SELECT length(b::BYTES) FROM aliases ORDER BY a
 ----
-3
 3
 3

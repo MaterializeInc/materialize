@@ -48,11 +48,11 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 > CREATE TABLE t1 (a int);
 > INSERT INTO t1 VALUES (201), (202), (203);
 
-# TODO: Reenable when database-issues#8619 is fixed
+# TODO: Reenable when https://linear.app/materializeinc/issue/SQL-406 is fixed
 $ skip-if
 SELECT true
 
 # Note: the important bit is making sure this EXPLAIN returns "can respond immediately: true"
 $ set-regex match=(\d{13}|([\d\-]{10}\s[\d:.]{12})|u\d+) replacement=<NON_CONSTANT>
 > EXPLAIN TIMESTAMP FOR SELECT COUNT(t1.a) FROM t1, pg_t1;
-"                query timestamp: <NON_CONSTANT> (<NON_CONSTANT>)\n          oracle read timestamp: <NON_CONSTANT> (<NON_CONSTANT>)\nlargest not in advance of upper: <NON_CONSTANT> (<NON_CONSTANT>)\n                          upper:[<NON_CONSTANT> (<NON_CONSTANT>)]\n                          since:[<NON_CONSTANT> (<NON_CONSTANT>)]\n        can respond immediately: true\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <NON_CONSTANT> (<NON_CONSTANT>)\n\nsource materialize.public.pg_t1 (<NON_CONSTANT>, storage):\n                  read frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n                 write frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n\nsource materialize.public.t1 (<NON_CONSTANT>, storage):\n                  read frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n                 write frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n\nbinding constraints:\nlower:\n  (IsolationLevel(StrictSerializable)): [<NON_CONSTANT> (<NON_CONSTANT>)]\n"
+"                query timestamp: <NON_CONSTANT> (<NON_CONSTANT>)\n          oracle read timestamp: <NON_CONSTANT> (<NON_CONSTANT>)\nlargest not in advance of upper: <NON_CONSTANT> (<NON_CONSTANT>)\n                          upper:[<NON_CONSTANT> (<NON_CONSTANT>)]\n                          since:[<NON_CONSTANT> (<NON_CONSTANT>)]\n        can respond immediately: true\n                       timeline: Some(EpochMilliseconds)\n              session wall time: <NON_CONSTANT> (<NON_CONSTANT>)\n\nsource materialize.public.pg_t1 (<NON_CONSTANT>, storage):\n                  read frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n                 write frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n\nsource materialize.public.t1 (<NON_CONSTANT>, storage):\n                  read frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n                 write frontier:[<NON_CONSTANT> (<NON_CONSTANT>)]\n\nbinding constraints:\nlower:\n  (Isolation level: StrictSerializable): [<NON_CONSTANT> (<NON_CONSTANT>)]\n"

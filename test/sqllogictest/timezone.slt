@@ -144,6 +144,10 @@ SELECT pg_catalog.timezone(-INTERVAL '1' MINUTE, TIMESTAMP '95143-12-31 23:59:59
 query error timestamp out of range
 SELECT pg_catalog.timezone('JAPAN', TIMESTAMPTZ '95143-12-31 23:59:59+06' + INTERVAL '167 MILLENNIUM')
 
+# Regression for CLU-93: applying a fixed offset to a near-max timestamp must not panic
+query error timestamp out of range
+SELECT (8210266876799000::mz_timestamp::timestamptz AT TIME ZONE 'UTC') AT TIME ZONE '+15:00'
+
 # Test that POSIX is used for timezone() and AT TIME ZONE.
 
 query T
@@ -282,3 +286,207 @@ SELECT timezone_offset('PST', now())
 
 query error invalid IANA Time Zone Database identifier: '-05'
 SELECT timezone_offset('-05', now())
+
+# Zones whose rules changed in tzdata 2023a through 2024b: Egypt reinstated
+# DST, Kazakhstan unified on UTC+5, Paraguay abolished DST, Greenland adopted
+# EU DST rules. Asserting on them keeps the compiled-in tzdata from silently
+# going stale. Zones without an alphabetic abbreviation show the numeric
+# offset form, and Asia/Kathmandu pins that rendering for fractional-hour
+# offsets.
+
+statement ok
+SET unsafe_new_transaction_wall_time = '2026-07-15 00:00:00 UTC';
+
+query TTTT
+SELECT * FROM pg_catalog.pg_timezone_names
+WHERE name IN ('Africa/Cairo', 'Asia/Almaty', 'America/Asuncion', 'America/Nuuk', 'Asia/Kathmandu')
+ORDER BY name
+----
+Africa/Cairo
+EEST
+03:00:00
+true
+America/Asuncion
+-03
+-03:00:00
+false
+America/Nuuk
+-01
+-01:00:00
+true
+Asia/Almaty
++05
+05:00:00
+false
+Asia/Kathmandu
++0545
+05:45:00
+false
+
+statement ok
+SET unsafe_new_transaction_wall_time = '2026-01-15 00:00:00 UTC';
+
+query TTTT
+SELECT * FROM pg_catalog.pg_timezone_names
+WHERE name IN ('Africa/Cairo', 'Asia/Almaty', 'America/Asuncion', 'America/Nuuk', 'Asia/Kathmandu')
+ORDER BY name
+----
+Africa/Cairo
+EET
+02:00:00
+false
+America/Asuncion
+-03
+-03:00:00
+false
+America/Nuuk
+-02
+-02:00:00
+false
+Asia/Almaty
++05
+05:00:00
+false
+Asia/Kathmandu
++0545
+05:45:00
+false
+
+query TT
+SELECT timezone_offset('Asia/Almaty', '2026-07-15 00:00:00 UTC'), timezone_offset('Africa/Cairo', '2026-07-15 00:00:00 UTC')
+----
+(+05,05:00:00,00:00:00)
+(EEST,02:00:00,01:00:00)
+
+# Zones whose rules changed in tzdata 2025c through 2026e: Morocco moved to
+# permanent +00 on 2026-09-20, Alberta, British Columbia, the Northwest
+# Territories (America/Inuvik), and Manitoba abolished DST on their 2026
+# fall-back dates and keep the summer offset, and Moldova follows EU
+# transition instants. The Canadian zones now render a neighbouring region's
+# standard-time abbreviation for their permanent offset.
+
+statement ok
+SET unsafe_new_transaction_wall_time = '2026-12-15 00:00:00 UTC';
+
+query TTTT
+SELECT * FROM pg_catalog.pg_timezone_names
+WHERE name IN ('Africa/Casablanca', 'America/Edmonton', 'America/Inuvik', 'America/Vancouver', 'America/Winnipeg', 'Europe/Chisinau')
+ORDER BY name
+----
+Africa/Casablanca
++00
+00:00:00
+false
+America/Edmonton
+CST
+-06:00:00
+false
+America/Inuvik
+CST
+-06:00:00
+false
+America/Vancouver
+MST
+-07:00:00
+false
+America/Winnipeg
+EST
+-05:00:00
+false
+Europe/Chisinau
+EET
+02:00:00
+false
+
+query TTTTT
+SELECT timezone_offset('Africa/Casablanca', '2026-09-21 00:00:00 UTC'), timezone_offset('America/Edmonton', '2026-11-15 00:00:00 UTC'), timezone_offset('America/Inuvik', '2026-11-15 00:00:00 UTC'), timezone_offset('America/Vancouver', '2026-11-15 00:00:00 UTC'), timezone_offset('America/Winnipeg', '2026-11-15 00:00:00 UTC')
+----
+(+00,00:00:00,00:00:00)
+(CST,-06:00:00,00:00:00)
+(CST,-06:00:00,00:00:00)
+(MST,-07:00:00,00:00:00)
+(EST,-05:00:00,00:00:00)
+
+# These pin historical rules: a timestamp from before a zone's rule change
+# must resolve under the rules in force at that instant, not current rules.
+
+# Kazakhstan unified on UTC+5 on 2024-03-01. Instants before that must keep
+# Almaty's earlier UTC+6.
+
+query T
+SELECT timezone_offset('Asia/Almaty', '2023-06-15 00:00:00 UTC')
+----
+(+06,06:00:00,00:00:00)
+
+# Egypt reinstated DST on 2023-04-28 after seven years without it. An instant
+# from that first reinstated summer must already resolve to EEST.
+
+query T
+SELECT timezone_offset('Africa/Cairo', '2023-08-01 00:00:00 UTC')
+----
+(EEST,02:00:00,01:00:00)
+
+# Asia/Choibalsan's separate pre-2008 history was judged unsupportable and
+# merged into Asia/Ulaanbaatar in tzdata 2024b. This asserts the current
+# belief about the past. If a data update breaks it, IANA rewrote history.
+
+query T
+SELECT timezone_offset('Asia/Choibalsan', '1995-06-15 00:00:00 UTC')
+----
+(+09,08:00:00,01:00:00)
+
+# Moldova has switched at the EU instant, 01:00 UTC, since 2022. Older data
+# had it one hour earlier, so for one hour around each transition the two
+# disagree. This asserts the current belief about the past. If a data update
+# breaks it, IANA rewrote history.
+
+query T
+SELECT timezone_offset('Europe/Chisinau', '2023-03-26 00:30:00 UTC')
+----
+(EET,02:00:00,00:00:00)
+
+# Baja California observed DST in 1953 and 1961 through 1975, following
+# California, where earlier data had none. This asserts the current belief
+# about the past. If a data update breaks it, IANA rewrote history.
+
+query T
+SELECT timezone_offset('America/Tijuana', '1970-07-15 12:00:00 UTC')
+----
+(PDT,-08:00:00,01:00:00)
+
+# Ireland fell back on 1925-09-20, not 1925-10-04, where earlier data kept
+# summer time two weeks longer. This asserts the current belief about the
+# past. If a data update breaks it, IANA rewrote history.
+
+query T
+SELECT timezone_offset('Europe/Dublin', '1925-09-25 12:00:00 UTC')
+----
+(GMT,00:00:00,00:00:00)
+
+# Colombia's 1992-05-02 spring forward was at 00:00, not 24:00, so for that
+# one day earlier data had standard time. This asserts the current belief
+# about the past. If a data update breaks it, IANA rewrote history.
+
+query T
+SELECT timezone_offset('America/Bogota', '1992-05-02 12:00:00 UTC')
+----
+(-04,-05:00:00,01:00:00)
+
+# Iran's 1979-05-26 spring forward was at 00:00, not 24:00, so for that one
+# day earlier data had standard time. This asserts the current belief about
+# the past. If a data update breaks it, IANA rewrote history.
+
+query T
+SELECT timezone_offset('Asia/Tehran', '1979-05-26 12:00:00 UTC')
+----
+(+0430,03:30:00,01:00:00)
+
+# EST5EDT follows US federal rules and never leaves EST/EDT. Between tzdata
+# 2024b and 2026c it was a link to America/New_York, whose local DST before
+# 1967 federal rules lacked. This asserts the current belief about the past.
+# If a data update breaks it, IANA rewrote history.
+
+query T
+SELECT timezone_offset('EST5EDT', '1955-07-15 12:00:00 UTC')
+----
+(EST,-05:00:00,00:00:00)

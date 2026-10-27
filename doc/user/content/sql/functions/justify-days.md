@@ -11,7 +11,7 @@ converted to months.
 
 ## Signatures
 
-{{< diagram "func-justify-days.svg" >}}
+{{% include-syntax file="examples/sql_functions/justify_days" example="syntax" %}}
 
 Parameter | Type                                                                                                                                                                                            | Description
 ----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------
@@ -30,5 +30,5 @@ SELECT justify_days(interval '35 days');
 ```nofmt
   justify_days
 ----------------
- 1 month 5 days
+ 1 mon 5 days
 ```

@@ -5,6 +5,8 @@ menu:
   main:
     parent: 'system-catalog'
     weight: 1
+aliases:
+  - /reference/system-catalog/mz_catalog/
 ---
 
 The following sections describe the available relations in the `mz_catalog`
@@ -36,9 +38,9 @@ other objects in the system catalog.
 <!-- RELATION_SPEC mz_catalog.mz_audit_events -->
 Field           | Type                         | Meaning
 ----------------|------------------------------|--------
-`id  `          | [`uint8`]                    | Materialize's unique, monotonically increasing ID for the event.
-`event_type`    | [`text`]                     | The type of the event: `create`, `drop`, or `alter`.
-`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `connection`, `database`, `function`, `index`, `materialized-view`, `role`, `schema`, `secret`, `sink`, `source`, `table`, `type`, or `view`.
+`id`            | [`uint8`]                    | Materialize's unique, monotonically increasing ID for the event.
+`event_type`    | [`text`]                     | The type of the event: `create`, `drop`, `alter`, `grant`, `revoke`, or `comment`.
+`object_type`   | [`text`]                     | The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `metric-sink`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.
 `details`       | [`jsonb`]                    | Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
 `user`          | [`text`]                     | The user who triggered the event, or `NULL` if triggered by the system.
 `occurred_at`   | [`timestamp with time zone`] | The time at which the event occurred. Guaranteed to be in order of event creation. Events created in the same transaction will have identical values.
@@ -109,7 +111,7 @@ any kind of capacity planning.
 | `processes`            | [`uint8`]   | The number of processes in the replica.                                                                                                                      |
 | `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.                                                                                                           |
 | `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.                                                                                                |
-| `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
+| `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in bytes.                                                                                                                    |
 | `disk_bytes`           | [`uint8`]   | The disk allocation per process.                                                                                                                             |
 | `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
 
@@ -124,7 +126,7 @@ Field               | Type      | Meaning
 `name`              | [`text`]  | The name of the cluster replica.
 `cluster_id`        | [`text`]  | The ID of the cluster to which the replica belongs. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `size`              | [`text`]  | The cluster replica's size, selected during creation.
-`availability_zone` | [`text`]  | The availability zone in which the cluster is running.
+`availability_zone` | [`text`]  | The availability zones the replica is provisioned in, comma-separated. `NULL` if nothing constrains the replica's placement.
 `owner_id`          | [`text`]  | The role ID of the owner of the cluster replica. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `disk`              | [`boolean`] | If the replica has a local disk.
 
@@ -384,7 +386,7 @@ Field       | Type                 | Meaning
 `oid`       | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the object.
 `schema_id` | [`text`]             | The ID of the schema to which the object belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`      | [`text`]             | The name of the object.
-`type`      | [`text`]             | The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+`type`      | [`text`]             | The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `metric-sink`, `index`, `connection`, `secret`, `type`, or `function`.
 `owner_id`  | [`text`]             | The role ID of the owner of the object. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `cluster_id`| [`text`]             | The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters). `NULL` for other object types.
 `privileges`| [`mz_aclitem array`] | The privileges belonging to the object.
@@ -410,7 +412,7 @@ Field       | Type                 | Meaning
 `oid`       | [`oid`]              | A [PostgreSQL-compatible OID][`oid`] for the relation.
 `schema_id` | [`text`]             | The ID of the schema to which the relation belongs. Corresponds to [`mz_schemas.id`](/sql/system-catalog/mz_catalog/#mz_schemas).
 `name`      | [`text`]             | The name of the relation.
-`type`      | [`text`]             | The type of the relation: either `table`, `source`, `view`, or `materialized view`.
+`type`      | [`text`]             | The type of the relation: either `table`, `source`, `view`, or `materialized-view`.
 `owner_id`  | [`text`]             | The role ID of the owner of the relation. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `cluster_id`| [`text`]             | The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters). `NULL` for other object types.
 `privileges`| [`mz_aclitem array`] | The privileges belonging to the relation.
@@ -560,9 +562,9 @@ Field            | Type                 | Meaning
 `type`           | [`text`]             | The type of the source: `kafka`, `mysql`, `postgres`, `load-generator`, `progress`, or `subsource`.
 `connection_id`  | [`text`]             | The ID of the connection associated with the source, if any. Corresponds to [`mz_connections.id`](/sql/system-catalog/mz_catalog/#mz_connections).
 `size`           | [`text`]             | *Deprecated* The [size](/sql/create-source/#sizing-a-source) of the source.
-`envelope_type`  | [`text`]             | For Kafka sources, the [envelope](/sql/create-source/#envelopes) type: `none`, `upsert`, or `debezium`. `NULL` for other source types.
-`key_format`     | [`text`]             | For Kafka sources, the [format](/sql/create-source/#formats) of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.
-`value_format`     | [`text`]           | For Kafka sources, the [format](/sql/create-source/#formats) of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.
+`envelope_type`  | [`text`]             | For old-syntax Kafka sources, the [envelope](/sql/create-source/kafka/#envelopes) type: `none`, `upsert`, or `debezium`. `NULL` for new-syntax Kafka sources, whose envelopes are defined per source table (see `mz_kafka_source_tables`), and for other source types.
+`key_format`     | [`text`]             | For Kafka sources, the [format](/sql/create-source/kafka#syntax) of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.
+`value_format`     | [`text`]           | For Kafka sources, the [format](/sql/create-source/kafka#syntax) of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.
 `cluster_id`     | [`text`]             | The ID of the cluster maintaining the source. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `owner_id`       | [`text`]             | The role ID of the owner of the source. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`     | [`mz_aclitem array`] | The privileges granted on the source.
@@ -580,11 +582,9 @@ The `mz_storage_usage` table describes the historical storage utilization of
 each table, source, and materialized view in the system. Storage utilization is
 assessed approximately every hour.
 
-{{< if-released "v0.111" >}}
 Consider querying
 [`mz_catalog.mz_recent_storage_usage`](#mz_recent_storage_usage)
 instead if you are interested in only the most recent storage usage information.
-{{< /if-released >}}
 
 <!-- RELATION_SPEC mz_catalog.mz_storage_usage -->
 Field                  | Type                         | Meaning
@@ -670,6 +670,11 @@ Field          | Type                 | Meaning
 ### `mz_views`
 
 The `mz_views` table contains a row for each view in the system.
+
+A few generated system views in `mz_internal` (the `mz_builtin_*` views,
+which list every builtin object) are shown with a short placeholder in
+`definition`, `create_sql`, and `redacted_create_sql` instead of their full
+SQL, which would embed metadata about every builtin object.
 
 <!-- RELATION_SPEC mz_catalog.mz_views -->
 Field          | Type                 | Meaning

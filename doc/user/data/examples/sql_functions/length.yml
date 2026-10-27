@@ -1,0 +1,10 @@
+- name: "syntax"
+  code: |
+    length ( <str> [, <encoding_name>] )
+  syntax_elements:
+    - name: "`<str>`"
+      description: |
+        A [`string`](/sql/types/text/) or `bytea` value whose length you want.
+    - name: "`<encoding_name>`"
+      description: |
+        Optional. A [`string`](/sql/types/text/) value specifying the [encoding](#encoding-details) to use for calculating the string's length. Defaults to UTF-8.

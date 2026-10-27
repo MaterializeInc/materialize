@@ -65,15 +65,18 @@
 use std::fmt;
 use std::sync::Arc;
 
+use aws_sdk_s3::error::DisplayErrorContext;
 use bytes::Bytes;
 use differential_dataflow::Hashable;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use mz_expr::SafeMfpPlan;
 use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_types::Codec;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_types::StorageDiff;
@@ -94,13 +97,15 @@ use std::fmt::{Debug, Display};
 use std::future::Future;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::{Scope, Stream as TimelyStream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tracing::info;
 
 use crate::oneshot_source::aws_source::{AwsS3Source, S3Checksum, S3Object};
 use crate::oneshot_source::csv::{CsvDecoder, CsvRecord, CsvWorkRequest};
-use crate::oneshot_source::http_source::{HttpChecksum, HttpObject, HttpOneshotSource};
+use crate::oneshot_source::http_source::{
+    HttpChecksum, HttpObject, HttpOneshotSource, build_http_client,
+};
 use crate::oneshot_source::parquet::{ParquetFormat, ParquetRowGroup, ParquetWorkRequest};
 
 pub mod csv;
@@ -128,17 +133,17 @@ mod util;
 /// chunks for parallel Decoding. We should benchmark if this is actually faster
 /// than just a single worker both fetching and decoding.
 ///
-pub fn render<G, F>(
-    scope: G,
+pub fn render<'scope, F>(
+    scope: Scope<'scope, Timestamp>,
     persist_clients: Arc<PersistClientCache>,
     connection_context: ConnectionContext,
     collection_id: GlobalId,
     collection_meta: CollectionMetadata,
     request: OneshotIngestionRequest,
+    enforce_external_addresses: bool,
     worker_callback: F,
 ) -> Vec<PressOnDropButton>
 where
-    G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<Option<ProtoBatch>, String>) -> () + 'static,
 {
     let OneshotIngestionRequest {
@@ -150,7 +155,16 @@ where
 
     let source = match source {
         ContentSource::Http { url } => {
-            let source = HttpOneshotSource::new(reqwest::Client::default(), url);
+            let client = match build_http_client(enforce_external_addresses) {
+                Ok(client) => client,
+                Err(err) => {
+                    worker_callback(Err(format!(
+                        "failed to build HTTP client for COPY FROM: {err}"
+                    )));
+                    return Vec::new();
+                }
+            };
+            let source = HttpOneshotSource::new(client, url);
             SourceKind::Http(source)
         }
         ContentSource::AwsS3 {
@@ -158,7 +172,25 @@ where
             connection_id,
             uri,
         } => {
-            let source = AwsS3Source::new(connection, connection_id, connection_context, uri);
+            // Checksum validation does not work with GCS when using ranges, which happens with parquet.
+            // So, we disable checksum if both the endpoint is overridden to a non-AWS endpoint and the format is Parquet.
+            let use_checksum = !(connection.endpoint.is_some()
+                && !connection.endpoint.as_ref().unwrap().contains("amazonaws"))
+                || format != ContentFormat::Parquet;
+            if !use_checksum {
+                tracing::info!(
+                    "disabling checksum validation for S3 source because endpoint: {:?} is overridden and format is Parquet",
+                    connection.endpoint
+                );
+            }
+            let source = AwsS3Source::new(
+                connection,
+                connection_id,
+                connection_context,
+                uri,
+                use_checksum,
+                enforce_external_addresses,
+            );
             SourceKind::AwsS3(source)
         }
     };
@@ -182,7 +214,7 @@ where
     let (work_stream, split_token) = render_split_work(
         scope.clone(),
         collection_id,
-        &objects_stream,
+        objects_stream,
         source.clone(),
         format.clone(),
     );
@@ -192,13 +224,13 @@ where
         collection_id,
         source.clone(),
         format.clone(),
-        &work_stream,
+        work_stream,
     );
     // Parse chunks of records into Rows.
     let (rows_stream, decode_token) = render_decode_chunk(
         scope.clone(),
         format.clone(),
-        &records_stream,
+        records_stream,
         shape.source_mfp,
     );
     // Stage the Rows in Persist.
@@ -207,11 +239,11 @@ where
         collection_id,
         &collection_meta,
         persist_clients,
-        &rows_stream,
+        rows_stream,
     );
 
     // Collect all results together and notify the upstream of whether or not we succeeded.
-    render_completion_operator(scope, &batch_stream, worker_callback);
+    render_completion_operator(scope, batch_stream, worker_callback);
 
     let tokens = vec![
         discover_token,
@@ -226,17 +258,16 @@ where
 
 /// Render an operator that using a [`OneshotSource`] will discover what objects are available
 /// for fetching.
-pub fn render_discover_objects<G, S>(
-    scope: G,
+pub fn render_discover_objects<'scope, S>(
+    scope: Scope<'scope, Timestamp>,
     collection_id: GlobalId,
     source: S,
     filter: ContentFilter,
 ) -> (
-    TimelyStream<G, Result<(S::Object, S::Checksum), StorageErrorX>>,
+    StreamVec<'scope, Timestamp, Result<(S::Object, S::Checksum), StorageErrorX>>,
     PressOnDropButton,
 )
 where
-    G: Scope<Timestamp = Timestamp>,
     S: OneshotSource + 'static,
 {
     // Only a single worker is responsible for discovering objects.
@@ -272,7 +303,11 @@ where
                     .into_iter()
                     .partition(|(o, _checksum)| filter.filter::<S>(o));
                 tracing::info!(%worker_id, ?include, ?exclude, "listed objects");
-
+                if include.is_empty() {
+                    let err = StorageErrorXKind::NoMatchingFiles.with_context("discover");
+                    start_handle.give(&start_cap, Err(err));
+                    return;
+                }
                 include
                     .into_iter()
                     .for_each(|object| start_handle.give(&start_cap, Ok(object)))
@@ -289,18 +324,18 @@ where
 
 /// Render an operator that given a stream of [`OneshotSource::Object`]s will split them into units
 /// of work based on the provided [`OneshotFormat`].
-pub fn render_split_work<G, S, F>(
-    scope: G,
+pub fn render_split_work<'scope, T, S, F>(
+    scope: Scope<'scope, T>,
     collection_id: GlobalId,
-    objects: &TimelyStream<G, Result<(S::Object, S::Checksum), StorageErrorX>>,
+    objects: StreamVec<'scope, T, Result<(S::Object, S::Checksum), StorageErrorX>>,
     source: S,
     format: F,
 ) -> (
-    TimelyStream<G, Result<F::WorkRequest<S>, StorageErrorX>>,
+    StreamVec<'scope, T, Result<F::WorkRequest<S>, StorageErrorX>>,
     PressOnDropButton,
 )
 where
-    G: Scope,
+    T: timely::progress::Timestamp,
     S: OneshotSource + Send + Sync + 'static,
     F: OneshotFormat + Send + Sync + 'static,
 {
@@ -361,18 +396,18 @@ where
 /// Render an operator that given a stream [`OneshotFormat::WorkRequest`]s will fetch chunks of the
 /// remote [`OneshotSource::Object`] and return a stream of [`OneshotFormat::RecordChunk`]s that
 /// can be decoded into [`Row`]s.
-pub fn render_fetch_work<G, S, F>(
-    scope: G,
+pub fn render_fetch_work<'scope, T, S, F>(
+    scope: Scope<'scope, T>,
     collection_id: GlobalId,
     source: S,
     format: F,
-    work_requests: &TimelyStream<G, Result<F::WorkRequest<S>, StorageErrorX>>,
+    work_requests: StreamVec<'scope, T, Result<F::WorkRequest<S>, StorageErrorX>>,
 ) -> (
-    TimelyStream<G, Result<F::RecordChunk, StorageErrorX>>,
+    StreamVec<'scope, T, Result<F::RecordChunk, StorageErrorX>>,
     PressOnDropButton,
 )
 where
-    G: Scope,
+    T: timely::progress::Timestamp,
     S: OneshotSource + Sync + 'static,
     F: OneshotFormat + Sync + 'static,
 {
@@ -429,17 +464,17 @@ where
 
 /// Render an operator that given a stream of [`OneshotFormat::RecordChunk`]s will decode these
 /// chunks into a stream of [`Row`]s.
-pub fn render_decode_chunk<G, F>(
-    scope: G,
+pub fn render_decode_chunk<'scope, T, F>(
+    scope: Scope<'scope, T>,
     format: F,
-    record_chunks: &TimelyStream<G, Result<F::RecordChunk, StorageErrorX>>,
+    record_chunks: StreamVec<'scope, T, Result<F::RecordChunk, StorageErrorX>>,
     mfp: SafeMfpPlan,
 ) -> (
-    TimelyStream<G, Result<Row, StorageErrorX>>,
+    StreamVec<'scope, T, Result<Row, StorageErrorX>>,
     PressOnDropButton,
 )
 where
-    G: Scope,
+    T: timely::progress::Timestamp,
     F: OneshotFormat + 'static,
 {
     let mut builder = AsyncOperatorBuilder::new("CopyFrom-decode_chunk".to_string(), scope.clone());
@@ -451,7 +486,6 @@ where
         let [_row_cap] = caps.try_into().unwrap();
 
         let mut datum_vec = DatumVec::default();
-        let row_arena = RowArena::default();
         let mut row_buf = Row::default();
 
         while let Some(event) = record_chunk_handle.next().await {
@@ -473,9 +507,14 @@ where
 
             match result {
                 Ok(rows) => {
+                    // Scoped to this chunk so the arena's retained capacity does not outlive it,
+                    // and cleared per row below so it only ever holds one row's MFP temporaries
+                    // rather than accumulating the whole source.
+                    let mut row_arena = RowArena::new();
                     // For each row of source data, we pass it through an MFP to re-arrange column
                     // orders and/or fill in default values for missing columns.
                     for row in rows {
+                        row_arena.clear();
                         let mut datums = datum_vec.borrow_with(&row);
                         let result = mfp
                             .evaluate_into(&mut *datums, &row_arena, &mut row_buf)
@@ -506,22 +545,22 @@ where
 
 /// Render an operator that given a stream of [`Row`]s will stage them in Persist and return a
 /// stream of [`ProtoBatch`]es that can later be linked into a shard.
-pub fn render_stage_batches_operator<G>(
-    scope: G,
+pub fn render_stage_batches_operator<'scope, T>(
+    scope: Scope<'scope, T>,
     collection_id: GlobalId,
     collection_meta: &CollectionMetadata,
     persist_clients: Arc<PersistClientCache>,
-    rows_stream: &TimelyStream<G, Result<Row, StorageErrorX>>,
+    rows_stream: StreamVec<'scope, T, Result<Row, StorageErrorX>>,
 ) -> (
-    TimelyStream<G, Result<ProtoBatch, StorageErrorX>>,
+    StreamVec<'scope, T, Result<ProtoBatch, StorageErrorX>>,
     PressOnDropButton,
 )
 where
-    G: Scope,
+    T: timely::progress::Timestamp,
 {
     let persist_location = collection_meta.persist_location.clone();
     let shard_id = collection_meta.data_shard;
-    let collection_desc = collection_meta.relation_desc.clone();
+    let collection_desc = Arc::new(collection_meta.relation_desc.clone());
 
     let mut builder =
         AsyncOperatorBuilder::new("CopyFrom-stage_batches".to_string(), scope.clone());
@@ -545,7 +584,7 @@ where
         let write_handle = persist_client
             .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                 shard_id,
-                Arc::new(collection_desc),
+                Arc::clone(&collection_desc),
                 Arc::new(UnitSchema),
                 persist_diagnostics,
             )
@@ -567,6 +606,12 @@ where
 
             // Pull Rows off our stream and stage them into a Batch.
             for maybe_row in row_batch {
+                let maybe_row = maybe_row.and_then(|row| {
+                    Row::validate(&row, &*collection_desc).map_err(|e| {
+                        StorageErrorXKind::invalid_record_batch(e).with_context("stage_batches")
+                    })?;
+                    Ok(row)
+                });
                 match maybe_row {
                     // Happy path, add the Row to our batch!
                     Ok(row) => {
@@ -616,12 +661,12 @@ where
 
 /// Render an operator that given a stream of [`ProtoBatch`]es will call our `worker_callback` to
 /// report the results upstream.
-pub fn render_completion_operator<G, F>(
-    scope: G,
-    results_stream: &TimelyStream<G, Result<ProtoBatch, StorageErrorX>>,
+pub fn render_completion_operator<'scope, T, F>(
+    scope: Scope<'scope, T>,
+    results_stream: StreamVec<'scope, T, Result<ProtoBatch, StorageErrorX>>,
     worker_callback: F,
 ) where
-    G: Scope,
+    T: timely::progress::Timestamp,
     F: FnOnce(Result<Option<ProtoBatch>, String>) -> () + 'static,
 {
     let mut builder = AsyncOperatorBuilder::new("CopyFrom-completion".to_string(), scope.clone());
@@ -1035,6 +1080,12 @@ pub enum StorageErrorXKind {
     MissingField(Arc<str>),
     #[error("failed while evaluating the provided mfp: '{0}'")]
     MfpEvalError(Arc<str>),
+    #[error("no matching files found at the given url")]
+    NoMatchingFiles,
+    #[error("server returned HTTP {0}; Redirects are not supported, use the final URL directly.")]
+    Redirect(u16),
+    #[error("server returned HTTP {0}")]
+    HttpStatus(u16),
     #[error("something went wrong: {0}")]
     Generic(String),
 }
@@ -1047,7 +1098,11 @@ impl From<csv_async::Error> for StorageErrorXKind {
 
 impl From<reqwest::Error> for StorageErrorXKind {
     fn from(err: reqwest::Error) -> Self {
-        StorageErrorXKind::Reqwest(err.to_string().into())
+        // Walk the source chain so that inner causes (like the custom DNS
+        // resolver's "Address resolved to a private IP" rejection) are
+        // visible. reqwest's top-level Display only says "error sending
+        // request for url ..." and hides the underlying cause.
+        StorageErrorXKind::Reqwest(err.to_string_with_causes().into())
     }
 }
 
@@ -1059,7 +1114,7 @@ impl From<reqwest::header::ToStrError> for StorageErrorXKind {
 
 impl From<aws_smithy_types::byte_stream::error::Error> for StorageErrorXKind {
     fn from(err: aws_smithy_types::byte_stream::error::Error) -> Self {
-        StorageErrorXKind::AwsS3Request(err.to_string())
+        StorageErrorXKind::AwsS3Bytes(DisplayErrorContext(err).to_string().into())
     }
 }
 

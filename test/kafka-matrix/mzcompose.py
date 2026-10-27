@@ -32,6 +32,8 @@ REDPANDA_VERSIONS = [
     "v24.2.27",
     "v24.3.18",
     "v25.1.12",
+    "v25.2.14",
+    "v25.3.14",
     REDPANDA_VERSION,
     "latest",
 ]
@@ -39,18 +41,18 @@ REDPANDA_VERSIONS = [
 CONFLUENT_PLATFORM_VERSIONS = [
     "7.0.16",
     "7.1.16",
-    "7.2.14",
-    "7.3.12",
-    "7.4.12",
-    "7.5.11",
-    "7.6.8",
-    "7.7.6",
-    "7.8.5",
+    "7.2.15",
+    "7.3.15",
+    "7.4.15",
+    "7.5.14",
+    "7.6.11",
+    "7.7.9",
+    "7.8.8",
+    "7.9.7",
+    "8.0.5",
+    "8.1.3",
     DEFAULT_CONFLUENT_PLATFORM_VERSION,
-    # There is currently a mismatch in the latest versions between cp-zookeeper
-    # (7.9.4) and cp-kafka (8.0.0), making running them in combination
-    # impossible
-    # "latest",
+    "latest",
 ]
 
 SERVICES = [
@@ -72,6 +74,17 @@ TD_CMD = [
     f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
     *[f"testdrive/{td}" for td in ["kafka-sinks.td", "kafka-upsert-sources.td"]],
 ]
+
+
+def _needs_zookeeper(confluent_version: str) -> bool:
+    """Confluent Platform 7.x and earlier require Zookeeper; 8.0+ uses KRaft."""
+    if confluent_version == "latest":
+        return False
+    major = confluent_version.split(".", 1)[0]
+    try:
+        return int(major) < 8
+    except ValueError:
+        return False
 
 
 def workflow_default(c: Composition) -> None:
@@ -96,11 +109,15 @@ def workflow_default(c: Composition) -> None:
 
     for confluent_version in confluent_versions:
         print(f"--- Testing Confluent Platform {confluent_version}")
+        use_zookeeper = _needs_zookeeper(confluent_version)
         with c.override(
             Zookeeper(tag=confluent_version),
-            Kafka(tag=confluent_version),
+            Kafka(tag=confluent_version, use_zookeeper=use_zookeeper),
             SchemaRegistry(tag=confluent_version),
         ):
             c.down(destroy_volumes=True)
-            c.up("zookeeper", "kafka", "schema-registry", "materialized")
+            services = ["kafka", "schema-registry", "materialized"]
+            if use_zookeeper:
+                services.insert(0, "zookeeper")
+            c.up(*services)
             c.run_testdrive_files(*TD_CMD)

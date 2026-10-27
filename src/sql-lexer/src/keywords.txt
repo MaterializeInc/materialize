@@ -23,7 +23,9 @@
 #
 # For details on the code that is generated, see keywords.rs.
 
+Abort
 Access
+Account
 Action
 Add
 Added
@@ -40,6 +42,7 @@ Analysis
 Analyze
 And
 Any
+Append
 Apply
 Arity
 Arn
@@ -53,6 +56,7 @@ Assume
 At
 Auction
 Authority
+Auto
 Availability
 Avro
 Aws
@@ -70,6 +74,7 @@ Broker
 Brokers
 By
 Bytes
+Cancellation
 Capture
 Cardinality
 Cascade
@@ -106,8 +111,9 @@ Confluent
 Connection
 Connections
 Constraint
-Continual
+Constraints
 Copy
+Correlated
 Count
 Counter
 Cpu
@@ -121,6 +127,7 @@ Credential
 Cross
 Cse
 Csv
+Cte
 Current
 Cursor
 Database
@@ -139,6 +146,7 @@ Decoding
 Decorrelated
 Default
 Defaults
+Delegation
 Delete
 Delimited
 Delimiter
@@ -153,6 +161,7 @@ Doc
 Dot
 Double
 Drop
+Duration
 Eager
 Element
 Else
@@ -172,6 +181,7 @@ Exclude
 Execute
 Exists
 Expected
+Experimental
 Explain
 Expose
 Expressions
@@ -187,6 +197,7 @@ File
 Files
 Filter
 First
+Fixed
 Fixpoint
 Float
 Following
@@ -199,7 +210,9 @@ Full
 Fullname
 Function
 Fusion
+Gcp
 Generator
+Glue
 Grant
 Greatest
 Group
@@ -265,6 +278,7 @@ Level
 Like
 Limit
 Linear
+Linger
 List
 Load
 Local
@@ -277,6 +291,7 @@ Managed
 Manual
 Map
 Marketing
+Matching
 Materialize
 Materialized
 Max
@@ -285,8 +300,10 @@ Membership
 Memory
 Message
 Metadata
+Metric
 Minute
 Minutes
+Mock
 Mode
 Month
 Months
@@ -321,6 +338,7 @@ Notices
 Null
 Nullif
 Nulls
+Oauth2
 Objects
 Of
 Offset
@@ -362,6 +380,7 @@ Progress
 Projection
 Protobuf
 Protocol
+Provider
 Public
 Publication
 Pushdown
@@ -392,7 +411,6 @@ Reoptimize
 Repeatable
 Replace
 Replacement
-Replacing
 Replan
 Replica
 Replicas
@@ -415,6 +433,7 @@ Rows
 Rules
 Sasl
 Scale
+Scaling
 Schedule
 Schema
 Schemas
@@ -467,10 +486,9 @@ System
 Table
 Tables
 Tail
-Task
-Tasks
 Temp
 Temporary
+Test
 Text
 Then
 Tick
@@ -491,6 +509,7 @@ Transactional
 Transform
 Trim
 True
+Try_Cast
 Tunnel
 Type
 Types
@@ -498,6 +517,7 @@ Unbounded
 Uncommitted
 Union
 Unique
+Unit
 Unknown
 Unnest
 Until

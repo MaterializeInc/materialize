@@ -54,6 +54,8 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 INSERT INTO numbers VALUES (1, true, 'one');
 
+ANALYZE;
+
 $ set-regex match=(\d{1,3}\.){3}\d{1,3} replacement=(HOST)
 
 # server: host, client: disable => OK
@@ -158,7 +160,7 @@ DELETE FROM numbers WHERE number = 2;
   );
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:self signed certificate in certificate chain
+regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
 > DROP CONNECTION pgconn;
 
 # server: hostssl, client: verify-ca => OK
@@ -195,7 +197,7 @@ DELETE FROM numbers WHERE number = 2;
   );
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:self signed certificate in certificate chain
+regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
 > DROP CONNECTION pgconn;
 
 # server: hostssl, client: verify-full => OK
@@ -268,7 +270,7 @@ contains:db error: FATAL: no pg_hba.conf entry for host "(HOST)", user "hostnoss
   );
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:self signed certificate in certificate chain
+regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
 > DROP CONNECTION pgconn;
 
 # server: hostnossl, client: verify-full => ERROR
@@ -280,7 +282,7 @@ contains:self signed certificate in certificate chain
   );
 ! CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pgconn (PUBLICATION 'mz_source');
-contains:self signed certificate in certificate chain
+regex:self[- ]signed certificate in certificate chain|invalid peer certificate: UnknownIssuer
 > DROP CONNECTION pgconn;
 
 # server: certuser, client: require => OK

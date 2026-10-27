@@ -7,17 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Utilities and implementations for transformation of [crate::plan::Plan]
+//! Utilities and implementations for transformation of [crate::plan::LirRelationExpr]
 //! structures.
 //!
 //! As a general rule, semantic transformations should be done at the
 //! [mz_expr::MirRelationExpr] level. However, in certain situations where we
-//! want to do a pass over a [crate::plan::Plan] lowered from an
+//! want to do a pass over a [crate::plan::LirRelationExpr] lowered from an
 //! [mz_expr::MirRelationExpr] in order to fix sub-optimal aspects of that plan.
 //!
 //! To do that, create a struct that implements [Transform] and call the
 //! [Transform::transform] method towards the end of
-//! [crate::plan::Plan::finalize_dataflow], but before the
+//! [crate::plan::LirRelationExpr::finalize_dataflow], but before the
 //! [mz_repr::explain::trace_plan] call.
 
 // Keep nested modules private (those are primary used for introducing better

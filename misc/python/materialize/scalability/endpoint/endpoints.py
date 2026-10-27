@@ -9,12 +9,17 @@
 
 import psycopg
 
-from materialize import MZ_ROOT, git
+from materialize import git
+from materialize.docker import get_mz_version_from_image_tag
+from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.services.listener_config import (
+    resolve_listeners_config_path,
+)
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
-from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.endpoint.endpoint import ConnectionKind, Endpoint
 
 POSTGRES_ENDPOINT_NAME = "postgres"
 
@@ -31,7 +36,7 @@ class MaterializeRemote(Endpoint):
         super().__init__(specified_target=TARGET_MATERIALIZE_REMOTE)
         self.materialize_url = materialize_url
 
-    def url(self) -> str:
+    def url(self, kind: ConnectionKind = ConnectionKind.Plain) -> str:
         return self.materialize_url
 
     def up(self) -> None:
@@ -180,14 +185,22 @@ class MaterializeContainer(MaterializeNonRemote):
         self.lift_limits()
 
     def up_internal(self) -> None:
+        # Match the schema dir to the image's version, since an older
+        # environmentd cannot parse a newer listener config schema.
+        image_version = (
+            MzVersion.parse_cargo()
+            if self.image is None
+            else get_mz_version_from_image_tag(self.image.rsplit(":", 1)[1])
+        )
+        listeners_config_path = resolve_listeners_config_path(
+            image_version, "testdrive_sasl"
+        )
         with self.composition.override(
             Materialized(
                 image=self.image,
                 sanity_restart=False,
                 additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
-                external_metadata_store=True,
-                metadata_store="cockroach",
-                listeners_config_path=f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive_sasl.json",
+                listeners_config_path=listeners_config_path,
             )
         ):
             self.composition.up("materialized")

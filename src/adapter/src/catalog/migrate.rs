@@ -7,13 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use base64::prelude::*;
 use maplit::btreeset;
-use mz_catalog::builtin::BuiltinTable;
+use mz_catalog::builtin::{BUILTINS, BuiltinTable};
+use mz_catalog::durable::objects::{SystemObjectDescription, SystemObjectMapping};
 use mz_catalog::durable::{MOCK_AUTHENTICATION_NONCE_KEY, Transaction};
-use mz_catalog::memory::objects::{BootstrapStateUpdateKind, StateUpdate};
+use mz_catalog::memory::objects::{StateUpdate, StateUpdateKind};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::NowFn;
 use mz_persist_types::ShardId;
@@ -24,7 +26,7 @@ use mz_sql::ast::{
     CreateSinkOptionName, CreateViewStatement, CteBlock, DeferredItemName, IfExistsBehavior, Query,
     SetExpr, SqlServerConfigOptionName, ViewDefinition,
 };
-use mz_sql::catalog::SessionCatalog;
+use mz_sql::catalog::{CatalogItemType, SessionCatalog};
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::normalize;
 use mz_sql::session::vars::{FORCE_SOURCE_TABLE_SYNTAX, Var, VarInput};
@@ -119,7 +121,7 @@ where
 pub(crate) struct MigrateResult {
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
     pub(crate) catalog_updates: Vec<ParsedStateUpdate>,
-    pub(crate) post_item_updates: Vec<(BootstrapStateUpdateKind, Timestamp, Diff)>,
+    pub(crate) post_item_updates: Vec<(StateUpdateKind, Timestamp, Diff)>,
 }
 
 /// Migrates all user items and loads them into `state`.
@@ -140,7 +142,7 @@ pub(crate) async fn migrate(
         catalog_version
     );
 
-    rewrite_ast_items(tx, |_tx, _id, stmt| {
+    rewrite_ast_items(tx, |tx, _id, stmt| {
         // Add per-item AST migrations below.
         //
         // Each migration should be a function that takes `stmt` (the AST
@@ -151,6 +153,11 @@ pub(crate) async fn migrate(
         // arbitrary changes to the catalog.
         ast_rewrite_create_sink_partition_strategy(stmt)?;
         ast_rewrite_sql_server_constraints(stmt)?;
+        ast_rewrite_add_missing_index_ids(tx, stmt)?;
+        ast_rewrite_add_missing_doc_on_ids(tx, stmt)?;
+        ast_rewrite_kafka_metadata_refresh_intervals(stmt)?;
+        ast_rewrite_small_commit_intervals(stmt)?;
+        ast_rewrite_strip_builtin_version_pins(stmt)?;
         Ok(())
     })?;
 
@@ -170,14 +177,12 @@ pub(crate) async fn migrate(
         .into_iter()
         // The only post-item update kind we currently generate is to
         // update storage collection metadata.
-        .partition(|(kind, _, _)| {
-            matches!(kind, BootstrapStateUpdateKind::StorageCollectionMetadata(_))
-        });
+        .partition(|(kind, _, _)| matches!(kind, StateUpdateKind::StorageCollectionMetadata(_)));
 
     let item_updates = item_updates
         .into_iter()
         .map(|(kind, ts, diff)| StateUpdate {
-            kind: kind.into(),
+            kind,
             ts,
             diff: diff.try_into().expect("valid diff"),
         })
@@ -797,7 +802,7 @@ pub(crate) fn durable_migrate(
     const EXPR_CACHE_MIGRATION_DONE: u64 = 1;
     if tx.get_config(EXPR_CACHE_MIGRATION_KEY.to_string()) != Some(EXPR_CACHE_MIGRATION_DONE) {
         if let Some(shard_id) = tx.get_expression_cache_shard() {
-            tx.mark_shards_as_finalized(btreeset! {shard_id});
+            tx.insert_unfinalized_shards(btreeset! {shard_id})?;
             tx.set_expression_cache_shard(ShardId::new())?;
         }
         tx.set_config(
@@ -814,7 +819,7 @@ pub(crate) fn durable_migrate(
         != Some(BUILTIN_MIGRATION_SHARD_MIGRATION_DONE)
     {
         if let Some(shard_id) = tx.get_builtin_migration_shard() {
-            tx.mark_shards_as_finalized(btreeset! {shard_id});
+            tx.insert_unfinalized_shards(btreeset! {shard_id})?;
             tx.set_builtin_migration_shard(ShardId::new())?;
         }
         tx.set_config(
@@ -828,9 +833,55 @@ pub(crate) fn durable_migrate(
         .is_none()
     {
         let mut nonce = [0u8; 24];
-        let _ = openssl::rand::rand_bytes(&mut nonce).expect("failed to generate nonce");
+        openssl::rand::rand_bytes(&mut nonce).expect("failed to generate nonce");
         let nonce = BASE64_STANDARD.encode(nonce);
         tx.set_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string(), Some(nonce))?;
+    }
+
+    migrate_builtin_tables_to_mvs(tx)?;
+
+    Ok(())
+}
+
+/// Update system object mappings for builtins whose type changed from table to materialized view.
+///
+/// Required for the work of making builtin tables views over `mz_catalog_raw`.
+fn migrate_builtin_tables_to_mvs(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+    // Collect `(schema, name)` of all builtin MVs.
+    let expected_mvs: BTreeSet<_> = BUILTINS::materialized_views()
+        .map(|mv| (mv.schema, mv.name))
+        .collect();
+
+    // Find persisted mappings for builtin tables that must be migrated.
+    let mut to_remove = BTreeSet::new();
+    let mut to_add = Vec::new();
+    for mapping in tx.get_system_object_mappings() {
+        let desc = &mapping.description;
+        if desc.object_type != CatalogItemType::Table {
+            continue;
+        }
+
+        let key = (&*desc.schema_name, &*desc.object_name);
+        if expected_mvs.contains(&key) {
+            info!(
+                "migrate: builtin {}.{} changed type from table to MV",
+                desc.schema_name, desc.object_name,
+            );
+            to_remove.insert(desc.clone());
+            to_add.push(SystemObjectMapping {
+                description: SystemObjectDescription {
+                    schema_name: desc.schema_name.clone(),
+                    object_type: CatalogItemType::MaterializedView,
+                    object_name: desc.object_name.clone(),
+                },
+                unique_identifier: mapping.unique_identifier,
+            });
+        }
+    }
+
+    if !to_remove.is_empty() {
+        tx.remove_system_object_mappings(to_remove)?;
+        tx.set_system_object_mappings(to_add)?;
     }
 
     Ok(())
@@ -943,4 +994,402 @@ fn ast_rewrite_sql_server_constraints(stmt: &mut Statement<Raw>) -> Result<(), a
     *deets = hex::encode(new_value.into_proto().encode_to_vec());
 
     Ok(())
+}
+
+/// Add missing item IDs to the ON clauses of CREATE INDEX statements.
+fn ast_rewrite_add_missing_index_ids(
+    tx: &Transaction<'_>,
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    let Statement::CreateIndex(stmt) = stmt else {
+        return Ok(());
+    };
+
+    let unresolved_name = match stmt.on_name.clone() {
+        mz_sql::ast::RawItemName::Name(name) => name,
+        // ID already present; nothing to do.
+        mz_sql::ast::RawItemName::Id(..) => return Ok(()),
+    };
+
+    let parts = &unresolved_name.0;
+    let (db_name, schema_name, item_name) = match parts.len() {
+        3 => (Some(&parts[0]), &parts[1], &parts[2]),
+        2 => (None, &parts[0], &parts[1]),
+        _ => panic!("invalid unresolved name: {unresolved_name:?}"),
+    };
+
+    let db_id = db_name.map(|x| {
+        let db = tx.get_databases().find(|db| db.name == x.as_str());
+        let db = db.unwrap_or_else(|| panic!("missing database: {x}"));
+        db.id
+    });
+    let schema_id = {
+        let schema = tx
+            .get_schemas()
+            .find(|s| s.name == schema_name.as_str() && s.database_id == db_id);
+        let schema = schema.unwrap_or_else(|| panic!("missing schema: {schema_name}, {db_id:?}"));
+        schema.id
+    };
+    let item_id = {
+        let item = tx
+            .get_items()
+            .find(|i| i.name == item_name.as_str() && i.schema_id == schema_id);
+        let item = item.unwrap_or_else(|| panic!("missing item: {item_name}, {schema_id:?}"));
+        item.id
+    };
+
+    stmt.on_name = mz_sql::ast::RawItemName::Id(item_id.to_string(), unresolved_name, None);
+
+    Ok(())
+}
+
+/// Add missing item IDs to `DOC ON` references in CREATE SINK statements.
+///
+/// `DOC ON TYPE x` and `DOC ON COLUMN x.c` used to persist a type reference
+/// as a bare qualified name, unlike a relation in the same position, because
+/// name resolution suppressed ids for types. Resolution now prints the id
+/// (see `NameResolver::resolve_doc_on_name`); this rewrites stored statements
+/// to match, so `create_sql` reference extraction (`mz_object_dependencies`)
+/// recovers the sink's edge to the type.
+///
+/// References that already carry an id are skipped, so this is idempotent and
+/// safe to run every boot.
+fn ast_rewrite_add_missing_doc_on_ids(
+    tx: &Transaction<'_>,
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    if !matches!(stmt, Statement::CreateSink(_)) {
+        return Ok(());
+    }
+    rewrite_doc_on_ids(stmt, |name| {
+        let parts = &name.0;
+        let (db_name, schema_name, item_name) = match parts.len() {
+            3 => (Some(&parts[0]), &parts[1], &parts[2]),
+            // Names in ambient schemas denote builtin types, which are resolved
+            // through the system object mappings.
+            2 => (None, &parts[0], &parts[1]),
+            _ => panic!("invalid doc on reference: {name:?}"),
+        };
+        let db_id = db_name.map(|db_name| {
+            let db = tx.get_databases().find(|db| db.name == db_name.as_str());
+            let db = db.unwrap_or_else(|| panic!("missing database in doc on reference: {name:?}"));
+            db.id
+        });
+        let schema = tx
+            .get_schemas()
+            .find(|s| s.name == schema_name.as_str() && s.database_id == db_id);
+        let schema =
+            schema.unwrap_or_else(|| panic!("missing schema in doc on reference: {name:?}"));
+
+        let user_type = tx.get_items().find(|i| {
+            i.name == item_name.as_str()
+                && i.schema_id == schema.id
+                // A type may share its (schema, name) with a secret, connection, sink,
+                // or function, so explicitly filter on Type.
+                && i.item_type() == CatalogItemType::Type
+        });
+        if let Some(item) = user_type {
+            return Some(item.id.to_string());
+        }
+        // A bare name in an ambient schema denotes a builtin type (an explicit
+        // `DOC ON TYPE int4`, or a DOC ON injected by purification after mz_system
+        // commented on one). Builtin types are not durable items, so the lookup
+        // above cannot find them; their ids live in the system object mappings.
+        let builtin_type = tx.get_system_object_mappings().find(|m| {
+            m.description.schema_name == schema.name
+                && m.description.object_type == CatalogItemType::Type
+                && m.description.object_name == item_name.as_str()
+        });
+        let builtin_type =
+            builtin_type.unwrap_or_else(|| panic!("missing type in doc on reference: {name:?}"));
+        Some(builtin_type.unique_identifier.catalog_id.to_string())
+    });
+    Ok(())
+}
+
+/// Replaces every bare `DOC ON` reference in `stmt` for which `lookup`
+/// returns an id with the `[id AS name]` form. `None` leaves the reference as
+/// a name.
+fn rewrite_doc_on_ids(
+    stmt: &mut Statement<Raw>,
+    lookup: impl FnMut(&mz_sql::ast::UnresolvedItemName) -> Option<String>,
+) {
+    use mz_sql::ast::visit_mut::{VisitMut, VisitMutNode};
+    use mz_sql::ast::{ColumnName, DocOnIdentifier, RawItemName, UnresolvedItemName};
+
+    struct Rewriter<F> {
+        lookup: F,
+    }
+
+    impl<'ast, F> VisitMut<'ast, Raw> for Rewriter<F>
+    where
+        F: FnMut(&UnresolvedItemName) -> Option<String>,
+    {
+        fn visit_doc_on_identifier_mut(&mut self, node: &mut DocOnIdentifier<Raw>) {
+            let name = match node {
+                DocOnIdentifier::Type(name) => name,
+                DocOnIdentifier::Column(ColumnName {
+                    relation,
+                    column: _,
+                }) => relation,
+            };
+            if let RawItemName::Name(unresolved) = name {
+                if let Some(id) = (self.lookup)(unresolved) {
+                    let unresolved = unresolved.clone();
+                    *name = RawItemName::Id(id, unresolved, None);
+                }
+            }
+        }
+    }
+
+    stmt.visit_mut(&mut Rewriter { lookup });
+}
+
+/// Strips the `VERSION` qualifier from by-id references to non-user (builtin)
+/// items.
+///
+/// A version pin on a builtin is meaningless, since builtins are not
+/// user-versioned. Older binaries could still persist such a pin, and once the
+/// builtin is converted to an item type without versions (e.g. a materialized
+/// view) reparsing the pin fails with `InvalidVersion` and panics during
+/// catalog open, wedging the upgrade. Stripping it makes the reference resolve
+/// to the latest version.
+///
+/// The read-side resolver tolerates these pins too, so this is durable cleanup
+/// rather than a correctness requirement. Safe to run every boot: stripping an
+/// absent version is a no-op.
+fn ast_rewrite_strip_builtin_version_pins(stmt: &mut Statement<Raw>) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::RawItemName;
+    use mz_sql::ast::visit_mut::{VisitMut, VisitMutNode};
+
+    struct StripBuiltinVersionPins;
+
+    impl<'ast> VisitMut<'ast, Raw> for StripBuiltinVersionPins {
+        fn visit_item_name_mut(&mut self, item_name: &mut RawItemName) {
+            if let RawItemName::Id(id, _, version) = item_name {
+                if version.is_some() {
+                    if let Ok(parsed) = id.parse::<CatalogItemId>() {
+                        if !parsed.is_user() {
+                            *version = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut visitor = StripBuiltinVersionPins;
+    stmt.visit_mut(&mut visitor);
+    Ok(())
+}
+
+fn ast_rewrite_kafka_metadata_refresh_intervals(
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{
+        CreateSinkConnection, CreateSourceConnection, KafkaSinkConfigOptionName,
+        KafkaSourceConfigOptionName, WithOptionValue,
+    };
+    // A user can persist the interval either as a string literal
+    // (`WithOptionValue::Value`) or, if they wrote it as a double-quoted
+    // value, as a lexed identifier (`WithOptionValue::UnresolvedItemName`).
+    // Both shapes must be handled here.
+    let interval: Option<&mut WithOptionValue<Raw>> = match stmt {
+        Statement::CreateSource(stmt) => {
+            if let CreateSourceConnection::Kafka { options, .. } = &mut stmt.connection {
+                options.iter_mut().find_map(|option| {
+                    if matches!(
+                        option.name,
+                        KafkaSourceConfigOptionName::TopicMetadataRefreshInterval
+                    ) {
+                        option.value.as_mut()
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        }
+        Statement::CreateSink(stmt) => {
+            if let CreateSinkConnection::Kafka { options, .. } = &mut stmt.connection {
+                options.iter_mut().find_map(|option| {
+                    if matches!(
+                        option.name,
+                        KafkaSinkConfigOptionName::TopicMetadataRefreshInterval
+                    ) {
+                        option.value.as_mut()
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    let Some(interval) = interval else {
+        return Ok(());
+    };
+
+    rewrite_interval_option_floor_1s(interval, "kafka metadata refresh interval")
+}
+
+/// Planning enforces a 1 second minimum `COMMIT INTERVAL`, but smaller
+/// intervals used to be accepted (and a sub-millisecond one left the sink
+/// unable to ever commit). Rewrite any persisted smaller interval to 1s so
+/// the sink still plans after an upgrade.
+///
+/// `COMMIT INTERVAL` is a generic `CREATE SINK` option in the grammar, but only
+/// Iceberg sinks accept it and only Iceberg planning enforces the 1s floor.
+fn ast_rewrite_small_commit_intervals(stmt: &mut Statement<Raw>) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{CreateSinkConnection, CreateSinkOptionName};
+
+    let Statement::CreateSink(stmt) = stmt else {
+        return Ok(());
+    };
+    if !matches!(stmt.connection, CreateSinkConnection::Iceberg { .. }) {
+        return Ok(());
+    }
+    let interval = stmt.with_options.iter_mut().find_map(|o| {
+        if matches!(o.name, CreateSinkOptionName::CommitInterval) {
+            o.value.as_mut()
+        } else {
+            None
+        }
+    });
+    let Some(interval) = interval else {
+        return Ok(());
+    };
+
+    rewrite_interval_option_floor_1s(interval, "commit interval")
+}
+
+/// Rewrites an interval option value to `'1s'` if it is below 1 second.
+fn rewrite_interval_option_floor_1s(
+    value: &mut mz_sql::ast::WithOptionValue<Raw>,
+    label: &str,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{Value, WithOptionValue};
+    use mz_sql::plan::TryFromValue;
+
+    let dur = Duration::try_from_value(value.clone())
+        .map_err(|e| anyhow::anyhow!("invalid value for {label}: {value:?}: {e}"))?;
+
+    if dur < Duration::from_secs(1) {
+        *value = WithOptionValue::Value(Value::String("1s".to_string()));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strip(sql: &str) -> String {
+        let mut stmt = mz_sql::parse::parse(sql)
+            .expect("test sql parses")
+            .into_element()
+            .ast;
+        ast_rewrite_strip_builtin_version_pins(&mut stmt).expect("rewrite succeeds");
+        stmt.to_ast_string_stable()
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn strips_version_from_builtin_reference() {
+        // A system (builtin) id must lose its version pin: builtins are never
+        // user-versioned, so a persisted `VERSION 0` is a stale artifact that
+        // wedges catalog open once the builtin is converted to a non-table.
+        let out = strip(
+            r#"CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM [s518 AS "mz_catalog"."mz_audit_events" VERSION 0]"#,
+        );
+        assert!(!out.contains("VERSION"), "version not stripped: {out}");
+        // The reference itself is preserved, only the version is dropped.
+        assert!(out.contains("s518"), "reference dropped: {out}");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn preserves_version_on_user_reference() {
+        // A user table legitimately carries versions (`ALTER TABLE ... ADD
+        // COLUMN`), so the pin must survive.
+        let out = strip(
+            r#"CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM [u5 AS "materialize"."public"."t" VERSION 1]"#,
+        );
+        assert!(out.contains("VERSION"), "user version stripped: {out}");
+        assert!(out.contains("u5"), "reference dropped: {out}");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn leaves_unpinned_builtin_reference_untouched() {
+        let out = strip(
+            r#"CREATE VIEW "materialize"."public"."v" AS SELECT 1 FROM [s518 AS "mz_catalog"."mz_audit_events"]"#,
+        );
+        assert!(!out.contains("VERSION"), "unexpected version: {out}");
+        assert!(out.contains("s518"), "reference dropped: {out}");
+    }
+
+    fn add_doc_on_ids(
+        sql: &str,
+        lookup: impl FnMut(&mz_sql::ast::UnresolvedItemName) -> Option<String>,
+    ) -> String {
+        let mut stmt = mz_sql::parse::parse(sql)
+            .expect("test sql parses")
+            .into_element()
+            .ast;
+        rewrite_doc_on_ids(&mut stmt, lookup);
+        stmt.to_ast_string_stable()
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn adds_ids_to_bare_doc_on_references() {
+        // The persisted shape of a sink from before types printed ids in DOC
+        // ON positions: relations carry ids, the type and its column carry
+        // bare names.
+        let out = add_doc_on_ids(
+            r#"CREATE SINK "materialize"."public"."s" FROM [u1 AS "materialize"."public"."t"] INTO KAFKA CONNECTION [u2 AS "materialize"."public"."kc"] (TOPIC = 'top') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION [u3 AS "materialize"."public"."csr"] (DOC ON TYPE "materialize"."public"."point" = 'p', DOC ON COLUMN "materialize"."public"."point"."x" = 'x', DOC ON TYPE "pg_catalog"."int4" = 'i') ENVELOPE UPSERT"#,
+            |name| match name.0.len() {
+                3 => {
+                    assert_eq!(name.0[2].as_str(), "point", "unexpected lookup: {name:?}");
+                    Some("u9".into())
+                }
+                2 => {
+                    assert_eq!(name.0[1].as_str(), "int4", "unexpected lookup: {name:?}");
+                    Some("s23".into())
+                }
+                _ => panic!("unexpected lookup: {name:?}"),
+            },
+        );
+        assert!(
+            out.contains(r#"DOC ON TYPE [u9 AS "materialize"."public"."point"]"#),
+            "type reference not rewritten: {out}"
+        );
+        assert!(
+            out.contains(r#"DOC ON COLUMN [u9 AS "materialize"."public"."point"]."x""#),
+            "column reference not rewritten: {out}"
+        );
+        assert!(
+            out.contains(r#"DOC ON TYPE [s23 AS "pg_catalog"."int4"]"#),
+            "builtin type reference not rewritten: {out}"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` (SQL parser stack growth)
+    fn leaves_id_doc_on_references_untouched() {
+        let out = add_doc_on_ids(
+            r#"CREATE SINK "materialize"."public"."s" FROM [u1 AS "materialize"."public"."t"] INTO KAFKA CONNECTION [u2 AS "materialize"."public"."kc"] (TOPIC = 'top') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION [u3 AS "materialize"."public"."csr"] (DOC ON TYPE [u4 AS "materialize"."public"."point"] = 'p', DOC ON COLUMN [u1 AS "materialize"."public"."t"]."c1" = 'c') ENVELOPE UPSERT"#,
+            |name| panic!("id reference must not be resolved: {name:?}"),
+        );
+        assert!(
+            out.contains(r#"DOC ON TYPE [u4 AS "materialize"."public"."point"]"#),
+            "id reference altered: {out}"
+        );
+    }
 }

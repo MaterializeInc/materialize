@@ -9,18 +9,21 @@
 
 use std::collections::BTreeSet;
 
-use anyhow::bail;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use mz_repr::SqlColumnType;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::prelude::any;
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use self::proto_my_sql_column_desc::Meta;
+use crate::schema_change::{KeyRef, SchemaChange, SchemaChangeError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_mysql_util.rs"));
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlTableDesc {
     /// In MySQL the schema and database of a table are synonymous.
     pub schema_name: String,
@@ -31,11 +34,17 @@ pub struct MySqlTableDesc {
     /// The index of each column is based on its `ordinal_position`
     /// reported by the information_schema.columns table, which defines
     /// the order of column values when received in a row.
-    #[proptest(strategy = "proptest::collection::vec(any::<MySqlColumnDesc>(), 0..4)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::vec(any::<MySqlColumnDesc>(), 0..4)")
+    )]
     pub columns: Vec<MySqlColumnDesc>,
     /// Applicable keys for this table (i.e. primary key and unique
     /// constraints).
-    #[proptest(strategy = "proptest::collection::btree_set(any::<MySqlKeyDesc>(), 0..4)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::btree_set(any::<MySqlKeyDesc>(), 0..4)")
+    )]
     pub keys: BTreeSet<MySqlKeyDesc>,
 }
 
@@ -75,42 +84,64 @@ impl MySqlTableDesc {
     /// exceptions:
     /// - `self`'s columns are a prefix of `other`'s columns.
     /// - `self`'s keys are all present in `other`
-    pub fn determine_compatibility(&self, other: &MySqlTableDesc) -> Result<(), anyhow::Error> {
+    ///
+    /// On incompatibility, the error describes the first mismatch found and,
+    /// where possible, how to recover from it. The error text becomes the
+    /// permanent, user-visible error for the stalled table, so it must stand
+    /// on its own.
+    pub fn determine_compatibility(
+        &self,
+        other: &MySqlTableDesc,
+        binlog_full_metadata: bool,
+    ) -> Result<(), SchemaChangeError> {
         if self == other {
             return Ok(());
         }
 
         if self.schema_name != other.schema_name || self.name != other.name {
-            bail!(
-                "table name mismatch: self: {}.{}, other: {}.{}",
-                self.schema_name,
-                self.name,
-                other.schema_name,
-                other.name
-            );
+            return Err(self.build_schema_change_error(SchemaChange::TableRenamed));
         }
 
-        // `columns` is ordered by the ordinal_position of each column in the table,
-        // so as long as `self.columns` is a compatible prefix of `other.columns`, we can
-        // ignore extra columns from `other.columns`.
-        let mut other_columns = other.columns.iter();
-        for self_column in &self.columns {
-            let other_column = other_columns.next().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "column {} no longer present in table {}",
-                    self_column.name,
-                    self.name
-                )
-            })?;
-            if !self_column.is_compatible(other_column) {
-                bail!(
-                    "column {} in table {} has been altered",
-                    self_column.name,
-                    self.name
-                );
+        // In the case that we don't have full binlog row metadata, `columns` is ordered by the
+        // ordinal position of each column in the table, so as long as `self.columns` is a
+        // compatible prefix of `other.columns`, we can ignore extra columns from `other.columns`.
+        //
+        // If we do have full metadata, then we can match columns by name and just check that all
+        // columns in `self.columns` are present and compatible with columns in `other.columns`.
+        for (i, self_column) in self.columns.iter().enumerate() {
+            if self_column.column_type.is_none() {
+                // This is an excluded column and can be ignored.
+                continue;
+            }
+            let wire_idx = if !binlog_full_metadata {
+                // No column name metadata, so we match by index.
+                (i < other.columns.len()).then_some(i)
+            } else {
+                // This means the row from the binlog has column name included in the metadata,
+                // so we can match on that instead of position.
+                other
+                    .columns
+                    .iter()
+                    .position(|oc| oc.name.as_str() == self_column.name.as_str())
+            };
+
+            let dropped_column_error = || {
+                self.build_schema_change_error(SchemaChange::ColumnDropped {
+                    column: self_column.name.clone(),
+                })
+            };
+            let wire_idx = match wire_idx {
+                Some(idx) => idx,
+                None => return Err(dropped_column_error()),
+            };
+            let other_column = other
+                .columns
+                .get(wire_idx)
+                .ok_or_else(dropped_column_error)?;
+            if let Some(change) = self_column.get_incompatible_schema_change(other_column) {
+                return Err(self.build_schema_change_error(change));
             }
         }
-
         // Our keys are all still present in exactly the same shape.
         // TODO: Implement a more relaxed key compatibility check:
         // We should check that for all keys that we know about there exists an upstream key whose
@@ -119,22 +150,40 @@ impl MySqlTableDesc {
         // up of columns (a, b) and key2 made up of columns (a, c) but now the table only has a
         // single unique key of just the column a then it's compatible because {a} ⊆ {a, b} and
         // {a} ⊆ {a, c}.
-        if self.keys.difference(&other.keys).next().is_some() {
-            bail!(
-                "keys in table {} have been altered: self: {:?}, other: {:?}",
-                self.name,
-                self.keys,
-                other.keys
-            );
+        if let Some(key) = self.keys.difference(&other.keys).next() {
+            let still_exists = other.keys.iter().any(|k| k.name == key.name);
+            let key = KeyRef {
+                name: key.name.clone(),
+                is_primary: key.is_primary,
+                columns: key.columns.clone(),
+            };
+            let change = if still_exists {
+                SchemaChange::KeyAltered { key }
+            } else {
+                SchemaChange::KeyDropped { key }
+            };
+            return Err(self.build_schema_change_error(change));
         }
 
         Ok(())
     }
+
+    pub fn build_schema_change_error(&self, change: SchemaChange) -> SchemaChangeError {
+        SchemaChangeError {
+            schema_name: self.schema_name.clone(),
+            name: self.name.clone(),
+            change,
+        }
+    }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlColumnMetaEnum {
-    #[proptest(strategy = "proptest::collection::vec(any::<String>(), 0..3)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::vec(any::<String>(), 0..3)")
+    )]
     pub values: Vec<String>,
 }
 
@@ -156,7 +205,8 @@ trait IsCompatible {
     fn is_compatible(&self, other: &Self) -> bool;
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum MySqlColumnMeta {
     /// The described column is an enum, with the given possible values.
     Enum(MySqlColumnMetaEnum),
@@ -202,7 +252,8 @@ impl IsCompatible for Option<MySqlColumnMeta> {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlColumnDesc {
     /// The name of the column.
     pub name: String,
@@ -257,37 +308,47 @@ impl RustType<ProtoMySqlColumnDesc> for MySqlColumnDesc {
     }
 }
 
-impl IsCompatible for MySqlColumnDesc {
-    /// Determines if two `MySqlColumnDesc` are compatible with one another in
-    /// a way that Materialize can handle.
-    fn is_compatible(&self, other: &MySqlColumnDesc) -> bool {
-        self.name == other.name
-            && match (&self.column_type, &other.column_type) {
-                (None, None) => true,
-                (Some(self_type), Some(other_type)) => {
-                    self_type.scalar_type == other_type.scalar_type
-                    // Columns are compatible if:
-                    // - self is nullable; introducing a not null constraint doesn't
-                    //   change this column's behavior.
-                    // - self and other are both not nullable
-                    && (self_type.nullable || self_type.nullable == other_type.nullable)
+impl MySqlColumnDesc {
+    /// The first change that makes a column shaped like `other` incompatible
+    /// with `self`, or `None` if `other` can be ingested as `self`.
+    fn get_incompatible_schema_change(&self, other: &MySqlColumnDesc) -> Option<SchemaChange> {
+        let column = self.name.clone();
+        if self.name != other.name {
+            return Some(SchemaChange::ColumnDropped { column });
+        }
+        if !self.meta.is_compatible(&other.meta) {
+            return Some(SchemaChange::ColumnTypeChanged { column });
+        }
+        match (&self.column_type, &other.column_type) {
+            (None, None) => None,
+            (Some(self_type), Some(other_type)) => {
+                if self_type.scalar_type != other_type.scalar_type {
+                    return Some(SchemaChange::ColumnTypeChanged { column });
                 }
-                (Some(_), None) => false,
-                (None, Some(_)) => false,
+                // A nullable column stays compatible when upstream adds NOT
+                // NULL. Only losing a NOT NULL that we recorded is a change.
+                if !self_type.nullable && other_type.nullable {
+                    return Some(SchemaChange::NotNullDropped { column });
+                }
+                None
             }
-            // Ensure any column metadata is compatible
-            && self.meta.is_compatible(&other.meta)
+            (Some(_), None) | (None, Some(_)) => Some(SchemaChange::ColumnTypeChanged { column }),
+        }
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Ord, PartialOrd, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Ord, PartialOrd)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct MySqlKeyDesc {
     /// The name of the index.
     pub name: String,
     /// Whether or not this key is the primary key.
     pub is_primary: bool,
     /// The columns that make up the key.
-    #[proptest(strategy = "proptest::collection::vec(any::<String>(), 0..4)")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "proptest::collection::vec(any::<String>(), 0..4)")
+    )]
     pub columns: Vec<String>,
 }
 

@@ -36,8 +36,7 @@ class ScalabilityFrameworkResultStorage(BaseDataStorage):
         sql_statements = []
 
         for result_entry in results:
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                     INSERT INTO scalability_framework_result
                     (
                         build_job_id,
@@ -59,7 +58,6 @@ class ScalabilityFrameworkResultStorage(BaseDataStorage):
                         {result_entry.count},
                         {result_entry.tps}
                     ;
-                    """
-            )
+                    """)
 
         self.database_connector.add_update_statements(sql_statements)

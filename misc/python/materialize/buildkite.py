@@ -10,7 +10,6 @@
 """Buildkite utilities."""
 
 import os
-import subprocess
 from collections.abc import Callable
 from enum import Enum, auto
 from pathlib import Path
@@ -19,8 +18,6 @@ from typing import Any, TypeVar
 import yaml
 
 from materialize import git, spawn, ui
-
-T = TypeVar("T")
 
 
 class BuildkiteEnvVar(Enum):
@@ -158,16 +155,18 @@ def find_modified_lines() -> set[tuple[str, int]]:
 
 
 def upload_artifact(path: Path | str, cwd: Path | None = None, quiet: bool = False):
-    spawn.runv(
-        [
-            "buildkite-agent",
-            "artifact",
-            "upload",
-            "--log-level",
-            "fatal" if quiet else "notice",
-            path,
-        ],
-        cwd=cwd,
+    spawn.run_with_retries(
+        lambda: spawn.runv(
+            [
+                "buildkite-agent",
+                "artifact",
+                "upload",
+                "--log-level",
+                "fatal" if quiet else "notice",
+                path,
+            ],
+            cwd=cwd,
+        )
     )
 
 
@@ -181,12 +180,27 @@ def get_parallelism_count() -> int:
     return int(get_var(BuildkiteEnvVar.BUILDKITE_PARALLEL_JOB_COUNT, 1))
 
 
+# Accumulates across shard_list calls because a workflow can shard multiple
+# lists (e.g. sqllogictest shards each step's file list separately). Each
+# upload overwrites the key with the accumulated items so far.
+_shard_info_items: list[str] = []
+
+
 def _upload_shard_info_metadata(items: list[str]) -> None:
+    _shard_info_items.extend(items)
+    # The label is unique per parallel job (mkpipeline appends the shard
+    # number), so shards don't overwrite each other's entry.
     label = get_var(BuildkiteEnvVar.BUILDKITE_LABEL) or get_var(
         BuildkiteEnvVar.BUILDKITE_STEP_KEY
     )
     spawn.runv(
-        ["buildkite-agent", "meta-data", "set", f"Shard for {label}", ", ".join(items)]
+        [
+            "buildkite-agent",
+            "meta-data",
+            "set",
+            f"Shard for {label}",
+            ", ".join(_shard_info_items),
+        ]
     )
 
 
@@ -211,6 +225,9 @@ def notify_qa_team_about_failure(failure: str) -> None:
     spawn.runv(
         ["buildkite-agent", "pipeline", "upload"], stdin=yaml.dump(pipeline).encode()
     )
+
+
+T = TypeVar("T")
 
 
 def shard_list(items: list[T], to_identifier: Callable[[T], str]) -> list[T]:
@@ -271,23 +288,27 @@ def get_artifact_url(artifact: dict[str, Any]) -> str:
     return f"https://buildkite.com/organizations/{org}/pipelines/{pipeline}/builds/{build}/jobs/{artifact['job_id']}/artifacts/{artifact['id']}"
 
 
-def add_annotation_raw(style: str, markdown: str) -> None:
+def add_annotation_raw(style: str, markdown: str, context: str | None = None) -> None:
     """
     Note that this does not trim the data.
     :param markdown: must not exceed 1 MB
+    :param context: suffix of the annotation context after the job ID, defaults
+        to `style`. An annotation replaces an earlier one with the same context.
     """
     spawn.runv(
         [
             "buildkite-agent",
             "annotate",
             f"--style={style}",
-            f"--context={os.environ['BUILDKITE_JOB_ID']}-{style}",
+            f"--context={os.environ['BUILDKITE_JOB_ID']}-{context or style}",
         ],
         stdin=markdown.encode(),
     )
 
 
-def add_annotation(style: str, title: str, content: str) -> None:
+def add_annotation(
+    style: str, title: str, content: str, context: str | None = None
+) -> None:
     if style == "info":
         markdown = f"""<details><summary>{title}</summary>
 
@@ -297,7 +318,7 @@ def add_annotation(style: str, title: str, content: str) -> None:
         markdown = f"""{title}
 
 {truncate_annotation_str(content)}"""
-    add_annotation_raw(style, markdown)
+    add_annotation_raw(style, markdown, context)
 
 
 def get_job_url_from_build_url(build_url: str, build_job_id: str) -> str:
@@ -309,10 +330,3 @@ def get_job_url_from_pipeline_and_build(
 ) -> str:
     build_url = f"https://buildkite.com/materialize/{pipeline}/builds/{build_number}"
     return get_job_url_from_build_url(build_url, build_job_id)
-
-
-def get_build_status(build: str) -> str:
-    return spawn.capture(
-        ["buildkite-agent", "meta-data", "get", build],
-        stderr=subprocess.DEVNULL,
-    )

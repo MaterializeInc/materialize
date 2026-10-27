@@ -16,6 +16,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE replica_identity_default (f1 INTEGER, f2 INTEGER, f3 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE replica_identity_default REPLICA IDENTITY DEFAULT;
 INSERT INTO replica_identity_default VALUES (1,1,1), (2,2,2), (3,3,3), (4,4,4);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.replica_identity_default
 

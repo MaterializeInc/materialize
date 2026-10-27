@@ -113,8 +113,9 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 
 # Test that frontiers of introspection sources advance at all.
 
+# (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM mz_introspection.mz_active_peeks AS OF 0
-contains: Timestamp (0) is not valid for all inputs
+contains:imestamp
 
 # Test that logged subscribe frontiers advance beyond 0.
 
@@ -289,7 +290,7 @@ true true true true true
 
 # Cast to numeric to get its rounding behavior
 > SELECT records, (size::numeric/1024/1024)::int FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%vt5_idx'
-10000 1
+10000 0
 
 > DROP TABLE t5 CASCADE
 
@@ -417,6 +418,86 @@ true true true true true
 
 > DROP SOURCE counter CASCADE;
 
+# Test that each stage of a bucketed hierarchical reduction arranges only the
+# rows its buckets reject. Every group holds a single row, which wins its bucket
+# at every stage however the rows hash, so no stage's reduction may hold a
+# record. The stage inputs, which hold every row, guard against reading the
+# sizes before the dataflow has hydrated.
+> CREATE TABLE singletons (k int, v int);
+> INSERT INTO singletons SELECT g, g FROM generate_series(1, 1000) g;
+
+> CREATE MATERIALIZED VIEW singleton_max AS
+  SELECT k, MAX(v) FROM singletons GROUP BY k;
+
+> SELECT o.name, count(*), coalesce(sum(s.records), 0)
+  FROM mz_introspection.mz_dataflow_operator_dataflows o
+  LEFT JOIN mz_introspection.mz_arrangement_sizes s ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%singleton_max' AND
+    o.name IN ('Arranged MinsMaxesHierarchical input', 'Reduced Fallibly MinsMaxesHierarchical')
+  GROUP BY o.name
+"Arranged MinsMaxesHierarchical input" 7 7000
+"Reduced Fallibly MinsMaxesHierarchical" 7 0
+
+# Several aggregates share one hierarchy and pack one column each into the value
+# row. In a single-row group all aggregates pick the same row, so the winner still
+# equals its input.
+> CREATE MATERIALIZED VIEW singleton_min_max AS
+  SELECT k, MIN(v), MAX(v) FROM singletons GROUP BY k;
+
+> SELECT o.name, count(*), coalesce(sum(s.records), 0)
+  FROM mz_introspection.mz_dataflow_operator_dataflows o
+  LEFT JOIN mz_introspection.mz_arrangement_sizes s ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%singleton_min_max' AND
+    o.name IN ('Arranged MinsMaxesHierarchical input', 'Reduced Fallibly MinsMaxesHierarchical')
+  GROUP BY o.name
+"Arranged MinsMaxesHierarchical input" 7 7000
+"Reduced Fallibly MinsMaxesHierarchical" 7 0
+
+> DROP TABLE singletons CASCADE;
+
+# Test that MV sink correction buffers show up in mz_arrangement_sizes.
+# We use a replacement MV to keep the correction buffer filled with data while
+# we inspect it.
+
+> CREATE TABLE t_mv_sink (a INT, b TEXT)
+> INSERT INTO t_mv_sink VALUES (1, 'one'), (2, 'two'), (3, 'three')
+
+> CREATE MATERIALIZED VIEW mv_sink_test
+  AS SELECT a, b FROM t_mv_sink
+> CREATE REPLACEMENT MATERIALIZED VIEW rp_sink_test FOR mv_sink_test
+  AS SELECT a * 2 AS a, b FROM t_mv_sink
+
+> SELECT COUNT(*)
+  FROM mz_introspection.mz_arrangement_sizes s
+  JOIN mz_introspection.mz_dataflow_operator_dataflows o ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%_sink_test' AND
+    o.name LIKE 'mv_sink%'
+2
+
+# Since the source table contains three records, and all of them get replaced,
+# there must be at least six records in the correction buffer: three -1s and
+# three +1s.
+> SELECT records >= 6, batches > 0, size > 0, capacity > 0, allocations > 0
+  FROM mz_introspection.mz_arrangement_sizes s
+  JOIN mz_introspection.mz_dataflow_operator_dataflows o ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%rp_sink_test' AND
+    o.name LIKE 'mv_sink%'
+true true true true true
+
+> DROP TABLE t_mv_sink CASCADE
+
+> SELECT COUNT(*)
+  FROM mz_introspection.mz_arrangement_sizes s
+  JOIN mz_introspection.mz_dataflow_operator_dataflows o ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%_sink_test' AND
+    o.name LIKE 'mv_sink%'
+0
+
 # Test dataflow error introspection.
 
 > CREATE TABLE zeros (a int)
@@ -447,7 +528,7 @@ mv_div_by_zero   1
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 3
-idx2_div_by_zero 3
+idx2_div_by_zero 1
 mv_div_by_zero   3
 
 > DELETE FROM zeros
@@ -466,7 +547,7 @@ mv_div_by_zero   3
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 2
-idx2_div_by_zero 2
+idx2_div_by_zero 1
 mv_div_by_zero   2
 
 > DROP INDEX idx1_div_by_zero
@@ -475,7 +556,7 @@ mv_div_by_zero   2
   FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
-idx2_div_by_zero 2
+idx2_div_by_zero 1
 mv_div_by_zero   2
 
 > DROP MATERIALIZED VIEW mv_div_by_zero
@@ -533,6 +614,39 @@ idx3_div_by_zero 3
   FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
+
+# Regression test for database-issues#11314: mz_dataflow_global_ids
+# declared a false unique key on `id`, which caused the optimizer to
+# drop `DISTINCT id` and return the wrong number of dataflows when a
+# single dataflow hosts multiple global IDs (e.g. an index that inlines
+# a view).
+
+> CREATE TABLE t_gid (x INT NOT NULL, y INT, z TEXT)
+> CREATE VIEW v_gid AS
+    SELECT t1.x, t1.z AS z1, t2.z AS z2
+    FROM t_gid AS t1, t_gid AS t2
+    WHERE t1.x = t2.y
+> CREATE INDEX v_gid_idx ON v_gid (x)
+
+# The index dataflow hosts two global IDs (the view and the index).
+> SELECT COUNT(*)
+  FROM mz_introspection.mz_dataflow_global_ids dgi
+  JOIN mz_introspection.mz_compute_exports ce ON dgi.id = ce.dataflow_id
+  JOIN mz_objects o ON ce.export_id = o.id
+  WHERE o.name = 'v_gid_idx'
+2
+
+# `DISTINCT id` must collapse those two rows to one.
+> SELECT COUNT(*) FROM (
+    SELECT DISTINCT dgi.id
+    FROM mz_introspection.mz_dataflow_global_ids dgi
+    JOIN mz_introspection.mz_compute_exports ce ON dgi.id = ce.dataflow_id
+    JOIN mz_objects o ON ce.export_id = o.id
+    WHERE o.name = 'v_gid_idx'
+  )
+1
+
+> DROP TABLE t_gid CASCADE
 
 # Cleanup.
 > DROP CLUSTER test CASCADE

@@ -21,7 +21,7 @@ securely store each credential in Materialize's secret management system.
 Credentials that are generally not sensitive (like usernames and SSL
 certificates) can be specified as plain `text`, or also stored as secrets.
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ## Source and sink connections
 
@@ -30,8 +30,9 @@ certificates) can be specified as plain `text`, or also stored as secrets.
 An Amazon Web Services (AWS) connection provides Materialize with access to an
 Identity and Access Management (IAM) user or role in your AWS account. You can
 use AWS connections to perform [bulk exports to Amazon S3](/serve-results/s3/),
-perform [authentication with an Amazon MSK cluster](#kafka-aws-connection), or
-perform [authentication with an Amazon RDS MySQL database](#mysql-aws-connection).
+perform [authentication with an Amazon MSK cluster](#kafka-aws-connection),
+perform [authentication with an Amazon RDS MySQL database](#mysql-aws-connection),
+or [authenticate to an AWS Glue Schema Registry](#aws-glue-schema-registry).
 
 {{% include-syntax file="examples/create_connection" example="syntax-aws" %}}
 
@@ -161,9 +162,10 @@ CREATE CONNECTION aws_credentials TO AWS (
 {{< /tabs >}}
 
 ### S3 compatible object storage
-You can use an AWS connection to perform bulk exports to any S3 compatible object storage service,
-such as Google Cloud Storage. While connecting to S3 compatible object storage, you need to provide
-static access key credentials, specify the endpoint, and the region.
+You can use an AWS connection to perform bulk exports ([`COPY TO`](/sql/copy-to)) and bulk imports ([`COPY FROM`](/sql/copy-from)) with any S3 compatible object
+storage service, such as Google Cloud Storage, Cloudflare R2, or MinIO. While connecting to S3
+compatible object storage, you need to provide static access key credentials, specify the endpoint,
+and the region.
 
 To create a connection that uses static access key credentials:
 
@@ -176,6 +178,29 @@ CREATE CONNECTION gcs_connection TO AWS (
     REGION = 'us'
 );
 ```
+
+If you are exporting to Google Cloud Storage using [Iceberg sinks](/sql/create-sink/iceberg), use a [GCP connection](#gcp).
+
+### GCP
+{{< private-preview />}}
+
+You can use a GCP connection to export data to
+[Lakehouse/BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog)
+via [Iceberg sinks](/sql/create-sink/iceberg).
+
+The GCP connection uses a [GCP service account key
+(JSON)](https://docs.cloud.google.com/iam/docs/keys-create-delete) to
+authenticate. Create a [GCP service
+account](https://docs.cloud.google.com/iam/docs/service-account-overview) for
+Materialize to use and generate a [service account
+key](https://docs.cloud.google.com/iam/docs/keys-create-delete) in JSON format.
+Base64-encode the entire JSON key (e.g., `base64 < sa_key.json`) and decode it
+in the `CREATE SECRET` statement, as shown below. This avoids escaping quotes
+and newlines in the SQL string literal.
+
+#### Syntax {#gcp-syntax}
+
+{{% include-syntax file="examples/create_connection" example="syntax-gcp" %}}
 
 ### Kafka
 
@@ -316,11 +341,46 @@ SSH bastion host.
 {{< tabs >}}
 {{< tab "AWS PrivateLink (Materialize Cloud)">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 Depending on the hosted service you are connecting to, you might need to specify
-a PrivateLink connection [per advertised broker](#kafka-privatelink-syntax)
-(e.g. Amazon MSK), or a single [default PrivateLink connection](#kafka-privatelink-default) (e.g. Redpanda Cloud).
+a PrivateLink connection and [per-availability-zone routing rules for brokers](#kafka-privatelinks) (e.g. Confluent Cloud),
+a PrivateLink connection [per advertised broker](#kafka-privatelink-syntax) (e.g. Amazon MSK),
+or a single [default PrivateLink connection](#kafka-privatelink-default) (e.g. Redpanda Cloud).
+
+##### Dynamic broker discovery {#kafka-privatelinks}
+
+Confluent Cloud does not require listing every broker individually.
+Instead, include a static broker address for the initial connection
+alongside wildcard `MATCHING` rules for routing dynamically discovered
+brokers through PrivateLink.
+
+{{% include-syntax file="examples/create_connection" example="syntax-kafka-aws-privatelinks" %}}
+
+The static broker address is used to bootstrap the initial connection to
+Kafka. It does not require an `AVAILABILITY ZONE` — Materialize will
+attempt all configured availability zones to find it.
+
+After bootstrapping, Kafka returns the addresses of all brokers in the
+cluster. The `MATCHING` rules route these discovered brokers through the
+correct AZ-specific PrivateLink endpoint based on their advertised
+hostname.
+
+```mzsql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+
+CREATE CONNECTION kafka_connection TO KAFKA (
+    BROKERS (
+        'lkc-xxx.domyyy.us-east-1.aws.confluent.cloud:9092'
+            USING AWS PRIVATELINK privatelink_svc,
+        MATCHING '*.use1-az1.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE = 'use1-az1'),
+        MATCHING '*.use1-az4.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE = 'use1-az4')
+    )
+);
+```
 
 ##### Broker connection syntax {#kafka-privatelink-syntax}
 
@@ -346,7 +406,7 @@ broker that you want to connect to via the tunnel.
 Field                                   | Value            | Required | Description
 ----------------------------------------|------------------|:--------:|-------------------------------
 `AWS PRIVATELINK`                       | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic for this broker should be routed.
-`AVAILABILITY ZONE`                     | `text`           |          | The ID of the availability zone of the AWS PrivateLink service in which the broker is accessible. If unspecified, traffic will be routed to each availability zone declared in the [AWS PrivateLink connection](#aws-privatelink) in sequence until the correct availability zone for the broker is discovered. If specified, Materialize will always route connections via the specified availability zone.
+`AVAILABILITY ZONE`                     | `text`           |          | The ID of the availability zone of the AWS PrivateLink service in which the broker is accessible.
 `PORT`                                  | `integer`        |          | The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
 
 ##### Example {#kafka-privatelink-example}
@@ -379,20 +439,13 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 
 ##### Default connections {#kafka-privatelink-default}
 
-[Redpanda Cloud](/ingest-data/redpanda/redpanda-cloud/)) does not require
+[Redpanda Cloud](/ingest-data/redpanda/redpanda-cloud/) does not require
 listing every broker individually. In this case, you should specify a
 PrivateLink connection and the port of the bootstrap server instead.
 
 ##### Default connection syntax {#kafka-privatelink-default-syntax}
 
 {{% include-syntax file="examples/create_connection" example="syntax-kafka-default-aws-privatelink" %}}
-
-##### Default connection options {#kafka-privatelink-default-options}
-
-Field                                   | Value            | Required | Description
-----------------------------------------|------------------|:--------:|-------------------------------
-`AWS PRIVATELINK`                       | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic for this broker should be routed.
-`PORT`                                  | `integer`        |          | The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
 
 ##### Example {#kafka-privatelink-default-example}
 
@@ -480,7 +533,7 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 
 A Confluent Schema Registry connection establishes a link to a [Confluent Schema
 Registry] server. You can use Confluent Schema Registry connections in the
-[`FORMAT`] clause of [`CREATE SOURCE`] and [`CREATE SINK`] statements.
+`FORMAT` clause of [`CREATE SOURCE`] and [`CREATE SINK`] statements.
 
 #### Syntax {#csr-syntax}
 
@@ -529,7 +582,7 @@ you can tunnel the connection through an AWS PrivateLink service (Materialize Cl
 {{< tabs >}}
 {{< tab "AWS PrivateLink (Materialize Cloud)">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ##### Example {#csr-privatelink-example}
 
@@ -566,6 +619,103 @@ CREATE CONNECTION csr_ssh TO CONFLUENT SCHEMA REGISTRY (
 {{< /tab >}}
 {{< /tabs >}}
 
+### AWS Glue Schema Registry
+
+{{< public-preview />}}
+
+An AWS Glue Schema Registry connection establishes a link to an [AWS Glue Schema
+Registry]. You can use AWS Glue Schema Registry connections in the `FORMAT`
+clause of [`CREATE SOURCE`] statements to decode Avro-encoded messages, and of
+[`CREATE SINK`] statements to encode them, with schemas managed in AWS Glue.
+
+The connection authenticates to AWS through a separate [AWS connection](#aws),
+which supplies the credentials and region. See [AWS](#aws) for how to grant
+Materialize access to your AWS account.
+
+#### Syntax {#glue-syntax}
+
+{{% include-syntax file="examples/create_connection" example="syntax-glue" %}}
+
+#### Examples {#glue-example}
+
+```mzsql
+CREATE CONNECTION aws_conn TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::123456789000:role/MaterializeGlue'
+);
+
+CREATE CONNECTION glue_conn TO AWS GLUE SCHEMA REGISTRY (
+    AWS CONNECTION = aws_conn,
+    REGISTRY = 'default-registry'
+);
+```
+
+#### Permissions {#glue-permissions}
+
+The IAM role assumed by the [AWS connection](#aws) must be allowed to access the
+registry. Sources only read. Sinks also register schemas. Materialize uses the
+following AWS Glue actions:
+
+| Action | When it is used |
+|--------|-----------------|
+| `glue:GetRegistry` | At connection creation, to validate the connection. Only required when `VALIDATE` is `true` (the default). |
+| `glue:GetSchemaVersion` | Source: when the source is created, to pin the schema, and at runtime, to fetch the writer schema for each new schema version encountered. Sink: to poll a newly registered schema version until it becomes available. Always required. |
+| `glue:GetSchemaByDefinition` | Sink, to find an existing version matching the schema being registered. |
+| `glue:RegisterSchemaVersion` | Sink, to add a version to an existing schema. |
+| `glue:CreateSchema` | Sink, to create a schema on its first publish. |
+| `glue:GetSchema` | Sink, to read an existing schema's compatibility level and warn when it differs from the requested one. Optional. |
+
+A least-privilege policy for a source, scoped to a single registry, grants only
+the read actions:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "glue:GetRegistry",
+                "glue:GetSchemaVersion"
+            ],
+            "Resource": [
+                "arn:aws:glue:<region>:<account>:registry/<registry-name>",
+                "arn:aws:glue:<region>:<account>:schema/<registry-name>/*"
+            ]
+        }
+    ]
+}
+```
+
+A sink additionally needs the schema-write actions on the same resources:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "glue:GetRegistry",
+                "glue:GetSchemaVersion",
+                "glue:GetSchemaByDefinition",
+                "glue:RegisterSchemaVersion",
+                "glue:CreateSchema",
+                "glue:GetSchema"
+            ],
+            "Resource": [
+                "arn:aws:glue:<region>:<account>:registry/<registry-name>",
+                "arn:aws:glue:<region>:<account>:schema/<registry-name>/*"
+            ]
+        }
+    ]
+}
+```
+
+If you create the connection with `WITH (VALIDATE = false)`, you can omit
+`glue:GetRegistry`. The registry itself must already exist. Materialize sinks
+create and version schemas within it but never create the registry. For details
+on creating and authorizing the AWS connection, see [AWS](#aws).
+
 ### MySQL
 
 A MySQL connection establishes a link to a [MySQL] server. You can use
@@ -597,7 +747,7 @@ SSH bastion host.
 {{< tabs >}}
 {{< tab "AWS PrivateLink (Materialize Cloud)">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ##### Example {#mysql-privatelink-example}
 
@@ -696,7 +846,7 @@ the connection through an AWS PrivateLink service (Materialize Cloud)or an SSH b
 {{< tabs >}}
 {{< tab "AWS PrivateLink">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 ##### Example {#postgres-privatelink-example}
 
@@ -771,13 +921,118 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
 );
 ```
 
+### Iceberg Catalog
+
+{{< public-preview />}}
+
+An Iceberg catalog connection establishes a link to an [Apache Iceberg](https://iceberg.apache.org/)
+catalog. You can use Iceberg catalog connections to create [Iceberg sinks](/sql/create-sink/iceberg).
+
+Materialize supports the following catalog type and destination combinations:
+
+| Catalog type | Destination | Authentication |
+| --- | --- | --- |
+| `'s3tablesrest'` | [AWS S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) | [AWS connection](#aws) |
+| `'rest'` | [Google Cloud BigLake](https://docs.cloud.google.com/lakehouse/docs/lakehouse-iceberg-rest-catalog) {{< private-preview-inline />}} | [GCP connection](#gcp) |
+| `'rest'` | Any [Iceberg REST catalog](https://iceberg.apache.org/spec/), including [Databricks Unity Catalog](/export-data/iceberg-databricks/) | OAuth2 credentials in a secret |
+
+#### Syntax {#iceberg-catalog-syntax}
+
+{{< tabs >}}
+{{< tab "AWS S3 Tables" >}}
+
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-s3tables" %}}
+
+{{< /tab >}}
+{{< tab "GCP BigLake" >}}
+
+{{< private-preview />}}
+
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-biglake" %}}
+
+{{< /tab >}}
+{{< tab "Iceberg REST catalog" >}}
+
+{{< public-preview />}}
+
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog-rest" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
+
+#### Examples {#iceberg-catalog-examples}
+
+{{< tabs >}}
+{{< tab "AWS S3 Tables" >}}
+
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-connection" %}}
+
+{{< /tab >}}
+{{< tab "GCP BigLake" >}}
+
+{{< private-preview />}}
+
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-gcp-connection" %}}
+
+{{< /tab >}}
+{{< tab "Iceberg REST catalog" >}}
+
+{{< public-preview />}}
+
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-databricks-connection" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
+
+#### Storage access delegation {#iceberg-catalog-access-delegation}
+
+Some Iceberg catalogs manage the object storage behind their tables and mint
+temporary, table-scoped credentials for it on request, rather than expecting
+clients to hold credentials of their own. The Iceberg specification calls this
+credential vending.
+
+The `ACCESS DELEGATION` option asks the catalog to vend credentials:
+
+| | |
+| --- | --- |
+| **Value** | `'vended-credentials'`. This is the only accepted value. |
+| **Default** | Unset, meaning Materialize does not request delegation. |
+| **Valid with** | `CATALOG TYPE = 'rest'`, using either `CREDENTIAL` or `GCP CONNECTION`. Not supported for `CATALOG TYPE = 's3tablesrest'`, which authenticates to storage through an [AWS connection](#aws). |
+
+Exactly one source of storage credentials is used, determined by how the
+connection is configured. There is no fallback between them:
+
+| Connection | Storage credentials used |
+| --- | --- |
+| `CATALOG TYPE = 'rest'` with `CREDENTIAL` and `ACCESS DELEGATION` | Only the table-scoped credentials the catalog vends, refreshed as they expire. Any storage credentials the catalog returns in its configuration are ignored. |
+| `CATALOG TYPE = 'rest'` with `CREDENTIAL` and no `ACCESS DELEGATION` | Only the storage credentials the catalog returns in its configuration. |
+| `CATALOG TYPE = 'rest'` with `GCP CONNECTION` and `ACCESS DELEGATION` | Only the table-scoped credentials the catalog vends, refreshed as they expire. The GCP connection's service account then authenticates the catalog alone. |
+| `CATALOG TYPE = 'rest'` with `GCP CONNECTION` and no `ACCESS DELEGATION` | Only the GCP connection's service account. |
+| `CATALOG TYPE = 's3tablesrest'` | Only the AWS connection's credentials, for both the catalog and its storage. |
+
+Delegation is opt-in rather than always requested, because a catalog that gates
+it behind privileges the principal does not hold rejects the whole request
+rather than falling back. Requesting it unconditionally would break connections
+that work today.
+
+Some catalogs, including [Databricks Unity
+Catalog](/export-data/iceberg-databricks/), vend
+credentials as the only
+way to reach their storage, so `ACCESS DELEGATION` is required there rather than
+optional.
+
+For more information about using Iceberg sinks, see the [Iceberg sink documentation](/export-data/iceberg/).
+
 ## Network security connections
 
 
 
 ### AWS PrivateLink (Materialize Cloud) {#aws-privatelink}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+{{% include-headless "/headless/aws-privatelink-cloud-only-note" %}}
 
 An AWS PrivateLink connection establishes a link to an [AWS PrivateLink] service.
 You can use AWS PrivateLink connections in [Confluent Schema Registry connections](#confluent-schema-registry),
@@ -912,6 +1167,7 @@ Connection type             | Validated by default |
 AWS                         |                      |
 Kafka                       | ✓                    |
 Confluent Schema Registry   | ✓                    |
+AWS Glue Schema Registry    | ✓                    |
 MySQL                       | ✓                    |
 PostgreSQL                  | ✓                    |
 SSH Tunnel                  |                      |
@@ -932,8 +1188,7 @@ completed.
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-connection.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/create-connection" %}}
 
 ## Related pages
 
@@ -943,6 +1198,7 @@ The privileges required to execute this statement are:
 
 [AWS PrivateLink]: https://aws.amazon.com/privatelink/
 [Confluent Schema Registry]: https://docs.confluent.io/platform/current/schema-registry/index.html#sr-overview
+[AWS Glue Schema Registry]: https://docs.aws.amazon.com/glue/latest/dg/schema-registry.html
 [Kafka]: https://kafka.apache.org
 [MySQL]: https://www.mysql.com/
 [PostgreSQL]: https://www.postgresql.org
@@ -950,7 +1206,6 @@ The privileges required to execute this statement are:
 [`ALTER CONNECTION`]: /sql/alter-connection
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE SINK`]: /sql/create-sink
-[`FORMAT`]: /sql/create-source/#formats
 [`mz_aws_privatelink_connections`]: /sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections
 [`mz_connections`]: /sql/system-catalog/mz_catalog/#mz_connections
 [`mz_ssh_tunnel_connections`]: /sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections

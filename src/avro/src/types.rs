@@ -166,8 +166,8 @@ pub enum Value {
     Uuid(uuid::Uuid),
 }
 
-/// Any structure implementing the [ToAvro](trait.ToAvro.html) trait will be usable
-/// from a [Writer](../writer/struct.Writer.html).
+/// Any structure implementing the [`ToAvro`] trait will be usable
+/// from a [`Writer`](crate::Writer).
 pub trait ToAvro {
     /// Transforms this value into an Avro-compatible [`Value`].
     fn avro(self) -> Value;
@@ -351,7 +351,7 @@ impl ToAvro for JsonValue {
 }
 
 impl Value {
-    /// Validate the value against the given [Schema](../schema/enum.Schema.html).
+    /// Validate the value against the given [`Schema`](crate::Schema).
     ///
     /// See the [Avro specification](https://avro.apache.org/docs/++version++/specification/)
     /// for the full set of rules of schema validation.

@@ -20,10 +20,10 @@
 
 use mz_expr::CollectionPlan;
 use mz_repr::GlobalId;
-use mz_repr::namespaces::is_system_schema;
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
     ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
+    SubscribePlan,
 };
 use smallvec::SmallVec;
 
@@ -41,6 +41,16 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
     session: &'s Session,
     plan: &'p Plan,
 ) -> TargetCluster {
+    let inspect_subscribe = |plan: &SubscribePlan| {
+        (
+            plan.from.depends_on(),
+            match &plan.from {
+                SubscribeFrom::Id(_) => false,
+                SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
+            },
+        )
+    };
+
     let (depends_on, could_run_expensive_function) = match plan {
         Plan::Select(plan) => (
             plan.source.depends_on(),
@@ -50,13 +60,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
             plan.select_plan.source.depends_on(),
             plan.select_plan.source.could_run_expensive_function(),
         ),
-        Plan::Subscribe(plan) => (
-            plan.from.depends_on(),
-            match &plan.from {
-                SubscribeFrom::Id(_) => false,
-                SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
-            },
-        ),
+        Plan::Subscribe(plan) => inspect_subscribe(plan),
         Plan::ExplainPlan(ExplainPlanPlan {
             explainee: Explainee::Statement(ExplaineeStatement::Select { plan, .. }),
             ..
@@ -64,6 +68,10 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
             plan.source.depends_on(),
             plan.source.could_run_expensive_function(),
         ),
+        Plan::ExplainPlan(ExplainPlanPlan {
+            explainee: Explainee::Statement(ExplaineeStatement::Subscribe { plan, .. }),
+            ..
+        }) => inspect_subscribe(plan),
         Plan::ExplainTimestamp(ExplainTimestampPlan { raw_plan, .. }) => (
             raw_plan.depends_on(),
             raw_plan.could_run_expensive_function(),
@@ -75,7 +83,6 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::CreateNetworkPolicy(_)
         | Plan::CreateCluster(_)
         | Plan::CreateClusterReplica(_)
-        | Plan::CreateContinualTask(_)
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateSecret(_)
@@ -84,6 +91,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::CreateView(_)
         | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
+        | Plan::CreateMetricSink(_)
         | Plan::CreateType(_)
         | Plan::Comment(_)
         | Plan::DiscardTemp
@@ -103,7 +111,18 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AbortTransaction(_)
         | Plan::CopyFrom(_)
         | Plan::CopyTo(_)
-        | Plan::ExplainPlan(_)
+        | Plan::ExplainPlan(ExplainPlanPlan {
+            explainee:
+                Explainee::Statement(
+                    // Explicitly list all enum variants, to avoid bugs when somebody
+                    // adds a new variant (e.g., for `Plan::Execute`).
+                    ExplaineeStatement::CreateView { .. }
+                    | ExplaineeStatement::CreateMaterializedView { .. }
+                    | ExplaineeStatement::CreateIndex { .. },
+                ),
+            ..
+        })
+        | Plan::ExplainPlan(ExplainPlanPlan { explainee: _, .. })
         | Plan::ExplainPushdown(_)
         | Plan::ExplainSinkSchema(_)
         | Plan::Insert(_)
@@ -118,6 +137,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)
         | Plan::AlterRetainHistory(_)
+        | Plan::AlterSourceTimestampInterval(_)
         | Plan::AlterSchemaRename(_)
         | Plan::AlterSchemaSwap(_)
         | Plan::AlterSecret(_)
@@ -215,21 +235,37 @@ pub fn check_cluster_restrictions(
     // 'mz_catalog_server' cluster to be "read-only", which restricts these actions.
     let depends_on: Box<dyn Iterator<Item = GlobalId>> = match plan {
         Plan::ReadThenWrite(plan) => Box::new(plan.selection.depends_on().into_iter()),
+        // A non-constant INSERT runs its selection as a peek on the active
+        // cluster. The `ReadThenWrite` arm above does not cover it, because
+        // the INSERT is rewritten into a read-then-write only later, during
+        // sequencing, without passing through this check again. A constant
+        // INSERT has no dependencies and passes the check below, which is
+        // fine because it never runs computation on the cluster.
+        Plan::Insert(plan) => Box::new(plan.values.depends_on().into_iter()),
         Plan::Subscribe(plan) => match plan.from {
             SubscribeFrom::Id(id) => Box::new(std::iter::once(id)),
             SubscribeFrom::Query { ref expr, .. } => Box::new(expr.depends_on().into_iter()),
         },
         Plan::Select(plan) => Box::new(plan.source.depends_on().into_iter()),
+        // COPY ... TO <url> runs its select as a dataflow on the active
+        // cluster. COPY ... TO STDOUT is planned as `Plan::Select` and is
+        // covered above.
+        Plan::CopyTo(plan) => Box::new(plan.select_plan.source.depends_on().into_iter()),
         _ => return Ok(()),
     };
 
     // Collect any items that are not allowed to be run on the catalog server cluster.
+    //
+    // Note: We decide whether an item is a system item by the identity of its
+    // schema, not the schema's name. A user-created schema can shadow a system
+    // schema name (`information_schema`) and must not bypass the restriction.
     let unallowed_dependents: SmallVec<[String; 2]> = depends_on
         .filter_map(|id| {
             let item = catalog.get_item_by_global_id(&id);
-            let full_name = catalog.resolve_full_name(item.name());
+            let schema_spec = item.name().qualifiers.schema_spec;
 
-            if !is_system_schema(&full_name.schema) {
+            if !catalog.is_system_schema_specifier(schema_spec) {
+                let full_name = catalog.resolve_full_name(item.name());
                 Some(full_name.to_string())
             } else {
                 None

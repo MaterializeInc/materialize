@@ -6,16 +6,16 @@ menu:
     parent: 'create-source'
     name: "PostgreSQL (New Syntax)"
     identifier: 'create-source-postgresql-v2'
-    weight: 22
+    weight: 20
 ---
-
-{{< private-preview />}}
 
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/postgres/)" include_blurb=true >}}
 
 {{% create-source-intro external_source="PostgreSQL" version="11+"
-create_table="/sql/create-table/" %}}
+create_table="/sql/create-table/postgres/" %}}
+
+PostgreSQL 16+ is required for connecting Materialize to a physical replica.
 
 ## Prerequisites
 
@@ -24,7 +24,7 @@ name="postgres-source-prereq" %}}
 
 ## Syntax
 
-{{% include-syntax file="examples/create_source/example_postgres_source"
+{{% include-syntax file="examples/create_source_postgres"
 example="syntax" %}}
 
 ## Details
@@ -44,26 +44,22 @@ SOURCE`](/sql/create-table/) allows for the handling of certain upstream DDL
 changes without downtime.
 
 See [`CREATE TABLE FROM
-SOURCE`](/sql/create-table/#handling-table-schema-changes) for details.
+SOURCE`](/sql/create-table/postgres/#handling-table-schema-changes) for details.
+
+See also [Handling upstream operations](#handling-upstream-operations) for
+additional upstream operation considerations.
 
 #### Supported types
 
 With the new syntax, after a PostgreSQL source is created, you [`CREATE TABLE
 FROM SOURCE`](/sql/create-table/) to create a corresponding table in
-Matererialize and start ingesting data.
+Materialize and start ingesting data.
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-supported-types" %}}
 
 For more information, including strategies for handling unsupported types,
 see [`CREATE TABLE FROM SOURCE`](/sql/create-table/).
-
-#### Upstream table truncation restrictions
-
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-truncation-restriction" %}}
-
-For additional considerations, see also [`CREATE TABLE`](/sql/create-table/).
 
 ### Publication membership
 
@@ -105,6 +101,19 @@ name="postgres-replication-slots-tip-list" %}}
 
 {{</ tip >}}
 
+### Reading from a physical standby
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-physical-standby" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}
+
+## Source failure states and recovery
+
+{{% include-headless "/headless/postgres-failure-states" %}}
+
 ## Examples
 
 ### Prerequisites
@@ -115,13 +124,13 @@ name="postgres-source-prereq" %}}
 
 ### Create a source {#create-source-example}
 
-{{% include-example file="examples/create_source/example_postgres_source"
+{{% include-example file="examples/create_source_postgres"
  example="example-prereq" %}}
 
-{{% include-example file="examples/create_source/example_postgres_source"
+{{% include-example file="examples/create_source_postgres"
  example="create-source" %}}
 
-{{% include-example file="examples/create_source/example_postgres_source"
+{{% include-example file="examples/create_source_postgres"
  example="create-table" %}}
 
 ## Related pages

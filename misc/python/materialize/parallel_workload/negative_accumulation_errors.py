@@ -1,0 +1,61 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+"""Error-message substrings produced when Materialize detects a negative
+accumulation (or similar "non-positive multiplicity" condition).
+
+Parallel Workload intentionally generates queries (via `repeat_row`) that can
+trigger these errors; this module is the single place to update when the
+messages change. Source of truth: DB-217 (section "For reference,
+here is a list of places in the code / error msgs where we detect negative
+accumulations or similar issues").
+"""
+
+# Keep this list in sync with DB-217. Each entry is a substring
+# that may appear in an error surfaced to the client. When the underlying
+# error messages are reworded, update this list in a single commit so the
+# rest of Parallel Workload picks up the new strings automatically.
+NEGATIVE_ACCUMULATION_ERRORS: list[str] = [
+    # Many places. NOTE: "Non-monotonic input" is only the internal
+    # `error_logger.log` text; the client-facing EvalError is the lowercase
+    # "... on non-monotonic input" below (monotonic top-k, top-1, reduction).
+    "Non-monotonic input",
+    "on non-monotonic input",
+    # TopK
+    "Negative multiplicities in TopK",
+    # Reduce
+    "Net-zero records with non-zero accumulation in ReduceAccumulable",
+    # Client-facing variant of the above (reduce.rs:1514, EvalError), distinct
+    # from the internal ReduceAccumulable log text. Seen in repeat_row (#8106).
+    "with non-zero accumulation in accumulable aggregate",
+    "Non-positive multiplicity in DistinctBy",
+    # Covers the `ReduceInaccumulable`, `ReduceInaccumulable DISTINCT` and
+    # `ReduceMinsMaxes` sites, which surface their internal log text verbatim.
+    "Non-positive accumulation",
+    # The hierarchical min/max stage words its client-facing error differently
+    # from its "Non-positive accumulation in MinsMaxesHierarchical" log line
+    # (reduce.rs `build_bucketed_stage`), so the entry above does not cover it.
+    # Seen in repeat_row (build 17664).
+    "saw non-positive accumulation",
+    "Invalid negative unsigned aggregation in ReduceAccumulable",
+    "saw negative accumulation",
+    # Peek handling
+    "Invalid data in source, saw retractions",
+    "index peek encountered negative multiplicities in ok trace",
+    "index peek encountered negative multiplicities in error trace",
+    # S3 oneshot sink
+    "S3 oneshot sink encountered negative multiplicities",
+    # Constant folding
+    "Negative multiplicity in constant result",
+    # Constant folding a DISTINCT/INTERSECT/reduce over a repeat_row collection
+    # with negative diffs. Seen in repeat_row (builds 17205, 17214).
+    "constant folding encountered reduce on collection with non-positive multiplicities",
+    # Scalar subquery guard
+    "negative number of rows produced in subquery",
+]

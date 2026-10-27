@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 
 use maplit::btreemap;
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, Index};
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
@@ -19,6 +20,7 @@ use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
+use mz_sql::session::metadata::SessionMetadata;
 use tracing::Span;
 
 use crate::command::ExecuteResponse;
@@ -82,7 +84,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         let stage = return_if_err!(
-            self.create_index_validate(plan, resolved_ids, ExplainContext::None),
+            self.create_index_validate(ctx.session(), plan, resolved_ids, ExplainContext::None),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -127,7 +129,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_index_validate(plan, resolved_ids, explain_ctx),
+            self.create_index_validate(ctx.session(), plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -180,7 +182,7 @@ impl Coordinator {
             optimizer_trace,
         });
         let stage = return_if_err!(
-            self.create_index_validate(plan, resolved_ids, explain_ctx),
+            self.create_index_validate(ctx.session(), plan, resolved_ids, explain_ctx),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -216,6 +218,7 @@ impl Coordinator {
 
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id))
             .override_from(&config.features);
 
         // TODO(mgree): calculate statistics (need a timestamp)
@@ -278,12 +281,21 @@ impl Coordinator {
     #[instrument]
     fn create_index_validate(
         &self,
+        session: &Session,
         plan: plan::CreateIndexPlan,
         resolved_ids: ResolvedIds,
         explain_ctx: ExplainContext,
     ) -> Result<CreateIndexStage, AdapterError> {
-        let validity =
-            PlanValidity::require_transient_revision(self.catalog().transient_revision());
+        // Track the target cluster and resolved dependencies so concurrent
+        // drops are caught between stages instead of panicking later when the
+        // persisted SQL is re-parsed during catalog application.
+        let validity = PlanValidity::new(
+            self.catalog(),
+            resolved_ids.items().copied().collect(),
+            Some(plan.index.cluster_id),
+            None,
+            session.role_metadata().clone(),
+        );
         Ok(CreateIndexStage::Optimize(CreateIndexOptimize {
             validity,
             plan,
@@ -312,15 +324,16 @@ impl Coordinator {
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
         let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
-            let id_ts = self.get_catalog_write_ts().await;
-            self.catalog().allocate_user_id(id_ts).await?
+            self.allocate_user_id().await?
         } else {
             self.allocate_transient_id()
         };
 
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(*cluster_id))
             .override_from(&explain_ctx);
+        let optimizer_features = optimizer_config.features.clone();
 
         // Build an optimizer for this INDEX.
         let mut optimizer = optimize::index::Optimizer::new(
@@ -341,8 +354,11 @@ impl Coordinator {
                 ), AdapterError> {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                    let index_plan =
-                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone());
+                    let index_plan = optimize::index::Index::new(
+                        plan.name.clone(),
+                        plan.index.on,
+                        plan.index.keys.clone(),
+                    );
 
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(index_plan)?;
@@ -372,6 +388,7 @@ impl Coordinator {
                                     resolved_ids,
                                     global_mir_plan,
                                     global_lir_plan,
+                                    optimizer_features,
                                 })
                             }
                         }
@@ -432,9 +449,13 @@ impl Coordinator {
             resolved_ids,
             global_mir_plan,
             global_lir_plan,
+            optimizer_features,
             ..
         } = stage;
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+
+        let on_entry = self.catalog().get_entry_by_global_id(&on);
+        let owner_id = *on_entry.owner_id();
 
         let ops = vec![catalog::Op::CreateItem {
             id: item_id,
@@ -449,21 +470,40 @@ impl Coordinator {
                 cluster_id,
                 is_retained_metrics_object: false,
                 custom_logical_compaction_window: compaction_window,
+                optimized_plan: None,
+                physical_plan: None,
+                dataflow_metainfo: None,
             }),
-            owner_id: *self.catalog().get_entry_by_global_id(&on).owner_id(),
+            owner_id,
         }];
 
-        // Pre-allocate a vector of transient GlobalIds for each notice.
-        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
-            .map(|(_item_id, global_id)| global_id)
-            .take(global_lir_plan.df_meta().optimizer_notices.len())
-            .collect::<Vec<_>>();
+        // We keep `raw_df_meta` live so that on success we can emit its raw
+        // notices to the user session (rendered against the user's
+        // session-aware humanizer).
+        let (df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let on_desc = on_entry
+            .relation_desc()
+            .expect("can only create indexes on items with a valid description");
+        let df_meta = self.render_create_item_notices(&name, global_id, &on_desc, &raw_df_meta);
+
+        // Populate the durable expression cache before the catalog
+        // transaction and await the write. This way any other envd (or a
+        // subsequent bootstrap here) will observe the cached plans +
+        // rendered notices as soon as the item becomes visible.
+        self.catalog()
+            .cache_expressions(
+                global_id,
+                None,
+                global_mir_plan.df_desc().clone(),
+                df_desc.clone(),
+                df_meta.clone(),
+                optimizer_features,
+            )
+            .await;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, ctx| {
+            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
                 Box::pin(async move {
-                    let (mut df_desc, df_meta) = global_lir_plan.unapply();
-
                     // Save plan structures.
                     coord
                         .catalog_mut()
@@ -472,33 +512,21 @@ impl Coordinator {
                         .catalog_mut()
                         .set_physical_plan(global_id, df_desc.clone());
 
-                    let notice_builtin_updates_fut = coord
-                        .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
-                        .await;
+                    let notice_builtin_updates_fut =
+                        coord.persist_dataflow_metainfo(df_meta, global_id);
 
-                    // We're putting in place read holds, such that ship_dataflow,
-                    // below, which calls update_read_capabilities, can successfully
-                    // do so. Otherwise, the since of dependencies might move along
-                    // concurrently, pulling the rug from under us!
-                    //
-                    // TODO: Maybe in the future, pass those holds on to compute, to
-                    // hold on to them and downgrade when possible?
-                    let read_holds = coord.acquire_read_holds(&id_bundle);
-                    let since = read_holds.least_valid_read();
-                    df_desc.set_as_of(since);
-
+                    // TODO: Maybe in the future, pass the read holds
+                    // `ship_new_dataflow` takes on to compute, to hold on to them
+                    // and downgrade when possible?
                     coord
-                        .ship_dataflow_and_notice_builtin_table_updates(
+                        .ship_new_dataflow(
+                            &id_bundle,
                             df_desc,
                             cluster_id,
                             notice_builtin_updates_fut,
                         )
                         .await;
                     // No `allow_writes` here because indexes do not modify external state.
-
-                    // Drop read holds after the dataflow has been shipped, at which
-                    // point compute will have put in its own read holds.
-                    drop(read_holds);
 
                     coord.update_compute_read_policy(
                         cluster_id,
@@ -510,10 +538,16 @@ impl Coordinator {
             .await;
 
         match transact_result {
-            Ok(_) => Ok(StageResult::Response(ExecuteResponse::CreatedIndex)),
+            Ok(_) => {
+                // Only emit optimizer notices to the user now that the
+                // catalog transaction has succeeded. If the transaction had
+                // failed, emitting notices would confuse the user with
+                // information about an item that wasn't actually created.
+                self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
+                Ok(StageResult::Response(ExecuteResponse::CreatedIndex))
+            }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -566,6 +600,7 @@ impl Coordinator {
 
         let features = OptimizerFeatures::from(self.catalog().system_config())
             .override_from(&target_cluster.config.features())
+            .override_from(&self.cluster_scoped_optimizer_overrides(index.cluster_id))
             .override_from(&config.features);
 
         let rows = optimizer_trace

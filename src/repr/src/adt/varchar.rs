@@ -11,10 +11,11 @@ use std::error::Error;
 use std::fmt;
 
 use anyhow::bail;
-use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest::arbitrary::Arbitrary;
+#[cfg(any(test, feature = "proptest"))]
 use proptest::strategy::{BoxedStrategy, Strategy};
 use serde::{Deserialize, Serialize};
 
@@ -36,7 +37,16 @@ pub struct VarChar<S: AsRef<str>>(pub S);
 ///
 /// [`SqlScalarType::VarChar`]: crate::SqlScalarType::VarChar
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
 )]
 pub struct VarCharMaxLength(pub(crate) u32);
 
@@ -65,22 +75,30 @@ impl RustType<ProtoVarCharMaxLength> for VarCharMaxLength {
         ProtoVarCharMaxLength { value: self.0 }
     }
 
+    // NOTE: `from_proto` is a trust boundary for durable and protocol state, so it
+    // enforces the same domain as `TryFrom<i64>` rather than trusting the wire.
     fn from_proto(proto: ProtoVarCharMaxLength) -> Result<Self, TryFromProtoError> {
-        Ok(VarCharMaxLength(proto.value))
+        VarCharMaxLength::try_from(i64::from(proto.value)).map_err(|e| {
+            TryFromProtoError::InvalidFieldError(format!(
+                "ProtoVarCharMaxLength::value {}: {e}",
+                proto.value
+            ))
+        })
     }
 }
 
+#[cfg(any(test, feature = "proptest"))]
 impl Arbitrary for VarCharMaxLength {
     type Parameters = ();
     type Strategy = BoxedStrategy<VarCharMaxLength>;
 
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        proptest::arbitrary::any::<u32>()
-            // We cap the maximum VarCharMaxLength to prevent generating
-            // massive strings which can greatly slow down tests and are
-            // relatively uninteresting.
-            .prop_map(|len| VarCharMaxLength(len % 300))
-            .boxed()
+        // We cap the maximum VarCharMaxLength to prevent generating massive
+        // strings which can greatly slow down tests and are relatively
+        // uninteresting. The lower bound is the type's own: a `varchar(0)` does
+        // not exist, and `arb_datum_for_scalar` builds a string of up to
+        // `max_length` chars from this.
+        (1..300u32).prop_map(VarCharMaxLength).boxed()
     }
 }
 

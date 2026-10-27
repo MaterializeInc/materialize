@@ -20,25 +20,17 @@ for instructions.
 
 ### Binary distribution
 
-To build the destination into a static Rust binary for distribution, first make sure you have
-updated the `misc/fivetran-sdk` submodule, this is how we include the protobuf definitions for the
-SDK. From the root of the Materialize repository run:
+To build the destination into a static Rust binary, run:
 
 ```shell
-git submodule update --init --recursive misc/fivetran-sdk
-```
-
-Once you have the `fivetran-sdk` submodule updated you can build the binary with:
-
-```shell
-cargo build --release -p mz-fivetran-destination
+cargo build --release -p fivetran_destination
 ```
 
 > **Note:** If you already have [`protoc`](https://grpc.io/docs/protoc-installation/) installed
 and in your PATH, you can skip building the vendored version with:
 
 ```shell
-cargo build --release -p mz-fivetran-destination --no-default-features
+cargo build --release -p fivetran_destination --no-default-features
 ```
 
 Cargo will emit the built binary at

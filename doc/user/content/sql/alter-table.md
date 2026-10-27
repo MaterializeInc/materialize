@@ -14,10 +14,8 @@ Use `ALTER TABLE` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Rename" >}}
-
-### Rename
 
 To rename a table:
 
@@ -26,16 +24,12 @@ To rename a table:
 {{< /tab >}}
 {{< tab "Change owner" >}}
 
-### Change owner
-
 To change the owner of a table:
 
 {{% include-syntax file="examples/alter_table" example="syntax-change-owner" %}}
 
 {{< /tab >}}
 {{< tab "(Re)Set retain history config" >}}
-
-### (Re)Set retain history config
 
 To set the retention history for a user-populated table:
 
@@ -52,4 +46,4 @@ To reset the retention history to the default for a user-populated table:
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-table.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-table" %}}

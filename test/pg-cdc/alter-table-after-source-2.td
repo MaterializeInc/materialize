@@ -107,6 +107,8 @@ CREATE TABLE drop_table (f1 int, f2 int);
 ALTER TABLE drop_table REPLICA IDENTITY FULL;
 INSERT INTO drop_table (f1, f2) VALUES (1, 1);
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 
@@ -145,7 +147,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_rename RENAME TO alter_table_renamed;
 
 ! SELECT * FROM alter_table_rename;
-contains:altered
+regex:incompatible schema change on public\.alter_table_rename \(oid \d+\): table was renamed or moved upstream
 
 #
 # Alter table rename colum
@@ -159,7 +161,7 @@ ALTER TABLE alter_table_rename_column RENAME COLUMN f2 TO f1;
 ALTER TABLE alter_table_rename_column RENAME COLUMN f3 TO f2;
 
 ! SELECT * FROM alter_table_rename_column;
-contains:altered
+regex:incompatible schema change on public\.alter_table_rename_column \(oid \d+\): column
 
 #
 # Change column attnum
@@ -173,7 +175,7 @@ ALTER TABLE alter_table_change_attnum DROP COLUMN f2;
 ALTER TABLE alter_table_change_attnum ADD COLUMN f2 VARCHAR(10);
 
 ! SELECT * FROM alter_table_change_attnum;
-contains:altered
+regex:incompatible schema change on public\.alter_table_change_attnum \(oid \d+\): column "f2" changed position upstream
 
 > SELECT * from alter_table_supported;
 1 1
@@ -199,7 +201,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE alter_table_supported DROP COLUMN f2;
 
 ! SELECT * from alter_table_supported;
-contains:altered
+regex:incompatible schema change on public\.alter_table_supported \(oid \d+\): column "f2" was dropped or renamed upstream
 
 
 #
@@ -217,6 +219,10 @@ contains:table was truncated
 #
 # Drop table
 
+# TODO: Reenable when https://linear.app/materializeinc/issue/SS-295 is fixed
+$ skip-if
+SELECT true
+
 > SELECT * from drop_table;
 1 1
 
@@ -226,3 +232,5 @@ DROP TABLE drop_table;
 # Table is dropped
 ! SELECT * FROM drop_table;
 regex:(table was dropped|incompatible schema change)
+
+$ skip-end

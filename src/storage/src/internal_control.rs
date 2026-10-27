@@ -18,13 +18,14 @@ use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
+use mz_timely_util::scope_label::ScopeExt;
 use serde::{Deserialize, Serialize};
-use timely::communication::Allocate;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::source;
-use timely::dataflow::operators::{Broadcast, Operator};
+use timely::dataflow::operators::vec::Broadcast;
 use timely::progress::Antichain;
-use timely::scheduling::{Activator, Scheduler};
+use timely::scheduling::Activator;
 use timely::worker::Worker as TimelyWorker;
 
 use crate::statistics::{SinkStatisticsRecord, SourceStatisticsRecord};
@@ -133,6 +134,16 @@ pub struct InternalCommandSender {
 }
 
 impl InternalCommandSender {
+    /// Creates a sender from externally provided parts, for hosts that
+    /// route internal commands through their own sequencing channel instead of
+    /// `setup_command_sequencer`.
+    pub fn from_parts(
+        tx: mpsc::Sender<InternalStorageCommand>,
+        activator: Rc<RefCell<Option<Activator>>>,
+    ) -> Self {
+        Self { tx, activator }
+    }
+
     /// Broadcasts the given command to all workers.
     pub fn send(&self, cmd: InternalStorageCommand) {
         if self.tx.send(cmd).is_err() {
@@ -164,8 +175,8 @@ impl InternalCommandReceiver {
     }
 }
 
-pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
-    timely_worker: &'w mut TimelyWorker<A>,
+pub(crate) fn setup_command_sequencer<'w>(
+    timely_worker: &'w mut TimelyWorker,
 ) -> (InternalCommandSender, InternalCommandReceiver) {
     let (input_tx, input_rx) = mpsc::channel();
     let (output_tx, output_rx) = mpsc::channel();
@@ -174,6 +185,7 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
     timely_worker.dataflow_named::<(), _, _>("command_sequencer", {
         let activator = Rc::clone(&activator);
         move |scope| {
+            let scope = scope.with_label();
             // Create a stream of commands received from `input_rx`.
             //
             // The output commands are tagged by worker ID and command index, allowing downstream

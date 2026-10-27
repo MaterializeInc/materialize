@@ -9,6 +9,7 @@
 
 //! A tiny utility library for making TLS connectors.
 
+use mz_ore::secure::{Zeroize, Zeroizing};
 use openssl::pkcs12::Pkcs12;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
@@ -18,9 +19,6 @@ use postgres_openssl::MakeTlsConnector;
 use tokio_postgres::config::SslMode;
 
 macro_rules! bail_generic {
-    ($fmt:expr, $($arg:tt)*) => {
-        return Err(TlsError::Generic(anyhow::anyhow!($fmt, $($arg)*)))
-    };
     ($err:expr $(,)?) => {
         return Err(TlsError::Generic(anyhow::anyhow!($err)))
     };
@@ -79,9 +77,9 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Tls
         _ => {}
     }
     if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
-        builder
-            .cert_store_mut()
-            .add_cert(X509::from_pem(ssl_root_cert)?)?;
+        for cert in X509::stack_from_pem(ssl_root_cert)? {
+            builder.cert_store_mut().add_cert(cert)?;
+        }
     }
 
     let mut tls_connector = MakeTlsConnector::new(builder.build());
@@ -103,12 +101,34 @@ pub struct Pkcs12Archive {
     pub pass: String,
 }
 
+impl Zeroize for Pkcs12Archive {
+    fn zeroize(&mut self) {
+        self.der.zeroize();
+        self.pass.zeroize();
+    }
+}
+
+impl Drop for Pkcs12Archive {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl Pkcs12Archive {
+    pub fn into_parts(self) -> (Vec<u8>, String) {
+        let mut md = std::mem::ManuallyDrop::new(self);
+        let der = std::mem::take(&mut md.der);
+        let pass = std::mem::take(&mut md.pass);
+        (der, pass)
+    }
+}
+
 /// Constructs an identity from a PEM-formatted key and certificate using OpenSSL.
 pub fn pkcs12der_from_pem(
     key: &[u8],
     cert: &[u8],
 ) -> Result<Pkcs12Archive, openssl::error::ErrorStack> {
-    let mut buf = Vec::new();
+    let mut buf = Zeroizing::new(Vec::new());
     buf.extend(key);
     buf.push(b'\n');
     buf.extend(cert);
@@ -146,4 +166,218 @@ pub fn pkcs12der_from_pem(
         .build2(&pass)?
         .to_der()?;
     Ok(Pkcs12Archive { der, pass })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::net::{SocketAddr, TcpListener};
+
+    use openssl::asn1::{Asn1Integer, Asn1Time};
+    use openssl::bn::{BigNum, MsbOption};
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::Private;
+    use openssl::rsa::Rsa;
+    use openssl::ssl::SslAcceptor;
+    use openssl::x509::X509NameBuilder;
+    use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
+    use tokio::io::{AsyncRead, AsyncReadExt};
+    use tokio::net::TcpStream;
+    use tokio_postgres::tls::{MakeTlsConnect, TlsConnect};
+
+    use super::*;
+
+    /// A throwaway CA that can issue leaf certificates.
+    struct TestCa {
+        cert: X509,
+        key: PKey<Private>,
+    }
+
+    fn random_serial() -> Asn1Integer {
+        let mut bn = BigNum::new().unwrap();
+        bn.rand(64, MsbOption::MAYBE_ZERO, false).unwrap();
+        bn.to_asn1_integer().unwrap()
+    }
+
+    impl TestCa {
+        fn new() -> TestCa {
+            let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+            let mut name = X509NameBuilder::new().unwrap();
+            name.append_entry_by_text("CN", "mz-tls-util test CA")
+                .unwrap();
+            let name = name.build();
+            let mut builder = X509::builder().unwrap();
+            builder.set_version(2).unwrap();
+            builder.set_serial_number(&random_serial()).unwrap();
+            builder.set_subject_name(&name).unwrap();
+            builder.set_issuer_name(&name).unwrap();
+            builder.set_pubkey(&key).unwrap();
+            builder
+                .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+                .unwrap();
+            builder
+                .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+                .unwrap();
+            builder
+                .append_extension(BasicConstraints::new().critical().ca().build().unwrap())
+                .unwrap();
+            builder.sign(&key, MessageDigest::sha256()).unwrap();
+            TestCa {
+                cert: builder.build(),
+                key,
+            }
+        }
+
+        /// Issues a leaf certificate, returning its PEM cert and PKCS#8 key.
+        fn issue(&self, cn: &str, dns_san: Option<&str>) -> (Vec<u8>, Vec<u8>) {
+            let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+            let mut name = X509NameBuilder::new().unwrap();
+            name.append_entry_by_text("CN", cn).unwrap();
+            let name = name.build();
+            let mut builder = X509::builder().unwrap();
+            builder.set_version(2).unwrap();
+            builder.set_serial_number(&random_serial()).unwrap();
+            builder.set_subject_name(&name).unwrap();
+            builder.set_issuer_name(self.cert.subject_name()).unwrap();
+            builder.set_pubkey(&key).unwrap();
+            builder
+                .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+                .unwrap();
+            builder
+                .set_not_after(&Asn1Time::days_from_now(1).unwrap())
+                .unwrap();
+            if let Some(dns) = dns_san {
+                let san = SubjectAlternativeName::new()
+                    .dns(dns)
+                    .build(&builder.x509v3_context(Some(&self.cert), None))
+                    .unwrap();
+                builder.append_extension(san).unwrap();
+            }
+            builder.sign(&self.key, MessageDigest::sha256()).unwrap();
+            (
+                builder.build().to_pem().unwrap(),
+                key.private_key_to_pem_pkcs8().unwrap(),
+            )
+        }
+    }
+
+    /// Starts a blocking OpenSSL TLS server on an ephemeral port, serving
+    /// connections one at a time on a background thread. Each connection
+    /// receives "ok" once the server side of the handshake has completed. When
+    /// `client_ca_pem` is given the server requires a client certificate
+    /// signed by that CA, so the "ok" also confirms the client presented one.
+    fn run_tls_server(cert_pem: &[u8], key_pem: &[u8], client_ca_pem: Option<&[u8]>) -> SocketAddr {
+        let mut acceptor = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls_server()).unwrap();
+        acceptor
+            .set_certificate(&X509::from_pem(cert_pem).unwrap())
+            .unwrap();
+        acceptor
+            .set_private_key(&PKey::private_key_from_pem(key_pem).unwrap())
+            .unwrap();
+        if let Some(ca_pem) = client_ca_pem {
+            for cert in X509::stack_from_pem(ca_pem).unwrap() {
+                acceptor.cert_store_mut().add_cert(cert).unwrap();
+            }
+            acceptor.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
+        }
+        let acceptor = acceptor.build();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                // A failed handshake drops the connection, which the client
+                // observes as a read error in `assert_server_ok`.
+                if let Ok(mut tls) = acceptor.accept(stream.unwrap()) {
+                    tls.write_all(b"ok").unwrap();
+                    let _ = tls.shutdown();
+                }
+            }
+        });
+        addr
+    }
+
+    /// Completes a TLS handshake for `host` via `make_tls`, returning the
+    /// established stream. Panics if certificate validation fails.
+    async fn openssl_connect(
+        config: &tokio_postgres::Config,
+        host: &str,
+        addr: SocketAddr,
+    ) -> postgres_openssl::TlsStream<TcpStream> {
+        let mut make = make_tls(config).unwrap();
+        let connect = MakeTlsConnect::<TcpStream>::make_tls_connect(&mut make, host).unwrap();
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        TlsConnect::<TcpStream>::connect(connect, tcp)
+            .await
+            .unwrap()
+    }
+
+    async fn assert_server_ok<S: AsyncRead + Unpin>(mut tls: S) {
+        let mut buf = [0u8; 2];
+        tls.read_exact(&mut buf)
+            .await
+            .expect("server did not complete the handshake");
+        assert_eq!(&buf, b"ok");
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn verify_full_trusts_default_store() {
+        let ca = TestCa::new();
+        let (server_cert, server_key) = ca.issue("server", Some("localhost"));
+
+        let mut ca_file = tempfile::NamedTempFile::new().unwrap();
+        ca_file.write_all(&ca.cert.to_pem().unwrap()).unwrap();
+        // SAFETY: the environment is process global. nextest, which CI uses,
+        // runs each test in its own process. Under plain `cargo test` this can
+        // race with other tests reading the environment.
+        unsafe { std::env::set_var("SSL_CERT_FILE", ca_file.path()) };
+
+        let addr = run_tls_server(&server_cert, &server_key, None);
+        let mut config = tokio_postgres::Config::new();
+        config.ssl_mode(SslMode::VerifyFull);
+
+        assert_server_ok(openssl_connect(&config, "localhost", addr).await).await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // uses the network and openssl FFI
+    async fn client_certs_accepted() {
+        let ca = TestCa::new();
+        let (server_cert, server_key) = ca.issue("server", Some("localhost"));
+        let (client_cert, client_key) = ca.issue("client", None);
+        let ca_pem = ca.cert.to_pem().unwrap();
+
+        let addr = run_tls_server(&server_cert, &server_key, Some(&ca_pem));
+        let mut config = tokio_postgres::Config::new();
+        config.ssl_mode(SslMode::VerifyFull);
+        config.ssl_root_cert(&ca_pem);
+        config.ssl_cert(&client_cert);
+        config.ssl_key(&client_key);
+
+        assert_server_ok(openssl_connect(&config, "localhost", addr).await).await;
+    }
+
+    #[mz_ore::test]
+    fn pkcs12_archive_needs_drop() {
+        assert!(std::mem::needs_drop::<Pkcs12Archive>());
+    }
+
+    #[mz_ore::test]
+    fn pkcs12_archive_zeroize_clears_fields() {
+        let mut archive = Pkcs12Archive {
+            der: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            pass: String::from("hunter2"),
+        };
+
+        archive.zeroize();
+
+        assert!(archive.der.is_empty(), "der was not zeroed");
+        assert!(archive.pass.is_empty(), "pass was not zeroed");
+    }
+
+    #[mz_ore::test]
+    fn pkcs12_archive_implements_zeroize() {
+        fn assert_zeroize<T: mz_ore::secure::Zeroize>() {}
+        assert_zeroize::<Pkcs12Archive>();
+    }
 }

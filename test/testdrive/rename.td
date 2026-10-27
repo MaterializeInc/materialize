@@ -119,6 +119,12 @@ name
 renamed_mz_data
 renamed_mz_data_tbl
 
+# Verify the table-from-source's create_sql references the renamed source, not
+# the old name. Regression test for the create_stmt_rename_refs no-op bug where
+# CreateTableFromSource's source field was not rewritten on rename.
+> SELECT create_sql LIKE '%"renamed_mz_data"%' AND create_sql NOT LIKE '%"mz_data"%' FROM mz_tables WHERE name = 'renamed_mz_data_tbl'
+true
+
 # Test that data can be selected from the source after renaming.
 > SELECT * FROM renamed_mz_data_tbl
 a  b
@@ -248,10 +254,15 @@ name                                create_sql
 ------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.dependent_view "CREATE VIEW materialize.public.dependent_view AS SELECT * FROM materialize.public.renamed_mz_view;"
 
-> SHOW CREATE SINK renamed_sink
+>[version<2600700] SHOW CREATE SINK renamed_sink
 name                            create_sql
 -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.public.renamed_sink "CREATE SINK materialize.public.renamed_sink IN CLUSTER <VARIABLE_OUTPUT> FROM materialize.public.renamed_mz_data_tbl INTO KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-snk1-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn ENVELOPE DEBEZIUM;"
+
+>[version>=2600700] SHOW CREATE SINK renamed_sink
+name                            create_sql
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+materialize.public.renamed_sink "CREATE SINK materialize.public.renamed_sink\nIN CLUSTER <VARIABLE_OUTPUT>\nFROM materialize.public.renamed_mz_data_tbl\nINTO KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-snk1-${testdrive.seed}')\nFORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn\nENVELOPE DEBEZIUM;"
 
 # Simple dependencies with both fully qualified and unqualified item references are renamed
 > SHOW CREATE VIEW byzantine_view
@@ -886,10 +897,15 @@ name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.to_be_renamed.mz_data "CREATE SOURCE materialize.to_be_renamed.mz_data\nIN CLUSTER <VARIABLE_OUTPUT>\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = '<VARIABLE_OUTPUT>');"
 
-> SHOW CREATE SINK to_be_renamed.sink1;
+>[version<2600700] SHOW CREATE SINK to_be_renamed.sink1;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.to_be_renamed.sink1    "CREATE SINK materialize.to_be_renamed.sink1 IN CLUSTER <VARIABLE_OUTPUT> FROM materialize.to_be_renamed.mz_data_tbl INTO KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn ENVELOPE DEBEZIUM;"
+
+>[version>=2600700] SHOW CREATE SINK to_be_renamed.sink1;
+name                                create_sql
+---------------------------------------------------------------------------------------------------------------------------------------------------
+materialize.to_be_renamed.sink1    "CREATE SINK materialize.to_be_renamed.sink1\nIN CLUSTER <VARIABLE_OUTPUT>\nFROM materialize.to_be_renamed.mz_data_tbl\nINTO\n    KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}')\nFORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn\nENVELOPE DEBEZIUM;"
 
 # Make sure the create_sql got updated.
 
@@ -900,7 +916,16 @@ name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.foo_bar.mz_data "CREATE SOURCE materialize.foo_bar.mz_data\nIN CLUSTER <VARIABLE_OUTPUT>\nFROM KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = '<VARIABLE_OUTPUT>');"
 
-> SHOW CREATE SINK foo_bar.sink1;
+>[version<2600700] SHOW CREATE SINK foo_bar.sink1;
 name                                create_sql
 ---------------------------------------------------------------------------------------------------------------------------------------------------
 materialize.foo_bar.sink1    "CREATE SINK materialize.foo_bar.sink1 IN CLUSTER <VARIABLE_OUTPUT> FROM materialize.foo_bar.mz_data_tbl INTO KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn ENVELOPE DEBEZIUM;"
+
+>[version>=2600700] SHOW CREATE SINK foo_bar.sink1;
+name                                create_sql
+---------------------------------------------------------------------------------------------------------------------------------------------------
+materialize.foo_bar.sink1    "CREATE SINK materialize.foo_bar.sink1\nIN CLUSTER <VARIABLE_OUTPUT>\nFROM materialize.foo_bar.mz_data_tbl\nINTO\n    KAFKA CONNECTION materialize.public.kafka_conn (TOPIC = 'testdrive-snk1-rename-schema-${testdrive.seed}')\nFORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION materialize.public.csr_conn\nENVELOPE DEBEZIUM;"
+
+# Verify the table-from-source's create_sql references the renamed schema.
+> SELECT create_sql LIKE '%"foo_bar"."mz_data"%' FROM mz_tables WHERE name = 'mz_data_tbl' AND schema_id = (SELECT id FROM mz_schemas WHERE name = 'foo_bar')
+true

@@ -10,8 +10,8 @@
 //! An Optimizer that
 //! 1. Optimistically calls `optimize_mir_constant`.
 //! 2. Then, if we haven't arrived at a constant, it does real optimization:
-//!    - calls `prep_relation_expr` an `ExprPrepStyle` was given.
-//!    - calls `optimize_mir_local`, i.e., the logical optimizer.
+//!    - applies an [`ExprPrep`].
+//!    - calls [`optimize_mir_local`], i.e., the logical optimizer.
 //!
 //! This is used for `CREATE VIEW` statements and in various other situations where no physical
 //! optimization is needed, such as for `INSERT` statements.
@@ -26,62 +26,68 @@ use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::reprtypecheck::{
-    SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
-};
+use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
 
-use crate::optimize::dataflows::{ExprPrepStyle, prep_relation_expr};
+use crate::optimize::dataflows::{ExprPrep, ExprPrepNoop};
 use crate::optimize::{
     Optimize, OptimizerConfig, OptimizerError, optimize_mir_constant, optimize_mir_local,
     trace_plan,
 };
 
-pub struct Optimizer<'a> {
+pub struct Optimizer<S> {
     /// A representation typechecking context to use throughout the optimizer pipeline.
-    repr_typecheck_ctx: ReprTypecheckContext,
+    typecheck_ctx: SharedTypecheckingContext,
     /// Optimizer config.
     config: OptimizerConfig,
     /// Optimizer metrics.
     ///
-    /// Allowed to be `None` for cases where view optimization is invoked outside of the
-    /// coordinator context and the metrics are not available.
+    /// Allowed to be `None` for cases where view optimization is invoked outside the
+    /// coordinator context, and the metrics are not available.
     metrics: Option<OptimizerMetrics>,
-    /// If present, the optimizer will call `prep_relation_expr` using the given `ExprPrepStyle`.
-    expr_prep_style: Option<ExprPrepStyle<'a>>,
+    /// Expression preparation style to use. Can be `NoopExprPrepStyle` to skip expression
+    /// preparation.
+    expr_prep_style: S,
     /// Whether to call `FoldConstants` with a size limit, or try to fold constants of any size.
     fold_constants_limit: bool,
 }
 
-impl<'a> Optimizer<'a> {
+impl Optimizer<ExprPrepNoop> {
+    /// Creates an optimizer instance that does not perform any expression
+    /// preparation.
     pub fn new(config: OptimizerConfig, metrics: Option<OptimizerMetrics>) -> Self {
+        Self::new_with_prep(config, metrics, ExprPrepNoop)
+    }
+}
+
+impl<S> Optimizer<S> {
+    /// Creates an optimizer instance that takes an [`ExprPrep`] to handle
+    /// unmaterializable functions.
+    ///
+    /// Constant folding runs with the usual size limit, see
+    /// [`Self::without_fold_constants_limit`].
+    pub fn new_with_prep(
+        config: OptimizerConfig,
+        metrics: Option<OptimizerMetrics>,
+        expr_prep_style: S,
+    ) -> Optimizer<S> {
         Self {
-            repr_typecheck_ctx: empty_repr_context(),
+            typecheck_ctx: empty_typechecking_context(),
             config,
             metrics,
-            expr_prep_style: None,
+            expr_prep_style,
             fold_constants_limit: true,
         }
     }
 
-    /// Creates an optimizer instance that also calls `prep_relation_expr` with the given
-    /// `ExprPrepStyle`, so that unmaterializable functions are resolved.
-    /// Additionally, this instance calls constant folding without a size limit.
-    pub fn new_with_prep_no_limit(
-        config: OptimizerConfig,
-        metrics: Option<OptimizerMetrics>,
-        expr_prep_style: ExprPrepStyle<'a>,
-    ) -> Optimizer<'a> {
-        Self {
-            repr_typecheck_ctx: empty_repr_context(),
-            config,
-            metrics,
-            expr_prep_style: Some(expr_prep_style),
-            fold_constants_limit: false,
-        }
+    /// Folds constants of any size, instead of giving up above the configured
+    /// limit.
+    pub fn without_fold_constants_limit(mut self) -> Self {
+        self.fold_constants_limit = false;
+        self
     }
 }
 
-impl Optimize<HirRelationExpr> for Optimizer<'_> {
+impl<S: ExprPrep> Optimize<HirRelationExpr> for Optimizer<S> {
     type To = OptimizedMirRelationExpr;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
@@ -96,7 +102,7 @@ impl Optimize<HirRelationExpr> for Optimizer<'_> {
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::local(
             &self.config.features,
-            &self.repr_typecheck_ctx,
+            &self.typecheck_ctx,
             &mut df_meta,
             self.metrics.as_mut(),
             None,
@@ -113,18 +119,19 @@ impl Optimize<HirRelationExpr> for Optimizer<'_> {
             trace_plan!(at: "local", &expr);
             OptimizedMirRelationExpr(expr)
         } else {
-            // Do the real optimization (starting with `prep_relation_expr` if needed).
-            if let Some(expr_prep_style) = &self.expr_prep_style {
-                let mut opt_expr = OptimizedMirRelationExpr(expr);
-                prep_relation_expr(&mut opt_expr, expr_prep_style.clone())?;
-                expr = opt_expr.into_inner();
-            }
+            // Do the real optimization (starting with `expr_prep_style`).
+            let mut opt_expr = OptimizedMirRelationExpr(expr);
+            self.expr_prep_style.prep_relation_expr(&mut opt_expr)?;
+            expr = opt_expr.into_inner();
             optimize_mir_local(expr, &mut transform_ctx)?
         };
 
         if let Some(metrics) = &self.metrics {
             metrics.observe_e2e_optimization_time("view", time.elapsed());
         }
+
+        // TODO: Handle the `optimizer_notices` in `df_meta`.
+        // https://linear.app/materializeinc/issue/SQL-444
 
         // Return the resulting OptimizedMirRelationExpr.
         Ok(expr)

@@ -1,0 +1,237 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural lockdown tests for mz_catalog.mz_cluster_replicas.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 7 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_cluster_replicas' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  text  false
+name  text  false
+cluster_id  text  false
+size  text  true
+availability_zone  text  true
+owner_id  text  false
+disk  boolean  true
+
+# --- System replicas ----------------------------------------------------------
+
+# Three of the five built-in system clusters have replicas at startup:
+# mz_system (s1), mz_catalog_server (s2), and mz_probe (s3). mz_support
+# (s4) and mz_analytics (s5) have replication_factor=0 in the default
+# bootstrap config and so contribute no rows. All system replicas have
+# id LIKE 's%' and cluster_id LIKE 's%'.
+query I
+SELECT count(*) FROM mz_cluster_replicas
+WHERE id LIKE 's%' AND cluster_id LIKE 's%'
+----
+3
+
+# Each of those system replicas is named r1 (the default replica name
+# for managed system clusters).
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.id LIKE 's%' AND r.name = 'r1'
+----
+3
+
+# --- Default quickstart replica -----------------------------------------------
+
+# The default quickstart cluster has exactly one replica.
+query I
+SELECT count(*) FROM mz_cluster_replicas WHERE cluster_id = 'u1'
+----
+1
+
+# Its row shape: id is u-prefixed, name is 'r1' (managed default),
+# size is set, owner_id matches the cluster's owner (mz_system / s1),
+# disk is true.
+query BTTTB
+SELECT id LIKE 'u%', name, cluster_id, owner_id, disk
+FROM mz_cluster_replicas WHERE cluster_id = 'u1'
+----
+true  r1  u1  s1  true
+
+# availability_zone is NULL by default (user did not specify one).
+query B
+SELECT availability_zone IS NULL FROM mz_cluster_replicas WHERE cluster_id = 'u1'
+----
+true
+
+# --- CREATE CLUSTER REPLICA (unmanaged cluster) -------------------------------
+
+statement ok
+CREATE CLUSTER c_unmanaged REPLICAS (r_a (SIZE 'scale=1,workers=1'))
+
+# Replica was inserted with the right shape: id LIKE 'u%', size set, disk true.
+query TTTBB
+SELECT r.name, r.size, r.cluster_id = c.id, r.id LIKE 'u%', r.disk
+FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.name = 'c_unmanaged'
+----
+r_a  scale=1,workers=1  true  true  true
+
+# CREATE CLUSTER REPLICA on an existing unmanaged cluster adds another row.
+statement ok
+CREATE CLUSTER REPLICA c_unmanaged.r_b SIZE 'scale=1,workers=1'
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.name = 'c_unmanaged'
+----
+2
+
+# DROP CLUSTER REPLICA removes the row.
+statement ok
+DROP CLUSTER REPLICA c_unmanaged.r_b
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.name = 'c_unmanaged'
+----
+1
+
+statement ok
+DROP CLUSTER c_unmanaged
+
+# --- AVAILABILITY ZONE assignment --------------------------------------------
+
+# The sqllogictest environment has no availability zones configured, so any
+# user-specified AVAILABILITY ZONE is rejected. The only thing we can lock
+# down here is the rejection path — that, in turn, ensures the only way
+# availability_zone becomes non-NULL in this environment is via a config-
+# supplied zone set.
+statement error unknown cluster replica availability zone a
+CREATE CLUSTER c_az_bad REPLICAS (r1 (SIZE 'scale=1,workers=1', AVAILABILITY ZONE 'a'))
+
+# --- Managed cluster: replicas track REPLICATION FACTOR ----------------------
+
+statement ok
+CREATE CLUSTER c_managed SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 2
+
+# replication_factor=2 produces exactly 2 replica rows.
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.name = 'c_managed'
+----
+2
+
+# Managed-cluster replica names follow the r1, r2, ... pattern.
+query T
+SELECT string_agg(r.name, ',' ORDER BY r.name)
+FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.name = 'c_managed'
+----
+r1,r2
+
+# Lowering REPLICATION FACTOR drops the extra replica rows.
+statement ok
+ALTER CLUSTER c_managed SET (REPLICATION FACTOR = 1)
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.name = 'c_managed'
+----
+1
+
+# REPLICATION FACTOR 0 produces zero rows.
+statement ok
+ALTER CLUSTER c_managed SET (REPLICATION FACTOR = 0)
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.name = 'c_managed'
+----
+0
+
+statement ok
+DROP CLUSTER c_managed
+
+# --- Uniqueness invariants ---------------------------------------------------
+
+# id is unique across all replicas.
+query I
+SELECT count(*) - count(DISTINCT id) FROM mz_cluster_replicas
+----
+0
+
+# (cluster_id, name) is unique.
+query I
+SELECT count(*) - count(DISTINCT (cluster_id, name)) FROM mz_cluster_replicas
+----
+0
+
+# No row has a NULL id, name, cluster_id, or owner_id (NOT NULL columns).
+query I
+SELECT count(*) FROM mz_cluster_replicas
+WHERE id IS NULL OR name IS NULL OR cluster_id IS NULL OR owner_id IS NULL
+----
+0
+
+# Every replica's cluster_id resolves to a real cluster.
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+LEFT JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.id IS NULL
+----
+0
+
+# --- mz_cluster_replicas_ind is on mz_cluster_replicas -----------------------
+
+# The mz_cluster_replicas_ind index must continue to target
+# mz_cluster_replicas after conversion from Table to MaterializedView.
+query TT
+SELECT idx.name, on_obj.name
+FROM mz_indexes idx
+JOIN mz_objects on_obj ON idx.on_id = on_obj.id
+WHERE idx.name = 'mz_cluster_replicas_ind'
+----
+mz_cluster_replicas_ind  mz_cluster_replicas
+
+# --- CREATE / DROP round-trip -------------------------------------------------
+
+statement ok
+CREATE CLUSTER c_rt SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 3
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.name = 'c_rt'
+----
+3
+
+statement ok
+DROP CLUSTER c_rt
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r
+JOIN mz_clusters c ON r.cluster_id = c.id
+WHERE c.name = 'c_rt'
+----
+0

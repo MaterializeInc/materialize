@@ -31,17 +31,20 @@ use mz_catalog::durable::objects::{
 use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
-    NetworkPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
-    TableDataSource, TemporaryItem, Type, UpdateFrom,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, NetworkPolicy,
+    Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
+    TableDataSource, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, instrument, soft_assert_no_log};
+use mz_ore::{
+    instrument, soft_assert_eq_or_log, soft_assert_no_log, soft_assert_or_log, soft_panic_or_log,
+};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
@@ -57,13 +60,15 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::notice::OptimizerNotice;
 use tracing::{info_span, warn};
 
 use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
 use crate::coord::catalog_implications::parsed_state_updates::{self, ParsedStateUpdate};
-use crate::util::index_sql;
+use crate::util::{index_sql, sort_topological};
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
 /// [`CatalogState`] maintains denormalized state for certain catalog objects. Updating an object
@@ -85,7 +90,6 @@ struct InProgressRetractions {
     clusters: BTreeMap<ClusterKey, Cluster>,
     network_policies: BTreeMap<NetworkPolicyKey, NetworkPolicy>,
     items: BTreeMap<ItemKey, CatalogEntry>,
-    temp_items: BTreeMap<CatalogItemId, CatalogEntry>,
     introspection_source_indexes: BTreeMap<CatalogItemId, CatalogEntry>,
     system_object_mappings: BTreeMap<CatalogItemId, CatalogEntry>,
 }
@@ -147,6 +151,20 @@ impl CatalogState {
                 .await;
             builtin_table_updates.extend(builtin_table_update);
             catalog_updates.extend(catalog_update);
+
+            // Clean up plans and optimizer notices for items that
+            // were retracted but not replaced (i.e., truly dropped).
+            let dropped_entries: Vec<CatalogEntry> = retractions.items.into_values().collect();
+            if !dropped_entries.is_empty() {
+                let dropped_notices = self.drop_optimizer_notices(dropped_entries);
+                if self.system_config().enable_mz_notices() {
+                    self.pack_optimizer_notice_updates(
+                        &mut builtin_table_updates,
+                        dropped_notices.iter(),
+                        Diff::MINUS_ONE,
+                    );
+                }
+            }
         }
 
         (builtin_table_updates, catalog_updates)
@@ -203,6 +221,17 @@ impl CatalogState {
         let mut catalog_updates = Vec::new();
 
         for state_update in updates {
+            // Do not apply temporary item updates from other processes, since
+            // temporary items are scoped per session, which must be in the
+            // same process.
+            if self.is_nonlocal_ephemeral_item_update(&state_update) {
+                tracing::debug!(
+                    ?state_update,
+                    "skipping ephemeral item update for non-local session"
+                );
+                continue;
+            }
+
             if matches!(state_update.kind, StateUpdateKind::SystemConfiguration(_)) {
                 update_system_config = true;
             }
@@ -258,7 +287,7 @@ impl CatalogState {
         }
 
         if update_system_config {
-            self.system_configuration.dyncfg_updates();
+            self.system_configuration.sync_dyncfgs();
         }
 
         Ok((builtin_table_updates, catalog_updates))
@@ -294,6 +323,24 @@ impl CatalogState {
             StateUpdateKind::SystemConfiguration(system_configuration) => {
                 self.apply_system_configuration_update(system_configuration, diff, retractions);
             }
+            StateUpdateKind::ClusterSystemConfiguration(cfg) => {
+                Self::apply_scoped_system_configuration_update(
+                    &mut self.scoped_system_parameters.cluster,
+                    cfg.cluster_id,
+                    cfg.name,
+                    cfg.value,
+                    diff,
+                );
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(cfg) => {
+                Self::apply_scoped_system_configuration_update(
+                    &mut self.scoped_system_parameters.replica,
+                    cfg.replica_id,
+                    cfg.name,
+                    cfg.value,
+                    diff,
+                );
+            }
             StateUpdateKind::Cluster(cluster) => {
                 self.apply_cluster_update(cluster, diff, retractions);
             }
@@ -317,9 +364,6 @@ impl CatalogState {
                     retractions,
                     local_expression_cache,
                 );
-            }
-            StateUpdateKind::TemporaryItem(item) => {
-                self.apply_temporary_item_update(item, diff, retractions, local_expression_cache);
             }
             StateUpdateKind::Item(item) => {
                 self.apply_item_update(item, diff, retractions, local_expression_cache)?;
@@ -410,27 +454,37 @@ impl CatalogState {
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
-        let (schemas_by_id, schemas_by_name) = match &schema.database_id {
+        match &schema.database_id {
             Some(database_id) => {
                 let db = self
                     .database_by_id
                     .get_mut(database_id)
                     .expect("catalog out of sync");
-                (&mut db.schemas_by_id, &mut db.schemas_by_name)
+                apply_inverted_lookup(&mut db.schemas_by_name, &schema.name, schema.id, diff);
+                apply_with_update(
+                    &mut db.schemas_by_id,
+                    schema,
+                    |schema| schema.id,
+                    diff,
+                    &mut retractions.schemas,
+                );
             }
-            None => (
-                &mut self.ambient_schemas_by_id,
-                &mut self.ambient_schemas_by_name,
-            ),
-        };
-        apply_inverted_lookup(schemas_by_name, &schema.name, schema.id, diff);
-        apply_with_update(
-            schemas_by_id,
-            schema,
-            |schema| schema.id,
-            diff,
-            &mut retractions.schemas,
-        );
+            None => {
+                apply_inverted_lookup(
+                    &mut self.ambient_schemas_by_name,
+                    &schema.name,
+                    schema.id,
+                    diff,
+                );
+                apply_with_update(
+                    &mut self.ambient_schemas_by_id,
+                    schema,
+                    |schema| schema.id,
+                    diff,
+                    &mut retractions.schemas,
+                );
+            }
+        }
     }
 
     #[instrument(level = "debug")]
@@ -441,11 +495,9 @@ impl CatalogState {
         _retractions: &mut InProgressRetractions,
     ) {
         match diff {
-            StateDiff::Addition => self
-                .default_privileges
+            StateDiff::Addition => Arc::make_mut(&mut self.default_privileges)
                 .grant(default_privilege.object, default_privilege.acl_item),
-            StateDiff::Retraction => self
-                .default_privileges
+            StateDiff::Retraction => Arc::make_mut(&mut self.default_privileges)
                 .revoke(&default_privilege.object, &default_privilege.acl_item),
         }
     }
@@ -458,8 +510,12 @@ impl CatalogState {
         _retractions: &mut InProgressRetractions,
     ) {
         match diff {
-            StateDiff::Addition => self.system_privileges.grant(system_privilege),
-            StateDiff::Retraction => self.system_privileges.revoke(&system_privilege),
+            StateDiff::Addition => {
+                Arc::make_mut(&mut self.system_privileges).grant(system_privilege)
+            }
+            StateDiff::Retraction => {
+                Arc::make_mut(&mut self.system_privileges).revoke(&system_privilege)
+            }
         }
     }
 
@@ -491,6 +547,43 @@ impl CatalogState {
         }
     }
 
+    /// Applies a durable update to one of the in-memory scoped-parameter working
+    /// copies (`scoped_system_parameters.{cluster,replica}`), keyed by object
+    /// id. Mirrors the durable `{cluster,replica}_system_configurations`
+    /// collections; the cluster copy is consumed at plan time via
+    /// [`CatalogState::cluster_scoped_optimizer_overrides`], the replica copy at
+    /// the compute controller's per-replica dyncfg push.
+    ///
+    /// Retraction is conditional on the value matching, so a value change
+    /// (retraction of the old value + addition of the new) is correct regardless
+    /// of the order the two updates are applied in. See the scoped feature flags
+    /// design.
+    ///
+    /// [`CatalogState::cluster_scoped_optimizer_overrides`]: crate::catalog::CatalogState::cluster_scoped_optimizer_overrides
+    fn apply_scoped_system_configuration_update<Id: Ord>(
+        map: &mut BTreeMap<Id, BTreeMap<String, String>>,
+        id: Id,
+        name: String,
+        value: String,
+        diff: StateDiff,
+    ) {
+        match diff {
+            StateDiff::Addition => {
+                map.entry(id).or_default().insert(name, value);
+            }
+            StateDiff::Retraction => {
+                if let Some(values) = map.get_mut(&id) {
+                    if values.get(&name) == Some(&value) {
+                        values.remove(&name);
+                        if values.is_empty() {
+                            map.remove(&id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[instrument(level = "debug")]
     fn apply_cluster_update(
         &mut self,
@@ -498,6 +591,25 @@ impl CatalogState {
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
+        // Soft signal for a managed cluster whose replica size isn't in
+        // the in-memory size map. The `mz_clusters` MV LEFT JOINs the size
+        // table and resolves `disk` to false when the size is missing, so
+        // this case no longer crashes a managed cluster with RF=0.
+        // A managed cluster with at least one running replica still panics
+        // via `concretize_replica_location` in `apply_cluster_replica_update`.
+        if matches!(diff, StateDiff::Addition) {
+            if let mz_catalog::durable::ClusterVariant::Managed(managed) = &cluster.config.variant {
+                if !self.cluster_replica_sizes.0.contains_key(&managed.size) {
+                    soft_panic_or_log!(
+                        "managed cluster {} ({}) references unknown replica size {:?}; \
+                         mz_clusters.disk will resolve to false",
+                        cluster.name,
+                        cluster.id,
+                        managed.size,
+                    );
+                }
+            }
+        }
         apply_inverted_lookup(&mut self.clusters_by_name, &cluster.name, cluster.id, diff);
         apply_with_update(
             &mut self.clusters_by_id,
@@ -599,9 +711,38 @@ impl CatalogState {
             .clusters_by_id
             .get(&cluster_replica.cluster_id)
             .expect("catalog out of sync");
-        let azs = cluster.availability_zones();
+
+        // Mirror the cluster-side soft signal: if a managed replica's size
+        // is no longer in the in-memory size map, skip in-memory
+        // registration rather than panicking. The mz_cluster_replicas MV
+        // resolves `disk` from mz_cluster_replica_size_internal (which
+        // retains rows for disabled sizes), so SQL still returns sensible
+        // results. We tolerate disabled sizes here (allow_disabled=true)
+        // because an existing replica must remain queryable even if the
+        // operator has since disabled its size.
+        if let mz_catalog::durable::ReplicaLocation::Managed { size, .. } =
+            &cluster_replica.config.location
+        {
+            if !self.cluster_replica_sizes.0.contains_key(size) {
+                soft_panic_or_log!(
+                    "cluster replica {}.{} ({}) references unknown replica size {:?}; \
+                     skipping in-memory registration",
+                    cluster.name,
+                    cluster_replica.name,
+                    cluster_replica.replica_id,
+                    size,
+                );
+                return;
+            }
+        }
+
+        // Pass no availability-zone override: a rebuild from the durable record
+        // keeps the AZ list the replica was provisioned under, which may differ
+        // from the cluster's current pool while a graceful reconfiguration is in
+        // flight — the cluster controller tells realized- from target-shape
+        // replicas by exactly this list.
         let location = self
-            .concretize_replica_location(cluster_replica.config.location, &vec![], azs)
+            .concretize_replica_location(cluster_replica.config.location, &vec![], None, true)
             .expect("catalog in unexpected state");
         let cluster = self
             .clusters_by_id
@@ -629,7 +770,10 @@ impl CatalogState {
                 };
                 let config = ReplicaConfig {
                     location,
-                    compute: ComputeReplicaConfig { logging },
+                    compute: ComputeReplicaConfig {
+                        logging,
+                        arrangement_compression: cluster_replica.config.arrangement_compression,
+                    },
                 };
                 let mem_cluster_replica = ClusterReplica {
                     name: cluster_replica.name.clone(),
@@ -875,7 +1019,7 @@ impl CatalogState {
                     name.clone(),
                     CatalogItem::Source(Source {
                         create_sql: None,
-                        data_source: DataSourceDesc::Introspection(coll.data_source),
+                        data_source: coll.data_source.clone(),
                         desc: coll.desc.clone(),
                         global_id,
                         timeline: Timeline::EpochMilliseconds,
@@ -894,46 +1038,65 @@ impl CatalogState {
                     PrivilegeMap::from_mz_acl_items(acl_items),
                 );
             }
-            Builtin::ContinualTask(ct) => {
+            Builtin::MaterializedView(mv) => {
                 let mut acl_items = vec![rbac::owner_privilege(
-                    mz_sql::catalog::ObjectType::Source,
+                    mz_sql::catalog::ObjectType::MaterializedView,
                     MZ_SYSTEM_ROLE_ID,
                 )];
-                acl_items.extend_from_slice(&ct.access);
-                // Continual Tasks can't be versioned.
+                acl_items.extend_from_slice(&mv.access);
+
+                let custom_logical_compaction_window = mv.is_retained_metrics_object.then(|| {
+                    self.system_config()
+                        .metrics_retention()
+                        .try_into()
+                        .expect("invalid metrics retention")
+                });
+
+                // Builtin materialized views can't be versioned.
                 let versions = BTreeMap::new();
 
-                let item = self
+                let mut item = self
                     .parse_item(
                         global_id,
-                        &ct.create_sql(),
+                        &mv.create_sql(),
                         &versions,
                         None,
-                        false,
-                        None,
+                        mv.is_retained_metrics_object,
+                        custom_logical_compaction_window,
                         local_expression_cache,
                         None,
                     )
                     .unwrap_or_else(|e| {
                         panic!(
-                            "internal error: failed to load bootstrap continual task:\n\
-                                    {}\n\
-                                    error:\n\
-                                    {:?}\n\n\
-                                    make sure that the schema name is specified in the builtin continual task's create sql statement.",
-                            ct.name, e
+                            "internal error: failed to load bootstrap materialized view:\n\
+                             {}\n\
+                             error:\n\
+                             {e:?}\n\n\
+                             make sure that the schema name is specified in the builtin \
+                             materialized view's create sql statement.",
+                            mv.name,
                         )
                     });
-                let CatalogItem::ContinualTask(_) = &item else {
+                let CatalogItem::MaterializedView(catalog_mv) = &mut item else {
                     panic!(
-                        "internal error: builtin continual task {}'s SQL does not begin with \"CREATE CONTINUAL TASK\".",
-                        ct.name
+                        "internal error: builtin materialized view {}'s SQL does not begin \
+                         with \"CREATE MATERIALIZED VIEW\".",
+                        mv.name,
                     );
                 };
 
+                // The optimizer can only infer keys from MV definitions, but cannot infer
+                // uniqueness present in the input data. Extend with the keys declared in the
+                // builtin definition, to allow supplying additional key knowledge.
+                let mut desc = catalog_mv.desc.latest();
+                for key in &mv.desc.typ().keys {
+                    desc = desc.with_key(key.clone());
+                }
+                catalog_mv.desc = VersionedRelationDesc::new(desc);
+
                 self.insert_item(
                     item_id,
-                    ct.oid,
+                    mv.oid,
                     name,
                     item,
                     MZ_SYSTEM_ROLE_ID,
@@ -989,121 +1152,22 @@ impl CatalogState {
         }
     }
 
-    #[instrument(level = "debug")]
-    fn apply_temporary_item_update(
-        &mut self,
-        temporary_item: TemporaryItem,
-        diff: StateDiff,
-        retractions: &mut InProgressRetractions,
-        local_expression_cache: &mut LocalExpressionCache,
-    ) {
-        match diff {
-            StateDiff::Addition => {
-                let TemporaryItem {
-                    id,
-                    oid,
-                    global_id,
-                    schema_id,
-                    name,
-                    conn_id,
-                    create_sql,
-                    owner_id,
-                    privileges,
-                    extra_versions,
-                } = temporary_item;
-                // Lazily create the temporary schema if it doesn't exist yet.
-                // We need the conn_id to create the schema, and it should always be Some for temp items.
-                let temp_conn_id = conn_id
-                    .as_ref()
-                    .expect("temporary items must have a connection id");
-                if !self.temporary_schemas.contains_key(temp_conn_id) {
-                    self.create_temporary_schema(temp_conn_id, owner_id)
-                        .expect("failed to create temporary schema");
-                }
-                let schema = self.find_temp_schema(&schema_id);
-                let name = QualifiedItemName {
-                    qualifiers: ItemQualifiers {
-                        database_spec: schema.database().clone(),
-                        schema_spec: schema.id().clone(),
-                    },
-                    item: name.clone(),
-                };
-
-                let entry = match retractions.temp_items.remove(&id) {
-                    Some(mut retraction) => {
-                        assert_eq!(retraction.id, id);
-
-                        // We only reparse the SQL if it's changed. Otherwise, we use the existing
-                        // item. This is a performance optimization and not needed for correctness.
-                        // This makes it difficult to use the `UpdateFrom` trait, but the structure
-                        // is still the same as the trait.
-                        if retraction.create_sql() != create_sql {
-                            let mut catalog_item = self
-                                .deserialize_item(
-                                    global_id,
-                                    &create_sql,
-                                    &extra_versions,
-                                    local_expression_cache,
-                                    Some(retraction.item),
-                                )
-                                .unwrap_or_else(|e| {
-                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                                });
-                            // Have to patch up the item because parsing doesn't
-                            // take into account temporary schemas/conn_id.
-                            // NOTE(aljoscha): I don't like how we're patching
-                            // this in here, but it's but one of the ways in
-                            // which temporary items are a bit weird. So, here
-                            // we are ...
-                            catalog_item.set_conn_id(conn_id);
-                            retraction.item = catalog_item;
-                        }
-
-                        retraction.id = id;
-                        retraction.oid = oid;
-                        retraction.name = name;
-                        retraction.owner_id = owner_id;
-                        retraction.privileges = PrivilegeMap::from_mz_acl_items(privileges);
-                        retraction
-                    }
-                    None => {
-                        let mut catalog_item = self
-                            .deserialize_item(
-                                global_id,
-                                &create_sql,
-                                &extra_versions,
-                                local_expression_cache,
-                                None,
-                            )
-                            .unwrap_or_else(|e| {
-                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                            });
-
-                        // Have to patch up the item because parsing doesn't
-                        // take into account temporary schemas/conn_id.
-                        // NOTE(aljoscha): I don't like how we're patching this
-                        // in here, but it's but one of the ways in which
-                        // temporary items are a bit weird. So, here we are ...
-                        catalog_item.set_conn_id(conn_id);
-
-                        CatalogEntry {
-                            item: catalog_item,
-                            referenced_by: Vec::new(),
-                            used_by: Vec::new(),
-                            id,
-                            oid,
-                            name,
-                            owner_id,
-                            privileges: PrivilegeMap::from_mz_acl_items(privileges),
-                        }
-                    }
-                };
-                self.insert_entry(entry);
-            }
-            StateDiff::Retraction => {
-                let entry = self.drop_item(temporary_item.id);
-                retractions.temp_items.insert(temporary_item.id, entry);
-            }
+    /// Whether `update` concerns an ephemeral item whose owning session is not
+    /// connected to this process, in which case applying it must be a no-op.
+    fn is_nonlocal_ephemeral_item_update(&self, update: &StateUpdate) -> bool {
+        let StateUpdateKind::Item(item) = &update.kind else {
+            return false;
+        };
+        // Only ephemeral items have ephemeral_owner_session
+        let Some(owner) = item.ephemeral_owner_session else {
+            return false;
+        };
+        match update.diff {
+            // An addition is local when the owning session is connected here.
+            StateDiff::Addition => !self.temporary_namespaces.contains_uuid(&owner),
+            // A retraction must be applied iff the matching addition above
+            // was applied here, and entry presence records exactly that.
+            StateDiff::Retraction => !self.entry_by_id.contains_key(&item.id),
         }
     }
 
@@ -1128,44 +1192,96 @@ impl CatalogState {
                     owner_id,
                     privileges,
                     extra_versions,
+                    ephemeral_owner_session,
                 } = item;
-                let schema = self.find_non_temp_schema(&schema_id);
-                let name = QualifiedItemName {
-                    qualifiers: ItemQualifiers {
-                        database_spec: schema.database().clone(),
-                        schema_spec: schema.id().clone(),
+
+                // Temporary items live in the temporary schema of the owning
+                // session's connection, not in the schema named by
+                // `schema_id` (which is the temporary schema sentinel).
+                // Updates for sessions not connected to this process are
+                // filtered out in `apply_updates_inner`, so the mapping must
+                // exist here.
+                let conn_id = ephemeral_owner_session.map(|owner| {
+                    self.temporary_namespaces
+                        .conn_for_uuid(&owner)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            panic!("no session record applied for temporary item owner {owner}")
+                        })
+                });
+                let name = match &conn_id {
+                    Some(_) => QualifiedItemName {
+                        qualifiers: ItemQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Temporary,
+                        },
+                        item: name.clone(),
                     },
-                    item: name.clone(),
-                };
-                let entry = match retractions.items.remove(&key) {
-                    Some(retraction) => {
-                        assert_eq!(retraction.id, item.id);
-
-                        let item = self
-                            .deserialize_item(
-                                global_id,
-                                &create_sql,
-                                &extra_versions,
-                                local_expression_cache,
-                                Some(retraction.item),
-                            )
-                            .unwrap_or_else(|e| {
-                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                            });
-
-                        CatalogEntry {
-                            item,
-                            id,
-                            oid,
-                            name,
-                            owner_id,
-                            privileges: PrivilegeMap::from_mz_acl_items(privileges),
-                            referenced_by: retraction.referenced_by,
-                            used_by: retraction.used_by,
+                    None => {
+                        let schema = self.find_non_temp_schema(&schema_id);
+                        QualifiedItemName {
+                            qualifiers: ItemQualifiers {
+                                database_spec: schema.database().clone(),
+                                schema_spec: schema.id().clone(),
+                            },
+                            item: name.clone(),
                         }
                     }
+                };
+                let entry = match retractions.items.remove(&key) {
+                    Some(mut retraction) => {
+                        assert_eq!(retraction.id, id);
+
+                        // We only reparse the SQL if it's changed. Otherwise, we use the existing
+                        // item. This is a performance optimization and not needed for correctness.
+                        // This makes it difficult to use the `UpdateFrom` trait, but the structure
+                        // is still the same as the trait.
+                        if retraction.create_sql() != create_sql {
+                            let mut catalog_item = self
+                                .deserialize_item(
+                                    global_id,
+                                    &create_sql,
+                                    &extra_versions,
+                                    local_expression_cache,
+                                    Some(retraction.item),
+                                )
+                                .unwrap_or_else(|e| {
+                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                                });
+                            if conn_id.is_some() {
+                                // Have to patch up the item because parsing
+                                // doesn't take into account temporary
+                                // schemas/conn_id.
+                                // NOTE(aljoscha): I don't like how we're patching
+                                // this in here, but it's but one of the ways in
+                                // which temporary items are a bit weird. So, here
+                                // we are ...
+                                catalog_item.set_conn_id(conn_id.clone());
+                                // Deserializing replans the SQL, and the
+                                // planner's canonical printing can differ from
+                                // `create_sql`, for example when a feature flag
+                                // changed how references are printed since
+                                // `create_sql` was produced. Keep the exact
+                                // input. A later op in the same transaction
+                                // retracts this item by re-serializing it, and
+                                // that retraction must cancel byte-for-byte
+                                // against this addition during consolidation,
+                                // else two retractions of the same id survive
+                                // and applying them panics.
+                                catalog_item.set_create_sql(create_sql);
+                            }
+                            retraction.item = catalog_item;
+                        }
+
+                        retraction.id = id;
+                        retraction.oid = oid;
+                        retraction.name = name;
+                        retraction.owner_id = owner_id;
+                        retraction.privileges = PrivilegeMap::from_mz_acl_items(privileges);
+                        retraction
+                    }
                     None => {
-                        let catalog_item = self
+                        let mut catalog_item = self
                             .deserialize_item(
                                 global_id,
                                 &create_sql,
@@ -1176,6 +1292,13 @@ impl CatalogState {
                             .unwrap_or_else(|e| {
                                 panic!("{e:?}: invalid persisted SQL: {create_sql}")
                             });
+
+                        if conn_id.is_some() {
+                            // See the patch-up comments on the reparse above.
+                            catalog_item.set_conn_id(conn_id.clone());
+                            catalog_item.set_create_sql(create_sql);
+                        }
+
                         CatalogEntry {
                             item: catalog_item,
                             referenced_by: Vec::new(),
@@ -1209,7 +1332,7 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let prev = self.comments.update_comment(
+                let prev = Arc::make_mut(&mut self.comments).update_comment(
                     comment.object_id,
                     comment.sub_component,
                     Some(comment.comment),
@@ -1220,9 +1343,11 @@ impl CatalogState {
                 );
             }
             StateDiff::Retraction => {
-                let prev =
-                    self.comments
-                        .update_comment(comment.object_id, comment.sub_component, None);
+                let prev = Arc::make_mut(&mut self.comments).update_comment(
+                    comment.object_id,
+                    comment.sub_component,
+                    None,
+                );
                 assert_eq!(
                     prev,
                     Some(comment.comment),
@@ -1269,7 +1394,7 @@ impl CatalogState {
         _retractions: &mut InProgressRetractions,
     ) {
         apply_inverted_lookup(
-            &mut self.storage_metadata.collection_metadata,
+            &mut Arc::make_mut(&mut self.storage_metadata).collection_metadata,
             &storage_collection_metadata.id,
             storage_collection_metadata.shard,
             diff,
@@ -1285,8 +1410,7 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let newly_inserted = self
-                    .storage_metadata
+                let newly_inserted = Arc::make_mut(&mut self.storage_metadata)
                     .unfinalized_shards
                     .insert(unfinalized_shard.shard);
                 assert!(
@@ -1295,8 +1419,7 @@ impl CatalogState {
                 );
             }
             StateDiff::Retraction => {
-                let removed = self
-                    .storage_metadata
+                let removed = Arc::make_mut(&mut self.storage_metadata)
                     .unfinalized_shards
                     .remove(&unfinalized_shard.shard);
                 assert!(
@@ -1305,22 +1428,6 @@ impl CatalogState {
                 );
             }
         }
-    }
-
-    /// Generate a list of `BuiltinTableUpdate`s that correspond to a list of updates made to the
-    /// durable catalog.
-    #[instrument]
-    pub(crate) fn generate_builtin_table_updates(
-        &self,
-        updates: Vec<StateUpdate>,
-    ) -> Vec<BuiltinTableUpdate> {
-        let mut builtin_table_updates = Vec::new();
-        for StateUpdate { kind, ts: _, diff } in updates {
-            let builtin_table_update = self.generate_builtin_table_update(kind, diff);
-            let builtin_table_update = self.resolve_builtin_table_updates(builtin_table_update);
-            builtin_table_updates.extend(builtin_table_update);
-        }
-        builtin_table_updates
     }
 
     /// Generate a list of `BuiltinTableUpdate`s that correspond to a single update made to the
@@ -1333,45 +1440,36 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let diff = diff.into();
         match kind {
-            StateUpdateKind::Role(role) => {
-                let mut builtin_table_updates = self.pack_role_update(role.id, diff);
-                for group_id in role.membership.map.keys() {
-                    builtin_table_updates
-                        .push(self.pack_role_members_update(*group_id, role.id, diff))
-                }
-                builtin_table_updates
-            }
+            // mz_roles and mz_role_parameters are MaterializedViews backed by
+            // mz_internal.mz_catalog_raw, so role rows do not produce builtin
+            // table updates here.
+            StateUpdateKind::Role(_) => Vec::new(),
             StateUpdateKind::RoleAuth(role_auth) => {
                 vec![self.pack_role_auth_update(role_auth.role_id, diff)]
             }
-            StateUpdateKind::Database(database) => {
-                vec![self.pack_database_update(&database.id, diff)]
-            }
-            StateUpdateKind::Schema(schema) => {
-                let db_spec = schema.database_id.into();
-                vec![self.pack_schema_update(&db_spec, &schema.id, diff)]
-            }
-            StateUpdateKind::DefaultPrivilege(default_privilege) => {
-                vec![self.pack_default_privileges_update(
-                    &default_privilege.object,
-                    &default_privilege.acl_item.grantee,
-                    &default_privilege.acl_item.acl_mode,
-                    diff,
-                )]
-            }
-            StateUpdateKind::SystemPrivilege(system_privilege) => {
-                vec![self.pack_system_privileges_update(system_privilege, diff)]
-            }
+            // mz_default_privileges and mz_system_privileges are MaterializedViews
+            // backed by mz_internal.mz_catalog_raw, so privilege rows do not
+            // produce builtin table updates here.
+            StateUpdateKind::DefaultPrivilege(_) => Vec::new(),
+            StateUpdateKind::SystemPrivilege(_) => Vec::new(),
             StateUpdateKind::SystemConfiguration(_) => Vec::new(),
-            StateUpdateKind::Cluster(cluster) => self.pack_cluster_update(&cluster.name, diff),
+            // mz_internal.mz_{cluster,replica}_system_parameters are
+            // MaterializedViews backed by mz_internal.mz_catalog_raw, so the
+            // durable scoped-configuration rows do not produce builtin table
+            // updates here. (The in-memory working copy used for resolution is
+            // maintained separately in `apply_*_system_configuration_update`.)
+            StateUpdateKind::ClusterSystemConfiguration(_) => Vec::new(),
+            StateUpdateKind::ReplicaSystemConfiguration(_) => Vec::new(),
+            // mz_clusters and mz_cluster_schedules are MaterializedViews backed
+            // by mz_internal.mz_catalog_raw, so cluster rows do not produce
+            // builtin table updates here.
+            StateUpdateKind::Cluster(_) => Vec::new(),
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.pack_item_update(introspection_source_index.item_id, diff)
             }
-            StateUpdateKind::ClusterReplica(cluster_replica) => self.pack_cluster_replica_update(
-                cluster_replica.cluster_id,
-                &cluster_replica.name,
-                diff,
-            ),
+            // mz_cluster_replicas is a MaterializedView backed by
+            // mz_internal.mz_catalog_raw.
+            StateUpdateKind::ClusterReplica(_) => Vec::new(),
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
                 // Runtime-alterable system objects have real entries in the
                 // items collection and so get handled through the normal
@@ -1382,27 +1480,17 @@ impl CatalogState {
                     vec![]
                 }
             }
-            StateUpdateKind::TemporaryItem(item) => self.pack_item_update(item.id, diff),
             StateUpdateKind::Item(item) => self.pack_item_update(item.id, diff),
-            StateUpdateKind::Comment(comment) => vec![self.pack_comment_update(
-                comment.object_id,
-                comment.sub_component,
-                &comment.comment,
-                diff,
-            )],
-            StateUpdateKind::SourceReferences(source_references) => {
-                self.pack_source_references_update(&source_references, diff)
-            }
-            StateUpdateKind::AuditLog(audit_log) => {
-                vec![
-                    self.pack_audit_log_update(&audit_log.event, diff)
-                        .expect("could not pack audit log update"),
-                ]
-            }
-            StateUpdateKind::NetworkPolicy(policy) => self
-                .pack_network_policy_update(&policy.id, diff)
-                .expect("could not pack audit log update"),
-            StateUpdateKind::StorageCollectionMetadata(_)
+            StateUpdateKind::Comment(_) => Vec::new(),
+            StateUpdateKind::SourceReferences(_) => Vec::new(),
+            // mz_audit_events is a MaterializedView backed by
+            // mz_internal.mz_catalog_raw, so audit log rows do not produce
+            // builtin table updates here.
+            StateUpdateKind::AuditLog(_) => Vec::new(),
+            StateUpdateKind::Database(_)
+            | StateUpdateKind::Schema(_)
+            | StateUpdateKind::NetworkPolicy(_)
+            | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
     }
@@ -1411,6 +1499,167 @@ impl CatalogState {
         self.entry_by_id
             .get_mut(id)
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
+    }
+
+    /// Set the optimized plan for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or `MetricSink`.
+    pub(super) fn set_optimized_plan(
+        &mut self,
+        id: GlobalId,
+        plan: DataflowDescription<mz_expr::OptimizedMirRelationExpr>,
+    ) {
+        let item_id = self.entry_by_global_id[&id];
+        let entry = self.get_entry_mut(&item_id);
+        match entry.item_mut() {
+            CatalogItem::Index(idx) => idx.optimized_plan = Some(Arc::new(plan)),
+            CatalogItem::MaterializedView(mv) => mv.optimized_plan = Some(Arc::new(plan)),
+            CatalogItem::MetricSink(ms) => ms.optimized_plan = Some(Arc::new(plan)),
+            other => panic!("set_optimized_plan called on {} ({:?})", id, other.typ()),
+        }
+    }
+
+    /// Set the physical plan for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or `MetricSink`.
+    pub(super) fn set_physical_plan(
+        &mut self,
+        id: GlobalId,
+        plan: mz_compute_types::dataflows::LirDataflowDescription,
+    ) {
+        let item_id = self.entry_by_global_id[&id];
+        let entry = self.get_entry_mut(&item_id);
+        match entry.item_mut() {
+            CatalogItem::Index(idx) => idx.physical_plan = Some(Arc::new(plan)),
+            CatalogItem::MaterializedView(mv) => mv.physical_plan = Some(Arc::new(plan)),
+            CatalogItem::MetricSink(ms) => ms.physical_plan = Some(Arc::new(plan)),
+            other => panic!("set_physical_plan called on {} ({:?})", id, other.typ()),
+        }
+    }
+
+    /// Set the `DataflowMetainfo` for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or `MetricSink`.
+    pub(super) fn set_dataflow_metainfo(
+        &mut self,
+        id: GlobalId,
+        metainfo: DataflowMetainfo<Arc<OptimizerNotice>>,
+    ) {
+        // Add entries to the `notices_by_dep_id` lookup map.
+        for notice in metainfo.optimizer_notices.iter() {
+            for dep_id in notice.dependencies.iter() {
+                self.notices_by_dep_id
+                    .entry(*dep_id)
+                    .or_default()
+                    .push(Arc::clone(notice));
+            }
+            if let Some(item_id) = notice.item_id {
+                soft_assert_eq_or_log!(
+                    item_id,
+                    id,
+                    "notice.item_id should match the id for whom we are saving the notice"
+                );
+            }
+        }
+        // Set the metainfo on the catalog object.
+        let item_id = self.entry_by_global_id[&id];
+        let entry = self.get_entry_mut(&item_id);
+        match entry.item_mut() {
+            CatalogItem::Index(idx) => idx.dataflow_metainfo = Some(metainfo),
+            CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo = Some(metainfo),
+            CatalogItem::MetricSink(ms) => ms.dataflow_metainfo = Some(metainfo),
+            other => panic!("set_dataflow_metainfo called on {} ({:?})", id, other.typ()),
+        }
+    }
+
+    /// Clean up optimizer notices for the given dropped catalog entries.
+    ///
+    /// This extracts notices directly from the owned entries (which
+    /// have already been removed from the catalog maps), cleans up
+    /// the `notices_by_dep_id` reverse index, and removes notices
+    /// from other (still-live) catalog objects that depended on the
+    /// dropped items.
+    ///
+    /// Returns the set of all dropped notices for builtin table
+    /// retraction.
+    #[mz_ore::instrument(level = "trace")]
+    pub(super) fn drop_optimizer_notices(
+        &mut self,
+        dropped_entries: Vec<CatalogEntry>,
+    ) -> BTreeSet<Arc<OptimizerNotice>> {
+        let mut dropped_notices = BTreeSet::new();
+        let mut drop_ids = BTreeSet::new();
+
+        // Extract notices directly from the owned dropped entries.
+        for mut entry in dropped_entries {
+            drop_ids.extend(entry.global_ids());
+            if let Some(metainfo) = entry.item_mut().dataflow_metainfo_mut() {
+                soft_assert_or_log!(
+                    metainfo.optimizer_notices.iter().all_unique(),
+                    "should have been pushed there by \
+                     `push_optimizer_notice_dedup`"
+                );
+                for n in metainfo.optimizer_notices.drain(..) {
+                    // Clean up notices_by_dep_id for this notice's
+                    // dependencies.
+                    for dep_id in n.dependencies.iter() {
+                        if let Some(notices) = self.notices_by_dep_id.get_mut(dep_id) {
+                            notices.retain(|x| &n != x);
+                            if notices.is_empty() {
+                                self.notices_by_dep_id.remove(dep_id);
+                            }
+                        }
+                    }
+                    dropped_notices.insert(n);
+                }
+            }
+        }
+
+        // Remove notices_by_dep_id entries keyed by the dropped IDs.
+        // These are notices on OTHER items that depend on a dropped
+        // item. We need to remove them from those items' metainfo.
+        for id in &drop_ids {
+            if let Some(notices) = self.notices_by_dep_id.remove(id) {
+                for n in notices.into_iter() {
+                    // Remove the notice from the catalog object it
+                    // lives on (if that object still exists — it
+                    // may have been dropped too, in which case the
+                    // notice was already collected above).
+                    if let Some(item_id) = n.item_id.as_ref() {
+                        if let Some(entry) = self.try_get_entry_by_global_id(item_id) {
+                            let catalog_item_id = entry.id();
+                            let entry = self.get_entry_mut(&catalog_item_id);
+                            if let Some(m) = entry.item_mut().dataflow_metainfo_mut() {
+                                m.optimizer_notices.retain(|x| &n != x);
+                            }
+                        }
+                    }
+                    dropped_notices.insert(n);
+                }
+            }
+        }
+
+        // Clean up notices_by_dep_id entries for dependency IDs
+        // that are NOT being dropped but had dropped notices.
+        let todo_dep_ids: BTreeSet<GlobalId> = dropped_notices
+            .iter()
+            .flat_map(|n| n.dependencies.iter())
+            .filter(|dep_id| !drop_ids.contains(dep_id))
+            .copied()
+            .collect();
+        for id in todo_dep_ids {
+            if let Some(notices) = self.notices_by_dep_id.get_mut(&id) {
+                notices.retain(|n| !dropped_notices.contains(n));
+                if notices.is_empty() {
+                    self.notices_by_dep_id.remove(&id);
+                }
+            }
+        }
+
+        dropped_notices
     }
 
     fn get_schema_mut(
@@ -1422,8 +1671,8 @@ impl CatalogState {
         // Keep in sync with `get_schemas`
         match (database_spec, schema_spec) {
             (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => self
-                .temporary_schemas
-                .get_mut(conn_id)
+                .temporary_namespaces
+                .schema_mut(conn_id)
                 .expect("catalog out of sync"),
             (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => self
                 .ambient_schemas_by_id
@@ -1556,6 +1805,7 @@ impl CatalogState {
                             global_id,
                             uncached_expr,
                             optimizer_features,
+                            RelationVersion::root(),
                         );
                     }
                     // Add item to catalog.
@@ -1704,7 +1954,7 @@ impl CatalogState {
                 Some(metadata) => metadata.referenced_by.push(entry.id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
-                    &u,
+                    u,
                     self.resolve_full_name(entry.name(), entry.conn_id())
                 ),
             }
@@ -1719,7 +1969,7 @@ impl CatalogState {
                 Some(metadata) => metadata.used_by.push(entry.id()),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
-                    &u,
+                    u,
                     self.resolve_full_name(entry.name(), entry.conn_id())
                 ),
             }
@@ -1730,11 +1980,9 @@ impl CatalogState {
         let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
         // Lazily create the temporary schema if this is a temporary item and the schema
         // doesn't exist yet.
-        if entry.name().qualifiers.schema_spec == SchemaSpecifier::Temporary
-            && !self.temporary_schemas.contains_key(conn_id)
-        {
-            self.create_temporary_schema(conn_id, entry.owner_id)
-                .expect("failed to create temporary schema");
+        if entry.name().qualifiers.schema_spec == SchemaSpecifier::Temporary {
+            self.temporary_namespaces
+                .ensure_schema(conn_id, entry.owner_id);
         }
         let schema = self.get_schema_mut(
             &entry.name().qualifiers.database_spec,
@@ -1901,6 +2149,9 @@ impl CatalogState {
             cluster_id,
             is_retained_metrics_object: false,
             custom_logical_compaction_window: None,
+            optimized_plan: None,
+            physical_plan: None,
+            dataflow_metainfo: None,
         });
         (index_name, index)
     }
@@ -1910,7 +2161,7 @@ impl CatalogState {
     /// Return a `bool` value indicating whether the configuration was modified
     /// by the call.
     fn insert_system_configuration(&mut self, name: &str, value: VarInput) -> Result<bool, Error> {
-        Ok(self.system_configuration.set(name, value)?)
+        Ok(Arc::make_mut(&mut self.system_configuration).set(name, value)?)
     }
 
     /// Reset system configuration `name`.
@@ -1918,7 +2169,7 @@ impl CatalogState {
     /// Return a `bool` value indicating whether the configuration was modified
     /// by the call.
     fn remove_system_configuration(&mut self, name: &str) -> Result<bool, Error> {
-        Ok(self.system_configuration.reset(name)?)
+        Ok(Arc::make_mut(&mut self.system_configuration).reset(name)?)
     }
 }
 
@@ -1926,8 +2177,9 @@ impl CatalogState {
 ///
 /// # Panics
 ///
-/// This function assumes that all provided `updates` have the same timestamp
-/// and will panic otherwise.
+/// This function assumes that all provided `updates` have the same timestamp and will panic
+/// otherwise. It also requires that the provided `updates` are consolidated, i.e. all contained
+/// `StateUpdateKinds` are unique.
 fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     fn push_update<T>(
         update: T,
@@ -1945,6 +2197,13 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         updates.iter().map(|update| update.ts).all_equal(),
         "all timestamps should be equal: {updates:?}"
     );
+    soft_assert_no_log!(
+        {
+            let mut dedup = BTreeSet::new();
+            updates.iter().all(|update| dedup.insert(&update.kind))
+        },
+        "updates should be consolidated: {updates:?}"
+    );
 
     // Partition updates by type so that we can weave different update types into the right spots.
     let mut pre_cluster_retractions = Vec::new();
@@ -1954,8 +2213,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     let mut builtin_item_updates = Vec::new();
     let mut item_retractions = Vec::new();
     let mut item_additions = Vec::new();
-    let mut temp_item_retractions = Vec::new();
-    let mut temp_item_additions = Vec::new();
     let mut post_item_retractions = Vec::new();
     let mut post_item_additions = Vec::new();
     for update in updates {
@@ -1975,8 +2232,10 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 &mut pre_cluster_additions,
             ),
             StateUpdateKind::Cluster(_)
+            | StateUpdateKind::ClusterSystemConfiguration(_)
             | StateUpdateKind::IntrospectionSourceIndex(_)
-            | StateUpdateKind::ClusterReplica(_) => push_update(
+            | StateUpdateKind::ClusterReplica(_)
+            | StateUpdateKind::ReplicaSystemConfiguration(_) => push_update(
                 update,
                 diff,
                 &mut cluster_retractions,
@@ -1985,12 +2244,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             StateUpdateKind::SystemObjectMapping(system_object_mapping) => {
                 builtin_item_updates.push((system_object_mapping, update.ts, update.diff))
             }
-            StateUpdateKind::TemporaryItem(item) => push_update(
-                (item, update.ts, update.diff),
-                diff,
-                &mut temp_item_retractions,
-                &mut temp_item_additions,
-            ),
             StateUpdateKind::Item(item) => push_update(
                 (item, update.ts, update.diff),
                 diff,
@@ -2010,7 +2263,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    // Sort builtin item updates by dependency.
+    // Sort builtin item updates by dependency. The builtin definition order must be a dependency
+    // order, so we can use that to avoid a more expensive topo sorting.
     let builtin_item_updates = builtin_item_updates
         .into_iter()
         .map(|(system_object_mapping, ts, diff)| {
@@ -2023,116 +2277,62 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         .sorted_by_key(|(idx, _, _, _)| *idx)
         .map(|(_, system_object_mapping, ts, diff)| (system_object_mapping, ts, diff));
 
-    // Further partition builtin item updates.
+    // Partition builtins based on whether or not they should be applied before or after clusters.
+    // Clusters depend on sources (introspection logs), so sources need to be applied first.
+    // Everything else can be applied after clusters.
+    let mut builtin_source_retractions = Vec::new();
+    let mut builtin_source_additions = Vec::new();
     let mut other_builtin_retractions = Vec::new();
     let mut other_builtin_additions = Vec::new();
-    let mut builtin_index_retractions = Vec::new();
-    let mut builtin_index_additions = Vec::new();
     for (builtin_item_update, ts, diff) in builtin_item_updates {
-        match &builtin_item_update.description.object_type {
-            CatalogItemType::Index | CatalogItemType::ContinualTask => push_update(
-                StateUpdate {
-                    kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                    ts,
-                    diff,
-                },
+        let object_type = builtin_item_update.description.object_type;
+        let update = StateUpdate {
+            kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+            ts,
+            diff,
+        };
+        if object_type == CatalogItemType::Source {
+            push_update(
+                update,
                 diff,
-                &mut builtin_index_retractions,
-                &mut builtin_index_additions,
-            ),
-            CatalogItemType::Table
-            | CatalogItemType::Source
-            | CatalogItemType::Sink
-            | CatalogItemType::View
-            | CatalogItemType::MaterializedView
-            | CatalogItemType::Type
-            | CatalogItemType::Func
-            | CatalogItemType::Secret
-            | CatalogItemType::Connection => push_update(
-                StateUpdate {
-                    kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                    ts,
-                    diff,
-                },
+                &mut builtin_source_retractions,
+                &mut builtin_source_additions,
+            );
+        } else {
+            push_update(
+                update,
                 diff,
                 &mut other_builtin_retractions,
                 &mut other_builtin_additions,
-            ),
+            );
         }
     }
 
-    /// Sort `CONNECTION` items.
+    /// Sort items by their dependencies using topological sort.
     ///
-    /// `CONNECTION`s can depend on one another, e.g. a `KAFKA CONNECTION` contains
-    /// a list of `BROKERS` and these broker definitions can themselves reference other
-    /// connections. This `BROKERS` list can also be `ALTER`ed and thus it's possible
-    /// for a connection to depend on another with an ID greater than its own.
-    fn sort_connections(connections: &mut Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>) {
-        let mut topo: BTreeMap<
-            (mz_catalog::durable::Item, Timestamp, StateDiff),
-            BTreeSet<CatalogItemId>,
-        > = BTreeMap::default();
-        let existing_connections: BTreeSet<_> = connections.iter().map(|item| item.0.id).collect();
+    /// # Panics
+    ///
+    /// This function requires that all provided items have unique item IDs.
+    fn sort_items_topological(items: &mut Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>) {
+        tracing::debug!(?items, "sorting items by dependencies");
 
-        // Initialize our set of topological sort.
-        tracing::debug!(?connections, "sorting connections");
-        for (connection, ts, diff) in connections.drain(..) {
-            let statement = mz_sql::parse::parse(&connection.create_sql)
-                .expect("valid CONNECTION create_sql")
+        let key_fn = |item: &(mz_catalog::durable::Item, _, _)| item.0.id;
+        let dependencies_fn = |item: &(mz_catalog::durable::Item, _, _)| {
+            let statement = mz_sql::parse::parse(&item.0.create_sql)
+                .expect("valid create_sql")
                 .into_element()
                 .ast;
-            let mut dependencies = mz_sql::names::dependencies(&statement)
-                .expect("failed to find dependencies of CONNECTION");
-            // Be defensive and remove any possible self references.
-            dependencies.remove(&connection.id);
-            // It's possible we're applying updates to a connection where the
-            // dependency already exists and thus it's not in `connections`.
-            dependencies.retain(|dep| existing_connections.contains(dep));
-
-            // Be defensive and ensure we're not clobbering any items.
-            assert_none!(topo.insert((connection, ts, diff), dependencies));
-        }
-        tracing::debug!(?topo, ?existing_connections, "built topological sort");
-
-        // Do a topological sort, pushing back into the provided Vec.
-        while !topo.is_empty() {
-            // Get all of the connections with no dependencies.
-            let no_deps: Vec<_> = topo
-                .iter()
-                .filter_map(|(item, deps)| {
-                    if deps.is_empty() {
-                        Some(item.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            // Cycle in our graph!
-            if no_deps.is_empty() {
-                panic!("programming error, cycle in Connections");
-            }
-
-            // Process all of the items with no dependencies.
-            for item in no_deps {
-                // Remove the item from our topological sort.
-                topo.remove(&item);
-                // Remove this item from anything that depends on it.
-                topo.values_mut().for_each(|deps| {
-                    deps.remove(&item.0.id);
-                });
-                // Push it back into our list as "completed".
-                connections.push(item);
-            }
-        }
+            mz_sql::names::dependencies(&statement).expect("failed to find dependencies of item")
+        };
+        sort_topological(items, key_fn, dependencies_fn);
     }
 
     /// Sort item updates by dependency.
     ///
     /// First we group items into groups that are totally ordered by dependency. For example, when
     /// sorting all items by dependency we know that all tables can come after all sources, because
-    /// a source can never depend on a table. Within these groups, the ID order matches the
-    /// dependency order.
+    /// a source can never depend on a table. Second, we sort the items in each group in
+    /// topological order, or by ID, depending on the type.
     ///
     /// It used to be the case that the ID order of ALL items matched the dependency order. However,
     /// certain migrations shuffled item IDs around s.t. this was no longer true. A much better
@@ -2157,8 +2357,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         let mut tables = Vec::new();
         let mut derived_items = Vec::new();
         let mut sinks = Vec::new();
-        let mut continual_tasks = Vec::new();
-
         for update in item_updates {
             match update.0.item_type() {
                 CatalogItemType::Type => types.push(update),
@@ -2169,93 +2367,26 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 CatalogItemType::Table => tables.push(update),
                 CatalogItemType::View
                 | CatalogItemType::MaterializedView
-                | CatalogItemType::Index => derived_items.push(update),
+                | CatalogItemType::Index
+                | CatalogItemType::MetricSink => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
-                CatalogItemType::ContinualTask => continual_tasks.push(update),
             }
         }
 
-        // Within each group, sort by ID.
+        // For some groups, the items in them can depend on each other and can be `ALTER`ed so that
+        // an item ends up depending on an item with a greater ID. Thus we need to perform
+        // topological sort for these groups.
+        sort_items_topological(&mut connections);
+        sort_items_topological(&mut derived_items);
+
+        // Other groups we can simply sort by ID.
         for group in [
             &mut types,
             &mut funcs,
             &mut secrets,
             &mut sources,
             &mut tables,
-            &mut derived_items,
             &mut sinks,
-            &mut continual_tasks,
-        ] {
-            group.sort_by_key(|(item, _, _)| item.id);
-        }
-
-        // HACK(parkmycar): Connections are special and can depend on one another. Additionally
-        // connections can be `ALTER`ed and thus a `CONNECTION` can depend on another whose ID
-        // is greater than its own.
-        sort_connections(&mut connections);
-
-        iter::empty()
-            .chain(types)
-            .chain(funcs)
-            .chain(secrets)
-            .chain(connections)
-            .chain(sources)
-            .chain(tables)
-            .chain(derived_items)
-            .chain(sinks)
-            .chain(continual_tasks)
-            .collect()
-    }
-
-    let item_retractions = sort_item_updates(item_retractions);
-    let item_additions = sort_item_updates(item_additions);
-
-    /// Sort temporary item updates by dependency.
-    ///
-    /// The logic of this function should match [`sort_item_updates`].
-    fn sort_temp_item_updates(
-        temp_item_updates: Vec<(TemporaryItem, Timestamp, StateDiff)>,
-    ) -> VecDeque<(TemporaryItem, Timestamp, StateDiff)> {
-        // Partition items into groups s.t. each item in one group has a predefined order with all
-        // items in other groups. For example, all sinks are ordered greater than all tables.
-        let mut types = Vec::new();
-        // N.B. Functions can depend on system tables, but not user tables.
-        let mut funcs = Vec::new();
-        let mut secrets = Vec::new();
-        let mut connections = Vec::new();
-        let mut sources = Vec::new();
-        let mut tables = Vec::new();
-        let mut derived_items = Vec::new();
-        let mut sinks = Vec::new();
-        let mut continual_tasks = Vec::new();
-
-        for update in temp_item_updates {
-            match update.0.item_type() {
-                CatalogItemType::Type => types.push(update),
-                CatalogItemType::Func => funcs.push(update),
-                CatalogItemType::Secret => secrets.push(update),
-                CatalogItemType::Connection => connections.push(update),
-                CatalogItemType::Source => sources.push(update),
-                CatalogItemType::Table => tables.push(update),
-                CatalogItemType::View
-                | CatalogItemType::MaterializedView
-                | CatalogItemType::Index => derived_items.push(update),
-                CatalogItemType::Sink => sinks.push(update),
-                CatalogItemType::ContinualTask => continual_tasks.push(update),
-            }
-        }
-
-        // Within each group, sort by ID.
-        for group in [
-            &mut types,
-            &mut funcs,
-            &mut secrets,
-            &mut connections,
-            &mut sources,
-            &mut tables,
-            &mut derived_items,
-            &mut sinks,
-            &mut continual_tasks,
         ] {
             group.sort_by_key(|(item, _, _)| item.id);
         }
@@ -2269,77 +2400,40 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             .chain(tables)
             .chain(derived_items)
             .chain(sinks)
-            .chain(continual_tasks)
             .collect()
     }
-    let temp_item_retractions = sort_temp_item_updates(temp_item_retractions);
-    let temp_item_additions = sort_temp_item_updates(temp_item_additions);
 
-    /// Merge sorted temporary and non-temp items.
-    fn merge_item_updates(
-        mut item_updates: VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
-        mut temp_item_updates: VecDeque<(TemporaryItem, Timestamp, StateDiff)>,
+    // Temporary and non-temporary items sort together: the type groups order
+    // cross-type dependencies and the topological sorts order dependencies
+    // within a group, regardless of which items are temporary.
+    fn into_state_updates(
+        item_updates: VecDeque<(mz_catalog::durable::Item, Timestamp, StateDiff)>,
     ) -> Vec<StateUpdate> {
-        let mut state_updates = Vec::with_capacity(item_updates.len() + temp_item_updates.len());
-
-        while let (Some((item, _, _)), Some((temp_item, _, _))) =
-            (item_updates.front(), temp_item_updates.front())
-        {
-            if item.id < temp_item.id {
-                let (item, ts, diff) = item_updates.pop_front().expect("non-empty");
-                state_updates.push(StateUpdate {
-                    kind: StateUpdateKind::Item(item),
-                    ts,
-                    diff,
-                });
-            } else if item.id > temp_item.id {
-                let (temp_item, ts, diff) = temp_item_updates.pop_front().expect("non-empty");
-                state_updates.push(StateUpdate {
-                    kind: StateUpdateKind::TemporaryItem(temp_item),
-                    ts,
-                    diff,
-                });
-            } else {
-                unreachable!(
-                    "two items cannot have the same ID: item={item:?}, temp_item={temp_item:?}"
-                );
-            }
-        }
-
-        while let Some((item, ts, diff)) = item_updates.pop_front() {
-            state_updates.push(StateUpdate {
+        item_updates
+            .into_iter()
+            .map(|(item, ts, diff)| StateUpdate {
                 kind: StateUpdateKind::Item(item),
                 ts,
                 diff,
-            });
-        }
-
-        while let Some((temp_item, ts, diff)) = temp_item_updates.pop_front() {
-            state_updates.push(StateUpdate {
-                kind: StateUpdateKind::TemporaryItem(temp_item),
-                ts,
-                diff,
-            });
-        }
-
-        state_updates
+            })
+            .collect()
     }
-    let item_retractions = merge_item_updates(item_retractions, temp_item_retractions);
-    let item_additions = merge_item_updates(item_additions, temp_item_additions);
+    let item_retractions = into_state_updates(sort_item_updates(item_retractions));
+    let item_additions = into_state_updates(sort_item_updates(item_additions));
 
     // Put everything back together.
     iter::empty()
         // All retractions must be reversed.
         .chain(post_item_retractions.into_iter().rev())
         .chain(item_retractions.into_iter().rev())
-        .chain(builtin_index_retractions.into_iter().rev())
-        .chain(cluster_retractions.into_iter().rev())
         .chain(other_builtin_retractions.into_iter().rev())
+        .chain(cluster_retractions.into_iter().rev())
+        .chain(builtin_source_retractions.into_iter().rev())
         .chain(pre_cluster_retractions.into_iter().rev())
         .chain(pre_cluster_additions)
-        .chain(other_builtin_additions)
+        .chain(builtin_source_additions)
         .chain(cluster_additions)
-        .chain(builtin_index_additions)
+        .chain(other_builtin_additions)
         .chain(item_additions)
         .chain(post_item_additions)
         .collect()
@@ -2374,7 +2468,7 @@ impl ApplyState {
                 Self::BuiltinViewAdditions(vec![view_addition])
             }
 
-            IntrospectionSourceIndex(_) | SystemObjectMapping(_) | TemporaryItem(_) | Item(_) => {
+            IntrospectionSourceIndex(_) | SystemObjectMapping(_) | Item(_) => {
                 Self::Items(vec![update])
             }
 
@@ -2385,6 +2479,8 @@ impl ApplyState {
             | DefaultPrivilege(_)
             | SystemPrivilege(_)
             | SystemConfiguration(_)
+            | ClusterSystemConfiguration(_)
+            | ReplicaSystemConfiguration(_)
             | Cluster(_)
             | NetworkPolicy(_)
             | ClusterReplica(_)
@@ -2412,8 +2508,8 @@ impl ApplyState {
     ) {
         match self {
             Self::BuiltinViewAdditions(builtin_view_additions) => {
-                let restore = state.system_configuration.clone();
-                state.system_configuration.enable_for_item_parsing();
+                let restore = Arc::clone(&state.system_configuration);
+                Arc::make_mut(&mut state.system_configuration).enable_for_item_parsing();
                 let builtin_table_updates = CatalogState::parse_builtin_views(
                     state,
                     builtin_view_additions,
@@ -2481,11 +2577,36 @@ impl ApplyState {
     }
 }
 
+/// Trait abstracting over map operations needed by [`apply_inverted_lookup`] and
+/// [`apply_with_update`]. Both [`BTreeMap`] and [`imbl::OrdMap`] implement this.
+trait MutableMap<K, V> {
+    fn insert(&mut self, key: K, value: V) -> Option<V>;
+    fn remove(&mut self, key: &K) -> Option<V>;
+}
+
+impl<K: Ord, V> MutableMap<K, V> for BTreeMap<K, V> {
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        BTreeMap::insert(self, key, value)
+    }
+    fn remove(&mut self, key: &K) -> Option<V> {
+        BTreeMap::remove(self, key)
+    }
+}
+
+impl<K: Ord + Clone, V: Clone> MutableMap<K, V> for imbl::OrdMap<K, V> {
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        imbl::OrdMap::insert(self, key, value)
+    }
+    fn remove(&mut self, key: &K) -> Option<V> {
+        imbl::OrdMap::remove(self, key)
+    }
+}
+
 /// Helper method to updated inverted lookup maps. The keys are generally names and the values are
 /// generally IDs.
 ///
 /// Importantly, when retracting it's expected that the existing value will match `value` exactly.
-fn apply_inverted_lookup<K, V>(map: &mut BTreeMap<K, V>, key: &K, value: V, diff: StateDiff)
+fn apply_inverted_lookup<K, V>(map: &mut impl MutableMap<K, V>, key: &K, value: V, diff: StateDiff)
 where
     K: Ord + Clone + Debug,
     V: PartialEq + Debug,
@@ -2512,7 +2633,7 @@ where
 /// Helper method to update catalog state, that may need to be updated from a previously retracted
 /// object.
 fn apply_with_update<K, V, D>(
-    map: &mut BTreeMap<K, V>,
+    map: &mut impl MutableMap<K, V>,
     durable: D,
     key_fn: impl FnOnce(&D) -> K,
     diff: StateDiff,

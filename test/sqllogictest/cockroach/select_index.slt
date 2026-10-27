@@ -1,4 +1,4 @@
-# Copyright 2015 - 2019 The Cockroach Authors. All rights reserved.
+# Copyright 2015 - 2023 The Cockroach Authors. All rights reserved.
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -9,26 +9,26 @@
 # by the Apache License, Version 2.0.
 #
 # This file is derived from the logic test suite in CockroachDB. The
-# original file was retrieved on June 10, 2019 from:
+# original file was retrieved on July 6, 2026 from:
 #
-#     https://github.com/cockroachdb/cockroach/blob/d2f7fbf5dd1fc1a099bbad790a2e1f7c60a66cc3/pkg/sql/logictest/testdata/logic_test/select_index
+#     https://github.com/cockroachdb/cockroach/blob/358e0d87912365b8976c55ab9b3292e999cf720d/pkg/sql/logictest/testdata/logic_test/select_index
 #
-# The original source code is subject to the terms of the Apache
-# 2.0 license, a copy of which can be found in the LICENSE file at the
+# That commit is tagged v23.1.0. CockroachDB v23.1 is licensed under
+# the Business Source License 1.1 with a Change Date of 2026-04-01 and
+# a Change License of Apache 2.0, so as of the retrieval date the
+# original source code is subject to the terms of the Apache 2.0
+# license, a copy of which can be found in the LICENSE file at the
 # root of this repository.
 
 mode cockroach
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET unsafe_enable_table_keys = true
-----
-COMPLETE 0
 
 statement ok
 CREATE TABLE t (
   a INT PRIMARY KEY,
   b INT,
-  c INT
+  c INT,
+  INDEX b_desc (b DESC),
+  INDEX bc (b, c)
 )
 
 statement ok
@@ -49,10 +49,7 @@ statement ok
 CREATE TABLE ab (
   s STRING,
   i INT
-)
-
-statement ok
-INSERT INTO ab VALUES ('a', 1), ('b', 1), ('c', 1)
+); INSERT INTO ab VALUES ('a', 1), ('b', 1), ('c', 1)
 
 query IT rowsort
 SELECT i, s FROM ab WHERE (i, s) < (1, 'c')
@@ -63,13 +60,15 @@ SELECT i, s FROM ab WHERE (i, s) < (1, 'c')
 statement ok
 CREATE INDEX baz ON ab (i, s)
 
+# Not supported by Materialize.
+onlyif cockroach
 query IT rowsort
 SELECT i, s FROM ab@baz WHERE (i, s) < (1, 'c')
 ----
 1 a
 1 b
 
-# Issue materialize#14426: verify we don't have an internal filter that contains "a IN ()"
+# Issue #14426: verify we don't have an internal filter that contains "a IN ()"
 # (which causes an error in DistSQL due to expression serialization).
 statement ok
 CREATE TABLE tab0(
@@ -82,12 +81,13 @@ query I
 SELECT k FROM tab0 WHERE (a IN (6) AND a > 6) OR b >= 4
 ----
 
-# Regression tests for materialize#12022
+# Regression tests for #12022
 
 statement ok
 CREATE TABLE t12022 (
   c1 INT,
   c2 BOOL,
+  UNIQUE INDEX i (c1, c2)
 );
 
 statement ok
@@ -95,6 +95,8 @@ INSERT INTO t12022 VALUES
   (1, NULL), (1, false), (1, true),
   (2, NULL), (2, false), (2, true);
 
+# Not supported by Materialize.
+onlyif cockroach
 query IB
 SELECT * FROM t12022@i WHERE (c1, c2) > (1, NULL) ORDER BY (c1, c2);
 ----
@@ -102,6 +104,8 @@ SELECT * FROM t12022@i WHERE (c1, c2) > (1, NULL) ORDER BY (c1, c2);
 2  false
 2  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query IB
 SELECT * FROM t12022@i WHERE (c1, c2) > (1, false) ORDER BY (c1, c2);
 ----
@@ -110,6 +114,8 @@ SELECT * FROM t12022@i WHERE (c1, c2) > (1, false) ORDER BY (c1, c2);
 2  false
 2  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query IB
 SELECT * FROM t12022@i WHERE (c1, c2) > (1, true) ORDER BY (c1, c2);
 ----
@@ -117,6 +123,8 @@ SELECT * FROM t12022@i WHERE (c1, c2) > (1, true) ORDER BY (c1, c2);
 2  false
 2  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query IB
 SELECT * FROM t12022@i WHERE (c1, c2) < (2, NULL) ORDER BY (c1, c2);
 ----
@@ -124,6 +132,8 @@ SELECT * FROM t12022@i WHERE (c1, c2) < (2, NULL) ORDER BY (c1, c2);
 1  false
 1  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query IB
 SELECT * FROM t12022@i WHERE (c1, c2) < (2, false) ORDER BY (c1, c2);
 ----
@@ -131,6 +141,8 @@ SELECT * FROM t12022@i WHERE (c1, c2) < (2, false) ORDER BY (c1, c2);
 1  false
 1  true
 
+# Not supported by Materialize.
+onlyif cockroach
 query IB
 SELECT * FROM t12022@i WHERE (c1, c2) < (2, true) ORDER BY (c1, c2);
 ----
@@ -140,7 +152,9 @@ SELECT * FROM t12022@i WHERE (c1, c2) < (2, true) ORDER BY (c1, c2);
 2  false
 
 
-# Regression test for materialize#20035.
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for #20035.
 statement ok
 CREATE TABLE favorites (
   id INT NOT NULL DEFAULT unique_rowid(),
@@ -153,8 +167,15 @@ CREATE TABLE favorites (
   created_ts TIMESTAMP NULL,
   guid_id STRING(100) NOT NULL,
   locale STRING(10) NOT NULL DEFAULT NULL,
+  CONSTRAINT "primary" PRIMARY KEY (id ASC),
+  UNIQUE INDEX favorites_idx (resource_type ASC, device_group ASC, resource_key ASC, customerid ASC),
+  INDEX favorites_guid_idx (guid_id ASC),
+  INDEX favorites_glob_fav_idx (resource_type ASC, device_group ASC, jurisdiction ASC, brand ASC, locale ASC, resource_key ASC),
+  FAMILY "primary" (id, resource_type, resource_key, device_group, customerid, jurisdiction, brand, created_ts, guid_id, locale)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO favorites (customerid, guid_id, resource_type, device_group, jurisdiction, brand, locale, resource_key)
   VALUES (1, '1', 'GAME', 'web', 'MT', 'xxx', 'en_GB', 'tp'),
@@ -164,6 +185,8 @@ INSERT INTO favorites (customerid, guid_id, resource_type, device_group, jurisdi
          (5, '5', 'GAME', 'web', 'MT', 'xxx', 'en_GB', 'ts3'),
          (6, '6', 'GAME', 'web', 'MT', 'xxx', 'en_GB', 'ts4')
 
+# Not supported by Materialize.
+onlyif cockroach
 query TI rowsort
 SELECT
   resource_key,
@@ -188,9 +211,11 @@ CREATE TABLE abcd (
   b INT,
   c INT,
   d INT,
+  INDEX adb (a, d, b),
+  INDEX abcd (a, b, c, d)
 )
 
-# Regression tests for materialize#20362 (IS NULL handling).
+# Regression tests for #20362 (IS NULL handling).
 statement ok
 INSERT INTO abcd VALUES
 (NULL, NULL, NULL),
@@ -226,6 +251,8 @@ INSERT INTO abcd VALUES
 (1,    10,   5),
 (1,    10,   10)
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII rowsort
 SELECT * FROM abcd@abcd WHERE a IS NULL AND b > 5
 ----
@@ -234,6 +261,8 @@ NULL  10  1     NULL
 NULL  10  5     NULL
 NULL  10  10    NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII rowsort
 SELECT * FROM abcd@abcd WHERE a IS NULL AND b < 5
 ----
@@ -242,6 +271,8 @@ NULL  1  1     NULL
 NULL  1  5     NULL
 NULL  1  10    NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII partialsort(1,2)
 SELECT * FROM abcd@abcd WHERE a IS NULL ORDER BY b
 ----
@@ -262,18 +293,20 @@ NULL  10    1     NULL
 NULL  10    5     NULL
 NULL  10    10    NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII
 SELECT * FROM abcd@abcd WHERE a = 1 AND b IS NULL AND c > 0 AND c < 10 ORDER BY c
 ----
 1  NULL  1  NULL
 1  NULL  5  NULL
 
-# Regression test for materialize#21831.
+# Regression test for #21831.
 statement ok
-CREATE TABLE str (k INT PRIMARY KEY, v STRING)
+CREATE TABLE str (k INT PRIMARY KEY, v STRING, INDEX(v))
 
 statement ok
-INSERT INTO str VALUES (1, 'A'), (4, 'AB'), (2, 'ABC'), (5, 'ABCD'), (3, 'ABCDEZ'), (9, 'ABD')
+INSERT INTO str VALUES (1, 'A'), (4, 'AB'), (2, 'ABC'), (5, 'ABCD'), (3, 'ABCDEZ'), (9, 'ABD'), (10, '\CBA'), (11, 'A%'), (12, 'CAB.*'), (13, 'CABD')
 
 query IT rowsort
 SELECT k, v FROM str WHERE v LIKE 'ABC%'
@@ -283,10 +316,42 @@ SELECT k, v FROM str WHERE v LIKE 'ABC%'
 3  ABCDEZ
 
 query IT rowsort
+SELECT k, v FROM str WHERE v LIKE '\ABC%'
+----
+2  ABC
+5  ABCD
+3  ABCDEZ
+
+statement error Evaluation error: unterminated escape sequence in LIKE
+SELECT k, v FROM str WHERE v LIKE 'ABC\'
+
+query IT rowsort
+SELECT k, v FROM str WHERE v LIKE '\\CBA%'
+----
+10 \CBA
+
+query IT rowsort
+SELECT k, v FROM str WHERE v LIKE 'A\%'
+----
+11  A%
+
+query IT rowsort
+SELECT k, v FROM str WHERE v LIKE 'CAB.*'
+----
+12  CAB.*
+
+query IT rowsort
 SELECT k, v FROM str WHERE v LIKE 'ABC%Z'
 ----
 3  ABCDEZ
 
+query IT rowsort
+SELECT k, v FROM str WHERE v LIKE '\ABCDE_'
+----
+3  ABCDEZ
+
+# Not supported by Materialize.
+onlyif cockroach
 query IT rowsort
 SELECT k, v FROM str WHERE v SIMILAR TO 'ABC_*'
 ----
@@ -294,9 +359,9 @@ SELECT k, v FROM str WHERE v SIMILAR TO 'ABC_*'
 5  ABCD
 3  ABCDEZ
 
-# Regression tests for materialize#22670.
+# Regression tests for #22670.
 statement ok
-CREATE TABLE xy (x INT, y INT)
+CREATE TABLE xy (x INT, y INT, INDEX (y))
 
 statement ok
 CREATE INDEX xy_idx ON xy (x, y)
@@ -311,7 +376,7 @@ SELECT * FROM xy WHERE x IN (NULL, 1, 2)
 1  1
 
 statement ok
-CREATE TABLE ef (e INT, f INT)
+CREATE TABLE ef (e INT, f INT, INDEX(f))
 
 statement ok
 INSERT INTO ef VALUES (NULL, 1), (1, 1)
@@ -327,94 +392,131 @@ SELECT * FROM xy WHERE (x, y) IN ((NULL, NULL), (1, NULL), (NULL, 1), (1, 1), (1
 ----
 1  1
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test index constraints for IS (NOT) TRUE/FALSE.
 statement ok
 CREATE TABLE bool1 (
   a BOOL,
+  INDEX (a)
 );
 INSERT INTO bool1 VALUES (NULL), (TRUE), (FALSE)
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT * FROM bool1 WHERE a IS NULL
 ----
 NULL
 
+# Not supported by Materialize.
+onlyif cockroach
 query B rowsort
 SELECT * FROM bool1 WHERE a IS NOT NULL
 ----
 false
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT * FROM bool1 WHERE a IS TRUE
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B rowsort
 SELECT * FROM bool1 WHERE a IS NOT TRUE
 ----
 NULL
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT * FROM bool1 WHERE a IS FALSE
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B rowsort
 SELECT * FROM bool1 WHERE a IS NOT FALSE
 ----
 NULL
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE bool2 (
   a BOOL NOT NULL,
+  INDEX (a)
 );
 INSERT INTO bool2 VALUES (TRUE), (FALSE)
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT * FROM bool2 WHERE a IS NULL
 ----
 
+# Not supported by Materialize.
+onlyif cockroach
 query B rowsort
 SELECT * FROM bool2 WHERE a IS NOT NULL
 ----
 false
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT * FROM bool2 WHERE a IS TRUE
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT * FROM bool2 WHERE a IS NOT TRUE
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT * FROM bool2 WHERE a IS FALSE
 ----
 false
 
+# Not supported by Materialize.
+onlyif cockroach
 query B
 SELECT * FROM bool2 WHERE a IS NOT FALSE
 ----
 true
 
+# Not supported by Materialize.
+onlyif cockroach
 # Test index constraints for IS (NOT) DISTINCT FROM on an integer column.
 statement ok
 CREATE TABLE int (
   a INT,
+  INDEX (a)
 );
 INSERT INTO int VALUES (NULL), (0), (1), (2)
 
+# Not supported by Materialize.
+onlyif cockroach
 query I
 SELECT * FROM int WHERE a IS NOT DISTINCT FROM 2
 ----
 2
 
+# Not supported by Materialize.
+onlyif cockroach
 query I rowsort
 SELECT * FROM int WHERE a IS DISTINCT FROM 2
 ----
@@ -431,6 +533,12 @@ CREATE TABLE noncover (
   b INT,
   c INT,
   d INT,
+  INDEX b (b),
+  UNIQUE INDEX c (c),
+  FAMILY (a),
+  FAMILY (b),
+  FAMILY (c),
+  FAMILY (d)
 )
 
 statement ok
@@ -441,20 +549,12 @@ SELECT * FROM noncover WHERE b = 2
 ----
 1 2 3 4
 
+# Not supported by Materialize.
+onlyif cockroach
 query IIII
 SET tracing=on, kv; SELECT * FROM noncover WHERE b = 2; SET tracing=off
 ----
 1 2 3 4
-
-# Verify that the index join span created doesn't include any potential child
-# interleaved tables. We look only for spans with the primary prefix to avoid
-# inconsistency between the fakedist and local test configurations.
-
-query T rowsort
-SELECT message FROM [SHOW KV TRACE FOR SESSION]
-WHERE message LIKE 'Scan /Table/65/1%'
-----
-Scan /Table/65/1/1{-/#}
 
 # Subset of output columns, not including tested column.
 query II
@@ -565,6 +665,8 @@ SELECT w FROM t3 WHERE v > 0 AND v < 100 ORDER BY v
 2
 1
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 CREATE TABLE tab1 (
       pk INTEGER NOT NULL,
@@ -582,6 +684,8 @@ CREATE TABLE tab1 (
       FAMILY "primary" (pk, col0, col1, col2, col3, col4, col5)
 )
 
+# Not supported by Materialize.
+onlyif cockroach
 statement ok
 INSERT INTO tab1(pk, col0, col3) VALUES
   (1, 65, 65),
@@ -592,6 +696,8 @@ INSERT INTO tab1(pk, col0, col3) VALUES
   (6, 72, 72),
   (7, 82, 82)
 
+# Not supported by Materialize.
+onlyif cockroach
 query II
 SELECT pk, col0 FROM tab1 WHERE (col3 BETWEEN 66 AND 87) ORDER BY 1 DESC
 ----
@@ -621,3 +727,104 @@ SELECT * FROM abc WHERE (c IS NULL OR c=2) AND a>0
 1  1  NULL
 1  2  NULL
 2  2  2
+
+# Regression test for #38878 (incorrect span generation with OR and exclusive
+# string boundaries).
+statement ok
+CREATE TABLE t38878 (k1 STRING, k2 STRING, v INT, PRIMARY KEY (k1, k2))
+
+statement ok
+INSERT INTO t38878 VALUES ('a', 'u', 1), ('b', 'v', 2), ('c', 'w', 3), ('d', 'x', 4), ('d', 'x2', 5)
+
+query TTI rowsort
+SELECT * FROM t38878 WHERE k1 = 'b' OR (k1 > 'b' AND k1 < 'd')
+----
+b  v  2
+c  w  3
+
+query TTI rowsort
+SELECT * FROM t38878 WHERE (k1 = 'd' AND k2 = 'x') OR k1 = 'b' OR (k1 > 'b' AND k1 < 'd')
+----
+b  v  2
+c  w  3
+d  x  4
+
+# Regression test for #47976 (optimizer OOM and timeouts with many ORs).
+statement ok
+CREATE TABLE t47976 (
+  k INT PRIMARY KEY,
+  a INT,
+  b FLOAT,
+  c INT,
+  INDEX (a),
+  INDEX (b),
+  INDEX (c)
+)
+
+statement ok
+SELECT k FROM t47976 WHERE
+  (a >= 6 OR b < 8 OR c IN (23, 27, 53)) AND
+  (a = 1 OR b >= 12 OR c IS NULL) AND
+  (a < 1 OR b = 6.8 OR c = 12) AND
+  (a > 4 OR b <= 5.23 OR c IN (1, 2, 3)) AND
+  (a = 12 OR b = 15.23 OR c = 14) AND
+  (a > 58 OR b < 0 OR c >= 13)
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for incorrectly splitting a lookup row (with NULL values not
+# in the lookup key) into family spans (#76289).
+statement ok
+CREATE TABLE t76289_1 (
+  pk1 DECIMAL NOT NULL, pk2 INT8 NOT NULL, c1 INT8, c2 INT8,
+  PRIMARY KEY (pk1, pk2),
+  UNIQUE (pk2),
+  FAMILY fam_c1 (c1), FAMILY fam_c2 (pk1, pk2, c2)
+);
+INSERT INTO t76289_1 (pk1, pk2, c1) VALUES (1:::DECIMAL, 0:::INT8, 0:::INT8);
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT c2 FROM t76289_1 WHERE pk2 = 0;
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+statement ok
+CREATE TABLE t76289_2 (
+  pk1 DECIMAL NOT NULL, pk2 INT8 NOT NULL, c1 INT8, c2 INT8,
+  PRIMARY KEY (pk1, pk2),
+  INDEX (pk2),
+  FAMILY fam_c1 (c1), FAMILY fam_c2 (pk1, pk2, c2)
+);
+INSERT INTO t76289_2 (pk1, pk2, c1) VALUES (1:::DECIMAL, 0:::INT8, 0:::INT8);
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT c2 FROM t76289_2@t76289_2_pk2_idx WHERE pk2 = 0;
+----
+NULL
+
+# Not supported by Materialize.
+onlyif cockroach
+# Regression test for incorrectly splitting a row to scan (with NULL values in
+# the row) into family spans when reading from the secondary index if the KV
+# is omitted for some column families (#88110).
+statement ok
+CREATE TABLE t88110 (
+  _i INT8 NOT NULL, _bool BOOL, _int INT8,
+  UNIQUE (_bool) STORING(_int),
+  FAMILY (_bool),
+  FAMILY (_i, _int)
+);
+INSERT INTO t88110 (_i, _bool, _int) VALUES (0, false, NULL);
+
+# Not supported by Materialize.
+onlyif cockroach
+query I
+SELECT DISTINCT _int FROM t88110 WHERE NOT _bool;
+----
+NULL

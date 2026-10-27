@@ -17,6 +17,7 @@ documentation][user-docs].
 
 import argparse
 import copy
+import html
 import importlib
 import importlib.abc
 import importlib.util
@@ -29,13 +30,16 @@ import selectors
 import subprocess
 import sys
 import threading
+import threading as _threading
 import time
 import traceback
 import urllib.parse
+import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
+from pathlib import Path
 from tempfile import TemporaryFile
 from typing import IO, Any, TextIO, TypeVar, cast
 
@@ -43,6 +47,7 @@ import psycopg
 import sqlparse
 import yaml
 from psycopg import Connection, Cursor
+from psycopg.sql import Composed
 
 from materialize import MZ_ROOT, buildkite, mzbuild, spawn, ui
 from materialize.docker import image_registry
@@ -53,7 +58,6 @@ from materialize.mzcompose.services.materialized import (
     DeploymentStatus,
     Materialized,
 )
-from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
@@ -66,6 +70,13 @@ from materialize.ui import (
     UIError,
 )
 from materialize.util import filter_cmd
+
+
+def _split_complete_lines(buffered: str) -> tuple[str, str]:
+    split = max(buffered.rfind("\n"), buffered.rfind("\r"))
+    if split == -1:
+        return "", buffered
+    return buffered[: split + 1], buffered[split + 1 :]
 
 
 class Service:
@@ -114,22 +125,34 @@ class Composition:
         preserve_ports: bool = False,
         silent: bool = False,
         munge_services: bool = True,
+        resolve_image_specs: bool = True,
         project_name: str | None = None,
         sanity_restart_mz: bool = False,
+        host_network: bool = False,
     ):
         self.conns = {}
         self.name = name
         self.description = None
         self.repo = repo
         self.preserve_ports = preserve_ports
-        self.project_name = project_name
+        self.project_name = project_name or name
         self.silent = silent
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, TestResult] = OrderedDict()
-        self.files = {}
+        self.has_testdrive_junit: bool = False
+        self.has_sqllogictest_junit: bool = False
+        # Per-thread cached YAML file is held in self._tls.file_and_gen.
+        # When self.compose is mutated, _invalidate_compose_files() bumps
+        # self._compose_gen so each thread regenerates on its next invoke.
+        # Avoids cross-thread races on a shared dict that previously caused
+        # docker compose children to inherit the wrong /dev/fd/N.
+        self._compose_gen: object = object()
+        self._tls = threading.local()
         self.sources_and_sinks_ignored_from_validation = set()
         self.is_sanity_restart_mz = sanity_restart_mz
         self.current_test_case_name_override: str | None = None
+        self.host_network = host_network
+        self.resolve_image_specs = resolve_image_specs
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -186,11 +209,32 @@ class Composition:
                     name = name[len("workflow_") :].replace("_", "-")
                     self.workflows[name] = fn
 
-            for python_service in getattr(module, "SERVICES", []):
-                name = python_service.name
-                if name in self.compose["services"]:
-                    raise UIError(f"service {name!r} specified more than once")
-                self.compose["services"][name] = python_service.config
+            def _register_companion(python_service: Any) -> None:
+                # Companions never override an explicit declaration (or an
+                # already-registered companion). A customized service listed
+                # in SERVICES therefore wins over the default companion of the
+                # same name, and identical companions of sibling services
+                # (e.g. the metadata store of both Materialized and Testdrive)
+                # collapse to a single registration.
+                if python_service.name in self.compose["services"]:
+                    return
+                self.compose["services"][python_service.name] = python_service.config
+                for companion in getattr(python_service, "companions", []):
+                    _register_companion(companion)
+
+            services = list(getattr(module, "SERVICES", []))
+            # First register all explicit services, keeping the guard against
+            # the same name being spelled out twice. Companions are registered
+            # afterwards so that explicit declarations always take precedence.
+            for python_service in services:
+                if python_service.name in self.compose["services"]:
+                    raise UIError(
+                        f"service {python_service.name!r} specified more than once"
+                    )
+                self.compose["services"][python_service.name] = python_service.config
+            for python_service in services:
+                for companion in getattr(python_service, "companions", []):
+                    _register_companion(companion)
 
             for volume_name, volume_def in getattr(module, "VOLUMES", {}).items():
                 if volume_name in self.compose["volumes"]:
@@ -206,7 +250,11 @@ class Composition:
         if munge_services:
             self.dependencies = self._munge_services(self.compose["services"].items())
 
-        self.files = {}
+        self._invalidate_compose_files()
+
+    def _invalidate_compose_files(self) -> None:
+        """Mark cached YAML files stale; each thread regenerates on its next invoke()."""
+        self._compose_gen = object()
 
     def override_current_testcase_name(self, test_case_name: str) -> None:
         """
@@ -239,6 +287,9 @@ class Composition:
                     config["user"] = f"{os.getuid()}:{os.getgid()}"
                 del config["propagate_uid_gid"]
 
+            # See https://bugs.launchpad.net/ubuntu/+source/containerd-app/+bug/2065423
+            config["security_opt"] = ["apparmor=unconfined"]
+
             ports = config.setdefault("ports", [])
             for i, port in enumerate(ports):
                 if self.preserve_ports and not ":" in str(port):
@@ -265,6 +316,11 @@ class Composition:
             if "allow_host_ports" in config:
                 config.pop("allow_host_ports")
 
+            if self.host_network:
+                config["network_mode"] = "host"
+                if "networks" in config:
+                    del config["networks"]
+
             if self.repo.rd.coverage:
                 coverage_volume = "./coverage:/coverage"
                 if coverage_volume not in config.get("volumes", []):
@@ -286,12 +342,19 @@ class Composition:
                 else:
                     config.setdefault("environment", []).append(llvm_profile_file)
 
-        # Determine mzbuild specs and inject them into services accordingly.
-        deps = self.repo.resolve_dependencies(images)
-        for _name, config in services:
-            if "mzbuild" in config:
-                config["image"] = deps[config["mzbuild"]].spec()
-                del config["mzbuild"]
+        if self.resolve_image_specs:
+            deps = self.repo.resolve_dependencies(images)
+            for _name, config in services:
+                if "mzbuild" in config:
+                    config["image"] = deps[config["mzbuild"]].spec()
+                    del config["mzbuild"]
+        else:
+            deps = mzbuild.DependencySet([])
+            for _name, config in services:
+                if "mzbuild" in config:
+                    image = self.repo.images[config["mzbuild"]]
+                    config["image"] = image.docker_name(tag="")
+                    del config["mzbuild"]
 
         return deps
 
@@ -306,7 +369,6 @@ class Composition:
         max_tries: int = 1,
         silent: bool = False,
         environment: dict[str, str] | None = None,
-        build: str | None = None,
         print_prefix: str | None = None,
     ) -> subprocess.CompletedProcess:
         """Invoke `docker compose` on the rendered composition.
@@ -339,20 +401,21 @@ class Composition:
         stderr = None
         if capture_stderr:
             stderr = subprocess.PIPE if capture_stderr == True else capture_stderr
-        project_name_args = (
-            ("--project-name", self.project_name) if self.project_name else ()
-        )
+        project_name_args = ("--project-name", self.project_name)
 
-        # One file per thread to make sure we don't try to read a file which is
-        # not seeked to 0, leading to "empty compose file" errors
-        thread_id = threading.get_ident()
-        file = self.files.get(thread_id)
-        if not file:
+        # Per-thread cached YAML file via threading.local — each thread owns its
+        # tempfile, so no other thread can drop or close it. The generation
+        # sentinel makes the cache invalidate when self.compose is mutated.
+        gen = self._compose_gen
+        cached = getattr(self._tls, "file_and_gen", None)
+        if cached is None or cached[1] is not gen:
             file = TemporaryFile(mode="w")
             os.set_inheritable(file.fileno(), True)
             yaml.dump(self.compose, file)
             os.fsync(file.fileno())
-            self.files[thread_id] = file
+            self._tls.file_and_gen = (file, gen)
+        else:
+            file = cached[0]
 
         cmd = [
             "docker",
@@ -392,6 +455,26 @@ class Composition:
                     os.set_blocking(p.stdout.fileno(), False)
                     os.set_blocking(p.stderr.fileno(), False)
                     running = True
+                    # Hold each stream's trailing partial line and print only
+                    # complete lines, so a line from one stream is never split
+                    # in the merged output by a chunk of the other stream. The
+                    # raw bytes are still captured in full below for the
+                    # returned CompletedProcess. Keyed by is_stdout.
+                    emit_partial = {True: "", False: ""}
+
+                    def emit(is_stdout: bool, text: str) -> None:
+                        file = sys.stdout if is_stdout else sys.stderr
+                        if print_prefix:
+                            for line in text.splitlines(keepends=True):
+                                print(
+                                    f"{print_prefix}{line}",
+                                    end="",
+                                    file=file,
+                                    flush=True,
+                                )
+                        else:
+                            print(text, end="", file=file, flush=True)
+
                     while running:
                         running = False
                         for key, val in sel.select():
@@ -407,38 +490,20 @@ class Composition:
                                 continue
                             # Keep running as long as stdout or stderr have any content
                             running = True
-                            if key.fileobj is p.stdout:
-                                if print_prefix:
-                                    for line in contents.splitlines(keepends=True):
-                                        print(
-                                            f"{print_prefix}{line}",
-                                            end="",
-                                            flush=True,
-                                        )
-                                else:
-                                    print(
-                                        contents,
-                                        end="",
-                                        flush=True,
-                                    )
+                            is_stdout = key.fileobj is p.stdout
+                            complete, emit_partial[is_stdout] = _split_complete_lines(
+                                emit_partial[is_stdout] + contents
+                            )
+                            if complete:
+                                emit(is_stdout, complete)
+                            if is_stdout:
                                 stdout_result.write(contents)
                             else:
-                                if print_prefix:
-                                    for line in contents.splitlines(keepends=True):
-                                        print(
-                                            f"{print_prefix}{line}",
-                                            end="",
-                                            file=sys.stderr,
-                                            flush=True,
-                                        )
-                                else:
-                                    print(
-                                        contents,
-                                        end="",
-                                        file=sys.stderr,
-                                        flush=True,
-                                    )
                                 stderr_result.write(contents)
+                    # Flush any trailing partial line left without a newline.
+                    for is_stdout, partial in emit_partial.items():
+                        if partial:
+                            emit(is_stdout, partial)
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None
@@ -463,8 +528,12 @@ class Composition:
                         check=check,
                         stdout=stdout,
                         stderr=stderr,
+                        # NOTE: isinstance against typing.IO is always False for
+                        # real file objects, so dispatch on str instead: strings
+                        # go through `input`, everything else (file objects,
+                        # subprocess.DEVNULL) is passed as the stdin stream.
                         input=stdin if isinstance(stdin, str) else None,
-                        stdin=stdin if isinstance(stdin, IO) else None,
+                        stdin=stdin if not isinstance(stdin, str) else None,
                         text=True,
                         bufsize=1,
                         env=environment,
@@ -477,26 +546,16 @@ class Composition:
 
                 if retry < max_tries:
                     print("Retrying ...")
-                    if build:
-                        for retry in range(max_tries):
-                            try:
-                                build_status = buildkite.get_build_status(build)
-                            except subprocess.CalledProcessError:
-                                time.sleep(3)
-                                break
-                            if build_status == "failed":
-                                print(
-                                    f"Build {build} has been marked as failed, exiting hard"
-                                )
-                                sys.exit(1)
-                            elif build_status == "success":
-                                break
-                            assert (
-                                build_status == "pending"
-                            ), f"Unknown build status {build_status}"
-                            time.sleep(1)
-                    else:
-                        time.sleep(3)
+                    # Back off exponentially rather than sleeping a flat
+                    # 3s each time. The only `invoke` callers that retry
+                    # (max_tries > 1) are image pulls (`up`, `pull`), and a
+                    # freshly-built mzbuild image can briefly fail to
+                    # resolve in the registry ("failed to resolve reference
+                    # ... not found") before it has propagated. With a flat
+                    # 3s sleep, `up`'s tries exhausted in seconds, which was
+                    # too short to ride out the propagation delay; the cap
+                    # plus `up`'s try count govern the total wait (see there).
+                    time.sleep(min(3 * 2 ** (retry - 1), 30))
                     continue
                 else:
                     raise CommandFailureCausedUIError(
@@ -599,7 +658,7 @@ class Composition:
         # config for an `mzbuild` config.
         deps.acquire()
 
-        self.files = {}
+        self._invalidate_compose_files()
 
         # Ensure image freshness
         self.pull_if_variable([service.name for service in services])
@@ -629,7 +688,7 @@ class Composition:
 
             # Restore the old composition.
             self.compose = old_compose
-            self.files = {}
+            self._invalidate_compose_files()
 
     @contextmanager
     def test_case(self, name: str) -> Iterator[None]:
@@ -783,7 +842,7 @@ class Composition:
 
     def sql(
         self,
-        sql: str,
+        sql: str | Composed,
         service: str | None = None,
         user: str = "materialize",
         database: str = "materialize",
@@ -801,6 +860,8 @@ class Composition:
             password=password,
             reuse_connection=reuse_connection,
         ) as cursor:
+            if isinstance(sql, Composed):
+                sql = sql.as_string(cursor)
             for statement in sqlparse.split(sql):
                 if print_statement:
                     print(f"> {statement}")
@@ -845,13 +906,15 @@ class Composition:
         entrypoint: str | None = None,
         check: bool = True,
         silent: bool = False,
+        use_aliases: bool = False,
     ) -> subprocess.CompletedProcess:
         """Run a one-off command in a service.
 
         Delegates to `docker compose run`. See that command's help for details.
-        Note that unlike `docker compose run`, any services whose definitions
-        have changed are rebuilt (like `docker compose up` would do) before the
-        command is executed.
+
+        Note that this does *not* rebuild services whose definitions have
+        changed. If you need to pick up definition changes (env vars, volumes,
+        image, etc.), call `up` with the service first.
 
         Args:
             service: The name of a service in the composition.
@@ -860,6 +923,9 @@ class Composition:
             stdin: read STDIN from a string.
             env_extra: Additional environment variables to set in the container.
             rm: Remove container after run.
+            use_aliases: Connect the container to the network(s) using the
+                service's network aliases, so other services can reach it by
+                its service name (`docker compose run` omits aliases by default).
             capture: Capture the stdout of the `docker compose` invocation.
             capture_stderr: Capture the stderr of the `docker compose` invocation.
             capture_and_print: Print during execution and capture the
@@ -871,6 +937,7 @@ class Composition:
             *(f"-e{k}" for k in env_extra.keys()),
             *(["--detach"] if detach else []),
             *(["--rm"] if rm else []),
+            *(["--use-aliases"] if use_aliases else []),
             service,
             *args,
             capture=capture,
@@ -900,31 +967,121 @@ class Composition:
             )
         environment = {"CLUSTER_REPLICA_SIZES": json.dumps(cluster_replica_size_map())}
 
-        if persistent:
-            if not self.is_running(service):
-                self.up(Service(service, idle=True))
+        if persistent and not self.is_running(service):
+            self.up(Service(service, idle=True))
 
-            return self.exec(
-                service,
-                *args,
-                # needed for sufficient error information in the junit.xml while still printing to stdout during execution
-                capture_and_print=not quiet,
-                capture=quiet,
-                capture_stderr=quiet,
-                env_extra=environment,
+        with self._testdrive_junit(args, service=service) as td_args:
+            if persistent:
+                return self.exec(
+                    service,
+                    *td_args,
+                    capture_and_print=not quiet,
+                    capture=quiet,
+                    capture_stderr=quiet,
+                    env_extra=environment,
+                    silent=True,
+                )
+            else:
+                return self.run(
+                    service,
+                    *td_args,
+                    capture_and_print=not quiet,
+                    capture=quiet,
+                    capture_stderr=quiet,
+                    env_extra=environment,
+                    silent=True,
+                )
+
+    @contextmanager
+    def _testdrive_junit(
+        self, args: tuple[str, ...] | list[str], service: str = "testdrive"
+    ) -> Iterator[tuple[str, ...]]:
+        """Wraps a testdrive invocation to capture per-file error details via
+        testdrive's own --junit-report, replacing generic docker compose
+        failures with specific testdrive errors when available."""
+        caller_junit_path: Path | None = None
+        for a in args:
+            if "--junit-report" in a and "=" in a:
+                caller_junit_path = self.path / Path(a.split("=", 1)[1]).name
+                break
+
+        use_junit = caller_junit_path is None and not any(
+            "--rewrite-results" in a for a in args
+        )
+        junit_filename = f".td_junit_{os.getpid()}_{_threading.get_ident()}.xml"
+        # Write to /share/tmp inside the container (Docker-managed volume,
+        # always writable) rather than /workdir which may be read-only in CI.
+        container_junit_path = f"/share/tmp/{junit_filename}"
+        host_junit_path = self.path / junit_filename
+
+        try:
+            if use_junit:
+                yield (f"--junit-report={container_junit_path}", *args)
+            else:
+                yield tuple(args)
+        except CommandFailureCausedUIError:
+            if use_junit:
+                self._copy_from_service(service, container_junit_path, host_junit_path)
+                errors = self._read_testdrive_junit_errors(host_junit_path)
+                if errors:
+                    raise FailedTestExecutionError(errors)
+            elif caller_junit_path is not None:
+                # Testdrive failed and was invoked with its own --junit-report.
+                # Signal that the mzcompose-level junit should be skipped
+                # to avoid duplicate annotations.
+                self.has_testdrive_junit = True
+            raise
+        finally:
+            if use_junit:
+                try:
+                    host_junit_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _copy_from_service(
+        self, service: str, container_path: str, host_path: Path
+    ) -> None:
+        try:
+            self.invoke(
+                "cp",
+                f"{service}:{container_path}",
+                str(host_path),
+                check=False,
                 silent=True,
             )
-        else:
-            return self.run(
-                service,
-                *args,
-                # needed for sufficient error information in the junit.xml while still printing to stdout during execution
-                capture_and_print=not quiet,
-                capture=quiet,
-                capture_stderr=quiet,
-                env_extra=environment,
-                silent=True,
+        except Exception:
+            pass
+
+    _TD_LOCATION_RE = re.compile(r"(\S+\.td):(\d+):\d+:")
+
+    def _read_testdrive_junit_errors(
+        self, junit_path: Path
+    ) -> list[TestFailureDetails]:
+        try:
+            tree = ET.parse(junit_path)
+        except (ET.ParseError, OSError):
+            return []
+
+        errors: list[TestFailureDetails] = []
+        for testcase in tree.iter("testcase"):
+            failure = testcase.find("failure")
+            if failure is None:
+                continue
+            file_name = testcase.get("name", "unknown")
+            failure_text = html.unescape(failure.get("message") or failure.text or "")
+            match = self._TD_LOCATION_RE.search(failure_text)
+            location = match.group(1) if match else file_name
+            line_number = int(match.group(2)) if match else None
+            errors.append(
+                TestFailureDetails(
+                    message=f"Executing {location} failed!",
+                    details=failure_text,
+                    test_case_name_override=self.current_test_case_name_override,
+                    location=location,
+                    line_number=line_number,
+                )
             )
+        return errors
 
     def exec(
         self,
@@ -975,6 +1132,43 @@ class Composition:
             print_prefix=print_prefix,
         )
 
+    def pull_images(
+        self,
+        *services: str | Service,
+        max_tries: int = 5,
+    ) -> None:
+        """Ensure images for the named services exist locally without
+        starting any containers.
+
+        Tries ``docker compose pull`` first, falling back to
+        ``docker compose build`` for any services whose images are not
+        in the registry (e.g. local development).  Unlike ``up`` with
+        ``idle=True``, no entrypoint is ever invoked, so this works
+        with distroless images that lack a shell or ``sleep``.
+
+        Args:
+            services: The names of services in the composition.
+            max_tries: Number of tries on failure.
+        """
+        service_names = [
+            service.name if isinstance(service, Service) else service
+            for service in services
+        ]
+        try:
+            self.invoke(
+                "pull",
+                *(["--quiet"] if ui.env_is_truthy("CI") else []),
+                *service_names,
+                max_tries=max_tries,
+            )
+        except UIError:
+            self.invoke(
+                "build",
+                *(["--quiet"] if ui.env_is_truthy("CI") else []),
+                *service_names,
+                max_tries=max_tries,
+            )
+
     def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
         """Pull fresh service images in case the tag indicates the underlying image may change over time.
 
@@ -1012,7 +1206,7 @@ class Composition:
         *services: str | Service,
         detach: bool = True,
         wait: bool = True,
-        max_tries: int = 5,  # increased since quay.io returns 502 sometimes
+        max_tries: int = 14,
     ) -> None:
         """Build, (re)create, and start the named services.
 
@@ -1032,33 +1226,38 @@ class Composition:
                 if isinstance(service, Service) and service.idle
             ]
         )
+        old_compose = None
         if idle:
             old_compose = copy.deepcopy(self.compose)
             for service_name, service in self.compose["services"].items():
                 if service_name in idle:
                     service["entrypoint"] = ["sleep", "infinity"]
                     service["command"] = []
-            self.files = {}
+                    service.pop("depends_on", None)
+                    service.pop("healthcheck", None)
+            self._invalidate_compose_files()
 
         service_names = [
             service.name if isinstance(service, Service) else service
             for service in services
         ]
 
-        self.capture_logs()
-        self.invoke(
-            "up",
-            *(["--detach"] if detach else []),
-            *(["--wait"] if wait else []),
-            *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
-            *service_names,
-            max_tries=300 if os.getenv("CI_WAITING_FOR_BUILD") else max_tries,
-            build=os.getenv("CI_WAITING_FOR_BUILD"),
-        )
-
-        if idle:
-            self.compose = old_compose  # type: ignore
-            self.files = {}
+        try:
+            self.capture_logs()
+            self.invoke(
+                "up",
+                *(["--detach"] if detach else []),
+                *(["--wait"] if wait else []),
+                *(["--quiet-pull"] if ui.env_is_truthy("CI") else []),
+                *service_names,
+                max_tries=max_tries,
+            )
+        finally:
+            # Restore even on failure: otherwise the next test in the same
+            # composition would inherit the sleep-infinity entrypoint.
+            if old_compose is not None:
+                self.compose = old_compose  # type: ignore
+                self._invalidate_compose_files()
 
     def validate_sources_sinks_clusters(self) -> str | None:
         """Validate that all sources, sinks & clusters are in a good state"""
@@ -1071,41 +1270,43 @@ class Composition:
             exclusion_clause = f"name NOT IN ({excluded_items})"
 
         # starting sources are currently expected if no new data is produced, see database-issues#6605
-        results = self.sql_query(
-            f"""
+        # A source export with an empty write frontier is sealed, for example after a definite
+        # error ended its ingestion. A restart leaves it out of the dataflow, so its last status
+        # stays in place.
+        results = self.sql_query(f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
                 status IN ('running', 'created', 'paused') OR
                 (type = 'progress' AND status = 'created')
             )
+            AND id NOT IN (
+                SELECT object_id
+                FROM mz_internal.mz_frontiers
+                WHERE write_frontier IS NULL
+            )
             AND {exclusion_clause}
-            """
-        )
+            """)
         for name, status, error, details in results:
             return f"Source {name} is expected to be running/created/paused, but is {status}, error: {error}, details: {details}"
 
-        results = self.sql_query(
-            f"""
+        results = self.sql_query(f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_sink_statuses
             WHERE status NOT IN ('running', 'dropped')
             AND {exclusion_clause}
-            """
-        )
+            """)
         for name, status, error, details in results:
             return f"Sink {name} is expected to be running/dropped, but is {status}, error: {error}, details: {details}"
 
-        results = self.sql_query(
-            """
+        results = self.sql_query("""
             SELECT mz_clusters.name, mz_cluster_replicas.name, status, reason
             FROM mz_internal.mz_cluster_replica_statuses
             JOIN mz_cluster_replicas
             ON mz_internal.mz_cluster_replica_statuses.replica_id = mz_cluster_replicas.id
             JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
             WHERE status NOT IN ('online', 'offline')
-            """
-        )
+            """)
         for cluster_name, replica_name, status, reason in results:
             return f"Cluster replica {cluster_name}.{replica_name} is expected to be online/offline, but is {status}, reason: {reason}"
 
@@ -1138,7 +1339,8 @@ class Composition:
                     with self.override(Materialized()):
                         self.up("materialized")
                 else:
-                    self.promote_mz()
+                    # The previous generation was killed above.
+                    self.promote_mz(retire_mz_service=None)
             self.sql("SELECT 1")
 
             NUM_RETRIES = 60
@@ -1179,6 +1381,19 @@ class Composition:
 
             self.kill("materialized")
             self.up("materialized")
+
+            # The SIGKILL above severed every SQL connection the workflow left
+            # cached (`sql`/`sql_query` reuse connections by default). Close and
+            # forget them so the checks below reconnect to the restarted
+            # `environmentd`. Reusing a dead socket would surface as a spurious
+            # "server closed the connection unexpectedly".
+            for conn in self.conns.values():
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self.conns.clear()
+
             self.sql("SELECT 1")
 
             NUM_RETRIES = 60
@@ -1197,7 +1412,7 @@ class Composition:
             )
 
     def metadata_store(self) -> str:
-        for name in ["cockroach", "postgres-metadata"]:
+        for name in ["cockroach", "postgres-metadata", "alloydb"]:
             if name in self.compose["services"]:
                 return name
         raise RuntimeError(
@@ -1284,7 +1499,7 @@ class Composition:
             self.wait(*services, expect_exit_code=137 if signal == "SIGKILL" else None)
 
     def is_running(self, container_name: str) -> bool:
-        qualified_container_name = f"{self.name}-{container_name}-1"
+        qualified_container_name = f"{self.project_name}-{container_name}-1"
         output_str = self.invoke(
             "ps",
             "--filter",
@@ -1389,7 +1604,7 @@ class Composition:
             force: Whether to force the removal (i.e., don't error if the
                 volume does not exist).
         """
-        volumes = tuple(f"{self.name}_{v}" for v in volumes)
+        volumes = tuple(f"{self.project_name}_{v}" for v in volumes)
         spawn.runv(
             ["docker", "volume", "rm", *(["--force"] if force else []), *volumes]
         )
@@ -1418,48 +1633,35 @@ class Composition:
 
         return str(output_list[0])
 
-    def stats(
-        self,
-        service: str,
-    ) -> str:
-        """Delegates to `docker stats`
+    def mem(self, service: str) -> int:
+        """Return memory usage in bytes for the given service's container.
 
-        Args:
-            service: The service whose container's stats will be probed.
+        Uses ``docker exec`` to read the cgroup memory file from inside the
+        container, where the path is always predictable regardless of the
+        host's cgroup driver or directory layout.
         """
-
         container_id = self.container_id(service)
         assert container_id is not None
 
-        return subprocess.run(
-            [
-                "docker",
-                "stats",
-                container_id,
-                "--format",
-                "{{json .}}",
-                "--no-stream",
-                "--no-trunc",
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        ).stdout
+        # Inside the container the cgroup root is always at /sys/fs/cgroup.
+        # Try v2 first, then v1.
+        for path in (
+            "/sys/fs/cgroup/memory.current",
+            "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+        ):
+            try:
+                out = subprocess.check_output(
+                    ["docker", "exec", container_id, "cat", path],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+                return int(out)
+            except (subprocess.CalledProcessError, ValueError):
+                continue
 
-    def mem(self, service: str) -> int:
-        stats_str = self.stats(service)
-        stats = json.loads(stats_str)
-        assert service in stats["Name"]
-        mem_str, _ = stats["MemUsage"].split("/")  # "MemUsage":"1.542GiB / 62.8GiB"
-        mem_float = float(re.findall(r"[\d.]+", mem_str)[0])
-        if "MiB" in mem_str:
-            mem_float = mem_float * 10**6
-        elif "GiB" in mem_str:
-            mem_float = mem_float * 10**9
-        else:
-            raise RuntimeError(f"Unable to parse {mem_str}")
-        return round(mem_float)
+        raise FileNotFoundError(
+            f"Could not read cgroup memory usage from container {container_id}"
+        )
 
     def testdrive(
         self,
@@ -1502,16 +1704,17 @@ class Composition:
         if not self.is_running(service):
             self.up(Service(service, idle=True))
 
-        return self.exec(
-            service,
-            *args,
-            stdin=input,
-            capture_and_print=not quiet,
-            capture=quiet,
-            capture_stderr=quiet,
-            silent=silent,
-            print_prefix=print_prefix,
-        )
+        with self._testdrive_junit(args, service=service) as td_args:
+            return self.exec(
+                service,
+                *td_args,
+                stdin=input,
+                capture_and_print=not quiet,
+                capture=quiet,
+                capture_stderr=quiet,
+                silent=silent,
+                print_prefix=print_prefix,
+            )
 
     def enable_minio_versioning(self) -> None:
         self.up("minio", Service("mc", idle=True))
@@ -1528,110 +1731,37 @@ class Composition:
 
         self.exec("mc", "mc", "version", "enable", "persist/persist")
 
-    def backup_cockroach(self) -> None:
-        self.up(Service("mc", idle=True))
-        self.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
-        self.exec(
-            "cockroach",
-            "cockroach",
-            "sql",
-            "--insecure",
-            "-e",
-            """
-                CREATE EXTERNAL CONNECTION backup_bucket
-                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
-                BACKUP INTO 'external://backup_bucket';
-                DROP EXTERNAL CONNECTION backup_bucket;
-            """,
-        )
-
-    def restore_cockroach(
-        self, mz_service: str = "materialized", restart_mz: bool = True
-    ) -> None:
-        self.kill(mz_service)
-        self.exec(
-            "cockroach",
-            "cockroach",
-            "sql",
-            "--insecure",
-            "-e",
-            """
-                DROP DATABASE defaultdb;
-                CREATE EXTERNAL CONNECTION backup_bucket
-                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
-                RESTORE DATABASE defaultdb
-                FROM LATEST IN 'external://backup_bucket';
-                DROP EXTERNAL CONNECTION backup_bucket;
-            """,
-        )
-        self.up(Service("persistcli", idle=True))
-        self.exec(
-            "persistcli",
-            "persistcli",
-            "admin",
-            "--commit",
-            "restore-blob",
-            f"--blob-uri={minio_blob_uri()}",
-            "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
-        )
-        if restart_mz:
-            self.up(mz_service)
-
-    def backup_postgres(self) -> None:
-        backup = self.exec(
-            "postgres-metadata",
-            "pg_dumpall",
-            "--user",
-            "postgres",
-            capture=True,
-        ).stdout
-        with open("backup.sql", "w") as f:
-            f.write(backup)
-
-    def restore_postgres(
-        self, mz_service: str = "materialized", restart_mz: bool = True
-    ) -> None:
-        self.kill(mz_service)
-        self.kill("postgres-metadata")
-        self.rm("postgres-metadata")
-        self.up("postgres-metadata")
-        with open("backup.sql") as f:
-            backup = f.read()
-        self.exec(
-            "postgres-metadata",
-            "psql",
-            "--user",
-            "postgres",
-            "--file",
-            "-",
-            stdin=backup,
-        )
-        self.up(Service("persistcli", idle=True))
-        self.exec(
-            "persistcli",
-            "persistcli",
-            "admin",
-            "--commit",
-            "restore-blob",
-            f"--blob-uri={minio_blob_uri()}",
-            "--consensus-uri=postgres://root@postgres-metadata:26257?options=--search_path=consensus",
-        )
-        if restart_mz:
-            self.up(mz_service)
-
     def backup(self) -> None:
-        if self.metadata_store() == "cockroach":
-            self.backup_cockroach()
+        from materialize.mzcompose.services.alloydb import AlloyDB
+        from materialize.mzcompose.services.cockroach import Cockroach
+        from materialize.mzcompose.services.postgres import PostgresMetadata
+
+        store = self.metadata_store()
+        if store == "cockroach":
+            Cockroach.backup(self)
+        elif store == "postgres-metadata":
+            PostgresMetadata.backup(self)
+        elif store == "alloydb":
+            AlloyDB.backup(self)
         else:
-            self.backup_postgres()
+            raise RuntimeError(f"Unsupported metadata store {store} for backup")
 
     def restore(
         self, mz_service: str = "materialized", restart_mz: bool = True
     ) -> None:
-        if self.metadata_store() == "cockroach":
-            self.restore_cockroach(mz_service, restart_mz)
+        from materialize.mzcompose.services.alloydb import AlloyDB
+        from materialize.mzcompose.services.cockroach import Cockroach
+        from materialize.mzcompose.services.postgres import PostgresMetadata
+
+        store = self.metadata_store()
+        if store == "cockroach":
+            Cockroach.restore(self, mz_service, restart_mz)
+        elif store == "postgres-metadata":
+            PostgresMetadata.restore(self, mz_service, restart_mz)
+        elif store == "alloydb":
+            AlloyDB.restore(self, mz_service, restart_mz)
         else:
-            self.restore_postgres(mz_service, restart_mz)
+            raise RuntimeError(f"Unsupported metadata store {store} for restore")
 
     def await_mz_deployment_status(
         self,
@@ -1677,7 +1807,21 @@ class Composition:
             f"Timed out waiting for {mz_service} to reach Mz deployment status {status.value}, still in status {result.get('status')}"
         )
 
-    def promote_mz(self, mz_service: str = "materialized") -> None:
+    def promote_mz(
+        self, mz_service: str = "materialized", *, retire_mz_service: str | None
+    ) -> None:
+        """Promote `mz_service` to leader and retire the generation it replaces.
+
+        `retire_mz_service` names the service running the previous generation.
+        Once `mz_service` is leader, `retire_mz_service` is killed with
+        `kill_fenced_mz`, as the orchestrator removes an old generation after a
+        promotion. Pass `None` only when no other generation runs, or when the
+        caller handles the fenced generation itself, for example by observing
+        it stop on its own or by calling `kill_fenced_mz` later.
+        """
+        assert (
+            retire_mz_service != mz_service
+        ), f"cannot retire the promoted {mz_service}"
         result = json.loads(
             self.exec(
                 mz_service,
@@ -1690,6 +1834,40 @@ class Composition:
             ).stdout
         )
         assert result["result"] == "Success", f"Unexpected result {result}"
+
+        if retire_mz_service is not None:
+            # Kill the old generation only after the new one has fenced it.
+            self.await_mz_deployment_status(DeploymentStatus.IS_LEADER, mz_service)
+            self.kill_fenced_mz(retire_mz_service)
+
+    def kill_fenced_mz(self, mz_service: str) -> None:
+        """Kill a Materialize service that a newer generation has fenced out.
+
+        `mz_service` must be defined in the composition. A container that has
+        already stopped and any exit code are accepted. The killed container
+        keeps its logs, and the next `down` or the CI hook collects them.
+        """
+        # The fenced environmentd exits with code 0. A container started with
+        # `restart="on-failure"` then sleeps instead of exiting (see the
+        # materialized entrypoint), and the clusterd processes it spawned keep
+        # running. The new generation's process orchestrator cannot reap them,
+        # because they run in another container's PID namespace.
+        #
+        # NOTE: Do not wrap this in an override. Overriding re-acquires the
+        # image, which exits in CI once the materialized fingerprint changed,
+        # e.g. after a version bump.
+        assert (
+            mz_service in self.compose["services"]
+        ), f"{mz_service} is not defined in the composition"
+        try:
+            self.kill(mz_service, wait=False)
+        except CommandFailureCausedUIError:
+            # A container without a restart policy stops on its own once
+            # fenced. If it stops between compose listing it and killing it,
+            # the kill fails.
+            if self.is_running(mz_service):
+                raise
+        self.wait(mz_service)
 
     def cloud_hostname(
         self, quiet: bool = False, timeout_secs: int = 180, poll_interval: float = 2.0
@@ -1787,11 +1965,17 @@ class Composition:
                 )
                 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 
-                test_analytics_config = create_test_analytics_config(self)
-                test_analytics = TestAnalyticsDb(test_analytics_config)
-                test_analytics.database_connector.submit_update_statements()
-        if exceptions:
+                try:
+                    test_analytics_config = create_test_analytics_config(self)
+                    test_analytics = TestAnalyticsDb(test_analytics_config)
+                    test_analytics.database_connector.submit_update_statements()
+                except Exception as e:
+                    # An analytics failure must not mask the actual test
+                    # result, which is raised below.
+                    print(f"Failed to submit test analytics data: {e}")
+        if len(exceptions) > 1:
             print(f"Further exceptions were raised:\n{exceptions[1:]}")
+        if exceptions:
             raise exceptions[0]
 
     def verify_build_profile(self, container: str = "materialized") -> None:

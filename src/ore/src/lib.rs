@@ -30,6 +30,7 @@ pub mod bits;
 #[cfg(feature = "bytes")]
 pub mod bytes;
 pub mod cast;
+pub mod cgroup;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
 pub mod channel;
@@ -50,12 +51,7 @@ pub mod hint;
 pub mod id_gen;
 pub mod iter;
 pub mod lex;
-#[cfg_attr(
-    nightly_doc_features,
-    doc(cfg(all(feature = "bytes", feature = "region")))
-)]
-#[cfg(all(feature = "bytes", feature = "region", feature = "tracing"))]
-pub mod lgbytes;
+pub mod memory;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "metrics")))]
 #[cfg(feature = "metrics")]
 pub mod metrics;
@@ -68,11 +64,17 @@ pub mod option;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "overflowing")))]
 #[cfg(feature = "overflowing")]
 pub mod overflowing;
+#[cfg_attr(nightly_doc_features, doc(cfg(all(feature = "pager", unix))))]
+#[cfg(all(feature = "pager", unix))]
+pub mod pager;
 #[cfg(not(target_family = "wasm"))]
 #[cfg(feature = "panic")]
 pub mod panic;
 pub mod path;
 pub mod permutations;
+#[cfg_attr(nightly_doc_features, doc(cfg(all(feature = "pool", unix))))]
+#[cfg(all(feature = "pool", unix))]
+pub mod pool;
 #[cfg(feature = "process")]
 pub mod process;
 #[cfg(feature = "region")]
@@ -82,7 +84,9 @@ pub mod result;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
 pub mod retry;
+pub mod secure;
 pub mod serde;
+pub mod sql;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
 #[cfg(feature = "stack")]
 pub mod stack;

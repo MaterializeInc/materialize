@@ -215,6 +215,7 @@ pub struct MySqlSourceExportDetails {
     pub initial_gtid_set: String,
     pub text_columns: Vec<String>,
     pub exclude_columns: Vec<String>,
+    pub binlog_full_metadata: bool,
 }
 
 impl AlterCompatible for MySqlSourceExportDetails {
@@ -230,13 +231,25 @@ impl AlterCompatible for MySqlSourceExportDetails {
             initial_gtid_set: _,
             text_columns: _,
             exclude_columns: _,
+            binlog_full_metadata: _,
         } = self;
         Ok(())
     }
 }
 
 /// Represents a MySQL transaction id
-#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Ord,
+    PartialOrd,
+    Eq,
+    PartialEq,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum GtidState {
     // NOTE: The ordering of the variants is important for the derived order implementation
     /// Represents a MySQL server source-id that has not yet presented a GTID

@@ -31,6 +31,37 @@ SELECT *, count(*) FROM foo GROUP BY a, a, a + 1
 ----
 37 1
 
+# Regression test for duplicate GROUP BY keys via positional references.
+# `GROUP BY 1, 1` (and `GROUP BY a, 1` etc.) used to panic the planner because
+# positional references to input columns skipped group-key deduplication. See
+# database-issues#11286.
+query II
+SELECT *, count(*) FROM foo GROUP BY 1, 1
+----
+37 1
+
+query II
+SELECT *, count(*) FROM foo GROUP BY a, 1
+----
+37 1
+
+query II
+SELECT *, count(*) FROM foo GROUP BY 1, a
+----
+37 1
+
+query II
+SELECT a, count(*) FROM bar GROUP BY 1, 1
+----
+37 2
+
+# A duplicate positional key alongside other distinct keys: the dedup must match
+# a non-trailing group key, not just the most recently added one.
+query III
+SELECT a, b, count(*) FROM bar GROUP BY 1, 2, 1
+----
+37 42 2
+
 query I
 SELECT a FROM foo GROUP BY a, foo.a
 ----

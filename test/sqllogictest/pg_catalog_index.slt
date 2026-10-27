@@ -15,10 +15,21 @@ CREATE TABLE a (b int, c int);
 statement ok
 CREATE INDEX a_index ON a (b);
 
-# Test that pg_class reports the correct number of columns of an index's relation
+# indnatts is the number of columns in the index, not the indexed table
 query I
 SELECT indnatts FROM pg_catalog.pg_index
-JOIN mz_catalog.mz_relations ON pg_catalog.pg_index.indrelid = mz_catalog.mz_relations.oid
-WHERE mz_catalog.mz_relations.name = 'a'
+JOIN mz_catalog.mz_indexes ON pg_catalog.pg_index.indexrelid = mz_catalog.mz_indexes.oid
+WHERE mz_catalog.mz_indexes.name = 'a_index'
+----
+1
+
+statement ok
+CREATE INDEX a_index2 ON a (b, c);
+
+# Multi-column index reports 2
+query I
+SELECT indnatts FROM pg_catalog.pg_index
+JOIN mz_catalog.mz_indexes ON pg_catalog.pg_index.indexrelid = mz_catalog.mz_indexes.oid
+WHERE mz_catalog.mz_indexes.name = 'a_index2'
 ----
 2

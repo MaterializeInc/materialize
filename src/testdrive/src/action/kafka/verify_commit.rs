@@ -41,8 +41,9 @@ pub async fn run_verify_commit(
 
     let mut config = state.kafka_config.clone();
     config.set("group.id", &consumer_group_id);
+    // Use `state.timeout` so `$ set-sql-timeout` extends this wait too.
     Retry::default()
-        .max_duration(state.default_timeout)
+        .max_duration(state.timeout)
         .retry_async_canceling(|_| async {
             let config = config.clone();
             let mut tpl = TopicPartitionList::new();
@@ -50,8 +51,8 @@ pub async fn run_verify_commit(
             let committed_tpl = mz_ore::task::spawn_blocking(
                 || "kakfa_committed_offsets".to_string(),
                 move || {
-                    let consumer: StreamConsumer =
-                        config.create().context("creating kafka consumer")?;
+                    let consumer: StreamConsumer = mz_kafka_util::client::create(&config)
+                        .context("creating kafka consumer")?;
 
                     Ok::<_, anyhow::Error>(
                         consumer.committed_offsets(tpl, Duration::from_secs(10))?,

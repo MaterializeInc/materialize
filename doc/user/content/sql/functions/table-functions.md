@@ -233,6 +233,16 @@ However, table functions in a `SELECT` clause have a number of restrictions (sim
 
 You can also call ordinary scalar functions in the `FROM` clause as if they were table functions. In that case, their output will be considered a table with a single row and column.
 
+## `generate_series` over timestamps
+
+{{< note >}}
+A timestamp `step` that mixes months and days, such as
+`INTERVAL '1 month -29 days'`, can fail making progress toward `stop` because
+adding a month saturates to the last day of a shorter month. Unlike PostgreSQL,
+which loops indefinitely on such input, Materialize terminates the series when
+it can no longer make progress.
+{{< /note >}}
+
 ## See also
 
 See a list of table functions in the [function reference](/sql/functions/#table-functions).

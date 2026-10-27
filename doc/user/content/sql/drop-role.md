@@ -27,7 +27,7 @@ You cannot drop the current role.
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-role.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-role" %}}
 
 ## Related pages
 

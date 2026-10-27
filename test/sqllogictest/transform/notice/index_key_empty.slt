@@ -91,6 +91,15 @@ WHERE
   idx.name = 't_idx_empty_key'
 ----
 
-# This further tests `drop_plans_and_metainfos`
+# Verify the notice row is actually retracted from the
+# underlying builtin table (not just hidden by the JOIN).
+query I
+SELECT count(*)
+FROM mz_internal.mz_optimizer_notices
+WHERE notice_type = 'Empty index key'
+----
+0
+
+# This further tests `drop_optimizer_notices`
 statement ok
 DROP SCHEMA notices CASCADE;

@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """Test analytics database."""
+
 from materialize import buildkite
 from materialize.test_analytics.config.mz_db_config import MzDbConfig
 from materialize.test_analytics.connector.test_analytics_connector import (

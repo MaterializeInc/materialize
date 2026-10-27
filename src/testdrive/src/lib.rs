@@ -9,6 +9,7 @@
 
 //! Integration test driver for Materialize.
 
+#![recursion_limit = "256"]
 #![warn(missing_docs)]
 
 use std::fs::File;
@@ -157,6 +158,16 @@ pub(crate) async fn run_line_reader(
                 break;
             }
         }
+    }
+    // Failures in `postgres-execute background=true` tasks must fail the test,
+    // so join them before wrapping up the file.
+    for e in state.join_background_tasks().await {
+        errors.push(e.into());
+    }
+    if errors.is_empty()
+        && let Err(e) = action::verify_kafka_topics_exhausted(&state).await
+    {
+        errors.push(e.into());
     }
     let mut consistency_checks_succeeded = true;
     if config.consistency_checks == action::consistency::Level::File {

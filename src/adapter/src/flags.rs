@@ -9,18 +9,19 @@
 
 use std::time::Duration;
 
+use mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT;
+use mz_cluster_client::params::GrpcClientParameters;
 use mz_compute_client::protocol::command::ComputeParameters;
 use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
 use mz_storage_types::parameters::{
     PgSourceSnapshotConfig, StorageMaxInflightBytesConfig, StorageParameters,
 };
 use mz_tracing::params::TracingParameters;
 
-use mz_timestamp_oracle::postgres_oracle::PostgresTimestampOracleParameters;
+use mz_timestamp_oracle::postgres_oracle::TimestampOracleParameters;
 
 /// Return the current compute configuration, derived from the system configuration.
 pub fn compute_config(config: &SystemVars) -> ComputeParameters {
@@ -47,6 +48,7 @@ pub fn storage_config(config: &SystemVars) -> StorageParameters {
         mysql_source_timeouts: mz_mysql_util::TimeoutConfig::build(
             config.mysql_source_snapshot_max_execution_time(),
             config.mysql_source_snapshot_lock_wait_timeout(),
+            config.mysql_source_snapshot_wait_timeout(),
             config.mysql_source_tcp_keepalive(),
             config.mysql_source_connect_timeout(),
         ),
@@ -164,8 +166,8 @@ pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
     }
 }
 
-pub fn pg_timstamp_oracle_config(config: &SystemVars) -> PostgresTimestampOracleParameters {
-    PostgresTimestampOracleParameters {
+pub fn timestamp_oracle_config(config: &SystemVars) -> TimestampOracleParameters {
+    TimestampOracleParameters {
         pg_connection_pool_max_size: Some(config.pg_timestamp_oracle_connection_pool_max_size()),
         pg_connection_pool_max_wait: Some(config.pg_timestamp_oracle_connection_pool_max_wait()),
         pg_connection_pool_ttl: Some(config.pg_timestamp_oracle_connection_pool_ttl()),
@@ -177,6 +179,10 @@ pub fn pg_timstamp_oracle_config(config: &SystemVars) -> PostgresTimestampOracle
         // oracle.
         pg_connection_pool_connect_timeout: Some(config.crdb_connect_timeout()),
         pg_connection_pool_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
+        pg_connection_pool_keepalives_idle: Some(config.crdb_keepalives_idle()),
+        pg_connection_pool_keepalives_interval: Some(config.crdb_keepalives_interval()),
+        pg_connection_pool_keepalives_retries: Some(config.crdb_keepalives_retries()),
+        pg_statement_timeout: Some(PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT.get(config.dyncfgs())),
     }
 }
 

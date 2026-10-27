@@ -43,7 +43,7 @@ mod ident;
 #[cfg(feature = "test")]
 pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
     use crate::ast::display::AstDisplay;
-    use crate::ast::{Expr, Statement};
+    use crate::ast::{CastFailureMode, Expr, Statement};
     use datadriven::TestCase;
     use mz_ore::collections::CollectionExt;
     use mz_ore::fmt::FormatBuffer;
@@ -125,13 +125,20 @@ pub fn datadriven_testcase(tc: &datadriven::TestCase) -> String {
                     match parser::parse_expr(&printed) {
                         Ok(parsed) => {
                             // TODO: We always coerce the double colon operator into a Cast expr instead
-                            // of keeping it as an Op (see parse_pg_cast). Expr::Cast always prints
-                            // itself as double colon. We're thus unable to perfectly roundtrip
-                            // `CAST(..)`. We could fix this by keeping "::" as a binary operator and
-                            // teaching func.rs how to handle it, similar to how that file handles "~~"
-                            // (without the parser converting that operator directly into an
-                            // Expr::Like).
-                            if !matches!(parsed, Expr::Cast { .. }) {
+                            // of keeping it as an Op (see parse_pg_cast). An erroring Expr::Cast
+                            // always prints itself as double colon. We're thus unable to perfectly
+                            // roundtrip `CAST(..)`. We could fix this by keeping "::" as a binary
+                            // operator and teaching func.rs how to handle it, similar to how that
+                            // file handles "~~" (without the parser converting that operator
+                            // directly into an Expr::Like). `TRY_CAST(..)` has no operator form
+                            // and so does roundtrip.
+                            if !matches!(
+                                parsed,
+                                Expr::Cast {
+                                    failure_mode: CastFailureMode::Error,
+                                    ..
+                                }
+                            ) {
                                 if parsed != s {
                                     panic!(
                                         "reparse comparison failed: {input} != {s}\n{:?}\n!=\n{:?}\n{printed}\n",

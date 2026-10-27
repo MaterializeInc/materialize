@@ -13,42 +13,52 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use columnar::{Columnar, Index};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, BatchVal};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::{AsCollection, Data, VecCollection};
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
+use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
-use mz_compute_types::plan::AvailableCollections;
+use mz_compute_types::dyncfgs::TEMPORAL_BUCKETING_SUMMARY;
+use mz_compute_types::plan::scalar::LirScalarExpr;
+use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
-use mz_expr::{Id, MapFilterProject, MirScalarExpr};
+use mz_expr::{Eval, Id, MfpPlan};
 use mz_ore::soft_assert_or_log;
-use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
+use mz_repr::fixed_length::ExtendDatums;
+use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow, StableRow};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
+use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
-use mz_timely_util::operator::{CollectionExt, StreamExt};
-use timely::container::CapacityContainerBuilder;
+use mz_timely_util::columnar::chunk::{
+    AccountedChunkBatcher, ChunkChunker, ComputeSpill, UnchunkBuilder,
+};
+use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
+use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher, columnar_exchange};
+use mz_timely_util::columnation::ColumnationChunker;
+use timely::ContainerBuilder;
+use timely::container::NoopBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
-use timely::dataflow::operators::generic::OutputBuilderSession;
-use timely::dataflow::scopes::Child;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::{Scope, Stream};
-use timely::progress::timestamp::Refines;
+use timely::progress::operate::FrontierInterest;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
-use crate::render::errors::ErrorLogger;
-use crate::render::{LinearJoinSpec, RenderTimestamp};
-use crate::row_spine::{DatumSeq, RowRowBuilder};
+use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, MzArrangeCore};
+use crate::extensions::reduce::MzReduce;
+use crate::render::columnar::{ColCollection, flat_map_datums};
+use crate::render::errors::{DataflowErrorSer, ErrorLogger};
+use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp, RowRowAgent, RowRowEnter,
-    RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
+use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder};
 
 /// Dataflow-local collections and arrangements.
 ///
@@ -56,19 +66,12 @@ use crate::typedefs::{
 /// These assets include dataflow-local collections and arrangements, as well as imported
 /// arrangements from outside the dataflow.
 ///
-/// Context has two timestamp types, one from `S::Timestamp` and one from `T`, where the
-/// former must refine the latter. The former is the timestamp used by the scope in question,
-/// and the latter is the timestamp of imported traces. The two may be different in the case
-/// of regions or iteration.
-pub struct Context<S: Scope, T = mz_repr::Timestamp>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
+/// Context has a timestamp type `T`, which is the timestamp used by the scope in question.
+pub struct Context<'scope, T: RenderTimestamp> {
     /// The scope within which all managed collections exist.
     ///
     /// It is an error to add any collections not contained in this scope.
-    pub(crate) scope: S,
+    pub(crate) scope: Scope<'scope, T>,
     /// The debug name of the dataflow associated with this context.
     pub debug_name: String,
     /// The Timely ID of the dataflow associated with this context.
@@ -79,31 +82,28 @@ where
     ///
     /// We *must* apply it to sinks, to ensure correct outputs.
     /// We *should* apply it to sources and imported traces, because it improves performance.
-    pub as_of_frontier: Antichain<T>,
+    pub as_of_frontier: Antichain<mz_repr::Timestamp>,
     /// Frontier after which updates should not be emitted.
     /// Used to limit the amount of work done when appropriate.
-    pub until: Antichain<T>,
+    pub until: Antichain<mz_repr::Timestamp>,
     /// Bindings of identifiers to collections.
-    pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
+    pub bindings: BTreeMap<Id, CollectionBundle<'scope, T>>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub(super) compute_logger: Option<crate::logging::compute::Logger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
     /// The expiration time for dataflows in this context. The output's frontier should never advance
     /// past this frontier, except the empty frontier.
-    pub dataflow_expiration: Antichain<T>,
+    pub dataflow_expiration: Antichain<mz_repr::Timestamp>,
     /// The config set for this context.
     pub config_set: Rc<ConfigSet>,
 }
 
-impl<S: Scope> Context<S>
-where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
-{
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Creates a new empty Context.
-    pub fn for_dataflow_in<Plan>(
-        dataflow: &DataflowDescription<Plan, CollectionMetadata>,
-        scope: S,
+    pub fn for_dataflow_in<Plan, O>(
+        dataflow: &DataflowDescription<Plan, CollectionMetadata, O>,
+        scope: Scope<'scope, T>,
         compute_state: &ComputeState,
         until: Antichain<mz_repr::Timestamp>,
         dataflow_expiration: Antichain<mz_repr::Timestamp>,
@@ -142,11 +142,7 @@ where
     }
 }
 
-impl<S: Scope, T> Context<S, T>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Insert a collection bundle by an identifier.
     ///
     /// This is expected to be used to install external collections (sources, indexes, other views),
@@ -154,18 +150,18 @@ where
     pub fn insert_id(
         &mut self,
         id: Id,
-        collection: CollectionBundle<S, T>,
-    ) -> Option<CollectionBundle<S, T>> {
+        collection: CollectionBundle<'scope, T>,
+    ) -> Option<CollectionBundle<'scope, T>> {
         self.bindings.insert(id, collection)
     }
     /// Remove a collection bundle by an identifier.
     ///
     /// The primary use of this method is uninstalling `Let` bindings.
-    pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<S, T>> {
+    pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<'scope, T>> {
         self.bindings.remove(&id)
     }
     /// Melds a collection bundle to whatever exists.
-    pub fn update_id(&mut self, id: Id, collection: CollectionBundle<S, T>) {
+    pub fn update_id(&mut self, id: Id, collection: CollectionBundle<'scope, T>) {
         if !self.bindings.contains_key(&id) {
             self.bindings.insert(id, collection);
         } else {
@@ -182,7 +178,7 @@ where
         }
     }
     /// Look up a collection bundle by an identifier.
-    pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S, T>> {
+    pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<'scope, T>> {
         self.bindings.get(&id).cloned()
     }
 
@@ -191,17 +187,13 @@ where
     }
 }
 
-impl<S: Scope, T> Context<S, T>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Brings the underlying arrangements and collections into a region.
     pub fn enter_region<'a>(
         &self,
-        region: &Child<'a, S, S::Timestamp>,
+        region: Scope<'a, T>,
         bindings: Option<&std::collections::BTreeSet<Id>>,
-    ) -> Context<Child<'a, S, S::Timestamp>, T> {
+    ) -> Context<'a, T> {
         let bindings = self
             .bindings
             .iter()
@@ -210,7 +202,7 @@ where
             .collect();
 
         Context {
-            scope: region.clone(),
+            scope: region,
             debug_name: self.debug_name.clone(),
             dataflow_id: self.dataflow_id.clone(),
             export_ids: self.export_ids.clone(),
@@ -227,15 +219,11 @@ where
 
 /// Describes flavor of arrangement: local or imported trace.
 #[derive(Clone)]
-pub enum ArrangementFlavor<S: Scope, T = mz_repr::Timestamp>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
+pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
     /// A dataflow-local arrangement.
     Local(
-        Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
-        Arranged<S, ErrAgent<S::Timestamp, Diff>>,
+        Arranged<'scope, RowRowAgent<T, Diff>>,
+        Arranged<'scope, ErrAgent<T, Diff>>,
     ),
     /// An imported trace from outside the dataflow.
     ///
@@ -243,53 +231,36 @@ where
     /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
-        Arranged<S, RowRowEnter<T, Diff, S::Timestamp>>,
-        Arranged<S, ErrEnter<T, S::Timestamp>>,
+        Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>,
+        Arranged<'scope, ErrEnter<mz_repr::Timestamp, T>>,
     ),
 }
 
-impl<S: Scope, T> ArrangementFlavor<S, T>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
-    /// Presents `self` as a stream of updates.
-    ///
-    /// Deprecated: This function is not fueled and hence risks flattening the whole arrangement.
-    ///
-    /// This method presents the contents as they are, without further computation.
-    /// If you have logic that could be applied to each record, consider using the
-    /// `flat_map` methods which allows this and can reduce the work done.
-    #[deprecated(note = "Use `flat_map` instead.")]
-    pub fn as_collection(
-        &self,
-    ) -> (
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
-    ) {
-        let mut datums = DatumVec::new();
-        let logic = move |k: DatumSeq, v: DatumSeq| {
-            let mut datums_borrow = datums.borrow();
-            datums_borrow.extend(k);
-            datums_borrow.extend(v);
-            SharedRow::pack(&**datums_borrow)
-        };
-        match &self {
-            ArrangementFlavor::Local(oks, errs) => (
-                oks.as_collection(logic),
-                errs.as_collection(|k, &()| k.clone()),
-            ),
-            ArrangementFlavor::Trace(_, oks, errs) => (
-                oks.as_collection(logic),
-                errs.as_collection(|k, &()| k.clone()),
-            ),
-        }
-    }
-
+impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// Constructs and applies logic to elements of `self` and returns the results.
     ///
-    /// The `logic` receives a vector of datums, a timestamp, and a diff, and produces
-    /// an iterator of `(D, S::Timestamp, Diff)` updates.
+    /// The `logic` callback receives a borrow of the decoded datum vector, a timestamp, a
+    /// diff, and two output sessions: one for `ok` updates of type `(D, T, Diff)` and one for
+    /// MFP-style `DataflowErrorSer` updates. It must return the number of records *produced*
+    /// (written to either session), not the number of input tuples consumed.
+    ///
+    /// # Fuel
+    ///
+    /// The operator accumulates the returned counts as fuel and yields when the total reaches
+    /// an internal refuel threshold. The metric is output-produced (not input-consumed) on
+    /// purpose: it regulates two asymmetric pressures.
+    ///
+    /// * **Drain inputs.** The operator holds a clone of each pending `Batch` until its work
+    ///   item pops; we want to release that memory back to the upstream arrangement as soon
+    ///   as possible. A `filter(false)` MFP returns 0 for every tuple, so fuel never trips
+    ///   and the cursor runs to end-of-batch in one activation.
+    /// * **Throttle outputs.** A `map("1KB-string")` MFP produces large records per input;
+    ///   stopping when emit count hits the threshold caps how much data a single activation
+    ///   dumps on the next operator.
+    ///
+    /// The refuel constant is a pragmatic compromise: large enough to be a non-event in
+    /// steady-state, small enough that one activation can't flood downstream. There is no
+    /// universal value across MFP shapes.
     ///
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
@@ -298,52 +269,105 @@ where
     /// The `max_demand` parameter limits the number of columns decoded from the
     /// input. Only the first `max_demand` columns are decoded. Pass `usize::MAX` to
     /// decode all columns.
-    pub fn flat_map<D, I, L>(
+    pub fn flat_map<DCB, L>(
         &self,
         key: Option<&Row>,
         max_demand: usize,
-        mut logic: L,
-    ) -> (Stream<S, I::Item>, VecCollection<S, DataflowError, Diff>)
+        logic: L,
+    ) -> (
+        Stream<'scope, T, DCB::Container>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
+    )
     where
-        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
-        D: Data,
-        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, S::Timestamp, Diff) -> I + 'static,
+        DCB: ContainerBuilder,
+        L: for<'a, 'b> FnMut(
+                &'a mut DatumVecBorrow<'b>,
+                T,
+                Diff,
+                &mut Session<T, DCB>,
+                &mut Session<T, ECB<T>>,
+            ) -> usize
+            + 'static,
     {
-        // Set a number of tuples after which the operator should yield.
-        // This allows us to remain responsive even when enumerating a substantial
-        // arrangement, as well as provides time to accumulate our produced output.
-        let refuel = 1000000;
-
-        let mut datums = DatumVec::new();
-        let logic = move |k: DatumSeq, v: DatumSeq, t, d| {
-            let mut datums_borrow = datums.borrow();
-            datums_borrow.extend(k.to_datum_iter().take(max_demand));
-            let max_demand = max_demand.saturating_sub(datums_borrow.len());
-            datums_borrow.extend(v.to_datum_iter().take(max_demand));
-            logic(&mut datums_borrow, t, d)
-        };
-
+        // `logic` is passed straight through to `flat_map_core_fallible`, which owns the per-row
+        // decode (and the activation-scoped arena it decodes into).
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
-                let errs = errs.as_collection(|k, &()| k.clone());
+                let (oks, mfp_errs) = CollectionBundle::<T>::flat_map_core_fallible::<_, DCB, _>(
+                    oks.clone(),
+                    key,
+                    max_demand,
+                    logic,
+                    REFUEL,
+                );
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
+                let errs = errs.concat(mfp_errs.as_collection());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
-                let errs = errs.as_collection(|k, &()| k.clone());
+                let (oks, mfp_errs) = CollectionBundle::<T>::flat_map_core_fallible::<_, DCB, _>(
+                    oks.clone(),
+                    key,
+                    max_demand,
+                    logic,
+                    REFUEL,
+                );
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
+                let errs = errs.concat(mfp_errs.as_collection());
+                (oks, errs)
+            }
+        }
+    }
+
+    /// Ok-only variant of [`Self::flat_map`]. The `logic` callback receives a single output
+    /// session, cannot produce errors, and returns the number of records produced (see
+    /// [`Self::flat_map`] for fuel semantics). The returned err collection comes solely from
+    /// the arrangement; no extra operator is built to carry an empty MFP-error stream.
+    pub fn flat_map_ok<DCB, L>(
+        &self,
+        key: Option<&Row>,
+        max_demand: usize,
+        logic: L,
+    ) -> (
+        Stream<'scope, T, DCB::Container>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
+    )
+    where
+        // No push bound here: it lives at `logic`'s `give` call site, so a caller can push
+        // borrowed records into a columnar builder that has no owned-tuple `Push`.
+        DCB: ContainerBuilder,
+        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, T, Diff, &mut Session<T, DCB>) -> usize
+            + 'static,
+    {
+        match &self {
+            ArrangementFlavor::Local(oks, errs) => {
+                let oks = CollectionBundle::<T>::flat_map_core_ok::<_, DCB, _>(
+                    oks.clone(),
+                    key,
+                    max_demand,
+                    logic,
+                    REFUEL,
+                );
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
+                (oks, errs)
+            }
+            ArrangementFlavor::Trace(_, oks, errs) => {
+                let oks = CollectionBundle::<T>::flat_map_core_ok::<_, DCB, _>(
+                    oks.clone(),
+                    key,
+                    max_demand,
+                    logic,
+                    REFUEL,
+                );
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
         }
     }
 }
-impl<S: Scope, T> ArrangementFlavor<S, T>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
+impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// The scope containing the collection bundle.
-    pub fn scope(&self) -> S {
+    pub fn scope(&self) -> Scope<'scope, T> {
         match self {
             ArrangementFlavor::Local(oks, _errs) => oks.stream.scope(),
             ArrangementFlavor::Trace(_gid, oks, _errs) => oks.stream.scope(),
@@ -351,36 +375,70 @@ where
     }
 
     /// Brings the arrangement flavor into a region.
-    pub fn enter_region<'a>(
-        &self,
-        region: &Child<'a, S, S::Timestamp>,
-    ) -> ArrangementFlavor<Child<'a, S, S::Timestamp>, T> {
+    pub fn enter_region<'a>(&self, region: Scope<'a, T>) -> ArrangementFlavor<'a, T> {
         match self {
-            ArrangementFlavor::Local(oks, errs) => {
-                ArrangementFlavor::Local(oks.enter_region(region), errs.enter_region(region))
-            }
-            ArrangementFlavor::Trace(gid, oks, errs) => {
-                ArrangementFlavor::Trace(*gid, oks.enter_region(region), errs.enter_region(region))
-            }
+            ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
+                oks.clone().enter_region(region),
+                errs.clone().enter_region(region),
+            ),
+            ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
+                *gid,
+                oks.clone().enter_region(region),
+                errs.clone().enter_region(region),
+            ),
         }
     }
 }
-impl<'a, S: Scope, T> ArrangementFlavor<Child<'a, S, S::Timestamp>, T>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
+impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// Extracts the arrangement flavor from a region.
-    pub fn leave_region(&self) -> ArrangementFlavor<S, T> {
+    pub fn leave_region<'outer>(&self, outer: Scope<'outer, T>) -> ArrangementFlavor<'outer, T> {
         match self {
-            ArrangementFlavor::Local(oks, errs) => {
-                ArrangementFlavor::Local(oks.leave_region(), errs.leave_region())
-            }
-            ArrangementFlavor::Trace(gid, oks, errs) => {
-                ArrangementFlavor::Trace(*gid, oks.leave_region(), errs.leave_region())
-            }
+            ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
+                oks.clone().leave_region(outer),
+                errs.clone().leave_region(outer),
+            ),
+            ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
+                *gid,
+                oks.clone().leave_region(outer),
+                errs.clone().leave_region(outer),
+            ),
         }
     }
+}
+/// Rewrites an arranged error collection to hold each of its errors once.
+///
+/// Sound because query semantics depend only on whether an error is present, and correct under
+/// retraction only because it reads the accumulated collection: no pointwise function of the input
+/// diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the errors
+/// retract.
+///
+/// NOTE: One consumer does read the multiplicity. Error-count introspection reports it as the
+/// number of failing rows, so `log_dataflow_errors` must see the collection before this collapses
+/// it, or a dataflow reports one error however many rows failed. Collapse after the logging, never
+/// before.
+pub(crate) fn distinct_arranged_errs<'a, T: RenderTimestamp>(
+    errs: Arranged<'a, ErrAgent<T, Diff>>,
+    name: &str,
+) -> Arranged<'a, ErrAgent<T, Diff>> {
+    errs.mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>, _>(
+        name,
+        |_err, _input, output| output.push(((), Diff::ONE)),
+    )
+}
+
+/// Rewrites an error collection to hold each of its errors once.
+///
+/// Costs an arrangement more than [`distinct_arranged_errs`], which reuses the arrangement its
+/// input already has.
+pub(crate) fn distinct_errs_collection<'a, T: RenderTimestamp>(
+    errs: VecCollection<'a, T, DataflowErrorSer, Diff>,
+) -> VecCollection<'a, T, DataflowErrorSer, Diff> {
+    let errs: KeyCollection<_, _, _> = errs.into();
+    let errs = errs
+        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+            "Arrange errors",
+        );
+    distinct_arranged_errs(errs, "Distinct errors").as_collection(|err, _| err.clone())
 }
 
 /// A bundle of the various ways a collection can be represented.
@@ -388,27 +446,19 @@ where
 /// This type maintains the invariant that it does contain at least one valid
 /// source of data, either a collection or at least one arrangement.
 #[derive(Clone)]
-pub struct CollectionBundle<S: Scope, T = mz_repr::Timestamp>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
+pub struct CollectionBundle<'scope, T: RenderTimestamp> {
     pub collection: Option<(
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        ColCollection<'scope, T>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )>,
-    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
+    pub arranged: BTreeMap<Vec<LirScalarExpr>, ArrangementFlavor<'scope, T>>,
 }
 
-impl<S: Scope, T> CollectionBundle<S, T>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
-    /// Construct a new collection bundle from update streams.
-    pub fn from_collections(
-        oks: VecCollection<S, Row, Diff>,
-        errs: VecCollection<S, DataflowError, Diff>,
+impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
+    /// Construct a new collection bundle from a [`ColCollection`] and an error stream.
+    pub fn from_edge(
+        oks: ColCollection<'scope, T>,
+        errs: VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) -> Self {
         Self {
             collection: Some((oks, errs)),
@@ -418,8 +468,8 @@ where
 
     /// Inserts arrangements by the expressions on which they are keyed.
     pub fn from_expressions(
-        exprs: Vec<MirScalarExpr>,
-        arrangements: ArrangementFlavor<S, T>,
+        exprs: Vec<LirScalarExpr>,
+        arrangements: ArrangementFlavor<'scope, T>,
     ) -> Self {
         let mut arranged = BTreeMap::new();
         arranged.insert(exprs, arrangements);
@@ -432,19 +482,19 @@ where
     /// Inserts arrangements by the columns on which they are keyed.
     pub fn from_columns<I: IntoIterator<Item = usize>>(
         columns: I,
-        arrangements: ArrangementFlavor<S, T>,
+        arrangements: ArrangementFlavor<'scope, T>,
     ) -> Self {
         let mut keys = Vec::new();
         for column in columns {
-            keys.push(MirScalarExpr::column(column));
+            keys.push(LirScalarExpr::column(column));
         }
         Self::from_expressions(keys, arrangements)
     }
 
     /// The scope containing the collection bundle.
-    pub fn scope(&self) -> S {
+    pub fn scope(&self) -> Scope<'scope, T> {
         if let Some((oks, _errs)) = &self.collection {
-            oks.inner.scope()
+            oks.scope()
         } else {
             self.arranged
                 .values()
@@ -454,16 +504,59 @@ where
         }
     }
 
+    /// Collapses the multiplicity of every error this bundle carries to one.
+    ///
+    /// Belongs at the definition of a binding that more than one `Get` reads. Each reader
+    /// propagates the binding's errors independently, so a binding read `f` times contributes its
+    /// errors `f` times to the dataflow's error output, and those factors apply again at every
+    /// further level of sharing: a chain of diamonds multiplies rather than adds, and reaches
+    /// `Diff` overflow at a depth plans really do have. Collapsing at each definition holds the
+    /// dataflow's error multiplicity to the fan-out of a single level.
+    ///
+    /// Sound because error semantics depend only on whether an error is present, and correct under
+    /// retraction only because it reads the accumulated collection: no pointwise function of the
+    /// input diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the
+    /// errors retract.
+    ///
+    /// Collapses every form the bundle offers, not just one. Each form carries its own error
+    /// stream, and those streams differ in content as well as identity: an arrangement's errors
+    /// include the key-formation errors that the raw collection's do not. Which form a consumer
+    /// reads is the consumer's choice, and a delta join reads both within one operator, so a
+    /// binding's definition cannot know which form to collapse.
+    ///
+    /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace`) alone, whose error traces
+    /// this dataflow cannot rewrite in place. Their errors arrive bounded by the exporting
+    /// dataflow's last level of sharing rather than collapsed to one, since nothing collapses at an
+    /// export. A global read more than once within one dataflow is not collapsed either, because
+    /// only local bindings reach this.
+    pub fn distinct_errs(mut self) -> Self {
+        if let Some((oks, errs)) = self.collection.take() {
+            self.collection = Some((oks, distinct_errs_collection(errs)));
+        }
+        for (key, flavor) in std::mem::take(&mut self.arranged) {
+            let flavor = match flavor {
+                ArrangementFlavor::Local(oks, errs) => {
+                    // Names the key, not the binding: an operator name carrying a `LocalId` would
+                    // churn the introspection goldens every time the optimizer renumbers locals.
+                    let name = format!("Distinct errors[{key:?}]");
+                    ArrangementFlavor::Local(oks, distinct_arranged_errs(errs, &name))
+                }
+                flavor @ ArrangementFlavor::Trace(..) => flavor,
+            };
+            self.arranged.insert(key, flavor);
+        }
+        self
+    }
+
     /// Brings the collection bundle into a region.
-    pub fn enter_region<'a>(
-        &self,
-        region: &Child<'a, S, S::Timestamp>,
-    ) -> CollectionBundle<Child<'a, S, S::Timestamp>, T> {
+    pub fn enter_region<'inner>(&self, region: Scope<'inner, T>) -> CollectionBundle<'inner, T> {
         CollectionBundle {
-            collection: self
-                .collection
-                .as_ref()
-                .map(|(oks, errs)| (oks.enter_region(region), errs.enter_region(region))),
+            collection: self.collection.as_ref().map(|(oks, errs)| {
+                (
+                    oks.clone().enter_region(region),
+                    errs.clone().enter_region(region),
+                )
+            }),
             arranged: self
                 .arranged
                 .iter()
@@ -473,32 +566,26 @@ where
     }
 }
 
-impl<'a, S: Scope, T> CollectionBundle<Child<'a, S, S::Timestamp>, T>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
+impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Extracts the collection bundle from a region.
-    pub fn leave_region(&self) -> CollectionBundle<S, T> {
+    pub fn leave_region<'outer>(&self, outer: Scope<'outer, T>) -> CollectionBundle<'outer, T> {
         CollectionBundle {
-            collection: self
-                .collection
-                .as_ref()
-                .map(|(oks, errs)| (oks.leave_region(), errs.leave_region())),
+            collection: self.collection.as_ref().map(|(oks, errs)| {
+                (
+                    oks.clone().leave_region(outer),
+                    errs.clone().leave_region(outer),
+                )
+            }),
             arranged: self
                 .arranged
                 .iter()
-                .map(|(key, bundle)| (key.clone(), bundle.leave_region()))
+                .map(|(key, bundle)| (key.clone(), bundle.leave_region(outer)))
                 .collect(),
         }
     }
 }
 
-impl<S: Scope, T> CollectionBundle<S, T>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
+impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Asserts that the arrangement for a specific key
     /// (or the raw collection for no key) exists,
     /// and returns the corresponding collection.
@@ -508,16 +595,17 @@ where
     /// Therefore, it should be used when the appropriate transformation
     /// was planned as part of a following MFP.
     ///
-    /// If `key` is specified, the function converts the arrangement to a collection. It uses either
-    /// the fueled `flat_map` or `as_collection` method, depending on the flag
-    /// [`ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION`].
+    /// If `key` is specified, the function converts the arrangement to a collection using a
+    /// fueled `flat_map` operator.
+    ///
+    /// The keyed path materializes the arrangement as the columnar edge. The unkeyed path
+    /// returns the unarranged `.collection` edge with its variant intact.
     pub fn as_specific_collection(
         &self,
-        key: Option<&[MirScalarExpr]>,
-        config_set: &ConfigSet,
+        key: Option<&[LirScalarExpr]>,
     ) -> (
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        ColCollection<'scope, T>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
         // Any operator that uses this method was told to use a particular
         // collection during LIR planning, where we should have made
@@ -533,16 +621,21 @@ where
                 let arranged = self.arranged.get(key).unwrap_or_else(|| {
                     panic!("The collection arranged by {:?} doesn't exist.", key)
                 });
-                if ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION.get(config_set) {
-                    // Decode all columns, pass max_demand as usize::MAX.
-                    let (ok, err) = arranged.flat_map(None, usize::MAX, |borrow, t, r| {
-                        Some((SharedRow::pack(borrow.iter()), t, r))
+                // Output is 1:1 from the already-consolidated cursor, so a
+                // non-consolidating `ColumnBuilder` suffices. `max_demand` is
+                // `usize::MAX` because the materialized collection carries every column.
+                let (ok, err) =
+                    arranged.flat_map_ok::<ColumnBuilder<(Row, T, Diff)>, _>(None, usize::MAX, {
+                        // `give` copies the bytes into the column, so one buffer
+                        // serves every record.
+                        let mut row_buf = Row::default();
+                        move |borrow, t, r, ok_session| {
+                            row_buf.packer().extend(borrow.iter());
+                            ok_session.give((&row_buf, &t, &r));
+                            1
+                        }
                     });
-                    (ok.as_collection(), err)
-                } else {
-                    #[allow(deprecated)]
-                    arranged.as_collection()
-                }
+                (ok.as_collection(), err)
             }
         }
     }
@@ -562,16 +655,25 @@ where
     /// The `max_demand` parameter limits the number of columns decoded from the
     /// input. Only the first `max_demand` columns are decoded. Pass `usize::MAX` to
     /// decode all columns.
-    pub fn flat_map<D, I, L>(
+    pub fn flat_map<DCB, L>(
         &self,
-        key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
         max_demand: usize,
-        mut logic: L,
-    ) -> (Stream<S, I::Item>, VecCollection<S, DataflowError, Diff>)
+        logic: L,
+    ) -> (
+        Stream<'scope, T, DCB::Container>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
+    )
     where
-        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
-        D: Data,
-        L: for<'a> FnMut(&'a mut DatumVecBorrow<'_>, S::Timestamp, Diff) -> I + 'static,
+        DCB: ContainerBuilder,
+        L: for<'a> FnMut(
+                &'a mut DatumVecBorrow<'_>,
+                T,
+                Diff,
+                &mut Session<T, DCB>,
+                &mut Session<T, ECB<T>>,
+            ) -> usize
+            + 'static,
     {
         // If `key_val` is set, we should have to use the corresponding arrangement.
         // If there isn't one, that implies an error in the contract between
@@ -579,18 +681,16 @@ where
         if let Some((key, val)) = key_val {
             self.arrangement(&key)
                 .expect("Should have ensured during planning that this arrangement exists.")
-                .flat_map(val.as_ref(), max_demand, logic)
+                .flat_map::<DCB, _>(val.as_ref(), max_demand, logic)
         } else {
-            use timely::dataflow::operators::Map;
             let (oks, errs) = self
                 .collection
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
-            let mut datums = DatumVec::new();
-            let oks = oks.inner.flat_map(move |(v, t, d)| {
-                logic(&mut datums.borrow_with_limit(&v, max_demand), t, d)
-            });
-            (oks, errs)
+            let (ok_stream, err_stream) =
+                flat_map_datums::<_, DCB, _>(oks, "CollectionFlatMap", max_demand, logic);
+            let errs = errs.concat(err_stream.as_collection());
+            (ok_stream, errs)
         }
     }
 
@@ -600,93 +700,233 @@ where
     /// once, and thereby avoid any skew in the two uses of the logic.
     ///
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
-    /// where key and value are potentially specialized, but convertible into rows.
-    fn flat_map_core<Tr, D, I, L>(
-        trace: &Arranged<S, Tr>,
-        key: Option<&Tr::KeyOwn>,
+    /// where key and value are potentially specialized, but convertible into rows. The `logic`
+    /// callback writes ok results into the first session and errors into the second, returning
+    /// the number of records produced. See [`ArrangementFlavor::flat_map`] for the fuel
+    /// rationale.
+    fn flat_map_core_fallible<Tr, DCB, L>(
+        trace: Arranged<'scope, Tr>,
+        key: Option<&<<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned>,
+        max_demand: usize,
         mut logic: L,
         refuel: usize,
-    ) -> Stream<S, I::Item>
+    ) -> (
+        Stream<'scope, T, DCB::Container>,
+        Stream<'scope, T, Vec<(DataflowErrorSer, T, Diff)>>,
+    )
     where
-        Tr: for<'a> TraceReader<
-                Key<'a>: ToDatumIter,
-                KeyOwn: PartialEq,
-                Val<'a>: ToDatumIter,
-                Time = S::Timestamp,
-                Diff = mz_repr::Diff,
-            > + Clone
+        Tr: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        for<'a> BatchCursor<Tr>:
+            Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = mz_repr::Diff>,
+        <<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned: PartialEq,
+        DCB: ContainerBuilder,
+        // `logic` receives the key and value already decoded into a `DatumVecBorrow`. The decode
+        // (and its arena/`DatumVec`) lives in the per-activation closure below, so it is scoped to
+        // a single scheduling invocation rather than to the operator.
+        L: for<'a, 'b> FnMut(
+                &'a mut DatumVecBorrow<'b>,
+                T,
+                mz_repr::Diff,
+                &mut Session<T, DCB>,
+                &mut Session<T, ECB<T>>,
+            ) -> usize
             + 'static,
-        I: IntoIterator<Item = (D, Tr::Time, Tr::Diff)>,
-        D: Data,
-        L: FnMut(Tr::Key<'_>, Tr::Val<'_>, S::Timestamp, mz_repr::Diff) -> I + 'static,
     {
-        use differential_dataflow::consolidation::ConsolidatingContainerBuilder as CB;
+        let scope = trace.stream.scope();
 
-        let mut key_con = Tr::KeyContainer::with_capacity(1);
+        let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
         if let Some(key) = &key {
             key_con.push_own(key);
         }
         let mode = if key.is_some() { "index" } else { "scan" };
         let name = format!("ArrangementFlatMap({})", mode);
-        use timely::dataflow::operators::Operator;
-        trace
-            .stream
-            .unary::<CB<_>, _, _, _>(Pipeline, &name, move |_, info| {
-                // Acquire an activator to reschedule the operator when it has unfinished work.
-                let activator = trace.stream.scope().activator_for(info.address);
-                // Maintain a list of work to do, cursor to navigate and process.
-                let mut todo = std::collections::VecDeque::new();
-                move |input, output| {
-                    let key = key_con.get(0);
-                    // First, dequeue all batches.
-                    input.for_each(|time, data| {
-                        let capability = time.retain();
-                        for batch in data.iter() {
-                            // enqueue a capability, cursor, and batch.
-                            todo.push_back(PendingWork::new(
-                                capability.clone(),
-                                batch.cursor(),
-                                batch.clone(),
-                            ));
-                        }
-                    });
 
-                    // Second, make progress on `todo`.
-                    let mut fuel = refuel;
-                    while !todo.is_empty() && fuel > 0 {
-                        todo.front_mut().unwrap().do_work(
-                            key.as_ref(),
-                            &mut logic,
-                            &mut fuel,
-                            output,
-                        );
-                        if fuel > 0 {
-                            todo.pop_front();
-                        }
+        let mut builder = OperatorBuilder::new(name, scope.clone());
+        let (ok_output, ok_stream) = builder.new_output();
+        let mut ok_output = OutputBuilder::<_, DCB>::from(ok_output);
+        let (err_output, err_stream) = builder.new_output();
+        let mut err_output = OutputBuilder::<_, ECB<T>>::from(err_output);
+        let mut input = builder.new_input(trace.stream.clone(), Pipeline);
+        let operator_info = builder.operator_info();
+
+        builder.build(move |_capabilities| {
+            // Acquire an activator to reschedule the operator when it has unfinished work.
+            let activator = scope.activator_for(operator_info.address);
+            // Maintain a list of work to do, cursor to navigate and process.
+            let mut todo = std::collections::VecDeque::new();
+            move |_frontiers| {
+                let key = key_con.get(0);
+                let mut ok_output = ok_output.activate();
+                let mut err_output = err_output.activate();
+
+                // First, dequeue all batches.
+                input.for_each(|time, data| {
+                    // Retain a capability for each output, as the work may complete across
+                    // multiple activations.
+                    let ok_cap = time.retain(0);
+                    let err_cap = time.retain(1);
+                    for batch in data.iter() {
+                        todo.push_back(PendingWork::new(
+                            ok_cap.clone(),
+                            err_cap.clone(),
+                            batch.cursor(),
+                            batch.clone(),
+                        ));
                     }
-                    // If we have not finished all work, re-activate the operator.
-                    if !todo.is_empty() {
-                        activator.activate();
+                });
+
+                // Decode the key/value of each record into datums for `logic`. The arena and datum
+                // buffer are created here, so they are scoped to this activation (dropped when it
+                // returns) rather than retained for the operator's lifetime; both are reused across
+                // the records processed within the activation.
+                let mut temp_storage = RowArena::new();
+                let mut datums = DatumVec::new();
+                let mut decode_logic =
+                    |k: BatchKey<'_, Tr>,
+                     v: BatchVal<'_, Tr>,
+                     t: T,
+                     d: mz_repr::Diff,
+                     ok_session: &mut Session<T, DCB>,
+                     err_session: &mut Session<T, ECB<T>>| {
+                        temp_storage.clear();
+                        let mut datums_borrow = datums.borrow();
+                        k.extend_datums(&temp_storage, &mut datums_borrow, Some(max_demand));
+                        let remaining = max_demand.saturating_sub(datums_borrow.len());
+                        v.extend_datums(&temp_storage, &mut datums_borrow, Some(remaining));
+                        logic(&mut datums_borrow, t, d, ok_session, err_session)
+                    };
+
+                // Second, make progress on `todo`.
+                let mut fuel = refuel;
+                while !todo.is_empty() && fuel > 0 {
+                    todo.front_mut().unwrap().do_work(
+                        key.as_ref(),
+                        &mut decode_logic,
+                        &mut fuel,
+                        &mut ok_output,
+                        &mut err_output,
+                    );
+                    if fuel > 0 {
+                        todo.pop_front();
                     }
                 }
-            })
+                // If we have not finished all work, re-activate the operator.
+                if !todo.is_empty() {
+                    activator.activate();
+                }
+            }
+        });
+
+        (ok_stream, err_stream)
+    }
+
+    /// Ok-only variant of [`Self::flat_map_core_fallible`]. The `logic` callback writes results
+    /// into a single output session and returns the number of records produced (see the
+    /// fallible variant for fuel semantics). Use this when the caller statically knows it
+    /// will never produce `DataflowErrorSer` records, to avoid building a second output port
+    /// and the empty err stream that would follow it.
+    fn flat_map_core_ok<Tr, DCB, L>(
+        trace: Arranged<'scope, Tr>,
+        key: Option<&<<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned>,
+        max_demand: usize,
+        mut logic: L,
+        refuel: usize,
+    ) -> Stream<'scope, T, DCB::Container>
+    where
+        Tr: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
+        for<'a> BatchCursor<Tr>:
+            Cursor<Key<'a>: ExtendDatums, Val<'a>: ExtendDatums, Time = T, Diff = mz_repr::Diff>,
+        <<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned: PartialEq,
+        DCB: ContainerBuilder,
+        L: for<'a, 'b> FnMut(
+                &'a mut DatumVecBorrow<'b>,
+                T,
+                mz_repr::Diff,
+                &mut Session<T, DCB>,
+            ) -> usize
+            + 'static,
+    {
+        let scope = trace.stream.scope();
+
+        let mut key_con = <BatchCursor<Tr> as Cursor>::KeyContainer::with_capacity(1);
+        if let Some(key) = &key {
+            key_con.push_own(key);
+        }
+        let mode = if key.is_some() { "index" } else { "scan" };
+        let name = format!("ArrangementFlatMapOk({})", mode);
+
+        let mut builder = OperatorBuilder::new(name, scope.clone());
+        let (ok_output, ok_stream) = builder.new_output();
+        let mut ok_output = OutputBuilder::<_, DCB>::from(ok_output);
+        let mut input = builder.new_input(trace.stream.clone(), Pipeline);
+        let operator_info = builder.operator_info();
+
+        builder.build(move |_capabilities| {
+            let activator = scope.activator_for(operator_info.address);
+            let mut todo = std::collections::VecDeque::new();
+            move |_frontiers| {
+                let key = key_con.get(0);
+                let mut ok_output = ok_output.activate();
+
+                input.for_each(|time, data| {
+                    let cap = time.retain(0);
+                    for batch in data.iter() {
+                        todo.push_back(PendingWorkOk::new(
+                            cap.clone(),
+                            batch.cursor(),
+                            batch.clone(),
+                        ));
+                    }
+                });
+
+                // Activation-scoped decode storage; see `flat_map_core_fallible`.
+                let mut temp_storage = RowArena::new();
+                let mut datums = DatumVec::new();
+                let mut decode_logic =
+                    |k: BatchKey<'_, Tr>,
+                     v: BatchVal<'_, Tr>,
+                     t: T,
+                     d: mz_repr::Diff,
+                     ok_session: &mut Session<T, DCB>| {
+                        temp_storage.clear();
+                        let mut datums_borrow = datums.borrow();
+                        k.extend_datums(&temp_storage, &mut datums_borrow, Some(max_demand));
+                        let remaining = max_demand.saturating_sub(datums_borrow.len());
+                        v.extend_datums(&temp_storage, &mut datums_borrow, Some(remaining));
+                        logic(&mut datums_borrow, t, d, ok_session)
+                    };
+
+                let mut fuel = refuel;
+                while !todo.is_empty() && fuel > 0 {
+                    todo.front_mut().unwrap().do_work(
+                        key.as_ref(),
+                        &mut decode_logic,
+                        &mut fuel,
+                        &mut ok_output,
+                    );
+                    if fuel > 0 {
+                        todo.pop_front();
+                    }
+                }
+                if !todo.is_empty() {
+                    activator.activate();
+                }
+            }
+        });
+
+        ok_stream
     }
 
     /// Look up an arrangement by the expressions that form the key.
     ///
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.
-    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, T>> {
+    pub fn arrangement(&self, key: &[LirScalarExpr]) -> Option<ArrangementFlavor<'scope, T>> {
         self.arranged.get(key).map(|x| x.clone())
     }
 }
 
-impl<S, T> CollectionBundle<S, T>
-where
-    T: MzTimestamp,
-    S: Scope,
-    S::Timestamp: Refines<T> + RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///
     /// This operator is able to apply the logic of `mfp` early, which can substantially
@@ -697,18 +937,17 @@ where
     /// that we can seek to the supplied row.
     pub fn as_collection_core(
         &self,
-        mut mfp: MapFilterProject,
-        key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        mut mfp_plan: MfpPlan<LirScalarExpr>,
+        key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
         until: Antichain<mz_repr::Timestamp>,
-        config_set: &ConfigSet,
     ) -> (
-        VecCollection<S, mz_repr::Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        ColCollection<'scope, T>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
-        mfp.optimize();
-        let mfp_plan = mfp.clone().into_plan().unwrap();
-
-        // If the MFP is trivial, we can just call `as_collection`.
+        // Unwrap the stable-serialization row wrapper, seeking works on
+        // plain rows.
+        let key_val = key_val.map(|(key, val)| (key, val.map(|val| val.0)));
+        // If the MFP is trivial, we can just return the collection.
         // In the case that we weren't going to apply the `key_val` optimization,
         // this path results in a slightly smaller and faster
         // dataflow graph, and is intended to fix
@@ -721,70 +960,82 @@ where
 
         if mfp_plan.is_identity() && !has_key_val {
             let key = key_val.map(|(k, _v)| k);
-            return self.as_specific_collection(key.as_deref(), config_set);
+            return match key {
+                // Unarranged identity hands the edge straight through, so a columnar
+                // producer stays columnar.
+                None => self
+                    .collection
+                    .clone()
+                    .expect("The unarranged collection doesn't exist."),
+                Some(key) => self.as_specific_collection(Some(&key)),
+            };
         }
 
-        let max_demand = mfp.demand().iter().max().map(|x| *x + 1).unwrap_or(0);
-        mfp.permute_fn(|c| c, max_demand);
-        mfp.optimize();
-        let mfp_plan = mfp.into_plan().unwrap();
+        let max_demand = mfp_plan.demand().last().map(|x| *x + 1).unwrap_or(0);
+        mfp_plan.permute_fn(|c| c, max_demand);
 
         let mut datum_vec = DatumVec::new();
         // Wrap in an `Rc` so that lifetimes work out.
         let until = std::rc::Rc::new(until);
 
-        let (stream, errors) = self.flat_map(key_val, max_demand, move |row_datums, time, diff| {
-            let mut row_builder = SharedRow::get();
-            let until = std::rc::Rc::clone(&until);
-            let temp_storage = RowArena::new();
-            let row_iter = row_datums.iter();
-            let mut datums_local = datum_vec.borrow();
-            datums_local.extend(row_iter);
-            let time = time.clone();
-            let event_time = time.event_time();
-            mfp_plan
-                .evaluate(
+        // `ConsolidatingColumnBuilder` folds within-batch duplicates. It consolidates in
+        // place, so records are given owned, which costs nothing here because
+        // `mfp_plan.evaluate` already produces a fresh `Row` per result.
+        let (stream, errors) = self.flat_map::<ConsolidatingColumnBuilder<Row, T, Diff>, _>(
+            key_val,
+            max_demand,
+            move |row_datums, time, diff, ok_session, err_session| {
+                let mut row_builder = SharedRow::get();
+                let until = std::rc::Rc::clone(&until);
+                let temp_storage = RowArena::new();
+                let row_iter = row_datums.iter();
+                let mut datums_local = datum_vec.borrow();
+                datums_local.extend(row_iter);
+                let event_time = time.event_time();
+                let mut work: usize = 0;
+                for result in mfp_plan.evaluate(
                     &mut datums_local,
                     &temp_storage,
                     event_time,
                     diff.clone(),
                     move |time| !until.less_equal(time),
                     &mut row_builder,
-                )
-                .map(move |x| match x {
-                    Ok((row, event_time, diff)) => {
-                        // Copy the whole time, and re-populate event time.
-                        let mut time: S::Timestamp = time.clone();
-                        *time.event_time_mut() = event_time;
-                        (Ok(row), time, diff)
+                ) {
+                    work += 1;
+                    match result {
+                        Ok((row, event_time, diff)) => {
+                            // Copy the whole time, and re-populate event time.
+                            let mut time: T = time.clone();
+                            *time.event_time_mut() = event_time;
+                            ok_session.give((row, time, diff));
+                        }
+                        Err((e, event_time, diff)) => {
+                            // Copy the whole time, and re-populate event time.
+                            let mut time: T = time.clone();
+                            *time.event_time_mut() = event_time;
+                            err_session.give((e, time, diff));
+                        }
                     }
-                    Err((e, event_time, diff)) => {
-                        // Copy the whole time, and re-populate event time.
-                        let mut time: S::Timestamp = time.clone();
-                        *time.event_time_mut() = event_time;
-                        (Err(e), time, diff)
-                    }
-                })
-        });
+                }
+                work
+            },
+        );
 
-        use differential_dataflow::AsCollection;
-        let (oks, errs) = stream
-            .as_collection()
-            .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
-                "OkErr",
-                |x| x,
-            );
-
-        (oks, errors.concat(&errs))
+        (stream.as_collection(), errors)
     }
     pub fn ensure_collections(
         mut self,
         collections: AvailableCollections,
-        input_key: Option<Vec<MirScalarExpr>>,
-        input_mfp: MapFilterProject,
+        input_key: Option<Vec<LirScalarExpr>>,
+        input_mfp: MfpPlan<LirScalarExpr>,
+        as_of: Antichain<mz_repr::Timestamp>,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
-    ) -> Self {
+        strategy: ArrangementStrategy,
+    ) -> Self
+    where
+        T: MaybeBucketByTime,
+    {
         if collections == Default::default() {
             return self;
         }
@@ -803,19 +1054,43 @@ where
             );
         }
 
+        // Track whether we already applied temporal bucketing in this call, to
+        // avoid bucketing the same updates twice.
+        let mut bucketed = false;
+
+        // True iff at least one new arrangement will actually be built below. Bucketing only
+        // pays off when something downstream merges/compacts the future-stamped updates; on a
+        // pure raw collection (no new arrangement) the work is wasted.
+        let will_create_arrangement = collections
+            .arranged
+            .iter()
+            .any(|(key, _, _)| !self.arranged.contains_key(key));
+
         // We need the collection if either (1) it is explicitly demanded, or (2) we are going to render any arrangement
-        let form_raw_collection = collections.raw
-            || collections
-                .arranged
-                .iter()
-                .any(|(key, _, _)| !self.arranged.contains_key(key));
+        let form_raw_collection = collections.raw || will_create_arrangement;
         if form_raw_collection && self.collection.is_none() {
-            self.collection = Some(self.as_collection_core(
-                input_mfp,
-                input_key.map(|k| (k, None)),
-                until,
-                config_set,
-            ));
+            let (oks, errs) =
+                self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until);
+            // Apply temporal bucketing when the lowering selected `TemporalBucketing` and
+            // we will build at least one arrangement. This path fires when the collection
+            // must be formed from scratch (e.g., from an arrangement via as_collection_core).
+            let effective_strategy = if will_create_arrangement {
+                strategy
+            } else {
+                ArrangementStrategy::Direct
+            };
+            let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing) {
+                let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                    .get(config_set)
+                    .try_into()
+                    .expect("must fit");
+                bucketed = true;
+                // Temporal bucketing is columnar throughout, so no round trip here.
+                T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
+            } else {
+                oks
+            };
+            self.collection = Some((oks, errs));
         }
         for (key, _, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {
@@ -824,14 +1099,42 @@ where
 
                 let (oks, errs) = self
                     .collection
-                    .clone()
+                    .take()
                     .expect("Collection constructed above");
-                let (oks, errs_keyed) =
-                    Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
-                let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
-                let errs = errs.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
-                    &format!("{}-errors", name),
-                );
+                // Apply temporal bucketing if the collection already existed on
+                // the bundle (e.g., from an upstream temporal Mfp or Get) and we
+                // haven't bucketed yet. This is the common path for temporal-MFP
+                // → ArrangeBy flows.
+                let effective_strategy = if bucketed {
+                    ArrangementStrategy::Direct
+                } else {
+                    strategy
+                };
+                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing) {
+                    let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                        .get(config_set)
+                        .try_into()
+                        .expect("must fit");
+                    bucketed = true;
+                    // Temporal bucketing is columnar throughout, so no round trip here.
+                    T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
+                } else {
+                    oks
+                };
+                let batcher = ArrangementBatcher::from_config(config_set);
+                let (oks, errs_keyed, passthrough) =
+                    Self::arrange_collection(&name, oks, key.clone(), thinning.clone(), batcher);
+                let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
+                self.collection = Some((passthrough, errs));
+                let errs =
+                    errs_concat.mz_arrange::<
+                        ColumnationChunker<_>,
+                        ErrBatcher<_, _>,
+                        ErrBuilder<_, _>,
+                        ErrSpine<_, _>,
+                    >(
+                        &format!("{}-errors", name),
+                    );
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }
@@ -845,61 +1148,192 @@ where
     /// the `thinning` applied to it. It selects which of the input columns are included in the
     /// value of the arrangement. The thinning is in support of permuting arrangements such that
     /// columns in the key are not included in the value.
+    ///
+    /// In addition to the ok and err streams, we produce a passthrough stream that forwards
+    /// the input as-is, which allows downstream consumers to reuse the collection without
+    /// teeing the stream.
     fn arrange_collection(
         name: &String,
-        oks: VecCollection<S, Row, Diff>,
-        key: Vec<MirScalarExpr>,
+        oks: ColCollection<'scope, T>,
+        key: Vec<LirScalarExpr>,
         thinning: Vec<usize>,
+        batcher: ArrangementBatcher,
     ) -> (
-        Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
-        VecCollection<S, DataflowError, Diff>,
+        Arranged<'scope, RowRowAgent<T, Diff>>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
+        ColCollection<'scope, T>,
     ) {
-        // The following `unary_fallible` implements a `map_fallible`, but produces columnar updates
-        // for the ok stream. The `map_fallible` cannot be used here because the closure cannot
-        // return references, which is what we need to push into columnar streams. Instead, we use
-        // a bespoke operator that also optimizes reuse of allocations across individual updates.
-        let (oks, errs) = oks
-            .inner
-            .unary_fallible::<ColumnBuilder<((Row, Row), S::Timestamp, Diff)>, _, _, _>(
-                Pipeline,
-                "FormArrangementKey",
-                move |_, _| {
-                    Box::new(move |input, ok, err| {
-                        let mut key_buf = Row::default();
-                        let mut val_buf = Row::default();
-                        let mut datums = DatumVec::new();
-                        let mut temp_storage = RowArena::new();
-                        while let Some((time, data)) = input.next() {
-                            let mut ok_session = ok.session_with_builder(&time);
-                            let mut err_session = err.session(&time);
-                            for (row, time, diff) in data.iter() {
-                                temp_storage.clear();
-                                let datums = datums.borrow_with(row);
-                                let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
-                                match key_buf.packer().try_extend(key_iter) {
-                                    Ok(()) => {
-                                        let val_datum_iter = thinning.iter().map(|c| datums[*c]);
-                                        val_buf.packer().extend(val_datum_iter);
-                                        ok_session.give(((&*key_buf, &*val_buf), time, diff));
-                                    }
-                                    Err(e) => {
-                                        err_session.give((e.into(), time.clone(), *diff));
-                                    }
+        // Spelled out rather than `map_fallible`, whose closure cannot return the references
+        // a columnar stream is pushed from.
+        //
+        // The arena is per-activation and cleared per row, so the capacity it retains never
+        // outlives a scheduling invocation.
+        let (ok_stream, err_stream, passthrough) = {
+            let mut builder =
+                OperatorBuilder::new("FormArrangementKey".to_string(), oks.inner.scope());
+            let (ok_output, ok_stream) = builder.new_output();
+            let mut ok_output =
+                OutputBuilder::<_, ColumnBuilder<((Row, Row), T, Diff)>>::from(ok_output);
+            let (err_output, err_stream) = builder.new_output();
+            let mut err_output = OutputBuilder::from(err_output);
+            let (passthrough_output, passthrough_stream) = builder.new_output();
+            let mut passthrough_output =
+                OutputBuilder::<_, NoopBuilder<Column<(Row, T, Diff)>>>::from(passthrough_output);
+            let mut input = builder.new_input(oks.inner, Pipeline);
+            builder.set_notify_for(0, FrontierInterest::Never);
+            builder.build(move |_capabilities| {
+                let mut key_buf = Row::default();
+                let mut val_buf = Row::default();
+                let mut datums = DatumVec::new();
+                move |_frontiers| {
+                    // Scoped to the activation so the arena's retained capacity does not
+                    // outlive a single scheduling invocation; cleared per row to reuse it
+                    // within the batch.
+                    let mut temp_storage = RowArena::new();
+                    let mut ok_output = ok_output.activate();
+                    let mut err_output = err_output.activate();
+                    let mut passthrough_output = passthrough_output.activate();
+                    input.for_each(|time, data| {
+                        let mut ok_session = ok_output.session_with_builder(&time);
+                        let mut err_session = err_output.session(&time);
+                        // Rows are read from the borrowed column, never materialized as
+                        // owned `Row`s. Times and diffs are owned only on the error path.
+                        for (row, t, d) in data.borrow().into_index_iter() {
+                            temp_storage.clear();
+                            let datums = datums.borrow_with(row);
+                            let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
+                            match key_buf.packer().try_extend(key_iter) {
+                                Ok(()) => {
+                                    let val_datum_iter = thinning.iter().map(|c| datums[*c]);
+                                    val_buf.packer().extend(val_datum_iter);
+                                    ok_session.give(((&*key_buf, &*val_buf), t, d));
+                                }
+                                Err(e) => {
+                                    err_session.give((
+                                        e.into(),
+                                        Columnar::into_owned(t),
+                                        Columnar::into_owned(d),
+                                    ));
                                 }
                             }
                         }
-                    })
-                },
-            );
-        let oks = oks
-            .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, S::Timestamp, Diff>),name
-            );
-        (oks, errs.as_collection())
+                        passthrough_output
+                            .session_with_builder(&time)
+                            .give_container(data);
+                    });
+                }
+            });
+            (ok_stream, err_stream, passthrough_stream.as_collection())
+        };
+
+        let exchange =
+            ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
+        let oks = match batcher {
+            ArrangementBatcher::Chunked => ok_stream.mz_arrange_core::<
+                _,
+                ChunkChunker<(Row, Row), T, Diff, ComputeSpill>,
+                AccountedChunkBatcher<(Row, Row), T, Diff, ComputeSpill>,
+                UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff, ComputeSpill>,
+                RowRowSpine<_, _>,
+            >(exchange, name),
+            ArrangementBatcher::Columnar => ok_stream.mz_arrange_core::<
+                _,
+                batcher::ColumnChunker<_>,
+                Col2ValColBatcher<_, _, _, _>,
+                RowRowColPagedBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name),
+            ArrangementBatcher::Columnation => ok_stream.mz_arrange_core::<
+                _,
+                batcher::Chunker<_>,
+                Col2ValBatcher<_, _, _, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(exchange, name),
+        };
+        (oks, err_stream.as_collection(), passthrough)
     }
 }
 
+/// Type alias for a timely output `Session` whose capability is a `Capability<T>`. The container
+/// builder `CB` is left to the caller; sessions can therefore drive consolidating, capacity, or
+/// (in the future) columnar output builders without changing call sites.
+pub(crate) type Session<'a, 'b, T, CB> =
+    timely::dataflow::operators::generic::Session<'a, 'b, T, CB, Capability<T>>;
+
+/// Container builder used for the err output of every flat_map variant. Pre-refactor the
+/// merged Ok/Err stream flowed through a [`ConsolidatingContainerBuilder`] before the
+/// `map_fallible` demux split it; we preserve that consolidation here so errors with the
+/// same `(error, time)` cancel within a batch rather than propagating to downstream.
+pub(crate) type ECB<T> = ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>;
+
+/// Number of output records the arrangement flat_map operators may produce before yielding.
+/// See [`ArrangementFlavor::flat_map`] for the fuel rationale; the constant is a pragmatic
+/// compromise and not tuned empirically.
+const REFUEL: usize = 1_000_000;
+
 struct PendingWork<C>
+where
+    C: Cursor,
+{
+    /// Capability for the `ok` output (output port 0).
+    ok_capability: Capability<C::Time>,
+    /// Capability for the `err` output (output port 1).
+    err_capability: Capability<C::Time>,
+    cursor: C,
+    batch: C::Storage,
+}
+
+impl<C> PendingWork<C>
+where
+    C: Cursor<KeyContainer: BatchContainer<Owned: PartialEq + Sized>>,
+{
+    /// Create a new bundle of pending work, from a pair of capabilities (one per output),
+    /// a cursor, and backing storage.
+    fn new(
+        ok_capability: Capability<C::Time>,
+        err_capability: Capability<C::Time>,
+        cursor: C,
+        batch: C::Storage,
+    ) -> Self {
+        Self {
+            ok_capability,
+            err_capability,
+            cursor,
+            batch,
+        }
+    }
+    /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to
+    /// the two output sessions.
+    fn do_work<DCB, L>(
+        &mut self,
+        key: Option<&C::Key<'_>>,
+        logic: &mut L,
+        fuel: &mut usize,
+        ok_output: &mut OutputBuilderSession<'_, C::Time, DCB>,
+        err_output: &mut OutputBuilderSession<'_, C::Time, ECB<C::Time>>,
+    ) where
+        DCB: ContainerBuilder,
+        L: FnMut(
+            C::Key<'_>,
+            C::Val<'_>,
+            C::Time,
+            C::Diff,
+            &mut Session<C::Time, DCB>,
+            &mut Session<C::Time, ECB<C::Time>>,
+        ) -> usize,
+    {
+        let mut ok_session = ok_output.session_with_builder(&self.ok_capability);
+        let mut err_session = err_output.session_with_builder(&self.err_capability);
+        walk_cursor(&mut self.cursor, &self.batch, key, fuel, |k, v, t, d| {
+            logic(k, v, t, d, &mut ok_session, &mut err_session)
+        });
+    }
+}
+
+/// Pending work for the Ok-only variant of `flat_map_core_fallible`. Holds a single capability since
+/// the operator has only one output port.
+struct PendingWorkOk<C>
 where
     C: Cursor,
 {
@@ -908,11 +1342,10 @@ where
     batch: C::Storage,
 }
 
-impl<C> PendingWork<C>
+impl<C> PendingWorkOk<C>
 where
-    C: Cursor<KeyOwn: PartialEq + Sized>,
+    C: Cursor<KeyContainer: BatchContainer<Owned: PartialEq + Sized>>,
 {
-    /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
     fn new(capability: Capability<C::Time>, cursor: C, batch: C::Storage) -> Self {
         Self {
             capability,
@@ -920,71 +1353,447 @@ where
             batch,
         }
     }
-    /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to `output`.
-    fn do_work<I, D, L>(
+
+    /// Perform roughly `fuel` work through the cursor, applying `logic` and sending results to
+    /// the single output session.
+    fn do_work<DCB, L>(
         &mut self,
         key: Option<&C::Key<'_>>,
         logic: &mut L,
         fuel: &mut usize,
-        output: &mut OutputBuilderSession<'_, C::Time, ConsolidatingContainerBuilder<Vec<I::Item>>>,
+        ok_output: &mut OutputBuilderSession<'_, C::Time, DCB>,
     ) where
-        I: IntoIterator<Item = (D, C::Time, C::Diff)>,
-        D: Data,
-        L: FnMut(C::Key<'_>, C::Val<'_>, C::Time, C::Diff) -> I + 'static,
+        DCB: ContainerBuilder,
+        L: FnMut(C::Key<'_>, C::Val<'_>, C::Time, C::Diff, &mut Session<C::Time, DCB>) -> usize,
     {
-        use differential_dataflow::consolidation::consolidate;
+        let mut ok_session = ok_output.session_with_builder(&self.capability);
+        walk_cursor(&mut self.cursor, &self.batch, key, fuel, |k, v, t, d| {
+            logic(k, v, t, d, &mut ok_session)
+        });
+    }
+}
 
-        // Attempt to make progress on this batch.
-        let mut work: usize = 0;
-        let mut session = output.session_with_builder(&self.capability);
-        let mut buffer = Vec::new();
-        if let Some(key) = key {
-            let key = C::KeyContainer::reborrow(*key);
-            if self.cursor.get_key(&self.batch).map(|k| k == key) != Some(true) {
-                self.cursor.seek_key(&self.batch, key);
-            }
-            if self.cursor.get_key(&self.batch).map(|k| k == key) == Some(true) {
-                let key = self.cursor.key(&self.batch);
-                while let Some(val) = self.cursor.get_val(&self.batch) {
-                    self.cursor.map_times(&self.batch, |time, diff| {
-                        buffer.push((C::owned_time(time), C::owned_diff(diff)));
-                    });
-                    consolidate(&mut buffer);
-                    for (time, diff) in buffer.drain(..) {
-                        for datum in logic(key, val, time, diff) {
-                            session.give(datum);
-                            work += 1;
-                        }
-                    }
-                    self.cursor.step_val(&self.batch);
-                    if work >= *fuel {
-                        *fuel = 0;
-                        return;
-                    }
+/// Walk a cursor, calling `emit` for each consolidated `(key, val, time, diff)` tuple. If
+/// `key` is set, the cursor is seeked to it and only values for that key are produced.
+///
+/// `emit` returns the number of records it produced for the given input tuple. The cursor
+/// stops as soon as the accumulated emit count reaches `*fuel`, leaving the cursor in place
+/// so work can resume on a later call. Within a batch, both the inner val loop and the
+/// outer key loop are bounded only by emit count, so selective filters (`emit` returns 0)
+/// run to batch completion in a single activation — see [`ArrangementFlavor::flat_map`]
+/// for why fuel counts output rather than input.
+fn walk_cursor<C, F>(
+    cursor: &mut C,
+    batch: &C::Storage,
+    key: Option<&C::Key<'_>>,
+    fuel: &mut usize,
+    mut emit: F,
+) where
+    C: Cursor<KeyContainer: BatchContainer<Owned: PartialEq + Sized>>,
+    F: FnMut(C::Key<'_>, C::Val<'_>, C::Time, C::Diff) -> usize,
+{
+    use differential_dataflow::consolidation::consolidate;
+
+    let mut work: usize = 0;
+    let mut buffer = Vec::new();
+    if let Some(key) = key {
+        let key = C::KeyContainer::reborrow(*key);
+        if cursor.get_key(batch).map(|k| k == key) != Some(true) {
+            cursor.seek_key(batch, key);
+        }
+        if cursor.get_key(batch).map(|k| k == key) == Some(true) {
+            let key = cursor.key(batch);
+            while let Some(val) = cursor.get_val(batch) {
+                cursor.map_times(batch, |time, diff| {
+                    buffer.push((C::owned_time(time), C::owned_diff(diff)));
+                });
+                consolidate(&mut buffer);
+                for (time, diff) in buffer.drain(..) {
+                    work += emit(key, val, time, diff);
                 }
-            }
-        } else {
-            while let Some(key) = self.cursor.get_key(&self.batch) {
-                while let Some(val) = self.cursor.get_val(&self.batch) {
-                    self.cursor.map_times(&self.batch, |time, diff| {
-                        buffer.push((C::owned_time(time), C::owned_diff(diff)));
-                    });
-                    consolidate(&mut buffer);
-                    for (time, diff) in buffer.drain(..) {
-                        for datum in logic(key, val, time, diff) {
-                            session.give(datum);
-                            work += 1;
-                        }
-                    }
-                    self.cursor.step_val(&self.batch);
-                    if work >= *fuel {
-                        *fuel = 0;
-                        return;
-                    }
+                cursor.step_val(batch);
+                if work >= *fuel {
+                    *fuel = 0;
+                    return;
                 }
-                self.cursor.step_key(&self.batch);
             }
         }
-        *fuel -= work;
+    } else {
+        while let Some(key) = cursor.get_key(batch) {
+            while let Some(val) = cursor.get_val(batch) {
+                cursor.map_times(batch, |time, diff| {
+                    buffer.push((C::owned_time(time), C::owned_diff(diff)));
+                });
+                consolidate(&mut buffer);
+                for (time, diff) in buffer.drain(..) {
+                    work += emit(key, val, time, diff);
+                }
+                cursor.step_val(batch);
+                if work >= *fuel {
+                    *fuel = 0;
+                    return;
+                }
+            }
+            cursor.step_key(batch);
+        }
+    }
+    *fuel -= work;
+}
+
+#[cfg(test)]
+mod tests {
+    use differential_dataflow::input::Input;
+    use mz_expr::{EvalError, MapFilterProject};
+    use mz_repr::{Datum, ReprScalarType, Timestamp};
+    use timely::dataflow::operators::Capture;
+    use timely::dataflow::operators::capture::{Event, Extract};
+
+    use super::*;
+    use crate::render::columnar::{columnar_to_vec, vec_to_columnar};
+
+    type OkUpdate = ((Row, Row), Timestamp, Diff);
+    type ErrUpdate = (DataflowErrorSer, Timestamp, Diff);
+    type Captured<D> = std::sync::mpsc::Receiver<Event<Timestamp, Vec<D>>>;
+
+    fn extract_ok(captured: Captured<OkUpdate>) -> Vec<OkUpdate> {
+        let mut updates: Vec<_> = captured
+            .extract()
+            .into_iter()
+            .flat_map(|(_, data)| data)
+            .collect();
+        updates.sort();
+        updates
+    }
+
+    // `DataflowErrorSer` is not `Ord`, so order by the error's debug string.
+    fn extract_err(captured: Captured<ErrUpdate>) -> Vec<(String, Timestamp, Diff)> {
+        let mut updates: Vec<_> = captured
+            .extract()
+            .into_iter()
+            .flat_map(|(_, data)| data)
+            .map(|(e, t, d)| (format!("{e:?}"), t, d))
+            .collect();
+        updates.sort();
+        updates
+    }
+
+    /// Arranges `rows`, returning the sorted ok and err output.
+    fn arrange_columnar(
+        rows: Vec<(Row, u64)>,
+        key: Vec<LirScalarExpr>,
+    ) -> (Vec<OkUpdate>, Vec<(String, Timestamp, Diff)>) {
+        let thinning = vec![0, 1];
+        let (ok, err) = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let (arranged, errs, _passthrough) =
+                    CollectionBundle::<Timestamp>::arrange_collection(
+                        &"col".to_string(),
+                        vec_to_columnar(collection),
+                        key,
+                        thinning,
+                        ArrangementBatcher::Columnation,
+                    );
+                let ok = arranged
+                    .as_collection(|k, v| (k.to_row(), v.to_row()))
+                    .inner
+                    .capture();
+                let err = errs.inner.capture();
+
+                let max_time = rows.iter().map(|(_, t)| *t).max().unwrap_or(0);
+                for (row, time) in rows {
+                    input.update_at(row, Timestamp::from(time), Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(max_time + 1));
+                input.flush();
+                (ok, err)
+            })
+        });
+        (extract_ok(ok), extract_err(err))
+    }
+
+    // Uniform two columns so `Column(0)` and full-row thinning are in bounds, over three
+    // distinct times so per-record time handling is exercised.
+    fn test_rows() -> Vec<(Row, u64)> {
+        vec![
+            (Row::pack_slice(&[Datum::Int32(1), Datum::String("a")]), 0),
+            (Row::pack_slice(&[Datum::Int32(2), Datum::String("b")]), 1),
+            (Row::pack_slice(&[Datum::Int32(1), Datum::String("a")]), 1),
+            (Row::pack_slice(&[Datum::Int32(3), Datum::Null]), 2),
+        ]
+    }
+
+    /// Agreeing contents do not rule out a silent `columnar_to_vec` on the ok path. That the
+    /// operator never decodes holds by inspection, not by this test.
+    #[mz_ore::test]
+    fn arrange_collection_keys_correctly() {
+        let rows = test_rows();
+        let mut expected: Vec<OkUpdate> = rows
+            .iter()
+            .map(|(row, t)| {
+                let key = Row::pack_slice(&[row.iter().next().unwrap()]);
+                ((key, row.clone()), Timestamp::from(*t), Diff::ONE)
+            })
+            .collect();
+        expected.sort();
+
+        let (ok, err) = arrange_columnar(rows, vec![LirScalarExpr::column(0)]);
+        assert_eq!(ok, expected);
+        assert!(err.is_empty());
+    }
+
+    /// A key expression that always errors drives every record onto the error path.
+    #[mz_ore::test]
+    fn arrange_collection_error_path() {
+        let key = vec![LirScalarExpr::literal(
+            Err(EvalError::DivisionByZero),
+            ReprScalarType::Int32,
+        )];
+        let (ok, err) = arrange_columnar(test_rows(), key);
+
+        assert!(ok.is_empty());
+        assert!(!err.is_empty());
+    }
+
+    /// The passthrough forwards every input record, including those whose key
+    /// evaluation errored, so a consumer of the bundle's collection sees the
+    /// unarranged input rather than the ok side of the arrangement.
+    #[mz_ore::test]
+    fn arrange_collection_passthrough_forwards_input() {
+        let rows = test_rows();
+        let mut expected: Vec<(Row, Timestamp, Diff)> = rows
+            .iter()
+            .map(|(row, t)| (row.clone(), Timestamp::from(*t), Diff::ONE))
+            .collect();
+        expected.sort();
+
+        let key = vec![LirScalarExpr::literal(
+            Err(EvalError::DivisionByZero),
+            ReprScalarType::Int32,
+        )];
+        let captured = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let (_arranged, _errs, passthrough) =
+                    CollectionBundle::<Timestamp>::arrange_collection(
+                        &"col".to_string(),
+                        vec_to_columnar(collection),
+                        key,
+                        vec![0, 1],
+                        ArrangementBatcher::Columnation,
+                    );
+                let captured = columnar_to_vec(passthrough).inner.capture();
+
+                let max_time = rows.iter().map(|(_, t)| *t).max().unwrap_or(0);
+                for (row, time) in rows {
+                    input.update_at(row, Timestamp::from(time), Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(max_time + 1));
+                input.flush();
+                captured
+            })
+        });
+
+        assert_eq!(extract_row_updates(captured), expected);
+    }
+
+    fn extract_row_updates(
+        captured: Captured<(Row, Timestamp, Diff)>,
+    ) -> Vec<(Row, Timestamp, Diff)> {
+        let mut updates: Vec<_> = captured
+            .extract()
+            .into_iter()
+            .flat_map(|(_, data)| data)
+            .collect();
+        updates.sort();
+        updates
+    }
+
+    /// Arrange correctness itself is covered by `arrange_collection_arms_agree`; this only
+    /// asserts the columnar variant survives the hand-off.
+    #[mz_ore::test]
+    fn get_arrange_by_produces_projected_rows() {
+        let rows = vec![
+            (Row::pack_slice(&[Datum::Int64(1), Datum::Int64(10)]), 0u64),
+            (Row::pack_slice(&[Datum::Int64(2), Datum::Int64(20)]), 1),
+            (Row::pack_slice(&[Datum::Int64(1), Datum::Int64(10)]), 1),
+        ];
+        // A projection is non-identity, so `as_collection_core` takes the producer path
+        // rather than the identity passthrough.
+        let mfp = MapFilterProject::<LirScalarExpr>::new(2)
+            .project(vec![0])
+            .into_plan()
+            .expect("mfp");
+        let mut expected: Vec<(Row, Timestamp, Diff)> = rows
+            .iter()
+            .map(|(r, t)| {
+                let col0 = r.iter().next().unwrap();
+                (Row::pack_slice(&[col0]), Timestamp::from(*t), Diff::ONE)
+            })
+            .collect();
+        expected.sort();
+
+        let produced = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                let bundle = CollectionBundle::from_edge(vec_to_columnar(collection), errs);
+                let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new());
+                let produced = columnar_to_vec(edge.clone()).inner.capture();
+                let (_arranged, _arrange_errs, _passthrough) =
+                    CollectionBundle::<Timestamp>::arrange_collection(
+                        &"arrange".to_string(),
+                        edge,
+                        vec![LirScalarExpr::column(0)],
+                        vec![0],
+                        ArrangementBatcher::Columnation,
+                    );
+
+                let max_time = rows.iter().map(|(_, t)| *t).max().unwrap();
+                for (row, time) in rows {
+                    input.update_at(row, Timestamp::from(time), Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(max_time + 1));
+                input.flush();
+                produced
+            })
+        });
+
+        assert_eq!(extract_row_updates(produced), expected);
+    }
+
+    /// The identity fast-path returns the unarranged input edge unchanged, with no
+    /// repack, so its contents pass straight through.
+    #[mz_ore::test]
+    fn as_collection_core_identity_passes_edge_through() {
+        let expected = vec![(
+            Row::pack_slice(&[Datum::Int64(1)]),
+            Timestamp::from(0u64),
+            Diff::ONE,
+        )];
+        let captured = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection::<Row, Diff>();
+                let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                let bundle = CollectionBundle::from_edge(vec_to_columnar(collection), errs);
+                let identity = MapFilterProject::<LirScalarExpr>::new(1)
+                    .into_plan()
+                    .expect("identity mfp");
+                let (out, _errs) = bundle.as_collection_core(identity, None, Antichain::new());
+                let captured = columnar_to_vec(out).inner.capture();
+                input.update_at(
+                    Row::pack_slice(&[Datum::Int64(1)]),
+                    Timestamp::from(0u64),
+                    Diff::ONE,
+                );
+                input.advance_to(Timestamp::from(1u64));
+                input.flush();
+                captured
+            })
+        });
+        assert_eq!(extract_row_updates(captured), expected);
+    }
+
+    /// Input rows that project to the same output row at the same time collapse to one
+    /// record with summed diff. A plain `ColumnBuilder` would emit both.
+    #[mz_ore::test]
+    fn as_collection_core_consolidates_within_batch() {
+        // `[1, 10]` and `[1, 20]` both project (dropping column 1) to `[1]` at
+        // t=0, so their `+1` diffs must fold to `+2`. `[2, 30]` projects to a
+        // distinct record.
+        let rows = vec![
+            Row::pack_slice(&[Datum::Int64(1), Datum::Int64(10)]),
+            Row::pack_slice(&[Datum::Int64(1), Datum::Int64(20)]),
+            Row::pack_slice(&[Datum::Int64(2), Datum::Int64(30)]),
+        ];
+        let mfp = MapFilterProject::<LirScalarExpr>::new(2)
+            .project(vec![0])
+            .into_plan()
+            .expect("mfp");
+        let expected = vec![
+            (
+                Row::pack_slice(&[Datum::Int64(1)]),
+                Timestamp::from(0u64),
+                Diff::from(2),
+            ),
+            (
+                Row::pack_slice(&[Datum::Int64(2)]),
+                Timestamp::from(0u64),
+                Diff::ONE,
+            ),
+        ];
+
+        let captured = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let (_err_input, errs) = scope.new_collection::<DataflowErrorSer, Diff>();
+                let bundle = CollectionBundle::from_edge(vec_to_columnar(collection), errs);
+                let (edge, _errs) = bundle.as_collection_core(mfp, None, Antichain::new());
+                let captured = columnar_to_vec(edge).inner.capture();
+                // Feed all rows at the same time in one batch so the fold is
+                // within-batch, not a downstream re-consolidation.
+                for row in rows {
+                    input.update_at(row, Timestamp::from(0u64), Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(1u64));
+                input.flush();
+                captured
+            })
+        });
+
+        assert_eq!(extract_row_updates(captured), expected);
+    }
+
+    /// Keying by column 0 and thinning the value to column 1 reconstructs the original
+    /// two-column row. The decode below belongs to the capture harness.
+    #[mz_ore::test]
+    fn as_specific_collection_materializes_columnar() {
+        let rows = test_rows();
+        let key = vec![LirScalarExpr::column(0)];
+        let mut expected: Vec<(Row, Timestamp, Diff)> = rows
+            .iter()
+            .map(|(r, t)| (r.clone(), Timestamp::from(*t), Diff::ONE))
+            .collect();
+        expected.sort();
+
+        let captured = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let (arranged, arr_errs, _passthrough) =
+                    CollectionBundle::<Timestamp>::arrange_collection(
+                        &"agg".to_string(),
+                        vec_to_columnar(collection),
+                        key.clone(),
+                        vec![1],
+                        ArrangementBatcher::Columnation,
+                    );
+                let err_arranged = {
+                    let kc: KeyCollection<_, _, _> = arr_errs.into();
+                    kc.mz_arrange::<
+                        ColumnationChunker<_>,
+                        ErrBatcher<_, _>,
+                        ErrBuilder<_, _>,
+                        ErrSpine<_, _>,
+                    >("agg-errs")
+                };
+                // An arrangement-only bundle, as Reduce/Threshold/TopK produce.
+                let bundle = CollectionBundle::from_columns(
+                    0..1,
+                    ArrangementFlavor::Local(arranged, err_arranged),
+                );
+                let (edge, _errs) = bundle.as_specific_collection(Some(&key));
+                let captured = columnar_to_vec(edge).inner.capture();
+
+                let max_time = rows.iter().map(|(_, t)| *t).max().unwrap();
+                for (row, time) in rows {
+                    input.update_at(row, Timestamp::from(time), Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(max_time + 1));
+                input.flush();
+                captured
+            })
+        });
+
+        assert_eq!(extract_row_updates(captured), expected);
     }
 }

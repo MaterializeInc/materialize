@@ -9,7 +9,6 @@
 
 $ set-sql-timeout duration=1s
 
-
 #
 # Test ALTER TABLE -- some column changes should not do any harm
 #

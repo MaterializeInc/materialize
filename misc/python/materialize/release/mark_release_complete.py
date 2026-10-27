@@ -14,14 +14,15 @@ import sys
 
 import frontmatter
 
-from materialize import git, spawn
-from materialize.release.util import doc_file_path
+from materialize import git
+from materialize.release.util import PUSH_BRANCH_HELP, doc_file_path, push_to_main
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("release_version")
     parser.add_argument("patch")
+    parser.add_argument("--push-branch", help=PUSH_BRANCH_HELP)
     args = parser.parse_args()
 
     remote = git.get_remote()
@@ -31,16 +32,17 @@ def main():
     metadata = frontmatter.load(release_version_doc_file)
     metadata["released"] = True
     metadata["patch"] = int(args.patch)
-    with open(release_version_doc_file, "wb") as f:
+    if "rc" in metadata:
+        del metadata["rc"]
+    with open(release_version_doc_file, "w", encoding="utf-8") as f:
         frontmatter.dump(metadata, f, sort_keys=False)
         # Always have a trailing newline
-        f.write(b"\n")
+        f.write("\n")
 
     git.add_file(str(release_version_doc_file))
     git.commit_all_changed(f"release: mark {args.release_version} as released")
 
-    print(f"Pushing to {remote}...")
-    spawn.runv(["git", "push", remote, "main"])
+    push_to_main(remote, args.push_branch)
 
 
 if __name__ == "__main__":

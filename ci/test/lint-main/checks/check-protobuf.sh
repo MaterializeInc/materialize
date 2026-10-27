@@ -25,10 +25,14 @@ if ! buf --version >/dev/null 2>/dev/null; then
 fi
 
 CURRENT_GIT_BRANCH=$(try git branch --show-current)
-IN_BUILDKITE=in_ci
+IN_BUILDKITE=0
 IN_BUILDKITE_PR=0
 ON_MAIN_BRANCH=0
 IN_LOCAL_NON_MAIN_BRANCH=0
+
+if [[ "${BUILDKITE:-}" == "true" ]]; then
+  IN_BUILDKITE=1
+fi
 
 if [[ ${BUILDKITE_PULL_REQUEST:-false} != "false" ]]; then
   IN_BUILDKITE_PR=1
@@ -42,21 +46,11 @@ if [[ "$IN_BUILDKITE" != 1 && "$ON_MAIN_BRANCH" != 1 ]]; then
   IN_LOCAL_NON_MAIN_BRANCH=1
 fi
 
-echo $IN_BUILDKITE_PR
-echo $IN_LOCAL_NON_MAIN_BRANCH
-
-if [[ "${1:-}" = --offline ]]; then
-  fetch_from_git=false
-else
-  fetch_from_git=true
-fi
-
-if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
+# The breaking-change check compares against the target branch, so only run it
+# where that comparison is meaningful. Note that `[[ $VAR ]]` tests whether the
+# string is non-empty, so "0" would be true; compare explicitly.
+if [[ $IN_BUILDKITE_PR == 1 || $IN_LOCAL_NON_MAIN_BRANCH == 1 ]]; then
   # see ./ci/test/lint-buf/README.md
-
-  if $fetch_from_git; then
-    fetch_pr_target_branch
-  fi
 
   ci_collapsed_heading "Verify that protobuf config is up-to-date"
   try bin/pyactivate ./ci/test/lint-buf/generate-buf-config.py
@@ -65,12 +59,52 @@ if [[ $IN_BUILDKITE_PR || $IN_LOCAL_NON_MAIN_BRANCH ]]; then
 
   ci_collapsed_heading "Lint protobuf"
   COMMON_ANCESTOR="$(get_common_ancestor_commit_of_pr_and_target)"
-  # Default is depth 50, which can be insufficient to grab the relevant ancestor commit
-  try buf breaking src --against ".git#ref=$COMMON_ANCESTOR,subdir=src,depth=10000" --verbose
+  # Extract src/ at the ancestor commit into a temp directory and compare
+  # against that, instead of using buf's .git# reference which does an
+  # expensive deep clone (depth=10000).
+  against_dir=$(mktemp -d)
+  trap 'rm -rf "$against_dir"' EXIT
+  git archive "$COMMON_ANCESTOR" -- src/ | tar -x -C "$against_dir"
+  try buf breaking src --against "$against_dir/src"
 
   ci_collapsed_heading "Lint protobuf formatting"
   # Proto formatting
   try buf format src --diff --exit-code
 fi
+
+ci_collapsed_heading "Check ProtoDataflowError determinism (no map fields)"
+# `DataflowError` is serialized on compute-internal dataflow edges and relies
+# on deterministic proto encoding for byte-equality == semantic-equality. Proto
+# `map<...>` fields have unspecified encoding order, so they must not appear in
+# `ProtoDataflowError` or any message transitively reachable from it.
+check_no_map_fields() {
+  local root="$1"
+  local -A seen=()
+  local stack=("$root")
+  local failed=0
+  # The recursion below skips missing files (imports may resolve elsewhere),
+  # but a missing root would turn the whole check into a silent no-op.
+  if [[ ! -f "$root" ]]; then
+    echo "error: root proto $root does not exist"
+    return 1
+  fi
+  while [[ ${#stack[@]} -gt 0 ]]; do
+    local file="${stack[-1]}"
+    unset 'stack[-1]'
+    [[ -n "${seen[$file]:-}" ]] && continue
+    seen[$file]=1
+    if [[ ! -f "$file" ]]; then continue; fi
+    if grep -nE '^\s*map<' "$file"; then
+      echo "error: map field in $file — breaks deterministic encoding of ProtoDataflowError"
+      failed=1
+    fi
+    while IFS= read -r imp; do
+      [[ "$imp" == google/protobuf/* ]] && continue
+      stack+=("src/$imp")
+    done < <(grep -oE '^[[:space:]]*import[[:space:]]+"[^"]+"' "$file" | sed -E 's/.*"([^"]+)".*/\1/')
+  done
+  return $failed
+}
+try check_no_map_fields src/storage-types/src/errors.proto
 
 try_status_report

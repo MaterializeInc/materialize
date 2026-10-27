@@ -10,7 +10,7 @@
 //! `EXPLAIN ... AS TEXT` support for structures defined in this crate.
 
 use std::collections::BTreeMap;
-use std::fmt;
+use std::fmt::{self, Display as _};
 use std::sync::Arc;
 
 use itertools::Itertools;
@@ -22,13 +22,13 @@ use mz_repr::explain::{
     CompactScalars, ExprHumanizer, HumanizedAnalyses, IndexUsageType, Indices,
     PlanRenderingContext, RenderingContext, ScalarOps,
 };
-use mz_repr::{Datum, Diff, GlobalId, Row, UNKNOWN_COLUMN_NAME};
+use mz_repr::{Datum, Diff, GlobalId, Row, StableRow, UNKNOWN_COLUMN_NAME};
 use mz_sql_parser::ast::Ident;
 
 use crate::explain::{ExplainMultiPlan, ExplainSinglePlan};
 use crate::{
     AccessStrategy, AggregateExpr, EvalError, Id, JoinImplementation, JoinInputCharacteristics,
-    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
+    LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizableExpr, RowSetFinishing,
 };
 
 impl<'a, T: 'a> DisplayText for ExplainSinglePlan<'a, T>
@@ -41,6 +41,9 @@ where
             self.context.humanizer,
             self.plan.annotations.clone(),
             self.context.config,
+            self.context
+                .used_indexes
+                .ambiguous_ids(self.context.humanizer),
         );
 
         let mode = HumanizedExplain::new(self.context.config.redacted);
@@ -103,6 +106,9 @@ where
                 ctx.humanizer,
                 plan.annotations.clone(),
                 self.context.config,
+                self.context
+                    .used_indexes
+                    .ambiguous_ids(self.context.humanizer),
             );
 
             if no > 0 {
@@ -135,8 +141,11 @@ where
         }
 
         if self.sources.iter().any(|src| !src.is_identity()) {
-            // Render one blank line between the plans and sources.
-            writeln!(f)?;
+            // Render one blank line between the plans and sources, but only if
+            // there were plans rendered above.
+            if !self.plans.is_empty() {
+                writeln!(f)?;
+            }
             for src in self.sources.iter().filter(|src| !src.is_identity()) {
                 if self.context.config.humanized_exprs {
                     let mut cols = ctx.humanizer.column_names_for_id(src.id);
@@ -146,7 +155,7 @@ where
                     if let Some(cols) = cols.as_mut() {
                         let anonymous = std::iter::repeat(String::new());
                         cols.extend(
-                            anonymous.take(src.op.map(|op| op.expressions.len()).unwrap_or(0)),
+                            anonymous.take(src.op.as_ref().map_or(0, |op| op.expressions.len())),
                         )
                     };
                     // Render source with humanized expressions.
@@ -214,10 +223,11 @@ where
     }
 }
 
-impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, MapFilterProject, M>
+impl<'a, C, M, E> DisplayText<C> for HumanizedExpr<'a, MapFilterProject<E>, M>
 where
     C: AsMut<Indent>,
     M: HumanizerMode,
+    E: OptimizableExpr + HumanizeDisplay,
 {
     fn fmt_text(&self, f: &mut fmt::Formatter<'_>, ctx: &mut C) -> fmt::Result {
         let (scalars, predicates, outputs, input_arity) = (
@@ -249,7 +259,9 @@ where
     }
 }
 
-impl<'a, M: HumanizerMode> HumanizedExpr<'a, MapFilterProject, M> {
+impl<'a, M: HumanizerMode, E: OptimizableExpr + HumanizeDisplay>
+    HumanizedExpr<'a, MapFilterProject<E>, M>
+{
     /// Render an MFP using the default (concise) syntax.
     pub fn fmt_default_text<T>(
         &self,
@@ -461,13 +473,11 @@ impl MirRelationExpr {
                                 .unwrap_or_else(|| id.to_string())
                         };
                         let humanize_unqualified = |id: &GlobalId| {
-                            ctx.humanizer
-                                .humanize_id_unqualified(*id)
+                            ctx.humanize_id_maybe_unqualified(*id)
                                 .unwrap_or_else(|| id.to_string())
                         };
                         let humanize_unqualified_maybe_deleted = |id: &GlobalId| {
-                            ctx.humanizer
-                                .humanize_id_unqualified(*id)
+                            ctx.humanize_id_maybe_unqualified(*id)
                                 .unwrap_or_else(|| "[DELETED INDEX]".to_owned())
                         };
                         match persist_or_index {
@@ -944,8 +954,7 @@ impl MirRelationExpr {
             .humanize_id(*coll_id)
             .unwrap_or_else(|| coll_id.to_string());
         let humanized_index = ctx
-            .humanizer
-            .humanize_id_unqualified(*idx_id)
+            .humanize_id_maybe_unqualified(*idx_id)
             .unwrap_or_else(|| "[DELETED INDEX]".to_owned());
         if let Some(constants) = constants {
             write!(
@@ -1188,6 +1197,14 @@ impl HumanizerMode for HumanizedExplain {
     fn humanize_ident(col: usize, ident: Ident, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if ident.as_str() == UNKNOWN_COLUMN_NAME {
             write!(f, "#{col}")
+        } else if ident.has_only_bare_chars() {
+            // The leading `#c` already disambiguates the column, and EXPLAIN
+            // output is never reparsed, so a keyword-named column (`any`,
+            // `all`, …) needs no quoting here — unlike in SQL display. Print
+            // the name bare for legibility; only fall back to the quoting
+            // `Ident` display for names with awkward characters (whitespace,
+            // braces, quotes) that would otherwise muddle the `{…}` annotation.
+            write!(f, "#{col}{{{}}}", ident.as_str())
         } else {
             write!(f, "#{col}{{{ident}}}")
         }
@@ -1240,7 +1257,10 @@ where
     }
 }
 
-impl<'a, M> ScalarOps for HumanizedExpr<'a, MirScalarExpr, M> {
+impl<'a, T, M> ScalarOps for HumanizedExpr<'a, T, M>
+where
+    T: ScalarOps,
+{
     fn match_col_ref(&self) -> Option<usize> {
         self.expr.match_col_ref()
     }
@@ -1250,57 +1270,54 @@ impl<'a, M> ScalarOps for HumanizedExpr<'a, MirScalarExpr, M> {
     }
 }
 
-impl<'a, M> ScalarOps for HumanizedExpr<'a, usize, M> {
-    fn match_col_ref(&self) -> Option<usize> {
-        Some(*self.expr)
-    }
-
-    fn references(&self, col_ref: usize) -> bool {
-        col_ref == *self.expr
-    }
+pub trait HumanizeDisplay: Sized {
+    fn humanize<'a, M: HumanizerMode>(
+        e: &HumanizedExpr<'a, Self, M>,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result;
 }
 
-impl<'a, M> fmt::Display for HumanizedExpr<'a, MirScalarExpr, M>
-where
-    M: HumanizerMode,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl HumanizeDisplay for MirScalarExpr {
+    fn humanize<'a, M: HumanizerMode>(
+        e: &HumanizedExpr<'a, MirScalarExpr, M>,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         use MirScalarExpr::*;
 
-        match self.expr {
+        match e.expr {
             Column(i, TreatAsEqual(None)) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation (plain column reference).
-                self.child(i).fmt(f)
+                e.child(i).fmt(f)
             }
             Column(i, TreatAsEqual(Some(name))) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation (with stored name information)
-                self.child(&(i, name)).fmt(f)
+                e.child(&(i, name)).fmt(f)
             }
             Literal(row, _) => {
                 // Delegate to the `HumanizedExpr<'a, _>` implementation.
-                self.child(row).fmt(f)
+                e.child(row).fmt(f)
             }
             CallUnmaterializable(func) => write!(f, "{}()", func),
             CallUnary { func, expr } => {
                 if let crate::UnaryFunc::Not(_) = *func {
                     if let CallUnary { func, expr } = expr.as_ref() {
                         if let Some(is) = func.is() {
-                            let expr = self.child::<MirScalarExpr>(&*expr);
+                            let expr = e.child::<MirScalarExpr>(&*expr);
                             return write!(f, "({}) IS NOT {}", expr, is);
                         }
                     }
                 }
                 if let Some(is) = func.is() {
-                    let expr = self.child::<MirScalarExpr>(&*expr);
+                    let expr = e.child::<MirScalarExpr>(&*expr);
                     write!(f, "({}) IS {}", expr, is)
                 } else {
-                    let expr = self.child::<MirScalarExpr>(&*expr);
+                    let expr = e.child::<MirScalarExpr>(&*expr);
                     write!(f, "{}({})", func, expr)
                 }
             }
             CallBinary { func, expr1, expr2 } => {
-                let expr1 = self.child::<MirScalarExpr>(&*expr1);
-                let expr2 = self.child::<MirScalarExpr>(&*expr2);
+                let expr1 = e.child::<MirScalarExpr>(&*expr1);
+                let expr2 = e.child::<MirScalarExpr>(&*expr2);
                 if func.is_infix_op() {
                     write!(f, "({} {} {})", expr1, func, expr2)
                 } else {
@@ -1309,38 +1326,64 @@ where
             }
             CallVariadic { func, exprs } => {
                 use crate::VariadicFunc::*;
-                let exprs = exprs.iter().map(|expr| self.child(expr));
                 match func {
-                    ArrayCreate { .. } => {
+                    CaseLiteral(cl) => {
+                        let input = e.child::<MirScalarExpr>(&exprs[0]);
+                        write!(f, "case_lookup {}", input)?;
+                        for entry in &cl.lookup {
+                            let result = e.child::<MirScalarExpr>(&exprs[entry.expr_index]);
+                            write!(f, " when ")?;
+                            e.mode.humanize_datum(entry.literal.unpack_first(), f)?;
+                            write!(f, " then {}", result)?;
+                        }
+                        let els = e.child::<MirScalarExpr>(exprs.last().unwrap());
+                        write!(f, " else {} end", els)
+                    }
+                    ArrayCreate(..) => {
+                        let exprs = exprs.iter().map(|expr| e.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "array[{}]", exprs)
                     }
-                    ListCreate { .. } => {
+                    ListCreate(..) => {
+                        let exprs = exprs.iter().map(|expr| e.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "list[{}]", exprs)
                     }
-                    RecordCreate { .. } => {
+                    RecordCreate(..) => {
+                        let exprs = exprs.iter().map(|expr| e.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "row({})", exprs)
                     }
                     func if func.is_infix_op() && exprs.len() > 1 => {
+                        let exprs = exprs.iter().map(|expr| e.child(expr));
                         let func = format!(" {} ", func);
                         let exprs = separated(&func, exprs);
                         write!(f, "({})", exprs)
                     }
                     func => {
+                        let exprs = exprs.iter().map(|expr| e.child(expr));
                         let exprs = separated(", ", exprs);
                         write!(f, "{}({})", func, exprs)
                     }
                 }
             }
             If { cond, then, els } => {
-                let cond = self.child::<MirScalarExpr>(&*cond);
-                let then = self.child::<MirScalarExpr>(&*then);
-                let els = self.child::<MirScalarExpr>(&*els);
+                let cond = e.child::<MirScalarExpr>(&*cond);
+                let then = e.child::<MirScalarExpr>(&*then);
+                let els = e.child::<MirScalarExpr>(&*els);
                 write!(f, "case when {} then {} else {} end", cond, then, els)
             }
         }
+    }
+}
+
+impl<'a, T, M> fmt::Display for HumanizedExpr<'a, T, M>
+where
+    T: HumanizeDisplay,
+    M: HumanizerMode,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        T::humanize(self, f)
     }
 }
 
@@ -1372,6 +1415,36 @@ where
 /// the former and handles the error case (including redaction) directly for
 /// the latter.
 impl<'a, M> fmt::Display for HumanizedExpr<'a, Result<Row, EvalError>, M>
+where
+    M: HumanizerMode,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.expr {
+            Ok(row) => self.mode.humanize_datum(row.unpack_first(), f),
+            Err(err) => {
+                if self.mode.redacted() {
+                    write!(f, "error(█)")
+                } else {
+                    write!(f, "error({})", err.to_string().escaped())
+                }
+            }
+        }
+    }
+}
+
+/// Delegates to the [`Row`] rendering of the wrapped row.
+impl HumanizeDisplay for StableRow {
+    fn humanize<'a, M: HumanizerMode>(
+        e: &HumanizedExpr<'a, Self, M>,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
+        e.child::<Row>(&e.expr.0).fmt(f)
+    }
+}
+
+/// Like the impl for `Result<Row, EvalError>`, for the stable-serialization
+/// row wrapper used by LIR literals.
+impl<'a, M> fmt::Display for HumanizedExpr<'a, Result<StableRow, EvalError>, M>
 where
     M: HumanizerMode,
 {

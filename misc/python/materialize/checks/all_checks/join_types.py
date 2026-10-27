@@ -49,9 +49,7 @@ class JoinTypes(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET search_path=join_schema;
 
                 > SELECT * FROM comma_join;
@@ -132,6 +130,4 @@ class JoinTypes(Check):
                 <null> 3
                 <null> 4
                 <null> <null>
-                """
-            )
-        )
+                """))

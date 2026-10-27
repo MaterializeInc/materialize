@@ -22,10 +22,7 @@ class UpsertWideValue(Check):
     """Perform upsert over records with a very long/wide value."""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
-            + dedent(
-                f"""
+        return Testdrive(dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD) + dedent(f"""
                 $ kafka-create-topic topic=upsert-wide-value
 
                 $ kafka-ingest format=avro key-format=avro topic=upsert-wide-value key-schema=${{keyschema}} schema=${{schema}}
@@ -41,9 +38,7 @@ class UpsertWideValue(Check):
                   SELECT LEFT(f1, 1), RIGHT(f1, 1),
                   LENGTH(f1)
                   FROM upsert_wide_value
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -73,16 +68,12 @@ class UpsertWideValue(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM upsert_wide_value_view
                 X X 102400
                 Y Y 512000
                 Z Z 1024000
-                """
-            )
-        )
+                """))
 
 
 @externally_idempotent(False)
@@ -90,10 +81,7 @@ class UpsertWideKey(Check):
     """Perform upsert over records with a very long/wide key."""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
-            + dedent(
-                f"""
+        return Testdrive(dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD) + dedent(f"""
                 $ kafka-create-topic topic=upsert-wide-key
 
                 $ kafka-ingest format=avro key-format=avro topic=upsert-wide-key key-schema=${{keyschema}} schema=${{schema}}
@@ -111,9 +99,7 @@ class UpsertWideKey(Check):
                   SELECT LEFT(key1, 1), RIGHT(key1, 1),
                   LENGTH(key1), f1
                   FROM upsert_wide_key
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -141,13 +127,9 @@ class UpsertWideKey(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM upsert_wide_key_view
                 A Z 1024001 A3
                 D Z 1024001 D1
                 E Z 1024001 E1
-                """
-            )
-        )
+                """))

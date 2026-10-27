@@ -1,0 +1,156 @@
+{{- /*
+  Copyright Materialize, Inc. and contributors. All rights reserved.
+
+  Use of this software is governed by the Business Source License
+  included in the LICENSE file at the root of this repository.
+
+  As of the Change Date specified in that file, in accordance with
+  the Business Source License, use of this software will be governed
+  by the Apache License, Version 2.0.
+*/ -}}
+{{- /*
+  Renders /llms.txt, an index of the docs for LLM and agent consumers, and one
+  <section>/llms.txt per top-level docs section. Format per https://llmstxt.org/:
+  an H1, a `>` summary blockquote and a short orienting note. The root index
+  then lists the section indexes and the pages outside any section, and each
+  section index lists its pages. Pages are listed as
+  "- [Title](url): description" entries.
+
+  The pages are split across section indexes because one index of every page
+  passed 85,000 characters, over the Agent-Friendly Documentation Spec's
+  50,000. The section indexes are published from this template, with
+  resources.FromString, so that all of llms.txt is built in one place.
+
+  Links point at each page's Markdown rendition rather than its HTML page, so a
+  consumer fetches prose instead of site chrome.
+
+  Only the HTML pass renders this file. config.skill.toml resets outputs.home to
+  ["skill"], and the rightmost --config file wins, so the Markdown pass emits
+  markdown-docs/index.md instead of a second copy of this index.
+
+  The output must be byte-stable: no dates, no build metadata, and no ranging
+  over maps. Every collection below is explicitly ordered.
+*/ -}}
+{{- /* Emit nothing rather than an index of dead links. */ -}}
+{{- if partial "site-has-markdown.html" . -}}
+{{- $eligible := slice -}}
+{{- range site.Pages -}}
+  {{- $keep := true -}}
+  {{- /* The home page is this file. */ -}}
+  {{- if .IsHome -}}{{- $keep = false -}}{{- end -}}
+  {{- /* build.render=never leaves a page with no permalink to link to. */ -}}
+  {{- if not .RelPermalink -}}{{- $keep = false -}}{{- end -}}
+  {{- if .Params.headless -}}{{- $keep = false -}}{{- end -}}
+  {{- with .Params.robots -}}
+    {{- if in (lower .) "noindex" -}}{{- $keep = false -}}{{- end -}}
+  {{- end -}}
+  {{- if $keep -}}{{- $eligible = $eligible | append . -}}{{- end -}}
+{{- end -}}
+{{- /*
+  Group order follows the sidebar. A top-level menu entry names a group only
+  when it canonically stands for a top-level content section: either its page IS
+  that section's index page, or its identifier resolves to one. The first test
+  has to compare paths, not just .Section, because a nested page can register a
+  top-level nav entry (content/developer-tools/mcp-server/_index.md does, at weight
+  48) and would otherwise claim the whole integrations group at the wrong
+  position. The identifier test covers the header-only entries declared in
+  config.toml, which have no page at all.
+
+  A header whose children are root-level pages, such as license, maps to the
+  empty section, whose pages the root index lists itself.
+*/ -}}
+{{- $keys := slice -}}
+{{- $groups := slice -}}
+{{- range site.Menus.main.ByWeight -}}
+  {{- $key := "" -}}
+  {{- $found := false -}}
+  {{- with .Page -}}
+    {{- if eq .Path (printf "/%s" .Section) -}}
+      {{- $key = .Section -}}{{- $found = true -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if not $found -}}
+    {{- with site.GetPage (printf "/%s" .Identifier) -}}
+      {{- if eq .Path (printf "/%s" .Section) -}}
+        {{- $key = .Section -}}{{- $found = true -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if and (not $found) (not .Page) .HasChildren -}}
+    {{- range .Children.ByWeight -}}
+      {{- if not $found -}}
+        {{- with .Page -}}{{- $key = .Section -}}{{- $found = true -}}{{- end -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if and $found (not (in $keys $key)) -}}
+    {{- $keys = $keys | append $key -}}
+    {{- $groups = $groups | append (dict "key" $key "title" .Name) -}}
+  {{- end -}}
+{{- end -}}
+{{- /*
+  Sections the nav never mentions, so nothing is dropped silently: two sections
+  spell the front matter key `menus:` and register no entry, concepts sits under
+  the Get started header, and administration has no entry at all.
+*/ -}}
+{{- range site.Home.Sections -}}
+  {{- if not (in $keys .Section) -}}
+    {{- $keys = $keys | append .Section -}}
+    {{- $groups = $groups | append (dict "key" .Section "title" .LinkTitle) -}}
+  {{- end -}}
+{{- end -}}
+{{- if not (in $keys "") -}}
+  {{- $groups = $groups | append (dict "key" "" "title" "Other") -}}
+{{- end -}}
+{{- /*
+  The summary is the same intro the docs home page and "What is Materialize?"
+  render, so the positioning here cannot drift from the site's own wording.
+*/ -}}
+{{- $intro := "" -}}
+{{- with site.GetPage "/headless/materialize-intro/intro" -}}
+  {{- $intro = trim (replaceRE `\s+` " " .RawContent) " " -}}
+{{- end -}}
+{{- $note := "Every link below points at the Markdown source of a documentation page. For\nthe HTML page instead, drop `markdown-docs/` from the URL and drop the\ntrailing `index.md`." -}}
+{{- $sections := slice -}}
+{{- $root := dict -}}
+{{- range $groups -}}
+  {{- $items := sort (where $eligible "Section" .key) "RelPermalink" -}}
+  {{- if $items -}}
+    {{- $entries := slice -}}
+    {{- range $items -}}
+      {{- $line := printf "- [%s](%s)" .Title (partial "markdown-url.html" (dict "page" . "absolute" true)) -}}
+      {{- with .Description -}}{{- $d := trim (replaceRE `\s+` " " .) " " -}}{{- if $d -}}{{- $line = printf "%s: %s" $line $d -}}{{- end -}}{{- end -}}
+      {{- $entries = $entries | append $line -}}
+    {{- end -}}
+    {{- if .key -}}
+      {{- $header := printf "# %s: %s\n\n> Pages in the %s section of the %s.\n\n%s\n" site.Title .title .title site.Title $note -}}
+      {{- $index := resources.FromString (printf "%s/llms.txt" .key) (printf "%s\n%s\n" $header (delimit $entries "\n")) -}}
+      {{- with $index.Publish -}}{{- end -}}
+      {{- $sections = $sections | append (dict "title" .title "url" (partial "llms-txt-url.html" (dict "section" .key "absolute" true)) "count" (len $items)) -}}
+    {{- else -}}
+      {{- $root = dict "title" .title "entries" $entries -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+# {{ site.Title }}
+
+> {{ $intro }}
+
+Each link under Sections points at the index of one documentation section. A
+section index lists every page in the section, with a link to its Markdown
+source and a one-line description.
+{{- with $root }} The pages outside any section are listed
+after the sections, in the same form.
+{{- end }}
+
+## Sections
+
+{{ range $sections }}- [{{ .title }}]({{ .url }}): {{ .count }} {{ cond (eq .count 1) "page" "pages" }}
+{{ end }}
+{{- with $root }}
+## {{ .title }}
+
+{{ range .entries }}{{ . }}
+{{ end }}
+{{- end }}
+{{- end -}}

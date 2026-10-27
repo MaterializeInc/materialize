@@ -16,8 +16,8 @@ use std::sync::Arc;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_expr::{AccessStrategy, Id, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
+use mz_repr::GlobalId;
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::{GlobalId, Timestamp};
 use mz_sql::ast::Statement;
 use mz_sql::names::Aug;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -49,7 +49,7 @@ pub struct PlanInsightsContext {
     pub finishing: RowSetFinishing,
     pub optimizer_config: OptimizerConfig,
     pub session: SessionMeta,
-    pub timestamp_context: TimestampContext<Timestamp>,
+    pub timestamp_context: TimestampContext,
     pub view_id: GlobalId,
     pub index_id: GlobalId,
     pub enable_re_optimize: bool,
@@ -67,7 +67,8 @@ pub struct PlanInsights {
     /// this as fast path. That is: if this query were run on the cluster of the key, it would be
     /// fast because it would use the index of the value.
     pub fast_path_clusters: BTreeMap<String, Option<FastPathCluster>>,
-    /// For the current cluster, whether adding a LIMIT <= this will result in a fast path.
+    /// For the current cluster, adding a `LIMIT n` such that `n + OFFSET < this` will result in a
+    /// fast path. (If the query has no `OFFSET`, the condition simplifies to `LIMIT < this`.)
     pub fast_path_limit: Option<usize>,
     /// Names of persist sources over which a count(*) is done.
     pub persist_count: Vec<Name>,

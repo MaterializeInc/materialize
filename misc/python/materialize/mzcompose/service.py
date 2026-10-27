@@ -115,6 +115,9 @@ class ServiceConfig(TypedDict, total=False):
     init: bool
     """Whether to run an init process in the container."""
 
+    ipc: str
+    """The IPC isolation mode for the container, e.g. `host`."""
+
     ports: Sequence[int | str]
     """Service ports to expose to the host."""
 
@@ -181,6 +184,9 @@ class ServiceConfig(TypedDict, total=False):
     dns: list[str] | None
     """The DNS servers to use for the container."""
 
+    security_opt: list[str] | None
+    """Additional security options to apply to the container."""
+
 
 class Service:
     """A Docker Compose service in a `Composition`.
@@ -188,8 +194,13 @@ class Service:
     Attributes:
         name: The name of the service.
         config: The definition of the service.
+        companions: Sibling services that should be registered in the
+            composition alongside this one. Lets a service pull in dependent
+            sidecar containers without each composition having to spell them
+            out.
     """
 
     def __init__(self, name: str, config: ServiceConfig) -> None:
         self.name = name
         self.config = config
+        self.companions: list[Service] = []

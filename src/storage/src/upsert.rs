@@ -24,11 +24,14 @@ use itertools::Itertools;
 use mz_ore::error::ErrorExt;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_rocksdb::ValueIterator;
-use mz_storage_operators::metrics::BackpressureMetrics;
+use mz_sql_server_util::cdc::Lsn;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
+use mz_storage_types::sources::MzOffset;
 use mz_storage_types::sources::envelope::UpsertEnvelope;
+use mz_storage_types::sources::kafka::{KafkaTimestamp, RangeBound};
+use mz_storage_types::sources::mysql::GtidPartition;
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
     PressOnDropButton,
@@ -37,21 +40,21 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, InputCapability, Operator};
-use timely::dataflow::{Scope, ScopeParent, Stream};
+use timely::dataflow::{Scope, StreamVec};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::healthcheck::HealthStatusUpdate;
-use crate::metrics::upsert::UpsertMetrics;
+use crate::metrics::upsert::{UpsertBackpressureMetrics, UpsertMetrics};
 use crate::storage_state::StorageInstanceContext;
-use crate::upsert_continual_feedback;
+use crate::{upsert_continual_feedback, upsert_continual_feedback_v2};
 use types::{
     BincodeOpts, StateValue, UpsertState, UpsertStateBackend, consolidating_merge_function,
     upsert_bincode_opts,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "fuzzing"))]
 pub mod memory;
 pub(crate) mod rocksdb;
 // TODO(aljoscha): Move next to upsert module, rename to upsert_types.
@@ -59,8 +62,290 @@ pub(crate) mod types;
 
 pub type UpsertValue = Result<Row, Box<UpsertError>>;
 
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Copy,
+    Clone,
+    Hash,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    bytemuck::AnyBitPattern,
+    bytemuck::NoUninit
+)]
+#[repr(transparent)]
 pub struct UpsertKey([u8; 32]);
+
+impl columnation::Columnation for UpsertKey {
+    type InnerRegion = columnation::CopyRegion<UpsertKey>;
+}
+
+/// Columnar (the `columnar` crate, distinct from `columnation`) support for
+/// `UpsertKey`, so the upsert-v2 source stash can use a paged columnar merge
+/// batcher keyed natively by `UpsertKey` (no `Row` packing). `UpsertKey` is a
+/// POD `[u8; 32]` newtype, so the container is a fixed-stride byte column.
+///
+/// This is hand-rolled rather than `#[derive(Columnar)]`d for one load-bearing
+/// reason: the reference type must be `&UpsertKey`. `&UpsertKey` is `Copy + Ord`
+/// (the lexicographic `[u8; 32]` order the persist-feedback trace is keyed on),
+/// which both satisfies the merge batcher's `Ref: Copy + Ord` requirement and —
+/// crucially — matches the read item of the feedback arrangement's
+/// `ColumnationStack<UpsertKey>` key container, so the paged `ValRow` builder
+/// can reconcile the `Column` input against the spine (its `BuilderInput` bound
+/// is `ReadItem: PartialEq<Ref<UpsertKey>>`). A derived impl would yield a
+/// generated `UpsertKeyReference` (and route `[u8; 32]` through the generic,
+/// non-fixed-stride array container), breaking that reconciliation.
+mod columnar_upsert_key {
+    use super::UpsertKey;
+    use columnar::Columnar;
+    use mz_ore::cast::CastFrom;
+    use std::ops::Range;
+
+    /// A newtype wrapper for a vector of `UpsertKey` values.
+    #[derive(Clone, Copy, Default, Debug)]
+    pub struct UpsertKeys<T>(T);
+    impl<D, T: columnar::Push<D>> columnar::Push<D> for UpsertKeys<T> {
+        #[inline(always)]
+        fn push(&mut self, item: D) {
+            self.0.push(item)
+        }
+    }
+    impl<T: columnar::Clear> columnar::Clear for UpsertKeys<T> {
+        #[inline(always)]
+        fn clear(&mut self) {
+            self.0.clear()
+        }
+    }
+    impl<T: columnar::Len> columnar::Len for UpsertKeys<T> {
+        #[inline(always)]
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+    }
+    impl<'a> columnar::Index for UpsertKeys<&'a [UpsertKey]> {
+        type Ref = &'a UpsertKey;
+
+        #[inline(always)]
+        fn get(&self, index: usize) -> Self::Ref {
+            &self.0[index]
+        }
+    }
+
+    impl Columnar for UpsertKey {
+        #[inline(always)]
+        fn into_owned<'a>(other: columnar::Ref<'a, Self>) -> Self {
+            *other
+        }
+        type Container = UpsertKeys<Vec<UpsertKey>>;
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(thing: columnar::Ref<'a, Self>) -> columnar::Ref<'b, Self>
+        where
+            Self: 'a,
+        {
+            thing
+        }
+    }
+
+    impl columnar::Borrow for UpsertKeys<Vec<UpsertKey>> {
+        type Ref<'a> = &'a UpsertKey;
+        type Borrowed<'a>
+            = UpsertKeys<&'a [UpsertKey]>
+        where
+            Self: 'a;
+        #[inline(always)]
+        fn borrow<'a>(&'a self) -> Self::Borrowed<'a> {
+            UpsertKeys(self.0.as_slice())
+        }
+        #[inline(always)]
+        fn reborrow<'b, 'a: 'b>(item: Self::Borrowed<'a>) -> Self::Borrowed<'b>
+        where
+            Self: 'a,
+        {
+            UpsertKeys(item.0)
+        }
+        #[inline(always)]
+        fn reborrow_ref<'b, 'a: 'b>(item: Self::Ref<'a>) -> Self::Ref<'b>
+        where
+            Self: 'a,
+        {
+            item
+        }
+    }
+
+    impl columnar::Container for UpsertKeys<Vec<UpsertKey>> {
+        #[inline(always)]
+        fn extend_from_self(&mut self, other: Self::Borrowed<'_>, range: Range<usize>) {
+            self.0.extend_from_self(other.0, range)
+        }
+        #[inline(always)]
+        fn reserve_for<'a, I>(&mut self, selves: I)
+        where
+            Self: 'a,
+            I: Iterator<Item = Self::Borrowed<'a>> + Clone,
+        {
+            self.0.reserve_for(selves.map(|s| s.0));
+        }
+    }
+
+    impl<'a> columnar::AsBytes<'a> for UpsertKeys<&'a [UpsertKey]> {
+        const SLICE_COUNT: usize = 1;
+        #[inline(always)]
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            mz_ore::soft_assert_no_log!(index < Self::SLICE_COUNT);
+            (
+                u64::cast_from(align_of::<UpsertKey>()),
+                bytemuck::cast_slice(self.0),
+            )
+        }
+        #[inline(always)]
+        fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
+            std::iter::once((
+                u64::cast_from(align_of::<UpsertKey>()),
+                bytemuck::cast_slice(self.0),
+            ))
+        }
+    }
+    impl<'a> columnar::FromBytes<'a> for UpsertKeys<&'a [UpsertKey]> {
+        const SLICE_COUNT: usize = 1;
+        #[inline(always)]
+        fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
+            UpsertKeys(bytemuck::cast_slice(
+                bytes.next().expect("Iterator exhausted prematurely"),
+            ))
+        }
+    }
+}
+
+/// Projects a source's native `FromTime` to a columnar, totally-ordered key
+/// used by the upsert source stash to keep the latest update per `(key, time)`.
+///
+/// The upsert stash is a paged columnar merge batcher; its diff carries this
+/// projection rather than the raw `FromTime`, so the only columnar type the
+/// stash needs is `Order` — never the (possibly structurally complex) source
+/// timestamp. This is what keeps the columnar requirement off the generic
+/// source-render path: that path only ever needs `FromTime: UpsertSourceTime`.
+/// Only the relative order matters; the value is never read back.
+///
+/// The upsert envelope is rendered for Kafka and the KEY VALUE load generator,
+/// so those source times (`KafkaTimestamp`, `MzOffset`) project to a real order
+/// key. The remaining source times implement the trait only for coherence on
+/// the generic render path — their sources never render upsert — so their
+/// projection is a panicking guard rather than a real key.
+pub trait UpsertSourceTime
+where
+    for<'a> columnar::Ref<'a, Self::Order>: Ord,
+{
+    /// Columnar order key. Must order consistently with the source time it is
+    /// projected from.
+    type Order: columnar::Columnar + Clone + Default + Ord + Send + Sync + 'static;
+    /// Project the source time onto its order key.
+    fn upsert_order(&self) -> Self::Order;
+}
+
+impl UpsertSourceTime for KafkaTimestamp {
+    /// Per-record Kafka source times are exact singletons (a single partition
+    /// at a single offset; see the source reader), and `KafkaTimestamp`'s
+    /// derived `Ord` is lexicographic on `(partition, offset)`, so this flat
+    /// projection is order-preserving. `RangeBound`'s infinities map to the
+    /// `i64` extrema to remain order-consistent for any non-singleton bound.
+    type Order = (i64, u64);
+    fn upsert_order(&self) -> (i64, u64) {
+        let partition = match self.interval().lower {
+            RangeBound::NegInfinity => i64::MIN,
+            RangeBound::Elem(p, _) => i64::from(p),
+            RangeBound::PosInfinity => i64::MAX,
+        };
+        (partition, self.timestamp().offset)
+    }
+}
+
+/// Load-generator (and Postgres) source time. The KEY VALUE load generator is
+/// the one non-Kafka source that renders the upsert envelope (see
+/// `apply_source_envelope_encoding` in the planner), so this projects to the
+/// record offset: offsets increase with each update, so "max order wins" is
+/// exactly "latest update wins" for dedup.
+impl UpsertSourceTime for MzOffset {
+    type Order = u64;
+    fn upsert_order(&self) -> u64 {
+        self.offset
+    }
+}
+
+/// Source times whose sources never render the upsert envelope (MySQL and SQL
+/// Server CDC). `Order = ()` keeps the generic render path free of any columnar
+/// requirement on the source time. The projection panics rather than returning:
+/// `()` would collapse every `from_time` to equal, silently breaking "latest
+/// offset wins" dedup, so if such a source ever reaches the upsert path we want
+/// a loud failure, not arbitrary per-key output.
+macro_rules! upsert_source_time_unit {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl UpsertSourceTime for $ty {
+            type Order = ();
+            fn upsert_order(&self) {
+                unreachable!(
+                    "upsert source stash is not rendered for this source, but \
+                     {} reached the projection",
+                    std::any::type_name::<Self>(),
+                )
+            }
+        }
+    )+};
+}
+upsert_source_time_unit!(GtidPartition, Lsn);
+
+/// The storage spill gate ([`mz_timely_util::columnar::chunk::StorageSpill`]),
+/// used by the chunked upsert-v2 stash flavor.
+///
+/// In that flavor the source stash and feedback arrangement spill through the
+/// process buffer pool: committed chunk bodies land in the pool once compute's
+/// config handler has installed and budgeted it (storage and compute run in
+/// the same `clusterd` process). The gate is consulted at every chunk commit,
+/// so flips apply to running dataflows.
+pub mod upsert_stash_spill {
+    /// Enable or disable spilling of upsert chunk bodies to the buffer pool.
+    pub fn set_enabled(enabled: bool) {
+        mz_timely_util::columnar::chunk::set_storage_spill_enabled(enabled);
+    }
+}
+
+/// Pager for the paged upsert-v2 stash flavor.
+///
+/// This draws from the same process-wide [`TieredPolicy`] budget pool as the
+/// compute column-paged batcher — there is one budget and one underlying
+/// `mz_ore::pager` — but whether the stash *uses* it is gated by storage's own
+/// `enable_upsert_paged_spill` flag, independently of compute's
+/// `enable_column_paged_batcher_spill`. The shared pool's budget / backend /
+/// codec are configured by compute's `apply_tiered_config` (storage and compute
+/// run in the same `clusterd` process).
+///
+/// Flipping the flag takes effect on dataflows created after the change: the
+/// paged flavor captures the pager once at operator construction.
+///
+/// [`TieredPolicy`]: mz_timely_util::column_pager::policy::TieredPolicy
+pub mod upsert_stash_pager {
+    use std::sync::{LazyLock, RwLock};
+
+    use mz_timely_util::column_pager::{ColumnPager, shared_pager};
+
+    /// Active pager handed to upsert source-stash batchers. Defaults to
+    /// disabled (every chunk resident) until [`set_enabled`] turns it on.
+    static PAGER: LazyLock<RwLock<ColumnPager>> =
+        LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
+
+    /// Enable or disable the stash's use of the shared column pager. When
+    /// enabled, the stash spills through the shared budget pool; when disabled
+    /// it keeps every chunk resident.
+    pub fn set_enabled(enabled: bool) {
+        *PAGER.write().expect("upsert stash pager poisoned") = shared_pager(enabled);
+    }
+
+    /// The current upsert-stash pager. Cheap: clones the inner `Arc`.
+    pub fn pager() -> ColumnPager {
+        PAGER.read().expect("upsert stash pager poisoned").clone()
+    }
+}
 
 impl Debug for UpsertKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -169,17 +454,14 @@ use self::types::ValueMetadata;
 /// This leaf operator drops `token` after the input reaches the `resume_upper`.
 /// This is useful to take coordinated actions across all workers, after the `upsert`
 /// operator has rehydrated.
-pub fn rehydration_finished<G, T>(
-    scope: G,
+pub fn rehydration_finished<'scope, T: Timestamp>(
+    scope: Scope<'scope, T>,
     source_config: &crate::source::RawSourceCreationConfig,
     // A token that we can drop to signal we are finished rehydrating.
     token: impl std::any::Any + 'static,
     resume_upper: Antichain<T>,
-    input: &Stream<G, Infallible>,
-) where
-    G: Scope<Timestamp = T>,
-    T: Timestamp,
-{
+    input: StreamVec<'scope, T, Infallible>,
+) {
     let worker_id = source_config.worker_id;
     let id = source_config.id;
     let mut builder = AsyncOperatorBuilder::new(format!("rehydration_finished({id}"), scope);
@@ -205,32 +487,67 @@ pub fn rehydration_finished<G, T>(
     });
 }
 
+/// Keys this operator's previous output, read back from persist, for retraction.
+///
+/// Only [`UpsertError`] survives the error side. It is the one error this operator can have
+/// written, and therefore the one it can retract; anything else entered the shard from
+/// elsewhere and is not ours to take back.
+pub(crate) fn key_persist_feedback<'scope, T>(
+    ok: VecCollection<'scope, T, Row, Diff>,
+    err: VecCollection<'scope, T, DataflowError, Diff>,
+    key_indices: Vec<usize>,
+) -> VecCollection<'scope, T, (UpsertKey, UpsertValue), Diff>
+where
+    T: Timestamp,
+{
+    let keyed_ok = {
+        let key_indices = key_indices.clone();
+        ok.map(move |row| {
+            let key = UpsertKey::from_value(Ok(&row), &key_indices);
+            (key, Ok(row))
+        })
+    };
+    let keyed_err = err.flat_map(move |err| {
+        let err = match err {
+            DataflowError::EnvelopeError(err) => match *err {
+                EnvelopeError::Upsert(err) => Box::new(err),
+                EnvelopeError::Flat(_) => return None,
+            },
+            _ => return None,
+        };
+        let key = UpsertKey::from_value(Err(&err), &key_indices);
+        Some((key, Err(err)))
+    });
+    keyed_ok.concat(keyed_err)
+}
+
 /// Resumes an upsert computation at `resume_upper` given as inputs a collection of upsert commands
 /// and the collection of the previous output of this operator.
 /// Returns a tuple of
 /// - A collection of the computed upsert operator and,
 /// - A health update stream to propagate errors
-pub(crate) fn upsert<G: Scope, FromTime>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+pub(crate) fn upsert<'scope, T, FromTime>(
+    input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     upsert_envelope: UpsertEnvelope,
-    resume_upper: Antichain<G::Timestamp>,
-    previous: VecCollection<G, Result<Row, DataflowError>, Diff>,
+    resume_upper: Antichain<T>,
+    previous_ok: VecCollection<'scope, T, Row, Diff>,
+    previous_err: VecCollection<'scope, T, DataflowError, Diff>,
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::SourceExportCreationConfig,
     instance_context: &StorageInstanceContext,
     storage_configuration: &StorageConfiguration,
     dataflow_paramters: &crate::internal_control::DataflowParameters,
-    backpressure_metrics: Option<BackpressureMetrics>,
+    backpressure_metrics: Option<UpsertBackpressureMetrics>,
 ) -> (
-    VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
-    Stream<G, Infallible>,
+    VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder + Sync,
-    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
-    FromTime: Timestamp + Sync,
+    T: Timestamp + TotalOrder + Sync,
+    T: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
+    FromTime: Timestamp + Clone + Sync,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
         source_config.id,
@@ -289,15 +606,17 @@ where
     let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
     let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
 
-    let env = instance_context.rocksdb_env.clone();
+    let env = instance_context
+        .rocksdb_env()
+        .expect("failed to create rocksdb env");
 
     // A closure that will initialize and return a configured RocksDB instance
     let rocksdb_init_fn = move || async move {
         let merge_operator = if rocksdb_use_native_merge_operator {
             Some((
                 "upsert_state_snapshot_merge_v1".to_string(),
-                |a: &[u8], b: ValueIterator<BincodeOpts, StateValue<G::Timestamp, FromTime>>| {
-                    consolidating_merge_function::<G::Timestamp, FromTime>(a.into(), b)
+                |a: &[u8], b: ValueIterator<BincodeOpts, StateValue<T, FromTime>>| {
+                    consolidating_merge_function::<T, FromTime>(a.into(), b)
                 },
             ))
         } else {
@@ -323,10 +642,11 @@ where
     };
 
     upsert_operator(
-        &thin_input,
+        thin_input,
         upsert_envelope.key_indices,
         resume_upper,
-        previous,
+        previous_ok,
+        previous_err,
         previous_token,
         upsert_metrics,
         source_config,
@@ -338,13 +658,73 @@ where
     )
 }
 
+/// An experimental upsert implementation loosely described in this doc:
+/// [Upsert V2 Much Simpler Boogaloo](https://www.notion.so/materialize/Upsert-V2-Much-Simpler-Boogaloo-31913f48d37b807fa88bdeafc27c02d9?source=copy_link)
+///
+/// Instead of using rocksdb as a state backend, this implementation uses a differential dataflow collection to hold the key state,
+/// and performs consolidation of updates with matching keys and MZ timestamps, using max FromTime to choose winners,
+/// resulting in only one record per key per time.
+pub(crate) fn upsert_v2<'scope, T, FromTime>(
+    input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    upsert_envelope: UpsertEnvelope,
+    resume_upper: Antichain<T>,
+    previous_ok: VecCollection<'scope, T, Row, Diff>,
+    previous_err: VecCollection<'scope, T, DataflowError, Diff>,
+    previous_token: Option<Vec<PressOnDropButton>>,
+    source_config: crate::source::SourceExportCreationConfig,
+    backpressure_metrics: Option<UpsertBackpressureMetrics>,
+    stash_flavor: upsert_continual_feedback_v2::UpsertStashFlavor,
+) -> (
+    VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<'scope, T, Infallible>,
+    PressOnDropButton,
+)
+where
+    T: Timestamp + TotalOrder + Sync,
+    T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
+    T: columnation::Columnation,
+    T: columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    FromTime: Timestamp + Clone + Sync,
+    FromTime: UpsertSourceTime,
+{
+    let upsert_metrics = source_config.metrics.get_upsert_metrics(
+        source_config.id,
+        source_config.worker_id,
+        backpressure_metrics,
+    );
+
+    let thin_input = upsert_thinning(input);
+
+    tracing::info!(
+        worker_id = %source_config.worker_id,
+        source_id = %source_config.id,
+        ?stash_flavor,
+        "rendering upsert source (btreemap backend)"
+    );
+
+    upsert_continual_feedback_v2::upsert_inner(
+        stash_flavor,
+        thin_input,
+        upsert_envelope.key_indices,
+        resume_upper,
+        previous_ok,
+        previous_err,
+        previous_token,
+        upsert_metrics,
+        source_config,
+    )
+}
+
 // A shim so we can dispatch based on the dyncfg that tells us which upsert
 // operator to use.
-fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+fn upsert_operator<'scope, T, FromTime, F, Fut, US>(
+    input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
-    resume_upper: Antichain<G::Timestamp>,
-    persist_input: VecCollection<G, Result<Row, DataflowError>, Diff>,
+    resume_upper: Antichain<T>,
+    persist_ok: VecCollection<'scope, T, Row, Diff>,
+    persist_err: VecCollection<'scope, T, DataflowError, Diff>,
     persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -354,18 +734,18 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
 ) -> (
-    VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
-    Stream<G, Infallible>,
+    VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder + Sync,
-    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
+    T: Timestamp + TotalOrder + Sync,
+    T: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<G::Timestamp, FromTime>,
-    FromTime: Debug + timely::ExchangeData + Ord + Sync,
+    US: UpsertStateBackend<T, FromTime>,
+    FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
 {
     // Hard-coded to true because classic UPSERT cannot be used safely with
     // concurrent ingestions, which we need for both 0dt upgrades and
@@ -379,7 +759,8 @@ where
             input,
             key_indices,
             resume_upper,
-            persist_input,
+            persist_ok,
+            persist_err,
             persist_token,
             upsert_metrics,
             source_config,
@@ -393,7 +774,8 @@ where
             input,
             key_indices,
             resume_upper,
-            persist_input,
+            persist_ok,
+            persist_err,
             persist_token,
             upsert_metrics,
             source_config,
@@ -409,21 +791,20 @@ where
 /// a streaming fashion. For each distinct (key, time) in the input it emits the value with the
 /// highest from_time. Its purpose is to thin out data as much as possible before exchanging them
 /// across workers.
-fn upsert_thinning<G, K, V, FromTime>(
-    input: &VecCollection<G, (K, V, FromTime), Diff>,
-) -> VecCollection<G, (K, V, FromTime), Diff>
+fn upsert_thinning<'scope, T, K, V, FromTime>(
+    input: VecCollection<'scope, T, (K, V, FromTime), Diff>,
+) -> VecCollection<'scope, T, (K, V, FromTime), Diff>
 where
-    G: Scope,
-    G::Timestamp: TotalOrder,
-    K: timely::Data + Eq + Ord,
-    V: timely::Data,
+    T: Timestamp + TotalOrder,
+    K: timely::ExchangeData + Clone + Eq + Ord,
+    V: timely::ExchangeData + Clone,
     FromTime: Timestamp,
 {
     input
         .inner
         .unary(Pipeline, "UpsertThinning", |_, _| {
             // A capability suitable to emit all updates in `updates`, if any.
-            let mut capability: Option<InputCapability<G::Timestamp>> = None;
+            let mut capability: Option<InputCapability<T>> = None;
             // A batch of received updates
             let mut updates = Vec::new();
             move |input, output| {
@@ -504,7 +885,7 @@ enum DrainStyle<'a, T> {
 
 /// Helper method for `upsert_inner` used to stage `data` updates
 /// from the input timely edge.
-async fn drain_staged_input<S, G, T, FromTime, E>(
+async fn drain_staged_input<S, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
     commands_state: &mut indexmap::IndexMap<UpsertKey, types::UpsertValueAndSize<T, FromTime>>,
     output_updates: &mut Vec<(UpsertValue, T, Diff)>,
@@ -515,10 +896,9 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     source_config: &crate::source::SourceExportCreationConfig,
 ) where
     S: UpsertStateBackend<T, FromTime>,
-    G: Scope,
     T: PartialOrder + Ord + Clone + Send + Sync + Serialize + Debug + 'static,
-    FromTime: timely::ExchangeData + Ord + Sync,
-    E: UpsertErrorEmitter<G>,
+    FromTime: timely::ExchangeData + Clone + Ord + Sync,
+    E: UpsertErrorEmitter<T>,
 {
     stash.sort_unstable();
 
@@ -584,7 +964,7 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
         let existing_value = &mut command_state.get_mut().value;
 
         if let Some(cs) = existing_value.as_mut() {
-            cs.ensure_decoded(bincode_opts, source_config.id);
+            cs.ensure_decoded(bincode_opts, source_config.id, Some(&key));
         }
 
         // Skip this command if its order key is below the one in the upsert state.
@@ -652,17 +1032,88 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
     }
 }
 
+/// A no-op-ish error emitter for the fuzzing hook. With the in-memory backend
+/// and the well-formed inputs the fuzzer builds, `multi_get`/`multi_put` never
+/// error, so reaching this is itself a finding.
+#[cfg(feature = "fuzzing")]
+struct PanicErrorEmitter;
+
+#[cfg(feature = "fuzzing")]
+#[async_trait::async_trait(?Send)]
+impl<T> UpsertErrorEmitter<T> for PanicErrorEmitter {
+    async fn emit(&mut self, context: String, e: anyhow::Error) {
+        panic!("unexpected upsert state error during fuzzing: {context}: {e}");
+    }
+}
+
+/// Fuzzing hook: run a single `drain_staged_input` over `commands` (each a
+/// `(timestamp, key, order, value)`, where `value == None` is a delete) against
+/// a fresh empty in-memory state, draining everything strictly below
+/// `drain_to`. Returns the emitted output updates and the final finalized value
+/// of each key in `all_keys`. Exposed only for fuzzing. Not a stable public
+/// API.
+#[cfg(feature = "fuzzing")]
+pub async fn fuzz_drain_staged_input(
+    parts: &types::FuzzUpsertParts,
+    source_config: &crate::source::SourceExportCreationConfig,
+    commands: Vec<(u64, UpsertKey, u64, Option<UpsertValue>)>,
+    drain_to: u64,
+    all_keys: &[UpsertKey],
+) -> (Vec<(UpsertValue, u64, Diff)>, Vec<Option<UpsertValue>>) {
+    let mut state = parts.state();
+    let mut stash: Vec<(u64, UpsertKey, Reverse<u64>, Option<UpsertValue>)> = commands
+        .into_iter()
+        .map(|(ts, key, order, value)| (ts, key, Reverse(order), value))
+        .collect();
+    let mut commands_state = indexmap::IndexMap::new();
+    let mut output = Vec::new();
+    let mut multi_get_scratch = Vec::new();
+    let mut emitter = PanicErrorEmitter;
+
+    drain_staged_input(
+        &mut stash,
+        &mut commands_state,
+        &mut output,
+        &mut multi_get_scratch,
+        DrainStyle::ToUpper(&Antichain::from_elem(drain_to)),
+        &mut emitter,
+        &mut state,
+        source_config,
+    )
+    .await;
+
+    let bincode_opts = types::upsert_bincode_opts();
+    let mut results = vec![types::UpsertValueAndSize::default(); all_keys.len()];
+    state
+        .multi_get(all_keys.iter().copied(), results.iter_mut())
+        .await
+        .expect("multi_get in fuzz hook should not error");
+    let final_state = results
+        .into_iter()
+        .map(|r| match r.value {
+            None => None,
+            Some(mut sv) => {
+                sv.ensure_decoded(bincode_opts, GlobalId::User(0), None);
+                sv.into_decoded().finalized
+            }
+        })
+        .collect();
+
+    (output, final_state)
+}
+
 // Created a struct to hold the configs for upserts.
 // So that new configs don't require a new method parameter.
 pub(crate) struct UpsertConfig {
     pub shrink_upsert_unused_buffers_by_ratio: usize,
 }
 
-fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
-    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+fn upsert_classic<'scope, T, FromTime, F, Fut, US>(
+    input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
-    resume_upper: Antichain<G::Timestamp>,
-    previous: VecCollection<G, Result<Row, DataflowError>, Diff>,
+    resume_upper: Antichain<T>,
+    previous_ok: VecCollection<'scope, T, Row, Diff>,
+    previous_err: VecCollection<'scope, T, DataflowError, Diff>,
     previous_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -671,36 +1122,21 @@ fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
 ) -> (
-    VecCollection<G, Result<Row, DataflowError>, Diff>,
-    Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
-    Stream<G, Infallible>,
+    VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
 where
-    G::Timestamp: TotalOrder + Sync,
+    T: Timestamp + TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<G::Timestamp, FromTime>,
-    FromTime: timely::ExchangeData + Ord + Sync,
+    US: UpsertStateBackend<T, FromTime>,
+    FromTime: timely::ExchangeData + Clone + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
 
-    // We only care about UpsertValueError since this is the only error that we can retract
-    let previous = previous.flat_map(move |result| {
-        let value = match result {
-            Ok(ok) => Ok(ok),
-            Err(DataflowError::EnvelopeError(err)) => match *err {
-                EnvelopeError::Upsert(err) => Err(Box::new(err)),
-                _ => return None,
-            },
-            Err(_) => return None,
-        };
-        let value_ref = match value {
-            Ok(ref row) => Ok(row),
-            Err(ref err) => Err(&**err),
-        };
-        Some((UpsertKey::from_value(value_ref, &key_indices), value))
-    });
+    let previous = key_persist_feedback(previous_ok, previous_err, key_indices);
     let (output_handle, output) = builder.new_output();
 
     // An output that just reports progress of the snapshot consolidation process upstream to the
@@ -710,13 +1146,13 @@ where
 
     let (mut health_output, health_stream) = builder.new_output();
     let mut input = builder.new_input_for(
-        &input.inner,
+        input.inner,
         Exchange::new(move |((key, _, _), _, _)| UpsertKey::hashed(key)),
         &output_handle,
     );
 
     let mut previous = builder.new_input_for(
-        &previous.inner,
+        previous.inner,
         Exchange::new(|((key, _), _, _)| UpsertKey::hashed(key)),
         &output_handle,
     );
@@ -786,7 +1222,7 @@ where
                     }
                 }
                 Err(e) => {
-                    UpsertErrorEmitter::<G>::emit(
+                    UpsertErrorEmitter::<T>::emit(
                         &mut error_emitter,
                         "Failed to rehydrate state".to_string(),
                         e,
@@ -820,10 +1256,8 @@ where
 
         // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
         // and have a consistent iteration order.
-        let mut commands_state: indexmap::IndexMap<
-            _,
-            types::UpsertValueAndSize<G::Timestamp, FromTime>,
-        > = indexmap::IndexMap::new();
+        let mut commands_state: indexmap::IndexMap<_, types::UpsertValueAndSize<T, FromTime>> =
+            indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
         // Now can can resume consuming the collection
@@ -877,7 +1311,7 @@ where
                         // Disable the partial drain as this progress event covers
                         // the `output_cap` time.
                         partial_drain_time = None;
-                        drain_staged_input::<_, G, _, _, _>(
+                        drain_staged_input::<_, _, _, _>(
                             &mut stash,
                             &mut commands_state,
                             &mut output_updates,
@@ -914,7 +1348,7 @@ where
             // the minimum. However, because the frontier only advances on `Progress` updates,
             // the collection always accumulates correctly for all keys.
             if let Some(partial_drain_time) = partial_drain_time {
-                drain_staged_input::<_, G, _, _, _>(
+                drain_staged_input::<_, _, _, _>(
                     &mut stash,
                     &mut commands_state,
                     &mut output_updates,
@@ -943,34 +1377,34 @@ where
 }
 
 #[async_trait::async_trait(?Send)]
-pub(crate) trait UpsertErrorEmitter<G> {
+pub(crate) trait UpsertErrorEmitter<T> {
     async fn emit(&mut self, context: String, e: anyhow::Error);
 }
 
 #[async_trait::async_trait(?Send)]
-impl<G: Scope> UpsertErrorEmitter<G>
+impl<T: Timestamp> UpsertErrorEmitter<T>
     for (
         &mut AsyncOutputHandle<
-            <G as ScopeParent>::Timestamp,
+            T,
             CapacityContainerBuilder<Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
         >,
-        &Capability<<G as ScopeParent>::Timestamp>,
+        &Capability<T>,
     )
 {
     async fn emit(&mut self, context: String, e: anyhow::Error) {
-        process_upsert_state_error::<G>(context, e, self.0, self.1).await
+        process_upsert_state_error::<T>(context, e, self.0, self.1).await
     }
 }
 
 /// Emit the given error, and stall till the dataflow is restarted.
-async fn process_upsert_state_error<G: Scope>(
+async fn process_upsert_state_error<T: Timestamp>(
     context: String,
     e: anyhow::Error,
     health_output: &AsyncOutputHandle<
-        <G as ScopeParent>::Timestamp,
+        T,
         CapacityContainerBuilder<Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
     >,
-    health_cap: &Capability<<G as ScopeParent>::Timestamp>,
+    health_cap: &Capability<T>,
 ) {
     let update = HealthStatusUpdate::halting(e.context(context).to_string_with_causes(), None);
     health_output.give(health_cap, (None, update));

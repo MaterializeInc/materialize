@@ -36,17 +36,19 @@ class SmokeTest(unittest.TestCase):
                 row = cur.fetchone()
                 self.assertEqual(row, ("{a=>1,b=>2}",))
 
-            # ...but binary encoding is not.
+            # ...but binary encoding is not. As in PostgreSQL, the absence of a
+            # binary output function is reported as an undefined_function error
+            # (SQLSTATE 42883).
             with conn.cursor(binary=True) as cur:
                 with self.assertRaisesRegex(
-                    psycopg.errors.ProtocolViolation,
-                    "binary encoding of list types is not implemented",
+                    psycopg.errors.UndefinedFunction,
+                    "no binary output function available for type list",
                 ):
                     cur.execute("SELECT LIST[1, 2, 3]")
 
                 with self.assertRaisesRegex(
-                    psycopg.errors.ProtocolViolation,
-                    "binary encoding of map types is not implemented",
+                    psycopg.errors.UndefinedFunction,
+                    "no binary output function available for type map",
                 ):
                     cur.execute("SELECT '{a => 1, b => 2}'::map[text => int]")
 
@@ -75,8 +77,41 @@ class SmokeTest(unittest.TestCase):
                     row = cur.fetchone()
                     self.assertEqual(row, ([1, 2, 3],))
 
+    def test_psycopg3_pipeline_is_implicit_transaction(self) -> None:
+        """The statements of a pipeline commit or roll back as a unit (SQL-470)."""
+        with psycopg.connect(MATERIALIZED_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DROP TABLE IF EXISTS pipeline_t")
+                cur.execute("CREATE TABLE pipeline_t (a int)")
+
+            with self.assertRaises(psycopg.errors.DivisionByZero):
+                with conn.pipeline():
+                    with conn.cursor() as cur:
+                        cur.execute("INSERT INTO pipeline_t VALUES (1)")
+                        cur.execute("INSERT INTO pipeline_t VALUES (2)")
+                        cur.execute("SELECT 1 / 0")
+
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM pipeline_t")
+                self.assertEqual(cur.fetchone(), (0,))
+
+            # A pipeline that reaches its sync commits all of its writes.
+            with conn.pipeline():
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO pipeline_t VALUES (1)")
+                    cur.execute("INSERT INTO pipeline_t VALUES (2)")
+
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM pipeline_t")
+                self.assertEqual(cur.fetchone(), (2,))
+
     def test_sqlalchemy(self) -> None:
-        engine = sqlalchemy.engine.create_engine(MATERIALIZED_URL)
+        # SQLAlchemy 2.1 connects a plain postgresql:// URL through psycopg 3,
+        # whose first connect sends SAVEPOINT, which Materialize doesn't
+        # support (SQL-483). Name the psycopg2 driver explicitly.
+        engine = sqlalchemy.engine.create_engine(
+            MATERIALIZED_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+        )
         with engine.connect() as connection:
             r = connection.execute(
                 sqlalchemy.text(
@@ -103,7 +138,7 @@ class SmokeTest(unittest.TestCase):
             # Validate the first row, but ignore the timestamp column.
             row = cur.fetchone()
             if row is not None:
-                (ts, diff, a, b) = row
+                ts, diff, a, b = row
                 self.assertEqual(diff, 1)
                 self.assertEqual(a, 1)
                 self.assertEqual(b, "a")
@@ -124,7 +159,7 @@ class SmokeTest(unittest.TestCase):
             row = cur.fetchone()
             assert row is not None
 
-            (ts, diff, a, b) = row
+            ts, diff, a, b = row
             self.assertEqual(diff, 1)
             self.assertEqual(a, 2)
             self.assertEqual(b, "b")
@@ -157,7 +192,7 @@ class SmokeTest(unittest.TestCase):
                     # Validate the first row, but ignore the timestamp column.
                     row = copy.read_row()
                     assert row is not None
-                    (ts, diff, a, b) = row
+                    ts, diff, a, b = row
                     self.assertEqual(diff, 1)
                     self.assertEqual(a, 1)
                     self.assertEqual(b, "a")
@@ -174,7 +209,7 @@ class SmokeTest(unittest.TestCase):
                     # Validate the new row, again ignoring the timestamp column.
                     row = copy.read_row()
                     assert row is not None
-                    (ts, diff, a, b) = row
+                    ts, diff, a, b = row
                     self.assertEqual(diff, 1)
                     self.assertEqual(a, 2)
                     self.assertEqual(b, "b")
@@ -198,7 +233,7 @@ class SmokeTest(unittest.TestCase):
                 stream = cur.stream("SUBSCRIBE psycopg3_subscribe_stream")
 
                 # Validate the first row, but ignore the timestamp column.
-                (ts, diff, a, b) = next(stream)
+                ts, diff, a, b = next(stream)
                 self.assertEqual(diff, 1)
                 self.assertEqual(a, 1)
                 self.assertEqual(b, "a")
@@ -213,7 +248,7 @@ class SmokeTest(unittest.TestCase):
                         )
 
                 # Validate the new row, again ignoring the timestamp column.
-                (ts, diff, a, b) = next(stream)
+                ts, diff, a, b = next(stream)
                 self.assertEqual(diff, 1)
                 self.assertEqual(a, 2)
                 self.assertEqual(b, "b")
@@ -246,7 +281,7 @@ class SmokeTest(unittest.TestCase):
                     )
 
                     # Ensure we see our own subscription in `mz_subscriptions`.
-                    (_ts, diff, pid) = next(metadata)
+                    _ts, diff, pid = next(metadata)
                     self.assertEqual(int(pid), metadata_session_id)
                     self.assertEqual(diff, 1)
 
@@ -266,7 +301,7 @@ class SmokeTest(unittest.TestCase):
 
                     # Ensure we see the dummy subscription added to
                     # `mz_subscriptions`.
-                    (_ts, diff, pid) = next(metadata)
+                    _ts, diff, pid = next(metadata)
                     self.assertEqual(int(pid), subscribe_session_id)
                     self.assertEqual(diff, 1)
 
@@ -276,7 +311,7 @@ class SmokeTest(unittest.TestCase):
 
                     # Ensure we see the dummy subscription removed from
                     # `mz_subscriptions`.
-                    (_ts, diff, pid) = next(metadata)
+                    _ts, diff, pid = next(metadata)
                     self.assertEqual(int(pid), subscribe_session_id)
                     self.assertEqual(diff, -1)
 

@@ -291,11 +291,12 @@ impl Value for Duration {
     {
         let s = extract_single_value(input)?;
         let s = s.trim();
-        // Take all numeric values from [0..]
-        let split_pos = s
-            .chars()
-            .position(|p| !char::is_numeric(p))
-            .unwrap_or_else(|| s.chars().count());
+        // Find where the leading run of ASCII digits ends. `str::find` returns a
+        // byte index, so it is safe to slice with directly. We restrict to ASCII
+        // digits (rather than `char::is_numeric`) because that is exactly what
+        // `u64::parse` accepts; matching broader Unicode numerics such as '²'
+        // would yield a byte offset that can land mid-character and panic.
+        let split_pos = s.find(|p: char| !p.is_ascii_digit()).unwrap_or(s.len());
 
         // Error if the numeric values don't parse, i.e. there aren't any.
         let d = s[..split_pos]
@@ -314,7 +315,7 @@ impl Value for Duration {
             o => {
                 return Err(VarParseError::InvalidParameterValue {
                     invalid_values: vec![o.to_string()],
-                    reason: "expected us, ms, s, min, h, or d but got {o:?}".to_string(),
+                    reason: format!("expected us, ms, s, min, h, or d but got {o:?}"),
                 });
             }
         };
@@ -466,6 +467,18 @@ impl Value for Vec<Ident> {
             // element. This matches PostgreSQL.
             VarInput::SqlSet(values) => values,
         };
+        // An empty identifier formats as `""`, which the `Flat` path rejects
+        // when the durable catalog re-parses it. A lone `''` means the empty
+        // list instead.
+        if values.iter().any(|v| v.is_empty()) {
+            if values.len() == 1 {
+                return Ok(vec![]);
+            }
+            return Err(VarParseError::InvalidParameterValue {
+                invalid_values: values.to_vec(),
+                reason: "empty identifier".into(),
+            });
+        }
         let values = values
             .iter()
             .map(Ident::new)
@@ -906,35 +919,67 @@ pub enum IsolationLevel {
      */
     StrongSessionSerializable,
     StrictSerializable,
+    /// Bounded staleness — pick `T` such that `T >= now_ms - D` and the
+    /// query does not wait on input frontiers. Errors if no such `T` exists
+    /// in the no-wait window. See
+    /// `doc/developer/design/20260429_bounded_staleness_isolation.md`.
+    BoundedStaleness(std::time::Duration),
 }
 
 impl IsolationLevel {
-    pub fn as_str(&self) -> &'static str {
+    const READ_UNCOMMITTED: &'static str = "read uncommitted";
+    const READ_COMMITTED: &'static str = "read committed";
+    const REPEATABLE_READ: &'static str = "repeatable read";
+    const SERIALIZABLE: &'static str = "serializable";
+    const STRONG_SESSION_SERIALIZABLE: &'static str = "strong session serializable";
+    const STRICT_SERIALIZABLE: &'static str = "strict serializable";
+    const BOUNDED_STALENESS: &'static str = "bounded staleness";
+    const BOUNDED_STALENESS_HINT: &'static str = "bounded staleness <duration>";
+
+    /// Returns true if the isolation level is of bounded staleness.
+    pub fn is_bounded_staleness(&self) -> bool {
+        matches!(self, Self::BoundedStaleness(_))
+    }
+
+    /// Unit-cardinality variant identifier, suitable for Prometheus labels and
+    /// equality checks against parsed input. The duration on `BoundedStaleness`
+    /// is omitted; use [`fmt::Display`] for the user-facing rendering.
+    pub fn as_variant_str(&self) -> &'static str {
         match self {
-            Self::ReadUncommitted => "read uncommitted",
-            Self::ReadCommitted => "read committed",
-            Self::RepeatableRead => "repeatable read",
-            Self::Serializable => "serializable",
-            Self::StrongSessionSerializable => "strong session serializable",
-            Self::StrictSerializable => "strict serializable",
+            Self::ReadUncommitted => Self::READ_UNCOMMITTED,
+            Self::ReadCommitted => Self::READ_COMMITTED,
+            Self::RepeatableRead => Self::REPEATABLE_READ,
+            Self::Serializable => Self::SERIALIZABLE,
+            Self::StrongSessionSerializable => Self::STRONG_SESSION_SERIALIZABLE,
+            Self::StrictSerializable => Self::STRICT_SERIALIZABLE,
+            Self::BoundedStaleness(_) => Self::BOUNDED_STALENESS,
         }
     }
 
     fn valid_values() -> Vec<&'static str> {
         vec![
-            Self::ReadUncommitted.as_str(),
-            Self::ReadCommitted.as_str(),
-            Self::RepeatableRead.as_str(),
-            Self::Serializable.as_str(),
-            // TODO(jkosh44) Add StrongSessionSerializable when it becomes available to users.
-            Self::StrictSerializable.as_str(),
+            Self::READ_UNCOMMITTED,
+            Self::READ_COMMITTED,
+            Self::REPEATABLE_READ,
+            Self::SERIALIZABLE,
+            // TODO(jkosh44) Add STRONG_SESSION_SERIALIZABLE when it becomes available to users.
+            Self::STRICT_SERIALIZABLE,
+            Self::BOUNDED_STALENESS_HINT,
         ]
     }
 }
 
 impl fmt::Display for IsolationLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        match self {
+            Self::BoundedStaleness(d) => write!(
+                f,
+                "{} {}",
+                Self::BOUNDED_STALENESS,
+                humantime::format_duration(*d)
+            ),
+            other => f.write_str(other.as_variant_str()),
+        }
     }
 }
 
@@ -950,26 +995,46 @@ impl Value for IsolationLevel {
     where
         Self: Sized,
     {
-        let s = extract_single_value(input)?;
-        let s = UncasedStr::new(s);
+        let invalid = || VarParseError::ConstrainedParameter {
+            invalid_values: input.to_vec(),
+            valid_values: Some(IsolationLevel::valid_values()),
+        };
 
-        // We don't have any optimizations for levels below Serializable,
-        // so we upgrade them all to Serializable.
-        if s == Self::ReadUncommitted.as_str()
-            || s == Self::ReadCommitted.as_str()
-            || s == Self::RepeatableRead.as_str()
-            || s == Self::Serializable.as_str()
-        {
-            Ok(Self::Serializable)
-        } else if s == Self::StrongSessionSerializable.as_str() {
-            Ok(Self::StrongSessionSerializable)
-        } else if s == Self::StrictSerializable.as_str() {
-            Ok(Self::StrictSerializable)
-        } else {
-            Err(VarParseError::ConstrainedParameter {
-                invalid_values: input.to_vec(),
-                valid_values: Some(IsolationLevel::valid_values()),
-            })
+        let s = extract_single_value(input)?;
+        let lower = s.to_ascii_lowercase();
+        let lower = lower.trim();
+
+        match lower {
+            // Weak isolations all upgrade to Serializable.
+            Self::READ_UNCOMMITTED
+            | Self::READ_COMMITTED
+            | Self::REPEATABLE_READ
+            | Self::SERIALIZABLE => Ok(Self::Serializable),
+            Self::STRONG_SESSION_SERIALIZABLE => Ok(Self::StrongSessionSerializable),
+            Self::STRICT_SERIALIZABLE => Ok(Self::StrictSerializable),
+            other => {
+                let rest = other
+                    .strip_prefix(Self::BOUNDED_STALENESS)
+                    .ok_or_else(invalid)?;
+                // Require whitespace between the keyword and the duration, so
+                // e.g. `bounded staleness5s` is rejected.
+                if !rest.starts_with(char::is_whitespace) {
+                    return Err(invalid());
+                }
+                let rest = rest.trim();
+                if rest.is_empty() {
+                    return Err(invalid());
+                }
+                let d = humantime::parse_duration(rest).map_err(|_| invalid())?;
+                // Reject anything below 1ms: downstream we truncate to whole
+                // milliseconds, so e.g. `999us` would silently behave like
+                // `0ms` and degenerate to "no staleness allowed", which is
+                // exactly the case the zero-rejection meant to forbid.
+                if d < std::time::Duration::from_millis(1) {
+                    return Err(invalid());
+                }
+                Ok(Self::BoundedStaleness(d))
+            }
         }
     }
 
@@ -978,7 +1043,7 @@ impl Value for IsolationLevel {
     }
 
     fn format(&self) -> String {
-        self.as_str().into()
+        self.to_string()
     }
 }
 
@@ -1240,6 +1305,40 @@ mod tests {
         errs("x");
         errs("s");
         errs("18446744073709551615 min");
+        // Unicode numerics such as '²' (U+00B2) are multi-byte and must not be
+        // treated as parseable digits: their char index differs from their byte
+        // offset, so slicing on them would land mid-character and panic.
+        errs("²");
+        errs("1²ms");
+        errs("½");
+        errs("１ms");
+    }
+
+    #[mz_ore::test]
+    fn test_value_ident_list() {
+        fn sql_set(values: &[&str]) -> Result<Vec<Ident>, VarParseError> {
+            let values: Vec<String> = values.iter().map(|v| v.to_string()).collect();
+            Vec::<Ident>::parse(VarInput::SqlSet(&values))
+        }
+        fn flat(value: &str) -> Result<Vec<Ident>, VarParseError> {
+            Vec::<Ident>::parse(VarInput::Flat(value))
+        }
+
+        // The durable catalog stores `format()` and re-parses it with `Flat`.
+        for input in [&[""][..], &["a", "b"], &["A b", "c\"d"]] {
+            let parsed = sql_set(input).expect("valid input");
+            let formatted = parsed.format();
+            assert_eq!(
+                flat(&formatted).ok(),
+                Some(parsed),
+                "{input:?} does not round-trip through {formatted:?}"
+            );
+        }
+
+        assert_eq!(sql_set(&[""]).ok(), Some(vec![]));
+        assert_eq!(flat("''").ok(), Some(vec![]));
+        assert_err!(sql_set(&["a", ""]));
+        assert_err!(flat("a, ''"));
     }
 
     #[mz_ore::test]
@@ -1277,5 +1376,89 @@ mod tests {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod bounded_staleness_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn parse_iso(s: &str) -> Result<IsolationLevel, VarParseError> {
+        IsolationLevel::parse(VarInput::Flat(s))
+    }
+
+    #[mz_ore::test]
+    fn parses_bounded_staleness() {
+        assert_eq!(
+            parse_iso("bounded staleness 5s").unwrap(),
+            IsolationLevel::BoundedStaleness(Duration::from_secs(5))
+        );
+        assert_eq!(
+            parse_iso("bounded staleness 500ms").unwrap(),
+            IsolationLevel::BoundedStaleness(Duration::from_millis(500))
+        );
+        // Upper-case input normalises.
+        assert_eq!(
+            parse_iso("BOUNDED STALENESS 5s").unwrap(),
+            IsolationLevel::BoundedStaleness(Duration::from_secs(5))
+        );
+        // Leading/trailing whitespace tolerated.
+        assert_eq!(
+            parse_iso("  bounded staleness 5s  ").unwrap(),
+            IsolationLevel::BoundedStaleness(Duration::from_secs(5))
+        );
+    }
+
+    #[mz_ore::test]
+    fn rejects_zero_duration() {
+        assert!(parse_iso("bounded staleness 0s").is_err());
+        assert!(parse_iso("bounded staleness 0ms").is_err());
+    }
+
+    #[mz_ore::test]
+    fn rejects_sub_millisecond_duration() {
+        // Truncated to 0ms downstream; treated as the same degenerate case as
+        // a literal zero.
+        assert!(parse_iso("bounded staleness 1us").is_err());
+        assert!(parse_iso("bounded staleness 999us").is_err());
+        assert!(parse_iso("bounded staleness 999ns").is_err());
+    }
+
+    #[mz_ore::test]
+    fn parses_multi_component_duration() {
+        // `1m30s` round-trips through humantime which formats as `1m 30s`,
+        // so the parser must accept the space-separated form.
+        let lvl = parse_iso("bounded staleness 1m30s").unwrap();
+        assert_eq!(
+            lvl,
+            IsolationLevel::BoundedStaleness(Duration::from_secs(90))
+        );
+        let formatted = lvl.format();
+        assert_eq!(parse_iso(&formatted).unwrap(), lvl);
+    }
+
+    #[mz_ore::test]
+    fn rejects_unparseable_duration() {
+        assert!(parse_iso("bounded staleness banana").is_err());
+        assert!(parse_iso("bounded staleness").is_err());
+        // Whitespace between the keyword and the duration is required.
+        assert!(parse_iso("bounded staleness5s").is_err());
+    }
+
+    #[mz_ore::test]
+    fn round_trips_format() {
+        let lvl = IsolationLevel::BoundedStaleness(Duration::from_secs(5));
+        assert_eq!(lvl.format(), "bounded staleness 5s");
+        let parsed = parse_iso(&lvl.format()).unwrap();
+        assert_eq!(parsed, lvl);
+    }
+
+    #[mz_ore::test]
+    fn accepts_long_durations() {
+        // No upper cap; a multi-hour bound is a perfectly valid (if loose)
+        // staleness contract.
+        assert!(parse_iso("bounded staleness 1h").is_ok());
+        assert!(parse_iso("bounded staleness 24h").is_ok());
     }
 }

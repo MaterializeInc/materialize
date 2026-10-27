@@ -10,14 +10,10 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-itertools = "0.14.0"
+anyhow.workspace = true
+itertools.workspace = true
 mz-metabase = { path = "../../../src/metabase" }
 mz-ore = { path = "../../../src/ore", features = ["network", "async", "test"] }
-tokio = { version = "1.48.0", features = ["macros"] }
-tokio-postgres = { version = "0.7.15" }
-tracing = "0.1.43"
-workspace-hack = { version = "0.0.0", path = "../../../src/workspace-hack" }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+tokio.workspace = true
+tokio-postgres.workspace = true
+tracing.workspace = true

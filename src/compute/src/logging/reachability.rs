@@ -18,6 +18,7 @@ use columnar::Index;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, Timestamp};
+use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
@@ -29,8 +30,8 @@ use timely::dataflow::operators::generic::operator::empty;
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog, consolidate_and_pack};
-use crate::row_spine::RowRowBuilder;
 use crate::typedefs::RowRowSpine;
+use mz_row_spine::RowRowBuilder;
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -44,8 +45,8 @@ pub(super) struct Return {
 /// * `scope`: The Timely scope hosting the log analysis dataflow.
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
-pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
+pub(super) fn construct(
+    scope: Scope<'_, Timestamp>,
     config: &LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>, 3>,
 ) -> Return {
@@ -66,28 +67,44 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
             (empty(scope), token)
         };
-        let logs = logs.unary::<CB, _, _, _>(Pipeline, "FlatMapReachability", move |_,_| move |input, output| {
-            input.for_each_time(|time, data| {
-                output.session_with_builder(&time)
-                    .give_iterator(data.flat_map(|d|
-                        d.borrow().into_index_iter().flat_map(move |(time, (operator_id, massaged))| {
-                            let time_ms = ((time.as_millis() / interval_ms) + 1) * interval_ms;
-                            let time_ms: Timestamp = time_ms.try_into().expect("must fit");
-                            massaged.into_iter().map(move |(source, port, update_type, ts, diff)| {
-                                let datum = (update_type, operator_id, source, port, ts);
-                                ((datum, ()), time_ms, diff)
-                            })
-                        }
-                    )));
-            });
+        let logs = logs.unary::<CB, _, _, _>(Pipeline, "FlatMapReachability", move |_, _| {
+            move |input, output| {
+                input.for_each_time(|time, data| {
+                    output
+                        .session_with_builder(&time)
+                        .give_iterator(data.flat_map(|d| {
+                            d.borrow().into_index_iter().flat_map(
+                                move |(time, (operator_id, massaged))| {
+                                    let time_ms =
+                                        ((time.as_millis() / interval_ms) + 1) * interval_ms;
+                                    let time_ms: Timestamp = time_ms.try_into().expect("must fit");
+                                    massaged.into_iter().map(
+                                        move |(source, port, update_type, ts, diff)| {
+                                            let datum =
+                                                (update_type, operator_id, source, port, ts);
+                                            ((datum, ()), time_ms, diff)
+                                        },
+                                    )
+                                },
+                            )
+                        }));
+                });
+            }
         });
 
         // Restrict results by those logs that are meant to be active.
         let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
         let worker_id = scope.index();
 
-        let updates = consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
-            &logs,
+        let updates = consolidate_and_pack::<
+            batcher::Chunker<_>,
+            Col2ValBatcher<UpdatesKey, _, _, _>,
+            ColumnBuilder<_>,
+            _,
+            _,
+            _,
+        >(
+            logs,
             TimelyLog::Reachability,
             move |data, packer, session| {
                 for ((datum, ()), time, diff) in data.iter() {
@@ -103,17 +120,24 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                     ]);
                     session.give((data, time, diff));
                 }
-            }
+            },
         );
 
         let mut result = BTreeMap::new();
         for variant in logs_active {
             if config.index_logs.contains_key(&variant) {
+                let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                    columnar_exchange::<Row, Row, Timestamp, Diff>,
+                );
                 let trace = updates
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
-                        &format!("Arrange {variant:?}"),
-                    )
+                    .clone()
+                    .mz_arrange_core::<
+                        _,
+                        batcher::Chunker<_>,
+                        Col2ValBatcher<_, _, _, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {
                     trace,

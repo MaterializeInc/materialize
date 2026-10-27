@@ -44,6 +44,7 @@ mod coord;
 mod error;
 mod explain;
 mod frontend_peek;
+mod frontend_read_then_write;
 mod notice;
 mod optimize;
 mod util;
@@ -51,7 +52,6 @@ mod util;
 pub mod catalog;
 pub mod client;
 pub mod config;
-pub mod continual_task;
 pub mod flags;
 pub mod metrics;
 pub mod peek_client;
@@ -63,7 +63,9 @@ pub mod webhook;
 pub use crate::peek_client::PeekClient;
 
 pub use crate::client::{Client, Handle, SessionClient};
-pub use crate::command::{ExecuteResponse, ExecuteResponseKind, StartupResponse};
+pub use crate::command::{
+    CopyFromStdinWriter, ExecuteResponse, ExecuteResponseKind, StartupResponse,
+};
 pub use crate::coord::ExecuteContext;
 pub use crate::coord::ExecuteContextExtra;
 pub use crate::coord::ExecuteContextGuard;
@@ -74,8 +76,8 @@ pub use crate::coord::timeline::TimelineContext;
 pub use crate::coord::timestamp_selection::{
     TimestampContext, TimestampExplanation, TimestampProvider,
 };
-pub use crate::coord::{Config, load_remote_system_parameters, serve};
-pub use crate::error::AdapterError;
+pub use crate::coord::{Config, RemoteSystemParameters, load_remote_system_parameters, serve};
+pub use crate::error::{AdapterError, AuthenticationError};
 pub use crate::notice::AdapterNotice;
 pub use crate::util::{ResultExt, verify_datum_desc};
 pub use crate::webhook::{

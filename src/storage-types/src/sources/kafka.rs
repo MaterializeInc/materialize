@@ -119,6 +119,11 @@ impl<C: ConnectionAccess> KafkaSourceConnection<C> {
     ///
     /// The caller is responsible for providing the source ID as it is not known
     /// to `KafkaSourceConnection`.
+    ///
+    /// NOTE: the `mz_catalog.mz_kafka_sources` builtin materialized view
+    /// reconstructs this value in SQL (user prefix concatenated with
+    /// `KafkaConnection::id_base`). Keep the two in sync. See the note on
+    /// `id_base` and the parity check in `test/testdrive/kafka-commit.td`.
     pub fn group_id(&self, connection_context: &ConnectionContext, source_id: GlobalId) -> String {
         format!(
             "{}{}",
@@ -353,7 +358,18 @@ impl crate::AlterCompatible for KafkaSourceExportDetails {
 /// value, exactly *at* that value, and right *after* that value. Additionally, it provides two
 /// special values for positive and negative infinity that are greater than and less than all the
 /// other elements respectively.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum RangeBound<P> {
     /// Negative infinity.
     NegInfinity,
@@ -363,7 +379,18 @@ pub enum RangeBound<P> {
     PosInfinity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum BoundKind {
     /// A bound right before a value. When used as an upper it represents an exclusive range.
     Before,

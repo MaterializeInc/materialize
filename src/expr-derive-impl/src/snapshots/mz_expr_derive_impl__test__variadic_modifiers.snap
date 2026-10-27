@@ -1,0 +1,83 @@
+---
+source: src/expr-derive-impl/src/test.rs
+expression: "#[sqlfunc(MaxDatum, could_error = false, is_monotone = true)]\nfn max_datum<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {\n    datums.into_iter().max().unwrap_or(Datum::Null)\n}\n"
+---
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
+pub struct MaxDatum;
+impl crate::func::variadic::EagerVariadicFunc for MaxDatum {
+    type Input<'a> = Variadic<Datum<'a>>;
+    type Output<'a> = Datum<'a>;
+    fn call<'a>(
+        &self,
+        datums: Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
+        max_datum(datums)
+    }
+    fn output_type(
+        &self,
+        input_types: &[mz_repr::SqlColumnType],
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::variadic::EagerVariadicFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        let non_nullable_input_is_nullable = false;
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
+        output.nullable(is_null)
+    }
+    fn could_error(&self) -> bool {
+        false
+    }
+    fn is_monotone(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for MaxDatum {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(stringify!(max_datum))
+    }
+}
+impl crate::func::FuncName for MaxDatum {
+    const NAME: &'static str = stringify!(max_datum);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(MaxDatum, could_error = false, is_monotone = true,)] fn max_datum<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a>",
+        signature: "fn(Variadic<Datum<'a>>) -> Datum<'a>",
+        body_fingerprint: 12432331865766881162u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                Datum<'static>,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
+}
+fn max_datum<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
+    datums.into_iter().max().unwrap_or(Datum::Null)
+}

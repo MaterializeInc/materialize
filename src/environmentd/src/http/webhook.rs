@@ -17,14 +17,18 @@ use mz_ore::cast::CastFrom;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::{Datum, Diff, Row, RowPacker, SqlScalarType, Timestamp};
+use mz_repr::{Datum, Diff, Row, RowPacker, SqlScalarType};
 use mz_sql::plan::{WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders};
 use mz_storage_types::controller::StorageError;
 
+use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use bytes::Bytes;
 use http::StatusCode;
+use mz_adapter_types::dyncfgs::{
+    WEBHOOK_MAX_REQUEST_SIZE_BYTES, WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES,
+};
 use thiserror::Error;
 
 use crate::http::WebhookState;
@@ -33,11 +37,33 @@ pub async fn handle_webhook(
     State(WebhookState {
         adapter_client_rx,
         webhook_cache,
+        dyncfgs,
     }): State<WebhookState>,
     Path((database, schema, name)): Path<(String, String, String)>,
     headers: http::HeaderMap,
-    body: Bytes,
+    body: Body,
 ) -> impl IntoResponse {
+    let max_request_size = WEBHOOK_MAX_REQUEST_SIZE_BYTES.get(&dyncfgs);
+    let validation_memory_budget = WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES.get(&dyncfgs);
+    let body = axum::body::to_bytes(body, max_request_size)
+        .await
+        .map_err(|err| {
+            use std::error::Error;
+            // axum::Error wraps the underlying cause as its source. If that source is a
+            // LengthLimitError the body exceeded the configured limit (HTTP 413). Any other
+            // cause (TCP reset, decompression failure, etc.) is an internal read error (HTTP 500)
+            // and must not be reported as a size-limit violation.
+            if err
+                .source()
+                .is_some_and(|s| s.is::<http_body_util::LengthLimitError>())
+            {
+                WebhookError::BodyTooLarge {
+                    max_bytes: max_request_size,
+                }
+            } else {
+                WebhookError::Internal(anyhow::anyhow!(err))
+            }
+        })?;
     let adapter_client = adapter_client_rx.clone().await.expect("sender not dropped");
     // Collect headers into a map, while converting them into strings.
     let mut headers_s = BTreeMap::new();
@@ -65,6 +91,7 @@ pub async fn handle_webhook(
                 &name,
                 &body,
                 &headers,
+                validation_memory_budget,
             )
             .await;
 
@@ -91,6 +118,7 @@ async fn append_webhook(
     name: &str,
     body: &Bytes,
     headers: &Arc<BTreeMap<String, String>>,
+    validation_memory_budget: usize,
 ) -> Result<(), AppendWebhookError> {
     // Shenanigans to get the types working for the async retry.
     let (database, schema, name) = (database.to_string(), schema.to_string(), name.to_string());
@@ -141,7 +169,12 @@ async fn append_webhook(
     // If this source requires validation, then validate!
     if let Some(validator) = validator {
         let valid = validator
-            .eval(Bytes::clone(body), Arc::clone(headers), received_at)
+            .eval(
+                Bytes::clone(body),
+                Arc::clone(headers),
+                received_at,
+                validation_memory_budget,
+            )
             .await?;
         if !valid {
             return Err(AppendWebhookError::ValidationFailed);
@@ -311,6 +344,9 @@ impl BodyRow {
 /// errors also generally need to map to HTTP status codes that we can use to respond to a webhook
 /// request. As such, webhook errors don't cleanly map to any existing error type, hence the
 /// existence of this error type.
+///
+/// Note: 429 Too Many Requests is handled at the HTTP layer via Tower's
+/// `GlobalConcurrencyLimitLayer`, not through these error variants.
 #[derive(Error, Debug)]
 pub enum WebhookError {
     #[error("no object was found at the path {}", .0.quoted())]
@@ -328,7 +364,9 @@ pub enum WebhookError {
     #[error("service unavailable")]
     Unavailable,
     #[error("internal storage failure! {0:?}")]
-    InternalStorageError(StorageError<Timestamp>),
+    InternalStorageError(StorageError),
+    #[error("request body exceeds the maximum allowed size of {max_bytes} bytes")]
+    BodyTooLarge { max_bytes: usize },
     #[error("internal failure! {0:?}")]
     Internal(#[from] anyhow::Error),
 }
@@ -384,11 +422,11 @@ impl IntoResponse for WebhookError {
             e @ WebhookError::InvalidHeaders(_) => {
                 (StatusCode::UNAUTHORIZED, e.to_string()).into_response()
             }
+            e @ WebhookError::BodyTooLarge { .. } => {
+                (StatusCode::PAYLOAD_TOO_LARGE, e.to_string()).into_response()
+            }
             e @ WebhookError::Unavailable => {
                 (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
-            }
-            e @ WebhookError::InternalStorageError(StorageError::ResourceExhausted(_)) => {
-                (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response()
             }
             e @ WebhookError::InternalStorageError(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
@@ -452,14 +490,7 @@ mod tests {
 
     #[mz_ore::test]
     fn smoke_test_storage_error_response_status() {
-        // Resource exhausted should get mapped to a specific status code.
-        let resp = WebhookError::from(AppendWebhookError::StorageError(
-            StorageError::ResourceExhausted("test"),
-        ))
-        .into_response();
-        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
-
-        // IdentifierMissing should also get mapped to a specific status code.
+        // IdentifierMissing should get mapped to a specific status code.
         let resp = WebhookError::from(AppendWebhookError::StorageError(
             StorageError::IdentifierMissing(GlobalId::User(42)),
         ))

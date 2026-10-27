@@ -9,7 +9,7 @@
 
 # Build and run SQLancer ported for Materialize
 
-MZFROM ubuntu-base
+MZFROM debian-base
 
 WORKDIR /workdir
 
@@ -22,10 +22,18 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
-# Build SQLancer
-RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
+# TODO: Put this back when merged: https://github.com/sqlancer/sqlancer/pull/1307 & DQP
+# ggevay: But in the meantime there have been more changes to our fork, see the `main` branch there.
+RUN git clone https://github.com/MaterializeInc/sqlancer \
     && cd sqlancer \
+    && git checkout 4e116a5bb6c57ac46c2df5f68dd35c3534fcc3f4 \
     && rm -rf .git \
     && mvn package -DskipTests
+# RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
+#     && cd sqlancer \
+#     && rm -rf .git \
+#     && mvn package -DskipTests
 
-ENTRYPOINT ["/usr/bin/eatmydata", "/usr/bin/java", "-jar", "sqlancer/target/sqlancer-2.0.0.jar"]
+WORKDIR /workdir/sqlancer
+
+ENTRYPOINT ["/usr/bin/eatmydata", "/usr/bin/java", "-Xmx16g", "-jar", "target/sqlancer-2.0.0.jar"]

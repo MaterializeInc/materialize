@@ -17,16 +17,37 @@ use std::time::Duration;
 pub struct ComputeReplicaConfig {
     /// TODO(database-issues#7533): Add documentation.
     pub logging: ComputeReplicaLogging,
+    /// Whether arrangements on this replica request dictionary compression.
+    ///
+    /// This carries the configured value. Whether the replica honors it is
+    /// gated at replica creation by the `enable_arrangement_dictionary_compression_alpha`
+    /// feature flag.
+    pub arrangement_compression: bool,
 }
 
 /// Logging configuration of a replica.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize
+)]
 pub struct ComputeReplicaLogging {
     /// Whether to enable logging for the logging dataflows.
     pub log_logging: bool,
     /// The interval at which to log.
     ///
     /// A `None` value indicates that logging is disabled.
+    ///
+    /// NOTE: 0dt cutovers measure their stability period from the replica's
+    /// hydration log (see `mz_adapter::coord::caught_up`). With logging
+    /// disabled they still wait for hydration, but not for the period, so a
+    /// crash-looping replica can pass.
     pub interval: Option<Duration>,
 }
 

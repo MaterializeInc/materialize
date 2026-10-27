@@ -8,6 +8,8 @@
 // by the Apach
 
 use mz_catalog::memory::objects::{Cluster, ClusterReplica};
+use mz_ore::sql;
+use mz_ore::sql::Sql;
 
 use super::sql::SqlRequest;
 
@@ -15,7 +17,7 @@ use super::sql::SqlRequest;
 pub(crate) struct PrometheusSqlQuery<'a> {
     pub(crate) metric_name: &'a str,
     pub(crate) help: &'a str,
-    pub(crate) query: &'a str,
+    pub(crate) query: &'static str,
     pub(crate) value_column_name: &'a str,
     pub(crate) per_replica: bool,
 }
@@ -25,19 +27,21 @@ impl<'a> PrometheusSqlQuery<'a> {
         &self,
         cluster: Option<(&Cluster, &ClusterReplica)>,
     ) -> SqlRequest {
-        SqlRequest::Simple {
-            query: if let Some((cluster, replica)) = cluster {
-                format!(
-                    "SET auto_route_catalog_queries = false; SET CLUSTER = '{}'; SET CLUSTER_REPLICA = '{}'; {}",
-                    cluster.name, replica.name, self.query
-                )
-            } else {
-                format!(
-                    "SET auto_route_catalog_queries = true; RESET CLUSTER; RESET CLUSTER_REPLICA; {}",
-                    self.query
-                )
-            },
-        }
+        let query = Sql::new(self.query);
+        let query = if let Some((cluster, replica)) = cluster {
+            sql!(
+                "SET auto_route_catalog_queries = false; SET CLUSTER = {}; SET CLUSTER_REPLICA = {}; {}",
+                Sql::literal(&cluster.name),
+                Sql::literal(&replica.name),
+                query
+            )
+        } else {
+            sql!(
+                "SET auto_route_catalog_queries = true; RESET CLUSTER; RESET CLUSTER_REPLICA; {}",
+                query
+            )
+        };
+        SqlRequest::Simple { query }
     }
 }
 
@@ -129,27 +133,6 @@ pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         per_replica: false,
     },
     PrometheusSqlQuery {
-        metric_name: "mz_clusters_count",
-        help: "Number of active clusters in the instance.",
-        query: "select
-                count(id) as clusters
-            from mz_clusters
-            where id like 'u%'",
-        value_column_name: "clusters",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_cluster_reps_count",
-        help: "Number of active cluster replicas in the instance, by replica size.",
-        query: "select size
-                , count(id) as replicas
-            from mz_cluster_replicas
-            where cluster_id like 'u%'
-            group by size",
-        value_column_name: "replicas",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
         metric_name: "mz_indexes_count",
         help: "Number of active indexes in the instance, by the type of relation on which the index is built.",
         query: "select
@@ -169,7 +152,7 @@ pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         query: "SELECT
                 type,
                 COALESCE(envelope_type, '<none>') AS envelope_type,
-                mz_cluster_replicas.size AS size,
+                COALESCE(mz_cluster_replicas.size, '') AS size,
                 count(mz_sources.id) AS sources
             FROM
                 mz_sources, mz_cluster_replicas
@@ -182,33 +165,12 @@ pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         per_replica: false,
     },
     PrometheusSqlQuery {
-        metric_name: "mz_views_count",
-        help: "Number of active views in the instance.",
-        query: "select count(id) as views from mz_views where id like 'u%'",
-        value_column_name: "views",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_mzd_views_count",
-        help: "Number of active materialized views in the instance.",
-        query: "select count(id) as mzd_views from mz_materialized_views where id like 'u%'",
-        value_column_name: "mzd_views",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_secrets_count",
-        help: "Number of active secrets in the instance.",
-        query: "select count(id) as secrets from mz_secrets where id like 'u%'",
-        value_column_name: "secrets",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
         metric_name: "mz_sinks_count",
         help: "Number of active sinks in the instance, by type, envelope type, and size.",
         query: "SELECT
                 type,
                 COALESCE(envelope_type, '<none>') AS envelope_type,
-                mz_cluster_replicas.size AS size,
+                COALESCE(mz_cluster_replicas.size, '') AS size,
                 count(mz_sinks.id) AS sinks
             FROM
                 mz_sinks, mz_cluster_replicas
@@ -230,40 +192,6 @@ pub(crate) static USAGE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         value_column_name: "connections",
         per_replica: false,
     },
-    PrometheusSqlQuery {
-        metric_name: "mz_tables_count",
-        help: "Number of active tables in the instance.",
-        query: "select count(id) as tables from mz_tables where id like 'u%'",
-        value_column_name: "tables",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_catalog_items",
-        help: "Mapping internal id for catalog item.",
-        query: "SELECT
-                concat(d.name, '.', s.name, '.', o.name) AS label,
-                0 AS value
-            FROM mz_objects o
-            JOIN mz_schemas s ON (o.schema_id = s.id)
-            JOIN mz_databases d ON (s.database_id = d.id)
-            WHERE o.id LIKE 'u%'",
-        value_column_name: "value",
-        per_replica: false,
-    },
-    PrometheusSqlQuery {
-        metric_name: "mz_object_id",
-        help: "Mapping external name for catalog item.",
-        query: "SELECT
-                o.id AS label1,
-                concat(d.name, '.', s.name, '.', o.name) AS label2,
-                0 AS value
-            FROM mz_objects o
-            JOIN mz_schemas s ON (o.schema_id = s.id)
-            JOIN mz_databases d ON (s.database_id = d.id)
-            WHERE o.id LIKE 'u%'",
-        value_column_name: "value",
-        per_replica: false,
-    },
 ];
 
 pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
@@ -278,7 +206,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
             collections AS (
                 SELECT
                     id,
-                    regexp_replace(export_id, '^t.+', 'transient') as export_id
+                    CASE
+                        WHEN starts_with(export_id, 't') THEN 'transient'
+                        ELSE export_id
+                    END AS export_id
                 FROM
                     mz_internal.mz_dataflow_addresses,
                     mz_internal.mz_compute_exports
@@ -300,7 +231,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
             collections AS (
                 SELECT
                     id,
-                    regexp_replace(export_id, '^t.+', 'transient') as export_id
+                    CASE
+                        WHEN starts_with(export_id, 't') THEN 'transient'
+                        ELSE export_id
+                    END AS export_id
                 FROM
                     mz_internal.mz_dataflow_addresses,
                     mz_internal.mz_compute_exports
@@ -323,7 +257,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
             collections AS (
                 SELECT
                     id,
-                    regexp_replace(export_id, '^t.+', 'transient') as export_id
+                    CASE
+                        WHEN starts_with(export_id, 't') THEN 'transient'
+                        ELSE export_id
+                    END AS export_id
                 FROM
                     mz_internal.mz_dataflow_addresses,
                     mz_internal.mz_compute_exports
@@ -346,7 +283,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
             collections AS (
                 SELECT
                     id,
-                    regexp_replace(export_id, '^t.+', 'transient') as export_id
+                    CASE
+                        WHEN starts_with(export_id, 't') THEN 'transient'
+                        ELSE export_id
+                    END AS export_id
                 FROM
                     mz_internal.mz_dataflow_addresses,
                     mz_internal.mz_compute_exports
@@ -409,7 +349,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         help: "The total time spent computing a dataflow.",
         query: "SELECT
             worker_id,
-            regexp_replace(export_id, '^t.+', 'transient') AS collection_id,
+            CASE
+                WHEN starts_with(export_id, 't') THEN 'transient'
+                ELSE export_id
+            END AS collection_id,
             sum(elapsed_ns)::float8 / 1000000000 AS elapsed_s
         FROM
             mz_internal.mz_scheduling_elapsed_per_worker AS s,
@@ -429,7 +372,10 @@ pub(crate) static COMPUTE_METRIC_QUERIES: &[PrometheusSqlQuery] = &[
         metric_name: "mz_dataflow_error_count",
         help: "The number of errors in a dataflow",
         query: "SELECT
-            regexp_replace(export_id, '^t.+', 'transient') AS collection_id,
+            CASE
+                WHEN starts_with(export_id, 't') THEN 'transient'
+                ELSE export_id
+            END AS collection_id,
             count::uint8 as count
         FROM mz_internal.mz_compute_error_counts",
         value_column_name: "count",

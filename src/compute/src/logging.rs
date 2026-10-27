@@ -12,21 +12,24 @@
 pub mod compute;
 mod differential;
 pub(super) mod initialize;
+mod prometheus;
 mod reachability;
+mod resource_usage;
 mod timely;
 
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use ::timely::container::CapacityContainerBuilder;
-use ::timely::dataflow::StreamCore;
+use ::prometheus::IntCounter;
+use ::timely::container::{CapacityContainerBuilder, PushInto};
+use ::timely::dataflow::Stream;
 use ::timely::dataflow::channels::pact::Pipeline;
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
 use ::timely::dataflow::operators::generic::Session;
-use ::timely::dataflow::operators::{InputCapability, Operator};
+use ::timely::dataflow::operators::{Capability, CapabilityTrait, InputCapability, Operator};
 use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
 use ::timely::{Container, ContainerBuilder};
@@ -68,6 +71,8 @@ where
     /// This means we should be able to perform the same action on timestamp capabilities, and only
     /// flush buffers when this timestamp advances.
     interval_ms: u128,
+    /// Counts the records of published batches.
+    records_total: IntCounter,
     _marker: PhantomData<C>,
 }
 
@@ -76,11 +81,12 @@ where
     P: EventPusher<Timestamp, C>,
 {
     /// Creates a new batch logger.
-    fn new(event_pusher: P, interval_ms: u128) -> Self {
+    fn new(event_pusher: P, interval_ms: u128, records_total: IntCounter) -> Self {
         BatchLogger {
             time_ms: Timestamp::minimum(),
             event_pusher,
             interval_ms,
+            records_total,
             _marker: PhantomData,
         }
     }
@@ -93,6 +99,8 @@ where
 {
     /// Publishes a batch of logged events.
     fn publish_batch(&mut self, data: C) {
+        let records = u64::try_from(data.record_count()).expect("record count is non-negative");
+        self.records_total.inc_by(records);
         self.event_pusher.push(Event::Messages(self.time_ms, data));
     }
 
@@ -210,6 +218,74 @@ impl PermutedRowPacker {
     }
 }
 
+/// Downgrade `cap` to the next logging-interval boundary and schedule the operator's next
+/// activation there. Returns the time the capability now holds.
+///
+/// `now` and `start_offset` must be the ones the logging dataflow was constructed with, so that
+/// every collection in it reports on the same boundaries. Scheduling off the boundary rather than
+/// off a fixed delay keeps the output frontier progressing at the logging rate without drifting
+/// from wall-clock elapsed time.
+///
+/// NOTE: downgrading the capability asserts the collection is complete up to the new time, so an
+/// operator that samples less often than the logging interval publishes a stale value rather than
+/// withholding it.
+pub(super) fn downgrade_to_interval_boundary(
+    cap: &mut Capability<Timestamp>,
+    activator: &Activator,
+    now: Instant,
+    start_offset: Duration,
+    interval_ms: u128,
+) -> Timestamp {
+    let elapsed = now.elapsed().as_millis();
+    let time_ms: u128 = ((elapsed + start_offset.as_millis()) / interval_ms + 1) * interval_ms;
+    let ts: Timestamp = time_ms.try_into().expect("must fit");
+    cap.downgrade(&ts);
+
+    let next_boundary_ms = time_ms - start_offset.as_millis();
+    let next_activation =
+        now + Duration::from_millis(next_boundary_ms.try_into().expect("must fit"));
+    activator.activate_after(next_activation.saturating_duration_since(Instant::now()));
+
+    ts
+}
+
+/// Emit the difference between two snapshots of a sampled source as updates at `ts`.
+///
+/// A sampled source reports its whole state on every read, so a changed value has to be expressed
+/// as a retraction of the previous one paired with an insertion of the new one. A key absent from
+/// `current` is retracted without a replacement, so a source that stops being readable drops out of
+/// the collection rather than lingering at its last value.
+///
+/// `pack` takes the packer as an argument instead of closing over it, because it hands back rows
+/// borrowed from it.
+pub(super) fn emit_snapshot_diff<K, V, CB, P, F>(
+    session: &mut Session<'_, '_, Timestamp, CB, P>,
+    packer: &mut PermutedRowPacker,
+    prev: &BTreeMap<K, V>,
+    current: &BTreeMap<K, V>,
+    ts: Timestamp,
+    pack: F,
+) where
+    K: Ord,
+    V: PartialEq,
+    CB: ContainerBuilder + for<'a> PushInto<((&'a RowRef, &'a RowRef), Timestamp, Diff)>,
+    P: CapabilityTrait<Timestamp>,
+    F: for<'a> Fn(&'a mut PermutedRowPacker, &K, &V) -> (&'a RowRef, &'a RowRef),
+{
+    for (key, value) in prev {
+        if current.get(key) != Some(value) {
+            let row = pack(packer, key, value);
+            session.give((row, ts, Diff::MINUS_ONE));
+        }
+    }
+    for (key, value) in current {
+        if prev.get(key) != Some(value) {
+            let row = pack(packer, key, value);
+            session.give((row, ts, Diff::ONE));
+        }
+    }
+}
+
 /// Information about a collection exported from a logging dataflow.
 struct LogCollection {
     /// Trace handle providing access to the logged records.
@@ -224,26 +300,26 @@ struct LogCollection {
 /// the updates into `(Row, Row)` pairs using the provided logic function. It is crucial that the
 /// data is not exchanged between workers, as the consolidation would not function as desired
 /// otherwise.
-pub(super) fn consolidate_and_pack<G, B, CB, L, F>(
-    input: &StreamCore<G, B::Input>,
+pub(super) fn consolidate_and_pack<'scope, Chu, B, CB, L, F, C>(
+    input: Stream<'scope, Timestamp, C>,
     log: L,
     mut logic: F,
-) -> StreamCore<G, CB::Container>
+) -> Stream<'scope, Timestamp, CB::Container>
 where
-    G: ::timely::dataflow::Scope<Timestamp = Timestamp>,
-    B: Batcher<Time = G::Timestamp> + 'static,
-    B::Input: Container + Clone + 'static,
+    B: Batcher<Time = Timestamp> + 'static,
+    Chu: ContainerBuilder<Container = B::Output> + for<'a> PushInto<&'a mut C> + 'static,
+    C: Container + Clone + 'static,
     B::Output: Clone,
     CB: ContainerBuilder,
     L: Into<LogVariant>,
-    F: for<'a> FnMut(B::Output, &mut PermutedRowPacker, &mut OutputSession<CB>) + 'static,
+    F: FnMut(B::Output, &mut PermutedRowPacker, &mut OutputSession<CB>) + 'static,
 {
     let log = log.into();
     // TODO: Use something other than the debug representation of the log variant as a name.
     let c_name = &format!("Consolidate {log:?}");
     let u_name = &format!("ToRow {log:?}");
     let mut packer = PermutedRowPacker::new(log);
-    let consolidated = consolidate_pact::<B, _, _>(input, Pipeline, c_name);
+    let consolidated = consolidate_pact::<Chu, B, _, _>(input, Pipeline, c_name);
     consolidated.unary::<CB, _, _, _>(Pipeline, u_name, |_, _| {
         move |input, output| {
             input.for_each_time(|time, data| {

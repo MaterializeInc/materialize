@@ -22,8 +22,8 @@ use itertools::Itertools;
 use mz_expr::JoinImplementation::{Differential, IndexedFilter, Unimplemented};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
-    FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper, MapFilterProject,
-    MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
+    Columns, FilterCharacteristics, Id, JoinInputCharacteristics, JoinInputMapper,
+    MapFilterProject, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
@@ -656,7 +656,7 @@ mod delta_queries {
 
             *implementation = JoinImplementation::DeltaQuery(orders);
 
-            super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
+            super::install_lifted_mfp(&mut new_join, lifted_mfp);
 
             // Hooray done!
             Ok((new_join, new_arrangements))
@@ -671,7 +671,7 @@ mod delta_queries {
 mod differential {
     use std::collections::BTreeSet;
 
-    use mz_expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+    use mz_expr::{Columns, JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
     use mz_ore::soft_assert_eq_or_log;
     use mz_repr::optimize::OptimizerFeatures;
 
@@ -816,7 +816,7 @@ mod differential {
                 order,
             );
 
-            super::install_lifted_mfp(&mut new_join, lifted_mfp)?;
+            super::install_lifted_mfp(&mut new_join, lifted_mfp);
 
             // Hooray done!
             Ok((new_join, new_arrangements))
@@ -940,10 +940,7 @@ fn implement_arrangements<'a>(
 ///   column that was permuted or created by the given MFP.
 /// - Canonicalizes scalar expressions in maps and filters with respect to the join equivalences.
 ///   See inline comment for more details.
-fn install_lifted_mfp(
-    new_join: &mut MirRelationExpr,
-    mfp: MapFilterProject,
-) -> Result<(), TransformError> {
+fn install_lifted_mfp(new_join: &mut MirRelationExpr, mfp: MapFilterProject) {
     if !mfp.is_identity() {
         let (mut map, mut filter, project) = mfp.as_map_filter_project();
         if let MirRelationExpr::Join { equivalences, .. } = new_join {
@@ -966,7 +963,7 @@ fn install_lifted_mfp(
                                 break;
                             }
                         }
-                    })?;
+                    });
                 }
             }
             // Canonicalize scalar expressions in maps and filters with respect to the join
@@ -985,12 +982,11 @@ fn install_lifted_mfp(
                     if let Some(canonical_expr) = canonicalizer_map.get(e) {
                         *e = canonical_expr.clone();
                     }
-                })?
+                })
             }
         }
         *new_join = new_join.clone().map(map).filter(filter).project(project);
     }
-    Ok(())
 }
 
 /// Permute the keys in `order` to compensate for projections being lifted from inputs.

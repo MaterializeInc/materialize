@@ -7,230 +7,218 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
-use mz_lowertest::MzReflect;
+use mz_expr_derive::sqlfunc;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
-use crate::scalar::func::EagerUnaryFunc;
 
-sqlfunc!(
-    #[sqlname = "-"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(NegFloat32)]
-    #[is_monotone = true]
-    fn neg_float32(a: f32) -> f32 {
-        -a
-    }
-);
+#[sqlfunc(
+    sqlname = "-",
+    preserves_uniqueness = false,
+    inverse = NegFloat32,
+    is_monotone = true
+)]
+fn neg_float32(a: f32) -> f32 {
+    -a
+}
 
-sqlfunc!(
-    #[sqlname = "abs"]
-    fn abs_float32(a: f32) -> f32 {
-        a.abs()
-    }
-);
+#[sqlfunc(sqlname = "abs")]
+fn abs_float32(a: f32) -> f32 {
+    a.abs()
+}
 
-sqlfunc!(
-    #[sqlname = "roundf32"]
-    fn round_float32(a: f32) -> f32 {
-        a.round_ties_even()
-    }
-);
+#[sqlfunc(sqlname = "roundf32")]
+fn round_float32(a: f32) -> f32 {
+    a.round_ties_even()
+}
 
-sqlfunc!(
-    #[sqlname = "truncf32"]
-    fn trunc_float32(a: f32) -> f32 {
-        a.trunc()
-    }
-);
+#[sqlfunc(sqlname = "truncf32")]
+fn trunc_float32(a: f32) -> f32 {
+    a.trunc()
+}
 
-sqlfunc!(
-    #[sqlname = "ceilf32"]
-    fn ceil_float32(a: f32) -> f32 {
-        a.ceil()
-    }
-);
+#[sqlfunc(sqlname = "ceilf32")]
+fn ceil_float32(a: f32) -> f32 {
+    a.ceil()
+}
 
-sqlfunc!(
-    #[sqlname = "floorf32"]
-    fn floor_float32(a: f32) -> f32 {
-        a.floor()
-    }
-);
+#[sqlfunc(sqlname = "floorf32")]
+fn floor_float32(a: f32) -> f32 {
+    a.floor()
+}
 
-sqlfunc!(
-    #[sqlname = "real_to_smallint"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastInt16ToFloat32)]
-    #[is_monotone = true]
-    fn cast_float32_to_int16(a: f32) -> Result<i16, EvalError> {
-        let f = round_float32(a);
-        // TODO(benesch): remove potentially dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        if (f >= (i16::MIN as f32)) && (f < -(i16::MIN as f32)) {
-            Ok(f as i16)
-        } else {
-            Err(EvalError::Int16OutOfRange(f.to_string().into()))
-        }
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "real_to_integer"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastInt32ToFloat32)]
-    #[is_monotone = true]
-    fn cast_float32_to_int32(a: f32) -> Result<i32, EvalError> {
-        let f = round_float32(a);
-        // This condition is delicate because i32::MIN can be represented exactly by
-        // an f32 but not i32::MAX. We follow PostgreSQL's approach here.
-        //
-        // See: https://github.com/postgres/postgres/blob/ca3b37487/src/include/c.h#L1074-L1096
-        // TODO(benesch): remove potentially dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        if (f >= (i32::MIN as f32)) && (f < -(i32::MIN as f32)) {
-            Ok(f as i32)
-        } else {
-            Err(EvalError::Int32OutOfRange(f.to_string().into()))
-        }
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "real_to_bigint"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastInt64ToFloat32)]
-    #[is_monotone = true]
-    fn cast_float32_to_int64(a: f32) -> Result<i64, EvalError> {
-        let f = round_float32(a);
-        // This condition is delicate because i64::MIN can be represented exactly by
-        // an f32 but not i64::MAX. We follow PostgreSQL's approach here.
-        //
-        // See: https://github.com/postgres/postgres/blob/ca3b37487/src/include/c.h#L1074-L1096
-        // TODO(benesch): remove potentially dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        if (f >= (i64::MIN as f32)) && (f < -(i64::MIN as f32)) {
-            Ok(f as i64)
-        } else {
-            Err(EvalError::Int64OutOfRange(f.to_string().into()))
-        }
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "real_to_double"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastFloat64ToFloat32)]
-    #[is_monotone = true]
-    fn cast_float32_to_float64(a: f32) -> f64 {
-        a.into()
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "real_to_text"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastStringToFloat32)]
-    fn cast_float32_to_string(a: f32) -> String {
-        let mut s = String::new();
-        strconv::format_float32(&mut s, a);
-        s
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "real_to_uint2"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastUint16ToFloat32)]
-    #[is_monotone = true]
-    fn cast_float32_to_uint16(a: f32) -> Result<u16, EvalError> {
-        let f = round_float32(a);
-        // TODO(benesch): remove potentially dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        if (f >= 0.0) && (f <= (u16::MAX as f32)) {
-            Ok(f as u16)
-        } else {
-            Err(EvalError::UInt16OutOfRange(f.to_string().into()))
-        }
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "real_to_uint4"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastUint32ToFloat32)]
-    #[is_monotone = true]
-    fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
-        let f = round_float32(a);
-        // TODO(benesch): remove potentially dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        if (f >= 0.0) && (f <= (u32::MAX as f32)) {
-            Ok(f as u32)
-        } else {
-            Err(EvalError::UInt32OutOfRange(f.to_string().into()))
-        }
-    }
-);
-
-sqlfunc!(
-    #[sqlname = "real_to_uint8"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastUint64ToFloat32)]
-    #[is_monotone = true]
-    fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {
-        let f = round_float32(a);
-        // TODO(benesch): remove potentially dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        if (f >= 0.0) && (f <= (u64::MAX as f32)) {
-            Ok(f as u64)
-        } else {
-            Err(EvalError::UInt64OutOfRange(f.to_string().into()))
-        }
-    }
-);
-
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
-pub struct CastFloat32ToNumeric(pub Option<NumericMaxScale>);
-
-impl<'a> EagerUnaryFunc<'a> for CastFloat32ToNumeric {
-    type Input = f32;
-    type Output = Result<Numeric, EvalError>;
-
-    fn call(&self, a: f32) -> Result<Numeric, EvalError> {
-        if a.is_infinite() {
-            return Err(EvalError::InfinityOutOfDomain(
-                "casting real to numeric".into(),
-            ));
-        }
-        let mut a = Numeric::from(a);
-        if let Some(scale) = self.0 {
-            if numeric::rescale(&mut a, scale.into_u8()).is_err() {
-                return Err(EvalError::NumericFieldOverflow);
-            }
-        }
-        numeric::munge_numeric(&mut a).unwrap();
-        Ok(a)
-    }
-
-    fn output_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastNumericToFloat32)
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
+#[sqlfunc(
+    sqlname = "real_to_smallint",
+    preserves_uniqueness = false,
+    inverse = super::CastInt16ToFloat32,
+    is_monotone = true
+)]
+fn cast_float32_to_int16(a: f32) -> Result<i16, EvalError> {
+    let f = round_float32(a);
+    // TODO(benesch): remove potentially dangerous usage of `as`.
+    #[allow(clippy::as_conversions)]
+    if (f >= (i16::MIN as f32)) && (f < -(i16::MIN as f32)) {
+        Ok(f as i16)
+    } else {
+        Err(EvalError::Int16OutOfRange(f.to_string().into()))
     }
 }
 
-impl fmt::Display for CastFloat32ToNumeric {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("real_to_numeric")
+#[sqlfunc(
+    sqlname = "real_to_integer",
+    preserves_uniqueness = false,
+    inverse = super::CastInt32ToFloat32,
+    is_monotone = true
+)]
+fn cast_float32_to_int32(a: f32) -> Result<i32, EvalError> {
+    let f = round_float32(a);
+    // This condition is delicate because i32::MIN can be represented exactly by
+    // an f32 but not i32::MAX. We follow PostgreSQL's approach here.
+    //
+    // See: https://github.com/postgres/postgres/blob/ca3b37487/src/include/c.h#L1074-L1096
+    // TODO(benesch): remove potentially dangerous usage of `as`.
+    #[allow(clippy::as_conversions)]
+    if (f >= (i32::MIN as f32)) && (f < -(i32::MIN as f32)) {
+        Ok(f as i32)
+    } else {
+        Err(EvalError::Int32OutOfRange(f.to_string().into()))
     }
+}
+
+#[sqlfunc(
+    sqlname = "real_to_bigint",
+    preserves_uniqueness = false,
+    inverse = super::CastInt64ToFloat32,
+    is_monotone = true
+)]
+fn cast_float32_to_int64(a: f32) -> Result<i64, EvalError> {
+    let f = round_float32(a);
+    // This condition is delicate because i64::MIN can be represented exactly by
+    // an f32 but not i64::MAX. We follow PostgreSQL's approach here.
+    //
+    // See: https://github.com/postgres/postgres/blob/ca3b37487/src/include/c.h#L1074-L1096
+    // TODO(benesch): remove potentially dangerous usage of `as`.
+    #[allow(clippy::as_conversions)]
+    if (f >= (i64::MIN as f32)) && (f < -(i64::MIN as f32)) {
+        Ok(f as i64)
+    } else {
+        Err(EvalError::Int64OutOfRange(f.to_string().into()))
+    }
+}
+
+#[sqlfunc(
+    sqlname = "real_to_double",
+    preserves_uniqueness = false,
+    inverse = super::CastFloat64ToFloat32,
+    is_monotone = true
+)]
+fn cast_float32_to_float64(a: f32) -> f64 {
+    a.into()
+}
+
+#[sqlfunc(
+    sqlname = "real_to_text",
+    preserves_uniqueness = false,
+    inverse = super::CastStringToFloat32
+)]
+fn cast_float32_to_string(a: f32) -> String {
+    let mut s = String::new();
+    strconv::format_float32(&mut s, a);
+    s
+}
+
+#[sqlfunc(
+    sqlname = "real_to_uint2",
+    preserves_uniqueness = false,
+    inverse = super::CastUint16ToFloat32,
+    is_monotone = true
+)]
+fn cast_float32_to_uint16(a: f32) -> Result<u16, EvalError> {
+    let f = round_float32(a);
+    // TODO(benesch): remove potentially dangerous usage of `as`.
+    #[allow(clippy::as_conversions)]
+    if (f >= 0.0) && (f <= (u16::MAX as f32)) {
+        Ok(f as u16)
+    } else {
+        Err(EvalError::UInt16OutOfRange(f.to_string().into()))
+    }
+}
+
+#[sqlfunc(
+    sqlname = "real_to_uint4",
+    preserves_uniqueness = false,
+    inverse = super::CastUint32ToFloat32,
+    is_monotone = true
+)]
+fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
+    let f = round_float32(a);
+    // TODO(benesch): remove potentially dangerous usage of `as`.
+    // NOTE: `u32::MAX` is not representable as f32 and rounds up to 2^32, so the
+    // bound must be strict. A `<=` here would admit 2^32, which the `as` cast
+    // below then saturates to `u32::MAX` instead of erroring.
+    #[allow(clippy::as_conversions)]
+    if (f >= 0.0) && (f < (u32::MAX as f32)) {
+        Ok(f as u32)
+    } else {
+        Err(EvalError::UInt32OutOfRange(f.to_string().into()))
+    }
+}
+
+#[sqlfunc(
+    sqlname = "real_to_uint8",
+    preserves_uniqueness = false,
+    inverse = super::CastUint64ToFloat32,
+    is_monotone = true
+)]
+fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {
+    let f = round_float32(a);
+    // TODO(benesch): remove potentially dangerous usage of `as`.
+    // NOTE: `u64::MAX` is not representable as f32 and rounds up to 2^64, so the
+    // bound must be strict. A `<=` here would admit 2^64, which the `as` cast
+    // below then saturates to `u64::MAX` instead of erroring.
+    #[allow(clippy::as_conversions)]
+    if (f >= 0.0) && (f < (u64::MAX as f32)) {
+        Ok(f as u64)
+    } else {
+        Err(EvalError::UInt64OutOfRange(f.to_string().into()))
+    }
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
+pub struct CastFloat32ToNumeric(pub Option<NumericMaxScale>);
+
+#[sqlfunc(
+    CastFloat32ToNumeric,
+    sqlname = "real_to_numeric",
+    inverse = super::CastNumericToFloat32,
+    is_monotone = true,
+    output_type_expr = SqlScalarType::Numeric { max_scale: self.0 }
+        .nullable(input_type.nullable)
+)]
+fn cast_float32_to_numeric(&self, a: f32) -> Result<Numeric, EvalError> {
+    if a.is_infinite() {
+        return Err(EvalError::InfinityOutOfDomain(
+            "casting real to numeric".into(),
+        ));
+    }
+    let mut a = Numeric::from(a);
+    if let Some(scale) = self.0 {
+        if numeric::rescale(&mut a, scale.into_u8()).is_err() {
+            return Err(EvalError::NumericFieldOverflow);
+        }
+    }
+    numeric::munge_numeric(&mut a).unwrap();
+    Ok(a)
 }

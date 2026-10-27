@@ -50,7 +50,7 @@ DROP DATABASE IF EXISTS my_db;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-database.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-database" %}}
 
 ## Related pages
 

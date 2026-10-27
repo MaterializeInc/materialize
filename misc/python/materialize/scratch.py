@@ -13,6 +13,7 @@ import asyncio
 import csv
 import datetime
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -29,7 +30,6 @@ from mypy_boto3_ec2.type_defs import (
     InstanceTypeDef,
     RunInstancesRequestServiceResourceCreateInstancesTypeDef,
 )
-from prettytable import PrettyTable
 from pydantic import BaseModel
 
 from materialize import MZ_ROOT, git, spawn, ui, util
@@ -38,10 +38,49 @@ from materialize import MZ_ROOT, git, spawn, ui, util
 DEFAULT_SECURITY_GROUP_NAME = "scratch-security-group"
 DEFAULT_INSTANCE_PROFILE_NAME = "admin-instance"
 
+# Ubuntu 26.04 LTS (Resolute Raccoon) base images, keyed by the CPU
+# architecture that EC2 reports for an instance type.
+#
+# To update: open https://cloud-images.ubuntu.com/locator/ec2/, filter to the
+# desired release, zone `us-east-1`, and instance type `hvm:ebs-ssd-gp3`. Copy
+# the AMI id for each architecture (amd64 -> x86_64, arm64) below. Bumping the
+# release also means updating the comment above and the `ami_user` default if
+# Canonical changes it.
+AMIS_BY_ARCH: dict[str, str] = {
+    "x86_64": "ami-0b6d9d3d33ba97d99",
+    "arm64": "ami-0bc7f2dbdcc6b5303",
+}
+
 SSH_COMMAND = ["mssh", "-o", "StrictHostKeyChecking=off"]
 SFTP_COMMAND = ["msftp", "-o", "StrictHostKeyChecking=off"]
 
 say = ui.speaker("scratch> ")
+
+
+def instance_type_arch(instance_type: str) -> str:
+    """Return the CPU architecture for an EC2 instance type as a key into
+    `AMIS_BY_ARCH`. Queries EC2, which also validates that the type exists."""
+    infos = boto3.client("ec2").describe_instance_types(
+        InstanceTypes=[cast(InstanceTypeType, instance_type)]
+    )["InstanceTypes"]
+    if not infos:
+        raise RuntimeError(f"unknown EC2 instance type: {instance_type}")
+    archs = infos[0]["ProcessorInfo"]["SupportedArchitectures"]
+    for arch in archs:
+        if arch in AMIS_BY_ARCH:
+            return arch
+    raise RuntimeError(
+        f"no scratch AMI for instance type {instance_type} "
+        f"(architectures: {', '.join(archs)})"
+    )
+
+
+def resolve_ami(desc: "MachineDesc") -> str:
+    """Resolve the AMI for a machine, deriving it from the instance type's
+    architecture unless the config pins one explicitly."""
+    if desc.ami:
+        return desc.ami
+    return AMIS_BY_ARCH[instance_type_arch(desc.instance_type)]
 
 
 def tags(i: Instance) -> dict[str, str]:
@@ -71,7 +110,7 @@ def delete_after(tags: dict[str, str]) -> datetime.datetime | None:
     if not unix:
         return None
     unix = int(float(unix))
-    return datetime.datetime.fromtimestamp(unix)
+    return datetime.datetime.fromtimestamp(unix, datetime.UTC)
 
 
 def instance_host(instance: Instance, user: str | None = None) -> str:
@@ -80,39 +119,273 @@ def instance_host(instance: Instance, user: str | None = None) -> str:
     return f"{user}@{instance.id}"
 
 
-def print_instances(ists: list[Instance], format: str) -> None:
-    field_names = [
-        "Name",
-        "Instance ID",
-        "Public IP Address",
-        "Private IP Address",
-        "Launched By",
-        "Delete After",
-        "State",
-    ]
-    rows = [
-        [
-            name(tags),
-            i.instance_id,
-            i.public_ip_address,
-            i.private_ip_address,
-            launched_by(tags),
-            delete_after(tags),
-            i.state["Name"],
+# Launch tags the instance Name as "{nonce}-{config name}"; the nonce is
+# redundant with the instance id in a flat listing, so strip it for display.
+_NONCE_PREFIX = re.compile(r"^[0-9a-f]{8}-")
+
+
+def _short_name(n: str | None) -> str:
+    if not n:
+        return "-"
+    return _NONCE_PREFIX.sub("", n, count=1)
+
+
+def render_table(headers: list[str], rows: list[list[str]]) -> None:
+    """Print a borderless, left-aligned table, like `docker ps` / `kubectl get`:
+    columns separated by two spaces, an uppercase header, no rules."""
+    widths = [max(len(r[c]) for r in [headers, *rows]) for c in range(len(headers))]
+    for r in [headers, *rows]:
+        print("  ".join(cell.ljust(w) for cell, w in zip(r, widths)).rstrip())
+
+
+def _format_expires(dt: datetime.datetime | None) -> str:
+    """Render a delete-after time as a compact relative duration."""
+    if dt is None:
+        return "-"
+    secs = (dt - datetime.datetime.now(datetime.UTC)).total_seconds()
+    if secs <= 0:
+        return "expired"
+    if secs >= 86400:
+        return f"{secs / 86400:.1f}d"
+    if secs >= 3600:
+        return f"{secs / 3600:.0f}h"
+    return f"{secs / 60:.0f}m"
+
+
+def print_instances(
+    ists: list[Instance],
+    format: str = "table",
+    numbered: bool = False,
+    show_launched_by: bool = False,
+) -> None:
+    if format == "csv":
+        # CSV is machine-readable: emit the full set of columns, unabridged.
+        field_names = [
+            "Name",
+            "Instance ID",
+            "Public IP Address",
+            "Private IP Address",
+            "Launched By",
+            "Delete After",
+            "State",
         ]
-        for (i, tags) in [(i, tags(i)) for i in ists]
-    ]
-    if format == "table":
-        pt = PrettyTable()
-        pt.field_names = field_names
-        pt.add_rows(rows)
-        print(pt)
-    elif format == "csv":
+        if numbered:
+            field_names = ["#"] + field_names
         w = csv.writer(sys.stdout)
         w.writerow(field_names)
-        w.writerows(rows)
-    else:
+        for idx, i in enumerate(ists, 1):
+            t = tags(i)
+            row = [
+                name(t),
+                i.instance_id,
+                i.public_ip_address,
+                i.private_ip_address,
+                launched_by(t),
+                delete_after(t),
+                i.state["Name"],
+            ]
+            if numbered:
+                row = [idx] + row
+            w.writerow(row)
+        return
+
+    if format != "table":
         raise RuntimeError("Unknown format passed to print_instances")
+
+    # Table is for humans: a compact subset that fits a default terminal.
+    # Private IP is omitted (mssh connects by instance id, not IP) and the
+    # owner only shown when listing instances beyond your own.
+    headers = ["INSTANCE ID", "NAME", "STATE", "EXPIRES", "PUBLIC IP"]
+    if show_launched_by:
+        headers.append("LAUNCHED BY")
+    if numbered:
+        headers = ["#"] + headers
+    rows = []
+    for idx, i in enumerate(ists, 1):
+        t = tags(i)
+        state = i.state["Name"]
+        # A dead instance has no meaningful expiry; don't show a future time.
+        expires = (
+            "-"
+            if state in ("terminated", "shutting-down")
+            else _format_expires(delete_after(t))
+        )
+        row = [
+            i.instance_id,
+            _short_name(name(t)),
+            state,
+            expires,
+            i.public_ip_address or "-",
+        ]
+        if show_launched_by:
+            row.append(launched_by(t) or "-")
+        if numbered:
+            row = [str(idx)] + row
+        rows.append(row)
+
+    render_table(headers, rows)
+
+
+def mssh(
+    instance: Instance,
+    command: str,
+    *,
+    extra_ssh_args: list[str] | None = None,
+    input: bytes | None = None,
+    quiet: bool = False,
+) -> None:
+    """Runs a command over SSH via EC2 Instance Connect."""
+    extra_ssh_args = extra_ssh_args or []
+    host = instance_host(instance)
+    if command:
+        if not quiet:
+            print(f"{host}$ {command}", file=sys.stderr)
+        # Quote to work around:
+        # https://github.com/aws/aws-ec2-instance-connect-cli/pull/26
+        command = shlex.quote(command)
+    else:
+        print(f"$ mssh {host}")
+
+    result = subprocess.run(
+        [
+            *SSH_COMMAND,
+            *extra_ssh_args,
+            host,
+            command,
+        ],
+        input=input,
+        stdout=subprocess.DEVNULL if quiet else None,
+        stderr=subprocess.DEVNULL if quiet else None,
+    )
+    # Exit code 130 = SIGINT (Ctrl-C) — exit cleanly
+    if result.returncode == 130:
+        sys.exit(130)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, result.args)
+
+
+def msftp(
+    instance: Instance,
+) -> None:
+    """Connects over SFTP via EC2 Instance Connect."""
+    host = instance_host(instance)
+    spawn.runv([*SFTP_COMMAND, host])
+
+
+def setup_ai_tools(instance: Instance) -> None:
+    """Transfer local Claude Code and Codex configs to a scratch instance
+    and install the mz-docs skill."""
+    import io
+    import pathlib
+    import tarfile
+
+    home = pathlib.Path.home()
+
+    # Collect only essential config files — skip session logs, caches, etc.
+    items: list[tuple[str, pathlib.Path]] = []
+
+    # Claude Code: settings, credentials, and project memory files
+    claude_dir = home / ".claude"
+    if claude_dir.is_dir():
+        for cfg_name in ("settings.json", ".credentials.json"):
+            p = claude_dir / cfg_name
+            if p.is_file():
+                items.append((f".claude/{cfg_name}", p))
+        # Transfer memory directories from all projects
+        projects_dir = claude_dir / "projects"
+        if projects_dir.is_dir():
+            for proj in projects_dir.iterdir():
+                if not proj.is_dir():
+                    continue
+                memory_dir = proj / "memory"
+                if memory_dir.is_dir():
+                    items.append((f".claude/projects/{proj.name}/memory", memory_dir))
+
+    if (home / ".claude.json").is_file():
+        items.append((".claude.json", home / ".claude.json"))
+
+    # Codex: only config, not session logs
+    codex_dir = home / ".codex"
+    if codex_dir.is_dir():
+        for cfg_name in ("config.json", "instructions.md"):
+            p = codex_dir / cfg_name
+            if p.is_file():
+                items.append((f".codex/{cfg_name}", p))
+
+    if items:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for arcname, path in items:
+                tar.add(str(path), arcname=arcname)
+        mssh(instance, "tar xzf - -C ~", input=buf.getvalue(), quiet=True)
+
+    mssh(
+        instance,
+        "cd materialize && "
+        "NPM_CONFIG_UPDATE_NOTIFIER=false "
+        "npx -q -y skills add MaterializeInc/agent-skills -g -a claude-code --copy -y --skill mz-docs 2>/dev/null || true",
+        quiet=True,
+    )
+
+    mssh(
+        instance,
+        "cd materialize && "
+        "NPM_CONFIG_UPDATE_NOTIFIER=false "
+        "npx -q -y skills add MaterializeInc/agent-skills -g -a codex --copy -y --skill mz-docs 2>/dev/null || true",
+        quiet=True,
+    )
+
+
+def mkrepo(
+    instance: Instance, rev: str, init: bool = True, force: bool = False
+) -> None:
+    if init:
+        mssh(instance, "git clone https://github.com/MaterializeInc/materialize.git")
+
+    rev = git.rev_parse(rev)
+
+    cmd: list[str] = [
+        "git",
+        "push",
+        "--no-verify",
+        f"{instance_host(instance)}:materialize/.git",
+        # Explicit refspec is required if the host repository is in detached
+        # HEAD mode.
+        f"{rev}:refs/heads/scratch",
+    ]
+    if force:
+        cmd.append("--force")
+
+    spawn.runv(
+        cmd,
+        cwd=MZ_ROOT,
+        env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
+    )
+    git_config_cmds = f"git checkout -f {rev}"
+
+    # Propagate local git user.name and user.email to the scratch instance.
+    if git_name := git.get_user_name():
+        git_config_cmds += f" && git config user.name {shlex.quote(git_name)}"
+    if git_email := git.get_user_email():
+        git_config_cmds += f" && git config user.email {shlex.quote(git_email)}"
+
+    mssh(
+        instance,
+        f"cd materialize && {git_config_cmds}",
+    )
+
+
+class MachineDesc(BaseModel):
+    name: str
+    launch_script: str | None = None
+    instance_type: str
+    # Optional: when unset, the AMI is derived from the instance type's
+    # architecture via `resolve_ami`.
+    ami: str | None = None
+    tags: dict[str, str] = {}
+    size_gb: int = 50
+    checkout: bool = True
+    ami_user: str = "ubuntu"
 
 
 def launch(
@@ -138,6 +411,18 @@ def launch(
     tags["git_ref"] = git.describe()
     tags["ami-user"] = ami_user
 
+    # The scratch account denies resource creation unless the `owner`,
+    # `reason`, `team`, and `deleteAfter` tags are all present (see the
+    # RequireTagsScratch SCP in MaterializeInc/i2). Default any that the
+    # caller didn't provide explicitly.
+    tags.setdefault("owner", tags.get("LaunchedBy") or whoami())
+    tags.setdefault("reason", "scratch instance")
+    tags.setdefault("team", "engineering")
+    tags.setdefault(
+        "deleteAfter",
+        delete_after.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    )
+
     ec2 = boto3.client("ec2")
     groups = ec2.describe_security_groups()
     security_group_id = None
@@ -150,7 +435,7 @@ def launch(
         vpcs = ec2.describe_vpcs()
         vpc_id = None
         for vpc in vpcs["Vpcs"]:
-            if vpc["IsDefault"] == True:
+            if vpc["IsDefault"]:
                 vpc_id = vpc["VpcId"]
                 break
         if vpc_id is None:
@@ -189,7 +474,13 @@ def launch(
             {
                 "ResourceType": "instance",
                 "Tags": [{"Key": k, "Value": v} for (k, v) in tags.items()],
-            }
+            },
+            # Tag the root volume too: the RequireTagsScratch SCP applies to
+            # the volumes created by RunInstances, not just the instance.
+            {
+                "ResourceType": "volume",
+                "Tags": [{"Key": k, "Value": v} for (k, v) in tags.items()],
+            },
         ],
         "NetworkInterfaces": [network_interface],
         "BlockDeviceMappings": [
@@ -231,8 +522,13 @@ async def setup(
         )
 
     done = False
-    async for remaining in ui.async_timeout_loop(60, 5):
-        say(f"Waiting for instance to become ready: {remaining:0.0f}s remaining")
+    async for remaining in ui.async_timeout_loop(60, 2):
+        print(
+            f"\rscratch> Waiting for instance to become ready: {remaining:0.0f}s remaining\033[K",
+            end="",
+            flush=True,
+            file=sys.stderr,
+        )
         try:
             i.reload()
             if is_ready(i):
@@ -240,70 +536,57 @@ async def setup(
                 break
         except ClientError:
             pass
+    print(file=sys.stderr)
     if not done:
         raise RuntimeError(
             f"Instance {i} did not become ready in a reasonable amount of time"
         )
 
+    # Wait for SSH to be available
     done = False
-    async for remaining in ui.async_timeout_loop(300, 5):
-        say(f"Checking whether setup has completed: {remaining:0.0f}s remaining")
+    async for remaining in ui.async_timeout_loop(120, 2):
+        print(
+            f"\rscratch> Waiting for SSH access: {remaining:0.0f}s remaining\033[K",
+            end="",
+            flush=True,
+            file=sys.stderr,
+        )
         try:
-            mssh(i, "[[ -f /opt/provision/done ]]")
+            mssh(i, "true", quiet=True)
             done = True
             break
         except CalledProcessError:
             continue
+    print(file=sys.stderr)
+    if not done:
+        raise RuntimeError(
+            "SSH did not become available in a reasonable amount of time"
+        )
+
+    # Start git clone while provisioning continues
+    say("Cloning repo (provisioning continues in background)...")
+    mkrepo(i, git_rev)
+
+    # Wait for provisioning to finish
+    done = False
+    async for remaining in ui.async_timeout_loop(300, 2):
+        print(
+            f"\rscratch> Waiting for provisioning to complete: {remaining:0.0f}s remaining\033[K",
+            end="",
+            flush=True,
+            file=sys.stderr,
+        )
+        try:
+            mssh(i, "[[ -f /opt/provision/done ]]", quiet=True)
+            done = True
+            break
+        except CalledProcessError:
+            continue
+    print(file=sys.stderr)
     if not done:
         raise RuntimeError(
             "Instance did not finish setup in a reasonable amount of time"
         )
-
-    mkrepo(i, git_rev)
-
-
-def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> None:
-    if init:
-        mssh(
-            i,
-            "git clone https://github.com/MaterializeInc/materialize.git --recurse-submodules",
-        )
-
-    rev = git.rev_parse(rev)
-
-    cmd: list[str] = [
-        "git",
-        "push",
-        "--no-verify",
-        f"{instance_host(i)}:materialize/.git",
-        # Explicit refspec is required if the host repository is in detached
-        # HEAD mode.
-        f"{rev}:refs/heads/scratch",
-        "--no-recurse-submodules",
-    ]
-    if force:
-        cmd.append("--force")
-
-    spawn.runv(
-        cmd,
-        cwd=MZ_ROOT,
-        env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
-    )
-    mssh(
-        i,
-        f"cd materialize && git config core.bare false && git checkout {rev} && git submodule sync --recursive && git submodule update --recursive",
-    )
-
-
-class MachineDesc(BaseModel):
-    name: str
-    launch_script: str | None
-    instance_type: str
-    ami: str
-    tags: dict[str, str] = {}
-    size_gb: int
-    checkout: bool = True
-    ami_user: str = "ubuntu"
 
 
 def launch_cluster(
@@ -313,12 +596,15 @@ def launch_cluster(
     key_name: str | None = None,
     security_group_name: str = DEFAULT_SECURITY_GROUP_NAME,
     instance_profile: str | None = DEFAULT_INSTANCE_PROFILE_NAME,
-    extra_tags: dict[str, str] = {},
+    extra_tags: dict[str, str] | None = None,
     delete_after: datetime.datetime,
     git_rev: str = "HEAD",
-    extra_env: dict[str, str] = {},
+    extra_env: dict[str, str] | None = None,
 ) -> list[Instance]:
     """Launch a cluster of instances with a given nonce"""
+
+    extra_tags = extra_tags or {}
+    extra_env = extra_env or {}
 
     if not nonce:
         nonce = util.nonce(8)
@@ -327,7 +613,7 @@ def launch_cluster(
         launch(
             key_name=key_name,
             instance_type=d.instance_type,
-            ami=d.ami,
+            ami=resolve_ami(d),
             ami_user=d.ami_user,
             tags={**d.tags, **extra_tags},
             display_name=f"{nonce}-{d.name}",
@@ -340,21 +626,27 @@ def launch_cluster(
         for d in descs
     ]
 
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(
-        asyncio.gather(
+    async def setup_all() -> None:
+        await asyncio.gather(
             *(
                 setup(i, git_rev if d.checkout else "HEAD")
                 for (i, d) in zip(instances, descs)
             )
         )
-    )
+
+    asyncio.run(setup_all())
+
+    for i in instances:
+        i.reload()
 
     hosts_str = "".join(
         f"{i.private_ip_address}\t{d.name}\n" for (i, d) in zip(instances, descs)
     )
     for i in instances:
         mssh(i, "sudo tee -a /etc/hosts", input=hosts_str.encode())
+
+    for i in instances:
+        setup_ai_tools(i)
 
     env = " ".join(f"{k}={shlex.quote(v)}" for k, v in extra_env.items())
     for i, d in zip(instances, descs):
@@ -376,8 +668,6 @@ def get_instance(name: str) -> Instance:
     Get an instance by instance id. The special name 'mine' resolves to a
     unique running owned instance, if there is one; otherwise the name is
     assumed to be an instance id.
-    :param name: The instance id or the special case 'mine'.
-    :return: The instance to which the name refers.
     """
     if name == "mine":
         filters: list[FilterTypeDef] = [
@@ -397,13 +687,16 @@ def get_instance(name: str) -> Instance:
     return boto3.resource("ec2").Instance(name)
 
 
-def get_instances_by_tag(k: str, v: str) -> list[InstanceTypeDef]:
-    return [
-        i
-        for r in boto3.client("ec2").describe_instances()["Reservations"]
-        for i in r["Instances"]
-        if instance_typedef_tags(i).get(k) == v
-    ]
+def list_instances(
+    owners: list[str] | None = None, all: bool = False
+) -> list[Instance]:
+    """List AWS instances, optionally filtered by owner."""
+    filters: list[FilterTypeDef] = []
+    if not all:
+        if not owners:
+            owners = [whoami()]
+        filters.append({"Name": "tag:LaunchedBy", "Values": owners})
+    return list(boto3.resource("ec2").instances.filter(Filters=filters))
 
 
 def get_old_instances() -> list[InstanceTypeDef]:
@@ -415,7 +708,7 @@ def get_old_instances() -> list[InstanceTypeDef]:
         if delete_after is None:
             return False
         delete_after = float(delete_after)
-        return datetime.datetime.utcnow().timestamp() > delete_after
+        return datetime.datetime.now(datetime.UTC).timestamp() > delete_after
 
     return [
         i
@@ -423,40 +716,3 @@ def get_old_instances() -> list[InstanceTypeDef]:
         for i in r["Instances"]
         if exists(i) and is_old(i)
     ]
-
-
-def mssh(
-    instance: Instance,
-    command: str,
-    *,
-    extra_ssh_args: list[str] = [],
-    input: bytes | None = None,
-) -> None:
-    """Runs a command over SSH via EC2 Instance Connect."""
-    host = instance_host(instance)
-    if command:
-        print(f"{host}$ {command}", file=sys.stderr)
-        # Quote to work around:
-        # https://github.com/aws/aws-ec2-instance-connect-cli/pull/26
-        command = shlex.quote(command)
-    else:
-        print(f"$ mssh {host}")
-
-    subprocess.run(
-        [
-            *SSH_COMMAND,
-            *extra_ssh_args,
-            host,
-            command,
-        ],
-        check=True,
-        input=input,
-    )
-
-
-def msftp(
-    instance: Instance,
-) -> None:
-    """Connects over SFTP via EC2 Instance Connect."""
-    host = instance_host(instance)
-    spawn.runv([*SFTP_COMMAND, host])

@@ -11,8 +11,8 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{Error, anyhow};
-use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
+#[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,6 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
 
 /// The identifier for an item within the Catalog.
 #[derive(
-    Arbitrary,
     Clone,
     Copy,
     Debug,
@@ -30,9 +29,9 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.catalog_item_id.rs"));
     PartialOrd,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect,
+    Deserialize
 )]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum CatalogItemId {
     /// System namespace.
     System(u64),
@@ -72,7 +71,7 @@ impl FromStr for CatalogItemId {
             return Err(anyhow!("couldn't parse id {}", s));
         }
         let tag = s.chars().next().unwrap();
-        s = &s[1..];
+        s = &s[tag.len_utf8()..];
         let variant = match tag {
             's' => {
                 if Some('i') == s.chars().next() {
@@ -144,5 +143,17 @@ mod tests {
         proptest!(|(id in any::<CatalogItemId>())| {
             testcase(id);
         })
+    }
+
+    #[mz_ore::test]
+    fn test_catalog_item_id_from_str_non_ascii() {
+        // Regression test for a panic on multi-byte leading characters, where
+        // slicing off a single byte landed inside a UTF-8 char boundary (SQL-195).
+        for invalid in ["ü1", "ü", "é42", "🦀7", ""] {
+            assert!(
+                invalid.parse::<CatalogItemId>().is_err(),
+                "expected {invalid:?} to fail to parse"
+            );
+        }
     }
 }

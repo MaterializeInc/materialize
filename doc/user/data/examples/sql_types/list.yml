@@ -1,0 +1,11 @@
+- name: "syntax"
+  code: |
+    LIST [ <element> [, ...] ]
+    LIST ( <query> )
+  syntax_elements:
+    - name: "**LIST** [ `<element>` [, ...] ]"
+      description: |
+        Construct a list from a comma-separated list of elements. All elements must be of the same type. You can nest `LIST` constructors to create layered lists, or elide the `LIST` keyword from interior list expressions.
+    - name: "**LIST** ( `<query>` )"
+      description: |
+        Construct a list from the results of a subquery. The subquery must return a single column. Note that parentheses are used rather than square brackets in this form.

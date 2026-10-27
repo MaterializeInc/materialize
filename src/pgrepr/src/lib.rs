@@ -11,7 +11,7 @@
 //!
 //! This crate exports a [`Value`] type that maps directly to a PostgreSQL
 //! datum. These values can be serialized using either the text or binary
-//! encoding format; see the [`mz_pgwire_common::Format`] type for details.
+//! encoding format; see the [`mz_pgrepr_consts::Format`] type for details.
 //!
 //! `Value`s are easily converted to and from [`mz_repr::Datum`]s. See, for
 //! example, the [`values_from_row`] function.
@@ -23,13 +23,15 @@ mod types;
 mod value;
 
 pub mod oid;
+pub mod regproc;
 
 pub use types::{
     ANYCOMPATIBLELIST, ANYCOMPATIBLEMAP, LIST, MAP, Type, TypeConversionError, TypeFromOidError,
 };
+pub use value::error::{IntoDatumError, NulCharacterError};
 pub use value::interval::Interval;
 pub use value::jsonb::Jsonb;
 pub use value::numeric::Numeric;
 pub use value::record::Record;
 pub use value::unsigned::{UInt2, UInt4, UInt8};
-pub use value::{Value, values_from_row};
+pub use value::{TextEncodeSettings, Value, values_from_row};

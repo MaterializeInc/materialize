@@ -37,17 +37,17 @@ use std::fmt::Debug;
 use std::sync::LazyLock;
 
 use mz_ore::collections::HashSet;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::TryFromProtoError;
 use mz_repr::Diff;
 use mz_repr::adt::jsonb::Jsonb;
-use mz_repr::adt::numeric::{Dec, Numeric};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
+#[cfg(test)]
 use proptest_derive::Arbitrary;
 use tracing::error;
 
 use crate::durable::debug::CollectionType;
-use crate::durable::objects::serialization::proto;
+use crate::durable::objects::serialization::{ProtoType, RustType, proto};
 use crate::durable::objects::{DurableType, FenceToken};
 use crate::durable::persist::Timestamp;
 use crate::durable::transaction::TransactionBatch;
@@ -148,6 +148,8 @@ impl StateUpdate {
             source_references,
             system_gid_mapping,
             system_configurations,
+            cluster_system_configurations,
+            replica_system_configurations,
             default_privileges,
             system_privileges,
             storage_collection_metadata,
@@ -155,6 +157,7 @@ impl StateUpdate {
             txn_wal_shard,
             audit_log_updates,
             upper: _,
+            ..
         } = txn_batch;
         let databases = from_batch(databases, StateUpdateKind::Database);
         let schemas = from_batch(schemas, StateUpdateKind::Schema);
@@ -176,6 +179,14 @@ impl StateUpdate {
             from_batch(system_gid_mapping, StateUpdateKind::SystemObjectMapping);
         let system_configurations =
             from_batch(system_configurations, StateUpdateKind::SystemConfiguration);
+        let cluster_system_configurations = from_batch(
+            cluster_system_configurations,
+            StateUpdateKind::ClusterSystemConfiguration,
+        );
+        let replica_system_configurations = from_batch(
+            replica_system_configurations,
+            StateUpdateKind::ReplicaSystemConfiguration,
+        );
         let default_privileges = from_batch(default_privileges, StateUpdateKind::DefaultPrivilege);
         let source_references = from_batch(source_references, StateUpdateKind::SourceReferences);
         let system_privileges = from_batch(system_privileges, StateUpdateKind::SystemPrivilege);
@@ -203,6 +214,8 @@ impl StateUpdate {
             .chain(source_references)
             .chain(system_object_mappings)
             .chain(system_configurations)
+            .chain(cluster_system_configurations)
+            .chain(replica_system_configurations)
             .chain(default_privileges)
             .chain(system_privileges)
             .chain(storage_collection_metadata)
@@ -216,7 +229,8 @@ impl StateUpdate {
 ///
 /// The entire catalog is serialized as bytes and saved in a single persist shard. We use this
 /// enum to determine what collection something in the catalog belongs to.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Arbitrary)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub enum StateUpdateKind {
     AuditLog(proto::AuditLogKey, ()),
     Cluster(proto::ClusterKey, proto::ClusterValue),
@@ -241,6 +255,14 @@ pub enum StateUpdateKind {
     SystemConfiguration(
         proto::ServerConfigurationKey,
         proto::ServerConfigurationValue,
+    ),
+    ClusterSystemConfiguration(
+        proto::ClusterSystemConfigurationKey,
+        proto::ClusterSystemConfigurationValue,
+    ),
+    ReplicaSystemConfiguration(
+        proto::ReplicaSystemConfigurationKey,
+        proto::ReplicaSystemConfigurationValue,
     ),
     SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
     SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
@@ -275,6 +297,12 @@ impl StateUpdateKind {
             StateUpdateKind::Setting(_, _) => Some(CollectionType::Setting),
             StateUpdateKind::SourceReferences(_, _) => Some(CollectionType::SourceReferences),
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
+            StateUpdateKind::ClusterSystemConfiguration(_, _) => {
+                Some(CollectionType::ClusterSystemConfiguration)
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(_, _) => {
+                Some(CollectionType::ReplicaSystemConfiguration)
+            }
             StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
             StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
             StateUpdateKind::StorageCollectionMetadata(_, _) => {
@@ -317,35 +345,6 @@ impl StateUpdateKindJson {
         datum.unwrap_str()
     }
 
-    pub(crate) fn audit_log_id(&self) -> u64 {
-        assert!(self.is_audit_log(), "unexpected update kind: {self:?}");
-        let row = self.0.row();
-        let mut iter = row.unpack_first().unwrap_map().iter();
-        let key = iter
-            .find_map(|(field, datum)| if field == "key" { Some(datum) } else { None })
-            .expect("key field must exist")
-            .unwrap_map();
-        let event = key
-            .iter()
-            .find_map(|(field, datum)| if field == "event" { Some(datum) } else { None })
-            .expect("event field must exist")
-            .unwrap_map();
-        let (event_version, versioned_datum) = event.iter().next().expect("event cannot be empty");
-        match event_version {
-            "V1" => {
-                let versioned_map = versioned_datum.unwrap_map();
-                let id = versioned_map
-                    .iter()
-                    .find_map(|(field, datum)| if field == "id" { Some(datum) } else { None })
-                    .expect("event field must exist")
-                    .unwrap_numeric();
-                let mut cx = Numeric::context();
-                cx.try_into_u64(id.into_inner()).expect("invalid id")
-            }
-            version => unimplemented!("unsupported event version: {version}"),
-        }
-    }
-
     /// Returns true if this is an update kind that is always deserializable, even before migrations. Otherwise, returns false.
     pub(crate) fn is_always_deserializable(&self) -> bool {
         // Construct some fake update kinds so we can extract exactly what the kind field will
@@ -368,7 +367,21 @@ impl StateUpdateKindJson {
                         value: String::new(),
                     },
                 ),
-                StateUpdateKind::AuditLog(proto::AuditLogKey { event: None }, ()),
+                StateUpdateKind::AuditLog(
+                    proto::AuditLogKey {
+                        event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
+                            id: 1,
+                            event_type: proto::audit_log_event_v1::EventType::Create,
+                            object_type: proto::audit_log_event_v1::ObjectType::Cluster,
+                            user: None,
+                            occurred_at: proto::EpochMillis { millis: 1 },
+                            details: proto::audit_log_event_v1::Details::ResetAllV1(
+                                proto::Empty {},
+                            ),
+                        }),
+                    },
+                    (),
+                ),
             ]
             .into_iter()
             .map(|kind| {
@@ -385,7 +398,19 @@ impl StateUpdateKindJson {
         // Construct a fake audit log so we can extract exactly what the kind field will serialize
         // as.
         static AUDIT_LOG_KIND: LazyLock<String> = LazyLock::new(|| {
-            let audit_log = StateUpdateKind::AuditLog(proto::AuditLogKey { event: None }, ());
+            let audit_log = StateUpdateKind::AuditLog(
+                proto::AuditLogKey {
+                    event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
+                        id: 1,
+                        event_type: proto::audit_log_event_v1::EventType::Create,
+                        object_type: proto::audit_log_event_v1::ObjectType::Cluster,
+                        user: None,
+                        occurred_at: proto::EpochMillis { millis: 1 },
+                        details: proto::audit_log_event_v1::Details::ResetAllV1(proto::Empty {}),
+                    }),
+                },
+                (),
+            );
             let json_kind: StateUpdateKindJson = audit_log.into();
             json_kind.kind().to_string()
         });
@@ -500,6 +525,22 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     system_configuration,
                 ))
             }
+            StateUpdateKind::ClusterSystemConfiguration(key, value) => {
+                let cluster_system_configuration = into_durable(key, value)?;
+                Some(
+                    memory::objects::StateUpdateKind::ClusterSystemConfiguration(
+                        cluster_system_configuration,
+                    ),
+                )
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(key, value) => {
+                let replica_system_configuration = into_durable(key, value)?;
+                Some(
+                    memory::objects::StateUpdateKind::ReplicaSystemConfiguration(
+                        replica_system_configuration,
+                    ),
+                )
+            }
             StateUpdateKind::SystemObjectMapping(key, value) => {
                 let system_object_mapping = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::SystemObjectMapping(
@@ -544,9 +585,7 @@ impl TryFrom<StateUpdateKindJson> for StateUpdateKind {
     type Error = String;
 
     fn try_from(value: StateUpdateKindJson) -> Result<Self, Self::Error> {
-        let kind: proto::state_update_kind::Kind =
-            value.try_to_serde().map_err(|err| err.to_string())?;
-        let kind = proto::StateUpdateKind { kind: Some(kind) };
+        let kind: proto::StateUpdateKind = value.try_to_serde().map_err(|err| err.to_string())?;
         StateUpdateKind::from_proto(kind).map_err(|err| err.to_string())
     }
 }
@@ -555,9 +594,7 @@ impl TryFrom<&StateUpdateKindJson> for StateUpdateKind {
     type Error = String;
 
     fn try_from(value: &StateUpdateKindJson) -> Result<Self, Self::Error> {
-        let kind: proto::state_update_kind::Kind =
-            value.try_to_serde().map_err(|err| err.to_string())?;
-        let kind = proto::StateUpdateKind { kind: Some(kind) };
+        let kind: proto::StateUpdateKind = value.try_to_serde().map_err(|err| err.to_string())?;
         StateUpdateKind::from_proto(kind).map_err(|err| err.to_string())
     }
 }
@@ -565,7 +602,6 @@ impl TryFrom<&StateUpdateKindJson> for StateUpdateKind {
 impl From<StateUpdateKind> for StateUpdateKindJson {
     fn from(value: StateUpdateKind) -> Self {
         let kind = value.into_proto_owned();
-        let kind = kind.kind.expect("kind should be set");
         StateUpdateKindJson::from_serde(kind)
     }
 }
@@ -580,432 +616,184 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
     }
 
     fn into_proto_owned(self) -> proto::StateUpdateKind {
-        proto::StateUpdateKind {
-            kind: Some(match self {
-                StateUpdateKind::AuditLog(key, _value) => {
-                    proto::state_update_kind::Kind::AuditLog(proto::state_update_kind::AuditLog {
-                        key: Some(key),
-                    })
-                }
-                StateUpdateKind::Cluster(key, value) => {
-                    proto::state_update_kind::Kind::Cluster(proto::state_update_kind::Cluster {
-                        key: Some(key),
-                        value: Some(value),
-                    })
-                }
-                StateUpdateKind::ClusterReplica(key, value) => {
-                    proto::state_update_kind::Kind::ClusterReplica(
-                        proto::state_update_kind::ClusterReplica {
-                            key: Some(key),
-                            value: Some(value),
-                        },
-                    )
-                }
-                StateUpdateKind::Comment(key, value) => {
-                    proto::state_update_kind::Kind::Comment(proto::state_update_kind::Comment {
-                        key: Some(key),
-                        value: Some(value),
-                    })
-                }
-                StateUpdateKind::Config(key, value) => {
-                    proto::state_update_kind::Kind::Config(proto::state_update_kind::Config {
-                        key: Some(key),
-                        value: Some(value),
-                    })
-                }
-                StateUpdateKind::Database(key, value) => {
-                    proto::state_update_kind::Kind::Database(proto::state_update_kind::Database {
-                        key: Some(key),
-                        value: Some(value),
-                    })
-                }
-                StateUpdateKind::DefaultPrivilege(key, value) => {
-                    proto::state_update_kind::Kind::DefaultPrivileges(
-                        proto::state_update_kind::DefaultPrivileges {
-                            key: Some(key),
-                            value: Some(value),
-                        },
-                    )
-                }
-                StateUpdateKind::FenceToken(fence_token) => {
-                    proto::state_update_kind::Kind::FenceToken(
-                        proto::state_update_kind::FenceToken {
-                            deploy_generation: fence_token.deploy_generation,
-                            epoch: fence_token.epoch.get(),
-                        },
-                    )
-                }
-                StateUpdateKind::IdAllocator(key, value) => {
-                    proto::state_update_kind::Kind::IdAlloc(proto::state_update_kind::IdAlloc {
-                        key: Some(key),
-                        value: Some(value),
-                    })
-                }
-                StateUpdateKind::IntrospectionSourceIndex(key, value) => {
-                    proto::state_update_kind::Kind::ClusterIntrospectionSourceIndex(
-                        proto::state_update_kind::ClusterIntrospectionSourceIndex {
-                            key: Some(key),
-                            value: Some(value),
-                        },
-                    )
-                }
-                StateUpdateKind::Item(key, value) => {
-                    proto::state_update_kind::Kind::Item(proto::state_update_kind::Item {
-                        key: Some(key),
-                        value: Some(value),
-                    })
-                }
-                StateUpdateKind::NetworkPolicy(key, value) => {
-                    proto::state_update_kind::Kind::NetworkPolicy(
-                        proto::state_update_kind::NetworkPolicy {
-                            key: Some(key),
-                            value: Some(value),
-                        },
-                    )
-                }
-                StateUpdateKind::Role(key, value) => {
-                    proto::state_update_kind::Kind::Role(proto::state_update_kind::Role {
-                        key: Some(key),
-                        value: Some(value),
-                    })
-                }
-                StateUpdateKind::RoleAuth(key, value) => {
-                    proto::state_update_kind::Kind::RoleAuth(proto::state_update_kind::RoleAuth {
-                        key: Some(key),
-                        value: Some(value),
-                    })
-                }
-                StateUpdateKind::Schema(key, value) => {
-                    proto::state_update_kind::Kind::Schema(proto::state_update_kind::Schema {
-                        key: Some(key),
-                        value: Some(value),
-                    })
-                }
-                StateUpdateKind::Setting(key, value) => {
-                    proto::state_update_kind::Kind::Setting(proto::state_update_kind::Setting {
-                        key: Some(key),
-                        value: Some(value),
-                    })
-                }
-                StateUpdateKind::SourceReferences(key, value) => {
-                    proto::state_update_kind::Kind::SourceReferences(
-                        proto::state_update_kind::SourceReferences {
-                            key: Some(key),
-                            value: Some(value),
-                        },
-                    )
-                }
-                StateUpdateKind::SystemConfiguration(key, value) => {
-                    proto::state_update_kind::Kind::ServerConfiguration(
-                        proto::state_update_kind::ServerConfiguration {
-                            key: Some(key),
-                            value: Some(value),
-                        },
-                    )
-                }
-                StateUpdateKind::SystemObjectMapping(key, value) => {
-                    proto::state_update_kind::Kind::GidMapping(
-                        proto::state_update_kind::GidMapping {
-                            key: Some(key),
-                            value: Some(value),
-                        },
-                    )
-                }
-                StateUpdateKind::SystemPrivilege(key, value) => {
-                    proto::state_update_kind::Kind::SystemPrivileges(
-                        proto::state_update_kind::SystemPrivileges {
-                            key: Some(key),
-                            value: Some(value),
-                        },
-                    )
-                }
-                StateUpdateKind::StorageCollectionMetadata(key, value) => {
-                    proto::state_update_kind::Kind::StorageCollectionMetadata(
-                        proto::state_update_kind::StorageCollectionMetadata {
-                            key: Some(key),
-                            value: Some(value),
-                        },
-                    )
-                }
-                StateUpdateKind::UnfinalizedShard(key, ()) => {
-                    proto::state_update_kind::Kind::UnfinalizedShard(
-                        proto::state_update_kind::UnfinalizedShard { key: Some(key) },
-                    )
-                }
-                StateUpdateKind::TxnWalShard((), value) => {
-                    proto::state_update_kind::Kind::TxnWalShard(
-                        proto::state_update_kind::TxnWalShard { value: Some(value) },
-                    )
-                }
-            }),
+        match self {
+            StateUpdateKind::AuditLog(key, ()) => {
+                proto::StateUpdateKind::AuditLog(proto::AuditLog { key })
+            }
+            StateUpdateKind::Cluster(key, value) => {
+                proto::StateUpdateKind::Cluster(proto::Cluster { key, value })
+            }
+            StateUpdateKind::ClusterReplica(key, value) => {
+                proto::StateUpdateKind::ClusterReplica(proto::ClusterReplica { key, value })
+            }
+            StateUpdateKind::Comment(key, value) => {
+                proto::StateUpdateKind::Comment(proto::Comment { key, value })
+            }
+            StateUpdateKind::Config(key, value) => {
+                proto::StateUpdateKind::Config(proto::Config { key, value })
+            }
+            StateUpdateKind::Database(key, value) => {
+                proto::StateUpdateKind::Database(proto::Database { key, value })
+            }
+            StateUpdateKind::DefaultPrivilege(key, value) => {
+                proto::StateUpdateKind::DefaultPrivileges(proto::DefaultPrivileges { key, value })
+            }
+            StateUpdateKind::FenceToken(fence_token) => {
+                proto::StateUpdateKind::FenceToken(proto::FenceToken {
+                    deploy_generation: fence_token.deploy_generation,
+                    epoch: fence_token.epoch.get(),
+                })
+            }
+            StateUpdateKind::IdAllocator(key, value) => {
+                proto::StateUpdateKind::IdAlloc(proto::IdAlloc { key, value })
+            }
+            StateUpdateKind::IntrospectionSourceIndex(key, value) => {
+                proto::StateUpdateKind::ClusterIntrospectionSourceIndex(
+                    proto::ClusterIntrospectionSourceIndex { key, value },
+                )
+            }
+            StateUpdateKind::Item(key, value) => {
+                proto::StateUpdateKind::Item(proto::Item { key, value })
+            }
+            StateUpdateKind::NetworkPolicy(key, value) => {
+                proto::StateUpdateKind::NetworkPolicy(proto::NetworkPolicy { key, value })
+            }
+            StateUpdateKind::Role(key, value) => {
+                proto::StateUpdateKind::Role(proto::Role { key, value })
+            }
+            StateUpdateKind::RoleAuth(key, value) => {
+                proto::StateUpdateKind::RoleAuth(proto::RoleAuth { key, value })
+            }
+            StateUpdateKind::Schema(key, value) => {
+                proto::StateUpdateKind::Schema(proto::Schema { key, value })
+            }
+            StateUpdateKind::Setting(key, value) => {
+                proto::StateUpdateKind::Setting(proto::Setting { key, value })
+            }
+            StateUpdateKind::SourceReferences(key, value) => {
+                proto::StateUpdateKind::SourceReferences(proto::SourceReferences { key, value })
+            }
+            StateUpdateKind::SystemConfiguration(key, value) => {
+                proto::StateUpdateKind::ServerConfiguration(proto::ServerConfiguration {
+                    key,
+                    value,
+                })
+            }
+            StateUpdateKind::ClusterSystemConfiguration(key, value) => {
+                proto::StateUpdateKind::ClusterSystemConfiguration(
+                    proto::ClusterSystemConfiguration { key, value },
+                )
+            }
+            StateUpdateKind::ReplicaSystemConfiguration(key, value) => {
+                proto::StateUpdateKind::ReplicaSystemConfiguration(
+                    proto::ReplicaSystemConfiguration { key, value },
+                )
+            }
+            StateUpdateKind::SystemObjectMapping(key, value) => {
+                proto::StateUpdateKind::GidMapping(proto::GidMapping { key, value })
+            }
+            StateUpdateKind::SystemPrivilege(key, value) => {
+                proto::StateUpdateKind::SystemPrivileges(proto::SystemPrivileges { key, value })
+            }
+            StateUpdateKind::StorageCollectionMetadata(key, value) => {
+                proto::StateUpdateKind::StorageCollectionMetadata(
+                    proto::StorageCollectionMetadata { key, value },
+                )
+            }
+            StateUpdateKind::UnfinalizedShard(key, ()) => {
+                proto::StateUpdateKind::UnfinalizedShard(proto::UnfinalizedShard { key })
+            }
+            StateUpdateKind::TxnWalShard((), value) => {
+                proto::StateUpdateKind::TxnWalShard(proto::TxnWalShard { value })
+            }
         }
     }
 
     fn from_proto(proto: proto::StateUpdateKind) -> Result<StateUpdateKind, TryFromProtoError> {
-        Ok(
-            match proto
-                .kind
-                .ok_or_else(|| TryFromProtoError::missing_field("StateUpdateKind::kind"))?
-            {
-                proto::state_update_kind::Kind::AuditLog(proto::state_update_kind::AuditLog {
-                    key,
-                }) => StateUpdateKind::AuditLog(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::AuditLog::key")
-                    })?,
-                    (),
-                ),
-                proto::state_update_kind::Kind::Cluster(proto::state_update_kind::Cluster {
-                    key,
-                    value,
-                }) => StateUpdateKind::Cluster(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Cluster::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Cluster::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::ClusterReplica(
-                    proto::state_update_kind::ClusterReplica { key, value },
-                ) => StateUpdateKind::ClusterReplica(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::ClusterReplica::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::ClusterReplica::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::Comment(proto::state_update_kind::Comment {
-                    key,
-                    value,
-                }) => StateUpdateKind::Comment(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Comment::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Comment::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::Config(proto::state_update_kind::Config {
-                    key,
-                    value,
-                }) => StateUpdateKind::Config(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Config::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Config::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::Database(proto::state_update_kind::Database {
-                    key,
-                    value,
-                }) => StateUpdateKind::Database(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Database::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Database::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::DefaultPrivileges(
-                    proto::state_update_kind::DefaultPrivileges { key, value },
-                ) => StateUpdateKind::DefaultPrivilege(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::DefaultPrivileges::key",
-                        )
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::DefaultPrivileges::value",
-                        )
-                    })?,
-                ),
-                proto::state_update_kind::Kind::FenceToken(
-                    proto::state_update_kind::FenceToken {
-                        deploy_generation,
-                        epoch,
-                    },
-                ) => StateUpdateKind::FenceToken(FenceToken {
-                    deploy_generation,
-                    epoch: Epoch::new(epoch).ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Epoch::epoch")
-                    })?,
-                }),
-                proto::state_update_kind::Kind::IdAlloc(proto::state_update_kind::IdAlloc {
-                    key,
-                    value,
-                }) => StateUpdateKind::IdAllocator(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::IdAlloc::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::IdAlloc::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::ClusterIntrospectionSourceIndex(
-                    proto::state_update_kind::ClusterIntrospectionSourceIndex { key, value },
-                ) => StateUpdateKind::IntrospectionSourceIndex(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::ClusterIntrospectionSourceIndex::key",
-                        )
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::ClusterIntrospectionSourceIndex::value",
-                        )
-                    })?,
-                ),
-                proto::state_update_kind::Kind::Item(proto::state_update_kind::Item {
-                    key,
-                    value,
-                }) => StateUpdateKind::Item(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Item::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Item::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::Role(proto::state_update_kind::Role {
-                    key,
-                    value,
-                }) => StateUpdateKind::Role(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Role::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Role::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::RoleAuth(proto::state_update_kind::RoleAuth {
-                    key,
-                    value,
-                }) => StateUpdateKind::RoleAuth(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::RoleAuth::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::RoleAuth::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::Schema(proto::state_update_kind::Schema {
-                    key,
-                    value,
-                }) => StateUpdateKind::Schema(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Schema::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Schema::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::Setting(proto::state_update_kind::Setting {
-                    key,
-                    value,
-                }) => StateUpdateKind::Setting(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Setting::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::Setting::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::ServerConfiguration(
-                    proto::state_update_kind::ServerConfiguration { key, value },
-                ) => StateUpdateKind::SystemConfiguration(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::ServerConfiguration::key",
-                        )
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::ServerConfiguration::value",
-                        )
-                    })?,
-                ),
-                proto::state_update_kind::Kind::GidMapping(
-                    proto::state_update_kind::GidMapping { key, value },
-                ) => StateUpdateKind::SystemObjectMapping(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::GidMapping::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::GidMapping::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::SystemPrivileges(
-                    proto::state_update_kind::SystemPrivileges { key, value },
-                ) => StateUpdateKind::SystemPrivilege(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::SystemPrivileges::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::SystemPrivileges::value",
-                        )
-                    })?,
-                ),
-                proto::state_update_kind::Kind::StorageCollectionMetadata(
-                    proto::state_update_kind::StorageCollectionMetadata { key, value },
-                ) => StateUpdateKind::StorageCollectionMetadata(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::StorageCollectionMetadata::key",
-                        )
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::StorageCollectionMetadata::value",
-                        )
-                    })?,
-                ),
-                proto::state_update_kind::Kind::UnfinalizedShard(
-                    proto::state_update_kind::UnfinalizedShard { key },
-                ) => StateUpdateKind::UnfinalizedShard(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::StorageCollectionMetadata::key",
-                        )
-                    })?,
-                    (),
-                ),
-                proto::state_update_kind::Kind::TxnWalShard(
-                    proto::state_update_kind::TxnWalShard { value },
-                ) => StateUpdateKind::TxnWalShard(
-                    (),
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::TxnWalShard::value")
-                    })?,
-                ),
-                proto::state_update_kind::Kind::SourceReferences(
-                    proto::state_update_kind::SourceReferences { key, value },
-                ) => StateUpdateKind::SourceReferences(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::SourceReferences::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field(
-                            "state_update_kind::SourceReferences::value",
-                        )
-                    })?,
-                ),
-                proto::state_update_kind::Kind::NetworkPolicy(
-                    proto::state_update_kind::NetworkPolicy { key, value },
-                ) => StateUpdateKind::NetworkPolicy(
-                    key.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::NetworkPolicy::key")
-                    })?,
-                    value.ok_or_else(|| {
-                        TryFromProtoError::missing_field("state_update_kind::NetworkPolicy::value")
-                    })?,
-                ),
-            },
-        )
+        Ok(match proto {
+            proto::StateUpdateKind::AuditLog(proto::AuditLog { key }) => {
+                StateUpdateKind::AuditLog(key, ())
+            }
+            proto::StateUpdateKind::Cluster(proto::Cluster { key, value }) => {
+                StateUpdateKind::Cluster(key, value)
+            }
+            proto::StateUpdateKind::ClusterReplica(proto::ClusterReplica { key, value }) => {
+                StateUpdateKind::ClusterReplica(key, value)
+            }
+            proto::StateUpdateKind::Comment(proto::Comment { key, value }) => {
+                StateUpdateKind::Comment(key, value)
+            }
+            proto::StateUpdateKind::Config(proto::Config { key, value }) => {
+                StateUpdateKind::Config(key, value)
+            }
+            proto::StateUpdateKind::Database(proto::Database { key, value }) => {
+                StateUpdateKind::Database(key, value)
+            }
+            proto::StateUpdateKind::DefaultPrivileges(proto::DefaultPrivileges { key, value }) => {
+                StateUpdateKind::DefaultPrivilege(key, value)
+            }
+            proto::StateUpdateKind::FenceToken(proto::FenceToken {
+                deploy_generation,
+                epoch,
+            }) => StateUpdateKind::FenceToken(FenceToken {
+                deploy_generation,
+                epoch: Epoch::new(epoch).ok_or_else(|| {
+                    TryFromProtoError::missing_field("state_update_kind::Epoch::epoch")
+                })?,
+            }),
+            proto::StateUpdateKind::IdAlloc(proto::IdAlloc { key, value }) => {
+                StateUpdateKind::IdAllocator(key, value)
+            }
+            proto::StateUpdateKind::ClusterIntrospectionSourceIndex(
+                proto::ClusterIntrospectionSourceIndex { key, value },
+            ) => StateUpdateKind::IntrospectionSourceIndex(key, value),
+            proto::StateUpdateKind::Item(proto::Item { key, value }) => {
+                StateUpdateKind::Item(key, value)
+            }
+            proto::StateUpdateKind::Role(proto::Role { key, value }) => {
+                StateUpdateKind::Role(key, value)
+            }
+            proto::StateUpdateKind::RoleAuth(proto::RoleAuth { key, value }) => {
+                StateUpdateKind::RoleAuth(key, value)
+            }
+            proto::StateUpdateKind::Schema(proto::Schema { key, value }) => {
+                StateUpdateKind::Schema(key, value)
+            }
+            proto::StateUpdateKind::Setting(proto::Setting { key, value }) => {
+                StateUpdateKind::Setting(key, value)
+            }
+            proto::StateUpdateKind::ServerConfiguration(proto::ServerConfiguration {
+                key,
+                value,
+            }) => StateUpdateKind::SystemConfiguration(key, value),
+            proto::StateUpdateKind::ClusterSystemConfiguration(
+                proto::ClusterSystemConfiguration { key, value },
+            ) => StateUpdateKind::ClusterSystemConfiguration(key, value),
+            proto::StateUpdateKind::ReplicaSystemConfiguration(
+                proto::ReplicaSystemConfiguration { key, value },
+            ) => StateUpdateKind::ReplicaSystemConfiguration(key, value),
+            proto::StateUpdateKind::GidMapping(proto::GidMapping { key, value }) => {
+                StateUpdateKind::SystemObjectMapping(key, value)
+            }
+            proto::StateUpdateKind::SystemPrivileges(proto::SystemPrivileges { key, value }) => {
+                StateUpdateKind::SystemPrivilege(key, value)
+            }
+            proto::StateUpdateKind::StorageCollectionMetadata(
+                proto::StorageCollectionMetadata { key, value },
+            ) => StateUpdateKind::StorageCollectionMetadata(key, value),
+            proto::StateUpdateKind::UnfinalizedShard(proto::UnfinalizedShard { key }) => {
+                StateUpdateKind::UnfinalizedShard(key, ())
+            }
+            proto::StateUpdateKind::TxnWalShard(proto::TxnWalShard { value }) => {
+                StateUpdateKind::TxnWalShard((), value)
+            }
+            proto::StateUpdateKind::SourceReferences(proto::SourceReferences { key, value }) => {
+                StateUpdateKind::SourceReferences(key, value)
+            }
+            proto::StateUpdateKind::NetworkPolicy(proto::NetworkPolicy { key, value }) => {
+                StateUpdateKind::NetworkPolicy(key, value)
+            }
+        })
     }
 }
 
@@ -1078,7 +866,21 @@ mod tests {
                 "Setting",
             ),
             (
-                StateUpdateKind::AuditLog(proto::AuditLogKey { event: None }, ()),
+                StateUpdateKind::AuditLog(
+                    proto::AuditLogKey {
+                        event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
+                            id: 1,
+                            event_type: proto::audit_log_event_v1::EventType::Create,
+                            object_type: proto::audit_log_event_v1::ObjectType::Cluster,
+                            user: None,
+                            occurred_at: proto::EpochMillis { millis: 4 },
+                            details: proto::audit_log_event_v1::Details::ResetAllV1(
+                                proto::Empty {},
+                            ),
+                        }),
+                    },
+                    (),
+                ),
                 "AuditLog",
             ),
         ];
@@ -1087,51 +889,6 @@ mod tests {
             let json_kind: StateUpdateKindJson = kind.into();
             let kind = json_kind.kind().to_string();
             assert_eq!(expected, kind);
-        }
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn audit_log_id_test() {
-        let test_cases = [
-            (
-                StateUpdateKind::AuditLog(
-                    proto::AuditLogKey {
-                        event: Some(proto::audit_log_key::Event::V1(proto::AuditLogEventV1 {
-                            id: 1,
-                            event_type: 2,
-                            object_type: 3,
-                            user: None,
-                            occurred_at: None,
-                            details: None,
-                        })),
-                    },
-                    (),
-                ),
-                1,
-            ),
-            (
-                StateUpdateKind::AuditLog(
-                    proto::AuditLogKey {
-                        event: Some(proto::audit_log_key::Event::V1(proto::AuditLogEventV1 {
-                            id: 4,
-                            event_type: 5,
-                            object_type: 6,
-                            user: None,
-                            occurred_at: None,
-                            details: None,
-                        })),
-                    },
-                    (),
-                ),
-                4,
-            ),
-        ];
-
-        for (kind, expected) in test_cases {
-            let json_kind: StateUpdateKindJson = kind.into();
-            let id = json_kind.audit_log_id();
-            assert_eq!(expected, id);
         }
     }
 

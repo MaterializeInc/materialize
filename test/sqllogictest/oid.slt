@@ -30,6 +30,35 @@ SELECT 4294967296::oid
 query error "-1" OID out of range
 SELECT (-1)::int8::oid
 
+# Regression: the text -> oid parser must accept the full u32 range, not just
+# the i32 range. PostgreSQL accepts the union of the u32 and i32 ranges (the
+# latter reinterpreted), so 2147483648..4294967295 must parse.
+query T
+SELECT '4294967295'::oid
+----
+4294967295
+
+query T
+SELECT '2147483648'::oid
+----
+2147483648
+
+query T
+SELECT '-1'::oid
+----
+4294967295
+
+query T
+SELECT '-2147483648'::oid
+----
+2147483648
+
+query error invalid input syntax for type oid
+SELECT '4294967296'::oid
+
+query error invalid input syntax for type oid
+SELECT '-2147483649'::oid
+
 query B
 SELECT 1::oid = 2::oid
 ----
@@ -91,6 +120,7 @@ SELECT oid, name FROM mz_roles WHERE id LIKE 's%' OR id LIKE 'g%' ORDER BY oid
 16663  mz_monitor
 16664  mz_monitor_redacted
 16984  mz_analytics
+17076  mz_jwt_sync
 
 # Only look at OIDs less than 20000 so that we don't consider system objects allocated at run time.
 query TT
@@ -132,6 +162,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 750  array_in
 849  position
 861  current_database
+868  strpos
 870  lower
 871  upper
 872  initcap
@@ -303,6 +334,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 2037  timezone
 2038  timezone
 2049  to_char
+2050  max
+2051  min
 2058  age
 2069  timezone
 2070  timezone
@@ -809,7 +842,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16682  mz_compute_error_counts_raw
 16683  mz_active_peeks_per_worker
 16684  mz_peek_durations_histogram_raw
-16685  mz_dataflow_shutdown_durations_histogram_raw
 16686  mz_arrangement_heap_size_raw
 16687  mz_arrangement_heap_capacity_raw
 16688  mz_arrangement_heap_allocations_raw
@@ -942,8 +974,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16816  mz_timezone_names
 16817  mz_peek_durations_histogram_per_worker
 16818  mz_peek_durations_histogram
-16819  mz_dataflow_shutdown_durations_histogram_per_worker
-16820  mz_dataflow_shutdown_durations_histogram
 16821  mz_scheduling_elapsed_per_worker
 16822  mz_scheduling_elapsed
 16823  mz_compute_operator_durations_histogram_per_worker
@@ -1140,8 +1170,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17023  mz_wallclock_global_lag_recent_history
 17024  mz_wallclock_global_lag_recent_history_ind
 17025  mz_kafka_source_tables
-17026  mz_continual_tasks
-17027  mz_show_continual_tasks
 17030  mz_objects_id_namespace_types
 17031  mz_object_history
 17032  mz_object_history_ind
@@ -1149,7 +1177,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17034  mz_cluster_replica_name_history_ind
 17035  mz_console_cluster_utilization_overview
 17036  mz_console_cluster_utilization_overview_ind
-17039  mz_continual_tasks_ind
 17040  mz_network_policies
 17041  mz_network_policy_rules
 17042  mz_index_advice
@@ -1174,3 +1201,67 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17062  mz_replacements
 17063  pg_authid_core
 17064  pg_authid_core_ind
+17065  mz_hydration_statuses_ind
+17066  mz_mcp_data_products
+17067  mz_catalog_raw
+17068  mz_cluster_prometheus_metrics
+17069  parse_catalog_id
+17070  parse_catalog_privileges
+17071  mz_mcp_data_product_details
+17072  mz_builtin_materialized_views
+17073  parse_catalog_create_sql
+17074  redact_sql
+17075  repeat_row_non_negative
+17077  mz_ontology_entity_types
+17078  mz_ontology_semantic_types
+17079  mz_ontology_properties
+17080  mz_ontology_link_types
+17081  mz_object_arrangement_sizes
+17082  mz_object_arrangement_sizes_ind
+17083  mz_object_arrangement_size_history
+17084  mz_object_arrangement_size_history_object_ind
+17085  mz_object_arrangement_size_history_ts_ind
+17086  mz_session_role_memberships
+17087  mz_builtin_sources
+17088  mz_cluster_replica_size_internal
+17089  mz_cluster_replica_size_internal_ind
+17090  parse_catalog_acl_mode
+17091  mz_cluster_system_parameters
+17092  mz_replica_system_parameters
+17093  generate_series_unoptimized
+17094  generate_series_unoptimized
+17095  mz_overridden_system_parameters
+17096  mz_console_cluster_utilization_overview_3h
+17097  mz_console_cluster_utilization_overview_3h_ind
+17098  mz_console_cluster_utilization_overview_24h
+17099  mz_console_cluster_utilization_overview_24h_ind
+17100  parse_catalog_audit_log_details
+17101  mz_cluster_reconfigurations
+17102  mz_cluster_reconfigurations_ind
+17103  mz_cluster_auto_scaling_strategies
+17104  mz_cluster_auto_scaling_strategies_ind
+17105  parse_postgres_source_details
+17106  parse_kafka_source_details
+17111  parse_source_export_details
+17112  parse_connection_details
+17113  mz_aws_account_id
+17114  mz_aws_external_id_prefix
+17115  mz_aws_connection_role_arn
+17116  mz_object_graph_edges
+17117  mz_object_graph_edges_ind
+17118  mz_builtin_tables
+17119  mz_builtin_views
+17120  mz_metric_sinks
+17121  mz_metric_sinks_ind
+17122  mz_object_hydration_history
+17123  mz_cluster_replica_resource_usage
+17124  mz_replica_hydration_history
+17125  parse_catalog_item_references
+17126  mz_object_dependencies_raw
+17127  mz_avg_promotion
+17128  mz_avg_promotion_internal_v1
+17129  mz_builtin_indexes
+17130  mz_builtin_log_indexes
+17131  max
+17132  min
+17138  jq

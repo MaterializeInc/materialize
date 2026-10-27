@@ -11,29 +11,29 @@
 Test the LaunchDarkly integration, get configuration flags from LD.
 """
 
+import json
 from itertools import chain
 from os import environ
 from textwrap import dedent
-from time import sleep
+from time import monotonic, sleep
 from typing import Any
 from uuid import uuid1
 
-import launchdarkly_api  # type: ignore
-from launchdarkly_api.api import feature_flags_api  # type: ignore
-from launchdarkly_api.model.client_side_availability_post import (  # type: ignore
+import launchdarkly_api
+import requests
+from launchdarkly_api.api import feature_flags_api
+from launchdarkly_api.models.client_side_availability_post import (
     ClientSideAvailabilityPost,
 )
-from launchdarkly_api.model.defaults import Defaults  # type: ignore
-from launchdarkly_api.model.feature_flag_body import FeatureFlagBody  # type: ignore
-from launchdarkly_api.model.json_patch import JSONPatch  # type: ignore
-from launchdarkly_api.model.patch_operation import PatchOperation  # type: ignore
-from launchdarkly_api.model.patch_with_comment import PatchWithComment  # type: ignore
-from launchdarkly_api.model.variation import Variation  # type: ignore
+from launchdarkly_api.models.defaults import Defaults
+from launchdarkly_api.models.feature_flag_body import FeatureFlagBody
+from launchdarkly_api.models.patch_operation import PatchOperation
+from launchdarkly_api.models.patch_with_comment import PatchWithComment
+from launchdarkly_api.models.variation import Variation
 
 from materialize.mzcompose import DEFAULT_MZ_ENVIRONMENT_ID, DEFAULT_ORG_ID
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
 
@@ -51,9 +51,41 @@ BUILDKITE_PULL_REQUEST = environ.get("BUILDKITE_PULL_REQUEST")
 LD_CONTEXT_KEY = DEFAULT_MZ_ENVIRONMENT_ID
 # A unique feature flag key to use for this test.
 LD_FEATURE_FLAG_KEY = f"ci-test-{BUILDKITE_JOB_ID}"
+# Unique feature flag keys for the scoped (per-cluster / per-replica) cases.
+LD_OPTIMIZER_FLAG_KEY = f"ci-test-optimizer-{BUILDKITE_JOB_ID}"
+LD_LGALLOC_FLAG_KEY = f"ci-test-lgalloc-{BUILDKITE_JOB_ID}"
+# A cluster-coherent (optimizer) parameter and a replica-local parameter, both
+# declared scoped in their definitions.
+OPTIMIZER_PARAM = "enable_eager_delta_joins"
+LGALLOC_PARAM = "enable_lgalloc"
+
+
+def context_rule(
+    context_kind: str, attribute: str, values: list[str], variation: int
+) -> dict[str, Any]:
+    """Builds a LaunchDarkly targeting rule that serves `variation` to contexts
+    of `context_kind` whose `attribute` is in `values`."""
+    return {
+        "variation": variation,
+        "clauses": [
+            {
+                "contextKind": context_kind,
+                "attribute": attribute,
+                "op": "in",
+                "values": values,
+                "negate": False,
+            }
+        ],
+    }
+
+
+# Boolean flag variations: index 0 is `false`, index 1 is `true`.
+BOOL_VARIATIONS: list[Any] = [
+    Variation(value=False, name="false"),
+    Variation(value=True, name="true"),
+]
 
 SERVICES = [
-    CockroachOrPostgresMetadata(),
     Materialized(
         environment_extra=[
             f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
@@ -65,7 +97,8 @@ SERVICES = [
         },
         external_metadata_store=True,
     ),
-    Testdrive(no_reset=True, seed=1),
+    # Include streaming reconnect backoff in the live-update assertion window.
+    Testdrive(no_reset=True, seed=1, default_timeout="120s"),
 ]
 
 
@@ -81,8 +114,8 @@ def workflow_default(c: Composition) -> None:
         configuration=launchdarkly_api.Configuration(
             api_key=dict(ApiKey=LAUNCHDARKLY_API_TOKEN),
         ),
-        project_key="default",
-        environment_key="ci-cd",
+        project_key=environ.get("LAUNCHDARKLY_PROJECT_KEY", "default"),
+        environment_key=environ.get("LAUNCHDARKLY_ENVIRONMENT_KEY", "ci-cd"),
     )
 
     try:
@@ -111,10 +144,6 @@ def workflow_default(c: Composition) -> None:
             LD_FEATURE_FLAG_KEY,
             on=True,
         )
-
-        # 3 seconds should be enough to avoid race conditions between the update
-        # above and the query below.
-        sleep(3)
 
         # Assert that the value is as expected after the initial parameter sync.
         with c.override(
@@ -186,7 +215,6 @@ def workflow_default(c: Composition) -> None:
             c.testdrive(
                 "\n".join(
                     [
-                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
                         "$ postgres-execute connection=mz_system",
                         command,
                     ]
@@ -231,21 +259,304 @@ def workflow_default(c: Composition) -> None:
         # turned off).
         c.testdrive("\n".join(["> SHOW max_result_size", "1GB"]))
         c.stop("materialized")
+
+        # Exercise the scoped (per-cluster / per-replica) feature flags.
+        run_scoped_feature_flag_cases(c, ld_client)
     except launchdarkly_api.ApiException as e:
-        raise UIError(
-            dedent(
-                f"""
+        raise UIError(dedent(f"""
                 Error when calling the Launch Darkly API.
                 - Status: {e.status},
                 - Reason: {e.reason},
-                """
-            )
-        )
+                """))
     finally:
         try:
             ld_client.delete_flag(LD_FEATURE_FLAG_KEY)
         except:
             pass  # ignore exceptions on cleanup
+
+
+def run_scoped_feature_flag_cases(
+    c: Composition, ld_client: "LaunchDarklyClient"
+) -> None:
+    """Demonstrates per-cluster (cluster-coherent) and per-replica
+    (replica-local) LaunchDarkly overrides, plus their durability across a
+    restart.
+
+    Cluster case: a cluster-coherent optimizer feature is served `true` to the
+    builtin clusters (e.g. `mz_catalog_server`) and `false` to user clusters,
+    targeted by the `cluster` context's `is_builtin` attribute.
+
+    Replica case: the replica-local `enable_lgalloc` flag is served `false` only
+    to replicas whose `replica_size_family` is `legacy`, while modern (`cc`)
+    replicas keep the environment-wide value, targeted by the `replica`
+    context's `replica_size_family` attribute.
+    """
+    # A materialized that syncs the scoped flags. The key map ties the
+    # cluster-coherent optimizer parameter and the replica-local lgalloc
+    # parameter to their LD flags, alongside the original max_result_size flag.
+    # MZ_LAUNCHDARKLY_KEY_MAP entries are `;`-separated (the CLI arg's value
+    # delimiter), not comma-separated.
+    key_map = ";".join(
+        [
+            f"max_result_size={LD_FEATURE_FLAG_KEY}",
+            f"{OPTIMIZER_PARAM}={LD_OPTIMIZER_FLAG_KEY}",
+            f"{LGALLOC_PARAM}={LD_LGALLOC_FLAG_KEY}",
+        ]
+    )
+    scoped_mz = Materialized(
+        environment_extra=[
+            f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
+            f"MZ_LAUNCHDARKLY_KEY_MAP={key_map}",
+            "MZ_CONFIG_SYNC_LOOP_INTERVAL=1s",
+        ],
+        additional_system_parameter_defaults={
+            "log_filter": "mz_adapter::catalog=debug,mz_adapter::config=debug",
+        },
+        external_metadata_store=True,
+    )
+
+    try:
+        # Cluster-coherent optimizer flag. Fallthrough serves the env-wide
+        # `false`. The rules carve out per-cluster opinions:
+        #   * builtin clusters (`is_builtin`) and a same-named user cluster
+        #     (`ld_role`, by name) are served `true`, which differs from env-wide,
+        #     so it is recorded.
+        #   * `quickstart` is served the env-wide `false`. That rule *matches*
+        #     but the served value does not differ from env-wide, so it must NOT
+        #     record a row. This guards the recording rule: a bare LD match is
+        #     not, by itself, a cluster opinion. Only a *differing* value is.
+        optimizer_rules = [
+            context_rule("cluster", "is_builtin", ["true"], 1),
+            context_rule("cluster", "cluster_name", ["ld_role", "ld_sync"], 1),
+            context_rule("cluster", "cluster_name", ["quickstart"], 0),
+        ]
+        ld_client.create_flag(
+            LD_OPTIMIZER_FLAG_KEY,
+            tags=["ci-test"],
+            variations=BOOL_VARIATIONS,
+            off_variation=0,
+            on_variation=0,
+        )
+        ld_client.update_targeting(
+            LD_OPTIMIZER_FLAG_KEY,
+            on=True,
+            rules=optimizer_rules,
+        )
+
+        # Replica-local lgalloc flag: fallthrough serves `true` (the env-wide
+        # default), a rule serves `false` to the legacy size family.
+        ld_client.create_flag(
+            LD_LGALLOC_FLAG_KEY,
+            tags=["ci-test"],
+            variations=BOOL_VARIATIONS,
+            off_variation=0,
+            on_variation=1,
+        )
+        ld_client.update_targeting(
+            LD_LGALLOC_FLAG_KEY,
+            on=True,
+            rules=[context_rule("replica", "replica_size_family", ["legacy"], 0)],
+        )
+
+        with c.override(scoped_mz):
+            c.up("materialized")
+
+            # A user cluster with a legacy-family replica (to contrast with the
+            # builtin / `cc` defaults), plus `ld_role`, targeted by name to
+            # exercise recreate semantics below.
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ postgres-execute connection=mz_system",
+                        "CREATE CLUSTER ld_legacy SIZE 'scale=1,workers=1,legacy'",
+                        "CREATE CLUSTER ld_role SIZE 'scale=1,workers=1,legacy'",
+                    ]
+                )
+            )
+
+            # Allow a few sync ticks to evaluate the new clusters/replicas.
+            sleep(5)
+
+            # Cluster case + differs-from-env guard. Recorded rows are sparse:
+            # `mz_catalog_server` (is_builtin rule) and `ld_role` (name rule)
+            # differ from the env-wide `false` and are recorded. `quickstart`
+            # (rule serves the env-wide `false`) and `ld_legacy` (fallthrough)
+            # carry no differing value, so they have no row. If either appears,
+            # the recording rule has regressed to keying on the LD match.
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT c.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id WHERE p.name = '{OPTIMIZER_PARAM}' AND c.name IN ('mz_catalog_server', 'quickstart', 'ld_legacy', 'ld_role') ORDER BY c.name",
+                        "ld_role true",
+                        "mz_catalog_server true",
+                    ]
+                )
+            )
+
+            # Replica case: the legacy-family replica's `false` differs from the
+            # env-wide `true` and is recorded. The `cc`-family quickstart replica
+            # falls through to the env-wide value, so it has no override row.
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT cr.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas cr ON cr.id = p.replica_id JOIN mz_clusters c ON c.id = cr.cluster_id WHERE p.name = '{LGALLOC_PARAM}' AND c.name IN ('ld_legacy', 'quickstart') ORDER BY c.name",
+                        "r1 false",
+                    ]
+                )
+            )
+
+            # Recreate semantics: a `cluster_name` rule is a *role* predicate, so
+            # it must re-apply to a recreated same-named cluster (which gets a
+            # fresh id, never the old one). Drop and recreate `ld_role`. The
+            # override returns under the new id.
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ postgres-execute connection=mz_system",
+                        "DROP CLUSTER ld_role",
+                        "CREATE CLUSTER ld_role SIZE 'scale=1,workers=1,legacy'",
+                    ]
+                )
+            )
+            sleep(5)
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT c.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id WHERE p.name = '{OPTIMIZER_PARAM}' AND c.name = 'ld_role'",
+                        "ld_role true",
+                    ]
+                )
+            )
+
+            # Bidirectional reconcile: the sync loop is the sole writer and must
+            # *remove* an override once LD no longer serves a differing value.
+            # Clear the rules so every cluster falls through to env-wide. All
+            # rows for the parameter disappear. Restoring the rules brings them
+            # back, exercising propagation in both directions.
+            ld_client.update_targeting(LD_OPTIMIZER_FLAG_KEY, rules=[])
+            sleep(5)
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT count(*) FROM mz_internal.mz_cluster_system_parameters WHERE name = '{OPTIMIZER_PARAM}'",
+                        "0",
+                    ]
+                )
+            )
+            ld_client.update_targeting(
+                LD_OPTIMIZER_FLAG_KEY,
+                rules=optimizer_rules,
+            )
+            sleep(5)
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT c.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id WHERE p.name = '{OPTIMIZER_PARAM}' AND c.name IN ('mz_catalog_server', 'ld_role') ORDER BY c.name",
+                        "ld_role true",
+                        "mz_catalog_server true",
+                    ]
+                )
+            )
+
+            c.stop("materialized")
+
+        # Durability: restart without the sync loop and assert the scoped values
+        # are restored from the durable cache, including the recreated
+        # `ld_role` cluster override and the legacy replica override.
+        with c.override(Materialized(external_metadata_store=True)):
+            c.up("materialized")
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT c.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id WHERE p.name = '{OPTIMIZER_PARAM}' AND c.name IN ('mz_catalog_server', 'ld_role') ORDER BY c.name",
+                        "ld_role true",
+                        "mz_catalog_server true",
+                        f"> SELECT cr.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas cr ON cr.id = p.replica_id JOIN mz_clusters c ON c.id = cr.cluster_id WHERE p.name = '{LGALLOC_PARAM}' AND c.name IN ('ld_legacy', 'quickstart') ORDER BY c.name",
+                        "r1 false",
+                    ]
+                )
+            )
+            c.stop("materialized")
+
+        # Create-time resolution: a cluster and its replicas created between sync
+        # ticks must resolve their overrides synchronously, before the cluster's
+        # first plan (cluster-coherent, optimizer features are baked into
+        # immutable dataflows) and before the replica renders (replica-local,
+        # render-frozen flags like the column-paged batcher). We isolate this from
+        # the periodic loop by running with a very long sync interval: the
+        # frontend is still installed on the first (immediate) tick, but no
+        # further reconcile happens during the test, so a row that appears right
+        # after `CREATE CLUSTER` can only come from create-time resolution.
+        # (testdrive `>` retries, but the periodic loop cannot fire within the
+        # retry window at this interval.)
+        slow_mz = Materialized(
+            environment_extra=[
+                f"MZ_LAUNCHDARKLY_SDK_KEY={LAUNCHDARKLY_SDK_KEY}",
+                f"MZ_LAUNCHDARKLY_KEY_MAP={key_map}",
+                "MZ_CONFIG_SYNC_LOOP_INTERVAL=3600s",
+            ],
+            external_metadata_store=True,
+        )
+        with c.override(slow_mz):
+            c.up("materialized")
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ postgres-execute connection=mz_system",
+                        "CREATE CLUSTER ld_sync SIZE 'scale=1,workers=1,legacy'",
+                    ]
+                )
+            )
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT c.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id WHERE p.name = '{OPTIMIZER_PARAM}' AND c.name = 'ld_sync'",
+                        "ld_sync true",
+                    ]
+                )
+            )
+            # Create-time replica resolution: `ld_sync` is a legacy-family
+            # cluster, so its replica is served `enable_lgalloc=false`, which
+            # differs from the env-wide `true` and is recorded. The override is
+            # folded into the create transaction, so the row appears immediately,
+            # before the (disabled) sync loop could write it. This is the
+            # replica-local counterpart to the cluster-coherent case above, and it
+            # would not appear if the replica's override were resolved only after
+            # the create transaction.
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT cr.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas cr ON cr.id = p.replica_id JOIN mz_clusters c ON c.id = cr.cluster_id WHERE p.name = '{LGALLOC_PARAM}' AND c.name = 'ld_sync'",
+                        "r1 false",
+                    ]
+                )
+            )
+
+            # Controller-created replicas use the same create-time fold. Record
+            # the initial replica, force a shape change, then require the new
+            # replica's row before the periodic sync can run.
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ set-from-sql var=ld_sync_replica_id",
+                        "SELECT cr.id::text FROM mz_cluster_replicas cr JOIN mz_clusters c ON c.id = cr.cluster_id WHERE c.name = 'ld_sync'",
+                        "$ postgres-execute connection=mz_system",
+                        "ALTER CLUSTER ld_sync SET (INTROSPECTION DEBUGGING = TRUE)",
+                        f"> SELECT cr.id::text <> '${{ld_sync_replica_id}}', p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas cr ON cr.id = p.replica_id JOIN mz_clusters c ON c.id = cr.cluster_id WHERE p.name = '{LGALLOC_PARAM}' AND c.name = 'ld_sync' AND cr.id::text <> '${{ld_sync_replica_id}}'",
+                        "true false",
+                    ]
+                )
+            )
+            c.stop("materialized")
+    finally:
+        for flag in (
+            LD_OPTIMIZER_FLAG_KEY,
+            LD_LGALLOC_FLAG_KEY,
+        ):
+            try:
+                ld_client.delete_flag(flag)
+            except:
+                pass  # ignore exceptions on cleanup
 
 
 class LaunchDarklyClient:
@@ -264,7 +575,21 @@ class LaunchDarklyClient:
         self.project_key = project_key
         self.environment_key = environment_key
 
-    def create_flag(self, feature_flag_key: str, tags: list[str] = []) -> Any:
+    def create_flag(
+        self,
+        feature_flag_key: str,
+        tags: list[str] = [],
+        variations: list[Any] | None = None,
+        off_variation: int = 0,
+        on_variation: int = 1,
+    ) -> Any:
+        if variations is None:
+            variations = [
+                Variation(value=1073741824, name="1 GiB"),
+                Variation(value=2147483648, name="2 GiB"),
+                Variation(value=3221225472, name="3 GiB"),
+                Variation(value=4294967295, name="4 GiB - 1 (max size)"),
+            ]
         with launchdarkly_api.ApiClient(self.configuration) as api_client:
             api = feature_flags_api.FeatureFlagsApi(api_client)
             return api.post_feature_flag(
@@ -272,21 +597,16 @@ class LaunchDarklyClient:
                 feature_flag_body=FeatureFlagBody(
                     name=feature_flag_key,
                     key=feature_flag_key,
-                    client_side_availability=ClientSideAvailabilityPost(
-                        using_environment_id=True,
-                        using_mobile_key=True,
+                    clientSideAvailability=ClientSideAvailabilityPost(
+                        usingEnvironmentId=True,
+                        usingMobileKey=True,
                     ),
-                    variations=[
-                        Variation(value=1073741824, name="1 GiB"),
-                        Variation(value=2147483648, name="2 GiB"),
-                        Variation(value=3221225472, name="3 GiB"),
-                        Variation(value=4294967295, name="4 GiB - 1 (max size)"),
-                    ],
+                    variations=variations,
                     temporary=False,
                     tags=tags,
                     defaults=Defaults(
-                        off_variation=0,
-                        on_variation=1,
+                        offVariation=off_variation,
+                        onVariation=on_variation,
                     ),
                 ),
             )
@@ -296,43 +616,123 @@ class LaunchDarklyClient:
         feature_flag_key: str,
         on: bool | None = None,
         contextTargets: list[Any] | None = None,
+        rules: list[Any] | None = None,
     ) -> Any:
         with launchdarkly_api.ApiClient(self.configuration) as api_client:
             api = feature_flags_api.FeatureFlagsApi(api_client)
-            return api.patch_feature_flag(
+            flag = api.patch_feature_flag(
                 project_key=self.project_key,
                 feature_flag_key=feature_flag_key,
                 patch_with_comment=PatchWithComment(
-                    patch=JSONPatch(
-                        list(
-                            chain(
-                                (
-                                    [
-                                        PatchOperation(
-                                            op="replace",
-                                            path=f"/environments/{self.environment_key}/on",
-                                            value=on,
-                                        )
-                                    ]
-                                    if on is not None
-                                    else []
-                                ),
-                                (
-                                    [
-                                        PatchOperation(
-                                            op="replace",
-                                            path=f"/environments/{self.environment_key}/contextTargets",
-                                            value=contextTargets,
-                                        ),
-                                    ]
-                                    if contextTargets is not None
-                                    else []
-                                ),
-                            )
+                    patch=list(
+                        chain(
+                            (
+                                [
+                                    PatchOperation(
+                                        op="replace",
+                                        path=f"/environments/{self.environment_key}/on",
+                                        value=on,
+                                    )
+                                ]
+                                if on is not None
+                                else []
+                            ),
+                            (
+                                [
+                                    PatchOperation(
+                                        op="replace",
+                                        path=f"/environments/{self.environment_key}/contextTargets",
+                                        value=contextTargets,
+                                    ),
+                                ]
+                                if contextTargets is not None
+                                else []
+                            ),
+                            (
+                                [
+                                    PatchOperation(
+                                        op="replace",
+                                        path=f"/environments/{self.environment_key}/rules",
+                                        value=rules,
+                                    ),
+                                ]
+                                if rules is not None
+                                else []
+                            ),
                         )
                     )
                 ),
             )
+        # `environments` is optional in the response model, but the patched flag
+        # always carries its environment configurations.
+        assert flag.environments is not None
+        self.wait_for_propagation(
+            feature_flag_key, flag.environments[self.environment_key].version
+        )
+        return flag
+
+    def wait_for_propagation(self, feature_flag_key: str, version: int) -> None:
+        """Probe fresh SDK stream snapshots until one contains the updated flag."""
+        assert LAUNCHDARKLY_SDK_KEY is not None
+        # A successful management API write does not imply SDK visibility. In
+        # particular, the boot-only assertion has no sync loop to repair a stale
+        # initial read. Probe the same initial snapshot endpoint that boot uses,
+        # not the polling endpoint or later patches on an already-open stream.
+        # These versions are environment-specific, not the flag's top-level
+        # management API version.
+        deadline = monotonic() + 120
+        observed: int | str | None = "no snapshot"
+        while monotonic() < deadline:
+            try:
+                with requests.get(
+                    "https://stream.launchdarkly.com/all",
+                    headers={"Authorization": LAUNCHDARKLY_SDK_KEY},
+                    stream=True,
+                    timeout=10,
+                ) as response:
+                    response.raise_for_status()
+                    response.encoding = "utf-8"
+                    event = ""
+                    data: list[str] = []
+                    for line in response.iter_lines(decode_unicode=True):
+                        if monotonic() >= deadline:
+                            break
+                        if line.startswith("event:"):
+                            event = line[len("event:") :].strip()
+                        elif line.startswith("data:"):
+                            data.append(line[len("data:") :].lstrip())
+                        elif not line and data:
+                            snapshot = json.loads("\n".join(data))
+                            if event != "put" or snapshot["path"] != "/":
+                                raise UIError(
+                                    "Expected an initial root put from SDK stream"
+                                )
+                            flag = snapshot["data"]["flags"].get(feature_flag_key)
+                            snapshot_version = (
+                                flag["version"] if flag is not None else None
+                            )
+                            observed = snapshot_version
+                            if (
+                                snapshot_version is not None
+                                and snapshot_version >= version
+                            ):
+                                print(
+                                    f"SDK snapshot contains {feature_flag_key} version "
+                                    f"{observed} (wanted {version})"
+                                )
+                                return
+                            break
+            except requests.HTTPError as e:
+                if e.response is None or e.response.status_code < 500:
+                    raise
+                observed = f"HTTP {e.response.status_code}"
+            except (requests.ConnectionError, requests.Timeout) as e:
+                observed = type(e).__name__
+            sleep(1)
+        raise UIError(
+            f"SDK propagation timed out for {feature_flag_key}: "
+            f"expected version >= {version}, last observed {observed}"
+        )
 
     def delete_flag(self, feature_flag_key: str) -> Any:
         with launchdarkly_api.ApiClient(self.configuration) as api_client:

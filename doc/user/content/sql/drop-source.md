@@ -72,7 +72,7 @@ DROP SOURCE IF EXISTS my_source;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-source.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-source" %}}
 
 ## Related pages
 

@@ -12,10 +12,8 @@ Use `ALTER VIEW` to:
 
 ## Syntax
 
-{{< tabs >}}
+{{< tabs level=3 >}}
 {{< tab "Rename" >}}
-
-### Rename
 
 To rename a view:
 
@@ -23,8 +21,6 @@ To rename a view:
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
-
-### Change owner
 
 To change the owner of a view:
 
@@ -38,5 +34,4 @@ To change the owner of a view:
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/alter-view.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-view" %}}

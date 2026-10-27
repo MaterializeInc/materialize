@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use mz_ore::retry::Retry;
+use mz_postgres_util::{query, sql};
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
@@ -32,19 +33,19 @@ pub async fn run_verify_slot(
         .initial_backoff(Duration::from_millis(50))
         .max_duration(cmp::max(state.default_timeout, Duration::from_secs(60)))
         .retry_async_canceling(|_| async {
-            println!(">> checking for postgres replication slot {}", &slot);
-            let rows = client
-                .query(
-                    "SELECT active_pid FROM pg_replication_slots WHERE slot_name LIKE $1::TEXT",
-                    &[&slot],
-                )
-                .await
-                .context("querying postgres for replication slot")?;
+            println!(">> checking for postgres replication slot {}", slot);
+            let rows = query(
+                &client,
+                sql!("SELECT active_pid FROM pg_replication_slots WHERE slot_name LIKE $1::TEXT"),
+                &[&slot],
+            )
+            .await
+            .context("querying postgres for replication slot")?;
 
             if rows.len() != 1 {
                 bail!(
                     "expected entry for slot {} in pg_replication slots, found {}",
-                    &slot,
+                    slot,
                     rows.len()
                 );
             }

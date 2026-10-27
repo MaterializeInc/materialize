@@ -41,6 +41,8 @@
 //! }
 //! ```
 
+use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
@@ -58,6 +60,7 @@ use prometheus::core::{
 use prometheus::proto::MetricFamily;
 use prometheus::{HistogramOpts, Registry};
 
+pub mod aggregation;
 mod delete_on_drop;
 
 pub use delete_on_drop::*;
@@ -73,6 +76,8 @@ macro_rules! metric {
         $(, const_labels: { $($cl_key:expr => $cl_value:expr ),* })?
         $(, var_labels: [ $($vl_name:expr),* ])?
         $(, buckets: $bk_name:expr)?
+        $(, visibility: $visibility:expr)?
+        $(, tags: [ $($tag:expr),* $(,)? ])?
         $(,)?
     ) => {{
         let const_labels = (&[
@@ -94,6 +99,14 @@ macro_rules! metric {
         };
         // Set buckets if passed
         $(mk_opts.buckets = Some($bk_name);)*
+        // `visibility` is documentation metadata for the metrics catalog
+        // (`bin/gen-metrics-catalog`).
+        // It has no runtime effect; we only type-check it here so a bad value is
+        // a compile error rather than silently ignored.
+        $(let _: $crate::metrics::MetricVisibility = $visibility;)?
+        // `tags` is documentation metadata for the metrics catalog.
+        // It has no runtime effect.
+        $($(let _: $crate::metrics::MetricTag = $tag;)*)?
         mk_opts
     }}
 }
@@ -106,6 +119,44 @@ pub struct MakeCollectorOpts {
     /// Buckets to be used with Histogram and HistogramVec. Must be set to create Histogram types
     /// and must not be set for other types.
     pub buckets: Option<Vec<f64>>,
+}
+
+/// This is documentation metadata: it is set via the optional `visibility:`
+/// field of [`metric!`] and consumed by the metrics catalog
+/// (`bin/gen-metrics-catalog`), which reads it from the source tree to produce
+/// the user-facing metrics reference. It has no effect on the metric at
+/// runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricVisibility {
+    /// A metric we use for internal development.
+    #[default]
+    Internal,
+    /// A metric we want customers to build dashboards and
+    /// alerts on. We do not guarantee stability for this group
+    /// of metrics.
+    Public,
+}
+
+/// A tag categorizing a metric in the user-facing metrics catalog.
+///
+/// It is set via the optional `tags:` field of [`metric!`] and
+/// consumed by the metrics catalog (`bin/gen-metrics-catalog`).
+/// It has no effect on the metric at runtime.
+///
+/// A metric may carry many tags, or none (the default). A tag names the
+/// grouping the metric is presented under in user-facing documentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MetricTag {
+    /// SQL Control plane metrics (client connections, availability, catalog).
+    Environment,
+    /// Metrics for compute objects (indexes, materialized views).
+    Compute,
+    /// Metrics for sources.
+    Source,
+    /// Metrics for sinks.
+    Sink,
 }
 
 /// The materialize metrics registry.
@@ -238,6 +289,60 @@ impl MetricsRegistry {
         self.inner
             .register(Box::new(collector))
             .expect("registering pre-defined metrics collector");
+    }
+
+    /// Register a pre-defined collector and return a handle that unregisters it on drop.
+    ///
+    /// Use this for collectors with a bounded lifetime (e.g. a metric sink that is torn down with
+    /// its dataflow), so the collector's series stop being scraped once the owner drops the handle.
+    /// The returned value is opaque: the caller only needs to hold it for as long as the collector
+    /// should stay registered, then drop it.
+    ///
+    /// `prometheus::Registry::unregister` matches a collector by the id of its `Desc`s, not by
+    /// object identity, so the guard keeps a clone of the collector and hands it back to
+    /// `unregister` on drop.
+    ///
+    /// If a collector with the same descriptor id is already registered this soft-panics and
+    /// returns a handle that owns no registration. A duplicate registration is a logic error, but
+    /// panicking here would run on a worker thread and could crash the process, so it degrades to
+    /// missing series rather than taking down the whole scrape. The contract is that a caller
+    /// replacing a collector must drop the old handle before registering the new one: doing so
+    /// unregisters the old descriptor id first, so the re-registration succeeds cleanly.
+    ///
+    /// A caller that expects such a collision should use
+    /// [`MetricsRegistry::try_register_collector_with_dropper`] instead.
+    pub fn register_collector_with_dropper<C>(&self, collector: C) -> Box<dyn Any + Send + Sync>
+    where
+        C: 'static + prometheus::core::Collector + Clone + Send + Sync,
+    {
+        self.try_register_collector_with_dropper(collector)
+            .unwrap_or_else(|e| {
+                crate::soft_panic_or_log!("collector already registered: {e}");
+                // Nothing was registered, so the handle must not unregister anything on drop.
+                Box::new(())
+            })
+    }
+
+    /// Like [`MetricsRegistry::register_collector_with_dropper`], but returns `Err` on a duplicate
+    /// descriptor id instead of soft-panicking.
+    ///
+    /// For callers that expect a transient collision, where a collector is re-registered before
+    /// its predecessor's teardown has dropped the old handle, and want to retry until the id frees
+    /// up. Nothing is registered on `Err`, so the caller may retry with the same collector.
+    pub fn try_register_collector_with_dropper<C>(
+        &self,
+        collector: C,
+    ) -> Result<Box<dyn Any + Send + Sync>, prometheus::Error>
+    where
+        C: 'static + prometheus::core::Collector + Clone + Send + Sync,
+    {
+        self.inner.register(Box::new(collector.clone()))?;
+        // `prometheus::Registry` is `Arc`-backed, so this clone is cheap and shares the same
+        // underlying registry the collector was registered into.
+        let registry = self.inner.clone();
+        Ok(Box::new(scopeguard::guard(collector, move |c| {
+            let _ = registry.unregister(Box::new(c));
+        })))
     }
 
     /// Registers a metric postprocessor.
@@ -789,6 +894,42 @@ pub fn register_runtime_metrics(
         };
     }
 
+    macro_rules! register_per_worker {
+        ($method:ident, $doc:literal) => {
+            let metrics = runtime_metrics.clone();
+            registry.register_computed_gauge::<prometheus::core::AtomicU64>(
+                crate::metric!(
+                    name: concat!("mz_tokio_", stringify!($method)),
+                    help: $doc,
+                    const_labels: {"runtime" => name},
+                ),
+                move || {
+                    (0..metrics.num_workers())
+                        .map(|i| <u64 as crate::cast::CastFrom<_>>::cast_from(metrics.$method(i)))
+                        .sum::<u64>()
+                },
+            );
+        };
+    }
+
+    macro_rules! register_per_worker_duration_secs {
+        ($method:ident, $doc:literal) => {
+            let metrics = runtime_metrics.clone();
+            registry.register_computed_gauge::<prometheus::core::AtomicF64>(
+                crate::metric!(
+                    name: concat!("mz_tokio_", stringify!($method)),
+                    help: $doc,
+                    const_labels: {"runtime" => name},
+                ),
+                move || {
+                    (0..metrics.num_workers())
+                        .map(|i| metrics.$method(i).as_secs_f64())
+                        .sum::<f64>()
+                },
+            );
+        };
+    }
+
     register!(
         num_workers,
         "The number of worker threads used by the runtime."
@@ -801,6 +942,19 @@ pub fn register_runtime_metrics(
         global_queue_depth,
         "The number of tasks currently scheduled in the runtime's global queue."
     );
+    register_per_worker_duration_secs!(
+        worker_total_busy_duration,
+        "The amount of time the worker threads have been busy, in seconds."
+    );
+    register_per_worker!(
+        worker_park_count,
+        "The total number of times the worker threads have parked."
+    );
+    register_per_worker!(
+        worker_park_unpark_count,
+        "The total number of times the worker threads have parked and unparked."
+    );
+
     #[cfg(tokio_unstable)]
     {
         register!(
@@ -810,6 +964,14 @@ pub fn register_runtime_metrics(
         register!(
             num_idle_blocking_threads,
             "The number of idle threads which have spawned by the runtime for spawn_blocking calls."
+        );
+        register_per_worker!(
+            worker_local_queue_depth,
+            "The number of tasks currently scheduled in the workers' local queues."
+        );
+        register!(
+            blocking_queue_depth,
+            "The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking."
         );
         register!(
             spawned_tasks_count,
@@ -823,10 +985,97 @@ pub fn register_runtime_metrics(
             budget_forced_yield_count,
             "The number of times that tasks have been forced to yield back to the scheduler after exhausting their task budgets."
         );
-        register!(
-            blocking_queue_depth,
-            "The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking."
+        register_per_worker!(
+            worker_noop_count,
+            "The number of times the given worker thread unparked but performed no work before parking again."
         );
+        register_per_worker!(
+            worker_steal_count,
+            "The number of tasks the given worker thread stole from another worker thread."
+        );
+        register_per_worker!(
+            worker_steal_operations,
+            "The number of times the given worker thread stole tasks from another worker thread."
+        );
+        register_per_worker!(
+            worker_poll_count,
+            "The number of tasks the given worker thread has polled."
+        );
+        register_per_worker!(
+            worker_local_schedule_count,
+            "The number of tasks scheduled from within the runtime on the given worker's local queue."
+        );
+        register_per_worker!(
+            worker_overflow_count,
+            "The number of times the given worker thread saturated its local queue."
+        );
+        register_per_worker_duration_secs!(
+            worker_mean_poll_time,
+            "The mean duration of task polls in seconds."
+        );
+    }
+}
+
+/// Returns the `(name, help, labels, source)` of every Tokio runtime metric
+/// registered by [`register_runtime_metrics`].
+#[cfg(feature = "async")]
+pub fn describe_runtime_metrics() -> Vec<(String, String, Vec<String>, &'static str)> {
+    // A current-thread runtime is enough to enumerate the metrics; we only read
+    // their names, help text, and labels, never their values.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("building a current-thread runtime");
+    let registry = MetricsRegistry::new();
+    register_runtime_metrics("describe", runtime.handle().metrics(), &registry);
+    registry
+        .gather()
+        .into_iter()
+        .map(|mf| {
+            // Every series in a family shares the same label keys, so the first
+            // metric's labels are representative.
+            let mut labels: Vec<String> = mf
+                .get_metric()
+                .first()
+                .map(|m| m.get_label().iter().map(|l| l.name().to_owned()).collect())
+                .unwrap_or_default();
+            labels.sort();
+            labels.dedup();
+            (mf.name().to_owned(), mf.help().to_owned(), labels, file!())
+        })
+        .collect()
+}
+
+/// Removes every child of `vec` whose label `name` has the value `value`.
+///
+/// Prometheus removes children only by their full label tuple, so this learns
+/// the tuples by collecting the vec, which clones every child once. Meant for
+/// occasional cleanup such as dropping an object's series, not for hot paths.
+pub fn remove_children_with_label<V: MetricVec_ + Collector>(vec: &V, name: &str, value: &str) {
+    let descs = vec.desc();
+    // A metric vec has exactly one `Desc`.
+    let Some(desc) = descs.first() else {
+        return;
+    };
+    for family in vec.collect() {
+        for child in family.get_metric() {
+            let labels: BTreeMap<&str, &str> = child
+                .get_label()
+                .iter()
+                .map(|pair| (pair.name(), pair.value()))
+                .collect();
+            if labels.get(name) != Some(&value) {
+                continue;
+            }
+            let values: Vec<&str> = desc
+                .variable_labels
+                .iter()
+                .map(|label| labels.get(label.as_str()).copied().unwrap_or_default())
+                .collect();
+            // `remove_label_values` fails when the series is already gone, which happens
+            // if another caller removed it between the `collect` snapshot above and now.
+            // That is the state we wanted, so the error is ignored.
+            let _ = vec.remove_label_values(&values);
+        }
     }
 }
 
@@ -834,6 +1083,7 @@ pub fn register_runtime_metrics(
 mod tests {
     use std::time::Duration;
 
+    use prometheus::core::Collector;
     use prometheus::{CounterVec, HistogramVec};
 
     use crate::stats::histogram_seconds_buckets;
@@ -910,8 +1160,9 @@ mod tests {
 
         let exec_histogram = exec_metric[0].get_histogram();
         assert_eq!(exec_histogram.get_sample_count(), 1);
-        // This future will normally complete very quickly, but it's hard to guarantee any particular
-        // timing in an arbitrary test environment, so we don't assert on it here.
+        // This future will normally complete very quickly, but it's hard to guarantee any
+        // particular timing in an arbitrary test environment, so we don't assert on it
+        // here.
 
         let wall_family = reports
             .iter()
@@ -956,7 +1207,7 @@ mod tests {
 
         let exec_counter = exec_metric[0].get_counter();
         // Since we're synchronously sleeping the execution time will be long.
-        assert!(exec_counter.get_value() >= 1.0);
+        assert!(exec_counter.value() >= 1.0);
 
         let wall_family = reports
             .iter()
@@ -967,6 +1218,113 @@ mod tests {
 
         let wall_counter = wall_metric[0].get_counter();
         // We filtered wall time to < 10ms, so our wall time metric should be filtered out.
-        assert_eq!(wall_counter.get_value(), 0.0);
+        assert_eq!(wall_counter.value(), 0.0);
+    }
+
+    #[crate::test]
+    fn collector_drop_handle_unregisters() {
+        use prometheus::IntGauge;
+
+        let registry = MetricsRegistry::new();
+        let gauge = IntGauge::new("mz_test_guarded", "help").unwrap();
+        gauge.set(7);
+        let before = registry.gather().len();
+
+        let handle = registry.register_collector_with_dropper(gauge.clone());
+        assert_eq!(registry.gather().len(), before + 1);
+
+        // Dropping the handle unregisters the collector, so its series stops being scraped.
+        drop(handle);
+        assert_eq!(registry.gather().len(), before);
+    }
+
+    #[crate::test]
+    fn register_drop_then_reregister() {
+        use prometheus::IntGauge;
+
+        // Two collectors sharing a descriptor id: re-registering the second while the first is
+        // still registered would collide. This locks in the contract that dropping the old handle
+        // first clears the id so the re-registration succeeds cleanly, the ordering a caller
+        // replacing a collector (e.g. a metric sink re-rendered on reconciliation) must uphold.
+        let registry = MetricsRegistry::new();
+        let old = IntGauge::new("mz_test_reregister", "help").unwrap();
+        let new = IntGauge::new("mz_test_reregister", "help").unwrap();
+        let before = registry.gather().len();
+
+        let handle = registry.register_collector_with_dropper(old);
+        assert_eq!(registry.gather().len(), before + 1);
+
+        // Drop old before registering new, matching the required ordering.
+        drop(handle);
+        let handle = registry.register_collector_with_dropper(new);
+        assert_eq!(registry.gather().len(), before + 1);
+
+        drop(handle);
+        assert_eq!(registry.gather().len(), before);
+    }
+
+    #[crate::test]
+    fn try_register_errors_on_duplicate_then_succeeds_after_drop() {
+        use prometheus::IntGauge;
+
+        // The fallible variant reports the collision instead of soft-panicking, and the collision
+        // clears as soon as the incumbent's handle drops. This is the retry contract the metric
+        // sink operator leans on when a new incarnation races the old one's teardown.
+        let registry = MetricsRegistry::new();
+        let old = IntGauge::new("mz_test_try_register", "help").unwrap();
+        let new = IntGauge::new("mz_test_try_register", "help").unwrap();
+        let before = registry.gather().len();
+
+        let handle = registry
+            .try_register_collector_with_dropper(old)
+            .expect("first registration succeeds");
+        assert_eq!(registry.gather().len(), before + 1);
+
+        let err = registry
+            .try_register_collector_with_dropper(new.clone())
+            .err()
+            .expect("duplicate descriptor id is rejected");
+        assert!(matches!(err, prometheus::Error::AlreadyReg));
+        // The failed attempt registered nothing, so the incumbent is still the only series.
+        assert_eq!(registry.gather().len(), before + 1);
+
+        drop(handle);
+        let handle = registry
+            .try_register_collector_with_dropper(new)
+            .expect("registration succeeds once the id is free");
+        assert_eq!(registry.gather().len(), before + 1);
+
+        drop(handle);
+        assert_eq!(registry.gather().len(), before);
+    }
+
+    #[crate::test]
+    fn remove_children_with_label_removes_only_matching_children() {
+        let registry = MetricsRegistry::new();
+        let vec: HistogramVec = registry.register(metric!(
+            name: "labeled_hist",
+            help: "help",
+            var_labels: ["cluster", "kind"],
+            buckets: histogram_seconds_buckets(0.000_128, 8.0),
+        ));
+        vec.with_label_values(&["u1", "a"]).observe(1.0);
+        vec.with_label_values(&["u1", "b"]).observe(1.0);
+        vec.with_label_values(&["u2", "a"]).observe(1.0);
+
+        super::remove_children_with_label(&vec, "cluster", "u1");
+
+        let remaining: Vec<Vec<String>> = vec
+            .collect()
+            .into_iter()
+            .flat_map(|family| family.get_metric().to_vec())
+            .map(|child| {
+                child
+                    .get_label()
+                    .iter()
+                    .map(|pair| pair.value().to_string())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(remaining, vec![vec!["u2".to_string(), "a".to_string()]]);
     }
 }

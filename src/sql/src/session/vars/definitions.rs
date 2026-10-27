@@ -20,6 +20,7 @@ use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT,
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER,
 };
+use mz_dyncfg::ParameterScope;
 use mz_ore::cast::{self, CastFrom};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -39,8 +40,8 @@ use uncased::UncasedStr;
 
 use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
-    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NUMERIC_BOUNDED_0_1_INCLUSIVE, NUMERIC_NON_NEGATIVE,
-    ValueConstraint,
+    BYTESIZE_AT_LEAST_1MB, DomainConstraint, NON_ZERO_DURATION, NUMERIC_BOUNDED_0_1_INCLUSIVE,
+    NUMERIC_NON_NEGATIVE, U32_AT_LEAST_1, ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
 use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
@@ -69,6 +70,9 @@ pub struct VarDefinition {
     /// When set, prevents getting or setting the variable unless the specified
     /// feature flag is enabled.
     pub require_feature_flag: Option<&'static FeatureFlag>,
+    /// The scope at which this variable's value may be overridden by the
+    /// LaunchDarkly sync loop.
+    pub scope: ParameterScope,
 
     /// Method to parse [`VarInput`] into a type that implements [`Value`].
     ///
@@ -110,6 +114,7 @@ impl VarDefinition {
             type_name: V::type_name,
             constraint: None,
             require_feature_flag: None,
+            scope: ParameterScope::DEFAULT,
         }
     }
 
@@ -129,6 +134,7 @@ impl VarDefinition {
             type_name: V::type_name,
             constraint: None,
             require_feature_flag: None,
+            scope: ParameterScope::DEFAULT,
         }
     }
 
@@ -148,6 +154,7 @@ impl VarDefinition {
             type_name: V::type_name,
             constraint: None,
             require_feature_flag: None,
+            scope: ParameterScope::DEFAULT,
         }
     }
 
@@ -176,6 +183,14 @@ impl VarDefinition {
         self
     }
 
+    /// Declares the [`ParameterScope`] of this variable, overriding the
+    /// [default](ParameterScope::DEFAULT). See [`ParameterScope`] for the
+    /// semantics of each scope class.
+    pub const fn scoped(mut self, scope: ParameterScope) -> Self {
+        self.scope = scope;
+        self
+    }
+
     pub fn parse(&self, input: VarInput) -> Result<Box<dyn Value>, VarError> {
         (self.parse)(input).map_err(|err| err.into_var_error(self))
     }
@@ -200,6 +215,10 @@ impl Var for VarDefinition {
 
     fn type_name(&self) -> Cow<'static, str> {
         (self.type_name)()
+    }
+
+    fn scope(&self) -> ParameterScope {
+        self.scope
     }
 
     fn visible(&self, user: &User, system_vars: &super::SystemVars) -> Result<(), VarError> {
@@ -321,7 +340,7 @@ pub static DEFAULT_CLUSTER_REPLICATION_FACTOR: VarDefinition = VarDefinition::ne
 
 pub static EXTRA_FLOAT_DIGITS: VarDefinition = VarDefinition::new(
     "extra_float_digits",
-    value!(i32; 3),
+    value!(i32; 1),
     "Adjusts the number of digits displayed for floating-point values (PostgreSQL).",
     true,
 );
@@ -549,13 +568,6 @@ pub static MAX_ROLES: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static MAX_CONTINUAL_TASKS: VarDefinition = VarDefinition::new(
-    "max_continual_tasks",
-    value!(u32; 100),
-    "The maximum number of continual tasks in the region, across all schemas (Materialize).",
-    true,
-);
-
 pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
     "max_network_policies",
     value!(u32; 25),
@@ -592,11 +604,10 @@ pub static MAX_QUERY_RESULT_SIZE: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static MAX_COPY_FROM_SIZE: VarDefinition = VarDefinition::new(
-    "max_copy_from_size",
-    // 1 GiB, this limit is noted in the docs, if you change it make sure to update our docs.
-    value!(u32; 1_073_741_824),
-    "The maximum size in bytes we buffer for COPY FROM statements (Materialize).",
+pub static MAX_COPY_FROM_ROW_SIZE: VarDefinition = VarDefinition::new(
+    "max_copy_from_row_size",
+    value!(ByteSize; ByteSize::mb(128)),
+    "The maximum size in bytes for a single COPY FROM STDIN row (Materialize).",
     true,
 );
 
@@ -627,11 +638,42 @@ pub static METRICS_RETENTION: VarDefinition = VarDefinition::new(
     false,
 );
 
+/// Curated metric sinks to keep from running, as a comma-separated list of names from `CURATED`
+/// in `mz_adapter::coord::metric_sink`. An entry naming no definition is tolerated, so a rollback
+/// that drops a definition needs no lockstep edit here.
+///
+/// Denying tears the sink down on replicas already running it; undenying puts it back. It
+/// subtracts from `enable_metric_sink`: with that flag off nothing installs regardless.
+pub static DISABLED_METRIC_SINKS: VarDefinition = VarDefinition::new(
+    "disabled_metric_sinks",
+    value!(Vec<Ident>; Vec::new()),
+    "Curated metric sinks to tear down and keep from installing, comma-separated (Materialize).",
+    false,
+);
+
 pub static ALLOWED_CLUSTER_REPLICA_SIZES: VarDefinition = VarDefinition::new(
     "allowed_cluster_replica_sizes",
     value!(Vec<Ident>; Vec::new()),
     "The allowed sizes when creating a new cluster replica (Materialize).",
     true,
+);
+
+/// Sizes the OCC write semaphore at boot. Zero permits would block every
+/// read-then-write until its `statement_timeout`, so the value must be at
+/// least 1.
+pub static MAX_CONCURRENT_OCC_WRITES: VarDefinition = VarDefinition::new(
+    "max_concurrent_occ_writes",
+    value!(u32; 4),
+    "Maximum number of concurrent read-then-write (DELETE/UPDATE) operations using OCC. Read at startup; changes require an environmentd restart (Materialize).",
+    false,
+)
+.with_constraint(&U32_AT_LEAST_1);
+
+pub static MAX_OCC_RETRIES: VarDefinition = VarDefinition::new(
+    "max_occ_retries",
+    value!(u32; 1000),
+    "Maximum number of OCC retry attempts per read-then-write operation before giving up (Materialize).",
+    false,
 );
 
 pub static PERSIST_FAST_PATH_LIMIT: VarDefinition = VarDefinition::new(
@@ -1036,6 +1078,15 @@ pub static MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT: VarDefinition = VarDefinitio
     false,
 );
 
+/// Sets the `wait_timeout` session value on connections used during the
+/// snapshotting phase of MySQL sources.
+pub static MYSQL_SOURCE_SNAPSHOT_WAIT_TIMEOUT: VarDefinition = VarDefinition::new(
+    "mysql_source_snapshot_wait_timeout",
+    value!(Duration; mz_mysql_util::DEFAULT_SNAPSHOT_WAIT_TIMEOUT),
+    "Sets the `wait_timeout` value to use on connections during the snapshotting phase of MySQL sources (Materialize)",
+    false,
+);
+
 /// Sets the timeout for establishing an authenticated connection to MySQL
 pub static MYSQL_SOURCE_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
     "mysql_source_connect_timeout",
@@ -1050,7 +1101,8 @@ pub static SSH_CHECK_INTERVAL: VarDefinition = VarDefinition::new(
     value!(Duration; mz_ssh_util::tunnel::DEFAULT_CHECK_INTERVAL),
     "Controls the check interval for connections to SSH bastions via `mz_ssh_util`.",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 /// Controls the connect timeout for connections to SSH bastions via `mz_ssh_util`.
 pub static SSH_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
@@ -1182,7 +1234,8 @@ pub static STORAGE_STATISTICS_INTERVAL: VarDefinition = VarDefinition::new(
     "The interval to submit statistics to `mz_source_statistics_per_worker` \
         and `mz_sink_statistics` (Materialize).",
     false,
-);
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 /// The interval to collect statistics for `mz_source_statistics_per_worker` and `mz_sink_statistics_per_worker` in
 /// clusterd. Controls the accuracy of metrics.
@@ -1275,6 +1328,14 @@ pub static ENABLE_SESSION_RBAC_CHECKS: VarDefinition = VarDefinition::new(
     value!(bool; false),
     "User facing session boolean flag indicating whether to apply RBAC checks before \
         executing statements (Materialize).",
+    true,
+);
+
+pub static RESTRICT_TO_USER_OBJECTS: VarDefinition = VarDefinition::new(
+    "restrict_to_user_objects",
+    value!(bool; false),
+    "When enabled, queries are restricted from accessing system catalog objects. \
+        Useful for MCP tool queries that should only access user-created data products.",
     true,
 );
 
@@ -1374,6 +1435,41 @@ pub static ENABLE_INTERNAL_STATEMENT_LOGGING: VarDefinition = VarDefinition::new
     false,
 );
 
+/// When on, the SQL frontends log incoming statements and other frontend
+/// messages at info level as soon as they arrive, before processing them
+/// (except that SQL text is parsed, for redaction). Messages consumed by
+/// pgwire's COPY subprotocol or its post-error drain loop are not logged.
+///
+/// This is an emergency diagnostic for statements that crash the process
+/// before they reach the statement log (or before its contents are written
+/// out to persist). It adds a lot of log volume, so use it only in emergencies,
+/// i.e. to debug active incidents.
+///
+/// SQL text is logged with its literals redacted, which is the same redaction
+/// the statement log applies, see `redact_sql_for_logging`.
+pub static ENABLE_STATEMENT_ARRIVAL_LOGGING: VarDefinition = VarDefinition::new(
+    "enable_statement_arrival_logging",
+    value!(bool; false),
+    "Whether to log incoming statements and other frontend messages at info \
+    level as they arrive at the SQL frontends, before processing. SQL text is \
+    logged with its literals redacted, as in the statement log. Use it only in \
+    emergencies, i.e. debugging active incidents.",
+    false,
+);
+
+/// Off is the escape hatch for clients that pipeline statements Materialize
+/// cannot run in one transaction, for example a read or a DDL after a write.
+/// Those fail while this is on, rather than silently committing the writes
+/// staged before them.
+pub static ENABLE_EXTENDED_PROTOCOL_IMPLICIT_TRANSACTION: VarDefinition = VarDefinition::new(
+    "enable_extended_protocol_implicit_transaction",
+    value!(bool; true),
+    "Whether an implicit write transaction started by the extended query \
+    protocol spans the whole pipeline up to the client's Sync, so that the \
+    pipeline commits or rolls back atomically as in PostgreSQL (Materialize).",
+    false,
+);
+
 pub static AUTO_ROUTE_CATALOG_QUERIES: VarDefinition = VarDefinition::new(
     "auto_route_catalog_queries",
     value!(bool; true),
@@ -1436,19 +1532,13 @@ pub static ENABLE_STORAGE_SHARD_FINALIZATION: VarDefinition = VarDefinition::new
     false,
 );
 
-pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition::new(
-    "enable_consolidate_after_union_negate",
-    value!(bool; true),
-    "consolidation after Unions that have a Negated input (Materialize).",
-    true,
-);
-
-pub static ENABLE_REDUCE_REDUCTION: VarDefinition = VarDefinition::new(
-    "enable_reduce_reduction",
-    value!(bool; true),
-    "split complex reductions in to simpler ones and a join (Materialize).",
-    true,
-);
+pub static DEFAULT_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
+    "default_timestamp_interval",
+    value!(Duration; Duration::from_millis(1000)),
+    "The interval at which timestamps are assigned to data from sources and tables.",
+    false,
+)
+.with_constraint(&NON_ZERO_DURATION);
 
 pub static MIN_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     "min_timestamp_interval",
@@ -1622,16 +1712,6 @@ pub mod cluster_scheduling {
         false,
     );
 
-    const DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL: Duration = Duration::from_secs(3);
-
-    pub static CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL: VarDefinition = VarDefinition::new(
-        "cluster_check_scheduling_policies_interval",
-        value!(Duration; DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL),
-        "How often policies are invoked to automatically start/stop clusters, e.g., \
-            for REFRESH EVERY materialized views.",
-        false,
-    );
-
     pub static CLUSTER_SECURITY_CONTEXT_ENABLED: VarDefinition = VarDefinition::new(
         "cluster_security_context_enabled",
         value!(bool; DEFAULT_SECURITY_CONTEXT_ENABLED),
@@ -1687,6 +1767,14 @@ pub mod cluster_scheduling {
 /// Ensuring that all syntax-related feature flags *enable* behavior means that setting all such
 /// feature flags to `on` during catalog boot has the desired effect.
 macro_rules! feature_flags {
+    // Resolve an optional `scope:` field to a `ParameterScope`, using the
+    // default scope when the field is omitted.
+    (@scope_or_default) => {
+        ParameterScope::DEFAULT
+    };
+    (@scope_or_default $scope:expr) => {
+        $scope
+    };
     // Match `$name, $feature_desc, $value`.
     (@inner
         // The feature flag name.
@@ -1695,6 +1783,8 @@ macro_rules! feature_flags {
         desc: $desc:literal,
         // The feature flag default value.
         default: $value:expr,
+        // The scope class of the feature flag.
+        scope: $scope:expr,
     ) => {
         paste::paste!{
             // Note that the ServerVar is not directly exported; we expect these to be
@@ -1704,7 +1794,8 @@ macro_rules! feature_flags {
                 value!(bool; $value),
                 concat!("Whether ", $desc, " is allowed (Materialize)."),
                 false,
-            );
+            )
+            .scoped($scope);
 
             pub static [<$name:upper >]: FeatureFlag = FeatureFlag {
                 flag: &[<$name:upper _VAR>],
@@ -1722,11 +1813,15 @@ macro_rules! feature_flags {
         // Should the feature be turned on during catalog rehydration when
         // parsing a catalog item.
         enable_for_item_parsing: $enable_for_item_parsing:expr,
+        // The optional scope class. Uses `ParameterScope::DEFAULT` when omitted.
+        // Cluster-coherent optimizer flags declare `scope: ParameterScope::Cluster`.
+        $(scope: $scope:expr,)?
     },)+) => {
         $(feature_flags! { @inner
             name: $name,
             desc: $desc,
             default: $value,
+            scope: feature_flags!(@scope_or_default $($scope)?),
         })+
 
         paste::paste!{
@@ -1773,12 +1868,6 @@ feature_flags!(
     },
     // Actual feature flags
     {
-        name: enable_guard_subquery_tablefunc,
-        desc: "Whether HIR -> MIR lowering should use a new tablefunc to guard subquery sizes",
-        default: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_binary_date_bin,
         desc: "the binary version of date_bin function",
         default: false,
@@ -1787,6 +1876,12 @@ feature_flags!(
     {
         name: enable_date_bin_hopping,
         desc: "the date_bin_hopping function",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_jq,
+        desc: "the jq function",
         default: false,
         enable_for_item_parsing: true,
     },
@@ -1882,6 +1977,24 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_repeat_row_non_negative,
+        desc: "the repeat_row_non_negative function",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_replica_targeted_materialized_views,
+        desc: "replica-targeted materialized views",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: unsafe_enable_incomplete_view_column_lists,
+        desc: "declaring a view with fewer column names than columns",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: unsafe_enable_table_check_constraint,
         desc: "CREATE TABLE with a check constraint",
         default: false,
@@ -1912,6 +2025,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: unsafe_enable_unbounded_custom_type_resolution,
+        desc: "resolving custom types without the depth and complexity limits that bound resolution work",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_within_timestamp_order_by_in_subscribe,
         desc: "`WITHIN TIMESTAMP ORDER BY ..`",
         default: false,
@@ -1921,12 +2040,18 @@ feature_flags!(
         name: enable_cardinality_estimates,
         desc: "join planning with cardinality estimates",
         default: false,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_connection_validation_syntax,
         desc: "CREATE CONNECTION .. WITH (VALIDATE) and VALIDATE CONNECTION syntax",
         default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_kafka_broker_matching_rules,
+        desc: "MATCHING broker rules in BROKERS for Kafka PrivateLink connections",
+        default: false,
         enable_for_item_parsing: true,
     },
     {
@@ -1972,6 +2097,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_notices_for_equals_null,
+        desc: "emitting notices for `= NULL` and `<> NULL` comparisons (doesn't affect EXPLAIN)",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_alter_swap,
         desc: "the ALTER SWAP feature for objects",
         default: true,
@@ -1980,6 +2111,14 @@ feature_flags!(
     {
         name: enable_new_outer_join_lowering,
         desc: "new outer join lowering",
+        default: true,
+        enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
+    },
+    {
+        name: enable_fixed_correlated_cte_lowering,
+        desc: "CTE-aware branch keys in HIR-to-MIR lowering, fixing references to \
+               correlated CTEs from nested correlated scopes",
         default: true,
         enable_for_item_parsing: false,
     },
@@ -2020,6 +2159,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_try_cast,
+        desc: "TRY_CAST(<expr> AS <type>) syntax",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_mz_notices,
         desc: "Populate the contents of `mz_internal.mz_notices`",
         default: true,
@@ -2031,6 +2176,7 @@ feature_flags!(
             "eager delta joins",
         default: false,
         enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
     },
     {
         name: enable_off_thread_optimization,
@@ -2051,6 +2197,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_auto_scaling_strategy,
+        desc: "`AUTO SCALING STRATEGY` cluster option",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_reduce_mfp_fusion,
         desc: "fusion of MFPs in reductions",
         default: true,
@@ -2060,12 +2212,6 @@ feature_flags!(
         name: enable_worker_core_affinity,
         desc: "set core affinity for replica worker threads",
         default: false,
-        enable_for_item_parsing: false,
-    },
-    {
-        name: enable_copy_to_expr,
-        desc: "COPY ... TO 's3://...'",
-        default: true,
         enable_for_item_parsing: false,
     },
     {
@@ -2079,6 +2225,7 @@ feature_flags!(
         desc: "Enable joint HIR ⇒ MIR lowering of stacks of left joins",
         default: true,
         enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
     },
     {
         name: enable_redacted_test_option,
@@ -2091,11 +2238,20 @@ feature_flags!(
         desc: "Enable Lattice-based fixpoint iteration on LetRec nodes in the Analysis framework",
         default: true, // This is just a failsafe switch for the deployment of materialize#25591.
         enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
     },
     {
         name: enable_kafka_sink_headers,
         desc: "Enable the HEADERS option for Kafka sinks",
-        default: false,
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_metric_sink,
+        desc: "CREATE METRIC SINK",
+        default: true,
+        // Boot re-parses every item's `create_sql`, so turning this off would leave any
+        // already-created metric sink unparseable and take the whole catalog down with it.
         enable_for_item_parsing: true,
     },
     {
@@ -2117,36 +2273,6 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
-        name: enable_zero_downtime_cluster_reconfiguration,
-        desc: "Enable zero-downtime reconfiguration for alter cluster",
-        default: false,
-        enable_for_item_parsing: false,
-    },
-    {
-        name: enable_aws_msk_iam_auth,
-        desc: "Enable AWS MSK IAM authentication for Kafka connections",
-        default: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_continual_task_create,
-        desc: "CREATE CONTINUAL TASK",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_continual_task_transform,
-        desc: "CREATE CONTINUAL TASK .. FROM TRANSFORM .. USING",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_continual_task_retain,
-        desc: "CREATE CONTINUAL TASK .. FROM RETAIN .. WHILE",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_network_policies,
         desc: "ENABLE NETWORK POLICIES",
         default: true,
@@ -2155,32 +2281,36 @@ feature_flags!(
     {
         name: enable_create_table_from_source,
         desc: "Whether to allow CREATE TABLE .. FROM SOURCE syntax.",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_copy_from_remote,
-        desc: "Whether to allow COPY FROM <url>.",
-        default: false,
-        enable_for_item_parsing: false,
+        name: enable_exclude_constraints_option,
+        desc: "Whether to allow the EXCLUDE CONSTRAINTS / EXCLUDE ALL CONSTRAINTS options \
+               in CREATE TABLE .. FROM SOURCE.",
+        default: true,
+        enable_for_item_parsing: true,
     },
     {
         name: enable_join_prioritize_arranged,
         desc: "Whether join planning should prioritize already-arranged keys over keys with more fields.",
         default: false,
         enable_for_item_parsing: false,
-    },
-    {
-        name: enable_sql_server_source,
-        desc: "Creating a SQL SERVER source",
-        default: true,
-        enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
     },
     {
         name: enable_projection_pushdown_after_relation_cse,
         desc: "Run ProjectionPushdown one more time after the last RelationCSE.",
         default: true,
         enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
+    },
+    {
+        name: enable_union_cancellation_after_relation_cse,
+        desc: "Run UnionBranchCancellation one more time after the last RelationCSE.",
+        default: true,
+        enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
     },
     {
         name: enable_less_reduce_in_eqprop,
@@ -2213,46 +2343,184 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_iceberg_sink,
-        desc: "Whether to enable the Iceberg sink.",
-        default: false,
+        name: enable_replacement_materialized_views,
+        desc: "Whether to enable replacement materialized views.",
+        default: true,
         enable_for_item_parsing: true,
     },
     {
-        name: enable_frontend_peek_sequencing, // currently, changes only take effect for new sessions
-        desc: "Enables the new peek sequencing code, which does most of its work in the Adapter Frontend instead of the Coordinator main task.",
+        name: enable_cast_elimination,
+        desc: "Allow the optimizer to eliminate noop casts between values of equivalent representation types.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        // Just an escape hatch for the unlikely case that we have some user who is doing such
+        // queries. Can be removed after one week in prod.
+        // https://github.com/MaterializeInc/database-issues/issues/10004
+        name: disallow_unmaterializable_functions_as_of,
+        desc: "Prohibits calling unmaterializable functions (except `mz_now`) in AS OF queries.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_case_literal_transform,
+        desc: "Allow the optimizer to rewrite If-chains matching a single expression against literals into a CaseLiteral lookup.",
         default: false,
         enable_for_item_parsing: false,
     },
     {
-        name: enable_replacement_materialized_views,
-        desc: "Whether to enable replacement materialized views.",
-        default: false,
-        enable_for_item_parsing: true,
+        name: enable_simplify_quantified_comparisons,
+        desc: "Allow the optimizer to simplify quantified comparisons in JOIN ON clauses into semi/anti-join EXISTS form during HIR-to-MIR lowering.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_simplify_from_less_existence,
+        desc: "Allow the optimizer to collapse EXISTS/NOT EXISTS over a FROM-less correlated subquery into a plain Filter during HIR-to-MIR lowering.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_coalesce_case_transform,
+        desc: "Allow the optimizer to push `COALESCE` into `CASE WHEN`.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    // Disposition: added 2026-05-29, default on; remove after several weeks of observation.
+    {
+        name: enable_will_distinct_propagation,
+        desc: "Allow the WillDistinct transform to propagate a pending distinct through Map, Filter, FlatMap, Threshold, Negate, non-negative Project, and TopK with limit 1 and offset 0.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
+    {
+        // An escape hatch: the `CASE` guard defeats the batched lowering that shares one
+        // `unnest` across several `ANY`/`ALL` operands, so a query with multiple `ANY`/`ALL`
+        // over a non-constant array plans into more arrangements than before. Turning the flag
+        // off restores the old plans at the cost of the wrong answer for a NULL array.
+        name: enable_any_all_null_array_semantics,
+        desc: "PostgreSQL-compatible NULL semantics for `ANY`/`ALL` over a NULL array or list.",
+        default: true,
+        enable_for_item_parsing: false,
     },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
     fn from(vars: &super::SystemVars) -> Self {
         Self {
-            enable_guard_subquery_tablefunc: vars.enable_guard_subquery_tablefunc(),
-            enable_consolidate_after_union_negate: vars.enable_consolidate_after_union_negate(),
             enable_eager_delta_joins: vars.enable_eager_delta_joins(),
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_reduce_mfp_fusion: vars.enable_reduce_mfp_fusion(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
-            enable_reduce_reduction: vars.enable_reduce_reduction(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
             enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
             enable_projection_pushdown_after_relation_cse: vars
                 .enable_projection_pushdown_after_relation_cse(),
+            enable_union_cancellation_after_relation_cse: vars
+                .enable_union_cancellation_after_relation_cse(),
             enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
             enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
             enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
             enable_fast_path_plan_insights: vars.enable_fast_path_plan_insights(),
+            enable_cast_elimination: vars.enable_cast_elimination(),
+            enable_case_literal_transform: vars.enable_case_literal_transform(),
+            enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
+            enable_simplify_from_less_existence: vars.enable_simplify_from_less_existence(),
+            enable_coalesce_case_transform: vars.enable_coalesce_case_transform(),
+            enable_will_distinct_propagation: vars.enable_will_distinct_propagation(),
+            enable_fixed_correlated_cte_lowering: vars.enable_fixed_correlated_cte_lowering(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::vars::SystemVars;
+
+    /// Ensure that all vars used for optimizer features have `enable_for_item_parsing = false`.
+    ///
+    /// This is important to ensure that plan caching works as intended during item parsing. Cached
+    /// plans include the optimizer features they were produced with, and if they don't match on
+    /// lookup, that results in a cache miss.
+    #[mz_ore::test]
+    fn optimizer_features_no_enable_for_item_parsing() {
+        // Construct a `SystemVars` where all optimizer features are `false`.
+        //
+        // We do this in a roundabout way, by first constructing all-false `OptimizerFeatures` and
+        // then assigning them to their respective system vars, to ensure we don't forget to update
+        // this test when new optimizer features are added.
+        //
+        // NOTE: if the new feature ships enabled, also turn it on in
+        // `mz_transform_fuzz::fuzz_features`, which the cargo-fuzz optimizer targets plan with.
+        // That helper falls back to `Default` (all-`false`) for anything it does not name, so a
+        // flag missing from it silently fuzzes the disabled path. This exhaustive destructuring is
+        // the tripwire for both.
+        let false_features = OptimizerFeatures::default();
+        let OptimizerFeatures {
+            enable_eq_classes_withholding_errors,
+            enable_eager_delta_joins,
+            enable_letrec_fixpoint_analysis,
+            enable_new_outer_join_lowering,
+            enable_reduce_mfp_fusion,
+            enable_variadic_left_join_lowering,
+            enable_cardinality_estimates,
+            persist_fast_path_limit,
+            reoptimize_imported_views,
+            enable_join_prioritize_arranged,
+            enable_projection_pushdown_after_relation_cse,
+            enable_union_cancellation_after_relation_cse,
+            enable_less_reduce_in_eqprop,
+            enable_dequadratic_eqprop_map,
+            enable_fast_path_plan_insights,
+            enable_cast_elimination,
+            enable_case_literal_transform,
+            enable_simplify_quantified_comparisons,
+            enable_simplify_from_less_existence,
+            enable_coalesce_case_transform,
+            enable_will_distinct_propagation,
+            enable_fixed_correlated_cte_lowering,
+        } = false_features;
+
+        let mut vars = SystemVars::new();
+
+        macro_rules! set_var {
+            ($var:ident) => {
+                vars.set(stringify!($var), VarInput::Flat(&$var.to_string()))
+                    .unwrap();
+            };
+        }
+
+        set_var!(enable_eq_classes_withholding_errors);
+        set_var!(enable_eager_delta_joins);
+        set_var!(enable_letrec_fixpoint_analysis);
+        set_var!(enable_new_outer_join_lowering);
+        set_var!(enable_reduce_mfp_fusion);
+        set_var!(enable_variadic_left_join_lowering);
+        set_var!(enable_cardinality_estimates);
+        set_var!(persist_fast_path_limit);
+        let _ = reoptimize_imported_views; // no corresponding var
+        set_var!(enable_join_prioritize_arranged);
+        set_var!(enable_projection_pushdown_after_relation_cse);
+        set_var!(enable_union_cancellation_after_relation_cse);
+        set_var!(enable_less_reduce_in_eqprop);
+        set_var!(enable_dequadratic_eqprop_map);
+        set_var!(enable_fast_path_plan_insights);
+        set_var!(enable_cast_elimination);
+        set_var!(enable_case_literal_transform);
+        set_var!(enable_simplify_quantified_comparisons);
+        set_var!(enable_simplify_from_less_existence);
+        set_var!(enable_coalesce_case_transform);
+        set_var!(enable_will_distinct_propagation);
+        set_var!(enable_fixed_correlated_cte_lowering);
+
+        // Enable for item parsing, then ensure we still get the same optimizer features.
+        vars.enable_for_item_parsing();
+        let features_for_item_parsing = OptimizerFeatures::from(&vars);
+        assert_eq!(features_for_item_parsing, false_features);
     }
 }

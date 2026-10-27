@@ -16,18 +16,18 @@ use std::sync::{Arc, atomic};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
-use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::ClusterReplicaLocation;
+use mz_cluster_client::params::GrpcClientParameters;
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use mz_service::client::{GenericClient, Partitioned};
-use mz_service::params::GrpcClientParameters;
 use mz_service::transport;
 use mz_storage_client::client::{
     RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse,
@@ -35,8 +35,7 @@ use mz_storage_client::client::{
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{IngestionDescription, SourceConnection};
-use timely::order::TotalOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tokio::select;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -48,19 +47,18 @@ use crate::history::CommandHistory;
 ///
 /// Encapsulates communication with replicas in this instance, and their rehydration.
 ///
-/// Note that storage objects (sources and sinks) don't currently support replication (database-issues#5051).
-/// An instance can have multiple replicas connected, but only if it has no storage objects
-/// installed. Attempting to install storage objects on multi-replica instances, or attempting to
-/// add more than one replica to instances that have storage objects installed, is illegal and will
-/// lead to panics.
+/// An instance can have any number of replicas. Objects that must run on one replica (ingestions
+/// whose connection reports `SourceConnection::prefers_single_replica`, such as OLTP sources, and
+/// all sinks) are scheduled on the replica with the lowest `ReplicaId` and move only when that
+/// replica goes away; all other objects run on every replica. See `update_scheduling`.
 #[derive(Debug)]
-pub(crate) struct Instance<T> {
+pub(crate) struct Instance {
     /// The workload class of this instance.
     ///
     /// This is currently only used to annotate metrics.
     pub workload_class: Option<String>,
     /// The replicas connected to this storage instance.
-    replicas: BTreeMap<ReplicaId, Replica<T>>,
+    replicas: BTreeMap<ReplicaId, Replica>,
     /// The ingestions currently running on this instance.
     ///
     /// While this is derivable from `history` on demand, keeping a denormalized
@@ -77,7 +75,7 @@ pub(crate) struct Instance<T> {
     active_exports: BTreeMap<GlobalId, ActiveExport>,
     /// The command history, used to replay past commands when introducing new replicas or
     /// reconnecting to existing replicas.
-    history: CommandHistory<T>,
+    history: CommandHistory,
     /// Metrics tracked for this storage instance.
     metrics: InstanceMetrics,
     /// A function that returns the current time.
@@ -87,7 +85,7 @@ pub(crate) struct Instance<T> {
     /// Responses are tagged with the [`ReplicaId`] of the replica that sent the
     /// response. Responses that don't originate from a replica (e.g. a "paused"
     /// status update, when no replicas are connected) are tagged with `None`.
-    response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
+    response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>,
 }
 
 #[derive(Debug)]
@@ -102,16 +100,24 @@ struct ActiveExport {
     active_replicas: BTreeSet<ReplicaId>,
 }
 
-impl<T> Instance<T>
-where
-    T: Timestamp + Lattice + TotalOrder + Sync,
-{
+/// Which replicas actively run a given object, as resolved by
+/// [`Instance::active_replica_ids`].
+enum ActiveReplicas<'a> {
+    /// The object has per-replica scheduling and runs on exactly these
+    /// replicas. The set is empty when it currently runs nowhere, e.g. it has
+    /// been compacted away or is not yet scheduled onto a replica.
+    Scheduled(&'a BTreeSet<ReplicaId>),
+    /// The object has no per-replica scheduling, so every replica runs it.
+    All,
+}
+
+impl Instance {
     /// Creates a new [`Instance`].
     pub fn new(
         workload_class: Option<String>,
         metrics: InstanceMetrics,
         now: NowFn,
-        instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
+        instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>,
     ) -> Self {
         let history = CommandHistory::new(metrics.for_history());
 
@@ -142,13 +148,26 @@ where
     }
 
     /// Adds a new replica to this storage instance.
-    pub fn add_replica(&mut self, id: ReplicaId, config: ReplicaConfig) {
-        // Reduce the history to limit the amount of commands sent to the new replica, and to
-        // enable the `objects_installed` assert below.
+    ///
+    /// `dyncfg_override` holds the replica's scoped parameters, which every
+    /// configuration command sent or replayed to the replica carries.
+    pub fn add_replica(
+        &mut self,
+        id: ReplicaId,
+        config: ReplicaConfig,
+        dyncfg_override: ConfigUpdates,
+    ) {
+        // Reduce the history to limit the amount of commands sent to the new replica.
         self.history.reduce();
 
         let metrics = self.metrics.for_replica(id);
-        let replica = Replica::new(id, config, metrics, self.response_tx.clone());
+        let replica = Replica::new(
+            id,
+            config,
+            dyncfg_override,
+            metrics,
+            self.response_tx.clone(),
+        );
 
         self.replicas.insert(id, replica);
 
@@ -193,8 +212,10 @@ where
             .get_mut(&replica_id)
             .expect("replica must exist");
 
-        // Replay the commands at the new replica.
+        // Replay the commands at the new replica, re-applying its dyncfg
+        // override to configuration commands.
         for command in filtered_commands {
+            let command = Self::specialize_command_for_replica(command, &replica.dyncfg_override);
             replica.send(command);
         }
     }
@@ -247,7 +268,7 @@ where
 
         for id in failed_replicas {
             let replica = self.replicas.remove(&id).expect("must exist");
-            self.add_replica(id, replica.config);
+            self.add_replica(id, replica.config, replica.dyncfg_override);
         }
     }
 
@@ -327,8 +348,37 @@ where
         }
     }
 
+    /// Replaces the dyncfg overrides of this instance's replicas. A replica
+    /// absent from `overrides` has its override cleared. Callers should follow
+    /// this with a configuration push (e.g. an `UpdateConfiguration` command)
+    /// so that existing replicas observe the new overrides.
+    pub fn update_replica_dyncfg_overrides(
+        &mut self,
+        mut overrides: BTreeMap<ReplicaId, ConfigUpdates>,
+    ) {
+        for (id, replica) in self.replicas.iter_mut() {
+            replica.dyncfg_override = overrides.remove(id).unwrap_or_default();
+        }
+    }
+
+    /// Specializes a command for a specific replica by merging that replica's
+    /// dyncfg override into its configuration. For `UpdateConfiguration` the
+    /// override is merged into the update. All other commands are returned
+    /// unchanged.
+    fn specialize_command_for_replica(
+        mut command: StorageCommand,
+        dyncfg_override: &ConfigUpdates,
+    ) -> StorageCommand {
+        if let StorageCommand::UpdateConfiguration(params) = &mut command
+            && !dyncfg_override.updates.is_empty()
+        {
+            params.dyncfg_updates.extend(dyncfg_override.clone());
+        }
+        command
+    }
+
     /// Sends a command to this storage instance.
-    pub fn send(&mut self, command: StorageCommand<T>) {
+    pub fn send(&mut self, command: StorageCommand) {
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(command.clone());
 
@@ -366,8 +416,12 @@ where
                 self.absorb_compaction(id, frontier);
             }
             command => {
-                for replica in self.replicas.values_mut() {
-                    replica.send(command.clone());
+                for replica in self.replicas.values() {
+                    let command = Self::specialize_command_for_replica(
+                        command.clone(),
+                        &replica.dyncfg_override,
+                    );
+                    replica.send(command);
                 }
             }
         }
@@ -415,7 +469,7 @@ where
     ///
     /// This does _not_ send commands to replicas, we only record the export
     /// in state and potentially update scheduling decisions.
-    fn absorb_export(&mut self, export: RunSinkCommand<T>) {
+    fn absorb_export(&mut self, export: RunSinkCommand) {
         let existing_export_state = self.active_exports.get_mut(&export.id);
 
         if let Some(export_state) = existing_export_state {
@@ -628,7 +682,7 @@ where
     pub fn get_export_description(
         &self,
         id: &GlobalId,
-    ) -> Option<StorageSinkDesc<CollectionMetadata, T>> {
+    ) -> Option<StorageSinkDesc<CollectionMetadata>> {
         if !self.active_exports.contains_key(id) {
             return None;
         }
@@ -647,7 +701,7 @@ where
     }
 
     /// Updates internal state based on incoming compaction commands.
-    fn absorb_compaction(&mut self, id: GlobalId, frontier: Antichain<T>) {
+    fn absorb_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
         tracing::debug!(?self.active_ingestions, ?id, ?frontier, "allow_compaction");
 
         if frontier.is_empty() {
@@ -657,70 +711,56 @@ where
         }
     }
 
-    /// Returns the replicas that are actively running the given object (ingestion or export).
-    fn active_replicas(&mut self, id: &GlobalId) -> Box<dyn Iterator<Item = &mut Replica<T>> + '_> {
+    /// Resolves an object to the replicas actively running it.
+    ///
+    /// Shared by [`Self::active_replicas`], [`Self::is_active_replica`], and
+    /// [`Self::get_active_replicas_for_object`], which differ only in how they
+    /// project the result.
+    fn active_replica_ids(&self, id: &GlobalId) -> ActiveReplicas<'_> {
+        // An empty set to borrow for objects whose scheduling target is gone.
+        static EMPTY: BTreeSet<ReplicaId> = BTreeSet::new();
+
         if let Some(ingestion_id) = self.ingestion_exports.get(id) {
             match self.active_ingestions.get(ingestion_id) {
-                Some(ingestion) => Box::new(self.replicas.iter_mut().filter_map(
-                    move |(replica_id, replica)| {
-                        if ingestion.active_replicas.contains(replica_id) {
-                            Some(replica)
-                        } else {
-                            None
-                        }
-                    },
-                )),
-                None => {
-                    // The ingestion has already been compacted away (aka. stopped).
-                    Box::new(std::iter::empty())
-                }
+                Some(ingestion) => ActiveReplicas::Scheduled(&ingestion.active_replicas),
+                // The ingestion has already been compacted away (aka. stopped).
+                None => ActiveReplicas::Scheduled(&EMPTY),
             }
         } else if let Some(ingestion) = self.active_ingestions.get(id) {
-            Box::new(
-                self.replicas
-                    .iter_mut()
-                    .filter_map(move |(replica_id, replica)| {
-                        if ingestion.active_replicas.contains(replica_id) {
-                            Some(replica)
-                        } else {
-                            None
-                        }
-                    }),
-            )
+            // A new-syntax source lists only its tables in `source_exports`, so
+            // the primary ingestion id is not in `ingestion_exports`.
+            ActiveReplicas::Scheduled(&ingestion.active_replicas)
         } else if let Some(export) = self.active_exports.get(id) {
-            Box::new(
-                self.replicas
-                    .iter_mut()
-                    .filter_map(move |(replica_id, replica)| {
-                        if export.active_replicas.contains(replica_id) {
-                            Some(replica)
-                        } else {
-                            None
-                        }
-                    }),
-            )
+            ActiveReplicas::Scheduled(&export.active_replicas)
         } else {
-            Box::new(self.replicas.values_mut())
+            // Objects that have no per-replica scheduling (e.g. tables and
+            // webhooks) run on all replicas.
+            ActiveReplicas::All
+        }
+    }
+
+    /// Returns the replicas that are actively running the given object (ingestion or export).
+    fn active_replicas(&mut self, id: &GlobalId) -> Box<dyn Iterator<Item = &mut Replica> + '_> {
+        // Take an owned copy of the scheduled set so the immutable borrow of
+        // `self` ends before we borrow `self.replicas` mutably below. The set
+        // is tiny (one entry per replica) and this is not a per-row path.
+        let scheduled = match self.active_replica_ids(id) {
+            ActiveReplicas::All => None,
+            ActiveReplicas::Scheduled(replicas) => Some(replicas.clone()),
+        };
+        match scheduled {
+            None => Box::new(self.replicas.values_mut()),
+            Some(scheduled) => Box::new(self.replicas.iter_mut().filter_map(
+                move |(replica_id, replica)| scheduled.contains(replica_id).then_some(replica),
+            )),
         }
     }
 
     /// Returns whether the given replica is actively running the given object (ingestion or export).
     fn is_active_replica(&self, id: &GlobalId, replica_id: &ReplicaId) -> bool {
-        if let Some(ingestion_id) = self.ingestion_exports.get(id) {
-            match self.active_ingestions.get(ingestion_id) {
-                Some(ingestion) => ingestion.active_replicas.contains(replica_id),
-                None => {
-                    // The ingestion has already been compacted away (aka. stopped).
-                    false
-                }
-            }
-        } else if let Some(ingestion) = self.active_ingestions.get(id) {
-            ingestion.active_replicas.contains(replica_id)
-        } else if let Some(export) = self.active_exports.get(id) {
-            export.active_replicas.contains(replica_id)
-        } else {
-            // For non-ingestion objects, all replicas are active
-            true
+        match self.active_replica_ids(id) {
+            ActiveReplicas::All => true,
+            ActiveReplicas::Scheduled(replicas) => replicas.contains(replica_id),
         }
     }
 
@@ -743,18 +783,9 @@ where
     /// Returns the set of replica IDs that are actively running the given
     /// object (ingestion, ingestion export (aka. subsource), or export).
     pub fn get_active_replicas_for_object(&self, id: &GlobalId) -> BTreeSet<ReplicaId> {
-        if let Some(ingestion_id) = self.ingestion_exports.get(id) {
-            // Right now, only ingestions can have per-replica scheduling decisions.
-            match self.active_ingestions.get(ingestion_id) {
-                Some(ingestion) => ingestion.active_replicas.clone(),
-                None => {
-                    // The ingestion has already been compacted away (aka. stopped).
-                    BTreeSet::new()
-                }
-            }
-        } else {
-            // For non-ingestion objects, all replicas are active
-            self.replicas.keys().copied().collect()
+        match self.active_replica_ids(id) {
+            ActiveReplicas::All => self.replicas.keys().copied().collect(),
+            ActiveReplicas::Scheduled(replicas) => replicas.clone(),
         }
     }
 }
@@ -769,30 +800,33 @@ pub(super) struct ReplicaConfig {
 
 /// State maintained about individual replicas.
 #[derive(Debug)]
-pub struct Replica<T> {
+pub struct Replica {
     /// Replica configuration.
     config: ReplicaConfig,
+    /// The replica's dyncfg override, merged into every `UpdateConfiguration`
+    /// sent or replayed to it. Holds only the scoped values that differ from
+    /// the environment-wide configuration, and is empty for a replica without
+    /// scoped parameters.
+    dyncfg_override: ConfigUpdates,
     /// A sender for commands for the replica.
     ///
     /// If sending to this channel fails, the replica has failed and requires
     /// rehydration.
-    command_tx: mpsc::UnboundedSender<StorageCommand<T>>,
+    command_tx: mpsc::UnboundedSender<StorageCommand>,
     /// A handle to the task that aborts it when the replica is dropped.
     task: AbortOnDropHandle<()>,
     /// Flag reporting whether the replica connection has been established.
     connected: Arc<AtomicBool>,
 }
 
-impl<T> Replica<T>
-where
-    T: Timestamp + Lattice + Sync,
-{
+impl Replica {
     /// Creates a new [`Replica`].
     fn new(
         id: ReplicaId,
         config: ReplicaConfig,
+        dyncfg_override: ConfigUpdates,
         metrics: ReplicaMetrics,
-        response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
+        response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let connected = Arc::new(AtomicBool::new(false));
@@ -812,6 +846,7 @@ where
 
         Self {
             config,
+            dyncfg_override,
             command_tx,
             task: task.abort_on_drop(),
             connected,
@@ -819,7 +854,7 @@ where
     }
 
     /// Sends a command to the replica.
-    fn send(&self, command: StorageCommand<T>) {
+    fn send(&self, command: StorageCommand) {
         // Send failures ignored, we'll check for failed replicas separately.
         let _ = self.command_tx.send(command);
     }
@@ -836,11 +871,11 @@ where
     }
 }
 
-type StorageCtpClient<T> = transport::Client<StorageCommand<T>, StorageResponse<T>>;
-type ReplicaClient<T> = Partitioned<StorageCtpClient<T>, StorageCommand<T>, StorageResponse<T>>;
+type StorageCtpClient = transport::Client<StorageCommand, StorageResponse>;
+type ReplicaClient = Partitioned<StorageCtpClient, StorageCommand, StorageResponse>;
 
 /// A task handling communication with a replica.
-struct ReplicaTask<T> {
+struct ReplicaTask {
     /// The ID of the replica.
     replica_id: ReplicaId,
     /// Replica configuration.
@@ -850,15 +885,12 @@ struct ReplicaTask<T> {
     /// Flag to report successful replica connection.
     connected: Arc<AtomicBool>,
     /// A channel upon which commands intended for the replica are delivered.
-    command_rx: mpsc::UnboundedReceiver<StorageCommand<T>>,
+    command_rx: mpsc::UnboundedReceiver<StorageCommand>,
     /// A channel upon which responses from the replica are delivered.
-    response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
+    response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>,
 }
 
-impl<T> ReplicaTask<T>
-where
-    T: Timestamp + Lattice + Sync,
-{
+impl ReplicaTask {
     /// Runs the replica task.
     async fn run(self) {
         let replica_id = self.replica_id;
@@ -875,7 +907,7 @@ where
     ///
     /// The connection is retried forever (with backoff) and this method returns only after
     /// a connection was successfully established.
-    async fn connect(&self) -> ReplicaClient<T> {
+    async fn connect(&self) -> ReplicaClient {
         let try_connect = async move |retry: RetryState| {
             let version = self.config.build_info.semver_version();
             let client_params = &self.config.grpc_client;
@@ -886,7 +918,7 @@ where
                 .http2_keep_alive_timeout
                 .unwrap_or(Duration::MAX);
 
-            let connect_result = StorageCtpClient::<T>::connect_partitioned(
+            let connect_result = StorageCtpClient::connect_partitioned(
                 self.config.location.ctl_addrs.clone(),
                 version,
                 connect_timeout,
@@ -930,7 +962,7 @@ where
     /// Returns (with an `Err`) if it encounters an error condition (e.g. the replica disconnects).
     /// If no error condition is encountered, the task runs until the controller disconnects from
     /// the command channel, or the task is dropped.
-    async fn run_message_loop(mut self, mut client: ReplicaClient<T>) -> Result<(), anyhow::Error> {
+    async fn run_message_loop(mut self, mut client: ReplicaClient) -> Result<(), anyhow::Error> {
         loop {
             select! {
                 // Command from controller to forward to replica.
@@ -966,9 +998,58 @@ where
     ///
     /// Most [`StorageCommand`]s are independent of the target replica, but some contain
     /// replica-specific fields that must be adjusted before sending.
-    fn specialize_command(&self, command: &mut StorageCommand<T>) {
+    fn specialize_command(&self, command: &mut StorageCommand) {
         if let StorageCommand::Hello { nonce } = command {
             *nonce = Uuid::new_v4();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_dyncfg::{ConfigUpdates, ConfigVal};
+    use mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL;
+    use mz_storage_types::parameters::StorageParameters;
+
+    use super::{Instance, StorageCommand};
+
+    fn update_configuration_command() -> StorageCommand {
+        StorageCommand::UpdateConfiguration(Box::new(StorageParameters::default()))
+    }
+
+    fn dyncfg_updates(command: &StorageCommand) -> &ConfigUpdates {
+        match command {
+            StorageCommand::UpdateConfiguration(params) => &params.dyncfg_updates,
+            other => panic!("expected UpdateConfiguration, got {other:?}"),
+        }
+    }
+
+    /// An overridden replica's `UpdateConfiguration` carries its override on
+    /// top of the environment-wide updates, while replicas without an
+    /// override receive the base command unchanged.
+    #[mz_ore::test]
+    fn update_configuration_applies_replica_override() {
+        let mut over = ConfigUpdates::default();
+        over.add(&ENABLE_UPSERT_PAGED_SPILL, true);
+
+        let command =
+            Instance::specialize_command_for_replica(update_configuration_command(), &over);
+        assert_eq!(
+            dyncfg_updates(&command)
+                .updates
+                .get(ENABLE_UPSERT_PAGED_SPILL.name()),
+            Some(&ConfigVal::Bool(true)),
+        );
+
+        let command = Instance::specialize_command_for_replica(
+            update_configuration_command(),
+            &ConfigUpdates::default(),
+        );
+        assert_eq!(
+            dyncfg_updates(&command)
+                .updates
+                .get(ENABLE_UPSERT_PAGED_SPILL.name()),
+            None,
+        );
     }
 }

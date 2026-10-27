@@ -14,29 +14,36 @@ mod builtin_schema_migration;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 
 use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
-use mz_adapter_types::dyncfgs::{ENABLE_CONTINUAL_TASK_BUILTINS, ENABLE_EXPRESSION_CACHE};
+use mz_adapter_types::dyncfgs::ENABLE_EXPRESSION_CACHE;
+use mz_audit_log::{
+    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, ObjectType, VersionedEvent,
+};
 use mz_auth::hash::scram256_hash;
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
-    BUILTIN_CLUSTER_REPLICAS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin,
-    Fingerprint, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin, Fingerprint,
+    MZ_CATALOG_RAW, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
     SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
-use mz_catalog::durable::{ClusterReplica, ClusterVariant, ClusterVariantManaged, Transaction};
+use mz_catalog::durable::{
+    ClusterReplica, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
+    Transaction, managed_cluster_replica_name,
+};
 use mz_catalog::expr_cache::{
     ExpressionCacheConfig, ExpressionCacheHandle, GlobalExpressions, LocalExpressions,
+    latest_item_version,
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    BootstrapStateUpdateKind, CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate,
+    CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate, StateUpdateKind,
 };
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::ClusterId;
@@ -46,16 +53,16 @@ use mz_ore::now::{SYSTEM_TIME, to_datetime};
 use mz_ore::{instrument, soft_assert_no_log};
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::is_unstable_schema;
-use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
-use mz_sql::catalog::{
-    BuiltinsConfig, CatalogError as SqlCatalogError, CatalogItemType, RoleMembership, RoleVars,
-};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp};
+use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType, RoleMembership, RoleVars};
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::CommentObjectId;
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
+use mz_storage_client::controller::{StorageMetadata, StorageTxn};
 use mz_storage_client::storage_collections::StorageCollections;
+use semver::Version;
 use tracing::{Instrument, info, warn};
 use uuid::Uuid;
 
@@ -63,21 +70,31 @@ use uuid::Uuid;
 use crate::AdapterError;
 use crate::catalog::migrate::{self, get_migration_version, set_migration_version};
 use crate::catalog::state::LocalExpressionCache;
-use crate::catalog::{
-    BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config, is_reserved_name,
-};
+use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Config, is_reserved_name};
 
 pub struct InitializeStateResult {
     /// An initialized [`CatalogState`].
     pub state: CatalogState,
-    /// A set of new shards that may need to be initialized (only used by 0dt migration).
+    /// Items whose builtin schema migration allocated a fresh, self-owned persist shard. Only used
+    /// by 0dt migration.
+    ///
+    /// `Replacement`-migrated items only: derived by filtering to items with a global id in
+    /// `MigrationRunResult::new_shards`, which only `migrate_replace` populates. `Evolution`
+    /// migrates in place and reuses the leader's shard, so it never lands here. Read-only write
+    /// paths depend on that: force-writing a shard while read-only is safe only because we
+    /// exclusively own it (see `ComputeController::allow_writes_in_read_only`).
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
     pub new_builtin_collections: BTreeSet<GlobalId>,
     /// A list of builtin table updates corresponding to the initialized state.
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
-    /// The version of the catalog that existed before initializing the catalog.
-    pub last_seen_version: String,
+    /// The version of the binary that last committed catalog migrations, or `None` for a newly
+    /// initialized catalog.
+    ///
+    /// While this environment is read-only during a 0dt deployment, this is the version of the
+    /// leader environment: the read-only catalog transaction is a savepoint, so our own bump of
+    /// the setting never lands.
+    pub last_seen_version: Option<Version>,
     /// A handle to the expression cache if it's enabled.
     pub expr_cache_handle: Option<ExpressionCacheHandle>,
     /// The global expressions that were cached in `expr_cache_handle`.
@@ -89,7 +106,10 @@ pub struct InitializeStateResult {
 pub struct OpenCatalogResult {
     /// An opened [`Catalog`].
     pub catalog: Catalog,
-    /// A set of new shards that may need to be initialized.
+    /// See [`InitializeStateResult::last_seen_version`].
+    pub last_seen_version: Option<Version>,
+    /// See [`InitializeStateResult::migrated_storage_collections_0dt`]; `Replacement`-migrated
+    /// items only.
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
     pub new_builtin_collections: BTreeSet<GlobalId>,
@@ -130,26 +150,28 @@ impl Catalog {
         }
 
         let mut state = CatalogState {
-            database_by_name: BTreeMap::new(),
-            database_by_id: BTreeMap::new(),
-            entry_by_id: BTreeMap::new(),
-            entry_by_global_id: BTreeMap::new(),
-            ambient_schemas_by_name: BTreeMap::new(),
-            ambient_schemas_by_id: BTreeMap::new(),
-            clusters_by_name: BTreeMap::new(),
-            clusters_by_id: BTreeMap::new(),
-            roles_by_name: BTreeMap::new(),
-            roles_by_id: BTreeMap::new(),
-            network_policies_by_id: BTreeMap::new(),
-            role_auth_by_id: BTreeMap::new(),
-            network_policies_by_name: BTreeMap::new(),
-            system_configuration,
-            default_privileges: DefaultPrivileges::default(),
-            system_privileges: PrivilegeMap::default(),
-            comments: CommentsMap::default(),
-            source_references: BTreeMap::new(),
-            storage_metadata: Default::default(),
-            temporary_schemas: BTreeMap::new(),
+            database_by_name: imbl::OrdMap::new(),
+            database_by_id: imbl::OrdMap::new(),
+            entry_by_id: imbl::OrdMap::new(),
+            entry_by_global_id: imbl::OrdMap::new(),
+            notices_by_dep_id: imbl::OrdMap::new(),
+            ambient_schemas_by_name: imbl::OrdMap::new(),
+            ambient_schemas_by_id: imbl::OrdMap::new(),
+            clusters_by_name: imbl::OrdMap::new(),
+            clusters_by_id: imbl::OrdMap::new(),
+            roles_by_name: imbl::OrdMap::new(),
+            roles_by_id: imbl::OrdMap::new(),
+            network_policies_by_id: imbl::OrdMap::new(),
+            role_auth_by_id: imbl::OrdMap::new(),
+            network_policies_by_name: imbl::OrdMap::new(),
+            system_configuration: Arc::new(system_configuration),
+            scoped_system_parameters: Default::default(),
+            default_privileges: Arc::new(DefaultPrivileges::default()),
+            system_privileges: Arc::new(PrivilegeMap::default()),
+            comments: Arc::new(CommentsMap::default()),
+            source_references: imbl::OrdMap::new(),
+            storage_metadata: Arc::new(StorageMetadata::default()),
+            temporary_namespaces: Default::default(),
             mock_authentication_nonce: Default::default(),
             config: mz_sql::catalog::CatalogConfig {
                 start_time: to_datetime((config.now)()),
@@ -158,19 +180,12 @@ impl Catalog {
                 environment_id: config.environment_id,
                 session_id: Uuid::new_v4(),
                 build_info: config.build_info,
-                timestamp_interval: Duration::from_secs(1),
                 now: config.now.clone(),
                 connection_context: config.connection_context,
-                builtins_cfg: BuiltinsConfig {
-                    // This will fall back to the default in code (false) if we timeout on the
-                    // initial LD sync. We're just using this to get some additional testing in on
-                    // CTs so a false negative is fine, we're only worried about false positives.
-                    include_continual_tasks: get_dyncfg_val_from_defaults_and_remote(
-                        &config.system_parameter_defaults,
-                        config.remote_system_parameters.as_ref(),
-                        &ENABLE_CONTINUAL_TASK_BUILTINS,
-                    ),
-                },
+                aws_account_id: config
+                    .aws_principal_context
+                    .as_ref()
+                    .map(|c| c.aws_account_id.clone()),
                 helm_chart_version: config.helm_chart_version,
             },
             cluster_replica_sizes: config.cluster_replica_sizes,
@@ -204,8 +219,7 @@ impl Catalog {
                 txn.set_system_config_synced_once()?;
             }
             // Add any new builtin objects and remove old ones.
-            let new_builtin_collections =
-                add_new_remove_old_builtin_items_migration(&state.config().builtins_cfg, &mut txn)?;
+            let new_builtin_collections = add_new_remove_old_builtin_items_migration(&mut txn)?;
             let builtin_bootstrap_cluster_config_map = BuiltinBootstrapClusterConfigMap {
                 system_cluster: config.builtin_system_cluster_config,
                 catalog_server_cluster: config.builtin_catalog_server_cluster_config,
@@ -216,15 +230,17 @@ impl Catalog {
             add_new_remove_old_builtin_clusters_migration(
                 &mut txn,
                 &builtin_bootstrap_cluster_config_map,
+                config.boot_ts,
             )?;
             add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
-            add_new_remove_old_builtin_cluster_replicas_migration(
+            reconcile_builtin_cluster_replicas(
                 &mut txn,
                 &builtin_bootstrap_cluster_config_map,
+                config.boot_ts,
             )?;
             add_new_remove_old_builtin_roles_migration(&mut txn)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
-            remove_pending_cluster_replicas_migration(&mut txn)?;
+            remove_pending_cluster_replicas_migration(&mut txn, config.boot_ts)?;
 
             new_builtin_collections
         };
@@ -249,7 +265,6 @@ impl Catalog {
                     Err(e) => return Err(e.into()),
                 };
             }
-            state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
         }
 
         // Make life easier by consolidating all updates, so that we end up with only positive
@@ -268,44 +283,44 @@ impl Catalog {
         let mut audit_log_updates = Vec::new();
         for (kind, ts, diff) in updates {
             match kind {
-                BootstrapStateUpdateKind::Role(_)
-                | BootstrapStateUpdateKind::RoleAuth(_)
-                | BootstrapStateUpdateKind::Database(_)
-                | BootstrapStateUpdateKind::Schema(_)
-                | BootstrapStateUpdateKind::DefaultPrivilege(_)
-                | BootstrapStateUpdateKind::SystemPrivilege(_)
-                | BootstrapStateUpdateKind::SystemConfiguration(_)
-                | BootstrapStateUpdateKind::Cluster(_)
-                | BootstrapStateUpdateKind::NetworkPolicy(_)
-                | BootstrapStateUpdateKind::ClusterReplica(_) => {
-                    pre_item_updates.push(StateUpdate {
-                        kind: kind.into(),
-                        ts,
-                        diff: diff.try_into().expect("valid diff"),
-                    })
-                }
-                BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
-                | BootstrapStateUpdateKind::SystemObjectMapping(_) => {
-                    system_item_updates.push(StateUpdate {
-                        kind: kind.into(),
-                        ts,
-                        diff: diff.try_into().expect("valid diff"),
-                    })
-                }
-                BootstrapStateUpdateKind::Item(_) => item_updates.push(StateUpdate {
-                    kind: kind.into(),
+                StateUpdateKind::Role(_)
+                | StateUpdateKind::RoleAuth(_)
+                | StateUpdateKind::Database(_)
+                | StateUpdateKind::Schema(_)
+                | StateUpdateKind::DefaultPrivilege(_)
+                | StateUpdateKind::SystemPrivilege(_)
+                | StateUpdateKind::SystemConfiguration(_)
+                | StateUpdateKind::ClusterSystemConfiguration(_)
+                | StateUpdateKind::ReplicaSystemConfiguration(_)
+                | StateUpdateKind::Cluster(_)
+                | StateUpdateKind::NetworkPolicy(_)
+                | StateUpdateKind::ClusterReplica(_) => pre_item_updates.push(StateUpdate {
+                    kind,
                     ts,
                     diff: diff.try_into().expect("valid diff"),
                 }),
-                BootstrapStateUpdateKind::Comment(_)
-                | BootstrapStateUpdateKind::StorageCollectionMetadata(_)
-                | BootstrapStateUpdateKind::SourceReferences(_)
-                | BootstrapStateUpdateKind::UnfinalizedShard(_) => {
+                StateUpdateKind::IntrospectionSourceIndex(_)
+                | StateUpdateKind::SystemObjectMapping(_) => {
+                    system_item_updates.push(StateUpdate {
+                        kind,
+                        ts,
+                        diff: diff.try_into().expect("valid diff"),
+                    })
+                }
+                StateUpdateKind::Item(_) => item_updates.push(StateUpdate {
+                    kind,
+                    ts,
+                    diff: diff.try_into().expect("valid diff"),
+                }),
+                StateUpdateKind::Comment(_)
+                | StateUpdateKind::StorageCollectionMetadata(_)
+                | StateUpdateKind::SourceReferences(_)
+                | StateUpdateKind::UnfinalizedShard(_) => {
                     post_item_updates.push((kind, ts, diff));
                 }
-                BootstrapStateUpdateKind::AuditLog(_) => {
+                StateUpdateKind::AuditLog(_) => {
                     audit_log_updates.push(StateUpdate {
-                        kind: kind.into(),
+                        kind,
                         ts,
                         diff: diff.try_into().expect("valid diff"),
                     });
@@ -317,6 +332,17 @@ impl Catalog {
             .apply_updates(pre_item_updates, &mut LocalExpressionCache::Closed)
             .await;
         builtin_table_updates.extend(builtin_table_update);
+
+        // Both the `system_parameter_defaults` set above and the durable
+        // `SystemConfiguration` values applied via `pre_item_updates` live in
+        // the `SystemVars` value map by now. Mirror their effective values into
+        // the dyncfg `ConfigSet`, so that startup-only reads observe configured
+        // values rather than compile-time defaults, as with
+        // `ENABLE_EXPRESSION_CACHE` below. `apply_updates` only
+        // syncs the `ConfigSet` when a `SystemConfiguration` update is present,
+        // and a deployment configured purely via `system_parameter_default` has
+        // none, so sync explicitly here.
+        state.system_config().sync_dyncfgs();
 
         // Ensure mz_system has a password if configured to have one.
         // It's important we do this after the `pre_item_updates` so that
@@ -360,16 +386,17 @@ impl Catalog {
                 ?enable_expr_cache_dyncfg,
                 "using expression cache for startup"
             );
-            let current_ids = txn
+            let current_items = txn
                 .get_items()
                 .flat_map(|item| {
-                    let gid = item.global_id.clone();
-                    let gids: Vec<_> = item.extra_versions.values().cloned().collect();
-                    std::iter::once(gid).chain(gids.into_iter())
+                    let item_version = latest_item_version(&item.extra_versions);
+                    std::iter::once(item.global_id)
+                        .chain(item.extra_versions.into_values())
+                        .map(move |gid| (gid, item_version))
                 })
                 .chain(
                     txn.get_system_object_mappings()
-                        .map(|som| som.unique_identifier.global_id),
+                        .map(|som| (som.unique_identifier.global_id, RelationVersion::root())),
                 )
                 .collect();
             let dyncfgs = config.persist_client.dyncfgs().clone();
@@ -389,7 +416,7 @@ impl Catalog {
                     .get_expression_cache_shard()
                     .expect("expression cache shard should exist for opened catalogs"),
                 persist: config.persist_client,
-                current_ids,
+                current_items,
                 remove_prior_versions: !config.read_only,
                 compact_shard: config.read_only,
                 dyncfgs,
@@ -420,8 +447,7 @@ impl Catalog {
             .await;
         builtin_table_updates.extend(builtin_table_update);
 
-        let last_seen_version =
-            get_migration_version(&txn).map_or_else(|| "new".into(), |v| v.to_string());
+        let last_seen_version = get_migration_version(&txn);
 
         let mz_authentication_mock_nonce =
             txn.get_authentication_mock_nonce().ok_or_else(|| {
@@ -443,7 +469,9 @@ impl Catalog {
             .await
             .map_err(|e| {
                 Error::new(ErrorKind::FailedCatalogMigration {
-                    last_seen_version: last_seen_version.clone(),
+                    last_seen_version: last_seen_version
+                        .as_ref()
+                        .map_or_else(|| "new".to_string(), |v| v.to_string()),
                     this_version: config.build_info.version,
                     cause: e.to_string(),
                 })
@@ -475,7 +503,7 @@ impl Catalog {
         let post_item_updates = post_item_updates
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate {
-                kind: kind.into(),
+                kind,
                 ts,
                 diff: diff.try_into().expect("valid diff"),
             })
@@ -556,7 +584,7 @@ impl Catalog {
                 migrated_storage_collections_0dt,
                 new_builtin_collections,
                 mut builtin_table_updates,
-                last_seen_version: _,
+                last_seen_version,
                 expr_cache_handle,
                 cached_global_exprs,
                 uncached_local_exprs,
@@ -571,9 +599,9 @@ impl Catalog {
 
             let catalog = Catalog {
                 state,
-                plans: CatalogPlans::default(),
                 expr_cache_handle,
                 transient_revision: 1,
+                shared_transient_revision: Arc::new(AtomicU64::new(1)),
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
             };
 
@@ -614,6 +642,7 @@ impl Catalog {
 
             Ok(OpenCatalogResult {
                 catalog,
+                last_seen_version,
                 migrated_storage_collections_0dt,
                 new_builtin_collections,
                 builtin_table_updates,
@@ -633,9 +662,7 @@ impl Catalog {
     /// collections created between versions.
     async fn initialize_storage_state(
         &mut self,
-        storage_collections: &Arc<
-            dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync,
-        >,
+        storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
         let collections = self
             .entries()
@@ -648,7 +675,20 @@ impl Catalog {
         let mut state = self.state.clone();
 
         let mut storage = self.storage().await;
+        let shard_id = storage.shard_id();
         let mut txn = storage.transaction().await?;
+
+        // Ensure the storage controller knows about the catalog shard and associates it with the
+        // `MZ_CATALOG_RAW` builtin source.
+        let item_id = self.resolve_builtin_storage_collection(&MZ_CATALOG_RAW);
+        let global_id = self.get_entry(&item_id).latest_global_id();
+        match txn.get_collection_metadata().get(&global_id) {
+            None => {
+                txn.insert_collection_metadata([(global_id, shard_id)].into())
+                    .map_err(mz_catalog::durable::DurableCatalogError::from)?;
+            }
+            Some(id) => assert_eq!(*id, shard_id),
+        }
 
         storage_collections
             .initialize_state(&mut txn, collections)
@@ -683,8 +723,7 @@ impl Catalog {
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
-    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
-    {
+    ) -> Result<mz_controller::Controller, mz_catalog::durable::CatalogError> {
         let controller_start = Instant::now();
         info!("startup: controller init: beginning");
 
@@ -735,7 +774,7 @@ impl CatalogState {
         name: &str,
         value: VarInput,
     ) -> Result<(), Error> {
-        Ok(self.system_configuration.set_default(name, value)?)
+        Ok(Arc::make_mut(&mut self.system_configuration).set_default(name, value)?)
     }
 }
 
@@ -743,7 +782,6 @@ impl CatalogState {
 ///
 /// Returns the list of new builtin [`GlobalId`]s.
 fn add_new_remove_old_builtin_items_migration(
-    builtins_cfg: &BuiltinsConfig,
     txn: &mut mz_catalog::durable::Transaction<'_>,
 ) -> Result<Vec<GlobalId>, mz_catalog::durable::CatalogError> {
     let mut new_builtin_mappings = Vec::new();
@@ -753,7 +791,7 @@ fn add_new_remove_old_builtin_items_migration(
     // We compare the builtin items that are compiled into the binary with the builtin items that
     // are persisted in the catalog to discover new and deleted builtin items.
     let mut builtins = Vec::new();
-    for builtin in BUILTINS::iter(builtins_cfg) {
+    for builtin in BUILTINS::iter() {
         let desc = SystemObjectDescription {
             schema_name: builtin.schema().to_string(),
             object_type: builtin.catalog_item_type(),
@@ -843,6 +881,7 @@ fn add_new_remove_old_builtin_items_migration(
                     *c.owner_id,
                     acl_items,
                     versions,
+                    None,
                 )?;
                 true
             }
@@ -871,14 +910,27 @@ fn add_new_remove_old_builtin_items_migration(
             Builtin::Source(s) => (CommentObjectId::Source(id), &s.desc, &s.column_comments),
             Builtin::View(v) => (CommentObjectId::View(id), &v.desc, &v.column_comments),
             Builtin::Table(t) => (CommentObjectId::Table(id), &t.desc, &t.column_comments),
+            Builtin::MaterializedView(mv) => (
+                CommentObjectId::MaterializedView(id),
+                &mv.desc,
+                &mv.column_comments,
+            ),
             Builtin::Log(_)
             | Builtin::Type(_)
             | Builtin::Func(_)
-            | Builtin::ContinualTask(_)
             | Builtin::Index(_)
             | Builtin::Connection(_) => continue,
         };
-        txn.drop_comments(&BTreeSet::from_iter([comment_id]))?;
+        // Drop comments under every relation-style `CommentObjectId` variant
+        // for this id, not just the current one. When a builtin's type changes
+        // (e.g. Table -> MaterializedView) but its catalog id is preserved, the
+        // prior type's comment rows would otherwise linger forever.
+        txn.drop_comments(&BTreeSet::from_iter([
+            CommentObjectId::Table(id),
+            CommentObjectId::View(id),
+            CommentObjectId::MaterializedView(id),
+            CommentObjectId::Source(id),
+        ]))?;
 
         let mut comments = comments.clone();
         for (col_idx, name) in desc.iter_names().enumerate() {
@@ -909,14 +961,14 @@ fn add_new_remove_old_builtin_items_migration(
             CatalogItemType::Table => CommentObjectId::Table(id),
             CatalogItemType::Source => CommentObjectId::Source(id),
             CatalogItemType::View => CommentObjectId::View(id),
+            CatalogItemType::MaterializedView => CommentObjectId::MaterializedView(id),
             CatalogItemType::Sink
-            | CatalogItemType::MaterializedView
+            | CatalogItemType::MetricSink
             | CatalogItemType::Index
             | CatalogItemType::Type
             | CatalogItemType::Func
             | CatalogItemType::Secret
-            | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => continue,
+            | CatalogItemType::Connection => continue,
         };
         deleted_comments.insert(comment_id);
     }
@@ -957,6 +1009,7 @@ fn add_new_remove_old_builtin_items_migration(
 fn add_new_remove_old_builtin_clusters_migration(
     txn: &mut mz_catalog::durable::Transaction<'_>,
     builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
+    boot_ts: Timestamp,
 ) -> Result<(), mz_catalog::durable::CatalogError> {
     let mut durable_clusters: BTreeMap<_, _> = txn
         .get_clusters()
@@ -969,7 +1022,7 @@ fn add_new_remove_old_builtin_clusters_migration(
         if durable_clusters.remove(builtin_cluster.name).is_none() {
             let cluster_config = builtin_cluster_config_map.get_config(builtin_cluster.name)?;
 
-            txn.insert_system_cluster(
+            let cluster_id = txn.insert_system_cluster(
                 builtin_cluster.name,
                 vec![],
                 builtin_cluster.privileges.to_vec(),
@@ -980,13 +1033,30 @@ fn add_new_remove_old_builtin_clusters_migration(
                         availability_zones: vec![],
                         replication_factor: cluster_config.replication_factor,
                         logging: default_logging_config(),
+                        arrangement_compression: false,
                         optimizer_feature_overrides: Default::default(),
                         schedule: Default::default(),
+                        auto_scaling_strategy: None,
+                        reconfiguration: None,
+                        burst: None,
                     }),
                     workload_class: None,
                 },
                 &HashSet::new(),
             )?;
+
+            let audit_id = txn.allocate_audit_log_id()?;
+            txn.insert_audit_log_event(VersionedEvent::new(
+                audit_id,
+                EventType::Create,
+                ObjectType::Cluster,
+                EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                    id: cluster_id.to_string(),
+                    name: builtin_cluster.name.to_string(),
+                }),
+                None,
+                boot_ts.into(),
+            ));
         }
     }
 
@@ -996,6 +1066,21 @@ fn add_new_remove_old_builtin_clusters_migration(
         .map(|cluster| cluster.id)
         .collect();
     txn.remove_clusters(&old_clusters)?;
+
+    for (_name, cluster) in &durable_clusters {
+        let audit_id = txn.allocate_audit_log_id()?;
+        txn.insert_audit_log_event(VersionedEvent::new(
+            audit_id,
+            EventType::Drop,
+            ObjectType::Cluster,
+            EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                id: cluster.id.to_string(),
+                name: cluster.name.clone(),
+            }),
+            None,
+            boot_ts.into(),
+        ));
+    }
 
     Ok(())
 }
@@ -1065,67 +1150,248 @@ fn add_new_remove_old_builtin_roles_migration(
     Ok(())
 }
 
-fn add_new_remove_old_builtin_cluster_replicas_migration(
+/// Converges each builtin cluster's replica set on the cluster's own managed
+/// config.
+///
+/// A builtin cluster is normally managed, and a managed cluster's replicas are
+/// derived state: exactly `replication_factor` replicas, named by
+/// [`managed_cluster_replica_name`]. One can be altered to unmanaged, which leaves
+/// no factor to derive from, and then its replica set is the operator's.
+///
+/// Replicas this creates are shaped from the cluster's config. An existing replica
+/// is matched by name alone and left untouched, so this converges cardinality and
+/// names rather than shape. An internal replica is never derived state and is left
+/// alone entirely.
+///
+/// The bootstrap flags seed `replication_factor` and `size` when a cluster is
+/// first created (see [`add_new_remove_old_builtin_clusters_migration`]) and are
+/// deliberately not consulted here, so an `ALTER CLUSTER` against a builtin
+/// cluster survives a restart.
+///
+/// This runs at catalog open so the replicas a cluster's config calls for exist as
+/// early as possible. The coordinator's bootstrap brings up only replicas already
+/// recorded durably and runs before the cluster controller is spawned, and the
+/// controller does not run at all while a deployment is read-only.
+///
+/// The cluster controller owns these replica sets at runtime and derives its
+/// target from the same cluster config, so the two converge on the same set
+/// rather than competing for it. The controller matches replicas by shape and
+/// count, never by name, so the `r1..rN` this creates satisfy it. This converges
+/// by name, so a boot after the controller reshaped a cluster renames or
+/// re-creates replicas it had materialized under generator names. That is
+/// harmless: every replica is a cold process at boot anyway, so the cost is
+/// replica-id and audit-log noise.
+fn reconcile_builtin_cluster_replicas(
     txn: &mut Transaction<'_>,
     builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
+    boot_ts: Timestamp,
 ) -> Result<(), AdapterError> {
-    let cluster_lookup: BTreeMap<_, _> = txn
-        .get_clusters()
-        .map(|cluster| (cluster.name.clone(), cluster.clone()))
+    let builtin_cluster_names: BTreeSet<&str> = BUILTIN_CLUSTERS
+        .iter()
+        .map(|cluster| cluster.name)
         .collect();
 
-    let mut durable_replicas: BTreeMap<ClusterId, BTreeMap<String, ClusterReplica>> = txn
-        .get_cluster_replicas()
-        .filter(|replica| replica.replica_id.is_system())
-        .fold(BTreeMap::new(), |mut acc, replica| {
-            acc.entry(replica.cluster_id)
-                .or_insert_with(BTreeMap::new)
-                .insert(replica.name.to_string(), replica);
-            acc
-        });
+    // Replicas of a cluster that is no longer a builtin need no handling here:
+    // `Transaction::remove_clusters` cascades to a cluster's replicas, and the
+    // clusters migration has already run against this transaction.
+    let clusters: Vec<_> = txn
+        .get_clusters()
+        .filter(|cluster| {
+            cluster.id.is_system() && builtin_cluster_names.contains(cluster.name.as_str())
+        })
+        .collect();
 
-    // Add new replicas.
-    for builtin_replica in BUILTIN_CLUSTER_REPLICAS {
-        let cluster = cluster_lookup
-            .get(builtin_replica.cluster_name)
-            .expect("builtin cluster replica references non-existent cluster");
-        // `empty_map` is a hack to simplify the if statement below.
-        let mut empty_map: BTreeMap<String, ClusterReplica> = BTreeMap::new();
-        let replica_names = durable_replicas
-            .get_mut(&cluster.id)
-            .unwrap_or(&mut empty_map);
+    let builtin_cluster_ids: BTreeSet<ClusterId> =
+        clusters.iter().map(|cluster| cluster.id).collect();
 
-        let builtin_cluster_bootstrap_config =
-            builtin_cluster_config_map.get_config(builtin_replica.cluster_name)?;
-        if replica_names.remove(builtin_replica.name).is_none()
-            // NOTE(SangJunBak): We need to explicitly check the replication factor because
-            // BUILT_IN_CLUSTER_REPLICAS is constant throughout all deployments but the replication
-            // factor is configurable on bootstrap.
-            && builtin_cluster_bootstrap_config.replication_factor > 0
-        {
-            let replica_size = match cluster.config.variant {
-                ClusterVariant::Managed(ClusterVariantManaged { ref size, .. }) => size.clone(),
-                ClusterVariant::Unmanaged => builtin_cluster_bootstrap_config.size,
-            };
-
-            let config = builtin_cluster_replica_config(replica_size);
-            txn.insert_cluster_replica(
-                cluster.id,
-                builtin_replica.name,
-                config,
-                MZ_SYSTEM_ROLE_ID,
-            )?;
-        }
+    // Only the builtin clusters' replicas. An environment can have thousands of
+    // user replicas and none of them are in scope here.
+    //
+    // An internal replica is deliberately out of scope. `CREATE CLUSTER REPLICA ...
+    // INTERNAL` is allowed on a managed cluster, and its name is barred from
+    // matching the derived `r1..rN` pattern so it cannot collide with one. It is a
+    // break-glass replica an operator added rather than derived state, so reaping it
+    // would undo that. The `ALTER CLUSTER` path skips it for the same reason.
+    let mut replicas_by_cluster: BTreeMap<ClusterId, BTreeMap<String, ClusterReplica>> =
+        BTreeMap::new();
+    for replica in txn.get_cluster_replicas().filter(|replica| {
+        builtin_cluster_ids.contains(&replica.cluster_id)
+            && !matches!(
+                replica.config.location,
+                ReplicaLocation::Managed { internal: true, .. }
+            )
+    }) {
+        replicas_by_cluster
+            .entry(replica.cluster_id)
+            .or_default()
+            .insert(replica.name.clone(), replica);
     }
 
-    // Remove old replicas.
-    let old_replicas = durable_replicas
-        .values()
-        .flat_map(|replicas| replicas.values().map(|replica| replica.replica_id))
+    let mut to_drop: Vec<(String, ClusterReplica)> = Vec::new();
+
+    for cluster in clusters {
+        // An unmanaged cluster has no replication factor, so there is no target to
+        // converge on. Its replica set is whatever an operator made it, and it is
+        // not ours to reshape.
+        let ClusterVariant::Managed(managed) = &cluster.config.variant else {
+            continue;
+        };
+
+        // The bootstrap flags seed a cluster at creation and are never re-applied,
+        // which is what keeps an `ALTER CLUSTER` from being reverted on every
+        // restart. That leaves an operator who changed a flag on an existing
+        // deployment with no feedback, so say so.
+        let bootstrap_config = builtin_cluster_config_map.get_config(&cluster.name)?;
+        if bootstrap_config.replication_factor != managed.replication_factor {
+            warn!(
+                cluster = %cluster.name,
+                configured_replication_factor = managed.replication_factor,
+                bootstrap_replication_factor = bootstrap_config.replication_factor,
+                "bootstrap replication factor is not applied to an already-existing \
+                 builtin cluster. Use ALTER CLUSTER ... SET (REPLICATION FACTOR ...) \
+                 to change it",
+            );
+        }
+
+        // Reading the cluster's factor is what makes this compose with the other
+        // writers of a replica set. The controller's on-refresh strategy parks a
+        // scheduled cluster by writing its factor to 0, so converging on the
+        // factor honors that instead of resurrecting a replica it just dropped.
+        let mut surplus = replicas_by_cluster.remove(&cluster.id).unwrap_or_default();
+        for index in 0..managed.replication_factor {
+            let replica_name = managed_cluster_replica_name(index);
+            if surplus.remove(&replica_name).is_some() {
+                continue;
+            }
+
+            // Builtin replicas live on system clusters. This runs inside the
+            // catalog-open transaction with no coordinator, so allocating from the
+            // same transaction is single-source and safe.
+            let replica_id = txn.allocate_system_replica_id()?;
+            txn.insert_cluster_replica_with_id(
+                cluster.id,
+                replica_id,
+                &replica_name,
+                managed_replica_config(managed),
+                // The cluster's owner, not `mz_system`. `mz_support` and
+                // `mz_analytics` are owned by their own roles, and replica
+                // ownership is checked against the replica's own `owner_id`, so
+                // stamping `mz_system` here would stop those roles from altering
+                // a replica of a cluster they own.
+                cluster.owner_id,
+            )?;
+            info!(
+                cluster = %cluster.name, replica = %replica_name, %replica_id,
+                "creating builtin cluster replica to match the cluster's replication factor"
+            );
+
+            let audit_id = txn.allocate_audit_log_id()?;
+            txn.insert_audit_log_event(VersionedEvent::new(
+                audit_id,
+                EventType::Create,
+                ObjectType::ClusterReplica,
+                EventDetails::CreateClusterReplicaV4(mz_audit_log::CreateClusterReplicaV4 {
+                    cluster_id: cluster.id.to_string(),
+                    cluster_name: cluster.name.clone(),
+                    replica_id: Some(replica_id.to_string()),
+                    replica_name,
+                    logical_size: managed.size.clone(),
+                    billed_as: None,
+                    internal: false,
+                    reason: CreateOrDropClusterReplicaReasonV1::System,
+                    scheduling_policies: None,
+                }),
+                None,
+                boot_ts.into(),
+            ));
+        }
+
+        // Whatever the config does not call for is surplus: a replica left over from
+        // a higher replication factor, or a `-pending` replica belonging to a
+        // graceful reconfiguration that a restart interrupted. Dropping the latter
+        // here means `remove_pending_cluster_replicas_migration` never sees it,
+        // which matches the abort semantics it would have applied anyway.
+        to_drop.extend(
+            surplus
+                .into_values()
+                .map(|replica| (cluster.name.clone(), replica)),
+        );
+    }
+
+    // Batched: `Transaction::remove_cluster_replica` is linear in the total replica
+    // count, so it must not be called in a loop.
+    let drop_ids = to_drop
+        .iter()
+        .map(|(_cluster_name, replica)| replica.replica_id)
         .collect();
-    txn.remove_cluster_replicas(&old_replicas)?;
+    txn.remove_cluster_replicas(&drop_ids)?;
+
+    for (cluster_name, replica) in to_drop {
+        info!(
+            cluster = %cluster_name, replica = %replica.name, replica_id = %replica.replica_id,
+            "dropping builtin cluster replica not called for by the cluster's replication factor"
+        );
+
+        let audit_id = txn.allocate_audit_log_id()?;
+        txn.insert_audit_log_event(VersionedEvent::new(
+            audit_id,
+            EventType::Drop,
+            ObjectType::ClusterReplica,
+            EventDetails::DropClusterReplicaV3(mz_audit_log::DropClusterReplicaV3 {
+                cluster_id: replica.cluster_id.to_string(),
+                cluster_name,
+                replica_id: Some(replica.replica_id.to_string()),
+                replica_name: replica.name,
+                reason: CreateOrDropClusterReplicaReasonV1::System,
+                scheduling_policies: None,
+            }),
+            None,
+            boot_ts.into(),
+        ));
+    }
 
     Ok(())
+}
+
+/// The replica config implied by a managed cluster's config.
+///
+/// Every field a replica shares with its cluster is taken from the cluster.
+/// `availability_zones` is the cluster's pool, which is what the provisioning
+/// paths stamp onto a managed replica.
+///
+/// Two things the `ALTER CLUSTER` path does that this does not. It normalizes
+/// logging through the plan, which discards `log_logging` when no interval is
+/// set, so for the odd cluster config that has debugging on and logging off the
+/// two produce different records. And it validates the size against the replica
+/// size map and the role's allowed sizes, which cannot be done from here because
+/// the size map is not part of the durable catalog. A builtin cluster's size only
+/// ever comes from a bootstrap flag or an `ALTER` that already validated it.
+fn managed_replica_config(managed: &ClusterVariantManaged) -> ReplicaConfig {
+    // Exhaustive destructure (no `..`): a field added to the managed config is a
+    // compile error here until we decide whether a replica has to carry it.
+    let ClusterVariantManaged {
+        size,
+        availability_zones,
+        logging,
+        arrangement_compression,
+        replication_factor: _,
+        optimizer_feature_overrides: _,
+        schedule: _,
+        auto_scaling_strategy: _,
+        reconfiguration: _,
+        burst: _,
+    } = managed;
+    ReplicaConfig {
+        location: ReplicaLocation::Managed {
+            size: size.clone(),
+            availability_zones: availability_zones.clone(),
+            billed_as: None,
+            internal: false,
+            pending: false,
+        },
+        logging: logging.clone(),
+        arrangement_compression: *arrangement_compression,
+    }
 }
 
 /// Roles can have default values for configuration parameters, e.g. you can set a Role default for
@@ -1182,32 +1448,61 @@ fn remove_invalid_config_param_role_defaults_migration(
     Ok(())
 }
 
-/// Cluster Replicas may be created ephemerally during an alter statement, these replicas
-/// are marked as pending and should be cleaned up on catalog opsn.
-fn remove_pending_cluster_replicas_migration(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+/// Drops replicas left durably marked `pending`.
+///
+/// No runtime path creates one anymore. An upgrade can still come from a version
+/// whose staged reconfiguration machine crashed between the pending-create commit
+/// and the finalize, and those replicas are excluded from the cluster
+/// controller's ownership test, so this catalog-open sweep is their only
+/// remaining cleaner. It goes away together with the durable `pending` field,
+/// once no supported upgrade source can still write one.
+fn remove_pending_cluster_replicas_migration(
+    tx: &mut Transaction,
+    boot_ts: mz_repr::Timestamp,
+) -> Result<(), anyhow::Error> {
+    // Build a map of cluster_id -> cluster_name for audit events.
+    let cluster_names: BTreeMap<_, _> = tx.get_clusters().map(|c| (c.id, c.name)).collect();
+
+    let occurred_at = boot_ts.into();
+
     for replica in tx.get_cluster_replicas().collect::<Vec<_>>() {
         if let mz_catalog::durable::ReplicaLocation::Managed { pending: true, .. } =
             replica.config.location
         {
+            let cluster_name = cluster_names
+                .get(&replica.cluster_id)
+                .cloned()
+                .unwrap_or_else(|| "<unknown>".to_string());
+
+            info!(
+                "removing pending cluster replica '{}' from cluster '{}'",
+                replica.name, cluster_name,
+            );
+
             tx.remove_cluster_replica(replica.replica_id)?;
+
+            // Emit an audit log event so that the drop is visible in
+            // mz_audit_events, matching the create event that was
+            // recorded when the pending replica was first created.
+            let audit_id = tx.allocate_audit_log_id()?;
+            tx.insert_audit_log_event(VersionedEvent::new(
+                audit_id,
+                EventType::Drop,
+                ObjectType::ClusterReplica,
+                EventDetails::DropClusterReplicaV3(mz_audit_log::DropClusterReplicaV3 {
+                    cluster_id: replica.cluster_id.to_string(),
+                    cluster_name,
+                    replica_id: Some(replica.replica_id.to_string()),
+                    replica_name: replica.name,
+                    reason: CreateOrDropClusterReplicaReasonV1::System,
+                    scheduling_policies: None,
+                }),
+                None,
+                occurred_at,
+            ));
         }
     }
     Ok(())
-}
-
-pub(crate) fn builtin_cluster_replica_config(
-    replica_size: String,
-) -> mz_catalog::durable::ReplicaConfig {
-    mz_catalog::durable::ReplicaConfig {
-        location: mz_catalog::durable::ReplicaLocation::Managed {
-            availability_zone: None,
-            billed_as: None,
-            pending: false,
-            internal: false,
-            size: replica_size,
-        },
-        logging: default_logging_config(),
-    }
 }
 
 fn default_logging_config() -> ReplicaLogging {
@@ -1258,56 +1553,78 @@ impl BuiltinBootstrapClusterConfigMap {
 
 /// Convert `updates` into a `Vec` that can be consolidated by doing the following:
 ///
-///   - Convert each update into a type that implements [`std::cmp::Ord`].
 ///   - Update the timestamp of each update to the same value.
 ///   - Convert the diff of each update to a type that implements
 ///     [`differential_dataflow::difference::Semigroup`].
-///
-/// [`mz_catalog::memory::objects::StateUpdateKind`] does not implement [`std::cmp::Ord`] only
-/// because it contains a variant for temporary items, which do not implement [`std::cmp::Ord`].
-/// However, we know that during bootstrap no temporary items exist, because they are not persisted
-/// and are only created after bootstrap is complete. So we forcibly convert each
-/// [`mz_catalog::memory::objects::StateUpdateKind`] into an [`BootstrapStateUpdateKind`], which is
-/// identical to [`mz_catalog::memory::objects::StateUpdateKind`] except it doesn't have a
-/// temporary item variant and does implement [`std::cmp::Ord`].
 ///
 /// WARNING: Do not call outside of startup.
 pub(crate) fn into_consolidatable_updates_startup(
     updates: Vec<StateUpdate>,
     ts: Timestamp,
-) -> Vec<(BootstrapStateUpdateKind, Timestamp, Diff)> {
+) -> Vec<(StateUpdateKind, Timestamp, Diff)> {
     updates
         .into_iter()
-        .map(|StateUpdate { kind, ts: _, diff }| {
-            let kind: BootstrapStateUpdateKind = kind
-                .try_into()
-                .unwrap_or_else(|e| panic!("temporary items do not exist during bootstrap: {e:?}"));
-            (kind, ts, Diff::from(diff))
-        })
+        .map(|StateUpdate { kind, ts: _, diff }| (kind, ts, Diff::from(diff)))
         .collect()
 }
 
-fn get_dyncfg_val_from_defaults_and_remote<T: mz_dyncfg::ConfigDefault>(
-    defaults: &BTreeMap<String, String>,
-    remote: Option<&BTreeMap<String, String>>,
-    cfg: &mz_dyncfg::Config<T>,
-) -> T::ConfigType {
-    let mut val = T::into_config_type(cfg.default().clone());
-    let get_fn = |map: &BTreeMap<String, String>| {
-        let val = map.get(cfg.name())?;
-        match <T::ConfigType as mz_dyncfg::ConfigType>::parse(val) {
-            Ok(x) => Some(x),
-            Err(err) => {
-                tracing::warn!("could not parse {} value [{}]: {}", cfg.name(), val, err);
-                None
+#[cfg(test)]
+mod tests {
+    use mz_catalog::durable::ClusterVariantManaged;
+
+    use super::*;
+
+    /// A replica the reconciler creates takes every shared field from its
+    /// cluster. Nothing here may fall back to a default, or a builtin cluster
+    /// ends up running a replica that disagrees with its own config.
+    #[mz_ore::test]
+    fn test_managed_replica_config_derives_every_shared_field() {
+        let managed = ClusterVariantManaged {
+            size: "somesize".into(),
+            availability_zones: vec!["az1".into(), "az2".into()],
+            logging: ReplicaLogging {
+                log_logging: true,
+                interval: Some(Duration::from_millis(10)),
+            },
+            arrangement_compression: true,
+            replication_factor: 3,
+            optimizer_feature_overrides: Default::default(),
+            schedule: Default::default(),
+            auto_scaling_strategy: None,
+            reconfiguration: None,
+            burst: None,
+        };
+
+        let config = managed_replica_config(&managed);
+
+        // Exhaustive destructures throughout, so a field added to either type is a
+        // compile error here rather than a silently unasserted one.
+        let ReplicaConfig {
+            location,
+            logging,
+            arrangement_compression,
+        } = config;
+
+        assert_eq!(logging, managed.logging);
+        assert_eq!(arrangement_compression, managed.arrangement_compression);
+        match location {
+            ReplicaLocation::Managed {
+                size,
+                availability_zones,
+                billed_as,
+                internal,
+                pending,
+            } => {
+                assert_eq!(size, managed.size);
+                assert_eq!(availability_zones, managed.availability_zones);
+                // A builtin replica is neither manually managed nor part of an
+                // in-flight reconfiguration, and those three traits are what
+                // exclude a replica from controller ownership.
+                assert_eq!(billed_as, None);
+                assert!(!internal);
+                assert!(!pending);
             }
+            ReplicaLocation::Unmanaged { .. } => panic!("expected a managed location"),
         }
-    };
-    if let Some(x) = get_fn(defaults) {
-        val = x;
     }
-    if let Some(x) = remote.and_then(get_fn) {
-        val = x;
-    }
-    val
 }

@@ -32,6 +32,8 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
 
 INSERT INTO t1 VALUES (interval '1 year 2 month 3 day 4 hour 5 minute 6.789123 second')
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > BEGIN
@@ -51,5 +53,5 @@ INSERT INTO t1 SELECT * FROM t1;
 interval
 
 > SELECT * FROM t1;
-"1 year 2 months 3 days 04:05:06.789123"
-"1 year 2 months 3 days 04:05:06.789123"
+"1 year 2 mons 3 days 04:05:06.789123"
+"1 year 2 mons 3 days 04:05:06.789123"

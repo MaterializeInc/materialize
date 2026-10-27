@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 
 # Copyright Materialize, Inc. and contributors. All rights reserved.
 #
@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -euo pipefail
+set -eu
 
 if [ -z "${MZ_EAT_MY_DATA:-}" ]; then
     unset LD_PRELOAD
@@ -17,9 +17,28 @@ else
     export LD_PRELOAD=libeatmydata.so
 fi
 
-if environmentd "$@"; then
-    echo "environmentd exited gracefully; sleeping forever" >&2
-    sleep infinity
-else
-    exit $?
-fi
+# Exit code of mz_ore::restart_in_place!, which environmentd uses only for
+# halts that are safe to repeat inside this container. Restarting here avoids
+# Kubernetes crash backoff. Every other failure, including mz_ore::halt!
+# (166), exits the container and leaves the restart to Kubernetes.
+restart_in_place=75
+
+# tini -g forwards shutdown signals to both this shell and environmentd.
+# Exit even if environmentd handles the signal by halting or exiting cleanly.
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
+while true; do
+    if environmentd "$@"; then
+        echo "environmentd exited gracefully; sleeping forever" >&2
+        exec sleep infinity
+    else
+        status=$?
+        if [ "$status" -ne "$restart_in_place" ]; then
+            exit "$status"
+        fi
+        echo "environmentd requested a restart in place; restarting" >&2
+        # Keeps the restarted process from booting writable, see preflight_0dt.
+        export MZ_RESTARTED_IN_PLACE=true
+    fi
+done

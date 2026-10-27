@@ -9,6 +9,8 @@
 
 //! Integration tests for TLS encryption and authentication.
 
+#![recursion_limit = "256"]
+
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -45,6 +47,7 @@ use mz_frontegg_auth::{
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
 };
+use mz_oidc_mock::{AudClaim, GenerateJwtOptions, OidcMockServer};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -115,6 +118,7 @@ enum TestCase<'a> {
         user_reported_by_system: &'a str,
         password: Option<Cow<'a, str>>,
         ssl_mode: SslMode,
+        options: Option<&'a str>,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
         assert: Assert<
             // A non-retrying, raw error.
@@ -132,7 +136,9 @@ enum TestCase<'a> {
         assert: Assert<Box<dyn Fn(Option<StatusCode>, String) + 'a>>,
     },
     Ws {
+        user_reported_by_system: &'a str,
         auth: &'a WebSocketAuth,
+        headers: &'a HeaderMap,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
         assert: Assert<Box<dyn Fn(CloseCode, String) + 'a>>,
     },
@@ -155,6 +161,7 @@ fn assert_http_rejected() -> Assert<Box<dyn Fn(Option<StatusCode>, String)>> {
     }))
 }
 
+#[allow(clippy::disallowed_methods)]
 async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[TestCase<'a>]) {
     println!("==> {}", header);
     for test in tests {
@@ -164,21 +171,26 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                 user_reported_by_system,
                 password,
                 ssl_mode,
+                options,
                 configure,
                 assert,
             } => {
                 println!(
-                    "pgwire user={} password={:?} ssl_mode={:?}",
-                    user_to_auth_as, password, ssl_mode
+                    "pgwire user={} password={:?} ssl_mode={:?} options={:?}",
+                    user_to_auth_as, password, ssl_mode, options
                 );
 
                 let tls = make_pg_tls(configure);
                 let password = password.as_ref().unwrap_or(&Cow::Borrowed(""));
-                let conn_config = server
+                let mut conn_config = server
                     .connect()
                     .ssl_mode(*ssl_mode)
                     .user(user_to_auth_as)
                     .password(password);
+
+                if let Some(opts) = options {
+                    conn_config = conn_config.options(opts);
+                }
 
                 match assert {
                     Assert::Success => {
@@ -338,6 +350,8 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
             }
             TestCase::Ws {
                 auth,
+                user_reported_by_system,
+                headers,
                 configure,
                 assert,
             } => {
@@ -353,8 +367,14 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     .path_and_query("/api/experimental/sql")
                     .build()
                     .unwrap();
+                let mut request = ClientRequestBuilder::new(uri.clone());
+                for (k, v) in headers.iter() {
+                    request =
+                        request.with_header::<String, &str>(k.to_string(), v.to_str().unwrap());
+                }
                 let stream = make_ws_tls(&uri, configure);
-                let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
+
+                let (mut ws, _resp) = tungstenite::client(request, stream).unwrap();
 
                 ws.send(Message::Text(serde_json::to_string(&auth).unwrap().into()))
                     .unwrap();
@@ -401,9 +421,25 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                 }
 
                 match assert {
-                    Assert::Success => assert_success_response(&mut ws, None, Some("SELECT 1")),
+                    Assert::Success => assert_success_response(
+                        &mut ws,
+                        Some(vec![
+                            serde_json::to_string(user_reported_by_system)
+                                .unwrap()
+                                .as_str(),
+                        ]),
+                        Some("SELECT 1"),
+                    ),
                     Assert::SuccessSuperuserCheck(is_superuser) => {
-                        assert_success_response(&mut ws, None, Some("SELECT 1"));
+                        assert_success_response(
+                            &mut ws,
+                            Some(vec![
+                                serde_json::to_string(user_reported_by_system)
+                                    .unwrap()
+                                    .as_str(),
+                            ]),
+                            Some("SELECT 1"),
+                        );
                         ws.send(Message::Text(r#"{"query": "SHOW is_superuser"}"#.into()))
                             .unwrap();
                         let expected = if *is_superuser { "\"on\"" } else { "\"off\"" };
@@ -429,6 +465,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_expiry() {
     // This function verifies that the background expiry refresh task runs. This
     // is done by starting a web server that awaits the refresh request, which the
@@ -677,6 +714,7 @@ async fn test_auth_base_require_tls_frontegg() {
         permissions: Vec::new(),
         token_type: ClaimTokenType::UserToken,
         metadata: None,
+        unknown_claims: Default::default(),
     };
     let frontegg_jwt = jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
@@ -823,28 +861,34 @@ async fn test_auth_base_require_tls_frontegg() {
         &server,
         &[
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user.to_string(),
                     password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Bearer {
                     token: frontegg_jwt.clone(),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: "bad user".to_string(),
                     password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
@@ -857,6 +901,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -874,6 +919,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -886,6 +932,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 assert: Assert::Success,
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user_lowercase.to_string(),
                     password: Password(frontegg_password.to_string()),
@@ -893,6 +940,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
+                headers: &no_headers,
             },
             // Password can be base64 encoded UUID bytes.
             TestCase::Pgwire {
@@ -905,6 +953,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     Some(Cow::Owned(format!("mzp_{}", URL_SAFE.encode(buf))))
                 },
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -919,6 +968,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     Some(Cow::Owned(format!("mzp_{}", URL_SAFE_NO_PAD.encode(buf))))
                 },
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -933,6 +983,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     Some(Cow::Owned(password.clone()))
                 },
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -951,6 +1002,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
@@ -974,6 +1026,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "materialize",
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -997,6 +1050,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed("bad password")),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1020,6 +1074,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Owned(format!("mznope_{client_id}{secret}"))),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1046,6 +1101,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1116,6 +1172,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "svc",
                 password: Some(Cow::Borrowed(frontegg_service_user_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1146,6 +1203,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "svc",
                 password: Some(Cow::Borrowed(frontegg_service_user_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1158,6 +1216,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: Some(Cow::Borrowed(frontegg_system_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1178,11 +1237,13 @@ async fn test_auth_base_require_tls_frontegg() {
                 })),
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
                     password: Password(frontegg_system_password.to_string()),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
@@ -1194,6 +1255,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: Some(Cow::Borrowed(frontegg_service_system_user_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1214,11 +1276,13 @@ async fn test_auth_base_require_tls_frontegg() {
                 })),
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: (&*SYSTEM_USER.name).into(),
                     password: Password(frontegg_service_system_user_password.to_string()),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
@@ -1231,6 +1295,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: PUBLIC_ROLE_NAME.as_str(),
                 password: Some(Cow::Borrowed(frontegg_system_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1251,15 +1316,1044 @@ async fn test_auth_base_require_tls_frontegg() {
                 })),
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: (PUBLIC_ROLE_NAME.as_str()).into(),
                     password: Password(frontegg_system_password.to_string()),
                     options: BTreeMap::default(),
                 },
+                headers: &no_headers,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
                     assert_eq!(message, "unauthorized");
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
+/// Tests OIDC authentication with TLS required.
+///
+/// This test verifies that users can authenticate using OIDC tokens
+/// over TLS connections
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_base_require_tls_oidc() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let issuer = oidc_server.issuer.clone();
+    let jwt_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+    let expired_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            exp: Some(0),
+            ..Default::default()
+        },
+    );
+    let wrong_user_token = oidc_server.generate_jwt(
+        "other@example.com",
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+    let wrong_issuer_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            issuer: Some("https://wrong-issuer.com"),
+            ..Default::default()
+        },
+    );
+
+    let oidc_bearer = Authorization::bearer(&jwt_token).unwrap();
+    let oidc_header_bearer = make_header(oidc_bearer);
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
+        .start()
+        .await;
+
+    run_tests(
+        "TlsMode::Require, OIDC",
+        &server,
+        &[
+            // TLS with valid JWT should succeed.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&jwt_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // HTTP with Bearer auth should succeed.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &oidc_header_bearer,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Ws with bearer token should succeed.
+            TestCase::Ws {
+                user_reported_by_system: oidc_user,
+                auth: &WebSocketAuth::Bearer {
+                    token: jwt_token.clone(),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+                headers: &HeaderMap::new(),
+            },
+            // No TLS should fail when server requires it.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&jwt_token)),
+                ssl_mode: SslMode::Disable,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(
+                        *err.code(),
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
+                    );
+                    assert_eq!(err.message(), "TLS encryption is required");
+                })),
+            },
+            // HTTP without TLS should be rejected.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTP,
+                headers: &oidc_header_bearer,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: assert_http_rejected(),
+            },
+            // Invalid JWT should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(
+                    "eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3Qta2V5LTEifQ.eyJzdWIiOiJ1c2VyQGV4YW1wbGUuY29tIn0.invalidsig",
+                )),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "failed to validate JWT");
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                })),
+            },
+            // Expired JWT should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&expired_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "authentication credentials have expired");
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                })),
+            },
+            // JWT for wrong user should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&wrong_user_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "wrong user");
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                })),
+            },
+            // JWT with wrong issuer should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&wrong_issuer_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid issuer");
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                    assert_contains!(
+                        err.detail().unwrap(),
+                        format!("Expected issuer \"{issuer}\" in the JWT.")
+                    );
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
+/// Tests OIDC audience validation.
+///
+/// This test verifies that when an audience is configured, only JWTs with
+/// matching `aud` claims are accepted.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_oidc_audience_validation() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let expected_audiences = vec!["app-client-1".to_string(), "app-client-2".to_string()];
+
+    let oidc_user = "user@example.com";
+    // Token with all expected audiences
+    let valid_all_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(AudClaim::Multiple(expected_audiences.clone())),
+            ..Default::default()
+        },
+    );
+
+    // Token with at least one of the expected audiences
+    let valid_one_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(AudClaim::Single(expected_audiences[0].clone())),
+            ..Default::default()
+        },
+    );
+    // Token with the wrong audience
+    let wrong_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(AudClaim::Single("wrong-app".to_string())),
+            ..Default::default()
+        },
+    );
+    // Token with no audience
+    let no_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let wrong_aud_headers = make_header(Authorization::bearer(&wrong_aud_token).unwrap());
+    let no_aud_headers = make_header(Authorization::bearer(&no_aud_token).unwrap());
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            Some(expected_audiences.clone()),
+            None,
+        )
+        .start()
+        .await;
+
+    run_tests(
+        "OIDC Audience Validation",
+        &server,
+        &[
+            // JWT that contains all expected audiences should succeed.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&valid_all_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // JWT with at least one of the expected audiences should succeed.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&valid_one_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // JWT with no expected audiences should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&wrong_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid audience");
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                    assert_contains!(
+                        err.detail().unwrap(),
+                        format!("Expected one of audiences {:?}", &expected_audiences)
+                    );
+                })),
+            },
+            // HTTP variant of the wrong-audience case: the response body
+            // should be the sanitized `OidcError::Display` so the console
+            // can render it on the login page.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &wrong_aud_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "invalid audience");
+                })),
+            },
+            // JWT with no audience should fail when audience is required.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&no_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid audience");
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                })),
+            },
+            // HTTP variant of the no-audience case.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &no_aud_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "invalid audience");
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
+/// Tests OIDC where we don't validate the audience claim.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_oidc_audience_optional() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    // Token with no audience
+    let no_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    // Token with any audience
+    let valid_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(AudClaim::Multiple(vec!["my-app-client-id".to_string()])),
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
+        .start()
+        .await;
+
+    run_tests(
+        "OIDC no audience validation",
+        &server,
+        &[
+            // JWT with no audience should succeed.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&no_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // JWT with any audience should succeed.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&valid_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+        ],
+    )
+    .await;
+}
+
+/// Tests password authentication when OIDC system parameters are also configured.
+///
+/// The harness `with_password_auth` call configures the SQL listener as
+/// `AuthenticatorKind::Password` even though OIDC issuer/claim system params are
+/// set; this test verifies that password auth still works in that combined
+/// configuration.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+async fn test_auth_oidc_password_fallback() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let user_password = "secure_password";
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            Some(Password("mz_system_password".to_owned())),
+        )
+        .start()
+        .await;
+
+    let admin_client = server
+        .connect()
+        .user("mz_system")
+        .password("mz_system_password")
+        .ssl_mode(SslMode::Require)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute(&format!(
+            "CREATE ROLE \"{}\" LOGIN PASSWORD '{}'",
+            oidc_user, user_password
+        ))
+        .await
+        .unwrap();
+
+    let oidc_header_basic = make_header(Authorization::basic(oidc_user, user_password));
+
+    run_tests(
+        "Password auth with OIDC params configured",
+        &server,
+        &[
+            // SQL Password auth should work when password isn't a JWT.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(user_password)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Invalid password should fail
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed("wrong_password")),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            // HTTP with basic username/password should use password authentication
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &oidc_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Ws with basic username/password should use password authentication
+            TestCase::Ws {
+                user_reported_by_system: oidc_user,
+                auth: &WebSocketAuth::Basic {
+                    user: oidc_user.to_string(),
+                    password: Password(user_password.to_string()),
+                    options: BTreeMap::default(),
+                },
+                headers: &HeaderMap::new(),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+        ],
+    )
+    .await;
+}
+
+/// This test verifies that OIDC authentication correctly respects
+/// runtime changes to the oidc_issuer and oidc_audience system parameters.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+async fn test_auth_oidc_issuer_and_audience_switch() {
+    let ca1 = Ca::new_root("test ca 1").unwrap();
+    let (server_cert, server_key) = ca1
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    // Start first OIDC server
+    let encoding_key1 = String::from_utf8(ca1.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let oidc_server1 = OidcMockServer::start(
+        None,
+        encoding_key1,
+        "key-1".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    // Start second OIDC server
+    let encoding_key2 = String::from_utf8(ca1.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let oidc_server2 = OidcMockServer::start(
+        None,
+        encoding_key2,
+        "key-2".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let audience1 = "app-client-1";
+    let audience2 = "app-client-2";
+
+    // Generate tokens from each server
+    let token1 = oidc_server1.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(AudClaim::Single(audience1.to_string())),
+            ..Default::default()
+        },
+    );
+    let token2 = oidc_server2.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(AudClaim::Single(audience2.to_string())),
+            ..Default::default()
+        },
+    );
+
+    // Start test server configured with first OIDC server
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server1.issuer.clone()),
+            Some("sub".to_string()),
+            Some(vec![audience1.to_string()]),
+            None,
+        )
+        .start()
+        .await;
+
+    let admin_client = server.connect().internal().await.unwrap();
+
+    let make_tls = || {
+        make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        }))
+    };
+
+    // Verify authentication works with first OIDC server's token
+    println!("Testing: first OIDC server token should succeed");
+    let client1 = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token1)
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client1.is_ok(),
+        "Should authenticate with first OIDC server: {:?}",
+        client1.err()
+    );
+
+    // Verify authentication fails with second OIDC server's token (wrong issuer)
+    println!("Testing: second OIDC server token should fail before switch");
+    let client2_before = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token2)
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client2_before.is_err(),
+        "Should fail with second OIDC server before switch"
+    );
+
+    // Switch to second OIDC server
+    println!("Switching OIDC configuration to second server");
+    admin_client
+        .batch_execute(&format!(
+            "ALTER SYSTEM SET oidc_issuer = '{}'",
+            oidc_server2.issuer
+        ))
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute(&format!(
+            "ALTER SYSTEM SET oidc_audience = '[\"{}\"]'",
+            audience2
+        ))
+        .await
+        .unwrap();
+
+    // Verify authentication now works with second OIDC server's token
+    println!("Testing: second OIDC server token should succeed after switch");
+    let client2_after = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token2)
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client2_after.is_ok(),
+        "Should authenticate with second OIDC server after switch: {:?}",
+        client2_after.err()
+    );
+
+    // Verify authentication now fails with first OIDC server's token
+    println!("Testing: first OIDC server token should fail after switch");
+    let client1_after = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token1)
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client1_after.is_err(),
+        "Should fail with first OIDC server after switch"
+    );
+}
+
+/// This test verifies that changing the OIDC authentication claim causes a new user
+/// to be created. With claim "sub", the sub value is used as the username. After
+/// switching to "email", the same token authenticates as the email value instead,
+/// creating a distinct new user.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+async fn test_auth_oidc_authentication_claim_switch() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        "key-1".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let sub_user = "sub-user-123";
+    let email_user = "user@example.com";
+
+    // Generate a token that carries both a "sub" claim and an "email" claim.
+    let token = oidc_server.generate_jwt(
+        sub_user,
+        GenerateJwtOptions {
+            extra_claims: Some(BTreeMap::from([(
+                "email".to_string(),
+                serde_json::Value::String(email_user.to_string()),
+            )])),
+            ..Default::default()
+        },
+    );
+
+    // Start server using "sub" as the authentication claim.
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer.clone()),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
+        .start()
+        .await;
+
+    let admin_client = server.connect().internal().await.unwrap();
+
+    // "sub" claim — user is created as sub_user.
+    run_tests(
+        "OIDC Authentication Claim Switch - sub claim",
+        &server,
+        &[TestCase::Pgwire {
+            user_to_auth_as: sub_user,
+            user_reported_by_system: sub_user,
+            password: Some(Cow::Borrowed(&token)),
+            ssl_mode: SslMode::Require,
+            options: None,
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            assert: Assert::Success,
+        }],
+    )
+    .await;
+
+    // Switch authentication claim to "email".
+    admin_client
+        .batch_execute("ALTER SYSTEM SET oidc_authentication_claim = 'email'")
+        .await
+        .unwrap();
+
+    // "email" claim — the same token now authenticates as email_user,
+    // which is a new, distinct user identity.
+    run_tests(
+        "OIDC Authentication Claim Switch - email claim",
+        &server,
+        &[TestCase::Pgwire {
+            user_to_auth_as: email_user,
+            user_reported_by_system: email_user,
+            password: Some(Cow::Borrowed(&token)),
+            ssl_mode: SslMode::Require,
+            options: None,
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            assert: Assert::Success,
+        }],
+    )
+    .await;
+}
+
+/// This test verifies that we return an error when the OIDC issuer is not set.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_required_issuer() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+
+    let token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(None, Some("sub".to_string()), None, None)
+        .start()
+        .await;
+
+    run_tests(
+        "OIDC Issuer Validation",
+        &server,
+        &[
+            // JWT with no issuer should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "OIDC issuer is not configured");
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                    assert_eq!(
+                        err.hint(),
+                        Some("Configure the OIDC issuer using the oidc_issuer system variable.")
+                    );
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
+/// This test verifies that we return an error when the OIDC authentication claim is not set.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_no_matching_authentication_claim() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let invalid_claim = "invalid_claim";
+    let token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let token_headers = make_header(Authorization::bearer(&token).unwrap());
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some(invalid_claim.to_string()),
+            None,
+            None,
+        )
+        .start()
+        .await;
+
+    run_tests(
+        "OIDC Issuer Validation",
+        &server,
+        &[
+            // JWT with no claim 'invalid_claim' should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(
+                        err.message(),
+                        "no matching authentication claim found in the JWT"
+                    );
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                    assert_eq!(
+                        err.detail(),
+                        Some(
+                            format!(
+                                "Expected authentication claim \"{}\" in the JWT.",
+                                invalid_claim
+                            )
+                            .as_str()
+                        )
+                    );
+                })),
+            },
+            // HTTP variant: response body should be the sanitized
+            // `OidcError::Display` for the no-matching-claim error.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &token_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "no matching authentication claim found in the JWT");
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
+/// Tests OIDC authentication when the issuer's JWKS endpoint is unreachable.
+///
+/// This verifies that when the issuer is configured and the JWT issuer matches,
+/// but the OIDC provider cannot be reached, authentication fails with an
+/// appropriate error.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_fetch_error() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    // Point the issuer at a loopback port that is guaranteed to refuse
+    // connections instead of at the mock server's just-freed ephemeral port.
+    // Under high test parallelism (`--test-threads=48`) the OS could reassign
+    // that freed port to another OIDC test's mock server before environmentd
+    // performed the discovery fetch. environmentd would then fetch a valid JWKS
+    // for the shared `kid` ("test-key-1") from the wrong server and fail JWT
+    // signature validation, so this assertion intermittently saw "failed to
+    // validate JWT" instead of the expected fetch error. Port 1 is privileged
+    // and is never bound by the ephemeral-port mock servers, so it cannot be
+    // hijacked.
+    let unreachable_issuer = "http://127.0.0.1:1";
+
+    // Mint a validly-signed JWT whose issuer matches the (unreachable)
+    // configured issuer. The mock server is only needed to sign the token; the
+    // discovery fetch fails before the signature or issuer is ever checked.
+    let jwt_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            issuer: Some(unreachable_issuer),
+            ..Default::default()
+        },
+    );
+
+    // The mock server has served its purpose; shut it down.
+    oidc_server.handle.abort_and_wait().await;
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(unreachable_issuer.to_string()),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
+        .start()
+        .await;
+
+    run_tests(
+        "OIDC Fetch Error",
+        &server,
+        &[
+            // The issuer matches but the OIDC server is down, so JWKS fetch fails.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&jwt_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "failed to fetch OIDC provider configuration");
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
                 })),
             },
         ],
@@ -1285,6 +2379,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
             },
@@ -1302,6 +2397,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Prefer,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
             },
@@ -1311,6 +2407,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|err| {
                     assert_eq!(
@@ -1339,6 +2436,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_contains!(
@@ -1386,6 +2484,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1413,6 +2512,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
@@ -1436,6 +2536,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Prefer,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1445,6 +2546,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1462,6 +2564,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Prefer,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_contains!(
@@ -1502,6 +2605,7 @@ async fn test_auth_intermediate_ca_no_intermediary() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1571,6 +2675,7 @@ async fn test_auth_intermediate_ca() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Success,
             },
@@ -1707,6 +2812,7 @@ async fn test_auth_admin_non_superuser() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(false),
             },
@@ -1719,6 +2825,7 @@ async fn test_auth_admin_non_superuser() {
                 assert: Assert::SuccessSuperuserCheck(false),
             },
             TestCase::Ws {
+                user_reported_by_system: frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: frontegg_user.to_string(),
                     password: Password(frontegg_password.to_string()),
@@ -1726,6 +2833,7 @@ async fn test_auth_admin_non_superuser() {
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(false),
+                headers: &HeaderMap::new(),
             },
         ],
     )
@@ -1852,6 +2960,7 @@ async fn test_auth_admin_superuser() {
                 user_reported_by_system: admin_frontegg_user,
                 password: Some(Cow::Borrowed(admin_frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(true),
             },
@@ -1864,6 +2973,7 @@ async fn test_auth_admin_superuser() {
                 assert: Assert::SuccessSuperuserCheck(true),
             },
             TestCase::Ws {
+                user_reported_by_system: admin_frontegg_user,
                 auth: &WebSocketAuth::Basic {
                     user: admin_frontegg_user.to_string(),
                     password: Password(admin_frontegg_password.to_string()),
@@ -1871,6 +2981,7 @@ async fn test_auth_admin_superuser() {
                 },
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(true),
+                headers: &HeaderMap::new(),
             },
         ],
     )
@@ -1879,6 +2990,7 @@ async fn test_auth_admin_superuser() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_admin_superuser_revoked() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2039,6 +3151,7 @@ async fn test_auth_admin_superuser_revoked() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_auth_deduplication() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2179,13 +3292,13 @@ async fn test_auth_deduplication() {
     assert_eq!(metrics.len(), 2);
 
     let metric = &metrics[0];
-    assert_eq!(metric.get_counter().get_value(), 1.0);
+    assert_eq!(metric.get_counter().value(), 1.0);
     let labels = metric.get_label();
     assert_eq!(labels.len(), 1);
     let reason_1 = labels[0].value().to_string();
 
     let metric = &metrics[1];
-    assert_eq!(metric.get_counter().get_value(), 1.0);
+    assert_eq!(metric.get_counter().value(), 1.0);
     let labels = metric.get_label();
     assert_eq!(labels.len(), 1);
     let reason_2 = labels[0].value().to_string();
@@ -2211,6 +3324,7 @@ async fn test_auth_deduplication() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_refresh_task_metrics() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2323,7 +3437,7 @@ async fn test_refresh_task_metrics() {
     assert_eq!(metrics.len(), 1);
     let metric = metrics.pop().unwrap();
     let metric = &metric.get_metric()[0];
-    assert_eq!(metric.get_gauge().get_value(), 1.0);
+    assert_eq!(metric.get_gauge().value(), 1.0);
 
     drop(pg_client);
 
@@ -2341,12 +3455,13 @@ async fn test_refresh_task_metrics() {
     let metric = metrics.pop().unwrap();
     let metric = &metric.get_metric()[0];
 
-    let guage_value = metric.get_gauge().get_value();
+    let guage_value = metric.get_gauge().value();
     assert_eq!(guage_value, 0.0);
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_superuser_can_alter_cluster() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2498,6 +3613,7 @@ async fn test_superuser_can_alter_cluster() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_refresh_dropped_session() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2621,7 +3737,7 @@ async fn test_refresh_dropped_session() {
     assert_eq!(metrics.len(), 1);
     let metric = metrics.pop().unwrap();
     let metric = &metric.get_metric()[0];
-    assert_eq!(metric.get_counter().get_value(), 1.0);
+    assert_eq!(metric.get_counter().value(), 1.0);
 
     let labels = metric.get_label();
     assert_eq!(
@@ -2665,6 +3781,7 @@ async fn test_refresh_dropped_session() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_refresh_dropped_session_lru() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2866,6 +3983,7 @@ async fn test_refresh_dropped_session_lru() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_transient_auth_failures() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2990,6 +4108,7 @@ async fn test_transient_auth_failures() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_transient_auth_failure_on_refresh() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3125,6 +4244,7 @@ async fn test_transient_auth_failure_on_refresh() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_password_auth() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3215,6 +4335,7 @@ async fn test_password_auth() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_sasl_auth() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3270,6 +4391,7 @@ async fn test_sasl_auth() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_sasl_auth_failure() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3316,6 +4438,7 @@ async fn test_sasl_auth_failure() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_password_auth_superuser() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3371,6 +4494,7 @@ async fn test_password_auth_superuser() {
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_password_auth_alter_role() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3656,6 +4780,7 @@ async fn test_password_auth_http() {
 /// because internal_user_metadata was hardcoded to None.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
 async fn test_password_auth_http_superuser() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3852,4 +4977,955 @@ async fn test_password_auth_http_superuser() {
         check_superuser_via_ws_basic(&ws_url, "mz_system", "mz_system_password"),
         "mz_system should have is_superuser=on via WebSocket Basic auth"
     );
+}
+
+/// Tests that session authentication does not override explicit credentials.
+///
+/// A session cookie for `password_user` is present in every request below.
+/// When no additional credentials are supplied the session should be used and
+/// `current_user` should equal `password_user`. When an OIDC bearer token for
+/// `oidc_user` is also included the explicit credential must win, so
+/// `current_user` should equal `oidc_user`.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
+async fn test_session_auth_does_not_override_credentials() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        "test-key-1".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "oidc_user@example.com";
+    let oidc_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let password_user = "password_user";
+    let password_user_password = "password_user_password";
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
+        .start()
+        .await;
+
+    // Create password_user with a password
+    let admin_client = server.connect().internal().await.unwrap();
+    admin_client
+        .batch_execute(&format!(
+            "CREATE ROLE \"{password_user}\" LOGIN PASSWORD '{password_user_password}'"
+        ))
+        .await
+        .unwrap();
+
+    let login_url: Uri = format!("https://{}/api/login", server.http_local_addr())
+        .parse()
+        .unwrap();
+
+    let http_client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+        .pool_idle_timeout(Duration::from_secs(10))
+        .build(make_http_tls(|b| Ok(b.set_verify(SslVerifyMode::NONE))));
+
+    // password_user logs in via /api/login and receives a session cookie.
+    let login_response = http_client
+        .request(
+            Request::post(login_url)
+                .header("Content-Type", "application/json")
+                .body(format!(
+                    r#"{{"username":"{password_user}","password":"{password_user_password}"}}"#
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login_response.status(), StatusCode::OK);
+
+    let session_cookie = login_response
+        .headers()
+        .get(SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split("; ")
+        .find(|v| v.starts_with("mz_session="))
+        .unwrap()
+        .to_owned();
+
+    let mut session_only_headers = HeaderMap::new();
+    session_only_headers.insert(COOKIE, HeaderValue::from_str(&session_cookie).unwrap());
+
+    run_tests(
+        "session cookie and no explicit credentials should authenticate as password_user",
+        &server,
+        &[
+            TestCase::Http {
+                user_to_auth_as: password_user,
+                user_reported_by_system: password_user,
+                scheme: Scheme::HTTPS,
+                headers: &session_only_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Ws {
+                user_reported_by_system: password_user,
+                headers: &session_only_headers,
+                auth: &WebSocketAuth::OptionsOnly {
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+        ],
+    )
+    .await;
+
+    // session cookie + OIDC bearer token -> oidc_user wins.
+    let mut session_and_token_headers = HeaderMap::new();
+    session_and_token_headers.insert(COOKIE, HeaderValue::from_str(&session_cookie).unwrap());
+    session_and_token_headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {oidc_token}")).unwrap(),
+    );
+
+    run_tests(
+        "session cookie and an OIDC bearer token should authenticate as oidc_user",
+        &server,
+        &[
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &session_and_token_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Ws {
+                user_reported_by_system: oidc_user,
+                headers: &session_only_headers,
+                auth: &WebSocketAuth::Bearer {
+                    token: oidc_token.clone(),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+        ],
+    )
+    .await;
+}
+
+/// Tests that auto-provisioning a role via Frontegg authentication records
+/// `auto_provision_source = 'frontegg'` in `mz_audit_events`.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+async fn test_auth_autoprovision_frontegg_audit_log() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_id = Uuid::new_v4();
+    let email = "user@autoprovision.com".to_string();
+    let password = Uuid::new_v4().to_string();
+    let client_id = Uuid::new_v4();
+    let secret = Uuid::new_v4();
+    let users = BTreeMap::from([(
+        email.clone(),
+        UserConfig {
+            id: Uuid::new_v4(),
+            email,
+            password,
+            tenant_id,
+            initial_api_tokens: vec![ApiToken {
+                client_id: client_id.clone(),
+                secret: secret.clone(),
+                description: None,
+                created_at: Utc::now(),
+            }],
+            roles: Vec::new(),
+            auth_provider: None,
+            verified: None,
+            metadata: None,
+        },
+    )]);
+
+    let issuer = "frontegg-mock".to_owned();
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        issuer,
+        encoding_key,
+        decoding_key,
+        users,
+        BTreeMap::new(),
+        None,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: Some(tenant_id),
+            now: SYSTEM_TIME.clone(),
+            admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+
+    let frontegg_user = "user@autoprovision.com";
+    let frontegg_password = &format!("mzp_{client_id}{secret}");
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg_auth(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    // Connect as the Frontegg user to trigger auto-provisioning.
+    let _pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(frontegg_user)
+        .password(frontegg_password)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    // Create a role manually for comparison.
+    let admin_client = server.connect().internal().await.unwrap();
+    admin_client
+        .batch_execute("CREATE ROLE manual_role_frontegg")
+        .await
+        .unwrap();
+
+    // Verify auto_provision_source in audit log for auto-provisioned role.
+    let rows = admin_client
+        .query(
+            "SELECT event_type, object_type, details \
+             FROM mz_audit_events \
+             WHERE event_type = 'create' AND object_type = 'role' \
+             ORDER BY id",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    // Find the auto-provisioned and manually created role events.
+    let auto_provisioned: Vec<_> = rows
+        .iter()
+        .filter(|r| {
+            let details = r.get::<_, serde_json::Value>("details");
+            details["name"] == "user@autoprovision.com"
+        })
+        .collect();
+    let manual: Vec<_> = rows
+        .iter()
+        .filter(|r| {
+            let details = r.get::<_, serde_json::Value>("details");
+            details["name"] == "manual_role_frontegg"
+        })
+        .collect();
+
+    assert_eq!(auto_provisioned.len(), 1);
+    let details = auto_provisioned[0].get::<_, serde_json::Value>("details");
+    assert_eq!(
+        details["auto_provision_source"].as_str(),
+        Some("frontegg"),
+        "Frontegg auto-provisioned role should have auto_provision_source = 'frontegg' in audit log"
+    );
+
+    assert_eq!(manual.len(), 1);
+    let details = manual[0].get::<_, serde_json::Value>("details");
+    assert!(
+        details["auto_provision_source"].is_null(),
+        "manually created role should have no auto_provision_source in audit log"
+    );
+}
+
+/// Tests that auto-provisioning a role via OIDC authentication records
+/// `auto_provision_source = 'oidc'` in `mz_audit_events`.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+async fn test_auth_autoprovision_oidc_audit_log() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@autoprovision-oidc.example.com";
+    let jwt_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
+        .start()
+        .await;
+
+    // Connect as the OIDC user to trigger auto-provisioning.
+    let _pg_client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&jwt_token)
+        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        })))
+        .await
+        .unwrap();
+
+    // Create a role manually for comparison.
+    let admin_client = server.connect().internal().await.unwrap();
+    admin_client
+        .batch_execute("CREATE ROLE manual_role_oidc")
+        .await
+        .unwrap();
+
+    // Verify auto_provision_source in audit log for OIDC auto-provisioned role.
+    let rows = admin_client
+        .query(
+            "SELECT event_type, object_type, details \
+             FROM mz_audit_events \
+             WHERE event_type = 'create' AND object_type = 'role' \
+             ORDER BY id",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    // Find the auto-provisioned and manually created role events.
+    let auto_provisioned: Vec<_> = rows
+        .iter()
+        .filter(|r| {
+            let details = r.get::<_, serde_json::Value>("details");
+            details["name"] == "user@autoprovision-oidc.example.com"
+        })
+        .collect();
+    let manual: Vec<_> = rows
+        .iter()
+        .filter(|r| {
+            let details = r.get::<_, serde_json::Value>("details");
+            details["name"] == "manual_role_oidc"
+        })
+        .collect();
+
+    let details = auto_provisioned[0].get::<_, serde_json::Value>("details");
+    assert_eq!(
+        details["auto_provision_source"].as_str(),
+        Some("oidc"),
+        "OIDC auto-provisioned role should have auto_provision_source = 'oidc' in audit log"
+    );
+
+    let details = manual[0].get::<_, serde_json::Value>("details");
+    assert!(
+        details["auto_provision_source"].is_null(),
+        "manually created role should have no auto_provision_source in audit log"
+    );
+}
+
+/// Tests that OIDC authentication is rejected for a role without the LOGIN
+/// attribute, and succeeds after granting LOGIN.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[allow(clippy::disallowed_methods)]
+async fn test_auth_oidc_non_login_role() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let jwt_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
+        .start()
+        .await;
+
+    // Pre-create the role without LOGIN so auto-provisioning is bypassed.
+    let admin_client = server.connect().internal().await.unwrap();
+    admin_client
+        .batch_execute(&format!("CREATE ROLE \"{}\" NOLOGIN", oidc_user))
+        .await
+        .unwrap();
+
+    let jwt_headers = make_header(Authorization::bearer(&jwt_token).unwrap());
+
+    // 1. Login should fail: role exists but has no LOGIN attribute.
+    run_tests(
+        "OIDC Non-Login Role - login rejected",
+        &server,
+        &[
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&jwt_token)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "role is not allowed to login");
+                    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+                    assert_eq!(
+                        err.detail(),
+                        Some("The role does not have the LOGIN attribute.")
+                    );
+                })),
+            },
+            // HTTP variant: same sanitized message in the response body.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &jwt_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Err(Box::new(|code, message| {
+                    assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
+                    assert_eq!(message, "role is not allowed to login");
+                })),
+            },
+        ],
+    )
+    .await;
+
+    // Grant LOGIN to the role.
+    admin_client
+        .batch_execute(&format!("ALTER ROLE \"{}\" LOGIN", oidc_user))
+        .await
+        .unwrap();
+
+    // 2. Login should now succeed.
+    run_tests(
+        "OIDC Non-Login Role - login succeeds after granting LOGIN",
+        &server,
+        &[TestCase::Pgwire {
+            user_to_auth_as: oidc_user,
+            user_reported_by_system: oidc_user,
+            password: Some(Cow::Borrowed(&jwt_token)),
+            ssl_mode: SslMode::Require,
+            options: None,
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            assert: Assert::Success,
+        }],
+    )
+    .await;
+}
+
+/// Fetches the role names a user is a member of, sorted alphabetically.
+#[allow(clippy::disallowed_methods)]
+async fn fetch_user_role_memberships(
+    client: &tokio_postgres::Client,
+    user_name: &str,
+) -> Vec<String> {
+    let rows = client
+        .query(
+            "SELECT r.name FROM mz_role_members rm
+             JOIN mz_roles r ON rm.role_id = r.id
+             JOIN mz_roles m ON rm.member = m.id
+             WHERE m.name = $1
+             ORDER BY r.name",
+            &[&user_name],
+        )
+        .await
+        .unwrap();
+    rows.iter().map(|r| r.get(0)).collect()
+}
+
+/// Sets up a test harness with OIDC auth, creates roles, and enables group sync.
+/// Returns the server, admin client, OIDC mock server, and a TLS factory closure.
+#[allow(clippy::disallowed_methods)]
+async fn setup_group_sync_test() -> (
+    test_util::TestServer,
+    tokio_postgres::Client,
+    OidcMockServer,
+) {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        "test-key-1".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server.issuer.clone()),
+            Some("sub".to_string()),
+            None,
+            None,
+        )
+        .start()
+        .await;
+
+    let admin_client = server.connect().internal().await.unwrap();
+
+    admin_client
+        .batch_execute("CREATE ROLE analytics")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("CREATE ROLE platform_eng")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("CREATE ROLE data_eng")
+        .await
+        .unwrap();
+
+    admin_client
+        .batch_execute("ALTER SYSTEM SET oidc_group_role_sync_enabled = true")
+        .await
+        .unwrap();
+
+    (server, admin_client, oidc_server)
+}
+
+const GROUP_SYNC_USER: &str = "alice@example.com";
+
+fn make_insecure_tls() -> postgres_openssl::MakeTlsConnector {
+    make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+        Ok(b.set_verify(SslVerifyMode::NONE))
+    }))
+}
+
+/// Helper: connect as the OIDC user with the given token.
+async fn oidc_connect(
+    server: &test_util::TestServer,
+    token: &str,
+) -> Result<tokio_postgres::Client, anyhow::Error> {
+    server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(GROUP_SYNC_USER)
+        .password(token)
+        .with_tls(make_insecure_tls())
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
+}
+
+/// Helper: generate a JWT with the given groups claim.
+fn jwt_with_groups(oidc_server: &OidcMockServer, groups: serde_json::Value) -> String {
+    oidc_server.generate_jwt(
+        GROUP_SYNC_USER,
+        GenerateJwtOptions {
+            extra_claims: Some(BTreeMap::from([("groups".to_string(), groups)])),
+            ..Default::default()
+        },
+    )
+}
+
+/// First login grants roles from JWT groups, with correct grantor and audit log entries.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
+async fn test_oidc_group_sync_first_login() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    let token = jwt_with_groups(
+        &oidc_server,
+        serde_json::json!(["analytics", "platform_eng"]),
+    );
+    let _client = oidc_connect(&server, &token)
+        .await
+        .expect("login should succeed");
+
+    let role_names = fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await;
+    assert_eq!(
+        role_names,
+        vec!["analytics", "platform_eng"],
+        "first login should grant analytics and platform_eng"
+    );
+
+    // Verify grantor is mz_jwt_sync.
+    let rows = admin_client
+        .query(
+            "SELECT g.name as grantor
+             FROM mz_role_members rm
+             JOIN mz_roles m ON rm.member = m.id
+             JOIN mz_roles g ON rm.grantor = g.id
+             WHERE m.name = $1
+             ORDER BY g.name",
+            &[&GROUP_SYNC_USER],
+        )
+        .await
+        .unwrap();
+    for row in &rows {
+        let grantor: String = row.get(0);
+        assert_eq!(grantor, "mz_jwt_sync", "grantor should be mz_jwt_sync");
+    }
+}
+
+/// A JWT groups claim containing the user's own role name (common when an IdP
+/// echoes the username/email into groups) must not fail with CircularRoleMembership.
+/// The self-referential group should be silently skipped; other valid groups apply.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
+async fn test_oidc_group_sync_self_named_group() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+    admin_client
+        .batch_execute("ALTER SYSTEM SET oidc_group_role_sync_strict = true")
+        .await
+        .unwrap();
+    // "Alice@Example.com" normalizes to "alice@example.com" == GROUP_SYNC_USER,
+    // so it resolves to the user's own role. It should be skipped; "analytics"
+    // should still be granted.
+    let token = jwt_with_groups(
+        &oidc_server,
+        serde_json::json!(["Alice@Example.com", "analytics"]),
+    );
+    oidc_connect(&server, &token).await.unwrap();
+    assert_eq!(
+        fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await,
+        vec!["analytics"],
+    );
+}
+
+/// HTTP Bearer auth triggers group sync the same as pgwire.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_http() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    let token = jwt_with_groups(&oidc_server, serde_json::json!(["analytics"]));
+
+    let uri = Uri::builder()
+        .scheme("https")
+        .authority(format!(
+            "{}:{}",
+            Ipv4Addr::LOCALHOST,
+            server.http_local_addr().port()
+        ))
+        .path_and_query("/api/sql")
+        .build()
+        .unwrap();
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+    );
+
+    let resp = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+        .build(make_http_tls(|b| Ok(b.set_verify(SslVerifyMode::NONE))))
+        .request({
+            let mut req = Request::post(&uri);
+            for (k, v) in headers.iter() {
+                req.headers_mut().unwrap().insert(k, v.clone());
+            }
+            req.headers_mut()
+                .unwrap()
+                .insert("Content-Type", HeaderValue::from_static("application/json"));
+            req.body(json!({ "query": "SELECT current_user()" }).to_string())
+                .unwrap()
+        })
+        .await
+        .expect("HTTP request should succeed");
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    assert_eq!(
+        fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await,
+        vec!["analytics"],
+        "HTTP login should sync groups"
+    );
+}
+
+/// WebSocket Bearer auth triggers group sync the same as pgwire.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_ws() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    let token = jwt_with_groups(&oidc_server, serde_json::json!(["analytics"]));
+
+    let uri = Uri::builder()
+        .scheme("wss")
+        .authority(format!(
+            "{}:{}",
+            Ipv4Addr::LOCALHOST,
+            server.http_local_addr().port()
+        ))
+        .path_and_query("/api/experimental/sql")
+        .build()
+        .unwrap();
+
+    let request = ClientRequestBuilder::new(uri.clone());
+    let stream = make_ws_tls(&uri, |b| Ok(b.set_verify(SslVerifyMode::NONE)));
+    let (mut ws, _resp) = tungstenite::client(request, stream).unwrap();
+
+    let auth = WebSocketAuth::Bearer {
+        token: token.clone(),
+        options: BTreeMap::default(),
+    };
+    ws.send(Message::Text(serde_json::to_string(&auth).unwrap().into()))
+        .unwrap();
+    ws.send(Message::Text(
+        r#"{"query": "SELECT current_user()"}"#.into(),
+    ))
+    .unwrap();
+
+    // Drain messages until we see CommandComplete, confirming the query ran.
+    loop {
+        let msg = ws.read().unwrap();
+        if let Message::Text(text) = msg {
+            let resp: WebSocketResponse = serde_json::from_str(&text).unwrap();
+            if matches!(resp, WebSocketResponse::CommandComplete(_)) {
+                break;
+            }
+        }
+    }
+
+    assert_eq!(
+        fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await,
+        vec!["analytics"],
+        "WebSocket login should sync groups"
+    );
+}
+
+/// Trigger a circular-membership catalog error to force sync_jwt_groups to fail.
+///
+/// Setup: grant alice's own role to r_cycle, so r_cycle is a member of alice.
+/// Then a JWT with group "r_cycle" makes sync try to grant r_cycle to alice,
+/// which would create a cycle (alice → r_cycle → alice).
+#[allow(clippy::disallowed_methods)]
+async fn setup_circular_group(
+    admin_client: &tokio_postgres::Client,
+    oidc_server: &OidcMockServer,
+    server: &test_util::TestServer,
+) {
+    // First login (no groups) to auto-provision alice's role.
+    let token = oidc_server.generate_jwt(GROUP_SYNC_USER, GenerateJwtOptions::default());
+    oidc_connect(server, &token)
+        .await
+        .expect("first login should succeed");
+
+    admin_client
+        .batch_execute("CREATE ROLE r_cycle")
+        .await
+        .unwrap();
+    // r_cycle becomes a member of alice; granting r_cycle back to alice is circular.
+    admin_client
+        .batch_execute(r#"GRANT "alice@example.com" TO r_cycle"#)
+        .await
+        .unwrap();
+}
+
+/// In strict mode, a sync error rejects the login entirely.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
+async fn test_oidc_group_sync_strict_rejects_on_error() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+    setup_circular_group(&admin_client, &oidc_server, &server).await;
+
+    admin_client
+        .batch_execute("ALTER SYSTEM SET oidc_group_role_sync_strict = true")
+        .await
+        .unwrap();
+
+    let token = jwt_with_groups(&oidc_server, serde_json::json!(["r_cycle"]));
+    let err = oidc_connect(&server, &token)
+        .await
+        .expect_err("strict mode should reject login on sync error");
+
+    // oidc_connect wraps tokio_postgres::Error in anyhow; downcast to get the DbError message.
+    let db_err = err
+        .downcast_ref::<tokio_postgres::Error>()
+        .and_then(|e| e.as_db_error())
+        .unwrap_or_else(|| panic!("expected a DbError, got: {err}"));
+
+    assert!(
+        db_err.message().contains("OIDC group-to-role sync failed"),
+        "unexpected error message: {}",
+        db_err.message()
+    );
+}
+
+/// In fail-open mode (default), a sync error lets login succeed and delivers a warning notice.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_fail_open_sends_notice() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+    setup_circular_group(&admin_client, &oidc_server, &server).await;
+
+    let token = jwt_with_groups(&oidc_server, serde_json::json!(["r_cycle"]));
+
+    // Notice delivery happens in a background task (see test_util.rs ConnectBuilder), so we use a
+    // channel to await it rather than reading a Mutex immediately after connect.
+    let (notice_tx, mut notice_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _client = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(GROUP_SYNC_USER)
+        .password(&token)
+        .notice_callback(move |n| notice_tx.send(n).expect("notice channel open"))
+        .with_tls(make_insecure_tls())
+        .await
+        .expect("fail-open: login should succeed despite sync error");
+
+    let notice = tokio::time::timeout(Duration::from_secs(5), notice_rx.recv())
+        .await
+        .expect("timed out waiting for sync-error notice")
+        .expect("notice channel closed");
+
+    assert!(
+        notice.message().contains("OIDC group-to-role sync failed"),
+        "unexpected notice message: {}",
+        notice.message()
+    );
+}
+
+/// JWT group-to-role matching must be case-sensitive. A JWT group "Admin" must
+/// not grant the privileges of the distinct "admin" role (SQL-276).
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+#[allow(clippy::disallowed_methods)]
+async fn test_oidc_group_sync_case_sensitive() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    // Create two roles that differ only by case, grant privileges to the lowercase one.
+    admin_client
+        .batch_execute("CREATE ROLE admin")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute(r#"CREATE ROLE "Admin""#)
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("CREATE TABLE case_test_data (data TEXT)")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("INSERT INTO case_test_data VALUES ('top-secret')")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute("GRANT SELECT ON case_test_data TO admin")
+        .await
+        .unwrap();
+
+    // JWT with "Admin" (capitalized) should grant only the "Admin" role, not "admin".
+    // "Admin" has no SELECT privilege on secrets, so the query must fail.
+    let token_wrong_case = jwt_with_groups(&oidc_server, serde_json::json!(["Admin"]));
+    let client = oidc_connect(&server, &token_wrong_case)
+        .await
+        .expect("login should succeed even with wrong-case group");
+
+    let err = client
+        .query("SELECT data FROM case_test_data", &[])
+        .await
+        .expect_err("capitalized 'Admin' group must not inherit lowercase 'admin' privileges");
+    assert!(
+        err.as_db_error()
+            .map(|e| e.message().contains("permission denied"))
+            .unwrap_or(false),
+        "expected permission denied, got: {err}"
+    );
+
+    // JWT with "admin" (lowercase) should grant the privileged role and succeed.
+    let token_exact = jwt_with_groups(&oidc_server, serde_json::json!(["admin"]));
+    let client = oidc_connect(&server, &token_exact)
+        .await
+        .expect("login should succeed with exact-case group");
+
+    let rows = client
+        .query("SELECT data FROM case_test_data", &[])
+        .await
+        .expect("exact 'admin' group should grant SELECT on secrets");
+    let val: String = rows[0].get(0);
+    assert_eq!(val, "top-secret");
 }

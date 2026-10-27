@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_allow_nullability (f1 INTEGER NOT NULL, f2 INTEGER PRIMARY KEY);
 ALTER TABLE alter_allow_nullability REPLICA IDENTITY FULL;
 INSERT INTO alter_allow_nullability VALUES (123, 0),(234, 1);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.alter_allow_nullability
 

@@ -36,12 +36,10 @@ impl crate::Transform for ReduceReduction {
     fn actually_perform_transform(
         &self,
         relation: &mut MirRelationExpr,
-        ctx: &mut TransformCtx,
+        _ctx: &mut TransformCtx,
     ) -> Result<(), crate::TransformError> {
-        if ctx.features.enable_reduce_reduction {
-            relation.visit_pre_mut(&mut Self::action);
-            mz_repr::explain::trace_plan(&*relation);
-        }
+        relation.visit_pre_mut(&mut Self::action);
+        mz_repr::explain::trace_plan(&*relation);
         Ok(())
     }
 }
@@ -59,7 +57,7 @@ impl ReduceReduction {
         {
             // We start by segmenting the aggregates into those that should be rendered independently.
             // Each element of this list is a pair of lists describing a bundle of aggregations that
-            // should be applied independently. Each pair of lists correspond to the aggregaties and
+            // should be applied independently. Each pair of lists correspond to the aggregates and
             // the column positions in which they should appear in the output.
             // Perhaps these should be lists of pairs, to ensure they align, but their subsequent use
             // is as the shredded lists.
