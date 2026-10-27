@@ -1404,12 +1404,8 @@ impl Coordinator {
                     | Statement::ExplainAnalyzeCluster(_)
                     | Statement::ExplainSinkSchema(_)
                     | Statement::ExplainTimestamp(_) => {
-                        // DDL transactions publish through one late-binding commit, which
-                        // can resolve commands against catalog state changed by concurrent
-                        // DDL. EXPLAIN would expose provisional state while accumulating
-                        // commands, without retaining its result to check during replay.
-                        if ctx.session().transaction().is_ddl() {
-                            return ctx.retire(Err(AdapterError::DDLOnlyTransaction));
+                        if let Err(error) = ctx.session_mut().transaction_mut().record_explain() {
+                            return ctx.retire(Err(error));
                         }
                     }
 

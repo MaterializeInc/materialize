@@ -406,6 +406,7 @@ impl Session {
                     pcx: self.new_pcx(wall_time),
                     ops: TransactionOps::None,
                     pending_ddl_inspections: Vec::new(),
+                    contains_explain: false,
                     access,
                     id,
                 });
@@ -439,6 +440,7 @@ impl Session {
                 pcx: self.new_pcx(wall_time),
                 ops: TransactionOps::None,
                 pending_ddl_inspections: Vec::new(),
+                contains_explain: false,
                 access: None,
                 id,
             };
@@ -641,6 +643,7 @@ impl Session {
                 access: _,
                 id: _,
                 pending_ddl_inspections: _,
+                contains_explain: _,
             }) => Some(determination.clone()),
             _ => None,
         }
@@ -662,6 +665,7 @@ impl Session {
                 access: _,
                 id: _,
                 pending_ddl_inspections: _,
+                contains_explain: _,
             })
         )
     }
@@ -1174,6 +1178,18 @@ impl TransactionStatus {
         }
     }
 
+    /// Records EXPLAIN execution, rejecting transactions that already contain DDL.
+    pub(crate) fn record_explain(&mut self) -> Result<(), AdapterError> {
+        let txn = self.inner_mut().expect("active transaction");
+        if matches!(txn.ops, TransactionOps::DDL { .. }) {
+            return Err(AdapterError::DDLOnlyTransaction);
+        }
+        // EXPLAIN outcomes are not replayed at commit, so this transaction must
+        // not subsequently enter DDL mode and rebind its writes.
+        txn.contains_explain = true;
+        Ok(())
+    }
+
     /// Whether the transaction's ops are DDL.
     pub fn is_ddl(&self) -> bool {
         match self {
@@ -1345,6 +1361,11 @@ impl TransactionStatus {
     /// different timestamps, reads on different timelines, reads on different clusters, etc. It's
     /// up to the caller to make sure these are aligned.
     pub fn add_ops(&mut self, mut add_ops: TransactionOps) -> Result<(), AdapterError> {
+        if matches!(add_ops, TransactionOps::DDL { .. })
+            && self.inner().is_some_and(|txn| txn.contains_explain)
+        {
+            return Err(AdapterError::DDLOnlyTransaction);
+        }
         match self {
             TransactionStatus::Started(Transaction {
                 ops,
@@ -1542,6 +1563,7 @@ pub struct Transaction {
     pub ops: TransactionOps,
     /// Catalog results and descriptions awaiting a possible transition to DDL mode.
     pending_ddl_inspections: Vec<DdlInspection>,
+    contains_explain: bool,
     /// Uniquely identifies the transaction on a per connection basis.
     /// Two transactions started from separate connections may share the
     /// same ID.

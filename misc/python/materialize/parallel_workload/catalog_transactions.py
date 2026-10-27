@@ -27,7 +27,24 @@ def execute(conn: Connection, statement: str) -> Cursor:
 
 
 def explain_ddl_rejection(c: Composition) -> None:
-    with c.sql_connection() as txn:
+    with c.sql_connection() as txn, c.sql_connection() as other:
+        rename = "ALTER VIEW ddl_explain_rejection.original RENAME TO observed"
+
+        def check_next_ddl_transaction() -> None:
+            names = execute(
+                other,
+                "SELECT v.name FROM mz_views v JOIN mz_schemas s ON s.id = v.schema_id "
+                "WHERE s.name = 'ddl_explain_rejection' ORDER BY v.name",
+            ).fetchall()
+            assert names == [("original",)], names
+            execute(txn, "BEGIN")
+            execute(txn, rename)
+            execute(txn, "ALTER VIEW ddl_explain_rejection.observed RENAME TO original")
+            execute(txn, "COMMIT")
+            assert execute(
+                other, "SELECT * FROM ddl_explain_rejection.original"
+            ).fetchall() == [(42,)]
+
         execute(txn, "CREATE SCHEMA ddl_explain_rejection")
         execute(txn, "CREATE VIEW ddl_explain_rejection.original AS SELECT 42 AS value")
         execute(txn, "CREATE TABLE ddl_explain_rejection.input (value INT)")
@@ -44,6 +61,8 @@ def explain_ddl_rejection(c: Composition) -> None:
         for explain in (
             "EXPLAIN RAW PLAN FOR VIEW {}",
             "EXPLAIN RAW PLAN FOR SELECT * FROM {}",
+            # AS OF in an implicit transaction does not register transactional peeks.
+            "EXPLAIN RAW PLAN FOR SELECT * FROM {} AS OF 0",
             "EXPLAIN VALUE SCHEMA FOR CREATE SINK ddl_explain_rejection.sink "
             "FROM ddl_explain_rejection.input "
             "INTO KAFKA CONNECTION ddl_explain_rejection.kafka (TOPIC 'explain-rejection') "
@@ -52,35 +71,52 @@ def explain_ddl_rejection(c: Composition) -> None:
         ):
             standalone = explain.format("ddl_explain_rejection.original")
             assert execute(txn, standalone).fetchall()
-            execute(txn, "BEGIN")
-            assert execute(txn, standalone).fetchall()
-            execute(txn, "COMMIT")
-            for mode in ("direct", "prepared", "implicit"):
-                rename = "ALTER VIEW ddl_explain_rejection.original RENAME TO observed"
-                statement = explain.format("ddl_explain_rejection.observed")
-                if mode == "implicit":
-                    statement = f"{rename}; {statement}"
-                else:
-                    execute(txn, "BEGIN")
-                    execute(txn, rename)
-                try:
-                    if mode == "prepared":
-                        # SQL PREPARE rejects EXPLAIN, so use protocol preparation.
-                        result = txn.execute(statement.encode(), prepare=True)
+            check_next_ddl_transaction()
+            for continuation in ("explain_only", "read", "rollback"):
+                execute(txn, "BEGIN")
+                assert execute(txn, standalone).fetchall()
+                if continuation == "read":
+                    assert execute(
+                        txn, "SELECT * FROM ddl_explain_rejection.original"
+                    ).fetchall() == [(42,)]
+                execute(txn, "ROLLBACK" if continuation == "rollback" else "COMMIT")
+                check_next_ddl_transaction()
+
+            for explain_first in (False, True):
+                for mode in ("direct", "prepared", "implicit"):
+                    first, statement = (
+                        (standalone, rename)
+                        if explain_first
+                        else (rename, explain.format("ddl_explain_rejection.observed"))
+                    )
+                    if mode == "implicit":
+                        statement = f"{first}; {statement}"
                     else:
-                        result = execute(txn, statement)
-                    while result.nextset():
-                        pass
-                except Error as error:
-                    assert error.sqlstate == "25000", error
-                    assert "restricted to just modifying objects" in str(error)
-                else:
-                    raise AssertionError(f"EXPLAIN was allowed in DDL mode: {mode}")
-                finally:
-                    execute(txn, "ROLLBACK")
-                assert execute(
-                    txn, "SELECT * FROM ddl_explain_rejection.original"
-                ).fetchall() == [(42,)]
+                        execute(txn, "BEGIN")
+                        # SQL PREPARE rejects EXPLAIN, so use protocol preparation.
+                        if mode == "prepared" and explain_first:
+                            result = txn.execute(first.encode(), prepare=True)
+                        else:
+                            result = execute(txn, first)
+                        if explain_first:
+                            assert result.fetchall()
+                    try:
+                        if mode == "prepared":
+                            result = txn.execute(statement.encode(), prepare=True)
+                        else:
+                            result = execute(txn, statement)
+                        while result.nextset():
+                            pass
+                    except Error as error:
+                        assert error.sqlstate == "25000", error
+                        assert "restricted to just modifying objects" in str(error)
+                    else:
+                        raise AssertionError(
+                            f"EXPLAIN and DDL were allowed: {mode}, {explain_first=}"
+                        )
+                    finally:
+                        execute(txn, "ROLLBACK")
+                    check_next_ddl_transaction()
 
 
 def catalog_result_outcome(c: Composition) -> None:
