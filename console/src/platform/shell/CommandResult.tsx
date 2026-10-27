@@ -44,7 +44,7 @@ import {
 import {
   calculateCommandDuration,
   formatCommandDuration,
-  getCommandResultCompletedTime,
+  getCommandResultStartTime,
 } from "./timings";
 import useCommandOutputPagination from "./useCommandOutputPagination";
 
@@ -172,12 +172,12 @@ const CommandResult = ({
       (executionTime ? ` · ${formatExecutionTime(executionTime)}` : "")
     : null;
 
-  // Same condition as `calculateCommandDuration`'s choice of start point.
-  const measuredFromPreviousResult =
-    getCommandResultCompletedTime(commandOutput, commandResultIndex - 1) !==
-    null;
+  const { isMeasuredFromPreviousResult } = getCommandResultStartTime(
+    commandOutput,
+    commandResultIndex,
+  );
   let roundTripHelp = ROUND_TRIP_HELP;
-  if (measuredFromPreviousResult) {
+  if (isMeasuredFromPreviousResult) {
     roundTripHelp = executionTime
       ? `${LATER_ROUND_TRIP_HELP} ${SHORTER_THAN_EXECUTION_TIME_HELP}`
       : LATER_ROUND_TRIP_HELP;

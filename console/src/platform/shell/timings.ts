@@ -22,6 +22,30 @@ export function getCommandResultCompletedTime(
 }
 
 /**
+ * Where a command result's duration is measured from: the previous result's
+ * completion, or sending the command when no earlier result has completed.
+ */
+export function getCommandResultStartTime(
+  commandOutput: CommandOutput,
+  commandResultIndex: number,
+): { startTimeMs: number; isMeasuredFromPreviousResult: boolean } {
+  const previousResultCompletedTime = getCommandResultCompletedTime(
+    commandOutput,
+    commandResultIndex - 1,
+  );
+  if (previousResultCompletedTime === null) {
+    return {
+      startTimeMs: commandOutput.commandSentTimeMs,
+      isMeasuredFromPreviousResult: false,
+    };
+  }
+  return {
+    startTimeMs: previousResultCompletedTime,
+    isMeasuredFromPreviousResult: true,
+  };
+}
+
+/**
  * Given a command result and its corresponding output, determine the number of milliseconds
  * spanned by the query. If the command is not yet done, do not calculate a duration.
  */
@@ -38,15 +62,16 @@ export function calculateCommandDuration(
     return null;
   }
 
-  const lastCommandResultCompletedTime =
-    getCommandResultCompletedTime(commandOutput, commandResultIndex - 1) ??
-    commandOutput.commandSentTimeMs;
+  const { startTimeMs } = getCommandResultStartTime(
+    commandOutput,
+    commandResultIndex,
+  );
 
-  if (!lastCommandResultCompletedTime) {
+  if (!startTimeMs) {
     return null;
   }
 
-  return commandResultCompletedTime - lastCommandResultCompletedTime;
+  return commandResultCompletedTime - startTimeMs;
 }
 
 /**
