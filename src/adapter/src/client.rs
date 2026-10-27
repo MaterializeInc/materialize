@@ -1073,6 +1073,28 @@ impl SessionClient {
         res
     }
 
+    /// Settles a statement whose result is about to be reported. If `commit_implicit_transaction`
+    /// and the session is in an implicit transaction, commits it first, which clears the session's
+    /// transaction state, portals included. Returns the parameters the commit reverted, or the
+    /// commit's error.
+    ///
+    /// Committing before the result means that a client sees the statement's success or the
+    /// commit's failure, never both, as with the last statement of a simple query in PostgreSQL
+    /// (`exec_simple_query`).
+    pub async fn settle_statement(
+        &mut self,
+        commit_implicit_transaction: bool,
+    ) -> Result<SettledStatement, AdapterError> {
+        let mut reverted = BTreeMap::new();
+        if commit_implicit_transaction && self.session().transaction().is_implicit() {
+            let response = self.end_transaction(EndTransactionAction::Commit).await?;
+            if let ExecuteResponse::TransactionCommitted { params } = response {
+                reverted = params;
+            }
+        }
+        Ok(SettledStatement { reverted })
+    }
+
     /// Fails a transaction.
     pub fn fail_transaction(&mut self) {
         let session = self.session.take().expect("session invariant violated");
@@ -2118,6 +2140,15 @@ impl Timeout {
             self.tx.send(pending_timeout).expect("rx is in this struct");
         }
     }
+}
+
+/// Additions to a statement's result that are known only after any commit that the result waits
+/// for, such as the session parameters that the commit reverted.
+#[derive(Debug)]
+pub struct SettledStatement {
+    /// Session parameters that committing the statement's implicit transaction reverted, if any,
+    /// such as a value set with `SET LOCAL`.
+    pub reverted: BTreeMap<&'static str, String>,
 }
 
 /// A wrapper around a Stream of PeekResponseUnary that records when it sees the

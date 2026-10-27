@@ -265,6 +265,14 @@ http
 200 OK
 {"results":[{"ok":"SET","notices":[],"parameters":[{"name":"cluster","value":"quickstart"}]}]}
 
+# The implicit commit reverts a SET LOCAL, and the restored value is reported with the
+# statement's result.
+http
+{"queries":[{"query":"SET LOCAL application_name = 'reverted'"}]}
+----
+200 OK
+{"results":[{"ok":"SET","notices":[],"parameters":[{"name":"application_name","value":"reverted"},{"name":"application_name","value":""}]}]}
+
 # Parameterized queries work
 http
 {"queries":[{"query":"select $1+$2::int as col","params":["1","2"]}]}

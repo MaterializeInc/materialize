@@ -1420,6 +1420,271 @@ fn test_ws_select_streams_rows_then_size_error() {
     );
 }
 
+/// Runs `request`, which must execute a constant `INSERT INTO {table}` in an implicit
+/// transaction, such that the INSERT's commit fails: the INSERT parks after packing its
+/// rows, `table` gains a column, and the INSERT resumes with rows of a stale arity.
+#[allow(clippy::disallowed_methods)]
+fn with_failing_insert_commit<T: Send + 'static>(
+    ddl: &mut postgres::Client,
+    table: &str,
+    request: impl FnOnce() -> T + Send + 'static,
+) -> T {
+    // Sends "exited" when the request thread ends, also when it panics.
+    struct OnExit(std::sync::mpsc::Sender<&'static str>);
+    impl Drop for OnExit {
+        fn drop(&mut self) {
+            let _ = self.0.send("exited");
+        }
+    }
+
+    let (events, events_rx) = std::sync::mpsc::channel();
+    let resume = Arc::new(std::sync::Barrier::new(2));
+    fail::cfg_callback("insert_after_pack_before_commit", {
+        let events = events.clone();
+        let resume = Arc::clone(&resume);
+        move || {
+            let _ = events.send("packed");
+            // The callback parks a runtime worker that the ALTER TABLE below needs.
+            // `block_in_place` hands the worker's queue to another thread first, see
+            // `test_insert_concurrent_alter_table` in tests/sql.rs.
+            tokio::task::block_in_place(|| resume.wait());
+        }
+    })
+    .unwrap();
+    let request = thread::spawn(move || {
+        let _on_exit = OnExit(events);
+        request()
+    });
+    // A request that ends before the failpoint fails the test with its own error, instead of
+    // leaving the test waiting for the failpoint.
+    if events_rx.recv().unwrap() != "packed" {
+        fail::remove("insert_after_pack_before_commit");
+        request.join().unwrap();
+        panic!("the request completed without reaching the failpoint");
+    }
+    ddl.batch_execute(&format!("ALTER TABLE {table} ADD COLUMN b int"))
+        .unwrap();
+    fail::remove("insert_after_pack_before_commit");
+    resume.wait();
+    request.join().unwrap()
+}
+
+/// Sends `request` and renders its responses up to `ReadyForQuery`, skipping notices and
+/// parameter statuses.
+fn ws_request_messages(
+    ws: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
+    request: serde_json::Value,
+) -> Vec<String> {
+    ws.send(Message::Text(request.to_string().into())).unwrap();
+    let mut msgs = Vec::new();
+    loop {
+        let Message::Text(text) = ws.read().unwrap() else {
+            continue;
+        };
+        let msg = match serde_json::from_str::<WebSocketResponse>(&text).unwrap() {
+            WebSocketResponse::CommandStarting(_) => "CommandStarting".to_string(),
+            WebSocketResponse::CommandComplete(tag) => format!("CommandComplete {tag}"),
+            WebSocketResponse::Error(err) => format!("Error {}", err.code),
+            WebSocketResponse::Rows(_) => "Rows".to_string(),
+            WebSocketResponse::Row(_) => "Row".to_string(),
+            WebSocketResponse::Notice(_) | WebSocketResponse::ParameterStatus(_) => continue,
+            WebSocketResponse::ReadyForQuery(_) => break,
+            other @ WebSocketResponse::BackendKeyData(_) => panic!("unexpected message {other:?}"),
+        };
+        msgs.push(msg);
+    }
+    msgs
+}
+
+/// Sends `sql` as a simple query on a new pgwire connection and renders the errors, row
+/// descriptions, rows and `CommandComplete`s it gets back, up to `ReadyForQuery`.
+fn pgwire_simple_query_messages(addr: std::net::SocketAddr, sql: &str) -> Vec<String> {
+    use postgres_protocol::message::backend::Message;
+    use postgres_protocol::message::frontend;
+    use tokio_postgres::fallible_iterator::FallibleIterator;
+
+    let mut stream = std::net::TcpStream::connect(addr).unwrap();
+    let mut read_buf = bytes::BytesMut::new();
+    let mut read_until_ready = |stream: &mut std::net::TcpStream| {
+        let mut msgs = Vec::new();
+        loop {
+            if let Some(msg) = Message::parse(&mut read_buf).unwrap() {
+                match msg {
+                    Message::ReadyForQuery(_) => return msgs,
+                    Message::ErrorResponse(err) => {
+                        let code = err
+                            .fields()
+                            .find(|f| Ok(f.type_() == b'C'))
+                            .unwrap()
+                            .map(|f| String::from_utf8_lossy(f.value_bytes()).into_owned());
+                        msgs.push(format!("Error {}", code.unwrap()));
+                    }
+                    Message::CommandComplete(_) => msgs.push("CommandComplete".into()),
+                    Message::RowDescription(_) => msgs.push("Rows".into()),
+                    Message::DataRow(_) => msgs.push("Row".into()),
+                    _ => {}
+                }
+            } else {
+                let mut chunk = [0; 1 << 13];
+                let n = stream.read(&mut chunk).unwrap();
+                assert!(n > 0, "connection closed");
+                read_buf.extend_from_slice(&chunk[..n]);
+            }
+        }
+    };
+    let mut buf = bytes::BytesMut::new();
+    frontend::startup_message(
+        vec![
+            ("user", "materialize"),
+            ("options", "--welcome_message=off"),
+        ],
+        &mut buf,
+    )
+    .unwrap();
+    stream.write_all(&buf).unwrap();
+    read_until_ready(&mut stream);
+    buf.clear();
+    frontend::query(sql, &mut buf).unwrap();
+    stream.write_all(&buf).unwrap();
+    read_until_ready(&mut stream)
+}
+
+/// A commit failure replaces the completion of the statement that ends an implicit transaction,
+/// and it stops the request.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_implicit_commit_failure() {
+    let server = test_util::TestHarness::default().start_blocking();
+    server.enable_feature_flags(&["enable_alter_table_add_column"]);
+    let mut system = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+    let user = &HTTP_DEFAULT_USER.name;
+    for statement in [
+        format!("CREATE ROLE {user}"),
+        format!("GRANT ALL PRIVILEGES ON SYSTEM TO {user}"),
+        format!("GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {user}"),
+        format!("GRANT ALL PRIVILEGES ON DATABASE materialize TO {user}"),
+        format!("GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {user}"),
+    ] {
+        system.batch_execute(&statement).unwrap();
+    }
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let tables = [
+        "http_t",
+        "http_simple_t",
+        "ws_t",
+        "ws_simple_t",
+        "pg_t",
+        "pg_simple_t",
+    ];
+    for table in tables {
+        client
+            .batch_execute(&format!("CREATE TABLE {table} (a int)"))
+            .unwrap();
+    }
+    for table in ["http_t", "http_simple_t"] {
+        system
+            .batch_execute(&format!("GRANT ALL PRIVILEGES ON TABLE {table} TO {user}"))
+            .unwrap();
+    }
+
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
+    let mut http_request = |table: &str, request: serde_json::Value| {
+        let http_url = http_url.clone();
+        with_failing_insert_commit(&mut client, table, move || {
+            Client::new()
+                .post(http_url)
+                .json(&request)
+                .send()
+                .unwrap()
+                .json::<serde_json::Value>()
+                .unwrap()
+        })
+    };
+    let body = http_request(
+        "http_t",
+        serde_json::json!({
+            "queries": [{"query": "INSERT INTO http_t VALUES (1)"}, {"query": "SELECT 1"}]
+        }),
+    );
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1, "one result, the commit failure: {body}");
+    assert_eq!(results[0]["error"]["code"], "40001", "{body}");
+
+    // In a simple request the commit follows the rows of the last statement, and its failure
+    // replaces that statement's rows.
+    let body = http_request(
+        "http_simple_t",
+        serde_json::json!({"query": "INSERT INTO http_simple_t VALUES (1); SELECT 1"}),
+    );
+    let results = body["results"].as_array().unwrap();
+    assert_eq!(
+        results.len(),
+        2,
+        "the INSERT's result and the commit failure: {body}"
+    );
+    assert_eq!(results[0]["ok"], "INSERT 0 1", "{body}");
+    assert_eq!(results[1]["error"]["code"], "40001", "{body}");
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+    let (mut ws, msgs) = with_failing_insert_commit(&mut client, "ws_t", move || {
+        let msgs = ws_request_messages(
+            &mut ws,
+            serde_json::json!({
+                "queries": [{"query": "INSERT INTO ws_t VALUES (1)"}, {"query": "SELECT 1"}]
+            }),
+        );
+        (ws, msgs)
+    });
+    assert_eq!(msgs, ["CommandStarting", "Error 40001"]);
+
+    // In a simple request the statements share one implicit transaction, which commits after
+    // the rows of the last statement and before its completion.
+    let (_ws, msgs) = with_failing_insert_commit(&mut client, "ws_simple_t", move || {
+        let msgs = ws_request_messages(
+            &mut ws,
+            serde_json::json!({"query": "INSERT INTO ws_simple_t VALUES (1); SELECT 1"}),
+        );
+        (ws, msgs)
+    });
+    assert_eq!(
+        msgs,
+        [
+            "CommandStarting",
+            "CommandComplete INSERT 0 1",
+            "CommandStarting",
+            "Rows",
+            "Row",
+            "Error 40001",
+        ]
+    );
+
+    // pgwire's simple query protocol commits likewise, so the commit error replaces the
+    // CommandComplete of the statement that ends the query.
+    let pgwire_addr = server.sql_local_addr();
+    let msgs = with_failing_insert_commit(&mut client, "pg_t", move || {
+        pgwire_simple_query_messages(pgwire_addr, "INSERT INTO pg_t VALUES (1)")
+    });
+    assert_eq!(msgs, ["Error 40001"]);
+    let msgs = with_failing_insert_commit(&mut client, "pg_simple_t", move || {
+        pgwire_simple_query_messages(pgwire_addr, "INSERT INTO pg_simple_t VALUES (1); SELECT 1")
+    });
+    assert_eq!(msgs, ["CommandComplete", "Rows", "Row", "Error 40001"]);
+
+    for table in tables {
+        let count: i64 = client
+            .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(count, 0, "the failed write to {table} must not land");
+    }
+}
+
 /// Regression test for SQL-428: the JSON `/api/sql` endpoint enforces
 /// `max_result_size` on `Row::byte_len`, the same quantity the WebSocket
 /// transport and pgwire use. A result that exceeds the cap fails cleanly with a

@@ -16,7 +16,8 @@ ParameterStatus {"name":"application_name","value":"session_value"}
 CommandComplete {"tag":"SET"}
 ReadyForQuery {"status":"I"}
 
-# Simple protocol: committed at the end of the Query message.
+# Simple protocol: the statement that ends the Query commits before its
+# CommandComplete, and the revert is announced before ReadyForQuery.
 send
 Query {"query": "SET LOCAL application_name = 'simple_local'"}
 Query {"query": "SHOW application_name"}
@@ -33,6 +34,22 @@ ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"application_name"}]}
 DataRow {"fields":["session_value"]}
 CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# The same when the statement that ends the Query returns rows.
+send
+Query {"query": "SET LOCAL application_name = 'simple_rows'; SELECT 1"}
+----
+
+until parameter_status=application_name
+ReadyForQuery
+----
+ParameterStatus {"name":"application_name","value":"simple_rows"}
+CommandComplete {"tag":"SET"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ParameterStatus {"name":"application_name","value":"session_value"}
 ReadyForQuery {"status":"I"}
 
 # Extended protocol: committed at Sync.
