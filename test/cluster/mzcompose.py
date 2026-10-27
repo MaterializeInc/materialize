@@ -7536,7 +7536,24 @@ def workflow_test_constant_sink(c: Composition) -> None:
             port=6877,
             user="mz_system",
         )[0][0]
-        c.kill("materialized")
+        connection = c.sql_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT mz_internal.mz_session_id()")
+                session_row = cursor.fetchone()
+                assert session_row is not None
+                abandoned_session = session_row[0]
+            c.testdrive(
+                dedent(f"""
+                    > SELECT count(*) FROM mz_internal.mz_sessions_raw
+                      WHERE id = '{abandoned_session}'::uuid
+                    1
+                    """),
+                args=["--materialize-url=postgres://mz_system@materialized:6877"],
+            )
+            c.kill("materialized")
+        finally:
+            connection.close()
         c.up("materialized")
 
         c.testdrive(dedent(f"""
@@ -7568,6 +7585,14 @@ def workflow_test_constant_sink(c: Composition) -> None:
 
                 > SELECT count(*) FROM mz_internal.mz_storage_statuses_raw h
                   JOIN mz_sinks s ON s.id = h.id WHERE s.name = 'snk'
+                1
+
+                > SELECT count(*) FROM mz_internal.mz_sessions_raw
+                  WHERE id = '{abandoned_session}'::uuid
+                0
+
+                > SELECT count(*) FROM mz_internal.mz_sessions_raw
+                  WHERE id = mz_internal.mz_session_id()
                 1
                 """),
             args=["--materialize-url=postgres://mz_system@materialized:6877"],
