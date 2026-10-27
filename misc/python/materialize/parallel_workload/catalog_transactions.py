@@ -169,64 +169,125 @@ def catalog_result_outcome(c: Composition) -> None:
 def description_outcome(c: Composition) -> None:
     for api in ("prepare", "declare", "protocol"):
         for wildcard in (False, True):
-            schema = f"ddl_description_{api}_{int(wildcard)}"
-            with c.sql_connection() as txn, c.sql_connection() as other:
-                execute(other, f"CREATE SCHEMA {schema}")
-                execute(other, f"CREATE TABLE {schema}.original (value INT)")
-                execute(txn, "BEGIN")
-                execute(txn, f"ALTER TABLE {schema}.original RENAME TO observed")
-                projection = "*" if wildcard else "value"
-                query = f"SELECT {projection} FROM {schema}.observed"
-                if api == "prepare":
-                    execute(txn, f"PREPARE described AS {query}")
-                elif api == "declare":
-                    execute(txn, f"DECLARE described CURSOR FOR {query}")
-                else:
-                    prepared = txn.pgconn.prepare(b"described", query.encode())
-                    assert (
-                        prepared.status == ExecStatus.COMMAND_OK
-                    ), prepared.error_message
-                    described = txn.pgconn.describe_prepared(b"described")
-                    assert (
-                        described.status == ExecStatus.COMMAND_OK
-                    ), described.error_message
-                    assert described.nfields == 1
-                    assert described.fname(0) == b"value"
-                if api in ("prepare", "declare"):
-                    wrapper = (
-                        "EXECUTE described" if api == "prepare" else "FETCH described"
-                    )
-                    prepared = txn.pgconn.prepare(b"wrapper", wrapper.encode())
-                    assert (
-                        prepared.status == ExecStatus.COMMAND_OK
-                    ), prepared.error_message
-                    described = txn.pgconn.describe_prepared(b"wrapper")
-                    assert (
-                        described.status == ExecStatus.COMMAND_OK
-                    ), described.error_message
-                    assert described.nfields == 1
-                    nested = f"DECLARE nested CURSOR FOR {wrapper}"
-                    prepared = txn.pgconn.prepare(b"nested_wrapper", nested.encode())
-                    assert (
-                        prepared.status == ExecStatus.COMMAND_OK
-                    ), prepared.error_message
-                execute(txn, f"ALTER TABLE {schema}.observed RENAME TO final")
-                execute(other, f"ALTER TABLE {schema}.original ADD COLUMN added TEXT")
-                try:
+            for timing in ("after_ddl", "before_ddl", "change_before_ddl"):
+                schema = f"ddl_description_{api}_{int(wildcard)}_{timing}"
+                with c.sql_connection() as txn, c.sql_connection() as other:
+                    execute(other, f"CREATE SCHEMA {schema}")
+                    execute(other, f"CREATE TABLE {schema}.original (value INT)")
+                    execute(txn, "BEGIN")
+                    if timing == "after_ddl":
+                        execute(
+                            txn, f"ALTER TABLE {schema}.original RENAME TO observed"
+                        )
+                    projection = "*" if wildcard else "value"
+                    name = "observed" if timing == "after_ddl" else "original"
+                    query = f"SELECT {projection} FROM {schema}.{name}"
+                    if api == "prepare":
+                        execute(txn, f"PREPARE described AS {query}")
+                    elif api == "declare":
+                        execute(txn, f"DECLARE described CURSOR FOR {query}")
+                    else:
+                        prepared = txn.pgconn.prepare(b"described", query.encode())
+                        assert (
+                            prepared.status == ExecStatus.COMMAND_OK
+                        ), prepared.error_message
+                        described = txn.pgconn.describe_prepared(b"described")
+                        assert (
+                            described.status == ExecStatus.COMMAND_OK
+                        ), described.error_message
+                        assert described.nfields == 1
+                        assert described.fname(0) == b"value"
+                    if api in ("prepare", "declare"):
+                        wrapper = (
+                            "EXECUTE described"
+                            if api == "prepare"
+                            else "FETCH described"
+                        )
+                        prepared = txn.pgconn.prepare(b"wrapper", wrapper.encode())
+                        assert (
+                            prepared.status == ExecStatus.COMMAND_OK
+                        ), prepared.error_message
+                        described = txn.pgconn.describe_prepared(b"wrapper")
+                        assert (
+                            described.status == ExecStatus.COMMAND_OK
+                        ), described.error_message
+                        assert described.nfields == 1
+                        nested = f"DECLARE nested CURSOR FOR {wrapper}"
+                        prepared = txn.pgconn.prepare(
+                            b"nested_wrapper", nested.encode()
+                        )
+                        assert (
+                            prepared.status == ExecStatus.COMMAND_OK
+                        ), prepared.error_message
+                    if timing == "change_before_ddl":
+                        execute(
+                            other,
+                            f"ALTER TABLE {schema}.original ADD COLUMN added TEXT",
+                        )
+                    if timing != "after_ddl":
+                        execute(
+                            txn, f"ALTER TABLE {schema}.original RENAME TO observed"
+                        )
+                    execute(txn, f"ALTER TABLE {schema}.observed RENAME TO final")
+                    if timing != "change_before_ddl":
+                        execute(
+                            other,
+                            f"ALTER TABLE {schema}.original ADD COLUMN added TEXT",
+                        )
+                    try:
+                        execute(txn, "COMMIT")
+                    except SerializationFailure as error:
+                        assert error.sqlstate == "40001", error
+                        assert wildcard, "explicit projection's schema is unchanged"
+                    else:
+                        assert (
+                            not wildcard
+                        ), "expanded wildcard changed the described schema"
+                    expected = "original" if wildcard else "final"
+                    names = execute(
+                        other,
+                        "SELECT t.name FROM mz_tables t JOIN mz_schemas s ON s.id = t.schema_id "
+                        f"WHERE s.name = '{schema}'",
+                    ).fetchall()
+                    assert names == [(expected,)], (api, wildcard, timing, names)
+
+                    # Neither successful nor failed COMMIT may retain descriptions.
+                    execute(txn, "BEGIN")
+                    execute(txn, f"ALTER TABLE {schema}.{expected} RENAME TO cleaned")
                     execute(txn, "COMMIT")
-                except SerializationFailure:
-                    assert wildcard, "explicit projection's schema is unchanged"
-                else:
-                    assert (
-                        not wildcard
-                    ), "expanded wildcard changed the described schema"
-                expected = "original" if wildcard else "final"
-                names = execute(
-                    other,
-                    "SELECT t.name FROM mz_tables t JOIN mz_schemas s ON s.id = t.schema_id "
-                    f"WHERE s.name = '{schema}'",
-                ).fetchall()
-                assert names == [(expected,)], (api, wildcard, names)
+                    assert execute(
+                        other, f"SELECT count(*) FROM {schema}.cleaned"
+                    ).fetchone() == (0,)
+
+    for continuation in ("select", "insert", "rollback"):
+        schema = f"ddl_description_without_ddl_{continuation}"
+        with c.sql_connection() as txn, c.sql_connection() as other:
+            execute(other, f"CREATE SCHEMA {schema}")
+            execute(other, f"CREATE TABLE {schema}.original (value INT)")
+            execute(other, f"CREATE TABLE {schema}.data (value INT)")
+            execute(other, f"INSERT INTO {schema}.data VALUES (42)")
+            execute(txn, "BEGIN")
+            execute(txn, f"PREPARE described AS SELECT * FROM {schema}.original")
+            if continuation == "select":
+                assert execute(txn, f"SELECT * FROM {schema}.data").fetchall() == [
+                    (42,)
+                ]
+            elif continuation == "insert":
+                execute(txn, f"INSERT INTO {schema}.data VALUES (7)")
+            execute(other, f"ALTER TABLE {schema}.original ADD COLUMN added TEXT")
+            execute(txn, "ROLLBACK" if continuation == "rollback" else "COMMIT")
+            expected_rows = [(7,), (42,)] if continuation == "insert" else [(42,)]
+            assert (
+                execute(other, f"SELECT * FROM {schema}.data ORDER BY value").fetchall()
+                == expected_rows
+            )
+
+            # A finished transaction must not constrain the next DDL transaction.
+            execute(txn, "BEGIN")
+            execute(txn, f"ALTER TABLE {schema}.original RENAME TO final")
+            execute(txn, "COMMIT")
+            after = execute(other, f"SHOW CREATE TABLE {schema}.final").fetchone()
+            assert after is not None and "added" in after[1]
 
     with c.sql_connection() as txn, c.sql_connection() as other:
         execute(other, "CREATE SCHEMA ddl_empty_description")

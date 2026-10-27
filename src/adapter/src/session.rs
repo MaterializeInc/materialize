@@ -405,7 +405,7 @@ impl Session {
                 self.transaction = TransactionStatus::InTransaction(Transaction {
                     pcx: self.new_pcx(wall_time),
                     ops: TransactionOps::None,
-                    pending_catalog_results: Vec::new(),
+                    pending_ddl_inspections: Vec::new(),
                     access,
                     id,
                 });
@@ -438,7 +438,7 @@ impl Session {
             let txn = Transaction {
                 pcx: self.new_pcx(wall_time),
                 ops: TransactionOps::None,
-                pending_catalog_results: Vec::new(),
+                pending_ddl_inspections: Vec::new(),
                 access: None,
                 id,
             };
@@ -506,15 +506,17 @@ impl Session {
         &mut self,
         command: Arc<crate::catalog::command::CatalogResultCommand>,
     ) {
+        self.retain_ddl_inspection(DdlInspection::CatalogResult(command));
+    }
+
+    fn retain_ddl_inspection(&mut self, inspection: DdlInspection) {
         let txn = self
             .transaction_mut()
             .inner_mut()
             .expect("active transaction");
         match &mut txn.ops {
-            TransactionOps::DDL { ops, .. } => {
-                ops.push(crate::catalog::Op::CatalogResult(command));
-            }
-            _ => txn.pending_catalog_results.push(command),
+            TransactionOps::DDL { ops, .. } => ops.push(inspection.into_op()),
+            _ => txn.pending_ddl_inspections.push(inspection),
         }
     }
 
@@ -525,7 +527,7 @@ impl Session {
         param_types: Vec<Option<mz_repr::SqlScalarType>>,
         expected: mz_sql::plan::StatementDesc,
     ) {
-        if !self.transaction().is_ddl()
+        if self.transaction().inner().is_none()
             || (expected.relation_desc.is_none() && expected.param_types.is_empty())
         {
             return;
@@ -548,17 +550,7 @@ impl Session {
             self.meta(),
             expected,
         );
-        let TransactionOps::DDL { ops, .. } = &mut self
-            .transaction_mut()
-            .inner_mut()
-            .expect("DDL transaction")
-            .ops
-        else {
-            unreachable!("checked DDL transaction")
-        };
-        ops.push(crate::catalog::Op::Description(std::sync::Arc::new(
-            command,
-        )));
+        self.retain_ddl_inspection(DdlInspection::Description(Arc::new(command)));
     }
 
     /// Adds operations, rejecting incompatible combinations of reads and writes.
@@ -648,7 +640,7 @@ impl Session {
                 ops: TransactionOps::Peeks { determination, .. },
                 access: _,
                 id: _,
-                pending_catalog_results: _,
+                pending_ddl_inspections: _,
             }) => Some(determination.clone()),
             _ => None,
         }
@@ -669,7 +661,7 @@ impl Session {
                 },
                 access: _,
                 id: _,
-                pending_catalog_results: _,
+                pending_ddl_inspections: _,
             })
         )
     }
@@ -1357,19 +1349,19 @@ impl TransactionStatus {
             TransactionStatus::Started(Transaction {
                 ops,
                 access,
-                pending_catalog_results,
+                pending_ddl_inspections,
                 ..
             })
             | TransactionStatus::InTransaction(Transaction {
                 ops,
                 access,
-                pending_catalog_results,
+                pending_ddl_inspections,
                 ..
             })
             | TransactionStatus::InTransactionImplicit(Transaction {
                 ops,
                 access,
-                pending_catalog_results,
+                pending_ddl_inspections,
                 ..
             }) => {
                 match ops {
@@ -1384,9 +1376,9 @@ impl TransactionStatus {
                             // restricting the transaction until it actually enters DDL mode.
                             ops.splice(
                                 0..0,
-                                pending_catalog_results
+                                pending_ddl_inspections
                                     .drain(..)
-                                    .map(crate::catalog::Op::CatalogResult),
+                                    .map(DdlInspection::into_op),
                             );
                         }
                         *ops = add_ops;
@@ -1520,6 +1512,21 @@ impl Default for TransactionStatus {
     }
 }
 
+#[derive(Debug)]
+enum DdlInspection {
+    CatalogResult(Arc<crate::catalog::command::CatalogResultCommand>),
+    Description(Arc<crate::catalog::command::DescriptionCommand>),
+}
+
+impl DdlInspection {
+    fn into_op(self) -> crate::catalog::Op {
+        match self {
+            Self::CatalogResult(command) => crate::catalog::Op::CatalogResult(command),
+            Self::Description(command) => crate::catalog::Op::Description(command),
+        }
+    }
+}
+
 /// State data for transactions.
 #[derive(Debug)]
 pub struct Transaction {
@@ -1527,8 +1534,8 @@ pub struct Transaction {
     pub pcx: PlanContext,
     /// Transaction operations.
     pub ops: TransactionOps,
-    /// SHOW CREATE results awaiting a possible transition to DDL mode.
-    pending_catalog_results: Vec<Arc<crate::catalog::command::CatalogResultCommand>>,
+    /// Catalog results and descriptions awaiting a possible transition to DDL mode.
+    pending_ddl_inspections: Vec<DdlInspection>,
     /// Uniquely identifies the transaction on a per connection basis.
     /// Two transactions started from separate connections may share the
     /// same ID.
