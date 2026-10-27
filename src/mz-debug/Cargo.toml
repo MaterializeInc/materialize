@@ -23,7 +23,6 @@ mz-ore = { path = "../ore", features = ["cli", "test"] }
 mz-postgres-util = { path = "../postgres-util" }
 mz-server-core = { path = "../server-core"}
 mz-tls-util = { path = "../tls-util" }
-postgres-openssl.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
