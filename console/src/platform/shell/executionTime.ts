@@ -18,10 +18,7 @@ export const EXECUTION_TIME_SESSION_VARIABLE = "emit_execution_time_notice";
  * The first Materialize version that knows `emit_execution_time_notice`. The
  * Shell sets it only on environments at this version or later, because an
  * older environment answers an unknown startup setting with a notice that the
- * Shell would print.
- *
- * TODO: set to the first release that contains the server change once it has
- * merged. A version that is too high only delays the feature.
+ * Shell would print. A version that is too high only delays the feature.
  */
 export const EXECUTION_TIME_MIN_VERSION = "26.49.0-dev";
 
