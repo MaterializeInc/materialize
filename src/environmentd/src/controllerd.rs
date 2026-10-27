@@ -10,6 +10,9 @@
 //! Deployment-scoped process management, separate from SQL coordination.
 
 pub mod provisioning;
+mod startup;
+
+pub use startup::open_catalog;
 
 /// Completes fresh deployment initialization before provisioning its children.
 ///
