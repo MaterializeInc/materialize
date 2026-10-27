@@ -192,10 +192,14 @@ pub async fn open_catalog(
             license_key: config.license_key.clone(),
         },
     };
+    let persist = catalog_config.state.persist_client.clone();
     let catalog = if fresh {
         super::initialize_fresh(catalog_config, oracle.as_ref()).await?
     } else {
-        Catalog::open(catalog_config).await?.catalog
+        Catalog::open(catalog_config)
+            .await?
+            .complete_deployment_restart(persist, &config.metrics_registry, oracle.as_ref())
+            .await?
     };
     ensure!(
         catalog.state().catalog_read_protection_enabled(),

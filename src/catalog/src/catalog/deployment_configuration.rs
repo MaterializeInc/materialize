@@ -30,8 +30,10 @@ impl Catalog {
     ///
     /// Call after table infrastructure completion and before launching children.
     /// `snapshot` is the builtin snapshot returned by catalog open. Replica-size
-    /// rows are derived here. Joiners, savepoints and read-only deployments cannot
-    /// publish configuration. This performs no ongoing maintenance or compaction.
+    /// rows are derived here. Only the active deployment's initializer calls this,
+    /// including when its controller restarts through durable join admission.
+    /// Serving adapters never call this. Pending, savepoint and read-only handles
+    /// cannot publish configuration. This performs no ongoing maintenance.
     pub async fn reconcile_deployment_configuration(
         &self,
         persist: &mz_persist_client::PersistClient,
@@ -44,7 +46,8 @@ impl Catalog {
             if self.diagnostic_config.read_only
                 || storage.is_read_only()
                 || storage.is_savepoint()
-                || storage.is_join()
+                || self.state().active_deployment_generation()
+                    != Some(self.state().deployment_generation())
             {
                 return Err(CatalogError::ReadOnly);
             }

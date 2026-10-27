@@ -227,8 +227,64 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
         expected.clone(),
         mz_repr::Diff::ONE,
     )];
-    for snapshot in [&desired[..], &desired[..], &[][..]] {
-        catalog
+    let mut controllers = Vec::new();
+    for generation in [0, 1] {
+        let openable = TestCatalogStateBuilder::new(persist.clone())
+            .with_organization_id(organization)
+            .with_deploy_generation(generation)
+            .unwrap_build()
+            .await;
+        let storage = if generation == 0 {
+            openable.join().await
+        } else {
+            openable
+                .join_prewarming(
+                    &mz_catalog::catalog::Catalog::expression_build_version(
+                        &mz_build_info::DUMMY_BUILD_INFO,
+                    )
+                    .to_string(),
+                )
+                .await
+        }
+        .expect("controller admission");
+        controllers.push(
+            Catalog::open_debug_catalog_inner(
+                persist.clone(),
+                storage,
+                mz_ore::now::SYSTEM_TIME.clone(),
+                Some(
+                    format!("local-az1-{organization}-0")
+                        .parse()
+                        .expect("environment ID"),
+                ),
+                &mz_build_info::DUMMY_BUILD_INFO,
+                [("enable_catalog_read_protection".into(), "true".into())].into(),
+                &bootstrap,
+                None,
+                None,
+            )
+            .await
+            .expect("reconstruct controller catalog"),
+        );
+    }
+    let restarted = &controllers[0];
+    let pending = &controllers[1];
+    assert_eq!(restarted.state().active_deployment_generation(), Some(0));
+    assert_eq!(pending.state().active_deployment_generation(), Some(0));
+    assert_eq!(pending.state().deployment_generation(), 1);
+    assert!(
+        pending
+            .reconcile_deployment_configuration(&persist, &mut infrastructure, &desired, &oracle,)
+            .await
+            .is_err(),
+        "pending deployment cannot overwrite active configuration"
+    );
+    for (publisher, snapshot) in [
+        (&catalog, &desired[..]),
+        (restarted, &desired[..]),
+        (restarted, &[][..]),
+    ] {
+        publisher
             .reconcile_deployment_configuration(&persist, &mut infrastructure, snapshot, &oracle)
             .await
             .expect("finite configuration reconciliation");
@@ -251,6 +307,9 @@ async fn table_writer_initialization_preserves_catalog_identity_and_peer_updates
                 vec![(expected.clone(), 1)]
             }
         );
+    }
+    for controller in controllers {
+        controller.expire().await;
     }
     reader.expire().await;
     drop(infrastructure);

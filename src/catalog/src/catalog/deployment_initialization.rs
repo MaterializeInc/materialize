@@ -23,6 +23,56 @@ use crate::builtin::{
 use crate::catalog::{Catalog, CatalogError};
 
 impl crate::catalog::OpenCatalogResult {
+    /// Reconciles active-controller launch configuration after join-only restart.
+    ///
+    /// The caller is the deployment's controller, not a serving adapter. Joining
+    /// preserves admission and format limits. This never seeds the positive
+    /// builtin snapshot or recovers interrupted initialization or migrations.
+    pub async fn complete_deployment_restart(
+        mut self,
+        persist: mz_persist_client::PersistClient,
+        metrics: &mz_ore::metrics::MetricsRegistry,
+        oracle: &(dyn TimestampOracle<Timestamp> + Send + Sync),
+    ) -> Result<Catalog, CatalogError> {
+        {
+            let storage = self.catalog.storage().await;
+            if self.catalog.diagnostic_config.read_only
+                || storage.is_read_only()
+                || storage.is_savepoint()
+                || !storage.is_join()
+                || self.catalog.state().active_deployment_generation()
+                    != Some(self.catalog.state().deployment_generation())
+            {
+                return Err(CatalogError::ReadOnly);
+            }
+        }
+        if self.initialized_catalog || !self.migrated_storage_collections_0dt.is_empty() {
+            return Err(anyhow::anyhow!(
+                "controller restart requires an initialized catalog without replacement migrations"
+            )
+            .into());
+        }
+        self.catalog.initialize_storage_metadata().await?;
+        let mut infrastructure = self
+            .catalog
+            .complete_table_infrastructure(
+                persist.clone(),
+                Arc::new(mz_txn_wal::metrics::Metrics::new(metrics)),
+                oracle,
+            )
+            .await?;
+        self.catalog
+            .reconcile_deployment_configuration(
+                &persist,
+                &mut infrastructure,
+                &self.builtin_table_updates,
+                oracle,
+            )
+            .await?;
+        drop(infrastructure);
+        Ok(self.catalog)
+    }
+
     /// Completes fresh active deployment infrastructure before launching children.
     ///
     /// Only the handle that committed fresh initialization may publish its positive

@@ -137,10 +137,13 @@ A confirmed supersession or deployment fence terminates the adapter, rather than
 registering again or continuing to serve with a closed client. An object DROP or
 ordinary acquisition rejection is not evidence of supersession.
 
-Joining a deployment reconstructs its committed catalog without rerunning shared
-initialization or migrations. This restriction follows the durable handle's
-admission, not whether the adapter serves read-only SQL. A writable joiner must
-not apply initializer-supplied configuration or reconcile shared builtin identities.
+A joining adapter reconstructs the committed catalog without rerunning shared
+initialization or migrations. Durable join admission forbids migrations regardless
+of whether the adapter serves read-only SQL. Serving adapters must not apply
+initializer-supplied configuration or reconcile shared builtin identities. A
+restarting controller also uses join admission, but explicitly reconciles its
+active deployment's launch configuration before provisioning. It never replays
+the positive builtin snapshot. Pending deployments cannot publish shared configuration.
 
 Replacement transfers committed grants into a separate recovery guard, not ordinary
 read holds. Retain that guard through reconstruction and acquisition of successor
