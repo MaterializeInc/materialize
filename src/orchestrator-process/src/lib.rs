@@ -29,7 +29,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use futures::stream::{BoxStream, FuturesUnordered};
-use itertools::Itertools;
 use maplit::btreemap;
 use mz_orchestrator::scheduling_config::ServiceSchedulingConfig;
 use mz_orchestrator::{
@@ -1474,6 +1473,7 @@ fn assign_tcp_ports(
                             loop {
                                 let listener = StdTcpListener::bind(("127.0.0.1", 0))?;
                                 if !used.contains(&listener.local_addr()?) {
+                                    drop(rejected);
                                     break listener;
                                 }
                                 rejected.push(listener);
