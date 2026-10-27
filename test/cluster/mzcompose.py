@@ -7539,7 +7539,10 @@ def workflow_test_constant_sink(c: Composition) -> None:
         connection = c.sql_connection()
         try:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT mz_internal.mz_session_id()")
+                cursor.execute(
+                    "SELECT id FROM mz_internal.mz_sessions "
+                    "WHERE connection_id = pg_backend_pid()"
+                )
                 session_row = cursor.fetchone()
                 assert session_row is not None
                 abandoned_session = session_row[0]
@@ -7592,7 +7595,7 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 0
 
                 > SELECT count(*) FROM mz_internal.mz_sessions_raw
-                  WHERE id = mz_internal.mz_session_id()
+                  WHERE connection_id = pg_backend_pid()
                 1
                 """),
             args=["--materialize-url=postgres://mz_system@materialized:6877"],
