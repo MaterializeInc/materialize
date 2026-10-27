@@ -11,6 +11,7 @@ import { Box, Grid, Skeleton, Text, useTheme } from "@chakra-ui/react";
 import React from "react";
 
 import { NULL_LAG_TEXT } from "~/api/materialize/freshness/lagHistory";
+import { MetricCard } from "~/components/MetricCard";
 import { MaterializeTheme } from "~/theme";
 import { formatDurationExact } from "~/utils/format";
 
@@ -54,16 +55,7 @@ const StatCard = ({
   const unreadable = value === UNREADABLE;
 
   return (
-    <Box
-      borderWidth="1px"
-      borderColor={colors.border.primary}
-      borderRadius="lg"
-      background="chakra-subtle-bg"
-      padding="4"
-    >
-      <Text textStyle="text-small-heavy" color={colors.foreground.secondary}>
-        {spec.label}
-      </Text>
+    <MetricCard label={spec.label} background={colors.background.tertiary}>
       {isLoading ? (
         <Skeleton height="6" width="16" marginY="1" />
       ) : (
@@ -75,7 +67,7 @@ const StatCard = ({
               : formatDurationExact(value)}
         </Text>
       )}
-    </Box>
+    </MetricCard>
   );
 };
 
