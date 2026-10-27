@@ -8217,6 +8217,7 @@ dependencies = [
  "fallible-iterator 0.2.0",
  "mz-ore",
  "postgres-protocol",
+ "regex",
  "serde",
  "serde_json",
 ]
