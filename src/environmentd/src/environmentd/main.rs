@@ -789,6 +789,8 @@ mod controller_cli_tests {
                 "--secrets-controller=local-file",
                 "--orchestrator-process-secrets-directory=/tmp/secrets",
                 "--persist-blob-url=file:///tmp/blob",
+                "--bootstrap-default-cluster-replica-size=1",
+                "--cluster-replica-sizes={}",
                 "--environment-id=local-az1-00000000-0000-0000-0000-000000000001-0",
                 "--listeners-config-json={}",
                 "--metadata-backend-url=postgres://user:password@localhost/db",
