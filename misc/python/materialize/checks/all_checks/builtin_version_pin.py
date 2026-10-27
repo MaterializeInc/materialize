@@ -34,10 +34,10 @@ from materialize.mz_version import MzVersion
 # dependencies, so conversions there cannot poison customer catalogs.
 # mz_role_auth is excluded because only mz_system can read it.
 _STABLE_BUILTINS: dict[str, MzVersion | None] = {
-    "mz_array_types": None,
+    "mz_array_types": MzVersion.parse_mz("v26.48.0"),
     "mz_audit_events": MzVersion.parse_mz("v26.33.0"),
     "mz_aws_privatelink_connections": MzVersion.parse_mz("v26.37.0"),
-    "mz_base_types": None,
+    "mz_base_types": MzVersion.parse_mz("v26.48.0"),
     "mz_cluster_replica_sizes": None,
     "mz_cluster_replicas": MzVersion.parse_mz("v26.30.0"),
     "mz_clusters": MzVersion.parse_mz("v26.30.0"),
@@ -50,15 +50,15 @@ _STABLE_BUILTINS: dict[str, MzVersion | None] = {
     "mz_kafka_connections": MzVersion.parse_mz("v26.37.0"),
     "mz_kafka_sinks": MzVersion.parse_mz("v26.38.0"),
     "mz_kafka_sources": MzVersion.parse_mz("v26.34.0"),
-    "mz_list_types": None,
-    "mz_map_types": None,
+    "mz_list_types": MzVersion.parse_mz("v26.48.0"),
+    "mz_map_types": MzVersion.parse_mz("v26.48.0"),
     "mz_operators": None,
-    "mz_pseudo_types": None,
+    "mz_pseudo_types": MzVersion.parse_mz("v26.48.0"),
     "mz_sinks": MzVersion.parse_mz("v26.38.0"),
     "mz_ssh_tunnel_connections": MzVersion.parse_mz("v26.37.0"),
     "mz_system_privileges": MzVersion.parse_mz("v26.30.0"),
     "mz_tables": MzVersion.parse_mz("v26.39.0"),
-    "mz_types": None,
+    "mz_types": MzVersion.parse_mz("v26.48.0"),
     "mz_views": MzVersion.parse_mz("v26.39.0"),
 }
 
