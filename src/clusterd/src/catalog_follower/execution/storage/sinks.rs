@@ -19,6 +19,9 @@ use timely::progress::Antichain;
 
 use super::{ReplicaEffects, ReplicaEnactment, storage_metadata};
 
+#[cfg(test)]
+mod tests;
+
 pub(super) struct Sink {
     // Canonical definition uses a minimum as_of. Execution frontiers may advance
     // without changing the definition or requiring another installation.
