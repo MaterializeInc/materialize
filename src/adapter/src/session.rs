@@ -1512,6 +1512,12 @@ impl Default for TransactionStatus {
     }
 }
 
+/// A catalog result or statement description that must remain valid at DDL commit.
+///
+/// Retaining inspections before the first DDL statement prevents commit-time
+/// replanning from contradicting results already exposed or stored for the client.
+/// Buffering them does not itself enter DDL mode. Transactions that never enter
+/// DDL mode discard them without validation.
 #[derive(Debug)]
 enum DdlInspection {
     CatalogResult(Arc<crate::catalog::command::CatalogResultCommand>),
