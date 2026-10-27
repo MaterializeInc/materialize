@@ -40,8 +40,7 @@ struct Catalog {
 #[serde(rename_all = "camelCase")]
 struct Parameter {
     name: String,
-    /// The type name the registry reports.
-    #[serde(rename = "type")]
+    /// The human-readable type name the registry reports. Not a schema.
     type_name: String,
     /// The compiled-in default, in a form that parses back to the same value,
     /// see `defaults_round_trip_through_parse`.
@@ -256,5 +255,11 @@ mod tests {
         let flag = find(&params, "enable_alter_swap");
         assert_eq!(flag["dyncfg"], false);
         assert_eq!(flag["scope"], "environment");
+
+        let bounded = find(&params, "max_result_size");
+        assert_eq!(
+            bounded["constraint"],
+            serde_json::json!({"kind": "range", "start": {"value": "1MB", "inclusive": true}}),
+        );
     }
 }
