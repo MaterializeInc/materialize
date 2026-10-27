@@ -593,7 +593,7 @@ which = "8"
 x509-cert = { version = "0.3.0", default-features = false }
 yansi = "1.0.1"
 zeroize = { version = "1.8.2", features = ["derive", "serde"] }
-zip = { version = "9.0.3", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.1.2", default-features = false, features = ["deflate-flate2"] }
 
 [profile.dev]
 split-debuginfo = "unpacked"
