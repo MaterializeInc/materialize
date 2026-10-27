@@ -122,7 +122,8 @@ async fn prepare_retired_rows(
 /// updates, not retractions conditioned on a snapshot of collection contents.
 /// Event timestamps encoded in rows are unaffected by append timestamp selection.
 ///
-/// Empty updates to closed collections are ignored. Nonempty updates to closed
+/// Empty updates are skipped when the requested timestamp is already complete,
+/// including after a peer wins a write conflict. Nonempty updates to closed
 /// collections, or invalid Persist usage, panic.
 pub async fn monotonic_append(
     write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
@@ -131,7 +132,7 @@ pub async fn monotonic_append(
 ) {
     let mut expected_upper = write_handle.shared_upper();
     loop {
-        if updates.is_empty() && expected_upper.is_empty() {
+        if updates.is_empty() && !expected_upper.less_equal(&at_least) {
             return;
         }
 
@@ -245,6 +246,15 @@ mod tests {
             0.into(),
         )
         .await;
+
+        let upper = writer.fetch_recent_upper().await.clone();
+        monotonic_append(&mut peer, Vec::new(), 0.into()).await;
+        assert_eq!(writer.fetch_recent_upper().await, &upper);
+        monotonic_append(&mut peer, Vec::new(), 1.into()).await;
+        assert_eq!(
+            writer.fetch_recent_upper().await,
+            &Antichain::from_elem(Timestamp::from(2))
+        );
 
         // Both collectors have read the same prefix before either submits.
         let first = prepare_retired_rows(&reader, &mut writer, id, metadata.clone(), retired)
