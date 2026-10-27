@@ -57,7 +57,10 @@ Two contracts on the implications phase:
   catalog with unapplied downstream effects cannot be recovered in-process and
   is left to restart and bootstrap.
 - It requires consolidated updates: at most one addition and one retraction per
-  item. See the `apply_catalog_implications` doc comment.
+  item. Catch-up must apply and enact each committed transaction against its own
+  projected catalog before advancing to the next. Flattening a prefix violates
+  this contract. Netting its endpoints also loses intermediate table versions and
+  replacement transitions. See the `apply_catalog_implications` doc comment.
 
 Read-protection acquisition can itself publish catalog metadata. Keep pending
 timeline acquisitions with timeline maintenance, not inside committed-diff

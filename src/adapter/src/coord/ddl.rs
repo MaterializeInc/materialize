@@ -718,21 +718,28 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let result = trace_catalog_await!(
             "catalog_refresh_sync",
-            match upper {
-                Some(upper) => self.catalog_mut().sync_updates_through(upper).await,
-                None => self.catalog_mut().sync_to_current_updates().await,
-            }
+            self.catalog_mut().fetch_committed_prefix(upper).await
         );
-        let updates = match result {
+        let mut prefix = match result {
             Err(mz_catalog::durable::CatalogError::Durable(
                 mz_catalog::durable::DurableCatalogError::Fence(error),
             )) => mz_ore::halt!("this deployment has been fenced out: {error}"),
             result => result?,
         };
+        while let Some(updates) = self
+            .catalog_mut()
+            .apply_next_committed_transaction(&mut prefix)
+            .await
+        {
+            if self.client_protection_catalog.is_none() {
+                self.validate_query_client_execution();
+            }
+            self.apply_caught_up_catalog_updates(updates).await;
+        }
+        self.catalog_mut().finish_committed_prefix(prefix);
         if self.client_protection_catalog.is_none() {
             self.validate_query_client_execution();
         }
-        self.apply_caught_up_catalog_updates(updates).await;
         Ok(())
     }
 

@@ -2243,6 +2243,84 @@ async fn test_multi_subscriber_catalog() {
             .expect("writer database")
     );
     drop(peer_before_ddl);
+
+    // A catch-up can include several commits for one object. Runtime effects
+    // must see each transaction's projection, not the final renamed replica.
+    let mut before_transaction = writer_catalog_peer.clone();
+    let mut previous_name = "pending_replica".to_string();
+    for name in ["first_peer_rename", "second_peer_rename"] {
+        let ts = writer_catalog.current_upper().await;
+        writer_catalog
+            .transact(
+                None,
+                None,
+                ts,
+                None,
+                vec![Op::RenameClusterReplica {
+                    cluster_id: replica.cluster_id,
+                    replica_id,
+                    name: mz_sql_parser::ast::QualifiedReplica {
+                        cluster: mz_sql_parser::ast::Ident::new(
+                            writer_catalog.get_cluster(replica.cluster_id).name.clone(),
+                        )
+                        .expect("valid cluster name"),
+                        replica: mz_sql_parser::ast::Ident::new(previous_name)
+                            .expect("valid replica name"),
+                    },
+                    to_name: name.into(),
+                }],
+            )
+            .await
+            .expect("commit separate replica rename");
+        previous_name = name.into();
+    }
+    let mut prefix = writer_catalog_peer
+        .fetch_committed_prefix(None)
+        .await
+        .expect("drain committed rename prefix");
+    assert!(before_transaction.transient_revision_is_current());
+    let build = Catalog::expression_build_version(writer_catalog.config().build_info).to_string();
+    let mut previous_name = "pending_replica";
+    for name in ["first_peer_rename", "second_peer_rename"] {
+        let updates = writer_catalog_peer
+            .apply_next_committed_transaction(&mut prefix)
+            .await
+            .expect("one transaction remains");
+        assert!(!before_transaction.transient_revision_is_current());
+        assert_eq!(
+            writer_catalog_peer
+                .get_cluster(replica.cluster_id)
+                .replica(replica_id)
+                .expect("renamed replica")
+                .name,
+            name
+        );
+        let effects =
+            crate::memory::implications::CatalogImplications::from_updates(updates, &build);
+        let Some(crate::memory::implications::CatalogImplication::ClusterReplica(
+            crate::memory::implications::CatalogImplicationKind::Altered { prev, new },
+        )) = effects.replicas.get(&(replica.cluster_id, replica_id))
+        else {
+            panic!("each rename must enact one alteration");
+        };
+        assert_eq!(prev.name, previous_name);
+        assert_eq!(new.name, name);
+        previous_name = name;
+        before_transaction = writer_catalog_peer.clone();
+    }
+    assert!(
+        writer_catalog_peer
+            .apply_next_committed_transaction(&mut prefix)
+            .await
+            .is_none()
+    );
+    writer_catalog_peer.finish_committed_prefix(prefix);
+    assert_eq!(
+        writer_catalog_peer.observed_position(),
+        writer_catalog.observed_position()
+    );
+    assert!(before_transaction.transient_revision_is_current());
+    drop(before_transaction);
     writer_catalog
         .sync_to_current_updates()
         .await

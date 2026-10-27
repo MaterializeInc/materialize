@@ -170,6 +170,30 @@ pub struct Catalog {
     before_commit: Option<tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>>,
 }
 
+/// A finite drained catalog prefix, applied in commit order before fetching more.
+///
+/// The caller must enact each returned transaction before applying the next one,
+/// then finish the prefix. Do not submit catalog transactions or refresh this
+/// catalog while a prefix is outstanding. Failure requires process recovery.
+#[must_use]
+pub struct CommittedCatalogPrefix {
+    transactions: std::collections::btree_map::IntoIter<
+        mz_repr::Timestamp,
+        Vec<crate::memory::objects::StateUpdate>,
+    >,
+    upper: mz_repr::Timestamp,
+    planning_upper: Option<mz_repr::Timestamp>,
+    diagnostic: Option<CommittedPrefixDiagnostic>,
+}
+
+struct CommittedPrefixDiagnostic {
+    from_position: Option<CatalogPosition>,
+    update_kinds: BTreeMap<(&'static str, crate::memory::objects::StateDiff), usize>,
+    grant_incarnations: Vec<u64>,
+    identities_truncated: bool,
+    old_bounds: BTreeMap<GlobalId, mz_repr::Timestamp>,
+}
+
 /// A handle for advancing the durable catalog upper off the coordinator loop.
 #[derive(Debug, Clone)]
 pub struct CatalogUpperHandle {
@@ -2083,7 +2107,6 @@ impl Catalog {
         &mut self,
         upper: mz_repr::Timestamp,
     ) -> Result<Vec<ParsedStateUpdate>, DurableError> {
-        let upper = self.observed_position.map_or(upper, |p| upper.max(p.upper));
         self.sync_updates_inner(Some(upper)).await
     }
 
@@ -2091,6 +2114,23 @@ impl Catalog {
         &mut self,
         target_upper: Option<mz_repr::Timestamp>,
     ) -> Result<Vec<ParsedStateUpdate>, DurableError> {
+        let mut prefix = self.fetch_committed_prefix(target_upper).await?;
+        let mut updates = Vec::new();
+        while let Some(transaction) = self.apply_next_committed_transaction(&mut prefix).await {
+            updates.extend(transaction);
+        }
+        self.finish_committed_prefix(prefix);
+        Ok(updates)
+    }
+
+    /// Drains a finite durable prefix without applying it to the local projection.
+    /// See [`CommittedCatalogPrefix`] for the caller's completion contract.
+    pub async fn fetch_committed_prefix(
+        &mut self,
+        target_upper: Option<mz_repr::Timestamp>,
+    ) -> Result<CommittedCatalogPrefix, DurableError> {
+        let target_upper =
+            target_upper.map(|upper| self.observed_position.map_or(upper, |p| upper.max(p.upper)));
         let (updates, upper) = match mz_ore::future::OreFutureExt::ore_catch_unwind(
             std::panic::AssertUnwindSafe(async {
                 let mut storage = self.storage().await;
@@ -2120,7 +2160,7 @@ impl Catalog {
                 mz_ore::halt!("cannot decode committed catalog changes, restart required: {cause}")
             }
         };
-        Ok(self.apply_committed_updates(updates, upper).await)
+        Ok(self.prepare_committed_prefix(updates, upper))
     }
 
     /// Applies a drained durable prefix independently of any candidate transaction.
@@ -2132,6 +2172,20 @@ impl Catalog {
         updates: Vec<crate::memory::objects::StateUpdate>,
         upper: mz_repr::Timestamp,
     ) -> Vec<ParsedStateUpdate> {
+        let mut prefix = self.prepare_committed_prefix(updates, upper);
+        let mut parsed = Vec::new();
+        while let Some(transaction) = self.apply_next_committed_transaction(&mut prefix).await {
+            parsed.extend(transaction);
+        }
+        self.finish_committed_prefix(prefix);
+        parsed
+    }
+
+    fn prepare_committed_prefix(
+        &self,
+        updates: Vec<crate::memory::objects::StateUpdate>,
+        upper: mz_repr::Timestamp,
+    ) -> CommittedCatalogPrefix {
         // Diagnose complete committed prefixes, not just their planning changes.
         // Bound identity output and omit catalog values and SQL.
         let prefix_diagnostic = (!updates.is_empty()
@@ -2149,12 +2203,12 @@ impl Catalog {
                     _ => None,
                 })
                 .collect();
-            (
-                self.observed_position,
-                Self::update_kind_counts(&updates),
-                incarnations.iter().copied().take(16).collect::<Vec<_>>(),
-                incarnations.len() > 16,
-                updates
+            CommittedPrefixDiagnostic {
+                from_position: self.observed_position,
+                update_kinds: Self::update_kind_counts(&updates),
+                grant_incarnations: incarnations.iter().copied().take(16).collect::<Vec<_>>(),
+                identities_truncated: incarnations.len() > 16,
+                old_bounds: updates
                     .iter()
                     .filter_map(|update| {
                         let crate::memory::objects::StateUpdateKind::CollectionCompactionBound(
@@ -2170,56 +2224,82 @@ impl Catalog {
                             .map(|old| (bound.id, *old))
                     })
                     .collect::<BTreeMap<_, _>>(),
-            )
+            }
         });
+        let mut transactions = BTreeMap::<_, Vec<_>>::new();
+        for update in updates {
+            transactions.entry(update.ts).or_default().push(update);
+        }
+        CommittedCatalogPrefix {
+            transactions: transactions.into_iter(),
+            upper,
+            planning_upper: None,
+            diagnostic: prefix_diagnostic,
+        }
+    }
+
+    /// Applies one complete transaction and returns effects for that exact state.
+    /// Enact these effects before applying the next transaction in the prefix.
+    pub async fn apply_next_committed_transaction(
+        &mut self,
+        prefix: &mut CommittedCatalogPrefix,
+    ) -> Option<Vec<ParsedStateUpdate>> {
+        let (ts, updates) = prefix.transactions.next()?;
         let (catalog_updates, planning_upper) =
             mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(async {
-                let mut catalog_updates = Vec::with_capacity(updates.len());
-                let mut planning_upper = None;
-                let mut transactions = BTreeMap::<_, Vec<_>>::new();
-                for update in updates {
-                    transactions.entry(update.ts).or_default().push(update);
-                }
-                for (ts, updates) in transactions {
-                    // Classify against each transaction's pre-application state.
-                    // A later release can retire metadata for an earlier DROP
-                    // without advancing the planning position again.
-                    if updates
-                        .iter()
-                        .any(|update| Self::update_affects_planning(&self.state, update))
-                    {
-                        planning_upper = Some(ts.step_forward());
-                    }
-                    let planning_update_kinds = Self::planning_update_kinds(&self.state, &updates);
-                    let (_builtin_updates, parsed_updates) = self
-                        .state
-                        .apply_updates(updates, &mut state::LocalExpressionCache::Closed)
-                        .await;
-                    tracing::debug!(
-                        target: "mz_catalog::planning_revision",
-                        catalog = ?std::ptr::from_ref(self),
-                        deployment = self.state.deployment_generation,
-                        revision = self.transient_revision,
-                        %ts,
-                        ?planning_update_kinds,
-                        "applied committed catalog transaction during refresh",
-                    );
-                    catalog_updates.extend(parsed_updates);
-                }
-                (catalog_updates, planning_upper)
+                let planning_upper = updates
+                    .iter()
+                    .any(|update| Self::update_affects_planning(&self.state, update))
+                    .then(|| ts.step_forward());
+                let planning_update_kinds = Self::planning_update_kinds(&self.state, &updates);
+                let (_, parsed_updates) = self
+                    .state
+                    .apply_updates(updates, &mut state::LocalExpressionCache::Closed)
+                    .await;
+                tracing::debug!(
+                    target: "mz_catalog::planning_revision",
+                    catalog = ?std::ptr::from_ref(self),
+                    deployment = self.state.deployment_generation,
+                    revision = self.transient_revision,
+                    %ts, ?planning_update_kinds,
+                    "applied committed catalog transaction during refresh",
+                );
+                (parsed_updates, planning_upper)
             }))
             .await
             .unwrap_or_else(|payload| {
                 let cause = mz_ore::panic::downcast_panic_message(&*payload);
                 mz_ore::halt!("cannot apply committed catalog changes, restart required: {cause}")
             });
-        if let Some((
+        if planning_upper.is_some() {
+            prefix.planning_upper = planning_upper;
+        }
+        // Effects can become visible during enactment. Invalidate earlier local
+        // planning snapshots before that, not only after the entire prefix.
+        self.advance_positions(ts.step_forward(), planning_upper);
+        if planning_upper.is_some() {
+            self.transient_revision += 1;
+            self.shared_transient_revision
+                .store(self.transient_revision, std::sync::atomic::Ordering::SeqCst);
+        }
+        Some(catalog_updates)
+    }
+
+    /// Finishes a fully applied prefix, including progress with no content updates.
+    pub fn finish_committed_prefix(&mut self, prefix: CommittedCatalogPrefix) {
+        assert!(
+            prefix.transactions.len() == 0,
+            "committed prefix must be fully applied"
+        );
+        let upper = prefix.upper;
+        let planning_upper = prefix.planning_upper;
+        if let Some(CommittedPrefixDiagnostic {
             from_position,
             update_kinds,
             grant_incarnations,
             identities_truncated,
             old_bounds,
-        )) = prefix_diagnostic
+        }) = prefix.diagnostic
         {
             // A finite before/after pair proves permission advancement, excluding
             // initial admission, deletion and completion. It says nothing about
@@ -2243,22 +2323,6 @@ impl Catalog {
             );
         }
         self.advance_positions(upper, planning_upper);
-        if planning_upper.is_some() {
-            tracing::debug!(
-                target: "mz_catalog::planning_revision",
-                catalog = ?std::ptr::from_ref(self),
-                deployment = self.state.deployment_generation,
-                old_revision = self.transient_revision,
-                new_revision = self.transient_revision + 1,
-                %upper,
-                ?planning_upper,
-                "catalog refresh advances planning revision",
-            );
-            self.transient_revision += 1;
-            self.shared_transient_revision
-                .store(self.transient_revision, std::sync::atomic::Ordering::SeqCst);
-        }
-        catalog_updates
     }
 }
 
