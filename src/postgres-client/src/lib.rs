@@ -265,10 +265,8 @@ impl PostgresClient {
         pg_config.keepalives_interval(config.knobs.keepalives_interval());
         pg_config.keepalives_retries(config.knobs.keepalives_retries());
 
-        let tls = mz_tls_util::make_tls(&pg_config).map_err(|tls_err| match tls_err {
-            mz_tls_util::TlsError::Generic(e) => PostgresError::Indeterminate(e),
-            mz_tls_util::TlsError::OpenSsl(e) => PostgresError::Indeterminate(anyhow::anyhow!(e)),
-        })?;
+        let tls = mz_tls_util::make_tls_rustls(&pg_config)
+            .map_err(|tls_err| PostgresError::Indeterminate(tls_err.into()))?;
 
         let pg_manager = PgManager::from_config(
             pg_config,
