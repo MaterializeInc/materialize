@@ -766,8 +766,7 @@ impl PeekClient {
         self.coordinator_client
             .send(Command::FrontendStatementLogging(
                 FrontendStatementLoggingEvent::BeganExecution {
-                    record,
-                    mseh_update,
+                    record: record.into_metadata(mseh_update),
                     prepared_statement,
                 },
             ));
