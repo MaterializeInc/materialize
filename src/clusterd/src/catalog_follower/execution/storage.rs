@@ -20,6 +20,7 @@ use mz_storage::server::{ReplicaStorage, ReplicaStorageResponse};
 use mz_storage_client::client::{RunIngestionCommand, StorageCommand, StorageResponse};
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
+use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::envelope::SourceEnvelope;
 use mz_storage_types::sources::{IngestionDescription, SourceConnection, SourceExport};
 use timely::progress::Antichain;
@@ -149,6 +150,7 @@ struct Ingestion {
 pub(super) struct StorageState {
     ingestions: BTreeMap<GlobalId, Ingestion>,
     sinks: BTreeMap<GlobalId, sinks::Sink>,
+    completed_sinks: BTreeMap<GlobalId, (StorageSinkDesc<()>, mz_persist_client::ShardId)>,
     // Includes retired attempts until their actual readers finish.
     reads: BTreeMap<u64, BTreeMap<GlobalId, ReadHold>>,
     starting: BTreeSet<u64>,
@@ -247,7 +249,7 @@ impl ReplicaEnactment {
         }
         self.retire_sources_not_in(&ingestions(catalog, cluster, replica));
         let sinks = self.desired_sinks(catalog, cluster);
-        self.retire_sinks_not_in(&sinks);
+        self.retire_sinks_not_in(catalog, &sinks);
     }
 
     fn retire_sources_not_in(&mut self, desired: &BTreeMap<GlobalId, IngestionDescription<()>>) {

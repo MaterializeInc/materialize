@@ -31,6 +31,14 @@ pub(super) struct History {
 enum Publication {
     Transition { event: StatusEvent, current: bool },
     RetireExecution(u64),
+    CompletedSink { id: GlobalId, present: bool },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum CurrentOwner {
+    Execution(u64),
+    // Catalog-following observes terminal output without starting an execution.
+    CompletedSinks,
 }
 
 impl History {
@@ -88,7 +96,7 @@ impl History {
         let task = mz_ore::task::spawn(|| "replica-status-history", async move {
             let mut writers = BTreeMap::new();
             let mut events = Vec::new();
-            let mut current_rows = BTreeMap::<u64, BTreeMap<GlobalId, Row>>::new();
+            let mut current_rows = BTreeMap::<CurrentOwner, BTreeMap<GlobalId, Row>>::new();
             while rx.recv_many(&mut events, 1024).await != 0 {
                 let mut batches: BTreeMap<_, Vec<TimestamplessUpdate>> = BTreeMap::new();
                 for publication in events.drain(..) {
@@ -115,7 +123,7 @@ impl History {
                                     .entry(IntrospectionType::StorageStatuses)
                                     .or_default();
                                 if let Some(previous) = current_rows
-                                    .entry(execution)
+                                    .entry(CurrentOwner::Execution(execution))
                                     .or_default()
                                     .insert(id, row.clone())
                                 {
@@ -132,7 +140,7 @@ impl History {
                         }
                         Publication::RetireExecution(execution) => {
                             for row in current_rows
-                                .remove(&execution)
+                                .remove(&CurrentOwner::Execution(execution))
                                 .into_iter()
                                 .flat_map(BTreeMap::into_values)
                             {
@@ -143,6 +151,42 @@ impl History {
                                         row,
                                         diff: -Diff::ONE,
                                     });
+                            }
+                        }
+                        Publication::CompletedSink { id, present } => {
+                            let rows = current_rows
+                                .entry(CurrentOwner::CompletedSinks)
+                                .or_default();
+                            let update = if present {
+                                if rows.contains_key(&id) {
+                                    continue;
+                                }
+                                let row = Row::pack([
+                                    Datum::Null,
+                                    Datum::String(&id.to_string()),
+                                    Datum::String("running"),
+                                    Datum::Null,
+                                    Datum::Null,
+                                    Datum::String(&replica.to_string()),
+                                    Datum::UInt64(deployment),
+                                    Datum::UInt64(incarnation),
+                                ]);
+                                rows.insert(id, row.clone());
+                                Some(TimestamplessUpdate {
+                                    row,
+                                    diff: Diff::ONE,
+                                })
+                            } else {
+                                rows.remove(&id).map(|row| TimestamplessUpdate {
+                                    row,
+                                    diff: -Diff::ONE,
+                                })
+                            };
+                            if let Some(update) = update {
+                                batches
+                                    .entry(IntrospectionType::StorageStatuses)
+                                    .or_default()
+                                    .push(update);
                             }
                         }
                     }
@@ -189,6 +233,16 @@ impl History {
     pub fn record(&self, event: StatusEvent, current: bool) {
         self.tx
             .send(Publication::Transition { event, current })
+            .expect("replica status history writer is alive");
+    }
+
+    /// Publishes only current health for a desired sink whose Persist output upper
+    /// is empty. A recovery requirement or compaction permission alone is not proof.
+    /// The catalog-following owner retracts this observation when placement or the
+    /// definition changes. Neither operation manufactures a historical transition.
+    pub fn completed_sink(&self, id: GlobalId, present: bool) {
+        self.tx
+            .send(Publication::CompletedSink { id, present })
             .expect("replica status history writer is alive");
     }
 }
@@ -302,8 +356,8 @@ mod tests {
             let mut readers = BTreeMap::new();
             for (kind, desc) in [
                 (
-                    IntrospectionType::SourceStatusHistory,
-                    MZ_SOURCE_STATUS_HISTORY_DESC.clone(),
+                    IntrospectionType::SinkStatusHistory,
+                    MZ_SINK_STATUS_HISTORY_DESC.clone(),
                 ),
                 (
                     IntrospectionType::StorageStatuses,
@@ -335,7 +389,7 @@ mod tests {
             let event = |id, execution, at, status| StatusEvent {
                 owner: id,
                 execution: Some(execution),
-                history: IntrospectionType::SourceStatusHistory,
+                history: IntrospectionType::SinkStatusHistory,
                 update: StatusUpdate::new(id, mz_ore::now::to_datetime(at), status),
             };
             let target = GlobalId::User(1);
@@ -347,6 +401,12 @@ mod tests {
             // transition belongs in history, but cannot replace current health.
             publisher.record(event(target, 1, 30, Status::Starting), false);
             publisher.retire_execution(1);
+            let completed = GlobalId::User(3);
+            publisher.record(event(completed, 4, 5, Status::Running), true);
+            publisher.retire_execution(4);
+            publisher.completed_sink(completed, true);
+            publisher.completed_sink(completed, true);
+            publisher.retire_execution(4);
             publisher.record(event(witness, 3, 40, Status::Starting), true);
 
             let mut current = readers
@@ -383,6 +443,16 @@ mod tests {
                     .filter(|row| row.unpack()[1].unwrap_str() == target.to_string())
                     .collect();
                 if witness_status == "starting" {
+                    let completed_rows: Vec<_> = rows
+                        .keys()
+                        .filter(|row| row.unpack()[1].unwrap_str() == completed.to_string())
+                        .collect();
+                    assert_eq!(completed_rows.len(), 1);
+                    let values = completed_rows[0].unpack();
+                    assert_eq!(values[0], Datum::Null);
+                    assert_eq!(values[2].unwrap_str(), "running");
+                    assert_eq!(values[6], Datum::UInt64(7));
+                    assert_eq!(values[7], Datum::UInt64(42));
                     assert_eq!(target_rows.len(), 1);
                     let values = target_rows[0].unpack();
                     assert_eq!(values[2].unwrap_str(), "running");
@@ -392,6 +462,7 @@ mod tests {
                         Datum::TimestampTz(mz_ore::now::to_datetime(20).try_into().unwrap())
                     );
                     publisher.retire_execution(2);
+                    publisher.completed_sink(completed, false);
                     publisher.record(event(witness, 3, 50, Status::Running), true);
                 } else {
                     assert!(target_rows.is_empty());
@@ -399,13 +470,13 @@ mod tests {
                 }
             }
             let mut history = readers
-                .remove(&IntrospectionType::SourceStatusHistory)
+                .remove(&IntrospectionType::SinkStatusHistory)
                 .unwrap()
                 .subscribe(Antichain::from_elem(Timestamp::MIN))
                 .await
                 .unwrap();
             let mut historical_rows = Vec::new();
-            while historical_rows.len() < 5 {
+            while historical_rows.len() < 6 {
                 for event in history.fetch_next().await {
                     if let ListenEvent::Updates(updates) = event {
                         for ((data, ()), _, diff) in updates {
@@ -415,7 +486,7 @@ mod tests {
                     }
                 }
             }
-            assert_eq!(historical_rows.len(), 5);
+            assert_eq!(historical_rows.len(), 6);
             assert!(historical_rows.iter().any(|row| {
                 let values = row.unpack();
                 values[1].unwrap_str() == target.to_string()

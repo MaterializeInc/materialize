@@ -143,23 +143,23 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|
 
 /// Replica-owned current health, independent of historical-event retention.
 pub static MZ_STORAGE_STATUSES_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
-    MZ_SOURCE_STATUS_HISTORY_DESC
-        .clone()
-        .concat(
-            RelationDesc::builder()
-                .with_column("client_incarnation", SqlScalarType::UInt64.nullable(true))
-                .finish(),
-        )
-        .with_names([
+    RelationDesc::builder()
+        // Durable completion can establish current health without its event time.
+        .with_column(
             "occurred_at",
-            "id",
-            "status",
-            "error",
-            "details",
-            "replica_id",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("status", SqlScalarType::String.nullable(false))
+        .with_column("error", SqlScalarType::String.nullable(true))
+        .with_column("details", SqlScalarType::Jsonb.nullable(true))
+        .with_column("replica_id", SqlScalarType::String.nullable(true))
+        .with_column(
             "deployment_generation",
-            "client_incarnation",
-        ])
+            SqlScalarType::UInt64.nullable(true),
+        )
+        .with_column("client_incarnation", SqlScalarType::UInt64.nullable(true))
+        .finish()
 });
 
 pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC: LazyLock<RelationDesc> =

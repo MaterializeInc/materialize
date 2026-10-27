@@ -118,6 +118,7 @@ impl ReplicaEnactment {
 
     pub(super) fn retire_sinks_not_in(
         &mut self,
+        catalog: &Catalog,
         desired: &BTreeMap<GlobalId, StorageSinkDesc<()>>,
     ) {
         let dropped: Vec<_> = self
@@ -128,22 +129,34 @@ impl ReplicaEnactment {
             .copied()
             .collect();
         for id in dropped {
-            let old = self
-                .storage_state
-                .sinks
-                .remove(&id)
-                .expect("installed sink");
+            self.retire_sink(id);
+        }
+        self.storage_state
+            .completed_sinks
+            .retain(|id, (definition, shard)| {
+                let retain = desired.get(id) == Some(definition)
+                    && catalog
+                        .state()
+                        .storage_metadata()
+                        .collection_metadata
+                        .get(id)
+                        == Some(shard);
+                if !retain
+                    && let Some(history) =
+                        &self.io.storage.as_ref().expect("storage endpoint").history
+                {
+                    history.completed_sink(*id, false);
+                }
+                retain
+            });
+    }
+
+    fn retire_sink(&mut self, id: GlobalId) {
+        if let Some(old) = self.storage_state.sinks.remove(&id) {
             self.storage_state.starting.remove(&old.execution);
-            self.io
-                .storage
-                .as_ref()
-                .expect("storage endpoint")
-                .retire_statuses(old.execution);
-            self.io
-                .storage
-                .as_mut()
-                .expect("storage endpoint")
-                .endpoint
+            let io = self.io.storage.as_mut().expect("storage endpoint");
+            io.retire_statuses(old.execution);
+            io.endpoint
                 .send(StorageCommand::AllowCompaction(id, Antichain::new()));
         }
     }
@@ -165,7 +178,7 @@ impl ReplicaEnactment {
         self.ensure_live(catalog)?;
         self.apply_storage_progress();
         let desired = self.desired_sinks(catalog, cluster);
-        self.retire_sinks_not_in(&desired);
+        self.retire_sinks_not_in(catalog, &desired);
         let mut pending = false;
         for (id, definition) in desired {
             if self
@@ -184,13 +197,44 @@ impl ReplicaEnactment {
                 pending = true;
                 continue;
             };
+            if upper.is_empty() {
+                // Other grant acquisitions in this batch can catch up DDL. Only
+                // observe completion for the still-desired definition and shard.
+                if !self.has_output_write_authority(catalog)
+                    || current_sink_definition(catalog, cluster, id).as_ref() != Some(&definition)
+                    || (matches!(definition.connection, StorageSinkConnection::Kafka(_))
+                        && !self.kafka_eligible(catalog, cluster))
+                    || catalog
+                        .state()
+                        .storage_metadata()
+                        .collection_metadata
+                        .get(&id)
+                        != Some(&to_metadata.data_shard)
+                {
+                    pending = true;
+                    continue;
+                }
+                self.retire_sink(id);
+                if self
+                    .storage_state
+                    .completed_sinks
+                    .insert(id, (definition, to_metadata.data_shard))
+                    .is_none()
+                    && let Some(history) =
+                        &self.io.storage.as_ref().expect("storage endpoint").history
+                {
+                    history.completed_sink(id, true);
+                }
+                continue;
+            }
             let requirement = catalog
                 .state()
                 .maintained_read_requirements()
                 .get(&id)
                 .with_context(|| format!("sink {id} has no recovery requirement"))?;
             let Some(frontier) = requirement.frontier else {
-                // A terminal durable output has no remaining input to replay.
+                // No recovery reads are authorized. The requirement alone does
+                // not establish successful output completion.
                 continue;
             };
             let inputs = BTreeSet::from([definition.from]);
@@ -207,17 +251,7 @@ impl ReplicaEnactment {
                 .await?;
             // Grant publication can consume concurrent DDL. Do not combine its
             // current authority with a superseded definition or shard mapping.
-            let current = catalog.try_get_entry_by_global_id(&id).and_then(|entry| {
-                let CatalogItem::Sink(sink) = entry.item() else {
-                    return None;
-                };
-                (sink.cluster_id == cluster).then(|| {
-                    catalog
-                        .state()
-                        .storage_sink_description(sink, Antichain::from_elem(Timestamp::MIN))
-                        .0
-                })
-            });
+            let current = current_sink_definition(catalog, cluster, id);
             if current.as_ref() != Some(&definition)
                 || (matches!(definition.connection, StorageSinkConnection::Kafka(_))
                     && !self.kafka_eligible(catalog, cluster))
@@ -282,4 +316,22 @@ impl ReplicaEnactment {
         }
         Ok(pending || !self.storage_state.starting.is_empty())
     }
+}
+
+fn current_sink_definition(
+    catalog: &Catalog,
+    cluster: ClusterId,
+    id: GlobalId,
+) -> Option<StorageSinkDesc<()>> {
+    catalog.try_get_entry_by_global_id(&id).and_then(|entry| {
+        let CatalogItem::Sink(sink) = entry.item() else {
+            return None;
+        };
+        (sink.cluster_id == cluster).then(|| {
+            catalog
+                .state()
+                .storage_sink_description(sink, Antichain::from_elem(Timestamp::MIN))
+                .0
+        })
+    })
 }

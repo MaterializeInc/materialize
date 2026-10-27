@@ -7477,6 +7477,12 @@ def workflow_test_constant_sink(c: Composition) -> None:
             Service("testdrive", idle=True),
         )
 
+        # This test synchronizes on recovery publication before restarting.
+        c.sql(
+            "ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'",
+            port=6877,
+            user="mz_system",
+        )
         c.testdrive(dedent("""
                 > CREATE CLUSTER test SIZE 'scale=1,workers=1';
 
@@ -7508,10 +7514,26 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 running
                 """))
 
+        c.testdrive(
+            dedent("""
+                > SELECT count(*)
+                  FROM mz_internal.mz_catalog_shared
+                  WHERE data->>'kind' = 'MaintainedReadRequirement'
+                    AND mz_internal.parse_catalog_id(data->'key'->'id') =
+                        (SELECT id FROM mz_sinks WHERE name = 'snk')
+                    AND data->'value'->'frontier' = 'null'::jsonb
+                1
+                """),
+            args=["--materialize-url=postgres://mz_system@materialized:6877"],
+        )
+        history_count = c.sql_query(
+            "SELECT count(*) FROM mz_internal.mz_sink_status_history h "
+            "JOIN mz_sinks s ON s.id = h.sink_id WHERE s.name = 'snk'"
+        )[0][0]
         c.kill("materialized")
         c.up("materialized")
 
-        c.testdrive(dedent("""
+        c.testdrive(dedent(f"""
                 > SELECT write_frontier
                   FROM mz_internal.mz_frontiers
                   JOIN mz_sinks ON id = object_id
@@ -7522,7 +7544,20 @@ def workflow_test_constant_sink(c: Composition) -> None:
                   FROM mz_internal.mz_sink_statuses
                   WHERE name = 'snk'
                 running
+
+                > SELECT count(*) FROM mz_internal.mz_sink_status_history h
+                  JOIN mz_sinks s ON s.id = h.sink_id WHERE s.name = 'snk'
+                {history_count}
+
+                > SELECT last_status_change_at FROM mz_internal.mz_sink_statuses
+                  WHERE name = 'snk'
+                <null>
                 """))
+        c.sql(
+            "ALTER SYSTEM RESET catalog_read_protection_publish_interval",
+            port=6877,
+            user="mz_system",
+        )
 
 
 def workflow_test_memory_limiter(c: Composition) -> None:
