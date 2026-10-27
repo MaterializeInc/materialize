@@ -53,7 +53,7 @@ INSERT INTO numbers VALUES (1, true, 'one');
 $ set-regex match=(\d{1,3}\.){3}\d{1,3} replacement=(HOST)
 
 # server: host, client: disable => OK
-> CREATE CONNECTION pgconn TO POSTGRES ( (
+> CREATE CONNECTION pgconn TO POSTGRES (
   HOST postgres,
   USER host,
   SSL MODE disable,
