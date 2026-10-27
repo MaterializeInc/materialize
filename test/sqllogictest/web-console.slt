@@ -88,7 +88,9 @@ EOF
 # Reset server to clear mz_object_history
 reset-server
 
-# Mock audit log timestamps to make test deterministic
+# Mock audit log timestamps to make test deterministic. This timestamp is far
+# in the past, so drop events recorded with it are already outside the retention
+# window of the audit-derived views.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET unsafe_mock_audit_event_timestamp = 666
 ----
@@ -97,14 +99,36 @@ COMPLETE 0
 statement ok
 CREATE MATERIALIZED VIEW temp_view AS SELECT 1;
 
+statement ok
+CREATE TABLE kept_table (a int);
 
 statement ok
 DROP MATERIALIZED VIEW temp_view;
 
+# Objects that exist are listed whatever their age; the dropped view aged out.
 query TTTTT
 SELECT id, cluster_id, object_type, created_at, dropped_at FROM mz_internal.mz_object_history WHERE id LIKE 'u%';
 ----
-u1  u1  materialized-view  1970-01-01␠00:00:00.666+00  1970-01-01␠00:00:00.666+00
+u2  NULL  table  1970-01-01␠00:00:00.666+00  NULL
+
+# This timestamp is far in the future, so drop events recorded with it stay
+# within the retention window.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_mock_audit_event_timestamp = 4102444800000
+----
+COMPLETE 0
+
+statement ok
+CREATE MATERIALIZED VIEW temp_view2 AS SELECT 1;
+
+statement ok
+DROP MATERIALIZED VIEW temp_view2;
+
+query TTTTT
+SELECT id, cluster_id, object_type, created_at, dropped_at FROM mz_internal.mz_object_history WHERE id LIKE 'u%' ORDER BY id;
+----
+u2  NULL  table  1970-01-01␠00:00:00.666+00  NULL
+u3  u1  materialized-view  2100-01-01␠00:00:00+00  2100-01-01␠00:00:00+00
 
 # ---- mz_cluster_replica_name_history
 
@@ -122,3 +146,15 @@ weewoo1  weewoo2
 
 statement ok
 DROP CLUSTER foo;
+
+# Replicas dropped within the retention window keep their history.
+query TT rowsort
+SELECT previous_name, new_name FROM mz_internal.mz_cluster_replica_name_history WHERE new_name = 'weewoo1' OR new_name = 'weewoo2';
+----
+NULL  weewoo1
+weewoo1  weewoo2
+
+query TTB
+SELECT cluster_name, replica_name, dropped_at IS NOT NULL FROM mz_internal.mz_cluster_replica_history WHERE cluster_name = 'foo';
+----
+foo  weewoo1  true

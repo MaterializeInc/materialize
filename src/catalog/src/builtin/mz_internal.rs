@@ -41,6 +41,14 @@ use super::{
     SUPPORT_SELECT,
 };
 
+/// How much history the indexed views over `mz_audit_events` keep: events
+/// older than this, and objects dropped longer ago than this, age out.
+/// Bounds the arrangements those views maintain on `mz_catalog_server`,
+/// which otherwise grow with the audit log. Equals the default retention of
+/// `mz_cluster_replica_metrics_history`, so every retained metrics sample
+/// still resolves to a row in `mz_cluster_replica_history`.
+const AUDIT_HISTORY_RETENTION: &str = "30 days";
+
 pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_catalog_raw",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4411,7 +4419,9 @@ SELECT id, global_id FROM introspection_source_indexes"
         }),
     });
 
-// TODO (SangJunBak): Remove once mz_object_history is released and used in the Console https://github.com/MaterializeInc/console/issues/3342
+// TODO: Remove once the Console no longer reads it. The Console reads item
+// creation times from `mz_object_history` and only database and schema
+// creation times from here.
 pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_lifetimes",
     schema: MZ_INTERNAL_SCHEMA,
@@ -4442,7 +4452,9 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
             "Wall-clock timestamp of when the event occurred.",
         ),
     ]),
-    sql: "
+    sql: Box::leak(
+        format!(
+            "
     SELECT
         CASE
             WHEN a.object_type = 'cluster-replica' THEN a.details ->> 'replica_id'
@@ -4453,7 +4465,12 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
         a.event_type,
         a.occurred_at
     FROM mz_catalog.mz_audit_events a
-    WHERE a.event_type = 'create' OR a.event_type = 'drop'",
+    WHERE (a.event_type = 'create' OR a.event_type = 'drop')
+        AND mz_now() <= a.occurred_at + INTERVAL '{retention}'",
+            retention = AUDIT_HISTORY_RETENTION,
+        )
+        .into_boxed_str(),
+    ),
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "object_lifetime_event",
@@ -4479,7 +4496,8 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     }),
 });
 
-pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
     name: "mz_object_history",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_OBJECT_HISTORY_OID,
@@ -4515,7 +4533,9 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
             "Wall-clock timestamp of when the object was dropped. `NULL` for built in system objects or if the object hasn't been dropped.",
         ),
     ]),
-    sql: r#"
+    sql: Box::leak(
+        format!(
+            r#"
     WITH
         creates AS
         (
@@ -4524,7 +4544,8 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
                 -- We need to backfill cluster_id since older object create events don't include the cluster ID in the audit log
                 COALESCE(details ->> 'cluster_id', objects.cluster_id) AS cluster_id,
                 object_type,
-                occurred_at
+                occurred_at,
+                objects.id IS NOT NULL AS live
             FROM
                 mz_catalog.mz_audit_events AS events
                     LEFT JOIN mz_catalog.mz_objects AS objects ON details ->> 'id' = objects.id
@@ -4535,16 +4556,27 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
             SELECT details ->> 'id' AS id, occurred_at
             FROM mz_catalog.mz_audit_events
             WHERE event_type = 'drop' AND object_type IN ( SELECT object_type FROM mz_internal.mz_objects_id_namespace_types )
+                AND mz_now() <= occurred_at + INTERVAL '{retention}'
         ),
+        -- Objects that exist, plus objects dropped within the retention window.
         user_object_history AS
         (
+            SELECT
+                id,
+                cluster_id,
+                object_type,
+                occurred_at AS created_at,
+                NULL::timestamptz AS dropped_at
+            FROM creates
+            WHERE id LIKE 'u%' AND live
+            UNION ALL
             SELECT
                 creates.id,
                 creates.cluster_id,
                 creates.object_type,
                 creates.occurred_at AS created_at,
                 drops.occurred_at AS dropped_at
-            FROM creates LEFT JOIN drops ON creates.id = drops.id
+            FROM creates JOIN drops ON creates.id = drops.id
             WHERE creates.id LIKE 'u%'
         ),
         -- We need to union built in objects since they aren't in the audit log
@@ -4561,6 +4593,10 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
             WHERE objects.id LIKE 's%'
         )
     SELECT * FROM user_object_history UNION ALL (SELECT * FROM built_in_objects)"#,
+            retention = AUDIT_HISTORY_RETENTION,
+        )
+        .into_boxed_str(),
+    ),
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "object_history",
@@ -4574,6 +4610,7 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
         },
         column_semantic_types: &[("id", SemanticType::CatalogItemId)],
     }),
+}
 });
 
 pub static MZ_OBJECT_TRANSITIVE_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::new(|| {
@@ -7669,7 +7706,9 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
             "The number of compute credits consumed per hour. Corresponds to `mz_cluster_replica_sizes.credits_per_hour`.",
         ),
     ]),
-    sql: r#"
+    sql: Box::leak(
+        format!(
+            r#"
         WITH
             creates AS
             (
@@ -7688,11 +7727,18 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
                         AND
                     details ->> 'cluster_id' !~~ 's%'
             ),
-            drops AS
+            -- Replicas that exist, plus replicas dropped within the retention window.
+            lifetimes AS
             (
-                SELECT details ->> 'replica_id' AS replica_id, occurred_at
+                SELECT id AS replica_id, NULL::timestamptz AS dropped_at
+                FROM mz_catalog.mz_cluster_replicas
+                UNION ALL
+                SELECT details ->> 'replica_id' AS replica_id, occurred_at AS dropped_at
                 FROM mz_catalog.mz_audit_events
-                WHERE object_type = 'cluster-replica' AND event_type = 'drop'
+                WHERE
+                    object_type = 'cluster-replica' AND event_type = 'drop'
+                        AND
+                    mz_now() <= occurred_at + INTERVAL '{retention}'
             )
         SELECT
             creates.replica_id,
@@ -7701,14 +7747,18 @@ pub static MZ_CLUSTER_REPLICA_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| 
             creates.cluster_name,
             creates.replica_name,
             creates.occurred_at AS created_at,
-            drops.occurred_at AS dropped_at,
+            lifetimes.dropped_at,
             mz_cluster_replica_sizes.credits_per_hour as credits_per_hour
         FROM
             creates
-                LEFT JOIN drops ON creates.replica_id = drops.replica_id
+                JOIN lifetimes ON creates.replica_id = lifetimes.replica_id
                 LEFT JOIN
                     mz_catalog.mz_cluster_replica_sizes
                     ON mz_cluster_replica_sizes.size = creates.size"#,
+            retention = AUDIT_HISTORY_RETENTION,
+        )
+        .into_boxed_str(),
+    ),
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "replica_history",
@@ -7743,7 +7793,9 @@ pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::ne
         ),
         ("new_name", "The new name of the cluster replica."),
     ]),
-    sql: r#"WITH user_replica_alter_history AS (
+    sql: Box::leak(
+        format!(
+            r#"WITH user_replica_alter_history AS (
   SELECT occurred_at,
     audit_events.details->>'replica_id' AS id,
     audit_events.details->>'old_name' AS previous_name,
@@ -7763,6 +7815,17 @@ user_replica_create_history AS (
     AND audit_events.event_type = 'create'
     AND audit_events.details->>'replica_id' like 'u%'
 ),
+-- Replicas that exist, plus replicas dropped within the retention window.
+retained_replicas AS (
+  SELECT id
+  FROM mz_catalog.mz_cluster_replicas
+  UNION ALL
+  SELECT audit_events.details->>'replica_id' AS id
+  FROM mz_catalog.mz_audit_events AS audit_events
+  WHERE object_type = 'cluster-replica'
+    AND audit_events.event_type = 'drop'
+    AND mz_now() <= occurred_at + INTERVAL '{retention}'
+),
 -- Because built in system cluster replicas don't have audit events, we need to manually add them
 system_replicas AS (
   -- We assume that the system cluster replicas were created at the beginning of time
@@ -7773,14 +7836,22 @@ system_replicas AS (
   FROM mz_catalog.mz_cluster_replicas
   WHERE id LIKE 's%'
 )
-SELECT *
-FROM user_replica_alter_history
-UNION ALL
-SELECT *
-FROM user_replica_create_history
+SELECT history.occurred_at, history.id, history.previous_name, history.new_name
+FROM (
+  SELECT *
+  FROM user_replica_alter_history
+  UNION ALL
+  SELECT *
+  FROM user_replica_create_history
+) AS history
+  JOIN retained_replicas ON retained_replicas.id = history.id
 UNION ALL
 SELECT *
 FROM system_replicas"#,
+            retention = AUDIT_HISTORY_RETENTION,
+        )
+        .into_boxed_str(),
+    ),
     access: vec![PUBLIC_SELECT],
     ontology: Some(Ontology {
         entity_name: "replica_name_history",

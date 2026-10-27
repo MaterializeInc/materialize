@@ -327,7 +327,7 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 
 The `mz_cluster_replica_history` view contains information about the timespan of
 each replica, including the times at which it was created and dropped
-(if applicable).
+(if applicable). Dropped replicas remain in the view for 30 days.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_history -->
 | Field                 | Type                         | Meaning                                                                                                                                   |
@@ -343,7 +343,7 @@ each replica, including the times at which it was created and dropped
 
 ## `mz_cluster_replica_name_history`
 
-The `mz_cluster_replica_name_history` view contains historical information about names of each cluster replica.
+The `mz_cluster_replica_name_history` view contains historical information about names of each cluster replica. Dropped replicas remain in the view for 30 days.
 
 <!-- RELATION_SPEC mz_internal.mz_cluster_replica_name_history -->
 | Field                 | Type                         | Meaning                                                                                                                                   |
@@ -702,7 +702,7 @@ The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`
 
 ## `mz_object_lifetimes`
 
-The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with information about the last lifetime event that occurred for each object in the system.
+The `mz_object_lifetimes` view lists the `create` and `drop` events from [`mz_catalog.mz_audit_events`](/sql/system-catalog/mz_catalog/#mz_audit_events) that occurred within the last 30 days.
 
 <!-- RELATION_SPEC mz_internal.mz_object_lifetimes -->
 | Field           | Type                           | Meaning                                                                                                                                        |
@@ -715,7 +715,7 @@ The `mz_object_lifetimes` view enriches the [`mz_catalog.mz_objects`](/sql/syste
 
 ## `mz_object_history`
 
-The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with historical information about each object in the system.
+The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/sql/system-catalog/mz_catalog/#mz_objects) view with historical information about each object in the system. Dropped objects remain in the view for 30 days.
 
 <!-- RELATION_SPEC mz_internal.mz_object_history -->
 | Field           | Type                           | Meaning                                                                                                                                        |

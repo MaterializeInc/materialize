@@ -596,91 +596,62 @@ mz_internal.mz_cluster_replica_history_ind:
 mz_internal.mz_cluster_replica_history:
   →With
     cte l0 =
-      →Fused with Child Map/Filter/Project
-        Project: #0..=#2, #4
-          →Read mz_catalog.mz_audit_events
-  →Return
-    →Delta Join [%0:mz_audit_events[#1] » %1[#0] » %2[#0]] [%1[#0] » %0:mz_audit_events[#2] » %2[#0]] [%2[#0] » %0:mz_audit_events[#1] » %1[#0]]
-      path %0:
-        after %1:
-          Project: #1, #2, #0, #3..=#5, #8
-          Map: case when (#7) IS NULL then null else #6 end
-        after %2:
-          Project: #2, #0, #5, #4, #3, #1, #6, #9
-          Map: case when (#8) IS NULL then null else #7 end
-      path %1:
-        after %2:
-          Project: #2, #0, #5, #4, #3, #1, #6, #9
-          Map: case when (#8) IS NULL then null else #7 end
-      path %2:
-        after %1:
-          Project: #0, #2, #5, #4, #3, #1, #9, #6
-          Map: case when (#8) IS NULL then null else #7 end
-      →Arrange (#1) (#2)
-        →Fused with Child Map/Filter/Project
-          Project: #3, #6, #4, #7, #8, #5
-          Filter: (#0{event_type} = "create") AND (#1{object_type} = "cluster-replica") AND (#4) IS NOT NULL AND NOT(like["s%"](#5))
-          Map: (#2{details} ->> "cluster_id"), (#2{details} ->> "logical_size"), (#2{details} ->> "replica_name"), (#2{details} ->> "cluster_name")
-            →Read mz_catalog.mz_audit_events
-      →Arrange (#0)
-        →Union
+      →Differential Join %0:mz_audit_events[#2{replica_id}] » %1[#0{replica_id}]
+        →Arrange (#2{replica_id})
           →Fused with Child Map/Filter/Project
-            Project: #4, #3, #5
-            Filter: (#0{event_type} = "drop") AND (#1{object_type} = "cluster-replica") AND (#4) IS NOT NULL
-            Map: true
+            Project: #2, #5, #3, #6, #7, #4
+            Filter: (#0{event_type} = "create") AND NOT(like["s%"](#4))
+            Map: (#1{details} ->> "cluster_id"), (#1{details} ->> "logical_size"), (#1{details} ->> "replica_name"), (#1{details} ->> "cluster_name")
               →Read mz_catalog.mz_audit_events
-          →Map/Filter/Project
-            Project: #0..=#2
-            Map: null, null
-              →Threshold Diffs #0
-                →Arrange (#0)
-                  →Consolidating Union
-                    →Negate Diffs
-                      →Fused with Child Map/Filter/Project
-                        Project: #3
-                        Filter: (#0{event_type} = "drop") AND (#1{object_type} = "cluster-replica") AND (#3) IS NOT NULL
-                          →Read l0
-                    →Unarranged Raw Stream
-                      →Distinct GroupAggregate
-                        →Fused with Child Map/Filter/Project
-                          Project: #3
-                          Filter: (#0{event_type} = "create") AND (#1{object_type} = "cluster-replica") AND NOT(like["s%"]((#2{details} ->> "cluster_id"))) AND (#3) IS NOT NULL
-                            →Read l0
-      →Arrange (#0)
-        →Union
-          →Fused with Child Map/Filter/Project
-            Project: #0, #6, #7
-            Map: true
-              →Arranged mz_catalog.mz_cluster_replica_sizes
-                Key: (#0{size})
-          →Map/Filter/Project
-            Project: #0..=#2
-            Map: null, null
-              →Threshold Diffs #0
-                →Arrange (#0)
-                  →Consolidating Union
-                    →Negate Diffs
-                      →Fused with Child Map/Filter/Project
-                        Project: #0
-                          →Arranged mz_catalog.mz_cluster_replica_sizes
-                            Key: (#0{size})
-                    →Unarranged Raw Stream
-                      →Distinct GroupAggregate
-                        →Union
-                          →Fused with Child Map/Filter/Project
-                            Project: #5
-                            Filter: (#0{event_type} = "create") AND (#1{object_type} = "cluster-replica") AND NOT(like["s%"]((#2{details} ->> "cluster_id"))) AND (#4) IS NOT NULL
-                            Map: (#2{details} ->> "logical_size")
-                              →Read mz_catalog.mz_audit_events
-                          →Constant (1 row)
+        →Arrange (#0{replica_id})
+          →Union
+            →Fused with Child Map/Filter/Project
+              Project: #0, #7
+              Map: null
+                →Arranged mz_catalog.mz_cluster_replicas
+                  Key: (#0{id})
+            →Fused with Child Map/Filter/Project
+              Project: #3, #2
+              Filter: (#0{event_type} = "drop")
+              TemporalFilter: mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((#2{occurred_at} + 30 days)))
+                →Read mz_catalog.mz_audit_events
+    cte l1 =
+      →Arrange (#1{size})
+        →Fused with Child Map/Filter/Project
+          Filter: (#1{size}) IS NOT NULL
+            →Read l0
+    cte l2 =
+      →Differential Join %1:mz_cluster_replica_sizes[#0{size}] » %0:l1[#1{size}]
+        →Arranged l1
+        →Arranged mz_catalog.mz_cluster_replica_sizes
+  →Return
+    →Union
+      →Map/Filter/Project
+        Project: #1, #0, #4, #3, #2, #5..=#7
+        Map: null
+          →Consolidating Union
+            →Negate Diffs
+              →Differential Join %1[#0] » %0:l1[#1{size}]
+                →Arranged l1
+                →Distinct GroupAggregate
+                  →Fused with Child Map/Filter/Project
+                    Project: #1
+                      →Read l2
+            →Fused with Child Map/Filter/Project
+              Project: #1..=#5, #0, #6
+                →Read l0
+      →Fused with Child Map/Filter/Project
+        Project: #2, #1, #5, #4, #3, #0, #6, #7
+          →Read l2
 
 Source mz_catalog.mz_audit_events
-  project=(#1..=#3, #5, #6)
+  project=(#1, #3, #5, #6)
   filter=((#2{object_type} = "cluster-replica") AND (#6) IS NOT NULL)
   map=((#3{details} ->> "replica_id"))
 
 Used Indexes:
-  - mz_catalog.mz_cluster_replica_sizes_ind (*** full scan ***)
+  - mz_catalog.mz_cluster_replicas_ind (*** full scan ***)
+  - mz_catalog.mz_cluster_replica_sizes_ind (differential join)
 
 Target cluster: mz_catalog_server
 
@@ -734,16 +705,30 @@ mz_internal.mz_cluster_replica_name_history_ind:
 
 mz_internal.mz_cluster_replica_name_history:
   →Union
-    →Fused with Child Map/Filter/Project
-      Project: #2..=#5
-      Filter: (#0{event_type} = "alter")
-      Map: (#1{details} ->> "old_name"), (#1{details} ->> "new_name")
-        →Read mz_catalog.mz_audit_events
-    →Fused with Child Map/Filter/Project
-      Project: #2, #3, #5, #4
-      Filter: (#0{event_type} = "create")
-      Map: (#1{details} ->> "replica_name"), null
-        →Read mz_catalog.mz_audit_events
+    →Differential Join %0[#1{id}] » %1[#0{id}]
+      →Arrange (#1{id})
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #2, #4..=#6
+            Filter: (#0{event_type} = "alter") AND like["u%"](#3)
+            Map: (#1{details} ->> "old_name"), (#1{details} ->> "new_name")
+              →Read mz_catalog.mz_audit_events
+          →Fused with Child Map/Filter/Project
+            Project: #2, #4, #6, #5
+            Filter: (#0{event_type} = "create") AND like["u%"](#3)
+            Map: (#1{details} ->> "replica_name"), null
+              →Read mz_catalog.mz_audit_events
+      →Arrange (#0{id})
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #0
+              →Arranged mz_catalog.mz_cluster_replicas
+                Key: (#0{id})
+          →Fused with Child Map/Filter/Project
+            Project: #4
+            Filter: (#0{event_type} = "drop") AND (#3) IS NOT NULL
+            TemporalFilter: mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((#2{occurred_at} + 30 days)))
+              →Read mz_catalog.mz_audit_events
     →Fused with Child Map/Filter/Project
       Project: #7, #0, #8, #1
       Filter: like["s%"](#0{id})
@@ -752,8 +737,8 @@ mz_internal.mz_cluster_replica_name_history:
           Key: (#0{id})
 
 Source mz_catalog.mz_audit_events
-  project=(#1, #3, #5, #6)
-  filter=((#2{object_type} = "cluster-replica") AND like["u%"](#6))
+  project=(#1, #3, #5, #6, #6)
+  filter=((#2{object_type} = "cluster-replica"))
   map=((#3{details} ->> "replica_id"))
 
 Used Indexes:
@@ -1703,13 +1688,13 @@ mz_internal.mz_object_history:
     cte l3 =
       →Differential Join %1:l2[#0] » %0[#0]
         after %0:
-          Project: #0, #2, #4, #5
-          Map: (#1{details} ->> "id"), coalesce((#1{details} ->> "cluster_id"), #3{cluster_id})
+          Project: #0, #2, #5..=#7
+          Map: (#1{details} ->> "id"), coalesce((#1{details} ->> "cluster_id"), #4{cluster_id}), (#3{id}) IS NOT NULL
         →Arrange (#0)
           →Union
             →Map/Filter/Project
-              Project: #0..=#3
-              Map: null
+              Project: #0..=#4
+              Map: null, null
                 →Consolidating Union
                   →Negate Diffs
                     →Differential Join %1[#0] » %0:l1[(#1{details} ->> "id")]
@@ -1721,41 +1706,29 @@ mz_internal.mz_object_history:
                             →Read l0
                   →Stream l1
             →Fused with Child Map/Filter/Project
-              Project: #1..=#3, #5
+              Project: #1..=#5
               Filter: (#0{event_type} = "create")
                 →Read l0
         →Arranged l2
-    cte l4 =
-      →Arrange (#2{id})
-        →Stream l3
-    cte l5 =
-      →Delta Join [%0:l4[#2{id}] » %1:mz_audit_events[(#1{details} ->> "id")] » %2:l2[#0]] [%1:mz_audit_events[#0] » %2:l2[#0] » %0:l4[#2{id}]] [%2:l2[#0] » %1:mz_audit_events[#0] » %0:l4[#2{id}]]
-        →Arranged l4
+  →Return
+    →Union
+      →Fused with Child Map/Filter/Project
+        Project: #2, #3, #0, #1, #5
+        Filter: #4{live}
+        Map: null
+          →Read l3
+      →Delta Join [%0:l3[#2{id}] » %1:mz_audit_events[(#1{details} ->> "id")] » %2:l2[#0]] [%1:mz_audit_events[#0] » %2:l2[#0] » %0:l3[#2{id}]] [%2:l2[#0] » %1:mz_audit_events[#0] » %0:l3[#2{id}]]
+        →Arrange (#2{id})
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#3
+              →Read l3
         →Arrange (#0) ((#1{details} ->> "id"))
           →Fused with Child Map/Filter/Project
             Project: #1..=#3
             Filter: (#0{event_type} = "drop")
+            TemporalFilter: mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((#3{occurred_at} + 30 days)))
               →Read mz_catalog.mz_audit_events
         →Arranged l2
-  →Return
-    →Union
-      →Map/Filter/Project
-        Project: #0..=#4
-        Map: null
-          →Consolidating Union
-            →Negate Diffs
-              →Differential Join %1[#0] » %0:l4[#2{id}]
-                →Arranged l4
-                →Distinct GroupAggregate
-                  →Fused with Child Map/Filter/Project
-                    Project: #2
-                      →Read l5
-            →Fused with Child Map/Filter/Project
-              Project: #2, #3, #0, #1
-                →Read l3
-      →Fused with Child Map/Filter/Project
-        Project: #2, #3, #0, #1, #4
-          →Read l5
       →Map/Filter/Project
         Project: #0, #2, #1, #3, #3
         Map: null
@@ -1791,7 +1764,7 @@ mz_internal.mz_object_lifetimes:
 
 Source mz_catalog.mz_audit_events
   project=(#6, #7, #2, #1, #5)
-  filter=(((#1{event_type} = "drop") OR (#1{event_type} = "create")))
+  filter=(((#1{event_type} = "drop") OR (#1{event_type} = "create")) AND (mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((#5{occurred_at} + 30 days)))))
   map=((#3{details} ->> case when (#2{object_type} = "cluster-replica") then "replica_id" else "id" end), (#3{details} ->> "previous_id"))
 
 Target cluster: mz_catalog_server
@@ -6012,7 +5985,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1064 rows)
+            →Constant (1070 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -10556,7 +10529,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1064 rows)
+            →Constant (1070 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
