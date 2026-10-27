@@ -144,6 +144,7 @@ pub struct Config {
     pub default_certificate_specs: DefaultCertificateSpecs,
 
     pub disable_license_key_checks: bool,
+    pub license_key_intermediate_certs: Vec<String>,
     pub disable_database_network_policies: bool,
 
     pub tracing: TracingCliArgs,
@@ -374,6 +375,7 @@ impl k8s_controller::Context for Context {
                 str::from_utf8(&license_key.0)
                     .context("invalid utf8")?
                     .trim(),
+                &self.config.license_key_intermediate_certs,
             )?;
             let environment_id = license_key
                 .environment_id

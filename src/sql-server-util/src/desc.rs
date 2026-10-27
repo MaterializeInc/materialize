@@ -62,6 +62,11 @@ pub struct SqlServerTableDesc {
     /// Columns for the table.
     pub columns: Box<[SqlServerColumnDesc]>,
     /// Constraints for the table.
+    ///
+    /// For new instances, it only holds the constraint backing the capture
+    /// instance's index. SQL Server rejects dropping that index while
+    /// the capture instance is the table's newest one, so we have some
+    /// protection against a dropped constraint.
     pub constraints: Vec<SqlServerTableConstraint>,
 }
 
@@ -70,6 +75,10 @@ impl SqlServerTableDesc {
     ///
     /// Note: Not all columns from SQL Server can be ingested into Materialize. To determine if a
     /// column is supported see [`SqlServerColumnDesc::decode_type`].
+    ///
+    /// Of `raw_constraints`, only the one backing the capture instance's index
+    /// is kept, see [`SqlServerTableDesc::constraints`]. A PRIMARY KEY or
+    /// UNIQUE constraint and the index enforcing it share a name.
     pub fn new(
         raw: SqlServerTableRaw,
         raw_constraints: Vec<SqlServerTableConstraintRaw>,
@@ -79,8 +88,10 @@ impl SqlServerTableDesc {
             .into_iter()
             .map(SqlServerColumnDesc::new)
             .collect();
+        let index_name = raw.capture_instance.index_name.as_deref();
         let constraints = raw_constraints
             .into_iter()
+            .filter(|constraint| Some(constraint.constraint_name.as_str()) == index_name)
             .map(SqlServerTableConstraint::try_from)
             .collect::<Result<Vec<_>, _>>()?;
         Ok(SqlServerTableDesc {
@@ -284,6 +295,10 @@ pub struct SqlServerCaptureInstanceRaw {
     pub name: Arc<str>,
     /// The creation date of the capture instance.
     pub create_date: Arc<NaiveDateTime>,
+    /// Name of the unique index SQL Server uses to identify rows in the
+    /// change table (`cdc.change_tables.index_name`). `None` when the source
+    /// table had no primary key when CDC was enabled and no index was given.
+    pub index_name: Option<Arc<str>>,
 }
 
 /// Description of a column from a table in Microsoft SQL Server.
@@ -1292,7 +1307,8 @@ mod tests {
 
     use crate::desc::{
         SqlServerCaptureInstanceRaw, SqlServerColumnDecodeType, SqlServerColumnDesc,
-        SqlServerTableDesc, SqlServerTableRaw, tiberius_numeric_to_mz_numeric,
+        SqlServerTableConstraintRaw, SqlServerTableConstraintType, SqlServerTableDesc,
+        SqlServerTableRaw, tiberius_numeric_to_mz_numeric,
     };
 
     use super::SqlServerColumnRaw;
@@ -1382,6 +1398,58 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn only_capture_instance_index_constraint_is_kept() {
+        fn table_desc(index_name: Option<&str>) -> SqlServerTableDesc {
+            let raw = SqlServerTableRaw {
+                schema_name: "dbo".into(),
+                name: "t".into(),
+                capture_instance: Arc::new(SqlServerCaptureInstanceRaw {
+                    name: "dbo_t".into(),
+                    create_date: NaiveDateTime::default().into(),
+                    index_name: index_name.map(Into::into),
+                }),
+                columns: [
+                    SqlServerColumnRaw::new("id", "int"),
+                    SqlServerColumnRaw::new("code", "int"),
+                ]
+                .into(),
+            };
+            let constraints = vec![
+                SqlServerTableConstraintRaw {
+                    constraint_name: "pk_t".into(),
+                    constraint_type: "PRIMARY KEY".into(),
+                    columns: vec!["id".into()],
+                },
+                SqlServerTableConstraintRaw {
+                    constraint_name: "uq_t".into(),
+                    constraint_type: "UNIQUE".into(),
+                    columns: vec!["code".into()],
+                },
+            ];
+            SqlServerTableDesc::new(raw, constraints).unwrap()
+        }
+
+        let desc = table_desc(Some("pk_t"));
+        let constraint = desc.constraints.into_element();
+        assert_eq!(constraint.constraint_name, "pk_t");
+        assert_eq!(
+            constraint.constraint_type,
+            SqlServerTableConstraintType::PrimaryKey
+        );
+
+        let desc = table_desc(Some("uq_t"));
+        let constraint = desc.constraints.into_element();
+        assert_eq!(constraint.constraint_name, "uq_t");
+        assert_eq!(
+            constraint.constraint_type,
+            SqlServerTableConstraintType::Unique
+        );
+
+        assert!(table_desc(None).constraints.is_empty());
+        assert!(table_desc(Some("ix_t")).constraints.is_empty());
+    }
+
+    #[mz_ore::test]
     fn smoketest_decoder() {
         let sql_server_columns = [
             SqlServerColumnRaw::new("a", "varchar").max_length(16),
@@ -1399,6 +1467,7 @@ mod tests {
                 )
                 .unwrap()
                 .into(),
+                index_name: None,
             }),
             columns: sql_server_columns.into(),
         };
@@ -1483,6 +1552,7 @@ mod tests {
                 )
                 .unwrap()
                 .into(),
+                index_name: None,
             }),
             columns: sql_server_columns.into(),
         };
@@ -1660,6 +1730,7 @@ mod tests {
                     )
                     .unwrap()
                     .into(),
+                    index_name: None,
                 }),
                 columns: columns.into(),
             };

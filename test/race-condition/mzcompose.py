@@ -796,21 +796,17 @@ class MaterializedView(Object):
                 > ALTER MATERIALIZED VIEW {self.name} RENAME TO {self.name}_tmp_mv
                 > ALTER MATERIALIZED VIEW {self.name}_tmp_mv RENAME TO {self.name}
 """),
-            # TODO: Also apply the replacement, guarded by `can_seal` like the
-            # replacement below, since APPLY REPLACEMENT rejects sealed targets.
-            # lambda: dedent(
-            #     f"""
-            #     > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
-            #     > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
-            #     > ALTER MATERIALIZED VIEW {self.name} APPLY REPLACEMENT {self.name}_replacement
-            #     """
-            # ),
         ]
         if not self.can_seal():
             manipulations.append(lambda: dedent(f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
                 > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
                 > DROP MATERIALIZED VIEW {self.name}_replacement
+                """))
+            manipulations.append(lambda: dedent(f"""
+                > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
+                > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
+                > ALTER MATERIALIZED VIEW {self.name} APPLY REPLACEMENT {self.name}_replacement
                 """))
         return manipulations[kind % len(manipulations)]()
 

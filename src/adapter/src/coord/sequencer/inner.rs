@@ -238,10 +238,9 @@ impl Coordinator {
             } else {
                 cancel_enabled = false
             };
-            let next = stage
-                .stage(self, &mut ctx)
-                .instrument(parent_span.clone())
-                .await;
+            // Stage implementations can contain large optimizer and DDL futures.
+            // Keep that state out of the generic plan dispatcher's allocation.
+            let next = Box::pin(stage.stage(self, &mut ctx).instrument(parent_span.clone())).await;
             let res = return_if_err!(next, ctx);
             stage = match res {
                 StageResult::Handle(handle) => {
@@ -2113,7 +2112,7 @@ impl Coordinator {
         }
     }
 
-    #[instrument]
+    #[instrument(level = "debug")]
     pub(super) async fn sequence_end_transaction(
         &mut self,
         mut ctx: ExecuteContext,
@@ -2175,9 +2174,11 @@ impl Coordinator {
                     num_requeues: 0,
                     otel_ctx: OpenTelemetryContext::obtain(),
                 };
-                self.strict_serializable_reads_tx
-                    .send((conn_id, pending_read_txn))
-                    .expect("sending to strict_serializable_reads_tx cannot fail");
+                if let Some(pending_read_txn) = pending_read_txn.try_finish_read(&self.metrics) {
+                    self.strict_serializable_reads_tx
+                        .send((conn_id, pending_read_txn))
+                        .expect("sending to strict_serializable_reads_tx cannot fail");
+                }
                 return;
             }
             Ok(Some(TransactionOps::Peeks {
@@ -2218,7 +2219,7 @@ impl Coordinator {
         ctx.retire(response);
     }
 
-    #[instrument]
+    #[instrument(level = "debug")]
     async fn sequence_end_transaction_inner(
         &mut self,
         ctx: &mut ExecuteContext,
