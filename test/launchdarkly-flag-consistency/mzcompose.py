@@ -62,8 +62,8 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-import launchdarkly_api  # type: ignore
-from launchdarkly_api.api import feature_flags_api  # type: ignore
+import launchdarkly_api
+from launchdarkly_api.api import feature_flags_api
 
 from materialize.mzcompose.composition import (
     Composition,
@@ -661,7 +661,7 @@ def ld_served_default(flag: dict[str, Any], environment: str) -> Any | None:
     if env.get("on"):
         index = (env.get("fallthrough") or {}).get("variation")
     else:
-        index = env.get("off_variation")
+        index = env.get("offVariation")
     if index is None or not (0 <= index < len(variations)):
         return None
     return variations[index].get("value")
@@ -684,7 +684,7 @@ def launchdarkly_flag_tags(api: Any) -> dict[str, list[str]]:
         items = page.get("items") or []
         for flag in items:
             flags[flag["key"]] = list(flag.get("tags") or [])
-        total = page.get("total_count")
+        total = page.get("totalCount")
         offset += len(items)
         if not items or (total is not None and offset >= total):
             break
