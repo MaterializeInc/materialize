@@ -92,21 +92,33 @@ These components have focused verification, not combined M3 acceptance.
   test-local and reset afterward. Evidence and reviews: `ci140735/completed-sink-*`.
   The exact SHOW inventory assertion was reproduced and passes with the added
   private source expectation in `3a4b5472`. The full catalog.td file was not rerun.
-- Worker `i-0788036f0778687f1` is clean on `22596f15`, tree-identical to published
-  `82c8c684`, with no build running. Retained fixtures are stopped with data
-  preserved. Last checked free space is 6 GiB. Audited cache/image cleanup and
-  verification logs are preserved in `retired-rows/followup-verification.tar.gz`.
-  Use focused builds and check disk before starting one. Local formatting uses
-  `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`.
-- The remaining status/session check is rebuilt-product CI140847 on `82c8c684`:
-  Testdrive 4 for unavailable terminal-source health and Cluster 4 for the
-  abandoned-session restart witness. Its x86 build is confirmed running, with
-  those workflows waiting. Do not count them as passed. Current-status cleanup
-  already passed the strengthened restart workflow in CI140837. Retirement
-  eligibility has seven focused tests and independent review, and the conditional
-  Persist reader/writer boundary has five passing tests including competing
-  collectors and late signed updates. Evidence: `retirement-eligibility/`,
-  `retired-rows/`, `session-cleanup-ownership-review.md`.
+- Worker `i-0788036f0778687f1` is on `43f8dc48`, published `82c8c684` plus
+  the session-fixture correction only. A corrected full Cluster 4 rerun is active under `m3-session-ci140847` and `mzrepro.slice`.
+  Do not sync source while it runs. Worker-only research edits select that
+  project and reject accidental builds. Free space is 3.3 GiB.
+  Output: `~/m3-evidence/ci140847-cluster4-fixed.log`.
+  Local formatting uses `RUSTUP_TOOLCHAIN=1.98.1 bin/fmt`.
+- CI140847 finished. Testdrive 4 passed, verifying unavailable terminal-source
+  health on the rebuilt product. Cluster 4 failed before the abandoned-session
+  restart: its witness used `mz_session_id()`, which identifies the process,
+  not the SQL session. The fixture correction in `98df7ff1` selects the session UUID
+  through `mz_sessions.connection_id = pg_backend_pid()`. The exact original
+  shard command reproduced the failure. The corrected constant-sink workflow
+  passes, including physical session removal, successor session preservation,
+  completed-sink health and sanity restart, with unchanged 20s deadlines under
+  the aggregate 8-CPU/16-GiB budget. The corrected full shard rerun is pending. Cluster 1 repeated the MV-frontier failure. SLT 4 has two
+  status EXPLAIN mismatches. Upgrade conversion and merge skew remain excluded.
+  Logs and annotations: `ci140847/README.txt`. Reproduction and passing
+  fixture logs: `ci140847/session-fixture/{exact-repeat,fixed}.log`.
+- Runtime registration certification is committed at `05a4c836`, but its strict
+  Clippy run failed on a missing `GlobalId` import. The uncommitted correction
+  includes that import and rejects non-writable certification. Neither the
+  correction nor the committer boundary has completed verification.
+  Current-status cleanup already passed the strengthened restart in CI140837.
+  Retirement eligibility has seven focused tests and independent review, and
+  the conditional Persist reader/writer boundary has five passing tests.
+  Evidence: `retirement-eligibility/`, `retired-rows/`,
+  `session-cleanup-ownership-review.md`.
 - After focused status/session verification and the bounded registration repair,
   prioritize one controllerd-managed default adapterd with external pubsub.
   Independent adapters, SQL/HTTP lifecycle and backend/deployment integration
