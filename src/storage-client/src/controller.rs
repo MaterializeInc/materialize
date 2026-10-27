@@ -748,7 +748,17 @@ pub trait StorageController: Debug {
     ///
     /// Rows passed in `updates` MUST have the correct schema for the given
     /// introspection type, as readers rely on this and might panic otherwise.
-    fn append_introspection_updates(&mut self, type_: IntrospectionType, updates: Vec<(Row, Diff)>);
+    fn append_introspection_updates(
+        &mut self,
+        type_: IntrospectionType,
+        updates: Vec<(Row, Diff)>,
+    ) {
+        self.append_introspection_batch(type_, AppendOnlyUpdate::Rows(updates));
+    }
+
+    /// Appends one batch, materializing deferred rows in the storage append task.
+    /// Rows must have the schema of `type_` and own any state needed to serialize them.
+    fn append_introspection_batch(&mut self, type_: IntrospectionType, updates: AppendOnlyUpdate);
 
     /// Records append-only status updates for the given introspection type.
     fn append_status_introspection_updates(
