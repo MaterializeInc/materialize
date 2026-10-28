@@ -26,7 +26,7 @@ import {
 import {
   calculateCommandDuration,
   doesCommandExceedTimeout,
-  getCommandResultCompletedTime,
+  getCommandResultStartTime,
 } from "../timings";
 import { useShellVirtualizedList } from "../useShellVirtualizedList";
 import {
@@ -130,9 +130,10 @@ const PlanInsightsNotice = ({
     commandOutput,
   );
 
-  const commandStartTimeMs =
-    getCommandResultCompletedTime(commandOutput, commandResultIndex - 1) ??
-    commandOutput.commandSentTimeMs;
+  const { startTimeMs: commandStartTimeMs } = getCommandResultStartTime(
+    commandOutput,
+    commandResultIndex,
+  );
 
   /**
    * We initially check if the notice should be visible based on how long the command took

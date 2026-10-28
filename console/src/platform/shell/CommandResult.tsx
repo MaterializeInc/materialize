@@ -7,7 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Code, HStack, Tooltip, useTheme, VStack } from "@chakra-ui/react";
+import {
+  chakra,
+  Code,
+  Grid,
+  HStack,
+  Text,
+  Tooltip,
+  useTheme,
+  VStack,
+} from "@chakra-ui/react";
 import { useAtomCallback } from "jotai/utils";
 import React from "react";
 
@@ -20,6 +29,11 @@ import { capitalizeSentence } from "~/util";
 import CommandResultNotice from "./CommandResultNotice";
 import { ERROR_NOTICE_OUTPUT_MAX_WIDTH, TABLE_PAGE_SIZE } from "./constants";
 import ErrorOutput from "./ErrorOutput";
+import {
+  describeExecutionTime,
+  findExecutionTime,
+  formatExecutionTime,
+} from "./executionTime";
 import formatRows from "./formatRows";
 import SqlSelectTable, { TablePagination } from "./SqlSelectTable";
 import {
@@ -27,8 +41,49 @@ import {
   CommandResult as CommandResultType,
   updateDisplayStateAtomCallback,
 } from "./store/shell";
-import { calculateCommandDuration, formatCommandDuration } from "./timings";
+import {
+  calculateCommandDuration,
+  formatCommandDuration,
+  getCommandResultStartTime,
+} from "./timings";
 import useCommandOutputPagination from "./useCommandOutputPagination";
+
+const ROUND_TRIP_HELP =
+  "The time until the Shell had received the whole result, including the network and your browser's processing, measured from sending the input.";
+
+const LATER_ROUND_TRIP_HELP =
+  "The time until the Shell had received the whole result, including the network and your browser's processing, measured from the previous result.";
+
+const SHORTER_THAN_EXECUTION_TIME_HELP =
+  "It can be shorter than the time in Materialize, because Materialize starts the statement while the Shell is still handling the previous result.";
+
+interface TimingRow {
+  label: string;
+  description: string;
+}
+
+const TimingTooltipContent = ({ rows }: { rows: TimingRow[] }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+
+  return (
+    <Grid as="dl" templateColumns="auto 1fr" columnGap={3} rowGap={2}>
+      {rows.map(({ label, description }) => (
+        <React.Fragment key={label}>
+          <Text
+            as="dt"
+            textStyle="text-ui-med"
+            color={colors.foreground.primary}
+          >
+            {label}
+          </Text>
+          <Text as="dd" textStyle="text-base">
+            {description}
+          </Text>
+        </React.Fragment>
+      ))}
+    </Grid>
+  );
+};
 
 const CommandResult = ({
   commandResultIndex,
@@ -53,7 +108,7 @@ const CommandResult = ({
     commandOutput.commandResultsDisplayStates[commandResultIndex]
       .isSubscribeManager;
 
-  const { colors } = useTheme<MaterializeTheme>();
+  const { colors, shadows } = useTheme<MaterializeTheme>();
 
   const paginationState = useCommandOutputPagination({
     historyId: commandOutput.historyId,
@@ -110,10 +165,30 @@ const CommandResult = ({
   }
 
   const timeTaken = calculateCommandDuration(commandResultIndex, commandOutput);
+  const executionTime = findExecutionTime(notices);
+  const { isMeasuredFromPreviousResult } = getCommandResultStartTime(
+    commandOutput,
+    commandResultIndex,
+  );
 
+  // A later result's round trip starts after the previous result and can come
+  // out shorter than its time in Materialize, so the footer names its start.
   const timeTakenStr = timeTaken
-    ? `Returned in ${formatCommandDuration(timeTaken)}`
+    ? `Returned in ${formatCommandDuration(timeTaken)}` +
+      (isMeasuredFromPreviousResult ? " after the previous result" : "") +
+      (executionTime ? ` · ${formatExecutionTime(executionTime)}` : "")
     : null;
+
+  let roundTripHelp = ROUND_TRIP_HELP;
+  if (isMeasuredFromPreviousResult) {
+    roundTripHelp = executionTime
+      ? `${LATER_ROUND_TRIP_HELP} ${SHORTER_THAN_EXECUTION_TIME_HELP}`
+      : LATER_ROUND_TRIP_HELP;
+  }
+  const timingRows: TimingRow[] = [
+    { label: "Returned in", description: roundTripHelp },
+    ...(executionTime ? [describeExecutionTime(executionTime)] : []),
+  ];
 
   // A cancelled query and a dropped connection both surface as errors so that
   // they get an explanation in the command block, but neither is a failure the
@@ -169,13 +244,22 @@ const CommandResult = ({
             {timeTakenStr}
           </Code>
           <Tooltip
-            label="The total time to submit, execute, receive, and render the query results over the network."
+            label={<TimingTooltipContent rows={timingRows} />}
             placement="right"
             color={colors.foreground.secondary}
             background={colors.background.secondary}
+            maxWidth="sm"
             hasArrow
           >
-            <InfoIcon />
+            <chakra.button
+              type="button"
+              aria-label="Timing details"
+              display="inline-flex"
+              borderRadius="full"
+              _focusVisible={{ boxShadow: shadows.input.focus }}
+            >
+              <InfoIcon />
+            </chakra.button>
           </Tooltip>
         </HStack>
       )}
