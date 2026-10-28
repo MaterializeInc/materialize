@@ -1,0 +1,41 @@
+[package]
+name = "mz-kafka-client"
+description = "A native Kafka client with an rdkafka-compatible API."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base64.workspace = true
+bytes.workspace = true
+crc32c.workspace = true
+crc32fast.workspace = true
+flate2.workspace = true
+futures.workspace = true
+hmac.workspace = true
+kafka-protocol.workspace = true
+lz4_flex.workspace = true
+mz-ore = { path = "../ore", default-features = false, features = ["async"] }
+openssl.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+snap.workspace = true
+socket2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-openssl.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+twox-hash.workspace = true
+uuid.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+itertools.workspace = true
+mz-ore = { path = "../ore", default-features = false, features = ["async", "test"] }

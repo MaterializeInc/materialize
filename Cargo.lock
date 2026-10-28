@@ -5455,6 +5455,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kafka-protocol"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "099d5c2f1b40cd830cbf18ca4d2a0805f2875b811ca18f0372b2433e68fe2dda"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "crc",
+ "crc32c",
+ "indexmap 2.14.2",
+ "uuid",
+]
+
+[[package]]
 name = "keyed_priority_queue"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7595,6 +7609,38 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "mz-kafka-client"
+version = "0.0.0"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "crc32c",
+ "crc32fast",
+ "flate2",
+ "futures",
+ "hmac 0.13.0",
+ "itertools 0.15.0",
+ "kafka-protocol",
+ "lz4_flex 0.14.0",
+ "mz-ore",
+ "openssl",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "snap",
+ "socket2",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-openssl",
+ "tokio-util",
+ "tracing",
+ "twox-hash",
+ "uuid",
+ "zstd",
 ]
 
 [[package]]
