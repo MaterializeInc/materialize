@@ -46,6 +46,7 @@ use timely::bytes::arc::BytesMut;
 use timely::dataflow::channels::ContainerBytes;
 
 use crate::columnar::Column;
+use crate::columnar::align_buffer::{AlignBuffer, Origin};
 
 /// Compression codec applied to a paged-out column.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -367,7 +368,7 @@ impl ColumnPager {
     ///
     /// Backend / codec semantics:
     ///
-    /// * Uncompressed, [`Column::Align`]: the inner `Vec<u64>` is moved into
+    /// * Uncompressed, [`Column::Align`]: the buffer's allocation is moved into
     ///   the pager handle with no copies. Swap backend keeps the allocation
     ///   resident; file backend writes it out and drops it.
     /// * Uncompressed, other variants: the column is serialized via
@@ -405,7 +406,10 @@ impl ColumnPager {
                     col.into_bytes(&mut buf);
                     mz_ore::soft_assert_eq_no_log!(buf.len() % 8, 0);
                     col.clear();
-                    Column::Align(bytemuck::allocation::pod_collect_to_vec::<u8, u64>(&buf))
+                    Column::Align(AlignBuffer::from_words(
+                        Origin::Pager,
+                        bytemuck::allocation::pod_collect_to_vec::<u8, u64>(&buf),
+                    ))
                 } else {
                     std::mem::take(col)
                 };
@@ -424,8 +428,10 @@ impl ColumnPager {
                 let body: Vec<u64> = match std::mem::take(col) {
                     // Move the aligned buffer straight into the pager: the
                     // allocation transfers with no copy. `take` already left
-                    // `col` as a refill-ready `Typed` default.
-                    Column::Align(v) => v,
+                    // `col` as a refill-ready `Typed` default. The buffer's
+                    // tracked life ends here, where it stops being a column
+                    // body and becomes pager-owned storage.
+                    Column::Align(v) => v.into_words(),
                     mut other => {
                         let mut buf = Vec::with_capacity(len_bytes);
                         other.into_bytes(&mut buf);
@@ -517,7 +523,7 @@ impl ColumnPager {
                 self.policy.record(PageEvent::PagedIn {
                     bytes: meta.len_bytes,
                 });
-                Column::Align(body)
+                Column::Align(AlignBuffer::from_words(Origin::Fetch, body))
             }
             PagedColumn::Compressed { inner, meta } => {
                 let mut decoded = Vec::with_capacity(meta.len_bytes);
@@ -766,7 +772,8 @@ mod tests {
         });
         let cp = ColumnPager::new(as_dyn(&policy));
         let body: Vec<u64> = (1u64..=512).collect();
-        let mut col: Column<i64> = Column::Align(body.clone());
+        let mut col: Column<i64> =
+            Column::Align(AlignBuffer::from_words(Origin::Pager, body.clone()));
         let paged = cp.page(&mut col);
         assert!(matches!(paged, PagedColumn::Paged { .. }));
         // After paging an Align variant, `col` is reset to the typed default.
@@ -774,7 +781,7 @@ mod tests {
         let rt = cp.take(paged);
         // Round-tripped column should produce identical bytes.
         match rt {
-            Column::Align(v) => assert_eq!(v, body),
+            Column::Align(v) => assert_eq!(v.as_words(), body),
             other => panic!("expected Align, got {:?}", std::mem::discriminant(&other)),
         }
     }
