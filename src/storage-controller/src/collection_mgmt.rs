@@ -80,7 +80,7 @@ use mz_ore::now::NowFn;
 use mz_ore::retry::Retry;
 use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
-use mz_persist_client::batch::Added;
+use mz_persist_client::batch::{Added, Batch};
 use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -1749,18 +1749,36 @@ async fn partially_truncate_metrics_history(
     }
 
     let mut updates = builder.finish(Antichain::from_elem(new_upper_ts)).await?;
-    let mut batches = vec![&mut updates];
+    append_metrics_retractions(id, write_handle, &mut updates, old_upper_ts).await;
+    Ok(())
+}
 
-    write_handle
+/// Apply snapshot-derived retractions only if that snapshot is still current.
+/// A competing writer makes this retention pass obsolete, not erroneous.
+async fn append_metrics_retractions(
+    id: GlobalId,
+    write_handle: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+    updates: &mut Batch<SourceData, (), Timestamp, StorageDiff>,
+    expected_upper: Timestamp,
+) {
+    let result = write_handle
         .compare_and_append_batch(
-            batches.as_mut_slice(),
-            Antichain::from_elem(old_upper_ts),
-            Antichain::from_elem(new_upper_ts),
+            &mut [updates],
+            Antichain::from_elem(expected_upper),
+            Antichain::from_elem(expected_upper.step_forward()),
             true,
         )
         .await
-        .expect("valid usage")
-        .map_err(|e| anyhow!("appending retractions: {e:?}"))
+        .expect("valid usage");
+    if let Err(error) = result {
+        // Like status-history retention, skip this pass if another adapter
+        // appended or advanced the upper. Never rebase these retractions onto
+        // newer contents: another collector may already have removed the rows.
+        info!(
+            %id, ?expected_upper, current_upper = ?error.current,
+            "failed to append partial metrics truncation",
+        );
+    }
 }
 
 /// Effectively truncates the status history shard based on its retention policy.
@@ -1999,6 +2017,91 @@ mod tests {
     use mz_storage_client::healthcheck::{
         MZ_SINK_STATUS_HISTORY_DESC, MZ_SOURCE_STATUS_HISTORY_DESC,
     };
+
+    #[mz_ore::test(tokio::test)]
+    async fn metrics_retention_does_not_rebase_after_competing_writes() {
+        use mz_persist_client::{Diagnostics, PersistClient, ShardId};
+        use mz_persist_types::codec_impls::UnitSchema;
+        use mz_repr::{RelationDesc, SqlScalarType};
+
+        // A fresh pass removes its row. A competing append or another collector
+        // invalidates the snapshot, so the stale pass must leave contents alone.
+        for competing_diff in [None, Some(1i64), Some(-1i64)] {
+            let client = PersistClient::new_for_tests().await;
+            let shard = ShardId::new();
+            let schema = Arc::new(
+                RelationDesc::builder()
+                    .with_column("v", SqlScalarType::Int64.nullable(false))
+                    .finish(),
+            );
+            let (mut writer, mut reader) = client
+                .open::<SourceData, (), Timestamp, StorageDiff>(
+                    shard,
+                    Arc::clone(&schema),
+                    Arc::new(UnitSchema),
+                    Diagnostics::for_tests(),
+                    false,
+                )
+                .await
+                .unwrap();
+            let old = SourceData(Ok(Row::pack_slice(&[Datum::Int64(1)])));
+            let new = SourceData(Ok(Row::pack_slice(&[Datum::Int64(2)])));
+            writer
+                .compare_and_append(
+                    vec![((old.clone(), ()), Timestamp::MIN, 1)],
+                    Antichain::from_elem(Timestamp::MIN),
+                    Antichain::from_elem(Timestamp::from(1)),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+
+            let upper = Timestamp::from(1);
+            let mut builder = writer.builder(Antichain::from_elem(upper));
+            builder.add(&old, &(), &upper, &-1).await.unwrap();
+            let mut retractions = builder
+                .finish(Antichain::from_elem(upper.step_forward()))
+                .await
+                .unwrap();
+            if let Some(diff) = competing_diff {
+                let mut peer = client
+                    .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                        shard,
+                        Arc::clone(&schema),
+                        Arc::new(UnitSchema),
+                        Diagnostics::for_tests(),
+                    )
+                    .await
+                    .unwrap();
+                let data = if diff > 0 { new.clone() } else { old.clone() };
+                peer.compare_and_append(
+                    vec![((data, ()), upper, diff)],
+                    Antichain::from_elem(upper),
+                    Antichain::from_elem(upper.step_forward()),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            }
+            append_metrics_retractions(GlobalId::System(1), &mut writer, &mut retractions, upper)
+                .await;
+            let snapshot = reader
+                .snapshot_and_fetch(Antichain::from_elem(upper))
+                .await
+                .unwrap();
+            let mut actual: Vec<_> = snapshot
+                .into_iter()
+                .map(|((data, ()), _, diff)| (data.0.unwrap(), diff))
+                .collect();
+            actual.sort();
+            let expected = if competing_diff == Some(1) {
+                vec![(old.0.unwrap(), 1), (new.0.unwrap(), 1)]
+            } else {
+                vec![]
+            };
+            assert_eq!(actual, expected, "competing write: {competing_diff:?}");
+        }
+    }
 
     /// Each manager has its own task and Persist handles, as independent
     /// controllers do. The reader factory counts full reconciliation snapshots.
