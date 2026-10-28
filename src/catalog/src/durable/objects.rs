@@ -464,8 +464,8 @@ pub enum ClusterVariant {
 }
 
 impl ClusterVariant {
-    /// The replica sizes a managed cluster references: its size, its
-    /// reconfiguration target's size, and its burst size.
+    /// The replica sizes a managed cluster references: its size, its hydration
+    /// size, an in-progress reconfiguration's target size, and its burst size.
     pub fn sizes(&self) -> impl Iterator<Item = &str> {
         let managed = match self {
             ClusterVariant::Managed(managed) => Some(managed),
@@ -474,7 +474,16 @@ impl ClusterVariant {
         managed.into_iter().flat_map(|managed| {
             [
                 Some(&managed.size),
-                managed.reconfiguration.as_ref().map(|r| &r.target.size),
+                managed
+                    .auto_scaling_strategy
+                    .as_ref()
+                    .and_then(|s| s.on_hydration.as_ref())
+                    .map(|h| &h.hydration_size),
+                managed
+                    .reconfiguration
+                    .as_ref()
+                    .filter(|r| r.is_in_progress())
+                    .map(|r| &r.target.size),
                 managed.burst.as_ref().map(|b| &b.burst_size),
             ]
             .into_iter()
