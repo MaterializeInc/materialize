@@ -12,6 +12,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use mz_kafka_client::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use mz_kafka_client::{Offset, TopicPartitionList};
 use mz_kafka_util::client::DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL;
 use mz_ore::task;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -20,8 +22,6 @@ use mz_sql_parser::ast::{
     KafkaSourceConfigOptionName,
 };
 use mz_storage_types::sinks::KafkaSinkCompressionType;
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::{Offset, TopicPartitionList};
 use tokio::time::Duration;
 
 use crate::ast::Value;
@@ -193,7 +193,7 @@ where
     .await
 }
 
-// Kafka supports bulk lookup of watermarks, but it is not exposed in rdkafka.
+// Kafka supports bulk lookup of watermarks, but it is not exposed by the Kafka client.
 // If that ever changes, we will want to first collect all pids that have no
 // offset for a given timestamp and then do a single request (instead of doing
 // a request for each partition individually).

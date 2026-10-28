@@ -15,15 +15,15 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use itertools::Itertools;
-use mz_ore::collections::CollectionExt;
-use mz_ore::retry::Retry;
-use mz_ore::str::separated;
-use rdkafka::admin::{
+use mz_kafka_client::admin::{
     AdminClient, AdminOptions, AlterConfig, ConfigEntry, ConfigResource, ConfigSource, NewTopic,
     OwnedResourceSpecifier, ResourceSpecifier,
 };
-use rdkafka::client::ClientContext;
-use rdkafka::error::{KafkaError, RDKafkaErrorCode};
+use mz_kafka_client::client::ClientContext;
+use mz_kafka_client::error::{KafkaError, RDKafkaErrorCode};
+use mz_ore::collections::CollectionExt;
+use mz_ore::retry::Retry;
+use mz_ore::str::separated;
 use tracing::{info, warn};
 
 /// Get the current configuration for a particular topic.
@@ -162,8 +162,8 @@ where
     }
 
     if try_alter {
-        // rdkafka does not support the newer incremental-alter APIs. Instead, we copy over values
-        // from the fetched dynamic config that we don't explicitly want to overwrite.
+        // The Kafka client does not support the newer incremental-alter APIs. Instead, we copy over
+        // values from the fetched dynamic config that we don't explicitly want to overwrite.
         for entry in &actual_configs {
             if entry.source != ConfigSource::DynamicTopic {
                 continue;
@@ -190,7 +190,7 @@ where
 /// creation can result in "unknown topic" errors.
 ///
 /// This function does not return successfully unless it can find the metadata
-/// for the newly-created topic in a call to [`rdkafka::client::Client::fetch_metadata`] and
+/// for the newly-created topic in a call to [`mz_kafka_client::client::Client::fetch_metadata`] and
 /// verify that the metadata reports the topic has the number of partitions
 /// requested in `new_topic`. Empirically, this seems to be the condition that
 /// guarantees that future attempts to consume from or produce to the topic will
@@ -297,7 +297,7 @@ where
 /// topic deletion has propagated throughout the Kafka cluster before returning.
 ///
 /// This function does not return successfully unless it can observe the metadata not containing
-/// the newly-created topic in a call to [`rdkafka::client::Client::fetch_metadata`]
+/// the newly-created topic in a call to [`mz_kafka_client::client::Client::fetch_metadata`]
 pub async fn delete_existing_topic<'a, C>(
     client: &'a AdminClient<C>,
     admin_opts: &AdminOptions,

@@ -33,6 +33,9 @@ use mz_environmentd::test_util::{
     self, KAFKA_ADDRS, MzTimestamp, PostgresErrorExt, TestServerWithRuntime, get_explain_timestamp,
     get_explain_timestamp_determination, try_get_explain_timestamp,
 };
+use mz_kafka_client::ClientConfig;
+use mz_kafka_client::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use mz_kafka_client::types::RDKafkaErrorCode;
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::now::{EpochMillis, NOW_ZERO, NowFn};
@@ -45,9 +48,6 @@ use mz_repr::Timestamp;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
 use mz_storage_types::sources::Timeline;
 use postgres::Row;
-use rdkafka::ClientConfig;
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
-use rdkafka_sys::RDKafkaErrorCode;
 use regex::Regex;
 use serde_json::json;
 use timely::order::PartialOrder;
@@ -114,7 +114,7 @@ async fn test_no_block() {
     // We manually time out the test because it's better than relying on CI to time out, because
     // an actual failure (as opposed to a CI timeout) causes `services.log` to be uploaded.
 
-    // Allow the use of banned rdkafka methods, because we are just in tests.
+    // Allow the use of banned Kafka client methods, because we are just in tests.
     #[allow(clippy::disallowed_methods)]
     let test_case = async move {
         println!("test_no_block: starting server");
@@ -243,7 +243,7 @@ async fn test_drop_connection_race() {
         .await
         .unwrap();
 
-    // Allow the use of banned rdkafka methods, because we are just in tests.
+    // Allow the use of banned Kafka client methods, because we are just in tests.
     #[allow(clippy::disallowed_methods)]
     let source_task = task::spawn(|| "source_client", async move {
         info!("test_drop_connection_race: in task; creating connection and source");

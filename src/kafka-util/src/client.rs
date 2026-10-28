@@ -24,22 +24,20 @@ use tokio::sync::watch;
 
 use anyhow::{Context, anyhow};
 use crossbeam::channel::{Receiver, Sender, unbounded};
+use mz_kafka_client::client::{Client, OAuthToken};
+use mz_kafka_client::config::{
+    ClientConfig, FromClientConfig, FromClientConfigAndContext, RDKafkaLogLevel,
+};
+use mz_kafka_client::consumer::{ConsumerContext, Rebalance};
+use mz_kafka_client::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
+use mz_kafka_client::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};
+use mz_kafka_client::{ClientContext, Statistics, TopicPartitionList};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::netio::{DnsResolutionError, resolve_address};
 use mz_ssh_util::tunnel::{SshTimeoutConfig, SshTunnelConfig, SshTunnelStatus};
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
-use rdkafka::client::{Client, NativeClient, OAuthToken};
-use rdkafka::config::{
-    ClientConfig, FromClientConfig, FromClientConfigAndContext, RDKafkaLogLevel,
-};
-use rdkafka::consumer::{ConsumerContext, Rebalance};
-use rdkafka::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
-use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};
-use rdkafka::types::RDKafkaRespErr;
-use rdkafka::util::Timeout;
-use rdkafka::{ClientContext, Statistics, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tracing::{Level, debug, info, trace, warn};
@@ -62,8 +60,8 @@ pub const DEFAULT_TOPIC_METADATA_REFRESH_INTERVAL: Duration = Duration::from_sec
 pub struct MzClientContext {
     /// The last observed error log, if any.
     error_tx: Sender<MzKafkaError>,
-    /// A tokio watch that retains the last statistics received by rdkafka and provides async
-    /// notifications to anyone interested in subscribing.
+    /// A tokio watch that retains the last statistics reported by the Kafka client and provides
+    /// async notifications to anyone interested in subscribing.
     statistics_tx: watch::Sender<Statistics>,
 }
 
@@ -75,7 +73,7 @@ impl Default for MzClientContext {
 
 impl MzClientContext {
     /// Constructs a new client context and returns an mpsc `Receiver` that can be used to learn
-    /// about librdkafka errors.
+    /// about Kafka client errors.
     // `crossbeam` channel receivers can be cloned, but this is intended to be used as a mpsc,
     // until we upgrade to `1.72` and the std mpsc sender is `Sync`.
     pub fn with_errors() -> (Self, Receiver<MzKafkaError>) {
@@ -88,8 +86,8 @@ impl MzClientContext {
         (ctx, error_rx)
     }
 
-    /// Creates a tokio Watch subscription for statistics reported by librdkafka. It is necessary
-    /// that the `statistics.ms.interval` is set for this stream to contain any values.
+    /// Creates a tokio Watch subscription for statistics reported by the Kafka client. It is
+    /// necessary that the `statistics.ms.interval` is set for this stream to contain any values.
     pub fn subscribe_statistics(&self) -> watch::Receiver<Statistics> {
         self.statistics_tx.subscribe()
     }
@@ -112,7 +110,7 @@ impl MzClientContext {
 /// [`MzKafkaError::PrivateBrokerAddress`].
 const PRIVATE_BROKER_ADDRESS_MARKER: &str = "Broker address resolved to a private IP";
 
-/// A structured error type for errors reported by librdkafka through its logs.
+/// A structured error type for errors reported by the Kafka client through its logs.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum MzKafkaError {
     /// Invalid username or password
@@ -238,8 +236,8 @@ impl FromStr for MzKafkaError {
 }
 
 impl ClientContext for MzClientContext {
-    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
-        use rdkafka::config::RDKafkaLogLevel::*;
+    fn log(&self, level: mz_kafka_client::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+        use mz_kafka_client::config::RDKafkaLogLevel::*;
 
         // Sniff out log messages that indicate errors.
         //
@@ -554,7 +552,7 @@ impl<C: ClientContext> TunnelingClientContext<C> {
     /// Resolves a broker address that the user controls directly, i.e. one not
     /// rewritten to an SSH tunnel or PrivateLink endpoint. With
     /// `enforce_external_addresses`, fails unless every address is global.
-    // NOTE: librdkafka connects only to addresses returned here, and every
+    // NOTE: the Kafka client connects only to addresses returned here, and every
     // re-resolution (e.g. after `broker.address.ttl`) comes back through this
     // callback, so checking here also defeats DNS rebinding. TLS SNI and
     // certificate verification still use the broker's hostname.
@@ -568,8 +566,9 @@ impl<C: ClientContext> TunnelingClientContext<C> {
                 .map(|ip| SocketAddr::new(ip, addr.port))
                 .collect()),
             Err(e) => {
-                // librdkafka reports a callback failure as a generic resolution
-                // failure, so surface the reason through the inner context.
+                // The Kafka client reports a callback failure as a generic
+                // resolution failure, so surface the reason through the inner
+                // context.
                 if let DnsResolutionError::PrivateAddress = e {
                     self.inner.log(
                         RDKafkaLogLevel::Error,
@@ -799,25 +798,12 @@ where
     fn stats(&self, statistics: Statistics) {
         self.inner.stats(statistics)
     }
-
-    fn stats_raw(&self, statistics: &[u8]) {
-        self.inner.stats_raw(statistics)
-    }
 }
 
 impl<C> ConsumerContext for TunnelingClientContext<C>
 where
     C: ConsumerContext,
 {
-    fn rebalance(
-        &self,
-        native_client: &NativeClient,
-        err: RDKafkaRespErr,
-        tpl: &mut TopicPartitionList,
-    ) {
-        self.inner.rebalance(native_client, err, tpl)
-    }
-
     fn pre_rebalance<'a>(&self, rebalance: &Rebalance<'a>) {
         self.inner.pre_rebalance(rebalance)
     }
@@ -828,10 +814,6 @@ where
 
     fn commit_callback(&self, result: KafkaResult<()>, offsets: &TopicPartitionList) {
         self.inner.commit_callback(result, offsets)
-    }
-
-    fn main_queue_min_poll_interval(&self) -> Timeout {
-        self.inner.main_queue_min_poll_interval()
     }
 }
 
@@ -882,8 +864,8 @@ pub fn get_partitions<C: ClientContext>(
         ))?;
     }
 
-    fn check_err(err: Option<RDKafkaRespErr>) -> Result<(), GetPartitionsError> {
-        match err.map(RDKafkaErrorCode::from) {
+    fn check_err(err: Option<RDKafkaErrorCode>) -> Result<(), GetPartitionsError> {
+        match err {
             Some(RDKafkaErrorCode::UnknownTopic | RDKafkaErrorCode::UnknownTopicOrPartition) => {
                 Err(GetPartitionsError::TopicDoesNotExist)
             }
@@ -1014,8 +996,8 @@ impl TimeoutConfig {
             progress_record_fetch_timeout
         };
 
-        // The documented max here is `300000`, but rdkafka bans `socket.timeout.ms` being more
-        // than `transaction.timeout.ms` + 100ms.
+        // The documented max here is `300000`, but the Kafka client rejects `socket.timeout.ms`
+        // being more than `transaction.timeout.ms` + 100ms.
         let max_socket_timeout = std::cmp::min(
             transaction_timeout + Duration::from_millis(100),
             Duration::from_secs(300),
@@ -1078,7 +1060,7 @@ pub fn create_new_client_config_simple() -> ClientConfig {
     create_new_client_config(tracing::Level::INFO, Default::default())
 }
 
-/// Build a new [`rdkafka`] [`ClientConfig`] with its `log_level` set correctly
+/// Build a new [`ClientConfig`] with its `log_level` set correctly
 /// based on the passed through [`tracing::Level`]. This level should be
 /// determined for `target: "librdkafka"`.
 pub fn create_new_client_config(
@@ -1113,15 +1095,14 @@ pub fn create_new_client_config(
     // For now, this works, and prints a nice log line exactly when we want it.
     //
     // TODO(guswynn): when we can remove `tracing-log`, remove this warning
-    tracing::debug!(target: "librdkafka", level = ?level, "Determined log level for librdkafka");
+    tracing::debug!(target: "librdkafka", level = ?level, "Determined Kafka client log level");
     config.set_log_level(level);
 
-    // Patch the librdkafka debug log system into the Rust `log` ecosystem. This
-    // is a very simple integration at the moment; enabling `debug`-level logs
-    // for the `librdkafka` target enables the full firehouse of librdkafka
-    // debug logs. We may want to investigate finer-grained control.
+    // Enabling `debug`-level logs for the `librdkafka` target enables the full
+    // firehose of the Kafka client's debug logs. We may want to investigate
+    // finer-grained control.
     if tracing_level >= Level::DEBUG {
-        tracing::debug!(target: "librdkafka", "Enabling debug logs for rdkafka");
+        tracing::debug!(target: "librdkafka", "Enabling debug logs for the Kafka client");
         config.set("debug", "all");
     }
 
@@ -1145,48 +1126,31 @@ pub fn create_new_client_config(
 }
 
 /// Creates a client from `config` using [`ClientConfig::create`].
-///
-/// Leaves the calling thread's OpenSSL error queue empty, see
-/// [`create_with_context`].
+#[allow(clippy::disallowed_methods)]
 pub fn create<T: FromClientConfig>(config: &ClientConfig) -> KafkaResult<T> {
-    #[allow(clippy::disallowed_methods)]
-    let client = config.create();
-    drop(openssl::error::ErrorStack::get());
-    client
+    config.create()
 }
 
 /// Creates a client from `config` using [`ClientConfig::create_with_context`].
-///
-/// Leaves the calling thread's OpenSSL error queue empty.
+#[allow(clippy::disallowed_methods)]
 pub fn create_with_context<C, T>(config: &ClientConfig, context: C) -> KafkaResult<T>
 where
     C: ClientContext,
     T: FromClientConfigAndContext<C>,
 {
-    #[allow(clippy::disallowed_methods)]
-    let client = config.create_with_context(context);
-    // NOTE: librdkafka loads `ssl.ca.pem` by reading certificates until
-    // `PEM_read_bio_X509` fails, and leaves that final `PEM routines:get_name:no
-    // start line` error on the calling thread's OpenSSL error queue. OpenSSL's
-    // `SSL_get_error` reports any queued error as `SSL_ERROR_SSL`, so a later
-    // TLS read that would merely block on this thread fails with the stale
-    // error instead. On a tokio worker this breaks unrelated connections, for
-    // example HTTPS requests to a schema registry. librdkafka v2.15.1 clears
-    // the queue itself (confluentinc/librdkafka#5561).
-    drop(openssl::error::ErrorStack::get());
-    client
+    config.create_with_context(context)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use mz_kafka_client::consumer::BaseConsumer;
     use openssl::asn1::Asn1Time;
     use openssl::hash::MessageDigest;
     use openssl::pkey::PKey;
     use openssl::rsa::Rsa;
     use openssl::x509::{X509, X509NameBuilder};
-    use rdkafka::consumer::BaseConsumer;
 
     fn self_signed_cert_pem() -> String {
         let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
@@ -1273,13 +1237,20 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
     fn test_create_with_context_clears_openssl_error_queue() {
+        // Client creation must leave the calling thread's OpenSSL error queue
+        // empty. OpenSSL's `SSL_get_error` reports any queued error as
+        // `SSL_ERROR_SSL`, so a stale entry makes a later TLS read on the same
+        // thread that would merely block fail instead. On a tokio worker this
+        // breaks unrelated connections, for example HTTPS requests to a schema
+        // registry. Parsing `ssl.ca.pem` is a typical source of such entries.
         let mut config = create_new_client_config_simple();
         // Client creation does not connect, so the broker need not exist.
         config.set("bootstrap.servers", "localhost:1");
         config.set("security.protocol", "ssl");
         config.set("ssl.ca.pem", self_signed_cert_pem());
         let _consumer: BaseConsumer =
-            create_with_context(&config, rdkafka::consumer::DefaultConsumerContext).unwrap();
+            create_with_context(&config, mz_kafka_client::consumer::DefaultConsumerContext)
+                .unwrap();
         let errors = openssl::error::ErrorStack::get();
         assert!(
             errors.errors().is_empty(),

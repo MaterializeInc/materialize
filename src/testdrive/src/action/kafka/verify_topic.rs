@@ -12,10 +12,10 @@ use std::str;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use mz_kafka_client::admin::{AdminClient, AdminOptions, ResourceSpecifier};
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_postgres_util::{Sql, query_one, sql};
-use rdkafka::admin::{AdminClient, AdminOptions, ResourceSpecifier};
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;

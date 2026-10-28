@@ -67,6 +67,7 @@ pub mod util;
 mod internal;
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod api_shape_tests;
 
 pub use crate::client::ClientContext;

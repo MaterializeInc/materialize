@@ -11,10 +11,10 @@ use std::cmp;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use mz_kafka_client::admin::NewPartitions;
+use mz_kafka_client::producer::Producer;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
-use rdkafka::admin::NewPartitions;
-use rdkafka::producer::Producer;
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;

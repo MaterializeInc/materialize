@@ -22,6 +22,13 @@ use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
 use itertools::Itertools;
 use maplit::btreemap;
+use mz_kafka_client::consumer::base_consumer::PartitionQueue;
+use mz_kafka_client::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use mz_kafka_client::error::KafkaError;
+use mz_kafka_client::message::{BorrowedMessage, Headers};
+use mz_kafka_client::statistics::Statistics;
+use mz_kafka_client::topic_partition_list::Offset;
+use mz_kafka_client::{ClientContext, Message, TopicPartitionList};
 use mz_kafka_util::client::{
     GetPartitionsError, MzClientContext, PartitionId, TunnelingClientContext, get_partitions,
 };
@@ -31,7 +38,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{Datum, Diff, GlobalId, Row, adt::jsonb::Jsonb};
+use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use mz_storage_types::connections::KafkaConnection;
 use mz_storage_types::errors::{
@@ -47,13 +54,6 @@ use mz_timely_util::builder_async::{
 };
 use mz_timely_util::containers::stack::FueledBuilder;
 use mz_timely_util::order::Partitioned;
-use rdkafka::consumer::base_consumer::PartitionQueue;
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
-use rdkafka::error::KafkaError;
-use rdkafka::message::{BorrowedMessage, Headers};
-use rdkafka::statistics::Statistics;
-use rdkafka::topic_partition_list::Offset;
-use rdkafka::{ClientContext, Message, TopicPartitionList};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
@@ -128,8 +128,8 @@ pub struct KafkaSourceReader {
     last_offsets: BTreeMap<usize, BTreeMap<PartitionId, i64>>,
     /// The offset to start reading from for each partition.
     start_offsets: BTreeMap<PartitionId, u64>,
-    /// Channel to receive Kafka statistics JSON blobs from the stats callback.
-    stats_rx: crossbeam_channel::Receiver<Jsonb>,
+    /// Channel to receive Kafka statistics from the stats callback.
+    stats_rx: crossbeam_channel::Receiver<Statistics>,
     /// A handle to the partition specific metrics
     partition_metrics: KafkaSourceMetrics,
     /// Per partition capabilities used to produce messages
@@ -410,8 +410,8 @@ fn render_reader<'scope>(
                 Partitioned::new_range(lower, RangeBound::PosInfinity, MzOffset::from(0));
             data_cap.downgrade(&future_ts);
 
-            // Each consumer owns librdkafka threads, one per broker plus internal ones, so only
-            // workers responsible for a partition create one. A worker that knows of no such
+            // Each consumer owns its own broker connections and fetch state, so only workers
+            // responsible for a partition create one. A worker that knows of no such
             // partition yet creates its consumer when a metadata update assigns it one.
             if !start_offsets.is_empty()
                 && consumer_setup
@@ -546,8 +546,8 @@ fn render_reader<'scope>(
                 // Wait for data or metadata events while also making progress with offset
                 // committing.
                 tokio::select! {
-                    // TODO(petrosagg): remove the timeout and rely purely on librdkafka waking us
-                    // up
+                    // TODO(petrosagg): remove the timeout and rely purely on the Kafka client
+                    // waking us up
                     _ = tokio::time::timeout(max_wait_time, notificator.notified()) => {},
 
                     _ = metadata_input.ready() => {
@@ -726,12 +726,9 @@ fn render_reader<'scope>(
                 }
 
                 // Poll the consumer once. We split the consumer's partitions out into separate
-                // queues and poll those individually, but it's still necessary to drive logic that
-                // consumes from rdkafka's internal event queue, such as statistics callbacks.
-                //
-                // Additionally, assigning topics and splitting them off into separate queues is
-                // not atomic, so we expect to see at least some messages to show up when polling
-                // the consumer directly.
+                // queues and poll those individually, but assigning topics and splitting them off
+                // into separate queues is not atomic, so we expect to see at least some messages
+                // to show up when polling the consumer directly.
                 let polled_consumer = reader.consumer.get().map(Arc::clone);
                 while let Some(result) = polled_consumer
                     .as_ref()
@@ -807,7 +804,7 @@ fn render_reader<'scope>(
                 for consumer in consumers.iter_mut() {
                     let pid = consumer.pid();
                     // We want to make sure the rest of the actions in the outer loops get
-                    // a chance to run. If rdkafka keeps pumping data at us we might find
+                    // a chance to run. If the consumer keeps pumping data at us we might find
                     // ourselves in a situation where we keep dumping data into the
                     // dataflow without signaling progress. For this reason we consume at most
                     // 10k messages from each partition and go around the loop.
@@ -1021,7 +1018,7 @@ impl KafkaResumeUpperProcessor {
         consumer: &Arc<ReaderConsumer>,
         offsets: &[(PartitionId, MzOffset)],
     ) -> Result<(), anyhow::Error> {
-        use rdkafka::consumer::CommitMode;
+        use mz_kafka_client::consumer::CommitMode;
 
         let mut tpl = TopicPartitionList::new();
         for (pid, offset) in offsets {
@@ -1112,8 +1109,8 @@ impl KafkaSourceReader {
             .assign(&partition_list)
             .expect("assignment known to be valid");
 
-        // Since librdkafka v1.6.0, we need to recreate all partition queues
-        // after every call to `consumer.assign`.
+        // Partition queues are tied to the assignment, so we need to recreate
+        // all of them after every call to `consumer.assign`.
         let context = Arc::clone(consumer.context());
         for pc in &mut self.partition_consumers {
             pc.partition_queue = consumer
@@ -1141,25 +1138,17 @@ impl KafkaSourceReader {
         );
     }
 
-    /// Read any statistics JSON blobs generated via the rdkafka statistics callback.
+    /// Read any statistics generated via the Kafka client's statistics callback.
     fn update_stats(&mut self) {
-        while let Ok(stats) = self.stats_rx.try_recv() {
-            match serde_json::from_str::<Statistics>(&stats.to_string()) {
-                Ok(statistics) => {
-                    let topic = statistics.topics.get(&self.topic_name);
-                    match topic {
-                        Some(topic) => {
-                            for (id, partition) in &topic.partitions {
-                                self.partition_metrics
-                                    .set_offset_max(*id, partition.hi_offset);
-                            }
-                        }
-                        None => error!("No stats found for topic: {}", &self.topic_name),
+        while let Ok(statistics) = self.stats_rx.try_recv() {
+            match statistics.topics.get(&self.topic_name) {
+                Some(topic) => {
+                    for (id, partition) in &topic.partitions {
+                        self.partition_metrics
+                            .set_offset_max(*id, partition.hi_offset);
                     }
                 }
-                Err(e) => {
-                    error!("failed decoding librdkafka statistics JSON: {}", e);
-                }
+                None => error!("No stats found for topic: {}", &self.topic_name),
             }
         }
     }
@@ -1383,29 +1372,24 @@ impl PartitionConsumer {
 /// worker
 struct GlueConsumerContext {
     notificator: Arc<Notify>,
-    stats_tx: crossbeam_channel::Sender<Jsonb>,
+    stats_tx: crossbeam_channel::Sender<Statistics>,
     inner: MzClientContext,
 }
 
 impl ClientContext for GlueConsumerContext {
-    fn stats_raw(&self, statistics: &[u8]) {
-        match Jsonb::from_slice(statistics) {
-            Ok(statistics) => {
-                self.stats_tx
-                    .send(statistics)
-                    .expect("timely operator hung up while Kafka source active");
-                self.activate();
-            }
-            Err(e) => error!("failed decoding librdkafka statistics JSON: {}", e),
-        };
+    fn stats(&self, statistics: Statistics) {
+        self.stats_tx
+            .send(statistics)
+            .expect("timely operator hung up while Kafka source active");
+        self.activate();
     }
 
-    // The shape of the rdkafka *Context traits require us to forward to the `MzClientContext`
-    // implementation.
-    fn log(&self, level: rdkafka::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
+    // The shape of the Kafka client's *Context traits require us to forward to the
+    // `MzClientContext` implementation.
+    fn log(&self, level: mz_kafka_client::config::RDKafkaLogLevel, fac: &str, log_message: &str) {
         self.inner.log(level, fac, log_message)
     }
-    fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
+    fn error(&self, error: mz_kafka_client::error::KafkaError, reason: &str) {
         self.inner.error(error, reason)
     }
 }
@@ -1443,7 +1427,7 @@ struct ReaderConsumerSetup {
     group_id: String,
     client_id: String,
     notificator: Arc<Notify>,
-    stats_tx: crossbeam_channel::Sender<Jsonb>,
+    stats_tx: crossbeam_channel::Sender<Statistics>,
     /// `(id, output_index)` of each source export.
     outputs: Vec<(GlobalId, usize)>,
     data_output: DataOutput,
@@ -1515,7 +1499,7 @@ impl ReaderConsumerSetup {
                     // TODO: document the rationale for this.
                     "fetch.message.max.bytes" => "134217728".into(),
                     // Consumer group ID, which may have been overridden by
-                    // the user. librdkafka requires this, and we use offset
+                    // the user. Offset commits require this, and we use offset
                     // committing to provide a way for users to monitor
                     // ingest progress, though we do not rely on the
                     // committed offsets for any functionality.
@@ -1699,9 +1683,9 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use mz_kafka_client::consumer::{BaseConsumer, Consumer};
+    use mz_kafka_client::{Message, Offset, TopicPartitionList};
     use mz_kafka_util::client::create_new_client_config_simple;
-    use rdkafka::consumer::{BaseConsumer, Consumer};
-    use rdkafka::{Message, Offset, TopicPartitionList};
     use uuid::Uuid;
 
     // Splitting off a partition queue with an `Offset` that is not `Offset::Beginning` seems to

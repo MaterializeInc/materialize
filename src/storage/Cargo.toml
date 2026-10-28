@@ -44,6 +44,7 @@ mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-cluster = { path = "../cluster" }
 mz-interchange = { path = "../interchange" }
+mz-kafka-client = { path = "../kafka-client" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-mysql-util = { path = "../mysql-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing", "chrono", "metrics", "columnar", "columnation"] }
@@ -69,7 +70,6 @@ prometheus.workspace = true
 # Loadgen sources need reproducible randomness, so we need to continue using
 # the old version of `rand`.
 rand-8.workspace = true
-rdkafka.workspace = true
 regex.workspace = true
 rocksdb.workspace = true
 seahash.workspace = true

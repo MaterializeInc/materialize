@@ -491,8 +491,6 @@ quote = "1.0.45"
 rand = "0.10.3"
 rand-8 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
 rayon = "1.12.0"
-rdkafka = { version = "0.29.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
-rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = "1.12.3"
 regex-syntax = "0.8.10"
 reqsign-core = "3.3.0"
@@ -690,9 +688,6 @@ chrono-tz = { git = "https://github.com/MaterializeInc/chrono-tz.git", rev = "14
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git", rev = "a84c6b71825efaffb332c0d19f18c2bdf9ee7b40" }
-
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "20a1646031763eb813cb5184343f3e10c5918d32" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", rev = "20a1646031763eb813cb5184343f3e10c5918d32" }
 
 # v0.37.1 plus the upstream rustls verifier fixes for `skip_domain_validation`
 # and `accept_invalid_certs` (blackbeam/mysql_async#408, #409). Drop this patch

@@ -23,6 +23,7 @@ use mz_adapter_types::dyncfgs::ENABLE_S3_TABLES_REGION_CHECK;
 use mz_ccsr::{Client, GetBySubjectError};
 use mz_cloud_provider::CloudProvider;
 use mz_controller_types::ClusterId;
+use mz_kafka_client::admin::AdminClient;
 use mz_kafka_util::client::MzClientContext;
 use mz_mysql_util::MySqlTableDesc;
 use mz_ore::collections::CollectionExt;
@@ -66,7 +67,6 @@ use mz_storage_types::sources::{
 use prost::Message;
 use protobuf_native::MessageLite;
 use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree};
-use rdkafka::admin::AdminClient;
 use references::{RetrievedSourceReferences, SourceReferenceClient};
 use uuid::Uuid;
 

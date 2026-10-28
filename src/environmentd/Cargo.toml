@@ -56,6 +56,7 @@ mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-frontegg-mock = { path = "../frontegg-mock", optional = true }
 mz-http-util = { path = "../http-util" }
 mz-interchange = { path = "../interchange" }
+mz-kafka-client = { path = "../kafka-client" }
 mz-license-keys = { path = "../license-keys" }
 mz-metrics = { path = "../metrics" }
 mz-orchestrator = { path = "../orchestrator" }
@@ -91,7 +92,6 @@ pin-project.workspace = true
 postgres = { workspace = true, optional = true }
 postgres-openssl = { workspace = true, optional = true }
 prometheus.workspace = true
-rdkafka-sys.workspace = true
 rand = { workspace = true, optional = true }
 regex = { workspace = true, optional = true }
 rlimit.workspace = true
@@ -139,7 +139,6 @@ postgres-protocol.workspace = true
 postgres_array.workspace = true
 predicates.workspace = true
 proptest.workspace = true
-rdkafka.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 serde_urlencoded.workspace = true

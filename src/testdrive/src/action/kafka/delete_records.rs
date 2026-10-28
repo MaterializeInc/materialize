@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use anyhow::{Context, bail};
+use mz_kafka_client::{Offset, TopicPartitionList};
 use mz_ore::collections::CollectionExt;
-use rdkafka::{Offset, TopicPartitionList};
 
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;

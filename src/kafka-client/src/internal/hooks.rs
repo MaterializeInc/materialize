@@ -188,6 +188,7 @@ impl Logger {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use std::error::Error;
     use std::sync::Mutex;

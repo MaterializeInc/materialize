@@ -10,8 +10,8 @@
 use crate::action::{ControlFlow, State};
 use crate::parser::BuiltinCommand;
 use anyhow::anyhow;
+use mz_kafka_client::admin::{NewTopic, TopicReplication};
 use mz_kafka_util::admin::EnsureTopicConfig;
-use rdkafka::admin::{NewTopic, TopicReplication};
 
 pub async fn run_create_topic(
     mut cmd: BuiltinCommand,

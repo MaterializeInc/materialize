@@ -60,9 +60,8 @@ tokio-openssl = { workspace = true, optional = true }
 thiserror.workspace = true
 tracing-capture = { workspace = true, optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
-# The `tracing-log` feature here is load-bearing: While our busiest-logging dependency (`rdkafka`) is now hooked-up
-# to use `tracing`, we cannot remove this feature until we guarantee no dependencies log using the `log` crate, for
-# log lines we care about.
+# The `tracing-log` feature here is load-bearing: we cannot remove this feature until we guarantee no dependencies log
+# using the `log` crate, for log lines we care about.
 # Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
 # there is no global `tracing` subscriber.
 tracing-subscriber = { workspace = true, optional = true }

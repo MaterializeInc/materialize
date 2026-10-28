@@ -78,6 +78,8 @@ pub struct ClientConfig {
     pub log_level: RDKafkaLogLevel,
 }
 
+// The clippy.toml ban on `ClientConfig::new` is meant for users of this crate.
+#[allow(clippy::disallowed_methods)]
 impl Default for ClientConfig {
     fn default() -> Self {
         Self::new()
@@ -184,7 +186,7 @@ impl FromIterator<(String, String)> for ClientConfig {
     where
         I: IntoIterator<Item = (String, String)>,
     {
-        let mut config = ClientConfig::new();
+        let mut config = ClientConfig::default();
         config.extend(iter);
         config
     }
@@ -225,6 +227,7 @@ pub trait FromClientConfigAndContext<C: ClientContext>: Sized {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

@@ -12,13 +12,13 @@
 use std::time::Duration;
 
 use anyhow::Context;
+use mz_kafka_client::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
+use mz_kafka_client::error::KafkaError;
+use mz_kafka_client::producer::{DeliveryFuture, FutureProducer, FutureRecord};
 use mz_kafka_util::admin::EnsureTopicConfig;
 use mz_kafka_util::client::{
     MzClientContext, create, create_new_client_config_simple, create_with_context,
 };
-use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
-use rdkafka::error::KafkaError;
-use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord};
 
 pub struct KafkaClient {
     producer: FutureProducer<MzClientContext>,

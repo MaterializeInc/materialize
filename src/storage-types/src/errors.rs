@@ -13,6 +13,7 @@ use std::fmt::Display;
 
 use bytes::BufMut;
 use mz_expr::EvalError;
+use mz_kafka_client::error::KafkaError;
 use mz_kafka_util::client::TunnelingClientContext;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use mz_repr::{GlobalId, Row};
@@ -20,7 +21,6 @@ use mz_ssh_util::tunnel::SshTunnelStatus;
 #[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use prost::Message;
-use rdkafka::error::KafkaError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::warn;
