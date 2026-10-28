@@ -26,6 +26,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::cast::CastFrom;
 
+/// Converts `path` to the NUL-terminated form libc expects. Fails with
+/// `InvalidInput` if `path` contains an interior NUL.
 fn c_path(path: &Path) -> io::Result<CString> {
     CString::new(path.as_os_str().as_bytes())
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
@@ -35,6 +37,8 @@ fn c_path(path: &Path) -> io::Result<CString> {
 /// open.
 const OPEN_NAMED_ATTEMPTS: usize = 8;
 
+/// Converts a file offset to `off_t`. Fails with `EFBIG` if it does not
+/// fit, the error the kernel reports for an offset past the file size limit.
 fn off_t(offset: u64) -> io::Result<libc::off_t> {
     libc::off_t::try_from(offset).map_err(|_| io::Error::from_raw_os_error(libc::EFBIG))
 }
