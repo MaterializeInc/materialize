@@ -18,7 +18,9 @@ use crate::config::{
 use crate::consumer::{CommitMode, Consumer, ConsumerContext, DefaultConsumerContext};
 use crate::error::KafkaResult;
 use crate::internal::consumer::{ConsumerInner, PartitionQueueInner};
+use crate::internal::hooks::ConsumerHooks;
 use crate::message::BorrowedMessage;
+use crate::message::Message;
 use crate::metadata::Metadata;
 use crate::topic_partition_list::TopicPartitionList;
 use crate::util::Timeout;
@@ -56,8 +58,9 @@ where
 {
     /// Creates the consumer engine on top of a client.
     pub(crate) fn from_client(client: Client<C>) -> KafkaResult<BaseConsumer<C>> {
-        let _ = client;
-        todo!("consumer: create the consumer engine")
+        let hooks: Arc<dyn ConsumerHooks> = Arc::<C>::clone(client.context());
+        let inner = ConsumerInner::new(Arc::clone(client.cluster()), hooks);
+        Ok(BaseConsumer { client, inner })
     }
 
     /// The consumer engine.
@@ -79,8 +82,7 @@ where
     ///
     /// [`KafkaError::PartitionEOF`]: crate::error::KafkaError::PartitionEOF
     pub fn poll<T: Into<Timeout>>(&self, timeout: T) -> Option<KafkaResult<BorrowedMessage<'_>>> {
-        let _ = timeout.into();
-        todo!("consumer: poll the main queue")
+        self.inner.poll(timeout.into())
     }
 
     /// Splits messages for the specified partition into their own queue.
@@ -101,8 +103,11 @@ where
         topic: &str,
         partition: i32,
     ) -> Option<PartitionQueue<C>> {
-        let _ = (topic, partition);
-        todo!("consumer: split off a partition queue")
+        let queue = self.inner.split_partition_queue(topic, partition)?;
+        Some(PartitionQueue {
+            consumer: Arc::clone(self),
+            queue,
+        })
     }
 }
 
@@ -115,13 +120,11 @@ where
     }
 
     fn subscribe(&self, topics: &[&str]) -> KafkaResult<()> {
-        let _ = topics;
-        todo!("consumer: join the group and subscribe")
+        self.inner.subscribe(topics)
     }
 
     fn assign(&self, assignment: &TopicPartitionList) -> KafkaResult<()> {
-        let _ = assignment;
-        todo!("consumer: replace the assignment")
+        self.inner.assign(assignment)
     }
 
     fn commit(
@@ -129,22 +132,20 @@ where
         topic_partition_list: &TopicPartitionList,
         mode: CommitMode,
     ) -> KafkaResult<()> {
-        let _ = (topic_partition_list, mode);
-        todo!("consumer: OffsetCommit")
+        self.inner.commit(topic_partition_list, mode)
     }
 
     fn commit_consumer_state(&self, mode: CommitMode) -> KafkaResult<()> {
-        let _ = mode;
-        todo!("consumer: commit the offset store")
+        self.inner.commit_consumer_state(mode)
     }
 
     fn store_offset_from_message(&self, message: &BorrowedMessage<'_>) -> KafkaResult<()> {
-        let _ = message;
-        todo!("consumer: store offset + 1 in the offset store")
+        self.inner
+            .store_offset(message.topic(), message.partition(), message.offset() + 1)
     }
 
     fn assignment(&self) -> KafkaResult<TopicPartitionList> {
-        todo!("consumer: current assignment")
+        self.inner.assignment()
     }
 
     fn committed_offsets<T: Into<Timeout>>(
@@ -152,8 +153,7 @@ where
         tpl: TopicPartitionList,
         timeout: T,
     ) -> KafkaResult<TopicPartitionList> {
-        let _ = (tpl, timeout.into());
-        todo!("consumer: OffsetFetch")
+        self.inner.committed_offsets(tpl, timeout.into())
     }
 
     fn offsets_for_times<T: Into<Timeout>>(
@@ -161,12 +161,11 @@ where
         timestamps: TopicPartitionList,
         timeout: T,
     ) -> KafkaResult<TopicPartitionList> {
-        let _ = (timestamps, timeout.into());
-        todo!("consumer: ListOffsets by timestamp")
+        self.inner.offsets_for_times(timestamps, timeout.into())
     }
 
     fn position(&self) -> KafkaResult<TopicPartitionList> {
-        todo!("consumer: application positions")
+        self.inner.position()
     }
 
     fn fetch_metadata<T: Into<Timeout>>(
@@ -193,7 +192,7 @@ where
     C: ConsumerContext + 'static,
 {
     consumer: Arc<BaseConsumer<C>>,
-    queue: Arc<PartitionQueueInner>,
+    queue: PartitionQueueInner,
 }
 
 impl<C> PartitionQueue<C>
@@ -208,8 +207,7 @@ where
     /// Control records and aborted transactional records are never returned,
     /// but polling past them advances [`Consumer::position`].
     pub fn poll<T: Into<Timeout>>(&self, timeout: T) -> Option<KafkaResult<BorrowedMessage<'_>>> {
-        let _ = (&self.consumer, &self.queue, timeout.into());
-        todo!("consumer: poll a partition queue")
+        self.queue.poll(self.consumer.inner(), timeout.into())
     }
 
     /// Sets a callback that will be invoked whenever the queue becomes
@@ -221,7 +219,16 @@ where
     where
         F: Fn() + Send + Sync + 'static,
     {
-        let _ = f;
-        todo!("consumer: register the nonempty callback")
+        self.queue.set_nonempty_callback(Arc::new(f));
+    }
+}
+
+impl<C> Drop for BaseConsumer<C>
+where
+    C: ConsumerContext + 'static,
+{
+    fn drop(&mut self) {
+        // Leave the group before the client shuts down its connections.
+        self.inner.close();
     }
 }

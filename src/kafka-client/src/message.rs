@@ -221,6 +221,7 @@ struct HeaderSpan {
 /// the fetched buffer and is only indexed when first accessed, so a message
 /// whose headers are never read costs no allocation.
 pub struct BorrowedHeaders {
+    /// The header entries, after the count.
     raw: Bytes,
     count: usize,
     index: OnceLock<Box<[HeaderSpan]>>,
@@ -248,13 +249,25 @@ impl BorrowedHeaders {
     pub(crate) fn from_record_bytes(
         raw: Bytes,
     ) -> Result<Option<BorrowedHeaders>, HeaderDecodeError> {
-        let mut count = 0;
-        walk_headers(&raw, |_| count += 1)?;
+        let mut pos = 0;
+        let count = read_varint(&raw, &mut pos)?;
+        let count = usize::try_from(count).map_err(|_| HeaderDecodeError::InvalidLength)?;
+        BorrowedHeaders::from_entries(count, raw.slice(pos..))
+    }
+
+    /// Like [`BorrowedHeaders::from_record_bytes`], for a header section whose
+    /// count was already read: `entries` holds exactly the `count` entries
+    /// that follow it.
+    pub(crate) fn from_entries(
+        count: usize,
+        entries: Bytes,
+    ) -> Result<Option<BorrowedHeaders>, HeaderDecodeError> {
+        walk_entries(&entries, count, |_| ())?;
         if count == 0 {
             return Ok(None);
         }
         Ok(Some(BorrowedHeaders {
-            raw,
+            raw: entries,
             count,
             index: OnceLock::new(),
         }))
@@ -292,7 +305,7 @@ impl BorrowedHeaders {
     fn spans(&self) -> &[HeaderSpan] {
         self.index.get_or_init(|| {
             let mut spans = Vec::with_capacity(self.count);
-            walk_headers(&self.raw, |span| spans.push(span))
+            walk_entries(&self.raw, self.count, |span| spans.push(span))
                 .expect("headers are validated on construction");
             spans.into_boxed_slice()
         })
@@ -331,11 +344,13 @@ impl fmt::Debug for BorrowedHeaders {
     }
 }
 
-/// Validates a record header section, calling `f` for every header.
-fn walk_headers(raw: &[u8], mut f: impl FnMut(HeaderSpan)) -> Result<(), HeaderDecodeError> {
+/// Validates `count` encoded header entries, calling `f` for every header.
+fn walk_entries(
+    raw: &[u8],
+    count: usize,
+    mut f: impl FnMut(HeaderSpan),
+) -> Result<(), HeaderDecodeError> {
     let mut pos = 0;
-    let count = read_varint(raw, &mut pos)?;
-    let count = usize::try_from(count).map_err(|_| HeaderDecodeError::InvalidLength)?;
     for _ in 0..count {
         let key_len = read_varint(raw, &mut pos)?;
         let key_len = usize::try_from(key_len).map_err(|_| HeaderDecodeError::InvalidLength)?;

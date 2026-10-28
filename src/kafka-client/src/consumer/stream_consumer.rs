@@ -12,6 +12,7 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 
@@ -38,8 +39,17 @@ impl<'a> Stream for MessageStream<'a> {
     type Item = KafkaResult<BorrowedMessage<'a>>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let _ = (self.inner, cx);
-        todo!("consumer: poll the main queue, registering the waker")
+        let inner = self.inner;
+        if let Some(result) = inner.poll(Timeout::After(Duration::ZERO)) {
+            return Poll::Ready(Some(result));
+        }
+        // Register, then poll again, so that data arriving in between is not
+        // missed.
+        inner.register_waker(cx.waker());
+        match inner.poll(Timeout::After(Duration::ZERO)) {
+            Some(result) => Poll::Ready(Some(result)),
+            None => Poll::Pending,
+        }
     }
 }
 
@@ -69,6 +79,12 @@ where
 {
     fn from_config_and_context(config: &ClientConfig, context: C) -> KafkaResult<Self> {
         let base = BaseConsumer::from_config_and_context(config, context)?;
+        // librdkafka has no consumer queue without a group.
+        if !base.inner().has_group() {
+            return Err(KafkaError::ClientCreation(
+                "librdkafka failed to create consumer queue".into(),
+            ));
+        }
         Ok(StreamConsumer {
             base: Arc::new(base),
         })

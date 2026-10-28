@@ -756,6 +756,12 @@ impl RecordHeaders {
         self.count == 0
     }
 
+    /// The declared header count and the encoded headers that follow it,
+    /// sharing the batch's buffer.
+    pub(crate) fn into_parts(self) -> (usize, Bytes) {
+        (self.count, self.data)
+    }
+
     /// Iterates over `(key, value)` pairs, with `None` for a null value.
     /// Malformed header data yields one error, then the iterator ends.
     pub(crate) fn iter(&self) -> HeaderIter<'_> {
