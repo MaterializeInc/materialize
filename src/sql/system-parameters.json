@@ -1040,6 +1040,15 @@
       "dyncfg": false
     },
     {
+      "name": "enable_drop_in_use_index",
+      "typeName": "boolean",
+      "default": "off",
+      "description": "Whether dropping an index while other dataflows read from it, leaving them running on an orphaned arrangement is allowed (Materialize).",
+      "scope": "environment",
+      "userVisible": false,
+      "dyncfg": false
+    },
+    {
       "name": "enable_eager_delta_joins",
       "typeName": "boolean",
       "default": "off",
