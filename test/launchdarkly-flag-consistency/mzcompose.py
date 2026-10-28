@@ -249,6 +249,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_coalesce_case_transform
+    enable_column_paged_batcher_file_extents
     enable_columnar_merge_batcher
     enable_compute_correction_v2_spill
     enable_compute_index_peek_offload

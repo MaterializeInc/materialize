@@ -52,7 +52,9 @@ static POOL_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 static FILE_FALLBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Whether [`apply_pool_config`] was asked for a file backend and installed
-/// the pool on swap instead.
+/// the pool on swap instead. Covers installation only: a store that later
+/// disables writes on an I/O error reports through
+/// `mz_column_pool_extent_file_write_errors_total`.
 pub fn file_backend_fell_back() -> bool {
     FILE_FALLBACK.load(std::sync::atomic::Ordering::Relaxed)
 }

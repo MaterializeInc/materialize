@@ -87,7 +87,7 @@ pub fn register(registry: &MetricsRegistry) {
         let _gauge: ComputedUIntGauge = registry.register_computed_gauge(
             metric!(
                 name: "mz_column_pool_backend_fallback",
-                help: "1 if the buffer pool was configured for the file store and runs on swap instead, else 0.",
+                help: "1 if the buffer pool was configured for the file store and installed on swap instead, else 0. Covers installation only: a store that later disables writes on an I/O error reports through mz_column_pool_extent_file_write_errors_total.",
             ),
             || u64::from(crate::pool_config::file_backend_fell_back()),
         );
