@@ -99,10 +99,6 @@ pub enum Error {
     /// Error that happens when a user cancels a login from the console UI.
     #[error("Login canceled.")]
     LoginOperationCanceled,
-    /// Error that raises when the clientid or secret are invalid.
-    /// It is a simpler alternative for parsing errors.
-    #[error("Invalid app-password.")]
-    InvalidAppPassword,
     /// Error returned by the OAuth authorization or token endpoint during a
     /// browser login.
     #[error("Login failed: {0}")]

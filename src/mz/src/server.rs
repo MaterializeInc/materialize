@@ -16,22 +16,12 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::get,
 };
-use mz_frontegg_auth::AppPassword;
 use serde::Deserialize;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::UnboundedSender;
-use uuid::Uuid;
 
 use crate::error::Error;
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct BrowserAPIToken {
-    client_id: String,
-    secret: String,
-}
-
-// Please update this link if the logo location changes in the future.
 const LOGO_URL: &str = "https://materialize.com/svgs/brand-guide/materialize-purple-mark.svg";
 
 /// Produces an HTML string formatted
@@ -46,48 +36,6 @@ fn format_as_html_message(msg: &str) -> Html<String> {
             </div>
         </body>
     ", LOGO_URL, msg)))
-}
-
-/// Request handler for the server waiting the browser API token creation
-/// Axum requires the handler be async even though we don't await
-#[allow(clippy::unused_async)]
-async fn request(
-    Query(BrowserAPIToken { secret, client_id }): Query<BrowserAPIToken>,
-    tx: UnboundedSender<Result<AppPassword, Error>>,
-) -> Response {
-    if secret.len() == 0 && client_id.len() == 0 {
-        tx.send(Err(Error::LoginOperationCanceled))
-            .unwrap_or_else(|_| panic!("Error handling login details."));
-        return format_as_html_message("Login canceled. You can now close the tab.")
-            .into_response();
-    }
-
-    let client_id = client_id.parse::<Uuid>();
-    let secret = secret.parse::<Uuid>();
-    if let (Ok(client_id), Ok(secret)) = (client_id, secret) {
-        let app_password = AppPassword {
-            client_id,
-            secret_key: secret,
-        };
-        tx.send(Ok(app_password))
-            .unwrap_or_else(|_| panic!("Error handling login details."));
-        format_as_html_message("You can now close the tab.").into_response()
-    } else {
-        tx.send(Err(Error::InvalidAppPassword))
-            .unwrap_or_else(|_| panic!("Error handling login details."));
-        format_as_html_message(
-            "Invalid credentials. Please, try again or communicate with support.",
-        )
-        .into_response()
-    }
-}
-
-/// Server for handling login's information.
-pub async fn server(
-    tx: UnboundedSender<Result<AppPassword, Error>>,
-) -> (impl Future<Output = Result<(), std::io::Error>>, u16) {
-    let app = Router::new().route("/", get(|body| request(body, tx)));
-    serve(app).await
 }
 
 /// The query string of an OAuth authorization response (RFC 6749 §4.1.2).

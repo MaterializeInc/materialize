@@ -30,7 +30,6 @@ use mz_frontegg_client::config::{
 };
 use sha2::{Digest, Sha256};
 
-use mz_cloud_api::config::DEFAULT_ENDPOINT;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
 use tokio::{select, sync::mpsc};
@@ -42,68 +41,8 @@ use crate::{
     context::{Context, ProfileContext},
     error::Error,
     error::Error::ProfileNameAlreadyExistsError,
-    server::{oauth_callback_server, server},
+    server::oauth_callback_server,
 };
-
-/// Strips the `.api` from the login endpoint.
-/// The `.api` prefix will cause a failure during login
-/// in the browser.
-fn strip_api_from_endpoint(endpoint: Url) -> Url {
-    if let Some(domain) = endpoint.domain() {
-        if let Some(corrected_domain) = domain.strip_prefix("api.") {
-            let mut new_endpoint = endpoint.clone();
-            let _ = new_endpoint.set_host(Some(corrected_domain));
-
-            return new_endpoint;
-        }
-    };
-
-    endpoint
-}
-
-/// Opens the default web browser in the host machine
-/// and awaits a single request containing the profile's app password.
-pub async fn init_with_browser(cloud_endpoint: Option<Url>) -> Result<AppPassword, Error> {
-    // Bind a web server to a local port to receive the app password.
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    let (server, port) = server(tx).await;
-
-    // Build the login URL
-    let mut url =
-        strip_api_from_endpoint(cloud_endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.clone()));
-
-    url.path_segments_mut()
-        .expect("constructor validated URL can be a base")
-        .extend(&["account", "login"]);
-
-    let mut query_pairs = url.query_pairs_mut();
-    query_pairs.append_pair(
-        "redirectUrl",
-        &format!("/access/cli?redirectUri=http://localhost:{port}&tokenDescription=Materialize%20CLI%20%28mz%29"),
-    );
-    // The replace is a little hack to avoid asking an additional parameter
-    // for a custom login.
-    let open_url = &query_pairs.finish().as_str().replace("cloud", "console");
-
-    // Open the browser to login user.
-    if let Err(_err) = open::that(open_url) {
-        println!(
-            "Error: Unable to launch a web browser. Access the login page using this link: '{:?}', or execute `mz profile init --no-browser` in your command line.",
-            open_url
-        )
-    }
-
-    // Wait for the browser to send the app password to our server.
-    select! {
-        _ = server => unreachable!("server should not shut down"),
-        result = rx.recv() => {
-            match result {
-                Some(app_password_result) => app_password_result,
-                None => { panic!("failed to login via browser") },
-            }
-        }
-    }
-}
 
 /// Logs in through the admin endpoint's OAuth authorization server in the
 /// default web browser, then creates an app password with the resulting access
@@ -305,7 +244,6 @@ pub async fn init_without_browser(admin_endpoint: Option<Url>) -> Result<AppPass
 pub async fn init(
     scx: &Context,
     no_browser: bool,
-    oauth: bool,
     oauth_client_id: Option<&str>,
     force: bool,
     admin_endpoint: Option<Url>,
@@ -328,10 +266,12 @@ pub async fn init(
 
     let app_password = if no_browser {
         init_without_browser(admin_endpoint.clone()).await?
-    } else if oauth || oauth_client_id.is_some() {
-        init_with_oauth(admin_endpoint.clone(), oauth_client_id).await?
     } else {
-        init_with_browser(cloud_endpoint.clone()).await?
+        let oauth_endpoint = scx.get_admin_endpoint(
+            cloud_endpoint.clone(),
+            admin_endpoint.as_ref().map(Url::as_str),
+        )?;
+        init_with_oauth(oauth_endpoint, oauth_client_id).await?
     };
 
     let new_profile = TomlProfile {

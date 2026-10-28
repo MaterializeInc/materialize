@@ -34,12 +34,7 @@ pub enum ProfileSubcommand {
         /// Prompt for a username and password on the terminal.
         #[clap(long)]
         no_browser: bool,
-        /// Log in through the admin endpoint's OAuth authorization server,
-        /// instead of through the console.
-        #[clap(long, hide = true, env = "MZ_OAUTH")]
-        oauth: bool,
-        /// Use this OAuth client ID instead of registering a client. Implies
-        /// `--oauth`.
+        /// Use this OAuth client ID instead of registering a client.
         #[clap(long, hide = true, env = "MZ_OAUTH_CLIENT_ID")]
         oauth_client_id: Option<String>,
         /// The admin or cloud endpoint to use.
@@ -90,7 +85,6 @@ pub async fn run(cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
         // Initiating a profile doesn't requires an active profile.
         ProfileSubcommand::Init {
             no_browser,
-            oauth,
             oauth_client_id,
             endpoint,
             force,
@@ -98,7 +92,6 @@ pub async fn run(cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
             mz::command::profile::init(
                 &cx,
                 *no_browser,
-                *oauth,
                 oauth_client_id.as_deref(),
                 *force,
                 endpoint.admin_endpoint.clone(),
@@ -126,7 +119,6 @@ pub async fn run(cx: Context, cmd: ProfileCommand) -> Result<(), Error> {
                 },
                 ProfileSubcommand::Init {
                     no_browser: _,
-                    oauth: _,
                     oauth_client_id: _,
                     endpoint: _,
                     force: _,
