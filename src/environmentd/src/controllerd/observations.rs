@@ -126,6 +126,18 @@ impl Observations {
         catalog: &Catalog,
         launch: &AdapterProvisioningConfig,
         sizes: &BTreeMap<String, AdapterAllocation>,
+    ) -> Vec<serde_json::Value> {
+        self.adapter_observations(catalog, launch, sizes)
+            .iter()
+            .map(|entry| adapter_inventory(entry, launch))
+            .collect()
+    }
+
+    fn adapter_observations(
+        &self,
+        catalog: &Catalog,
+        launch: &AdapterProvisioningConfig,
+        sizes: &BTreeMap<String, AdapterAllocation>,
     ) -> Vec<AdapterInventoryEntry> {
         let mut desired = super::desired_adapters(catalog, launch, sizes);
         for entry in &mut desired {
@@ -368,7 +380,7 @@ impl Observations {
         sizes: &BTreeMap<String, AdapterAllocation>,
     ) -> Result<(), CatalogError> {
         let mut ops = Vec::new();
-        for entry in self.adapters(catalog, launch, sizes) {
+        for entry in self.adapter_observations(catalog, launch, sizes) {
             let previous = catalog
                 .state()
                 .get_adapter_runtime(entry.id, entry.generation);
@@ -385,6 +397,55 @@ impl Observations {
         }
         Ok(())
     }
+}
+
+fn adapter_endpoints(
+    entry: &AdapterInventoryEntry,
+    launch: &AdapterProvisioningConfig,
+) -> Vec<AdapterEndpoint> {
+    let mut endpoints = Vec::new();
+    for (name, port, kind) in launch
+        .listeners
+        .sql
+        .keys()
+        .map(|name| (name, launch.sql_port_name(name), "sql"))
+        .chain(
+            launch
+                .listeners
+                .http
+                .keys()
+                .map(|name| (name, launch.http_port_name(name), "http")),
+        )
+    {
+        if let Some(addresses) = port.and_then(|port| entry.endpoints.get(&port)) {
+            for address in addresses {
+                endpoints.push(AdapterEndpoint {
+                    listener: name.clone(),
+                    kind: kind.into(),
+                    address: address.clone(),
+                });
+            }
+        }
+    }
+    endpoints
+}
+
+fn adapter_inventory(
+    entry: &AdapterInventoryEntry,
+    launch: &AdapterProvisioningConfig,
+) -> serde_json::Value {
+    let mut endpoints = BTreeMap::<String, Vec<String>>::new();
+    for endpoint in adapter_endpoints(entry, launch) {
+        endpoints
+            .entry(format!("{}-{}", endpoint.kind, endpoint.listener))
+            .or_default()
+            .push(endpoint.address);
+    }
+    // Backend port names obey orchestrator constraints. Public endpoint labels
+    // instead identify the configured listener, matching the SQL projection.
+    let mut inventory = serde_json::json!(entry);
+    inventory["endpoints"] = serde_json::json!(endpoints);
+    inventory
 }
 
 fn adapter_runtime(
@@ -405,30 +466,7 @@ fn adapter_runtime(
         readiness_changed_at: None,
         provisioning_error: None,
     });
-    runtime.endpoints.clear();
-    for (name, port, kind) in launch
-        .listeners
-        .sql
-        .keys()
-        .map(|name| (name, launch.sql_port_name(name), "sql"))
-        .chain(
-            launch
-                .listeners
-                .http
-                .keys()
-                .map(|name| (name, launch.http_port_name(name), "http")),
-        )
-    {
-        if let Some(addresses) = port.and_then(|port| entry.endpoints.get(&port)) {
-            for address in addresses {
-                runtime.endpoints.push(AdapterEndpoint {
-                    listener: name.clone(),
-                    kind: kind.into(),
-                    address: address.clone(),
-                });
-            }
-        }
-    }
+    runtime.endpoints = adapter_endpoints(entry, launch);
     runtime.provisioning_error = entry.provisioning_error.clone();
     // Adapters have exactly one process. Absence of an event is not a transition.
     if let Some(event) = entry.observed_processes.first() {
@@ -540,6 +578,33 @@ mod tests {
         observations.retain(&BTreeSet::new());
         observations.complete_probe(result(replacement), &launch);
         assert!(!observations.readiness.contains_key(&service));
+    }
+
+    #[mz_ore::test]
+    fn inventory_labels_endpoints_by_protocol_and_listener() {
+        let (mut entry, mut launch) = fixture();
+        launch
+            .listeners
+            .sql
+            .insert("analytics".into(), launch.listeners.sql["external"].clone());
+        entry.endpoints = BTreeMap::from([
+            ("sql-0".into(), vec!["127.0.0.1:10000".into()]),
+            ("sql-1".into(), vec!["127.0.0.1:10001".into()]),
+            ("sql-2".into(), vec!["127.0.0.1:10002".into()]),
+            ("http-0".into(), vec!["127.0.0.1:10003".into()]),
+            ("http-1".into(), vec!["127.0.0.1:10004".into()]),
+        ]);
+
+        assert_eq!(
+            adapter_inventory(&entry, &launch)["endpoints"],
+            serde_json::json!({
+                "sql-analytics": ["127.0.0.1:10000"],
+                "sql-external": ["127.0.0.1:10001"],
+                "sql-internal": ["127.0.0.1:10002"],
+                "http-external": ["127.0.0.1:10003"],
+                "http-internal": ["127.0.0.1:10004"],
+            })
+        );
     }
 
     #[mz_ore::test]

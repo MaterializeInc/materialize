@@ -67,6 +67,9 @@ The default adapter tries configured SQL port 6875. If it is occupied, use the
 backend-assigned external SQL endpoint in `/api/adapters`, also for additional
 adapters. Wait for readiness before connecting. Assigned endpoints alone do not
 mean an adapter is ready. Do not assume all adapters share a fixed SQL/HTTP port.
+Both `/api/adapters` and `/api/inventory` label adapter endpoints by protocol and
+configured listener name, such as `sql-external`, `sql-internal` and `http-external`.
+Custom listener names are preserved rather than replaced by backend port numbers.
 Controller HTTP is unauthenticated and binds to loopback on port 6882. Override
 it with `-- --controller-http-listen-addr=127.0.0.1:PORT`. Adapter listeners use
 the existing no-auth developer configuration, which permits non-loopback access.

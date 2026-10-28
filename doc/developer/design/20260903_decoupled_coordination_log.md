@@ -20,6 +20,12 @@ old/new-version, prewarming, promotion, client switching and retirement outcomes
 
 ## Resume here
 
+HTTP adapter listing and inventory use protocol-qualified listener names such as
+`sql-external` and `http-internal`, not backend ordinals. Backend port names and
+SQL observations are unchanged. Formatting and strict all-target Clippy pass.
+The serialization regression compiles but has not run. The active lifecycle
+witness uses the named keys and checks both HTTP routes. Verify with rebuilt binaries.
+
 Published head is `969056d5`. CI141151 is terminal, with no remaining queued or
 executing jobs. CI141217 checks that head. Its x86_64 product job
 `01a1820c-1f44-4f4e-b53f-8ec54d183cac` built and pushed images, then failed the
