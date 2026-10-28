@@ -3821,3 +3821,104 @@ def workflow_restarted_in_place_after_promotion(c: Composition) -> None:
     c.sql("INSERT INTO t VALUES (2)", service="mz_new")
     assert c.sql_query("SELECT count(*) FROM t", service="mz_new")[0][0] == 2
     assert _leader_status(c, "mz_new") == DeploymentStatus.IS_LEADER.value
+
+
+def _replica_ids_of_cluster(
+    c: Composition, mz_service: str, cluster_id: str
+) -> set[str]:
+    """Returns the ids of the replica processes of *cluster_id* running in *mz_service*."""
+    prefix = "--opentelemetry-resource=replica_id="
+    ids = set()
+    for line in c.exec(
+        mz_service, "ps", "-eo", "args=", capture=True, silent=True
+    ).stdout.splitlines():
+        args = line.split()
+        if f"--opentelemetry-resource=cluster_id={cluster_id}" in args:
+            ids.update(
+                arg.removeprefix(prefix) for arg in args if arg.startswith(prefix)
+            )
+    return ids
+
+
+def workflow_system_replica_id_collision(c: Composition) -> None:
+    """A system replica id the leader reuses leaves no orphaned replica behind.
+
+    A controller resize names the leader's mz_catalog_server replica r2, so the
+    read-only generation's catalog open creates r1 in memory with the next
+    system replica id. The leader then gives that id to an mz_analytics replica,
+    and the read-only generation reboots on DDL and gives its r1 a new id. Its
+    process for the old id must go.
+    """
+    new_size = "scale=1,workers=1"
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+    c.sql(
+        f"""
+        ALTER SYSTEM SET with_0dt_deployment_ddl_check_interval = '1s';
+        ALTER CLUSTER mz_catalog_server SET (SIZE = '{new_size}');
+        """,
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    deadline = time.time() + 120
+    while True:
+        replicas = c.sql_query(
+            "SELECT r.name, r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+            "WHERE c.name = 'mz_catalog_server'",
+            service="mz_old",
+        )
+        if [size for _name, size in replicas] == [new_size]:
+            break
+        assert time.time() < deadline, f"the resize did not finish: {replicas}"
+        time.sleep(1)
+    assert replicas[0][0] != "r1", "the controller named the resized replica r1"
+
+    c.up("mz_new")
+    deadline = time.time() + 120
+    while not (ids := _replica_ids_of_cluster(c, "mz_new", "s2")):
+        assert (
+            time.time() < deadline
+        ), "mz_new never started an mz_catalog_server replica"
+        time.sleep(1)
+    assert len(ids) == 1, ids
+    (old_id,) = ids
+
+    # The leader allocates the id the read-only generation holds in memory. Only
+    # the cluster's owner can alter it, and the controller creates the replica on
+    # its next tick.
+    c.sql(
+        "ALTER CLUSTER mz_analytics SET (REPLICATION FACTOR 1)",
+        service="mz_old",
+        port=6877,
+        user="mz_analytics",
+    )
+    deadline = time.time() + 60
+    while not (
+        taken := c.sql_query(
+            "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id "
+            "WHERE c.name = 'mz_analytics'",
+            service="mz_old",
+        )
+    ):
+        assert (
+            time.time() < deadline
+        ), "the leader never created an mz_analytics replica"
+        time.sleep(1)
+    assert taken == [
+        (old_id,)
+    ], f"leader took {taken}, read-only generation holds {old_id}"
+
+    # The leader's new system replica does not make mz_new reboot, because its DDL
+    # check compares user items and user replicas only. User DDL does. Only a
+    # reboot gives mz_new's mz_catalog_server replica another id.
+    c.sql("CREATE TABLE collision_trigger (a int)", service="mz_old")
+    deadline = time.time() + 300
+    while True:
+        ids = _replica_ids_of_cluster(c, "mz_new", "s2")
+        if len(ids) == 1 and old_id not in ids:
+            break
+        assert (
+            time.time() < deadline
+        ), f"mz_new runs {ids}, expected one id other than {old_id}"
+        time.sleep(1)
