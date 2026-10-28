@@ -408,6 +408,12 @@ def workflow_disabled_cluster_replica_size_survives_restart(c: Composition) -> N
                 ! CREATE CLUSTER REPLICA test.r2 SIZE '{size}'
                 contains:unknown cluster replica size {size}
 
+                # So is converting an empty unmanaged cluster to the disabled size.
+                > CREATE CLUSTER empty REPLICAS ()
+
+                ! ALTER CLUSTER empty SET (MANAGED, SIZE '{size}')
+                contains:unknown cluster replica size {size}
+
                 # A managed cluster configured with the disabled size can still
                 # create replicas of it.
                 > ALTER CLUSTER managed SET (REPLICATION FACTOR 1)
