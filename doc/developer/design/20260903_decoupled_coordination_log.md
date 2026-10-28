@@ -6,195 +6,126 @@ The [PR](https://github.com/MaterializeInc/materialize/pull/38696) provides the
 reviewer-facing summary. Replace this handoff as work advances, rather than
 appending a work log. Detailed evidence stays outside these documents.
 
-## Current work: M3 SQL/HTTP lifecycle
+## Current work: M3 runtime acceptance
 
 Sole implementer: `2026-10-27-11-01-36-080`. Bookmark: `decoupled-coordination`,
-based on pinned `d9a2c5dc40`. M2 is closed, including the 60s publication default.
-The controller-managed two-adapter demonstration passes. SQL/HTTP lifecycle,
-replica-policy integration, zero-adapter recovery, interrupted initialization and
-deployment/backend acceptance remain open. Broad CI is not green.
-
-Deployment acceptance includes publishing and executing the local upgrade
-walkthrough in [the developer guide](../controllerd.md), following the design's
-old/new-version, prewarming, promotion, client switching and retirement outcomes.
+based on pinned `d9a2c5dc40`. M2 remains closed, including the 60s publication
+default. Published implementation head is `6dbd009d`. M3 is not complete.
 
 ## Resume here
 
-Aljoscha explicitly requested destructive default-environment reset after deleting
-local state. `bin/controllerd --reset` now clears only the default local metadata
-schemas and state directory, then starts fresh. It stops recoverable associated
-processes first, rejects custom targets and refuses a live foreign-worktree user
-of the same database. Recovery also retains directly discovered process identities
-when PID records are missing. SQL failures preserve local files. Independent
-review findings on cross-worktree safety and lost PID records are resolved with
-real-process regressions. All 29 launcher tests pass, plus Black/Ruff. No reset has
-been executed against the user's database. This steering supersedes the earlier
-blanket reset rejection, without changing normal stop/restart preservation.
+Default debug revision `888e822f` passed the real `bin/controllerd` witness:
+managed relay initialization, maintained SQL, Ctrl-C and unchanged adoption,
+relay-only executable replacement with retained endpoint/SQL child PIDs/session,
+whole-environment stop after controller exit, and restart retaining SQL data.
+Cleanup succeeded. The build through `bin/controllerd --build-only` took 42m33s.
+Evidence is preserved off-worker in `public-launcher-888e822f.tgz`, including
+`launcher-5adaafebc6e8413bac8b3763148bf52c/results.json` and the executed witness.
+This does not cover the later default-reset helper.
 
-The real default development build through `bin/controllerd --build-only` passed
-on worker `i-0788036f0778687f1` at revision `888e822f` in 42m33s. Task108 finished.
-Worker source must remain pinned for the corresponding runtime acceptance. The
-worker has about17GiB free after that build. Managed-relay/public-launcher runtime
-acceptance is next. Task109's disk monitor also finished.
+The two-adapter SQL/HTTP lifecycle witness on the same debug revision failed
+once, then passed unchanged. The failed run reached adapter replacement before
+both adapters panicked at `src/txn-wal/src/txn_cache.rs:595`: a retained write was
+older than the global minimum unapplied timestamp. Restarts repeated the panic.
+Do not dismiss this as a deadline or weaken the assertion. A two-shard reduction reproduces it twice in an extracted std-only harness
+(`/tmp/txn-cache-repro/repro.rs`), not a Cargo test. The cache file is identical
+to pinned upstream. Per-shard cleanup leaves another shard behind the advancing
+global minimum, violating global compaction validation without losing writes in
+the reduction. Oracle review of the shared invariant/repair is running. No
+production changes or assertion weakening have been made.
+Both runs are preserved in `debug-lifecycle-888e822f.tgz`:
+`run-93d7927e3ac54f4597f18d7b4a8f6feb` failed,
+`run-04119edf999540daafc2b286ccba5fc7` passed.
+The passing run covers protocol-named HTTP endpoints. It does not erase the
+intermittent failure.
 
-HTTP adapter listing and inventory use protocol-qualified listener names such as
-`sql-external` and `http-internal`, not backend ordinals. Backend port names and
-SQL observations are unchanged. Formatting and strict all-target Clippy pass.
-The serialization regression compiles but has not run. The active lifecycle
-witness uses the named keys and checks both HTTP routes. Verify with rebuilt binaries.
+Aljoscha reported controller exit after `pkill adapterd`. The supplied exit241
+indicates SIGTERM, not a panic. Full-command matching would also match
+controllerd's `--adapterd-image` argument, but that explanation is unconfirmed.
+The real launcher witness passed plain `/usr/bin/pkill adapterd`, after verifying
+all matches belonged to its disposable environment. Controllerd survived, replaced
+only its adapter, and retained replica PIDs and maintained data. Evidence and
+cleanup success are preserved in `public-launcher-pkill-888e822f.tgz`, run
+`launcher-7d1c815c44d4461f89c5afd7fdae504f`. The local report remains unexplained.
 
-Published head is `969056d5`. CI141151 is terminal, with no remaining queued or
-executing jobs. CI141217 checks that head. Its x86_64 product job
-`01a1820c-1f44-4f4e-b53f-8ec54d183cac` built and pushed images, then failed the
-public-registry gate: `materialize/pubsubd` is not public on Docker Hub. The exact
-read-only visibility probe still returns false. A registry owner must make the
-repository public. Do not bypass the check or change shared permissions without
-approval. CI141217 is now terminal: 20 jobs passed, including both Clippies,
-lint/rustfmt and Console E2E/staging. Its other failure is merge skew against the
-pinned upstream base. Cargo tests and downstream integration did not execute
-because the product job failed. No verification remains running. The draft PR summary now reflects the implemented
-launcher, lifecycle and collection endpoint, with runtime acceptance still open.
+Next acceptance: concurrent adapter replica policy, interrupted initialization,
+compatible old/new deployment coexistence and the executed user-facing upgrade
+walkthrough in [the developer guide](../controllerd.md), then remaining backend
+and broad regression gates. Agent34 identified the existing ON REFRESH
+empty/one/empty regression in `test/testdrive/cluster-controller.td:1033–1117`:
+run with both adapters, resize across endpoints, then repeat new transitions with
+each adapter as sole survivor. Preserve default policy ticks and publication
+cadence. Single-active-deployment status queries do not prove prewarming isolation.
 
-Lifecycle core (`c5838f31`), local launcher (`4515a0df`) and deployment-qualified
-observations (`6bb0bfe4`) are implemented. SQL CREATE/DROP/RENAME require superuser
-with optional RBAC disabled. HTTP adapter management uses the same validated
-catalog operations, without in-process authentication, on port 6882 by default.
-Both independent reviews approved authority, fencing and ownership boundaries.
+## Implemented contracts and verification
 
-`AdapterRuntime` stores change-only observations by adapter and generation.
-Declaration drop and generation retirement clean up its rows. It does not
-invalidate planning or publish builtin-table rows. SQL exposes named endpoints,
-backend status and separately observed readiness. Readiness uses existing
-unauthenticated health routes, with target/revision checks on late responses.
-Kubernetes time-only events do not invalidate readiness. The branch-owned v96
-schema and fixture were updated in place, with matching hashes verified.
+Adapter policy remains deployment-local and catalog-validated, enabled separately
+from provisioning ownership (`bc10afcb`). No designated policy leader. Controllerd
+initializes deployments, enacts committed process inventory and serves the simple
+unauthenticated administrative listener. It does not own replica policy.
 
-Strict combined all-target Clippy passes for adapter, environmentd, sqllogictest
-and catalog-debug after review fixes. Parser tests pass (76 passed, one ignored).
-Catalog lifecycle, runtime authority/roundtrip/planning, promotion, multi-subscriber
-and upgrade checks pass. New builtin descriptor validation passes. The removal of
-unused transaction helpers was subsequently compile-checked. HTTP and observation
-unit tests compile but have not executed. Updated SLT/testdrive catalog listings
-and the RBAC-disabled denial regression also await execution.
+SQL CREATE/DROP/RENAME require superuser even with optional RBAC disabled. HTTP
+uses the same validated catalog operations. Deployment-qualified `AdapterRuntime`
+observations expose named endpoints, backend status and separate readiness.
+Drop/retirement clean them up. They do not invalidate planning or publish builtin
+rows. Late readiness results check target/revision. Reviews approved authority,
+fencing and ownership. Parser, catalog lifecycle/runtime/promotion/upgrade tests
+and strict combined Clippy passed. Some HTTP unit tests and updated SLT/testdrive
+regressions still await execution.
 
-The managed relay path is implemented. Plain `bin/controllerd` provisions pubsubd
-from static configuration before constructing Persist clients, then passes its
-assigned endpoint to adapters and replicas. The relay has an environment-scoped
-backend identity and appears in HTTP inventory. Explicit `--pubsub-url` selects
-external mode, without adoption or a TCP readiness gate. Only the relay opts out
-of Kubernetes controller-owner references. Other service ownership is unchanged.
+The CI141217 candidate `969056d5` passed all24 SQL/HTTP lifecycle checks, including
+paused-peer catch-up, superuser enforcement, independent sessions, replacement,
+controller restarts, collection filters, zero-adapter restart without recreation,
+and HTTP recovery of maintained data. Its external-relay evidence is in
+`run-4dc771671d034ee8a0a142f051818c1d/`. The debug rerun above adds named-endpoint
+coverage but exposes the open transaction-cache failure.
 
-The standalone relay parser regression passes. Strict all-target Clippy passes
-for environmentd and both process/Kubernetes backends. All six Kubernetes library
-tests pass, including generated resource ownership and address parity. All 15
-launcher tests, Black, Ruff, Rust formatting and whitespace checks pass. Review
-found a metrics port-name mismatch, fixed to `internal-http` and compile-checked.
-The environmentd relay/HTTP tests compile but have not executed. The image
-metadata validates through `bin/mzimage describe pubsubd`. CI141217 built the
-standalone image, but its Docker Hub repository fails the public-visibility gate.
-No actual plain-launcher demo has run.
+`GET /api/collections` returns catalog-committed combined since, with SQL LIKE
+id/name filters. No physical Persist inspection or fallback. The lifecycle
+witness covers the endpoint. Strict environmentd Clippy passes.
 
-Whole-environment `bin/controllerd --stop` is implemented without building or
-initializing. It stops controllers selected by environment identity and state
-location before reading managed-child PID/start-time records. It preserves data
-and backend records, skips stale identities, and leaves external/other-environment
-processes alone. Startup records and reuses the backend location across shell
-TMPDIR changes. After review fixes, partial initialization needs no startup and
-unusable PID records do not prevent stopping valid identities. Incomplete identity
-verification is reported after safe shutdown work. All 22 launcher tests pass,
-including real disposable-process ordering/isolation cases, plus Black and Ruff.
-Actual product stop/restart with retained SQL data remains unverified.
+Plain `bin/controllerd` provisions pubsub from static configuration, records it
+in inventory, and passes its endpoint to adapters/replicas. Explicit pubsub URL
+selects external mode without adoption or readiness gating. Only managed pubsub
+opts into executable-change replacement and Kubernetes owner-reference exclusion.
+Adapters/replicas and argument/settings changes do not trigger native replacement.
+Qualified image sidecars preserve safe unchanged adoption and stable endpoints.
+Unknown legacy identities remain adopted. Eleven process-library tests and six
+Kubernetes library tests pass, plus strict Clippy. Runtime Kubernetes acceptance
+remains open. Keep the standalone image publishable.
 
-Relay-only executable replacement is implemented through an opt-in process-backend
-mechanism. Only managed pubsub enables it. Filesystem executable identity and a
-PID/start-qualified sidecar distinguish the actual launch from desired state.
-Argument/settings changes do not trigger replacement, and adapters/replicas remain
-opted out. Unchanged adoption preserves connections and assigned TCP endpoints.
-Unverified legacy records remain adopted until exit, without inventing an identity.
-Review fixes cover forwarding wrappers on both adoption-time and live replacement,
-refreshing identity after automatic respawn, and unknown adopted state. Eleven
-process-library tests and combined strict all-target Clippy for environmentd and
-both backends pass. Real managed-relay rollout and plain-launcher acceptance remain
-pending. Keep the standalone image publishable. Its visibility gate is unresolved.
+`--stop` is scoped, idempotent and data-preserving without rebuilding. Ctrl-C
+stops only controllerd. PID/start identities and recorded backend locations keep
+unrelated environments untouched. Real launcher stop/restart now passes.
+`--reset`, explicitly requested after deletion of local state, accepts only the
+default local database/state/blob targets. It stops recoverable associated
+processes before dropping the three metadata schemas and local directory, rejects
+live foreign-worktree database users, and preserves files on SQL failure.
+Independent review findings are resolved. All29 launcher tests, Black and Ruff
+pass, including real disposable process checks. SQL reset itself has not been
+exercised end-to-end against the default database. No user database was reset.
 
-Scratch access is restored. Worker `i-0788036f0778687f1` is running, with seven hours
-remaining when checked. The idle worker was clean and synced explicitly to
-`969056d563114cf426c1b7a9df84afda00492a58`. Removed its unused incremental cache to
-recover disk space, preserving source, evidence, products and database containers.
-The exact CI141217 materialized image is
+The catch-up repair (`d6f662f7`) applies/enacts each transaction against its
+matching projection. Review, strict Clippy, multi-subscriber regression and the
+full catalog suite passed (396 passed, two ignored). Evidence:
+`prefix-review.md`, `prefix-reviewed-{test,clippy}.log`, `prefix-catalog-suite.log`.
+
+## CI and worker
+
+CI141235 for `6dbd009d` is terminal failed. Failed jobs are x86 product
+`01a182a6-884a-4a85-a0a7-335a8a2a494a` and merge skew. The current product log confirms
+`pubsubd` is not public on Docker Hub. Merge-skew details remain uninspected. CI141217 built products but failed the
+public Docker Hub visibility gate for `materialize/pubsubd`; a registry owner
+must resolve it without bypassing the gate. Its pinned-base merge-skew job also
+failed. Cargo/downstream integration did not run. Broad CI is not green.
+
+Worker `i-0788036f0778687f1` is pinned at `888e822f`, with default debug binaries
+and about17GiB free after building. Scratch access works. Last expiry check showed
+five hours remaining. Task120 completed successfully. Check for new work before syncing source. Exact older CI product:
 `materialize/materialized:mzbuild-FJXSGTKPCPESYSV4SG3CJ3LIKLBPF5GP`, digest
-`sha256:6d4cb1d4f5065426e5c80fe7a813a663620cc123b9222baafd7bbebf7eca7f51`.
-Extracted binaries are in `/home/ubuntu/m3-evidence/ci141217-product` on the worker.
-
-The SQL/HTTP lifecycle witness now passes all 24 checks on that candidate, with
-successful cleanup. It covers required superuser authorization with RBAC disabled,
-peer observations, rename, shared DDL/writes, peer replacement, two controller
-restarts retaining PIDs/sessions/temp views, collection filters, zero-adapter
-restart without default recreation, and HTTP recovery of maintained data.
-Evidence is copied off-worker under
-`~/.local/share/aj/m3-evidence/run-4dc771671d034ee8a0a142f051818c1d/`.
-Two initial failures reproduced an incorrect witness setup: administrative SQL used
-the non-superuser materialize role. Only management commands now use the existing
-mz_system listener. Ordinary sessions and denied-user assertions remain unchanged.
-
-Next: build this revision on the idle worker and verify the plain launcher,
-managed relay, whole-environment stop/restart, replica policy and deployment
-walkthrough. The successful witness uses an external relay and is not acceptance
-of these remaining paths. The separately owned named HTTP endpoint change is committed as `3b78e424`.
-It is not covered by the pinned candidate run. Update the witness to the new labels
-when testing a product that includes that commit.
-`GET /api/collections` is committed as `7c6e3651` with LIKE filters,
-qualified names, unnamed entries and committed `collection_compaction_bounds`.
-It follows designer commit `16dcb3c6`: no Persist inspection or fallback to physical
-since. The earlier physical-shard implementation was removed, including its Persist
-API changes. Browser/curl examples and filter/transport tests are added. Formatting
-and whitespace checks pass. Strict environmentd all-target Clippy passes for the
-final catalog-frontier implementation. Its HTTP and filter tests compile but have
-not executed. The lifecycle witness passes on the matching CI141217 product.
-
-CI141151 on prior head `9062a348` built both architectures. Rust tests stopped at
-compilation: the catalog debug/open test formatters omitted `adapter_runtimes`,
-and a new runtime test used a forbidden Option unwrap. The exact scoped command
-`cargo clippy -p mz-catalog --all-targets -j 2 -- -D warnings` reproduced all three
-and passes after the fixes. Both formatters include the field rather than ignoring
-it. Both exact snapshot failures were reproduced, regenerated through the tests
-and accepted with cargo-insta. The original debug/open tests now pass. Runtime
-publication and authority/cleanup tests also pass (two tests). The full CI container
-command and HTTP/readiness unit tests remain unexecuted.
-
-Replica policy, interrupted initialization, deployment coexistence and full backend
-acceptance remain open. The current candidate's lifecycle witness is verified, but
-it does not establish M3 completion.
-
-Evidence: `runtime-review-resolution.md`, `runtime-reviewed-clippy.log`,
-`runtime-builtin-tests.log`, `lifecycle-review-resolution.md` and the earlier
-lifecycle/catalog/parser check logs under the private evidence directory.
-
-The catch-up repair is published as `d6f662f7` in CI141032. It applies and enacts
-one transaction at a time against its matching projection, invalidating snapshots
-before enactment. Independent review approved it. Formatting, strict catalog/adapter
-lib/test Clippy, the multi-subscriber regression and the full catalog suite pass
-(396 passed, two ignored). Evidence: `prefix-review.md`,
-`prefix-reviewed-{test,clippy}.log`, `prefix-catalog-suite.log`.
-
-Exact CI141032 binaries passed `two-managed-adapters-smoke.py` in
-`run-3b18bc7440e544cf8e1fd1045d5a0576/`. It verifies paused-peer CREATE/ALTER/DROP
-catch-up, cross-adapter DDL/writes, temporary-view isolation, replacement of only
-the failed adapter, and two controller restarts preserving child PIDs, sessions
-and maintained reads. Cleanup completed without errors. The witness source and
-product image digests/hashes are retained in that directory. Binaries are in
-`ci141032-product/`. The intermediate declaration uses the catalog-admin fixture,
-not the required lifecycle API. Postgres used 5000 connections and a 768 MiB limit.
-
-Policy task enablement is separate from process ownership in `bc10afcb`. Keep
-policy deployment-local and catalog-validated across adapters, without a leader.
-With zero adapters, policy may pause while controllerd maintains committed processes.
-
-CI141032 is terminal failed, with no executing or queued jobs. Its product supplied
-the prior two-adapter witness, not the lifecycle/status candidate. Inspect the latest
-bookmark and CI before another publication. Preserve executing verification. Earlier
-parallel SLT and upgrade failures remain unclosed. The focused SLT2 runs in `slt2/`
-did not establish the failure as a baseline flake.
+`sha256:6d4cb1d4f5065426e5c80fe7a813a663620cc123b9222baafd7bbebf7eca7f51`,
+extracted at `/home/ubuntu/m3-evidence/ci141217-product`. It supplies the distinct
+relay executable for replacement acceptance, not green CI.
 
 ## Boundaries and remaining risks
 
@@ -254,8 +185,8 @@ The standard SLT runner uses the ignored
 Worker: `i-0788036f0778687f1`, m8i.4xlarge, 16 vCPUs, 64 GiB RAM, 500 GiB disk.
 Last verified expiry: 2026-10-28 19:01:27 UTC. Check status, source revision and
 live tasks before reuse, and extend expiry under the prompt's authorization.
-Scratch SSO needs renewal. Do not replace the worker or stall implementation:
-local checks within available resources and draft-PR CI are approved fallbacks.
+Scratch access is restored. Keep local checks lightweight and use draft-PR CI
+for broad verification.
 Keep `i-01023ce0e1db179f9` and `m2-pause-test-postgres` untouched.
 
 Use `bin/ci-builder run stable <command>` and `bin/cargo-test`, forwarding `--lib`
