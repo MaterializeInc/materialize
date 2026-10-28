@@ -22,9 +22,13 @@ export type SchemaOption = {
   databaseName: Schema["databaseName"];
 };
 
-export interface SchemaSelectProps
-  extends Omit<SearchableSelectProps<SchemaOption>, "ariaLabel" | "options"> {
+export interface SchemaSelectProps extends Omit<
+  SearchableSelectProps<SchemaOption>,
+  "ariaLabel" | "options"
+> {
   schemas: SchemaOption[];
+  /** Defaults to "Select schema". */
+  ariaLabel?: string;
 }
 
 /**

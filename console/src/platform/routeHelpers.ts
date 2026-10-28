@@ -15,10 +15,7 @@ import {
 import { useRegionSlug } from "~/store/environments";
 
 export type RoutableObjectType =
-  | "source"
-  | "sink"
-  | "index"
-  | "materialized-view";
+  "source" | "sink" | "index" | "materialized-view";
 
 export const regionPath = (regionSlug: string) => {
   return `/regions/${regionSlug}`;
@@ -33,6 +30,21 @@ export const absoluteClusterPath = (
   regionSlug: string,
   cluster: ClusterPathParams,
 ) => `${regionPath(regionSlug)}/clusters/${relativeClusterPath(cluster)}`;
+
+/** The Freshness page, optionally opened on a given cluster. */
+export const absoluteFreshnessPath = (
+  regionSlug: string,
+  clusterId?: string,
+) =>
+  clusterId
+    ? `${regionPath(regionSlug)}/freshness?cluster=${encodeURIComponent(clusterId)}`
+    : `${regionPath(regionSlug)}/freshness`;
+
+/** An object's detail drawer, on Monitoring's Objects page. */
+export const absoluteMaintainedObjectPath = (
+  regionSlug: string,
+  objectId: string,
+) => `${regionPath(regionSlug)}/maintained-objects/${objectId}`;
 
 export const relativeClusterPath = (cluster: ClusterPathParams) =>
   `${cluster.id}/${encodeURIComponent(cluster.name)}`;

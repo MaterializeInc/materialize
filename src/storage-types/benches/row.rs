@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_alloc_default as _;
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -17,7 +18,7 @@ use mz_repr::{Datum, ProtoRow, RelationDesc, Row, SqlColumnType, SqlScalarType};
 use mz_storage_types::sources::SourceData;
 use rand::distr::{Alphanumeric, Distribution, SampleString, StandardUniform};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 fn encode_legacy(data: &[SourceData]) -> ColumnarRecords {
     let mut buf = ColumnarRecordsBuilder::default();

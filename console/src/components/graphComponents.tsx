@@ -16,7 +16,7 @@ import {
   VStack,
 } from "@chakra-ui/react";
 import { Line } from "@visx/shape";
-import { TooltipInPortalProps } from "@visx/tooltip/lib/hooks/useTooltipInPortal";
+import { TooltipInPortalProps } from "@visx/tooltip";
 import React from "react";
 
 import { MODAL_TOOLTIP_Z_INDEX } from "~/layouts/zIndex";

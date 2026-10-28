@@ -17,7 +17,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mz_compute_types::dataflows::{BuildDesc, DataflowDesc, DataflowDescription, IndexImport};
+use mz_compute_types::dataflows::{
+    BuildDesc, DataflowDescription, IndexImport, MirDataflowDescription,
+};
 use mz_expr::{
     AccessStrategy, CollectionPlan, Id, JoinImplementation, LocalId, MapFilterProject,
     MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
@@ -45,7 +47,7 @@ use crate::{IndexOracle, Optimizer, TransformCtx, TransformError};
     fields(path.segment ="global")
 )]
 pub fn optimize_dataflow(
-    dataflow: &mut DataflowDesc,
+    dataflow: &mut MirDataflowDescription,
     transform_ctx: &mut TransformCtx,
     fast_path_optimizer: bool,
 ) -> Result<(), TransformError> {
@@ -121,7 +123,7 @@ pub fn optimize_dataflow(
     level = "debug",
     fields(path.segment = "inline_views")
 )]
-fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+fn inline_views(dataflow: &mut MirDataflowDescription) -> Result<(), TransformError> {
     // We cannot inline anything whose `BuildDesc::id` appears in either the
     // `index_exports` or `sink_exports` of `dataflow`, because we lose our
     // ability to name it.
@@ -227,7 +229,7 @@ fn inline_views(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     fields(path.segment = optimizer.name)
 )]
 fn optimize_dataflow_relations(
-    dataflow: &mut DataflowDesc,
+    dataflow: &mut MirDataflowDescription,
     optimizer: &Optimizer,
     ctx: &mut TransformCtx,
 ) -> Result<(), TransformError> {
@@ -255,7 +257,7 @@ fn optimize_dataflow_relations(
     level = "debug",
     fields(path.segment ="demand")
 )]
-fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+fn optimize_dataflow_demand(dataflow: &mut MirDataflowDescription) -> Result<(), TransformError> {
     // Maps id -> union of known columns demanded from the source/view with the
     // corresponding id.
     let mut demand = BTreeMap::new();
@@ -265,7 +267,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) -> Result<(), Transform
         // that are not depended on by another view, which is currently the last
         // object in `objects_to_build`.
 
-        // A DataflowDesc without exports is currently created in the context of
+        // A MirDataflowDescription without exports is currently created in the context of
         // EXPLAIN outputs. This ensures that the output has all the columns of
         // the original explainee.
         if let Some(build_desc) = dataflow.objects_to_build.iter_mut().rev().next() {
@@ -353,7 +355,7 @@ where
     level = "debug",
     fields(path.segment ="filters")
 )]
-fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+fn optimize_dataflow_filters(dataflow: &mut MirDataflowDescription) -> Result<(), TransformError> {
     // Contains id -> predicates map, describing those predicates that
     // can (but need not) be applied to the collection named by `id`.
     let mut predicates = BTreeMap::<Id, BTreeSet<mz_expr::MirScalarExpr>>::new();
@@ -425,7 +427,7 @@ where
     fields(path.segment ="monotonic")
 )]
 pub fn optimize_dataflow_monotonic(
-    dataflow: &mut DataflowDesc,
+    dataflow: &mut MirDataflowDescription,
     ctx: &mut TransformCtx,
 ) -> Result<(), TransformError> {
     let mut monotonic_ids = BTreeSet::new();
@@ -461,7 +463,9 @@ pub fn optimize_dataflow_monotonic(
 
 /// Determine whether we require snapshots from our durable source imports.
 /// (For example, these can often be skipped for simple subscribe queries.)
-pub fn optimize_dataflow_snapshot(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+pub fn optimize_dataflow_snapshot(
+    dataflow: &mut MirDataflowDescription,
+) -> Result<(), TransformError> {
     // For every global id, true iff we need a snapshot for that global ID.
     // This is computed bottom-up: subscribes may or may not require a snapshot from their inputs,
     // index exports definitely do, and objects-to-build require a snapshot from their inputs if
@@ -544,7 +548,7 @@ pub fn optimize_dataflow_snapshot(dataflow: &mut DataflowDesc) -> Result<(), Tra
     level = "debug",
     fields(path.segment = "source_imports")
 )]
-fn prune_dataflow_source_imports(dataflow: &mut DataflowDesc) {
+fn prune_dataflow_source_imports(dataflow: &mut MirDataflowDescription) {
     // NOTE: A description with no exports has no answer to "what do the exports read", and pruning
     // everything is the wrong one. `EXPLAIN` builds a peek description without its index export,
     // see the conditional `export_index` in `mz_adapter::optimize::peek`. Such a description is
@@ -573,7 +577,7 @@ fn prune_dataflow_source_imports(dataflow: &mut DataflowDesc) {
     fields(path.segment = "index_imports")
 )]
 fn prune_and_annotate_dataflow_index_imports(
-    dataflow: &mut DataflowDesc,
+    dataflow: &mut MirDataflowDescription,
     indexes: &dyn IndexOracle,
     dataflow_metainfo: &mut DataflowMetainfo,
 ) -> Result<(), TransformError> {
@@ -1383,7 +1387,7 @@ impl<Notice> DataflowMetainfo<Notice> {
     /// Create a [`UsedIndexes`] instance by resolving each `id` in the
     /// `index_ids` iterator against an entry expected to exist in the
     /// [`DataflowMetainfo::index_usage_types`].
-    pub fn used_indexes<T>(&self, df_desc: &DataflowDescription<T>) -> UsedIndexes {
+    pub fn used_indexes<T, O>(&self, df_desc: &DataflowDescription<T, (), O>) -> UsedIndexes {
         UsedIndexes::new(
             df_desc
                 .index_imports
@@ -1441,8 +1445,8 @@ mod tests {
 
     /// A dataflow importing `READ` and `UNREAD` and building `VIEW` from `plan`. It has no exports
     /// until `export_subscribe` adds one.
-    fn dataflow(plan: MirRelationExpr) -> DataflowDesc {
-        let mut df = DataflowDesc::new("test".to_string());
+    fn dataflow(plan: MirRelationExpr) -> MirDataflowDescription {
+        let mut df = MirDataflowDescription::new("test".to_string());
         df.import_source(READ, SqlRelationType::from_repr(&typ()), false);
         df.import_source(UNREAD, SqlRelationType::from_repr(&typ()), false);
         df.objects_to_build.push(BuildDesc {
@@ -1452,7 +1456,7 @@ mod tests {
         df
     }
 
-    fn export_subscribe(df: &mut DataflowDesc) {
+    fn export_subscribe(df: &mut MirDataflowDescription) {
         df.export_sink(
             SINK,
             ComputeSinkDesc {
@@ -1465,6 +1469,7 @@ mod tests {
                 up_to: Default::default(),
                 non_null_assertions: Vec::new(),
                 refresh_schedule: None,
+                from_arrangement: None,
             },
         );
     }

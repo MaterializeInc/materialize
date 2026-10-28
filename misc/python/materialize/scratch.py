@@ -110,7 +110,7 @@ def delete_after(tags: dict[str, str]) -> datetime.datetime | None:
     if not unix:
         return None
     unix = int(float(unix))
-    return datetime.datetime.fromtimestamp(unix)
+    return datetime.datetime.fromtimestamp(unix, datetime.UTC)
 
 
 def instance_host(instance: Instance, user: str | None = None) -> str:
@@ -142,7 +142,7 @@ def _format_expires(dt: datetime.datetime | None) -> str:
     """Render a delete-after time as a compact relative duration."""
     if dt is None:
         return "-"
-    secs = (dt - datetime.datetime.now()).total_seconds()
+    secs = (dt - datetime.datetime.now(datetime.UTC)).total_seconds()
     if secs <= 0:
         return "expired"
     if secs >= 86400:
@@ -274,7 +274,7 @@ def msftp(
 
 def setup_ai_tools(instance: Instance) -> None:
     """Transfer local Claude Code and Codex configs to a scratch instance
-    and install the materialize-docs skill."""
+    and install the mz-docs skill."""
     import io
     import pathlib
     import tarfile
@@ -323,7 +323,7 @@ def setup_ai_tools(instance: Instance) -> None:
         instance,
         "cd materialize && "
         "NPM_CONFIG_UPDATE_NOTIFIER=false "
-        "npx -q -y skills add MaterializeInc/agent-skills -g -a claude-code --copy -y --skill materialize-docs 2>/dev/null || true",
+        "npx -q -y skills add MaterializeInc/agent-skills -g -a claude-code --copy -y --skill mz-docs 2>/dev/null || true",
         quiet=True,
     )
 
@@ -331,7 +331,7 @@ def setup_ai_tools(instance: Instance) -> None:
         instance,
         "cd materialize && "
         "NPM_CONFIG_UPDATE_NOTIFIER=false "
-        "npx -q -y skills add MaterializeInc/agent-skills -g -a codex --copy -y --skill materialize-docs 2>/dev/null || true",
+        "npx -q -y skills add MaterializeInc/agent-skills -g -a codex --copy -y --skill mz-docs 2>/dev/null || true",
         quiet=True,
     )
 
@@ -420,7 +420,7 @@ def launch(
     tags.setdefault("team", "engineering")
     tags.setdefault(
         "deleteAfter",
-        delete_after.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        delete_after.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
 
     ec2 = boto3.client("ec2")
@@ -708,7 +708,7 @@ def get_old_instances() -> list[InstanceTypeDef]:
         if delete_after is None:
             return False
         delete_after = float(delete_after)
-        return datetime.datetime.now(datetime.timezone.utc).timestamp() > delete_after
+        return datetime.datetime.now(datetime.UTC).timestamp() > delete_after
 
     return [
         i

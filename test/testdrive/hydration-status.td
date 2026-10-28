@@ -31,6 +31,7 @@ ALTER SYSTEM SET hydration_history_collection_interval = '1s';
 # Pin retention too: CI randomizes it, and a short period would prune the
 # episodes asserted below before the assertions run.
 ALTER SYSTEM SET hydration_history_retention_period = '30d';
+ALTER SYSTEM SET replica_hydration_history_retention_period = '120d';
 # Keep both publications of the process resource observations fresh enough to
 # compare within the test's retry budget.
 ALTER SYSTEM SET mz_metrics_usage_refresh_interval = '1s';
@@ -183,7 +184,7 @@ FROM mz_introspection.mz_cluster_replica_resource_usage
 # default can raise this bound for sanitizer overhead.
 $ set-sql-timeout duration=20s
 
-> SELECT rh.status, rh.object_count,
+> SELECT rh.process_id, rh.status, rh.object_count,
          rh.started_at = oh.installed_at,
          rh.finished_at = oh.hydrated_at
   FROM mz_internal.mz_replica_hydration_history AS rh
@@ -192,19 +193,22 @@ $ set-sql-timeout duration=20s
    AND oh.installed_at = rh.started_at
   JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = oh.object_id
   JOIN mz_catalog.mz_objects AS o ON o.id = g.id
-  WHERE o.name = 'replica_episode_idx';
-hydrated 1 true true
+  WHERE o.name = 'replica_episode_idx'
+  ORDER BY rh.process_id;
+0 hydrated 1 true true
+1 hydrated 1 true true
 
 # The Prometheus registry and resource-usage log publish the same process
 # sampler independently. A Prometheus scrape after collection can observe a
-# higher process-lifetime peak, so the value is bracketed by the maximum across
-# process resource logs before collection and the maximum across Prometheus
-# series after it rather than required to equal the later scrape. Metric
-# availability must agree.
+# higher process-lifetime peak, so the maximum recorded peak is bracketed by
+# the maximum across process resource logs before collection and the maximum
+# across Prometheus series after it rather than required to equal the later
+# scrape. Metric availability must agree.
 > SET cluster_replica = hydrated_test_1
 
 > WITH recorded AS (
-      SELECT rh.peak_memory_bytes, rh.peak_disk_bytes
+      SELECT max(rh.peak_memory_bytes) AS peak_memory_bytes,
+             max(rh.peak_disk_bytes) AS peak_disk_bytes
       FROM mz_internal.mz_replica_hydration_history AS rh
       JOIN mz_internal.mz_object_hydration_history AS oh
         ON oh.replica_id = rh.replica_id
@@ -555,16 +559,54 @@ snk           hydrated_test_4 true
 > DROP MATERIALIZED VIEW mv
 
 # Retention runs in the same sweep on the catalog server. It retracts aged-out rows
-# through the same OCC path, in bounded batches. A zero retention period expires
-# everything.
+# through the same OCC path, in bounded batches. Object retention must not expire
+# replica history.
+$ set-from-sql var=retained-replica-history
+SELECT jsonb_agg(jsonb_build_object(
+    'replica_id', replica_id, 'started_at', started_at, 'process_id', process_id
+))::text
+FROM mz_internal.mz_replica_hydration_history
+
+> SELECT jsonb_array_length('${retained-replica-history}'::jsonb) > 0;
+true
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET hydration_history_retention_period = '0s';
 
 > SELECT count(*) FROM mz_internal.mz_object_hydration_history;
 0
 
+> SELECT jsonb_agg(jsonb_build_object(
+      'replica_id', replica_id, 'started_at', started_at, 'process_id', process_id
+  )) @> '${retained-replica-history}'::jsonb
+  FROM mz_internal.mz_replica_hydration_history;
+true
+
+# Conversely, replica retention must not expire object history.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET hydration_history_retention_period = '30d';
+ALTER SYSTEM SET replica_hydration_history_retention_period = '0s';
+
+> CREATE MATERIALIZED VIEW retention_probe AS SELECT * FROM t;
+
+> SELECT count(*) > 0
+  FROM mz_internal.mz_object_hydration_history AS h
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+  JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+  WHERE o.name = 'retention_probe';
+true
+
 > SELECT count(*) FROM mz_internal.mz_replica_hydration_history;
 0
+
+> SELECT count(*) > 0
+  FROM mz_internal.mz_object_hydration_history AS h
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+  JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+  WHERE o.name = 'retention_probe';
+true
+
+> DROP MATERIALIZED VIEW retention_probe;
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -740,6 +782,7 @@ WHERE o.name = 'episode_stuck'
 # one, which is not recorded (it never completes here) and carries B with it.
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET hydration_history_retention_period = '30d';
+ALTER SYSTEM SET replica_hydration_history_retention_period = '120d';
 
 > SELECT count(*),
          bool_and(h.status = 'hydrated'),

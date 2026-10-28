@@ -44,9 +44,9 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::soft_panic_or_log;
 
 use crate::ctx::{
-    ApplyOutcome, ClusterControllerCtx, ClusterState, CreateReason, Decision, ObservedReplica,
-    ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus, ReconfigurationWrite,
-    RefreshWindowInputs, ReplicaShape, StateWrite,
+    ApplyOutcome, BurstAudit, BurstFinishCause, BurstWrite, ClusterControllerCtx, ClusterState,
+    CreateReason, Decision, ObservedReplica, ReconfigurationAudit, ReconfigurationRecord,
+    ReconfigurationStatus, ReconfigurationWrite, RefreshWindowInputs, ReplicaShape, StateWrite,
 };
 use crate::strategy::{
     BaselineStrategy, ConfigSignals, DesiredReplica, GracefulReconfigurationStrategy,
@@ -240,9 +240,9 @@ impl ClusterController {
     /// single [`StateWrite`] the tick applies under one compare-and-append.
     ///
     /// The merge is a per-field join, independent of the order strategies run
-    /// in: a field set by exactly one strategy is taken as-is, a field no
-    /// strategy sets is left unchanged, and a field set to the same value by
-    /// several is that value.
+    /// in, before the cutover adjustment below: a field set by exactly one
+    /// strategy is taken as-is, a field no strategy sets is left unchanged, and
+    /// a field set to the same value by several is that value.
     ///
     /// Two strategies setting one field to *different* values is a conflict.
     /// The strategies keep every field single-writer at any given moment:
@@ -276,7 +276,7 @@ impl ClusterController {
         let mut conflicts: Vec<&'static str> = Vec::new();
         // Exhaustive construction (every field named, no `..`): a field added to
         // `StateWrite` is a compile error here until its join is spelled out.
-        let merged = StateWrite {
+        let mut merged = StateWrite {
             new_size: join(
                 "size",
                 writes.iter().map(|w| w.new_size.clone()),
@@ -324,6 +324,29 @@ impl ClusterController {
             );
         }
 
+        // A graceful cutover replaces the steady set used to establish burst
+        // readiness. Lag allowances are not transitive, so the new steady set
+        // must establish its own readiness directly against the burst helpers.
+        if merged.new_size.is_some() {
+            if let Some(record) = &state.burst {
+                let explicit_cleanup = merged.burst.as_ref().is_some_and(|write| {
+                    write.audit
+                        == Some(BurstAudit::Finished {
+                            cause: BurstFinishCause::NoLongerWarranted,
+                        })
+                });
+                if !explicit_cleanup {
+                    merged.burst = Some(BurstWrite {
+                        record: Some(crate::ctx::BurstRecord {
+                            steady_ready_at: None,
+                            ..record.clone()
+                        }),
+                        audit: None,
+                    });
+                }
+            }
+        }
+
         merged
     }
 
@@ -356,7 +379,7 @@ impl ClusterController {
             if request.hydratable_objects {
                 live.has_hydratable_objects = ctx.has_hydratable_objects(state.cluster_id).await;
             }
-            if request.hydration {
+            if request.hydration || !request.readiness.is_empty() {
                 let replica_ids: Vec<_> = state
                     .replicas
                     .iter()
@@ -364,8 +387,16 @@ impl ClusterController {
                     .map(|r| r.replica_id)
                     .collect();
                 if !replica_ids.is_empty() {
-                    live.hydrated_replicas =
-                        ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
+                    if request.hydration {
+                        live.hydrated_replicas =
+                            ctx.hydrated_replicas(state.cluster_id, &replica_ids).await;
+                    }
+                    for reference in request.readiness {
+                        let ready = ctx
+                            .ready_replicas(state.cluster_id, &replica_ids, &reference)
+                            .await;
+                        live.ready_replicas.insert(reference, ready);
+                    }
                 }
             }
             if request.refresh_window {

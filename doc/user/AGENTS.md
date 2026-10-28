@@ -9,12 +9,6 @@ This directory is the root of Materialize's Hugo user documentation site.
   the documentation hierarchy: `identifier` names a node, `parent` places it
   beneath another node, and `weight` orders siblings. Section landing pages
   generally use `_index.md`.
-- `data/` contains YAML and JSON inputs used to populate reference pages and
-  examples.
-- `layouts/` contains Hugo templates and shortcodes; `assets/` contains SCSS
-  and JavaScript sources.
-- `archetypes/` provides metadata templates, `static/` holds copied assets,
-  and `sql-grammar/` contains BNF files and generated railroad diagrams.
 - `resources/` and `public/` are generated build output. Avoid hand-editing
   them.
 
@@ -104,22 +98,11 @@ appropriate language (`sql` for SQL and `nofmt` for expected output), and
 relative links to repository files. Match nearby front matter and URL naming
 patterns, generally using lowercase, hyphenated paths. Keep examples runnable
 and update related `data/` definitions when changing generated reference
-content. Use `warn-if-unreleased` or `version-added` for features not yet
-deployed.
+content.
 
-Documentation for a new feature should merge with its implementation. Gate
-unreleased material on the release instead of holding the documentation change:
-
-- Use `warn-if-unreleased` or `warn-if-unreleased-inline` for warnings.
-- Use paired `if-released` and `if-unreleased` blocks for conditional content.
-- Set `version-added` on signatures in `data/sql_funcs.yml`.
-
-These mechanisms read the `released`, `date`, and `patch` fields from
-`content/releases/vX.Y.md`, so release warnings disappear when the release page
-is marked as released. The `version` shortcode expands to the latest released
-version. Content in an `if-released` block is hidden in PR previews. Temporarily
-toggle the applicable release page when you need to preview it, and do not
-commit that toggle.
+Put non-trivial documentation for a new feature in its own PR, merged after the
+feature's release rolls out. Before documenting a new feature, read "Adding
+documentation for new features" in `README.md`.
 
 Use `public-preview`, `private-preview`, and `private-preview-inline` for
 maturity callouts.
@@ -213,6 +196,17 @@ version does not support the syntax yet. Wherever possible, include sample
 output in the documentation and verify that it matches the emulator output.
 
 Don't try to build Materialize from source; just use the latest emulator verison.
+
+## Query history relations by ID
+
+History relations outlive renames and replicas, so find their rows by ID:
+
+- `mz_cluster_replica_history.cluster_name` is the name at replica creation and
+  goes stale after a rename or swap. Filter on the current name instead:
+  `JOIN mz_catalog.mz_clusters AS c ON c.id = rh.cluster_id WHERE c.name = '...'`.
+- Join history to `mz_internal.mz_cluster_replica_history`, not
+  `mz_catalog.mz_cluster_replicas`, which lists only current replicas and drops
+  the rows of replicas a resize replaced.
 
 ## Deployments
 

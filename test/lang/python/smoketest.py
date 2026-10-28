@@ -106,7 +106,12 @@ class SmokeTest(unittest.TestCase):
                 self.assertEqual(cur.fetchone(), (2,))
 
     def test_sqlalchemy(self) -> None:
-        engine = sqlalchemy.engine.create_engine(MATERIALIZED_URL)
+        # SQLAlchemy 2.1 connects a plain postgresql:// URL through psycopg 3,
+        # whose first connect sends SAVEPOINT, which Materialize doesn't
+        # support (SQL-483). Name the psycopg2 driver explicitly.
+        engine = sqlalchemy.engine.create_engine(
+            MATERIALIZED_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+        )
         with engine.connect() as connection:
             r = connection.execute(
                 sqlalchemy.text(

@@ -116,14 +116,26 @@ export const queryHistoryListSchema = z.object({
   dateRange: z
     .tuple(
       [
-        z.string({ required_error: "Min start time is required." }).datetime(),
-        z.string({ required_error: "Max start time is required." }).datetime(),
+        z
+          .string({
+            error: (issue) =>
+              issue.input === undefined
+                ? "Min start time is required."
+                : undefined,
+          })
+          .datetime(),
+        z
+          .string({
+            error: (issue) =>
+              issue.input === undefined
+                ? "Max start time is required."
+                : undefined,
+          })
+          .datetime(),
       ],
       {
-        errorMap: (issue, ctx) =>
-          issue.code === "too_small"
-            ? { message: "Both times are required" }
-            : { message: ctx.defaultError },
+        error: (issue) =>
+          issue.code === "too_small" ? "Both times are required" : undefined,
       },
     )
     .nullable()
@@ -169,12 +181,12 @@ export const queryHistoryListSchema = z.object({
 
         return isAfter(startDate, minStartDate);
       },
-      () => {
-        const currentTime = new Date();
-        const minStartDate = subHours(currentTime, MAX_TIME_SPAN_HOURS);
-        return {
-          message: `Date range must start after ${formatDate(minStartDate, `${DATE_FORMAT_SHORT} ${TIME_FORMAT_NO_SECONDS}`)}.`,
-        };
+      {
+        error: () => {
+          const currentTime = new Date();
+          const minStartDate = subHours(currentTime, MAX_TIME_SPAN_HOURS);
+          return `Date range must start after ${formatDate(minStartDate, `${DATE_FORMAT_SHORT} ${TIME_FORMAT_NO_SECONDS}`)}.`;
+        },
       },
     ),
   clusterId: z.string().nullable(),

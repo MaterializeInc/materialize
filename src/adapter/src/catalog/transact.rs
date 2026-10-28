@@ -1002,6 +1002,16 @@ impl Catalog {
                     .to_mut()
                     .apply_updates(op_updates.clone(), &mut local_expr_cache)
                     .await;
+                let updated_item_ids = op_updates.iter().filter_map(|update| match &update.kind {
+                    mz_catalog::memory::objects::StateUpdateKind::Item(item)
+                        if update.diff == mz_catalog::memory::objects::StateDiff::Addition =>
+                    {
+                        Some(item.id)
+                    }
+                    _ => None,
+                });
+                // Durably record metadata such as an item's columns.
+                preliminary_state.record_item_metadata(tx, updated_item_ids)?;
             }
             updates.append(&mut op_updates);
         }
@@ -3788,10 +3798,10 @@ mod tests {
             variant: ClusterVariant::Unmanaged,
             workload_class: None,
         };
-        let record = |steady_hydrated_at| BurstState {
+        let record = |steady_ready_at| BurstState {
             burst_size: "large".into(),
             linger_duration: Duration::from_secs(60),
-            steady_hydrated_at,
+            steady_ready_at,
         };
 
         // Lifecycle movements: these writes must declare an audit intent.
@@ -3863,7 +3873,7 @@ mod tests {
         let record = || BurstState {
             burst_size: "large".into(),
             linger_duration: Duration::from_secs(60),
-            steady_hydrated_at: None,
+            steady_ready_at: None,
         };
 
         // No record: nothing to retire, with or without a policy.
@@ -3958,7 +3968,7 @@ mod tests {
         let record = || BurstState {
             burst_size: "large".into(),
             linger_duration: Duration::from_secs(60),
-            steady_hydrated_at: None,
+            steady_ready_at: None,
         };
 
         // A started intent reads the armed record from the new config.

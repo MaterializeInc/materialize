@@ -68,7 +68,7 @@ materialize.blue.t_idx      <XXX>        <XXX>
 > EXPLAIN ANALYZE CPU FOR INDEX mz_internal.mz_console_cluster_utilization_overview_ind;
 operator                     total_elapsed
 -----------------------------------------
-"Arrange (#17{cluster_id})" <XXX>
+"Arrange (#20{cluster_id})" <XXX>
 "  Stream <XXX>" <null>
 "Returning Map/Filter/Project" <XXX>
 "  Union" <XXX>
@@ -98,7 +98,7 @@ operator                     total_elapsed
 "l3 = Delta Join [%0 » %1 » %2 » %3 » %4 » %5] [%1 » %0 » %2 » %3 » %4 » %5] [%2 » %0 » %1 » %3 » %4 » %5] [%3 » %0 » %1 » %2 » %4 » %5] [%4 » %0 » %1 » %2 » %3 » %5] [%5 » %0 » %1 » %2 » %3 » %4]" <XXX>
 "  Arrange (#0{replica_id})" <XXX>
 "    Arranged l0" <null>
-"  Arrange (#1{replica_id}, #3{bucket_start})" <XXX>
+"  Arrange (#1{replica_id}, #6{bucket_start})" <XXX>
 "    Map/Filter/Project" <XXX>
 "      Non-monotonic TopK" <XXX>
 "        Read l2" <XXX>
@@ -185,3 +185,37 @@ operator                     total_elapsed
 "    Arranged l0"  <null>  <null>
 "With l0 = Accumulable GroupAggregate"  <XXX>  2
 "  Stream <XXX>"  <null>  <null>
+
+# Regression test for SQL-756: EXPLAIN ANALYZE CPU counts the time of operators
+# nested in a region once. Hierarchical MIN/MAX renders inside two nested
+# regions, so double counting puts the reported total far above the time the
+# whole dataflow ran, which its root operator measures. The check is an upper
+# bound: it catches over-counting of that size, not small errors in either
+# direction.
+> CREATE TABLE cpu_t (k int, g int, v int);
+
+> INSERT INTO cpu_t SELECT x, x % 100, x FROM generate_series(1, 100000) x;
+
+> CREATE VIEW cpu_max AS SELECT g, max(v) AS m FROM cpu_t GROUP BY g;
+
+> CREATE INDEX cpu_max_idx ON cpu_max (g);
+
+> SELECT count(*) FROM cpu_max;
+100
+
+$ set-from-sql var=cpu-sql
+EXPLAIN ANALYZE CPU FOR INDEX cpu_max_idx AS SQL
+
+> CREATE TEMPORARY VIEW cpu_explained AS ${cpu-sql}
+
+> SELECT
+    (SELECT sum(extract(epoch FROM total_elapsed)) FROM cpu_explained)
+    <=
+    (SELECT sum(se.elapsed_ns) / 1e9
+     FROM mz_catalog.mz_indexes i
+     JOIN mz_introspection.mz_compute_exports ce ON ce.export_id = i.id
+     JOIN mz_introspection.mz_dataflow_addresses a
+       ON a.address = list[ce.dataflow_id]::uint8 list
+     JOIN mz_introspection.mz_scheduling_elapsed se ON se.id = a.id
+     WHERE i.name = 'cpu_max_idx');
+true

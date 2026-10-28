@@ -12,7 +12,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{
+    CollectionPlan, MapFilterProject, MfpPlan, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr,
+};
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
@@ -29,9 +32,9 @@ use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataflowDescription<P, S: 'static = ()> {
+pub struct DataflowDescription<P, S: 'static = (), O = MapFilterProject> {
     /// Sources instantiations made available to the dataflow pair with monotonicity information.
-    pub source_imports: BTreeMap<GlobalId, SourceImport<S>>,
+    pub source_imports: BTreeMap<GlobalId, SourceImport<S, O>>,
     /// Indexes made available to the dataflow.
     /// (id of index, import)
     pub index_imports: BTreeMap<GlobalId, IndexImport>,
@@ -69,7 +72,7 @@ pub struct DataflowDescription<P, S: 'static = ()> {
     pub time_dependence: Option<TimeDependence>,
 }
 
-impl<P, S> DataflowDescription<P, S> {
+impl<P, S, O> DataflowDescription<P, S, O> {
     /// Tests if the dataflow refers to a single timestamp, namely
     /// that `as_of` has a single coordinate and that the `until`
     /// value corresponds to the `as_of` value plus one, or `as_of`
@@ -87,24 +90,25 @@ impl<P, S> DataflowDescription<P, S> {
         // Ensure that as_of <= until.
         soft_assert_or_log!(
             timely::PartialOrder::less_equal(as_of, until),
-            "expected empty `as_of ≤ until`, got `{as_of:?} ≰ {until:?}`",
+            "expected `as_of ≤ until`, got `{as_of:?} ≰ {until:?}`",
         );
         // IF `as_of` is not a single timestamp this can't be a single time dataflow.
         let Some(as_of) = as_of.as_option() else {
             return false;
         };
-        // Ensure that `as_of = MAX` implies `until.is_empty()`.
-        soft_assert_or_log!(
-            as_of != &mz_repr::Timestamp::MAX || until.is_empty(),
-            "expected `until = {{}}` due to `as_of = MAX`, got `until = {until:?}`",
-        );
-        // Note that the `(as_of = MAX, until = {})` case also returns `true`
-        // here (as expected) since we are going to compare two `None` values.
+        // With `as_of = MAX` the `as_of <= until` invariant leaves only two valid
+        // frontiers, and both are handled correctly by the comparison below:
+        //   * `until = {}` (unbounded) yields `None == None`, so single time. `MAX`
+        //     is the last timestamp, so an unbounded dataflow starting there sees
+        //     exactly one time.
+        //   * `until = {MAX}` is the empty range produced by e.g.
+        //     `SUBSCRIBE ... AS OF MAX UP TO MAX`. `try_step_forward` on `MAX`
+        //     overflows to `None`, so `None == Some(MAX)` is false: not single time.
         as_of.try_step_forward().as_ref() == until.as_option()
     }
 }
 
-impl DataflowDescription<LirRelationExpr, ()> {
+impl LirDataflowDescription {
     /// Check invariants expected to be true about `DataflowDescription`s.
     pub fn check_invariants(&self) -> Result<(), String> {
         let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();
@@ -228,7 +232,7 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
                 return desc.plan.arity();
             }
         }
-        panic!("GlobalId {} not found in DataflowDesc", id);
+        panic!("GlobalId {} not found in MirDataflowDescription", id);
     }
 
     /// Calls r and s on any sub-members of those types in self. Halts at the first error return.
@@ -255,7 +259,71 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
     }
 }
 
-impl<P, S> DataflowDescription<P, S> {
+impl<P, S, O> DataflowDescription<P, S, O> {
+    /// Applies `f` to the operators of every source import, failing on the
+    /// first error.
+    pub fn try_map_source_operators<O2, E>(
+        self,
+        mut f: impl FnMut(O) -> Result<O2, E>,
+    ) -> Result<DataflowDescription<P, S, O2>, E> {
+        let DataflowDescription {
+            source_imports,
+            index_imports,
+            objects_to_build,
+            index_exports,
+            sink_exports,
+            as_of,
+            until,
+            initial_storage_as_of,
+            refresh_schedule,
+            debug_name,
+            time_dependence,
+        } = self;
+        let source_imports = source_imports
+            .into_iter()
+            .map(|(id, import)| {
+                let SourceImport {
+                    desc:
+                        SourceInstanceDesc {
+                            arguments: SourceInstanceArguments { operators },
+                            storage_metadata,
+                            typ,
+                        },
+                    monotonic,
+                    with_snapshot,
+                    upper,
+                } = import;
+                let desc = SourceInstanceDesc {
+                    arguments: SourceInstanceArguments {
+                        operators: operators.map(&mut f).transpose()?,
+                    },
+                    storage_metadata,
+                    typ,
+                };
+                let import = SourceImport {
+                    desc,
+                    monotonic,
+                    with_snapshot,
+                    upper,
+                };
+                Ok((id, import))
+            })
+            .collect::<Result<_, E>>()?;
+        Ok(DataflowDescription {
+            source_imports,
+            index_imports,
+            objects_to_build,
+            index_exports,
+            sink_exports,
+            as_of,
+            until,
+            initial_storage_as_of,
+            refresh_schedule,
+            debug_name,
+            time_dependence,
+        })
+    }
+
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
         Self {
@@ -414,7 +482,7 @@ impl<P, S> DataflowDescription<P, S> {
     }
 }
 
-impl<P, S> DataflowDescription<P, S>
+impl<P, S, O> DataflowDescription<P, S, O>
 where
     P: CollectionPlan,
 {
@@ -507,7 +575,7 @@ where
     }
 }
 
-impl<S> DataflowDescription<RenderPlan, S>
+impl<S> RenderDataflowDescription<S>
 where
     S: Clone + PartialEq,
 {
@@ -601,8 +669,17 @@ where
     }
 }
 
-/// A commonly used name for dataflows contain MIR expressions.
-pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
+/// A dataflow of optimized MIR, as the optimizer builds and rewrites it.
+pub type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
+
+/// A dataflow lowered to LIR.
+///
+/// Its source operators are already planned. Rendering evaluates them as
+/// given, so lowering is the only place they are planned.
+pub type LirDataflowDescription<S = ()> = DataflowDescription<LirRelationExpr, S, MfpPlan>;
+
+/// A dataflow ready to render.
+pub type RenderDataflowDescription<S> = DataflowDescription<RenderPlan, S, MfpPlan>;
 
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
@@ -639,9 +716,9 @@ pub struct IndexImport {
 
 /// Information about an imported source, and how it will be used by the dataflow.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SourceImport<S: 'static = ()> {
+pub struct SourceImport<S: 'static = (), O = MapFilterProject> {
     /// Description of the source instance to import.
-    pub desc: SourceInstanceDesc<S>,
+    pub desc: SourceInstanceDesc<S, O>,
     /// Whether the source will supply monotonic data.
     pub monotonic: bool,
     /// Whether this import must include the snapshot data.
@@ -661,7 +738,8 @@ pub struct BuildDesc<P> {
 
 #[cfg(test)]
 mod tests {
-    use mz_expr::{AccessStrategy, Id, MirRelationExpr};
+    use mz_expr::{AccessStrategy, Id, MirRelationExpr, UnmaterializableFunc, func};
+    use mz_repr::optimize::OptimizerFeatures;
     use mz_repr::{RelationDesc, ReprRelationType, ReprScalarType, SqlRelationType};
 
     use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
@@ -681,7 +759,7 @@ mod tests {
 
     /// A dataflow importing `READ` and `UNREAD`, building `VIEW` from `plan`, and exporting a
     /// subscribe sink over it.
-    fn dataflow(plan: MirRelationExpr) -> DataflowDesc {
+    fn dataflow(plan: MirRelationExpr) -> MirDataflowDescription {
         let source_import = || SourceImport {
             desc: SourceInstanceDesc {
                 arguments: SourceInstanceArguments { operators: None },
@@ -693,7 +771,7 @@ mod tests {
             upper: Antichain::from_elem(Timestamp::MIN),
         };
 
-        let mut df = DataflowDesc::new("test".to_string());
+        let mut df = MirDataflowDescription::new("test".to_string());
         df.source_imports.insert(READ, source_import());
         df.source_imports.insert(UNREAD, source_import());
         df.objects_to_build.push(BuildDesc {
@@ -712,6 +790,7 @@ mod tests {
                 up_to: Antichain::new(),
                 non_null_assertions: Vec::new(),
                 refresh_schedule: None,
+                from_arrangement: None,
             },
         );
         df
@@ -797,5 +876,106 @@ mod tests {
         );
 
         assert_eq!(df.used_import_ids(), BTreeSet::from([imported_index]));
+    }
+
+    /// Builds a minimal dataflow description carrying only the `as_of` and
+    /// `until` frontiers that `is_single_time` inspects.
+    fn desc_with_bounds(
+        as_of: Antichain<Timestamp>,
+        until: Antichain<Timestamp>,
+    ) -> DataflowDescription<OptimizedMirRelationExpr, ()> {
+        let mut desc = DataflowDescription::new("test".to_string());
+        desc.set_as_of(as_of);
+        desc.until = until;
+        desc
+    }
+
+    #[mz_ore::test]
+    fn is_single_time_classification() {
+        // Ordinary single-time dataflow: `until = as_of + 1`.
+        assert!(
+            desc_with_bounds(
+                Antichain::from_elem(5.into()),
+                Antichain::from_elem(6.into())
+            )
+            .is_single_time()
+        );
+
+        // `as_of = MAX` with an empty `until` is single time: `MAX` is the last
+        // timestamp, so an unbounded dataflow starting there sees exactly one time.
+        assert!(
+            desc_with_bounds(Antichain::from_elem(Timestamp::MAX), Antichain::new())
+                .is_single_time()
+        );
+
+        // `as_of = MAX` with `until = {MAX}` is an empty range, produced by
+        // `SUBSCRIBE ... AS OF MAX UP TO MAX`. It must not be classified as single
+        // time, and it must not trip an invariant assertion (see CPU-169).
+        assert!(
+            !desc_with_bounds(
+                Antichain::from_elem(Timestamp::MAX),
+                Antichain::from_elem(Timestamp::MAX)
+            )
+            .is_single_time()
+        );
+    }
+
+    #[mz_ore::test]
+    fn lowering_plans_source_operators() {
+        // `#1 = #0::mz_timestamp`, filtered by `mz_now() < #1` and
+        // `mz_now() = #0::mz_timestamp`.
+        let mz_now = || MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let cast = || MirScalarExpr::column(0).call_unary(func::CastInt64ToMzTimestamp);
+        let mfp = MapFilterProject::new(1).map([cast()]).filter([
+            mz_now().call_binary(MirScalarExpr::column(1), func::Lt),
+            mz_now().call_binary(cast(), func::Eq),
+        ]);
+        let planned = MfpPlan::create_from(mfp.clone()).expect("plannable");
+
+        let mut df = dataflow(MirRelationExpr::Get {
+            id: Id::Global(READ),
+            typ: typ(),
+            access_strategy: AccessStrategy::Persist,
+        });
+        let unread = df.source_imports.get_mut(&UNREAD).expect("imported");
+        unread.desc.arguments.operators = Some(mfp);
+
+        let lowered = LirRelationExpr::finalize_dataflow(df, &OptimizerFeatures::default(), None)
+            .expect("lowers");
+        let operators = &lowered.source_imports[&UNREAD].desc.arguments.operators;
+        assert_eq!(operators.as_ref(), Some(&planned));
+    }
+
+    /// MIR predicate pushdown copies `mz_now() <= #0` into the source's operators and keeps it in
+    /// the `Filter` above the read. Hoisting the read's copy into the source must not leave the
+    /// source evaluating the same bound twice.
+    #[mz_ore::test]
+    fn lowering_merges_pushed_down_temporal_predicate() {
+        let mz_now = || MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let cast = || MirScalarExpr::column(0).call_unary(func::CastInt64ToMzTimestamp);
+        let le = || mz_now().call_binary(cast(), func::Lte);
+
+        let mut df = dataflow(
+            MirRelationExpr::Get {
+                id: Id::Global(READ),
+                typ: typ(),
+                access_strategy: AccessStrategy::Persist,
+            }
+            .filter([le()]),
+        );
+        let read = df.source_imports.get_mut(&READ).expect("imported");
+        read.desc.arguments.operators = Some(MapFilterProject::new(1).filter([le()]));
+
+        let lowered = LirRelationExpr::finalize_dataflow(df, &OptimizerFeatures::default(), None)
+            .expect("lowers");
+        let operators = lowered.source_imports[&READ]
+            .desc
+            .arguments
+            .operators
+            .as_ref()
+            .expect("planned operators");
+        let (_safe, lower, upper) = operators.as_parts();
+        assert!(lower.is_empty(), "{operators:?}");
+        assert_eq!(upper.len(), 1, "{operators:?}");
     }
 }

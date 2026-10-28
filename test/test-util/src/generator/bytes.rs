@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::Alphanumeric;
 
 /// Generates and returns bytes of length `len`.

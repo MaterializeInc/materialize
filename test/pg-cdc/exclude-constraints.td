@@ -57,6 +57,10 @@ CREATE TABLE excl_combo (id int PRIMARY KEY, u int NOT NULL, val text NOT NULL, 
 INSERT INTO excl_combo VALUES (1, 10, 'a');
 ALTER TABLE excl_combo REPLICA IDENTITY FULL;
 
+CREATE TABLE excl_not_null (id int PRIMARY KEY, u int NOT NULL, val text NOT NULL, CONSTRAINT unq_u UNIQUE (u));
+INSERT INTO excl_not_null VALUES (1, 10, 'a');
+ALTER TABLE excl_not_null REPLICA IDENTITY FULL;
+
 ANALYZE;
 
 > CREATE SOURCE mz_source
@@ -247,3 +251,95 @@ contains:not available
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_exclude_constraints_option = true
+
+#
+# EXCLUDE ALL NOT NULL CONSTRAINTS: keys and uniqueness remain, but every column nullable, so
+# DROP NOT NULL is a non-event.
+#
+
+> CREATE TABLE all_nullable
+  FROM SOURCE mz_source (REFERENCE public.excl_not_null)
+  WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
+
+> SHOW CREATE TABLE all_nullable;
+materialize.public.all_nullable "CREATE TABLE materialize.public.all_nullable\nFROM SOURCE materialize.public.mz_source (REFERENCE = postgres.public.excl_not_null)\nWITH (EXCLUDE ALL NOT NULL CONSTRAINTS);"
+
+> CREATE DEFAULT INDEX ON all_nullable;
+> SELECT key FROM (SHOW INDEXES ON all_nullable);
+{id}
+
+# All columns except id should be nullable, but id is a PK and cannot be NULL
+> SELECT name, nullable FROM mz_columns WHERE id = (SELECT id FROM mz_tables WHERE name = 'all_nullable');
+id false
+u true
+val true
+
+> CREATE TABLE all_nullable_combo
+  FROM SOURCE mz_source (REFERENCE public.excl_not_null)
+  WITH (EXCLUDE ALL NOT NULL CONSTRAINTS, EXCLUDE CONSTRAINTS ('excl_not_null_pkey'));
+
+> CREATE DEFAULT INDEX ON all_nullable_combo;
+> SELECT key FROM (SHOW INDEXES ON all_nullable_combo);
+{id,u,val}
+
+# All columns except id should be nullable, but id is a PK and cannot be NULL
+> SELECT name, nullable FROM mz_columns WHERE id = (SELECT id FROM mz_tables WHERE name = 'all_nullable_combo');
+id true
+u true
+val true
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE excl_not_null ALTER COLUMN val DROP NOT NULL;
+INSERT INTO excl_not_null VALUES (2, 20, NULL);
+
+> SELECT * FROM all_nullable;
+1 10 a
+2 20 <null>
+
+> SELECT * FROM all_nullable_combo;
+1 10 a
+2 20 <null>
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE excl_not_null DROP CONSTRAINT excl_not_null_pkey;
+INSERT INTO excl_not_null VALUES (3, 30, 'c');
+
+! SELECT * FROM all_nullable;
+regex:incompatible schema change on public\.excl_not_null \(oid \d+\): PRIMARY KEY constraint "excl_not_null_pkey" \(id\) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('excl_not_null_pkey')) before the upstream drop
+
+> DROP TABLE all_nullable;
+
+> SELECT * FROM all_nullable_combo;
+1 10 a
+2 20 <null>
+3 30 c
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE excl_not_null ALTER COLUMN u DROP NOT NULL;
+INSERT INTO excl_not_null VALUES (4, NULL, 'd');
+INSERT INTO excl_not_null VALUES (5, NULL, 'e');
+
+> SELECT * FROM all_nullable_combo;
+1 10 a
+2 20 <null>
+3 30 c
+4 <null> d
+5 <null> e
+
+> SELECT u, COUNT(*) FROM all_nullable_combo GROUP BY u;
+10 1
+20 1
+30 1
+<null> 2
+
+# The unique constraint still needs to be explicitly excluded if you want to drop the constraint.
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE excl_not_null DROP CONSTRAINT unq_u;
+INSERT INTO excl_not_null VALUES (6, 60, 'f');
+
+! SELECT * FROM all_nullable_combo;
+regex:incompatible schema change on public\.excl_not_null \(oid \d+\): UNIQUE constraint "unq_u" \(u\) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('unq_u')) before the upstream drop
+
+> DROP TABLE all_nullable_combo;

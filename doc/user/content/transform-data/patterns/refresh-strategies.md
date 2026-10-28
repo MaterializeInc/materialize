@@ -147,11 +147,12 @@ SELECT ...;
 
 Because the materialized view is hosted on a scheduled cluster that is
 configured to **turn on ahead of any scheduled refreshes**, you can expect
-`my_scheduled_cluster` to be provisioned at 11PM UTC — or, 1 hour ahead of the
+`my_scheduled_cluster` to be provisioned at 11PM UTC, 1 hour ahead of the
 scheduled refresh time for `mv_refresh_every`. This means that the cluster can
-backfill the view with pre-existing data — a process known as [_hydration_](/serve-results/troubleshooting/#hydrating-objects)
-— ahead of the refresh operation, which **reduces the total unavailability window
-of the view** to just the duration of the refresh.
+backfill the view with pre-existing data ahead of the refresh operation, a
+process known as [_hydration_](/fundamentals/concepts/hydration/). This
+**reduces the total unavailability window of the view** to just the duration
+of the refresh.
 
 If the cluster is **not** configured to turn on ahead of scheduled refreshes
 (i.e., using the `HYDRATION TIME ESTIMATE` option), the total unavailability
@@ -181,8 +182,8 @@ SELECT mv.id AS materialized_view_id,
        mv.name AS materialized_view_name,
        rs.type AS refresh_strategy,
        rs.interval AS refresh_interval,
-       rs.aligned_to AS refresh_interval_phase,
-       rs.at AS refresh_time,
+       rs.aligned_to_expression AS refresh_interval_phase,
+       rs.at_expression AS refresh_time,
        r.last_completed_refresh,
        r.next_refresh
 FROM mz_internal.mz_materialized_view_refresh_strategies rs

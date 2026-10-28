@@ -15,9 +15,8 @@ use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
 };
 use mz_compute_client::protocol::response::{FrontiersResponse, PeekResponse};
-use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::RenderDataflowDescription;
 use mz_compute_types::dyncfgs::ENABLE_PEEK_RESPONSE_STASH;
-use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::{MapFilterProject, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
@@ -131,7 +130,7 @@ impl Driver {
     /// `schedule`, so side-effect timing stays under test control.
     pub fn submit_dataflow(
         &self,
-        df: DataflowDescription<RenderPlan, CollectionMetadata>,
+        df: RenderDataflowDescription<CollectionMetadata>,
     ) -> anyhow::Result<()> {
         self.send(ComputeCommand::CreateDataflow(Box::new(df)))
     }

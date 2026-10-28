@@ -10,7 +10,8 @@
 //! An interactive cluster server.
 
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::Thread;
 
 use anyhow::{Error, anyhow};
@@ -18,6 +19,8 @@ use async_trait::async_trait;
 use differential_dataflow::trace::ExertionLogic;
 use futures::future;
 use mz_cluster_client::client::{TimelyConfig, TryIntoProtocolNonce};
+use mz_ore::metric;
+use mz_ore::metrics::{ComputedUIntGauge, MetricsRegistry};
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::LocalClient;
 use timely::WorkerConfig;
@@ -61,12 +64,123 @@ pub struct TimelyContainer<C: ClusterSpec> {
 }
 
 impl<C: ClusterSpec> TimelyContainer<C> {
-    fn worker_threads(&self) -> Vec<Thread> {
+    /// The threads of the Timely workers in this process.
+    pub fn worker_threads(&self) -> Vec<Thread> {
         self.worker_guards
             .guards()
             .iter()
             .map(|h| h.thread().clone())
             .collect()
+    }
+}
+
+/// A client to a secondary ("guest") command stream served by workers of
+/// an existing Timely cluster. Like [`ClusterClient`], but the per-worker client channels are
+/// provided externally instead of coming from a [`TimelyContainer`] built for this command type.
+pub struct GuestClusterClient<Cmd, Resp>
+where
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    /// Per-worker channels over which to send endpoints for wiring up a new client.
+    client_txs: Arc<
+        Vec<
+            mpsc::UnboundedSender<(
+                Uuid,
+                mpsc::UnboundedReceiver<Cmd>,
+                mpsc::UnboundedSender<Resp>,
+            )>,
+        >,
+    >,
+    /// The worker threads, for unparking on send.
+    worker_threads: Vec<Thread>,
+    /// The actual client to talk to the cluster.
+    inner: Option<PartitionedClient<Cmd, Resp>>,
+}
+
+impl<Cmd, Resp> GuestClusterClient<Cmd, Resp>
+where
+    Cmd: fmt::Debug + Send + TryIntoProtocolNonce,
+    Resp: fmt::Debug + Send,
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    /// Create a new `GuestClusterClient`.
+    pub fn new(
+        client_txs: Arc<
+            Vec<
+                mpsc::UnboundedSender<(
+                    Uuid,
+                    mpsc::UnboundedReceiver<Cmd>,
+                    mpsc::UnboundedSender<Resp>,
+                )>,
+            >,
+        >,
+        worker_threads: Vec<Thread>,
+    ) -> Self {
+        Self {
+            client_txs,
+            worker_threads,
+            inner: None,
+        }
+    }
+
+    fn connect(&mut self, nonce: Uuid) {
+        let mut command_txs = Vec::new();
+        let mut response_rxs = Vec::new();
+        for client_tx in self.client_txs.iter() {
+            let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+            let (resp_tx, resp_rx) = mpsc::unbounded_channel();
+
+            client_tx
+                .send((nonce, cmd_rx, resp_tx))
+                .expect("worker not dropped");
+
+            command_txs.push(cmd_tx);
+            response_rxs.push(resp_rx);
+        }
+
+        self.inner = Some(LocalClient::new_partitioned(
+            response_rxs,
+            command_txs,
+            self.worker_threads.clone(),
+        ));
+    }
+}
+
+impl<Cmd, Resp> fmt::Debug for GuestClusterClient<Cmd, Resp>
+where
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GuestClusterClient").finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl<Cmd, Resp> GenericClient<Cmd, Resp> for GuestClusterClient<Cmd, Resp>
+where
+    Cmd: fmt::Debug + Send + TryIntoProtocolNonce,
+    Resp: fmt::Debug + Send,
+    (Cmd, Resp): Partitionable<Cmd, Resp>,
+{
+    async fn send(&mut self, cmd: Cmd) -> Result<(), Error> {
+        match cmd.try_into_protocol_nonce() {
+            Ok(nonce) => {
+                self.connect(nonce);
+                Ok(())
+            }
+            Err(cmd) => self.inner.as_mut().expect("initialized").send(cmd).await,
+        }
+    }
+
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe, see [`ClusterClient::recv`].
+    async fn recv(&mut self) -> Result<Option<Resp>, Error> {
+        if let Some(client) = self.inner.as_mut() {
+            client.recv().await
+        } else {
+            future::pending().await
+        }
     }
 }
 
@@ -225,6 +339,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             // largest to the smallest layer.
 
             let arc: ExertionLogic = Arc::new(move |layers| {
+                EXERT_POLICY_CALLS.fetch_add(1, Ordering::Relaxed);
                 let mut prop = config.arrangement_exert_proportionality;
 
                 // Layers are ordered from largest to smallest.
@@ -238,12 +353,14 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
                 for (_idx, count, len) in layers {
                     if count > 1 {
                         // Found an in-progress merge that we should continue.
+                        EXERT_POLICY_MERGE_GRANTS.fetch_add(1, Ordering::Relaxed);
                         return merge_effort;
                     }
 
                     if !first && prop > 0 && len > 0 {
                         // Found a non-empty batch within `arrangement_exert_proportionality` of
                         // the largest one.
+                        EXERT_POLICY_CONSOLIDATION_GRANTS.fetch_add(1, Ordering::Relaxed);
                         return merge_effort;
                     }
 
@@ -282,6 +399,39 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             worker_guards,
         })
     }
+}
+
+// Evaluations of the exertion policy installed above, process-wide across
+// every timely runtime and trace implementation. A spine evaluates the policy
+// both when exerted and after each insert, so evaluations and grants count
+// decisions, not applications of effort. With
+// `arrangement_exert_proportionality` at zero no policy is installed and the
+// counts stay zero.
+static EXERT_POLICY_CALLS: AtomicU64 = AtomicU64::new(0);
+static EXERT_POLICY_MERGE_GRANTS: AtomicU64 = AtomicU64::new(0);
+static EXERT_POLICY_CONSOLIDATION_GRANTS: AtomicU64 = AtomicU64::new(0);
+
+/// Register gauges for the arrangement exertion policy's decisions.
+///
+/// The counters are process-wide, so only the first call registers them, and
+/// they cover every timely runtime in the process, not only the caller's.
+pub fn register_exert_policy_metrics(registry: &MetricsRegistry) {
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| {
+        let _: ComputedUIntGauge = registry.register_computed_gauge(
+            metric!(name: "mz_arrangement_exert_policy_calls_total", help: "Arrangement exertion policy evaluations."),
+            || EXERT_POLICY_CALLS.load(Ordering::Relaxed),
+        );
+        for (reason, grants) in [
+            ("active_merge", &EXERT_POLICY_MERGE_GRANTS),
+            ("consolidation", &EXERT_POLICY_CONSOLIDATION_GRANTS),
+        ] {
+            let _: ComputedUIntGauge = registry.register_computed_gauge(
+                metric!(name: "mz_arrangement_exert_policy_grants_total", help: "Arrangement exertion policy evaluations that returned effort, by reason.", const_labels: {"reason" => reason}),
+                move || grants.load(Ordering::Relaxed),
+            );
+        }
+    });
 }
 
 mod alloc {
@@ -364,5 +514,28 @@ mod alloc {
             self.pointer = std::ptr::NonNull::dangling();
             self.capacity = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod exert_policy_metrics_tests {
+    use super::*;
+
+    /// Registration is guarded process-wide, so under a test runner that
+    /// shares the process another test may have registered first, into its
+    /// own registry. Either way a second call must not panic, and this
+    /// registry holds both families or neither.
+    #[mz_ore::test]
+    fn registering_twice_does_not_panic() {
+        let registry = MetricsRegistry::new();
+        register_exert_policy_metrics(&registry);
+        register_exert_policy_metrics(&registry);
+        let names: Vec<_> = registry
+            .gather()
+            .into_iter()
+            .map(|family| family.name().to_string())
+            .filter(|name| name.starts_with("mz_arrangement_exert_policy"))
+            .collect();
+        assert!(matches!(names.len(), 0 | 2), "{names:?}");
     }
 }

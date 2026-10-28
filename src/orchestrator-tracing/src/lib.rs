@@ -39,6 +39,7 @@ use mz_ore::tracing::{
 use mz_tracing::CloneableEnvFilter;
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::resource::Resource;
+use sentry_tracing::EventFilter;
 
 /// Command line arguments for application tracing.
 ///
@@ -324,7 +325,7 @@ impl TracingCliArgs {
                     .chain(self.sentry_tag.iter().cloned())
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
-                event_filter: mz_service::tracing::mz_sentry_event_filter,
+                event_filter: mz_sentry_event_filter,
             }),
             build_version: build_info.version,
             build_sha: build_info.sha,
@@ -334,6 +335,20 @@ impl TracingCliArgs {
         })
         .await
     }
+}
+
+/// Target for events that go to the logs but never to Sentry, e.g. because they carry client IPs.
+/// The Sentry layer otherwise attaches recent info events as breadcrumbs to unrelated errors.
+pub const NO_SENTRY_TARGET: &str = "mz_no_sentry";
+
+pub fn mz_sentry_event_filter(meta: &tracing::Metadata<'_>) -> EventFilter {
+    // special cases
+    if meta.target() == "librdkafka" || meta.target() == NO_SENTRY_TARGET {
+        return EventFilter::Ignore;
+    }
+
+    // default case
+    sentry_tracing::default_event_filter(meta)
 }
 
 /// The fields of [`TracingConfig`] that are not set by command-line arguments.
@@ -514,6 +529,10 @@ impl NamespacedOrchestrator for NamespacedTracingOrchestrator {
 
     async fn list_services(&self) -> Result<Vec<String>, anyhow::Error> {
         self.inner.list_services().await
+    }
+
+    async fn flush(&self) -> Result<(), anyhow::Error> {
+        self.inner.flush().await
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {

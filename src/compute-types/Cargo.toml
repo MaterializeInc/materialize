@@ -20,15 +20,19 @@ mz-ore = { path = "../ore", features = ["tracing", "metrics"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-storage-types = { path = "../storage-types" }
 serde.workspace = true
+serde_json.workspace = true
 timely.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 chrono.workspace = true
 chrono-tz.workspace = true
+hex.workspace = true
+mz-expr = { path = "../expr", features = ["func-registry"] }
 mz-pgtz = { path = "../pgtz" }
 serde-reflection.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 [features]
 default = []

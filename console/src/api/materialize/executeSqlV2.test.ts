@@ -143,7 +143,7 @@ describe("executeSqlV2", () => {
       }),
     );
 
-    expect(
+    await expect(
       executeSqlV2({
         queries: sql`Invalid keyword`.compile(queryBuilder),
         queryKey: ["invalidQuery"],
@@ -160,7 +160,7 @@ describe("executeSqlV2", () => {
       }),
     );
 
-    expect(
+    await expect(
       executeSqlV2({
         queries: sql`SELECT 1`.compile(queryBuilder),
         queryKey: ["unauthorized"],
@@ -182,7 +182,7 @@ describe("executeSqlV2", () => {
 
     server.use(buildSqlQueryHandlerV2(mockResults));
 
-    expect(
+    await expect(
       executeSqlV2({
         queries: sql`SELECT foo from mz_secrets;`.compile(queryBuilder),
         queryKey: ["databaseErrorQuery"],

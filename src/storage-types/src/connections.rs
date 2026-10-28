@@ -37,8 +37,8 @@ use iceberg_catalog_rest::{
     RestCatalogBuilder, TokenProvider,
 };
 use iceberg_storage_opendal::{
-    AwsCredential, CustomAwsCredentialLoader, CustomGcsCredentialLoader, OpenDalStorageFactory,
-    ProvideCredential,
+    AwsCredential, CustomAwsCredentialLoader, CustomAzdlsCredentialLoader,
+    CustomGcsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
 };
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
@@ -67,7 +67,7 @@ use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
 use reqsign_core::time::Timestamp;
-use reqwest::Request;
+use reqwest_0_12::Request;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
@@ -630,6 +630,9 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            (Self::SqlServer(s), Self::SqlServer(o)) => s.alter_compatible(id, o),
+            (Self::GlueSchemaRegistry(s), Self::GlueSchemaRegistry(o)) => s.alter_compatible(id, o),
+            (Self::IcebergCatalog(s), Self::IcebergCatalog(o)) => s.alter_compatible(id, o),
             _ => {
                 tracing::warn!(
                     "Connection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -698,6 +701,24 @@ impl IcebergAccessDelegation {
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for RestIcebergCatalog<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        // Auth and access delegation are not considered for compatibility, because they can
+        // be changed without breaking existing tables.
+        if (self.warehouse != other.warehouse) || (self.storage_provider != other.storage_provider)
+        {
+            tracing::warn!(
+                "RestIcebergCatalog incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(AlterError { id })
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct S3TablesRestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
     /// The AWS connection details, for s3tables
@@ -745,6 +766,26 @@ impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
         S3TablesRestIcebergCatalog {
             aws_connection: self.aws_connection.into_inline_connection(&r),
             warehouse: self.warehouse,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for S3TablesRestIcebergCatalog<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self.aws_connection.connection_id != other.aws_connection.connection_id
+            || self.warehouse != other.warehouse
+        {
+            tracing::warn!(
+                "S3TablesRestIcebergCatalog incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(AlterError { id })
+        } else {
+            self.aws_connection
+                .connection
+                .alter_compatible(id, &other.aws_connection.connection)?;
+            Ok(())
         }
     }
 }
@@ -806,17 +847,49 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogImpl, R>
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for IcebergCatalogImpl<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        match (self, other) {
+            (IcebergCatalogImpl::Rest(rest), IcebergCatalogImpl::Rest(other_rest)) => {
+                rest.alter_compatible(id, other_rest)
+            }
+            (
+                IcebergCatalogImpl::S3TablesRest(s3tables),
+                IcebergCatalogImpl::S3TablesRest(other_s3tables),
+            ) => s3tables.alter_compatible(id, other_s3tables),
+            _ => Err(AlterError { id }),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
     /// The catalog impl impl of that catalog
     pub catalog: IcebergCatalogImpl<C>,
     /// Where the catalog is located
-    pub uri: reqwest::Url,
+    pub uri: reqwest_0_12::Url,
 }
 
-impl AlterCompatible for IcebergCatalogConnection {
-    fn alter_compatible(&self, id: GlobalId, _other: &Self) -> Result<(), AlterError> {
-        Err(AlterError { id })
+impl<C: ConnectionAccess> AlterCompatible for IcebergCatalogConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let compatibility_checks = [
+            (
+                self.catalog.alter_compatible(id, &other.catalog).is_ok(),
+                "catalog",
+            ),
+            (self.uri == other.uri, "uri"),
+        ];
+        for (is_ok, field) in compatibility_checks {
+            if !is_ok {
+                tracing::warn!(
+                    "IcebergCatalogConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1054,7 +1127,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
     async fn vended_credential_endpoint(
         &self,
         rest: &RestIcebergCatalog,
-        client: &reqwest::Client,
+        client: &reqwest_0_12::Client,
         token: &Arc<dyn TokenProvider>,
         headers: &HeaderMap,
         table: Option<&TableIdent>,
@@ -1078,7 +1151,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
     /// Builds a GCS storage factory, refreshing vended credentials from `endpoint` if there is one.
     fn gcs_storage_factory(
         endpoint: Option<Url>,
-        client: &reqwest::Client,
+        client: &reqwest_0_12::Client,
         token: &Arc<dyn TokenProvider>,
         headers: &HeaderMap,
     ) -> OpenDalStorageFactory {
@@ -1112,7 +1185,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
 
         // One client for catalog requests, OAuth token requests, and credential refreshes, so all
         // three share a connection pool. `iceberg-rust` would otherwise default to its own.
-        let client = reqwest::Client::new();
+        let client = reqwest_0_12::Client::new();
 
         // Catalog auth is configured through a combination of `props` and `.with_authenticator(...)`,
         // which happen at different stages of the [`RestCatalogBuilder`] -> [`RestCatalog`]
@@ -1224,13 +1297,18 @@ impl IcebergCatalogConnection<InlinedConnection> {
                         IcebergStorageProvider::Gcs => {
                             Self::gcs_storage_factory(endpoint, &client, &token, &headers)
                         }
-                        // ADLS takes its credentials from the catalog's config, which
-                        // `iceberg-rust` forwards to `opendal` the same way. OpenDAL's Azure
-                        // service does not go through reqsign's credential provider
-                        // abstraction, so there is no hook to wrap: vended credentials for
-                        // ADLS work only through those static props, and stop working when
-                        // they expire.
-                        IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls,
+                        IcebergStorageProvider::Adls => OpenDalStorageFactory::Azdls {
+                            customized_credential_load: endpoint.map(|endpoint| {
+                                CustomAzdlsCredentialLoader::new(
+                                    iceberg_credentials::VendedCredentialLoader::new(
+                                        client.clone(),
+                                        endpoint,
+                                        Arc::clone(&token),
+                                        headers.clone(),
+                                    ),
+                                )
+                            }),
+                        },
                     },
                     // NOTE: We construct our own OAuth authenticator for the Catalog client instead of using the one built in.
                     // This means we ignore auth overrides from `/v1/config` (e.g. `oauth2-server-uri`).
@@ -1732,9 +1810,6 @@ impl KafkaConnection {
             ),
         };
 
-        // TODO(roshan): Implement enforcement of external address validation once
-        // rdkafka client has been updated to support providing multiple resolved
-        // addresses for brokers
         let mut context = TunnelingClientContext::new(
             context,
             Handle::current(),
@@ -1745,6 +1820,7 @@ impl KafkaConnection {
             storage_configuration.parameters.ssh_timeout_config,
             aws_config,
             in_task,
+            ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
         );
 
         match &self.default_tunnel {
@@ -1866,7 +1942,9 @@ impl KafkaConnection {
             }
         }
 
-        Ok(config.create_with_context(context)?)
+        Ok(mz_kafka_util::client::create_with_context(
+            &config, context,
+        )?)
     }
 
     async fn validate(
@@ -2442,7 +2520,8 @@ impl PostgresConnection<InlinedConnection> {
             .port(self.port)
             .dbname(&self.database)
             .user(&self.user.get_string(in_task, secrets_reader).await?)
-            .ssl_mode(self.tls_mode);
+            .ssl_mode(self.tls_mode)
+            .application_name("materialize");
         if let Some(password) = self.password {
             let password = secrets_reader
                 .read_string_in_task_if(in_task, password)

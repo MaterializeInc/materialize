@@ -10,7 +10,8 @@
 //! This module is responsible for serializing catalog objects into Protobuf.
 
 use mz_ore::cast::CastFrom;
-use mz_proto::{ProtoType, RustType, TryFromProtoError};
+use mz_proto::TryFromProtoError;
+use mz_repr::ColumnName;
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
@@ -18,14 +19,15 @@ use crate::durable::objects::{
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
     ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
     ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
-    ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
-    SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, IndexColumn, IndexColumnsKey,
+    IndexColumnsValue, IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId,
+    ItemColumn, ItemColumnsKey, ItemColumnsValue, ItemKey, ItemValue, NetworkPolicyKey,
+    NetworkPolicyValue, ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey,
+    RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue,
+    SettingKey, SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemCatalogItemId,
+    SystemGlobalId, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
@@ -33,6 +35,12 @@ use crate::durable::{
 };
 
 use super::{RoleAuthKey, RoleAuthValue};
+
+mod audit_log;
+mod foreign;
+mod rust_type;
+
+pub use rust_type::{ProtoMapEntry, ProtoType, RustType};
 
 pub mod proto {
     pub use mz_catalog_protos::objects::*;
@@ -190,7 +198,7 @@ impl RustType<proto::BurstState> for BurstState {
         proto::BurstState {
             burst_size: self.burst_size.clone(),
             linger_duration: self.linger_duration.into_proto(),
-            steady_hydrated_at: self.steady_hydrated_at.map(Into::into),
+            steady_ready_at: self.steady_ready_at.map(Into::into),
         }
     }
 
@@ -198,7 +206,7 @@ impl RustType<proto::BurstState> for BurstState {
         Ok(Self {
             burst_size: proto.burst_size,
             linger_duration: proto.linger_duration.into_rust()?,
-            steady_hydrated_at: proto.steady_hydrated_at.map(mz_repr::Timestamp::new),
+            steady_ready_at: proto.steady_ready_at.map(mz_repr::Timestamp::new),
         })
     }
 }
@@ -590,6 +598,100 @@ impl RustType<proto::ItemValue> for ItemValue {
             global_id: proto.global_id.into_rust()?,
             extra_versions,
             ephemeral_owner_session: proto.ephemeral_owner_session,
+        })
+    }
+}
+
+impl RustType<proto::ItemColumnsKey> for ItemColumnsKey {
+    fn into_proto(&self) -> proto::ItemColumnsKey {
+        proto::ItemColumnsKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ItemColumnsKey) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumnsKey {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ItemColumnsValue> for ItemColumnsValue {
+    fn into_proto(&self) -> proto::ItemColumnsValue {
+        proto::ItemColumnsValue {
+            columns: self.columns.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ItemColumnsValue) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumnsValue {
+            columns: proto.columns.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ItemColumn> for ItemColumn {
+    fn into_proto(&self) -> proto::ItemColumn {
+        proto::ItemColumn {
+            name: self.name.to_string(),
+            nullable: self.nullable,
+            type_oid: self.type_oid,
+            type_mod: self.type_mod,
+            custom_type: self.custom_type.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ItemColumn) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumn {
+            name: ColumnName::from(proto.name),
+            nullable: proto.nullable,
+            type_oid: proto.type_oid,
+            type_mod: proto.type_mod,
+            custom_type: proto.custom_type.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::IndexColumnsKey> for IndexColumnsKey {
+    fn into_proto(&self) -> proto::IndexColumnsKey {
+        proto::IndexColumnsKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::IndexColumnsKey) -> Result<Self, TryFromProtoError> {
+        Ok(IndexColumnsKey {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::IndexColumnsValue> for IndexColumnsValue {
+    fn into_proto(&self) -> proto::IndexColumnsValue {
+        proto::IndexColumnsValue {
+            columns: self.columns.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::IndexColumnsValue) -> Result<Self, TryFromProtoError> {
+        Ok(IndexColumnsValue {
+            columns: proto.columns.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::IndexColumn> for IndexColumn {
+    fn into_proto(&self) -> proto::IndexColumn {
+        proto::IndexColumn {
+            column: self.column.map(u64::cast_from),
+            nullable: self.nullable,
+        }
+    }
+
+    fn from_proto(proto: proto::IndexColumn) -> Result<Self, TryFromProtoError> {
+        Ok(IndexColumn {
+            column: proto.column.map(usize::cast_from),
+            nullable: proto.nullable,
         })
     }
 }
@@ -1083,8 +1185,8 @@ impl RustType<proto::IntrospectionSourceIndexGlobalId> for IntrospectionSourceIn
 
 #[cfg(test)]
 mod tests {
+    use crate::durable::objects::serialization::RustType;
     use mz_audit_log::VersionedEvent;
-    use mz_proto::RustType;
     use proptest::prelude::*;
 
     proptest! {

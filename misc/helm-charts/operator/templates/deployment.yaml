@@ -91,6 +91,12 @@ spec:
         {{- if not .Values.operator.args.enableLicenseKeyChecks }}
         - "--disable-license-key-checks"
         {{- end }}
+        {{- range .Values.operator.args.licenseKeyIntermediateCerts }}
+        - "--license-key-intermediate-cert={{ . }}"
+        {{- end }}
+        {{- if not .Values.operator.args.enableDatabaseNetworkPolicies }}
+        - "--disable-database-network-policies"
+        {{- end }}
         {{- if .Values.operator.args.installV1CRD }}
         - "--install-v1-crd"
         {{- if .Values.operator.args.webhookCertReloadInterval }}
@@ -197,6 +203,15 @@ spec:
         {{- end }}
         {{- if .Values.environmentd.defaultResources }}
         - '--environmentd-default-resources={{ toJson .Values.environmentd.defaultResources }}'
+        {{- end }}
+        {{- if .Values.environmentd.defaultReadinessProbe }}
+        - '--environmentd-default-readiness-probe={{ toJson .Values.environmentd.defaultReadinessProbe }}'
+        {{- end }}
+        {{- if .Values.environmentd.defaultLivenessProbe }}
+        - '--environmentd-default-liveness-probe={{ toJson .Values.environmentd.defaultLivenessProbe }}'
+        {{- end }}
+        {{- if .Values.environmentd.defaultStartupProbe }}
+        - '--environmentd-default-startup-probe={{ toJson .Values.environmentd.defaultStartupProbe }}'
         {{- end }}
         {{- if .Values.clusterd.nodeSelector }}
         {{- range $key, $value := .Values.clusterd.nodeSelector }}

@@ -50,3 +50,12 @@ rustflags = ["--cfg=tokio_unstable"]
 
 [env]
 DUCKDB_DOWNLOAD_LIB = "1"
+# jemalloc 5.3.1 defaults to a 64 KiB allocator page on aarch64 Linux. The
+# nodes we run on use 4 KiB kernel pages, and a 64 KiB allocator page makes
+# every slab at least 64 KiB, which leaves hundreds of MiB of active but unused
+# memory in each process and makes every heap-profiling sample occupy a 64 KiB
+# page. Pin the page to 4 KiB. A binary built this way aborts at startup on a
+# kernel with larger pages ("Unsupported system page size").
+#
+# See: https://github.com/facebook/jemalloc/pull/34
+AARCH64_UNKNOWN_LINUX_GNU_JEMALLOC_SYS_WITH_LG_PAGE = "12"

@@ -14,7 +14,7 @@ Persist reports its own build independently of `mz_version`: `mz_persist_metadat
 
 Every one of these is a counter whose rate should be at or near zero. Treat any of them departing from its measured baseline as a finding, because unlike the throughput metrics they have no legitimate reason to grow with load.
 
-`mz_persist_blob_failures`, `mz_persist_consensus_failures`, `mz_persist_state_update_state_slow_path`, `mz_persist_lease_timeout_read`, `mz_persist_compaction_noop`, `mz_persist_compaction_failed`, `mz_persist_compaction_dropped`, `mz_persist_external_blob_delete_noop_count`, `mz_persist_external_failed_count`, `mz_persist_cmd_failed_count`, `mz_persist_pushdown_parts_mismatched_stats_count`, `mz_persist_schema_cache_fetch_state_count`, `mz_persist_shard_unconsolidated_snapshot`, and `mz_persist_columnar_op_count{op="validation", result="invalid"}`.
+`mz_persist_blob_failures`, `mz_persist_consensus_failures`, `mz_persist_state_update_state_slow_path`, `mz_persist_lease_timeout_read`, `mz_persist_compaction_noop`, `mz_persist_compaction_failed`, `mz_persist_compaction_dropped`, `mz_persist_external_blob_delete_noop_count`, `mz_persist_external_failed_count`, `mz_persist_cmd_failed_count`, `mz_persist_pushdown_parts_mismatched_stats_count`, `mz_persist_schema_cache_fetch_state_count`, `mz_persist_unconsolidated_snapshot`, and `mz_persist_columnar_op_count{op="validation", result="invalid"}`.
 
 Two of the panel's sixteen arms are dead and are deliberately left out of the list above, because an arm that cannot resolve contributes a permanent zero and makes the panel look healthier than it is. `mz_persist_columnar_validation_count{result="invalid"}` duplicates the columnar validation series that `mz_persist_columnar_op_count{op="validation", result="invalid"}` already carries, and only the second resolves. `mz_txn_placeholder_schema_apply` resolves nowhere. Neither name has ever appeared in the Materialize source tree, in any release from v26.36.0 through v26.39.0-rc.3 or in the history behind them, so both are panel-authored rather than renamed. Sweep the fourteen that resolve and treat the panel's own count as wrong by two.
 
@@ -32,11 +32,11 @@ Worth adding to the sweep even though the panel omits them: `mz_persist_compacti
 | `mz_persist_external_seconds`, `_started_count`, `_succeeded_count`, `_failed_count` | counter | Blob and consensus calls. External time dominates every other timing series. |
 | `mz_persist_external_rtt_latency`, `mz_persist_external_op_latency_bucket` | gauge, histogram | Per-operation latency, split by `op`. |
 | `mz_persist_compaction_seconds`, `_requested`, `_applied`, `_bytes`, `_goodbytes` | counter | Compaction. Requested minus applied equals the noop and dropped counts. |
-| `mz_persist_gc_seconds`, `_started`, `_finished`, `_noop`, `_skipped`, `_merged_reqs` | counter | Garbage collection. |
+| `mz_persist_gc_seconds`, `_started`, `_finished`, `_noop`, `_merged_reqs` | counter | Garbage collection. The already-done case is `_noop`. There is no `mz_persist_gc_skipped`, and `skipped` exists only as `mz_persist_compaction_skipped`. |
 | `mz_persist_retry_retries_count`, `_started_count`, `_finished_count`, `_sleep_seconds` | counter | The panel excludes `op="next_listen_batch"`, which has its own panel because it retries by design. |
 | `mz_persist_shard_count` | gauge, per process | Shards the process holds a handle to. environmentd holds one per collection, so its value is the environment's shard count. |
-| `mz_persist_read_batch_part_bytes`, `_count` | counter, by `op` | The `op="unindexed"` slice is the `unindexed reads` panel. Rises by roughly 3x during rehydration. |
-| `mz_persist_pushdown_parts_filtered_count`, `_fetched_count`, `_inline_count`, `_faked_count` and their `_bytes` variants | counter | The ratio panels divide one by the sum of all four. |
+| `mz_persist_read_batch_part_bytes`, `mz_persist_read_batch_part_count` | counter, by `op` | The `op="unindexed"` slice is the `unindexed reads` panel. Rises by roughly 3x during rehydration. |
+| `mz_persist_pushdown_parts_filtered_count`, `_fetched_count`, `_inline_count`, `_faked_count` and their `mz_persist_pushdown_parts_filtered_bytes` variants | counter | The ratio panels divide one by the sum of all four. |
 | `mz_persist_blob_cache_hits_bytes`, `_hits_blobs`, `_evictions` | counter | |
 | `mz_txn_batch_unapplied_count`, `_unapplied_min_ts`, `_commit_count`, `_commit_bytes` | gauge, counter | Txn-shard backlog. |
 | `mz_txn_op_started_count`, `_succeeded_count`, `_retry_count`, `_errored_count` | counter, by `op` | |
@@ -44,6 +44,10 @@ Worth adding to the sweep even though the panel omits them: `mz_persist_compacti
 ### Everything else
 
 The remaining rows are for drill-down once the sweep flags something: `By Shard` for per-shard state, `Compaction` and `Compaction state` for compaction internals, `GC`, `External`, `Retries`, `Codec`, `Audit`, `Postgres/Consensus`, `PubSub Server` and `PubSub Client`, `Schema/Structured`, `Rehydration`, and `Txns`. Per-shard panels are keyed by `shard` and often by `name`, which is how a source or collection is joined to its shard, for example `mz_persist_shard_update_count{name="$source"}`.
+
+From v26.43.0, 14 per-shard panels render empty because [#38664](https://github.com/MaterializeInc/materialize/pull/38664) removed the metrics behind them: `# shards`, `# shards by env`, `upper`, `consensus_bytes / shard`, `consensus_started / shard`, `shard since`, `Stale versions`, `batch parts by version`, `schema reg`, the two inline-write panels, and the three pubsub `diffs applied` panels. An empty after-window on these is a dashboard gap, not a finding.
+
+Persist may export only aggregates in place of the per-shard series, and the per-shard panels fall back to them. Top-shard gauges then come from `<name>_topk`, so they still name shards. Counter rates collapse to one line labelled `(all shards)`, and totals come from environmentd's `<name>_sum`. A `By Shard` panel showing a single `(all shards)` line is this fallback, not a finding.
 
 ## Hazards and invariants
 

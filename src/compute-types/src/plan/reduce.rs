@@ -706,6 +706,7 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::SumFloat32
         | AggregateFunc::SumFloat64
         | AggregateFunc::SumNumeric
+        | AggregateFunc::SumInterval
         | AggregateFunc::Count
         | AggregateFunc::Any
         | AggregateFunc::All
@@ -727,6 +728,8 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MaxTimestampTz
         | AggregateFunc::MaxInterval
         | AggregateFunc::MaxTime
+        | AggregateFunc::MaxArray
+        | AggregateFunc::MaxList
         | AggregateFunc::MinNumeric
         | AggregateFunc::MinInt16
         | AggregateFunc::MinInt32
@@ -743,7 +746,9 @@ pub fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::MinDate
         | AggregateFunc::MinTimestamp
         | AggregateFunc::MinTimestampTz
-        | AggregateFunc::MinTime => ReductionType::Hierarchical,
+        | AggregateFunc::MinTime
+        | AggregateFunc::MinArray
+        | AggregateFunc::MinList => ReductionType::Hierarchical,
         AggregateFunc::JsonbAgg { .. }
         | AggregateFunc::JsonbObjectAgg { .. }
         | AggregateFunc::MapAgg { .. }

@@ -149,7 +149,7 @@ pub(crate) const GC_USE_ACTIVE_GC: Config<bool> = Config::new(
 
 pub(crate) const ENABLE_INCREMENTAL_COMPACTION: Config<bool> = Config::new(
     "persist_enable_incremental_compaction",
-    false,
+    true,
     "Whether to enable incremental compaction.",
     ParameterScope::Environment,
 );

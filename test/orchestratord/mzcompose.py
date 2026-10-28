@@ -308,6 +308,28 @@ def stop_and_remove_container(container_name: str) -> None:
         pass
 
 
+REGISTRY_PROXY_IMAGE = "registry:2"
+
+
+def pull_registry_proxy_image(max_attempts: int = 5) -> None:
+    # Docker Hub sporadically answers 502 Bad Gateway (on the token endpoint or
+    # on blob downloads), which made the implicit pull in `docker run` fail
+    # with exit status 125 before any test ran, so pull explicitly with retries.
+    delay = 2
+    for attempt in range(1, max_attempts + 1):
+        try:
+            spawn.runv(["docker", "pull", REGISTRY_PROXY_IMAGE])
+            return
+        except subprocess.CalledProcessError:
+            if attempt == max_attempts:
+                raise
+            print(
+                f"Pulling {REGISTRY_PROXY_IMAGE} failed (attempt {attempt}/{max_attempts}), retrying in {delay}s"
+            )
+            time.sleep(delay)
+            delay *= 2
+
+
 def start_registry_proxy(
     *,
     container_name: str,
@@ -339,7 +361,7 @@ def start_registry_proxy(
             "-v",
             cache_dir,
             *env,
-            "registry:2",
+            REGISTRY_PROXY_IMAGE,
         ]
     )
 
@@ -396,6 +418,7 @@ def recreate_kind_cluster() -> None:
     stop_and_remove_container("proxy-dockerhub")
     stop_and_remove_container("proxy-ghcr")
 
+    pull_registry_proxy_image()
     start_registry_proxy(
         container_name="proxy-dockerhub",
         cache_dir=f"{MZ_ROOT}/misc/kind/cache/dockerhub:/var/lib/registry",
@@ -479,7 +502,7 @@ def port_forward_environmentd(
 
 def retry(fn: Callable, timeout: int) -> None:
     end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=timeout)
+        datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=timeout)
     ).timestamp()
     while time.time() < end_time:
         try:
@@ -774,8 +797,11 @@ class BalancerdNodeSelector(Modification):
 PRIORITY_CLASS_NAME = "mz-test-priority"
 PRIORITY_CLASS_VALUE = 1000000000
 # Release in which environmentd learned
-# --orchestrator-kubernetes-priority-class-name.
-PRIORITY_CLASS_VERSION = "v26.42.0"
+# --orchestrator-kubernetes-priority-class-name. Must match `V26_42_0` in
+# src/orchestratord/src/controller/materialize/generation.rs: the operator
+# forwards the flag from 26.42.0-dev.0 on, so the gate has to name the -dev.0
+# prerelease or every 26.42.0 release candidate sorts below it.
+PRIORITY_CLASS_VERSION = "v26.42.0-dev.0"
 
 
 def assert_priority_class(pod: dict[str, Any], expected: str | None) -> None:
@@ -1213,6 +1239,62 @@ class ConsoleReplicas(Modification):
 
         # console doesn't get launched until last
         retry(check_replicas, 120)
+
+
+def balancerd_configmap() -> dict[str, Any]:
+    return {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {
+            "name": "balancerd-settings",
+            "namespace": "materialize-environment",
+        },
+        "data": {"config.json": json.dumps({"balancerd_max_connections": 123})},
+    }
+
+
+class BalancerdConfigMap(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        if version >= MzVersion.parse_mz("v26.44.0-dev.0"):
+            return [None, "balancerd-settings"]
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["balancerdConfigmapName"] = self.value
+        if self.value is not None:
+            definition["balancerd_configmap"] = balancerd_configmap()
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if not mods[BalancerdEnabled] or MzVersion.parse_mz(
+            mods[EnvironmentdImageRef]
+        ) < MzVersion.parse_mz("v26.44.0-dev.0"):
+            return
+
+        def check() -> None:
+            pods = get_balancerd_data()["items"]
+            assert pods
+            for pod in pods:
+                volumes = [
+                    v for v in pod["spec"]["volumes"] if v["name"] == "dynamic-config"
+                ]
+                args = pod["spec"]["containers"][0]["args"]
+                if self.value is None:
+                    assert not volumes
+                    assert not any(
+                        arg.startswith("--config-sync-file-path=") for arg in args
+                    )
+                else:
+                    assert len(volumes) == 1
+                    assert volumes[0]["configMap"]["name"] == self.value
+                    assert "--config-sync-file-path=/etc/balancerd/config.json" in args
+                    assert "--config-sync-loop-interval=1s" in args
+
+        retry(check, 240)
 
 
 class SystemParamConfigMap(Modification):
@@ -1669,6 +1751,76 @@ class EnvironmentdResources(Modification):
             assert (
                 resources == expected
             ), f"Expected environmentd resources {expected}, but got {resources}"
+
+        retry(check_pods, 120)
+
+
+class EnvironmentdProbes(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        if version >= MzVersion.parse_mz("v26.48.0-dev.0"):
+            return [
+                None,
+                {
+                    "readiness": {"periodSeconds": 5},
+                    "liveness": {"failureThreshold": 60, "timeoutSeconds": 3},
+                    "startup": {"failureThreshold": 360},
+                },
+            ]
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            spec = definition["materialize"]["spec"]
+            spec["environmentdReadinessProbe"] = self.value["readiness"]
+            spec["environmentdLivenessProbe"] = self.value["liveness"]
+            spec["environmentdStartupProbe"] = self.value["startup"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v26.48.0-dev.0"
+        ):
+            return
+
+        # The CR's fields are overlaid onto the operator's built-in probe.
+        base = {"initialDelaySeconds": 1, "failureThreshold": 12}
+        overrides = self.value or {"readiness": {}, "liveness": {}}
+        expected = {
+            "readinessProbe": {**base, **overrides["readiness"]},
+            "livenessProbe": {**base, **overrides["liveness"]},
+        }
+        # There is no startup probe unless one is configured.
+        expected_startup = (
+            {**base, **self.value["startup"]} if self.value is not None else None
+        )
+
+        def check_pods() -> None:
+            container = get_environmentd_data()["items"][0]["spec"]["containers"][0]
+            for probe_name, expected_fields in expected.items():
+                probe = container[probe_name]
+                assert (
+                    "tcpSocket" in probe
+                ), f"Expected tcpSocket in {probe_name}: {probe}"
+                actual = {k: probe.get(k) for k in expected_fields}
+                assert (
+                    actual == expected_fields
+                ), f"Expected environmentd {probe_name} {expected_fields}, but got {probe}"
+            startup = container.get("startupProbe")
+            if expected_startup is None:
+                assert startup is None, f"Expected no startupProbe, but got {startup}"
+            else:
+                assert startup is not None, "Expected a startupProbe"
+                assert (
+                    "tcpSocket" in startup
+                ), f"Expected tcpSocket in startupProbe: {startup}"
+                actual = {k: startup.get(k) for k in expected_startup}
+                assert (
+                    actual == expected_startup
+                ), f"Expected environmentd startupProbe {expected_startup}, but got {startup}"
 
         retry(check_pods, 120)
 
@@ -2358,9 +2510,13 @@ def workflow_documentation_defaults(
             "misc/helm-charts/operator/values.yaml",
             os.path.join(dir, "sample-values.yaml"),
         )
+        # The docs fetch MinIO from main rather than a release tag.
+        shutil.copyfile(
+            "misc/helm-charts/testing/minio.yaml",
+            os.path.join(dir, "sample-minio.yaml"),
+        )
         files = {
             "sample-postgres.yaml": "misc/helm-charts/testing/postgres.yaml",
-            "sample-minio.yaml": "misc/helm-charts/testing/minio.yaml",
             "sample-materialize.yaml": "misc/helm-charts/testing/materialize.yaml",
         }
 
@@ -2393,6 +2549,17 @@ def workflow_documentation_defaults(
                 "--for=condition=Available",
                 "--timeout=300s",
                 "deployment/minio",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "wait",
+                "-n",
+                "materialize",
+                "--for=condition=Complete",
+                "--timeout=300s",
+                "job/minio-setup",
             ]
         )
         spawn.runv(
@@ -2763,8 +2930,146 @@ def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
     definition = setup(c, args)
+    if args.tag is None:
+        definition["balancerd_configmap"] = balancerd_configmap()
+        definition["balancer"]["spec"]["configmapName"] = "balancerd-settings"
     init(definition)
     run_balancer(definition, False)
+    if args.tag is None:
+        check_balancer_config_sync(definition)
+
+
+def check_balancer_config_sync(definition: dict[str, Any]) -> None:
+    namespace = definition["balancer"]["metadata"]["namespace"]
+    pods = get_balancerd_data()["items"]
+    assert pods, "Expected balancerd pods"
+
+    def pod_state() -> dict[str, tuple[str, list[int]]]:
+        return {
+            pod["metadata"]["name"]: (
+                pod["metadata"]["uid"],
+                [s["restartCount"] for s in pod["status"].get("containerStatuses", [])],
+            )
+            for pod in get_balancerd_data()["items"]
+        }
+
+    initial_pod_state = pod_state()
+    volume = next(
+        v for v in pods[0]["spec"]["volumes"] if v["name"] == "dynamic-config"
+    )
+    config_map_name = volume["configMap"]["name"]
+    assert config_map_name == "balancerd-settings"
+
+    def read_config() -> dict[str, Any]:
+        cm = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "configmap",
+                    config_map_name,
+                    "-n",
+                    namespace,
+                    "-o",
+                    "json",
+                ]
+            )
+        )
+        assert not cm["metadata"].get(
+            "ownerReferences"
+        ), "Operator adopted an external ConfigMap"
+        return json.loads(cm["data"]["config.json"])
+
+    def check_limit(expected: int) -> None:
+        for pod in pods:
+            container = pod["spec"]["containers"][0]
+            port = next(
+                p["containerPort"]
+                for p in container["ports"]
+                if p["name"] == "internal-http"
+            )
+            name = pod["metadata"]["name"]
+            metrics = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "--raw",
+                    f"/api/v1/namespaces/{namespace}/pods/{name}:{port}/proxy/metrics",
+                ]
+            )
+            assert (
+                f"mz_balancer_connection_limit {expected}" in metrics.splitlines()
+            ), metrics
+
+    assert read_config() == {"balancerd_max_connections": 123}
+    retry(lambda: check_limit(123), 60)
+    for index, limit in enumerate((456, 0)):
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "configmap",
+                config_map_name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "-p",
+                json.dumps(
+                    {
+                        "data": {
+                            "config.json": json.dumps(
+                                {"balancerd_max_connections": limit}
+                            )
+                        }
+                    }
+                ),
+            ]
+        )
+        # A spec change forces reconciliation, which must leave the external
+        # ConfigMap unchanged.
+        replicas = len(pods) + index + 1
+        name = definition["balancer"]["metadata"]["name"]
+        spawn.runv(
+            [
+                "kubectl",
+                "patch",
+                "balancer",
+                name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "-p",
+                json.dumps({"spec": {"replicas": replicas}}),
+            ]
+        )
+        deployment = pods[0]["metadata"]["labels"]["materialize.cloud/name"]
+
+        def check_reconciled() -> None:
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "deployment",
+                        deployment,
+                        "-n",
+                        namespace,
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+            assert data["spec"]["replicas"] == replicas
+
+        retry(check_reconciled, 60)
+        assert read_config() == {"balancerd_max_connections": limit}
+        # Kubelet projection can take two minutes before the one-second sync.
+        retry(lambda: check_limit(limit), 180)
+        current_pod_state = pod_state()
+        for name, state in initial_pod_state.items():
+            assert (
+                current_pod_state.get(name) == state
+            ), "balancerd restarted during config sync"
 
 
 def get_materialize_v1alpha1() -> dict[str, Any]:
@@ -3418,6 +3723,118 @@ def workflow_webhook_cert_rotation(
     print("webhook cert rotation test PASSED")
 
 
+# The reporter of the events the Materialize controller publishes.
+MATERIALIZE_EVENT_REPORTER = "orchestratord.materialize.cloud/materialize"
+
+
+def get_materialize_events(definition: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the events published about the test's Materialize resource."""
+    name = definition["materialize"]["metadata"]["name"]
+    events = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                # `kubectl get events` serves the core v1 view of events, which
+                # renames the events.k8s.io fields these tests read.
+                "events.events.k8s.io",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+        )
+    )["items"]
+    return [
+        event
+        for event in events
+        if event.get("regarding", {}).get("kind") == "Materialize"
+        and event.get("regarding", {}).get("name") == name
+    ]
+
+
+def wait_for_failure_note(
+    definition: dict[str, Any],
+    matches: Callable[[str], bool],
+) -> str:
+    """Wait for a ReconcileFailed event on the Materialize resource whose note
+    satisfies `matches`, and return that note."""
+    found: list[str] = []
+
+    def check() -> None:
+        failures = [
+            event
+            for event in get_materialize_events(definition)
+            if event.get("reason") == "ReconcileFailed"
+        ]
+        matching = [event for event in failures if matches(event.get("note") or "")]
+        assert (
+            matching
+        ), f"No matching ReconcileFailed event; notes were {[e.get('note') for e in failures]}"
+        assert matching[0]["type"] == "Warning", matching[0]
+        found.append(matching[0]["note"])
+
+    retry(check, 300)
+    return found[0]
+
+
+def workflow_failure_events(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test that the ReconcileFailed event on a Materialize resource follows
+    the current cause of the failure, rather than the first one.
+
+    The environment first fails because its backend secret is missing, then,
+    once the secret exists with an invalid license key, because the key fails
+    to validate.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    init(definition)
+
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [definition["namespace"], definition["materialize"]]
+        ).encode(),
+    )
+    first = wait_for_failure_note(definition, lambda note: "not found" in note.lower())
+    print(f"First failure reported: {first}")
+
+    secret = copy.deepcopy(definition["secret"])
+    secret["stringData"]["license_key"] = "not-a-real-license-key"
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all([secret]).encode(),
+    )
+    second = wait_for_failure_note(definition, lambda note: note != first)
+    print(f"Second failure reported: {second}")
+
+    reporters = {
+        event["reportingController"] for event in get_materialize_events(definition)
+    }
+    assert reporters == {MATERIALIZE_EVENT_REPORTER}, reporters
+    print("workflow_failure_events PASSED")
+
+
 def workflow_manually_promote(
     c: Composition,
     parser: WorkflowArgumentParser,
@@ -3523,7 +3940,21 @@ def workflow_manually_promote(
     wait_for_rollout_complete()
     print("Test 2 PASSED: Promotion via v1 requestedRolloutHash succeeded")
 
+    check_lifecycle_events(definition)
     print("workflow_manually_promote PASSED")
+
+
+def check_lifecycle_events(definition: dict[str, Any]) -> None:
+    """Assert that each phase of a ManuallyPromote rollout was published as an
+    event on the Materialize resource, with the condition's reason and
+    message."""
+    by_reason = {event["reason"]: event for event in get_materialize_events(definition)}
+    for reason in ("Applying", "ReadyToPromote", "Promoting", "Applied"):
+        assert reason in by_reason, f"No {reason} event, found {sorted(by_reason)}"
+        event = by_reason[reason]
+        assert event["type"] == "Normal", event
+        assert event["reportingController"] == MATERIALIZE_EVENT_REPORTER, event
+        assert "generation" in (event.get("note") or ""), event
 
 
 def apply_materialize(definition: dict[str, Any]) -> None:
@@ -3537,6 +3968,8 @@ def apply_materialize(definition: dict[str, Any]) -> None:
         defs.append(definition["materialize2"])
     if "system_params_configmap" in definition:
         defs.append(definition["system_params_configmap"])
+    if "balancerd_configmap" in definition:
+        defs.append(definition["balancerd_configmap"])
     yaml_str = yaml.dump_all(defs)
     print(f"Attempting to apply:\n{yaml_str}")
     kubectl_apply_retrying_webhook(["kubectl", "apply", "-f", "-"], yaml_str)
@@ -4556,7 +4989,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if args.runtime:
         end_time = (
-            datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
+            datetime.datetime.now(datetime.UTC)
+            + datetime.timedelta(seconds=args.runtime)
         ).timestamp()
 
     action = Action(args.action)
@@ -4564,7 +4998,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     mod_source = make_mod_source(properties, mod_classes, rng)
 
     end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=args.runtime or 1800)
+        datetime.datetime.now(datetime.UTC)
+        + datetime.timedelta(seconds=args.runtime or 1800)
     ).timestamp()
     versions = get_all_self_managed_versions()
 
@@ -4709,6 +5144,8 @@ def setup(c: Composition, args) -> dict[str, Any]:
     # definition["operator"]["networkPolicies"]["ingress"]["enabled"] = True
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
+    # TODO: Remove once the pinned operator image knows '--disable-database-network-policies'
+    definition["operator"]["operator"]["args"]["enableDatabaseNetworkPolicies"] = True
     definition["operator"]["clusterd"]["nodeSelector"][
         "workload"
     ] = "materialize-instance"
@@ -5150,12 +5587,36 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
         )
         raise ValueError("Never completed")
 
+    if expect_fail:
+        wait_for_reconcile_failed_event(definition)
+
+
+def wait_for_reconcile_failed_event(definition: dict[str, Any]) -> None:
+    """Assert that the operator published a ReconcileFailed warning event on
+    the Materialize resource, with the error as its note."""
+
+    def check() -> None:
+        failures = [
+            event
+            for event in get_materialize_events(definition)
+            if event.get("reason") == "ReconcileFailed"
+        ]
+        assert failures, "No ReconcileFailed event on the Materialize resource"
+        event = failures[0]
+        assert event["type"] == "Warning", event
+        assert event["reportingController"] == MATERIALIZE_EVENT_REPORTER, event
+        assert event.get("note"), event
+
+    retry(check, 120)
+
 
 def run_balancer(definition: dict[str, Any], expect_fail: bool) -> None:
     defs = [
         definition["namespace"],
-        definition["balancer"],
     ]
+    if "balancerd_configmap" in definition:
+        defs.append(definition["balancerd_configmap"])
+    defs.append(definition["balancer"])
     try:
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],

@@ -12,11 +12,11 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_controller_types::ClusterId;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ResultSpec, RowSetFinishing};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
@@ -24,7 +24,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task::JoinHandle;
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
+use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, RowIterator, Timestamp};
 use mz_sql::ast::Raw;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::Params;
@@ -34,7 +34,10 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::vars::IsolationLevel;
+use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+use mz_sql::session::vars::{
+    CLUSTER, CLUSTER_REPLICA, IsolationLevel, TRANSACTION_ISOLATION, Var, VarInput,
+};
 use mz_sql_parser::ast::{CopyDirection, ExplainStage, ShowStatement, Statement};
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -44,9 +47,9 @@ use tracing::{Span, debug, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::Catalog;
-use crate::command::Command;
+use crate::command::{CatalogSnapshot, Command};
 use crate::coord;
-use crate::coord::peek::{FastPathPlan, PeekPlan};
+use crate::coord::peek::{FastPathPlan, PeekPlan, PeekResponseUnary};
 use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
 use crate::coord::timeline::timedomain_for;
 use crate::coord::timestamp_selection::TimestampDetermination;
@@ -203,6 +206,101 @@ impl PeekClient {
             .await
     }
 
+    /// Executes a coordinator-owned `SELECT`, pinned to `replica_id`, and
+    /// returns its rows.
+    ///
+    /// The caller must build `sql` itself rather than accept it from a user.
+    /// It runs as the system role, in a session of its own, and is not
+    /// statement-logged. This calls into the coordinator, so awaiting it on the
+    /// coordinator's main loop deadlocks.
+    ///
+    /// NOTE: Dropping the returned future does not cancel the peek, since
+    /// there is no connection to cancel it with. A peek dropped after its issue
+    /// keeps its read holds until the replica answers or goes away. One dropped
+    /// between its registration with the coordinator and its issue leaves the
+    /// registration behind, since only a response, a cancel of its connection,
+    /// or a drop of its inputs retires it.
+    pub(crate) async fn background_peek(
+        &mut self,
+        sql: &str,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> Result<Vec<Row>, AdapterError> {
+        // Not `catalog_snapshot`, which expects the coordinator to outlive its
+        // caller. A background client may race the coordinator's shutdown.
+        let CatalogSnapshot { catalog } = self
+            .call_coordinator(|tx| Command::CatalogSnapshot { tx })
+            .await?;
+        let (cluster_name, replica_name) = {
+            let cluster = catalog
+                .try_get_cluster(cluster_id)
+                .ok_or_else(|| AdapterError::Internal(format!("unknown cluster {cluster_id}")))?;
+            let replica = cluster
+                .replica(replica_id)
+                .ok_or_else(|| AdapterError::Internal(format!("unknown replica {replica_id}")))?;
+            (cluster.name.clone(), replica.name.clone())
+        };
+        let stmt = mz_sql::parse::parse(sql)?.into_element().ast;
+
+        let mut session = Session::dummy();
+        session.initialize_role_metadata(MZ_SYSTEM_ROLE_ID);
+        let system_vars = catalog.system_config();
+        // Serializable reads at the freshest time the inputs can serve. A
+        // strict-serializable read picks the stalest valid time at or past the
+        // oracle's read timestamp instead. In a read-only environment whose
+        // leader is not running, nothing advances the oracle, and such a read
+        // sees introspection logs as of a time before the replicas started.
+        for (var, value) in [
+            (&CLUSTER, cluster_name.as_str()),
+            (&CLUSTER_REPLICA, replica_name.as_str()),
+            (&TRANSACTION_ISOLATION, "serializable"),
+        ] {
+            session
+                .vars_mut()
+                .set(system_vars, var.name(), VarInput::Flat(value), false)?;
+        }
+        session.start_transaction_single_stmt(mz_ore::now::to_datetime((catalog.config().now)()));
+
+        let mut logging = ExecutionLogging::adopt(None, self);
+        let response = self
+            .try_frontend_peek_inner(
+                &mut session,
+                catalog,
+                Some(Arc::new(stmt)),
+                Params::empty(),
+                &mut logging,
+            )
+            .await?;
+
+        let mut rows = Vec::new();
+        let mut collect = |mut iter: Box<dyn RowIterator + Send + Sync>| {
+            while let Some(row) = iter.next() {
+                rows.push(row.to_owned());
+            }
+        };
+        match response {
+            Some(ExecuteResponse::SendingRowsImmediate { rows }) => collect(rows),
+            Some(ExecuteResponse::SendingRowsStreaming { mut rows, .. }) => {
+                while let Some(response) = rows.next().await {
+                    match response {
+                        PeekResponseUnary::Rows(iter) => collect(iter),
+                        PeekResponseUnary::Error(error) => return Err(error),
+                        PeekResponseUnary::Canceled => return Err(AdapterError::Canceled),
+                        PeekResponseUnary::DependencyDropped(dependency) => {
+                            return Err(dependency.to_concurrent_dependency_drop());
+                        }
+                    }
+                }
+            }
+            response => {
+                return Err(AdapterError::Internal(format!(
+                    "background peek returned an unexpected response: {response:?}"
+                )));
+            }
+        }
+        Ok(rows)
+    }
+
     /// This is encapsulated in an inner function so that the outer function can still do statement
     /// logging after the `?` returns of the inner function.
     ///
@@ -211,6 +309,7 @@ impl PeekClient {
     /// logging slot at the point where the coordinator takes over. Everywhere
     /// else the slot stays armed and `SessionClient::execute` logs the end from
     /// the returned result.
+    #[mz_ore::instrument(level = "debug")]
     async fn try_frontend_peek_inner(
         &mut self,
         session: &mut Session,
@@ -474,10 +573,6 @@ impl PeekClient {
 
         let max_query_result_size = Some(session.vars().max_query_result_size());
 
-        // # From sequence_peek
-
-        // # From peek_validate
-
         let compute_instance_snapshot =
             ComputeInstanceSnapshot::new_without_collections(cluster.id());
 
@@ -534,8 +629,6 @@ impl PeekClient {
         )?;
         session.add_notices(notices);
 
-        // # From peek_linearize_timestamp
-
         let isolation_level = session.vars().transaction_isolation().clone();
         let timeline = Coordinator::get_timeline(&timeline_context);
         let needs_linearized_read_ts =
@@ -549,8 +642,6 @@ impl PeekClient {
             }
             Some(_) | None => None,
         };
-
-        // # From peek_real_time_recency
 
         let vars = session.vars();
         let real_time_recency_ts: Option<Timestamp> = if vars.real_time_recency()
@@ -568,8 +659,6 @@ impl PeekClient {
             None
         };
 
-        // # From peek_timestamp_read_hold
-
         let dataflow_builder =
             DataflowBuilder::new(catalog.state(), compute_instance_snapshot.clone());
         let input_id_bundle = dataflow_builder.sufficient_collections(source_ids.clone());
@@ -582,10 +671,9 @@ impl PeekClient {
         // FreshestTableWrite doesn't matter.)
         //
         // TODO(peek-seq): It's not totally clear to me what the intended semantics are for AS OF
-        // queries inside a transaction: We clearly can't use the transaction timestamp, but the old
-        // peek sequencing still does a timedomain validation. The new peek sequencing does not do
-        // timedomain validation for AS OF queries, which seems more natural. But I'm thinking that
-        // it would be the cleanest to just simply disallow AS OF queries inside transactions.
+        // queries inside a transaction: We clearly can't use the transaction timestamp, and we don't
+        // do timedomain validation for AS OF queries, which seems natural. But I'm thinking that it
+        // would be the cleanest to just simply disallow AS OF queries inside transactions.
         let in_immediate_multi_stmt_txn = session.transaction().in_immediate_multi_stmt_txn(when)
             && !matches!(query_plan, QueryPlan::Subscribe { .. });
 
@@ -783,8 +871,6 @@ impl PeekClient {
                 }
             }
         }
-
-        // # From peek_optimize
 
         let stats = statistics_oracle(
             session,
@@ -1035,7 +1121,9 @@ impl PeekClient {
                                             .source_imports
                                             .into_iter()
                                             .filter_map(|(id, import)| {
-                                                import.desc.arguments.operators.map(|mfp| (id, mfp))
+                                                import.desc.arguments.operators.map(|plan| {
+                                                    (id, plan.into_map_filter_project())
+                                                })
                                             })
                                             .collect(),
                                         PeekPlan::FastPath(_) => {
@@ -1172,8 +1260,6 @@ impl PeekClient {
                 imports,
                 determination,
             } => {
-                // # From peek_explain_pushdown
-
                 let as_of = determination.timestamp_context.antichain();
                 let mz_now = determination
                     .timestamp_context
@@ -1203,7 +1289,6 @@ impl PeekClient {
                 insights_ctx,
             } => {
                 // Continue with normal execution
-                // # From peek_finish
 
                 // The typ here was generated from the HIR SQL type and simply stored in LIR.
                 let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
@@ -1238,8 +1323,6 @@ impl PeekClient {
                         .await?;
                     session.add_notice(AdapterNotice::PlanInsights(insights));
                 }
-
-                // # Now back to peek_finish
 
                 let watch_set = logging.id().map(|logging_id| {
                     WatchSetCreation::new(
@@ -1347,17 +1430,13 @@ impl PeekClient {
 
                 // Add timestamp notice if emit_timestamp_notice is enabled
                 if let Some(determination) = determination_for_notice {
-                    let explanation = self
-                        .call_coordinator(|tx| Command::ExplainTimestamp {
-                            conn_id: session.conn_id().clone(),
-                            session_wall_time: session.pcx().wall_time,
-                            cluster_id: target_cluster_id,
-                            id_bundle: input_id_bundle.clone(),
-                            determination,
-                            tx,
-                        })
-                        .await?;
-                    session.add_notice(AdapterNotice::QueryTimestamp { explanation });
+                    self.add_timestamp_notice(
+                        session,
+                        target_cluster_id,
+                        input_id_bundle.clone(),
+                        determination,
+                    )
+                    .await?;
                 }
 
                 Ok(Some(match copy_to {
@@ -1723,7 +1802,7 @@ enum Execution {
     },
     Subscribe {
         subscribe_plan: SubscribePlan,
-        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        df_desc: mz_compute_types::dataflows::LirDataflowDescription,
         df_meta: DataflowMetainfo,
         optimization_finished_at: EpochMillis,
     },

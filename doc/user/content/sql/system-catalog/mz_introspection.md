@@ -344,7 +344,7 @@ The `mz_mappable_objects` identifies indexes (and their underlying views) and ma
 | `name`       | [`text`]  | The name of the object. This name is unquoted, and you might need to call `quote_ident` if you want to reference the name shown here.
 | `global_id`  | [`text`]  | The global ID of the object.
 
-See [Which part of my query runs slowly or uses a lot of memory?](/serve-results/troubleshooting/#which-part-of-my-query-runs-slowly-or-uses-a-lot-of-memory) for examples of debugging with `mz_mappable_objects` and `mz_lir_mapping`.
+See [`EXPLAIN ANALYZE`](/sql/explain-analyze/) for examples of debugging with `mz_mappable_objects` and `mz_lir_mapping`.
 
 ## `mz_lir_mapping`
 

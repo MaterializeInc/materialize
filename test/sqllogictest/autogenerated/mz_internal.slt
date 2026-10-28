@@ -137,7 +137,7 @@ SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object 
 ----
 cluster_id  text  The␠ID␠of␠the␠cluster.␠Corresponds␠to␠`mz_clusters.id`.
 strategy  jsonb  **Unstable**␠The␠configured␠autoscaling␠policy,␠as␠JSON.␠Currently␠an␠`on_hydration`␠sub-policy␠carrying␠its␠`hydration_size`␠and␠optional␠`linger_duration`.
-state  jsonb  **Unstable**␠The␠in-flight␠autoscaling␠runtime␠state,␠as␠JSON␠keyed␠by␠strategy,␠or␠`NULL`␠when␠nothing␠is␠running.␠Currently␠a␠`burst`␠key␠carrying␠the␠active␠hydration␠burst:␠its␠`burst_size`,␠`linger_duration`,␠and␠`steady_hydrated_at`.
+state  jsonb  **Unstable**␠The␠in-flight␠autoscaling␠runtime␠state,␠as␠JSON␠keyed␠by␠strategy,␠or␠`NULL`␠when␠nothing␠is␠running.␠Currently␠a␠`burst`␠key␠carrying␠the␠active␠hydration␠burst:␠its␠`burst_size`,␠`linger_duration`,␠and␠`steady_ready_at`.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics' ORDER BY position
@@ -324,8 +324,8 @@ SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object 
 materialized_view_id  text  The␠ID␠of␠the␠materialized␠view.␠Corresponds␠to␠`mz_catalog.mz_materialized_views.id`
 type  text  `at`,␠`every`,␠or␠`on-commit`.␠Default:␠`on-commit`
 interval  interval  The␠refresh␠interval␠of␠a␠`REFRESH␠EVERY`␠option,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`every`.
-aligned_to  timestamp␠with␠time␠zone  The␠`ALIGNED␠TO`␠option␠of␠a␠`REFRESH␠EVERY`␠option,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`every`.
-at  timestamp␠with␠time␠zone  The␠time␠of␠a␠`REFRESH␠AT`,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`at`.
+aligned_to_expression  text  The␠`ALIGNED␠TO`␠expression␠of␠a␠`REFRESH␠EVERY`␠option,␠as␠it␠appears␠in␠the␠materialized␠view's␠`create_sql`,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`every`.
+at_expression  text  The␠time␠expression␠of␠a␠`REFRESH␠AT`␠option,␠as␠it␠appears␠in␠the␠materialized␠view's␠`create_sql`,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`at`.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_refreshes' ORDER BY position
@@ -411,9 +411,10 @@ cluster_id  text  The␠ID␠of␠the␠replica's␠cluster.
 started_at  timestamp␠with␠time␠zone  The␠earliest␠maintained␠compute␠dataflow␠installation␠in␠the␠hydration␠episode.
 finished_at  timestamp␠with␠time␠zone  The␠latest␠maintained␠compute␠dataflow␠hydration␠in␠the␠hydration␠episode.
 object_count  uint8  The␠number␠of␠maintained␠compute␠dataflows␠in␠the␠hydration␠episode.␠Includes␠the␠replica's␠system␠introspection␠dataflows,␠so␠it␠exceeds␠the␠number␠of␠indexes␠and␠materialized␠views␠you␠created.
-peak_memory_bytes  uint8  The␠largest␠process-lifetime␠cgroup␠memory␠high-water␠mark␠reported␠by␠any␠process␠when␠the␠collector␠recorded␠the␠episode.␠`NULL`␠if␠the␠platform␠reports␠no␠cgroup␠memory␠peak.
-peak_disk_bytes  uint8  The␠largest␠process-lifetime␠scratch-filesystem␠or␠swap␠high-water␠mark␠reported␠by␠any␠process␠when␠the␠collector␠recorded␠the␠episode.␠Filesystem␠peaks␠are␠sampled␠lower␠bounds.␠`NULL`␠if␠neither␠measurement␠is␠available.
+peak_memory_bytes  uint8  The␠process-lifetime␠cgroup␠memory␠high-water␠mark␠when␠the␠collector␠recorded␠the␠episode.␠`NULL`␠if␠the␠platform␠reports␠no␠cgroup␠memory␠peak.
+peak_disk_bytes  uint8  The␠process-lifetime␠scratch-filesystem␠or␠swap␠high-water␠mark␠when␠the␠collector␠recorded␠the␠episode.␠Filesystem␠peaks␠are␠sampled␠lower␠bounds.␠`NULL`␠if␠neither␠measurement␠is␠available.
 status  text  The␠hydration␠episode's␠status.␠Currently␠always␠`hydrated`.
+process_id  uint8  The␠ID␠of␠a␠process␠within␠the␠replica.␠Episode␠timing␠and␠object_count␠are␠replica-wide␠and␠repeated␠for␠each␠process.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_transitive_dependencies' ORDER BY position
@@ -811,6 +812,10 @@ mz_aggregates
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
+mz_builtin_columns
+mz_builtin_index_columns
+mz_builtin_indexes
+mz_builtin_log_indexes
 mz_builtin_materialized_views
 mz_builtin_sources
 mz_builtin_tables

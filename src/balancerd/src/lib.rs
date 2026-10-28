@@ -23,12 +23,11 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use axum::response::IntoResponse;
 use axum::{Router, routing};
 use bytes::BytesMut;
 use futures::TryFutureExt;
@@ -45,9 +44,12 @@ use launchdarkly_server_sdk as ld;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_orchestrator_tracing::NO_SENTRY_TARGET;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
-use mz_ore::metrics::{ComputedGauge, ComputedUIntGauge, IntCounter, IntGauge, MetricsRegistry};
+use mz_ore::metrics::{
+    ComputedGauge, ComputedIntGauge, ComputedUIntGauge, IntCounter, IntGauge, MetricsRegistry,
+};
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::task::{JoinSetExt, spawn};
@@ -62,6 +64,7 @@ use mz_server_core::{
     Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
     ReloadingTlsConfig, ServeConfig, ServeDyncfg, TlsCertConfig, TlsMode, listen,
 };
+use openssl::error::ErrorStack;
 use openssl::ssl::{NameType, Ssl, SslConnector, SslMethod, SslVerifyMode};
 use prometheus::{IntCounterVec, IntGaugeVec};
 use proxy_header::{ProxiedAddress, ProxyHeader};
@@ -79,8 +82,9 @@ use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 use crate::dyncfgs::{
-    INJECT_PROXY_PROTOCOL_HEADER_HTTP, MAX_CONNECTIONS, SIGTERM_CONNECTION_WAIT,
-    SIGTERM_LISTEN_WAIT, has_tracing_config_update, tracing_config,
+    CONNECTION_HIGH_WATERMARK, CONNECTION_LOW_WATERMARK, INJECT_PROXY_PROTOCOL_HEADER_HTTP,
+    MAX_CONNECTIONS, PRE_RESOLVED_TIMEOUT, SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
+    has_tracing_config_update, tracing_config,
 };
 
 /// Balancer build information.
@@ -196,9 +200,9 @@ pub struct BalancerService {
 
 impl BalancerService {
     pub async fn new(cfg: BalancerConfig) -> Result<Self, anyhow::Error> {
-        let pgwire = listen(&cfg.pgwire_listen_addr).await?;
-        let https = listen(&cfg.https_listen_addr).await?;
-        let internal_http = listen(&cfg.internal_http_listen_addr).await?;
+        let pgwire = listen(&cfg.pgwire_listen_addr)?;
+        let https = listen(&cfg.https_listen_addr)?;
+        let internal_http = listen(&cfg.internal_http_listen_addr)?;
         let metrics = BalancerMetrics::new(&cfg);
         let mut configs = ConfigSet::default();
         configs = dyncfgs::all_dyncfgs(configs);
@@ -316,6 +320,15 @@ impl BalancerService {
             None => (None, None),
         };
 
+        // Built once and shared by every upstream connection, since building a connector loads
+        // and parses the system CA bundle.
+        let internal_tls = self
+            .cfg
+            .internal_tls
+            .then(internal_tls_connector)
+            .transpose()
+            .context("building internal TLS connector")?;
+
         let metrics = ServerMetricsConfig::register_into(&self.cfg.metrics_registry);
         let limiter = ConnectionLimiter::new(&self.cfg.metrics_registry, self.configs.clone());
 
@@ -339,9 +352,10 @@ impl BalancerService {
                 resolver: Arc::new(self.cfg.resolver),
                 cancellation_resolver: Arc::new(self.cfg.cancellation_resolver),
                 tls: pgwire_tls,
-                internal_tls: self.cfg.internal_tls,
+                internal_tls: internal_tls.clone(),
                 metrics: ServerMetrics::new(metrics.clone(), "pgwire"),
                 limiter: Arc::clone(&limiter),
+                configs: self.configs.clone(),
                 now: SYSTEM_TIME.clone(),
             };
             let (handle, stream) = self.pgwire;
@@ -374,9 +388,9 @@ impl BalancerService {
                 resolve_template: Arc::from(addr),
                 port,
                 metrics: Arc::from(ServerMetrics::new(metrics, "https")),
-                limiter,
+                limiter: Arc::clone(&limiter),
                 configs: self.configs.clone(),
-                internal_tls: self.cfg.internal_tls,
+                internal_tls,
             };
             let (handle, stream) = self.https;
             server_handles.push(handle);
@@ -408,7 +422,19 @@ impl BalancerService {
                     "/api/livez",
                     routing::get(mz_http_util::handle_liveness_check),
                 )
-                .route("/api/readyz", routing::get(handle_readiness_check));
+                .route("/api/readyz", {
+                    let limiter = Arc::clone(&limiter);
+                    routing::get(move || async move {
+                        if limiter.evaluate_watermarks() {
+                            (StatusCode::OK, "ready")
+                        } else {
+                            (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "at the connection high watermark",
+                            )
+                        }
+                    })
+                });
             let internal_http = InternalHttpServer { router };
             let (handle, stream) = self.internal_http;
             server_handles.push(handle);
@@ -424,6 +450,15 @@ impl BalancerService {
                 warn!("internal_http server exited");
             });
         }
+        // Keeps `mz_balancer_connection_accepting` and config changes current between probes.
+        // Detached so that it does not keep `serve` from returning once the listeners are gone.
+        spawn(|| "connection_watermark_tick", async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tick.tick().await;
+                limiter.evaluate_watermarks();
+            }
+        });
         #[cfg(unix)]
         {
             let mut sigterm =
@@ -454,11 +489,6 @@ impl BalancerService {
     }
 }
 
-#[allow(clippy::unused_async)]
-async fn handle_readiness_check() -> impl IntoResponse {
-    (StatusCode::OK, "ready")
-}
-
 struct InternalHttpServer {
     router: Router,
 }
@@ -481,6 +511,14 @@ impl mz_server_core::Server for InternalHttpServer {
             http.serve_connection(conn, service).err_into().await
         })
     }
+}
+
+/// Builds the connector for TLS to environmentd.
+fn internal_tls_connector() -> Result<SslConnector, ErrorStack> {
+    let mut builder = SslConnector::builder(SslMethod::tls())?;
+    // environmentd doesn't yet have a cert we trust, so for now disable verification.
+    builder.set_verify(SslVerifyMode::NONE);
+    Ok(builder.build())
 }
 
 /// Wraps an IntGauge and automatically `inc`s on init and `drop`s on drop. Callers should not call
@@ -507,6 +545,8 @@ impl Drop for GaugeGuard {
 struct ServerMetricsConfig {
     connection_status: IntCounterVec,
     active_connections: IntGaugeVec,
+    pre_resolved_connections: IntGaugeVec,
+    pre_resolved_timeouts: IntCounterVec,
     tenant_connections: IntGaugeVec,
     tenant_connection_rx: IntCounterVec,
     tenant_connection_tx: IntCounterVec,
@@ -523,6 +563,16 @@ impl ServerMetricsConfig {
         let active_connections = registry.register(metric!(
             name: "mz_balancer_connection_active",
             help: "Count of currently open network connections.",
+            var_labels: ["source"],
+        ));
+        let pre_resolved_connections = registry.register(metric!(
+            name: "mz_balancer_pre_resolved_connection_active",
+            help: "Count of open network connections that have not yet resolved a backend.",
+            var_labels: ["source"],
+        ));
+        let pre_resolved_timeouts = registry.register(metric!(
+            name: "mz_balancer_pre_resolved_timeout_total",
+            help: "Count of connections closed for not resolving a backend within the pre-resolved timeout.",
             var_labels: ["source"],
         ));
         let tenant_connections = registry.register(metric!(
@@ -548,6 +598,8 @@ impl ServerMetricsConfig {
         Self {
             connection_status,
             active_connections,
+            pre_resolved_connections,
+            pre_resolved_timeouts,
             tenant_connections,
             tenant_connection_rx,
             tenant_connection_tx,
@@ -586,6 +638,19 @@ impl ServerMetrics {
             .active_connections
             .with_label_values(&[self.source])
             .into()
+    }
+
+    fn pre_resolved_connections(&self) -> GaugeGuard {
+        self.inner
+            .pre_resolved_connections
+            .with_label_values(&[self.source])
+            .into()
+    }
+
+    fn pre_resolved_timeout(&self) -> IntCounter {
+        self.inner
+            .pre_resolved_timeouts
+            .with_label_values(&[self.source])
     }
 
     fn tenant_connections(&self, tenant: &str) -> GaugeGuard {
@@ -631,8 +696,64 @@ struct ConnectionLimiter {
     /// Whether connections are currently being refused, so that reaching and clearing the limit
     /// are logged once each rather than once per connection.
     limited: AtomicBool,
+    /// Whether `/api/readyz` last reported ready. Written only by `evaluate_watermarks`.
+    accepting: Arc<AtomicBool>,
+    /// Taken only by the watermark tick and `/api/readyz`, never on connection acquire or
+    /// release.
+    watermark_state: Mutex<WatermarkState>,
     rejected: IntCounter,
+    watermark_transitions: IntCounter,
     _limit: ComputedUIntGauge,
+    _accepting: ComputedIntGauge,
+    _high_watermark: ComputedUIntGauge,
+    _low_watermark: ComputedUIntGauge,
+}
+
+#[derive(Debug, Default)]
+struct WatermarkState {
+    out_of_rotation: bool,
+    /// The last watermark misconfiguration warned about, so it is logged once per change.
+    last_warning: Option<String>,
+}
+
+/// Validated connection watermarks, see [`configured_watermarks`].
+#[derive(Debug, Clone, Copy)]
+struct Watermarks {
+    low: usize,
+    high: usize,
+}
+
+/// The effective watermarks, `Ok(None)` when both are zero, or `Err` describing why the
+/// configured values are ignored.
+///
+/// The high watermark must be strictly below the hard limit. At the limit the pod would leave
+/// rotation exactly when it is full, which is when a load balancer that closes connections to
+/// unhealthy targets does the most damage.
+fn configured_watermarks(configs: &ConfigSet) -> Result<Option<Watermarks>, String> {
+    let low = CONNECTION_LOW_WATERMARK.get(configs);
+    let high = CONNECTION_HIGH_WATERMARK.get(configs);
+    let max = MAX_CONNECTIONS.get(configs);
+    let reason = match (low, high) {
+        (0, 0) => return Ok(None),
+        (0, _) | (_, 0) => "both watermarks must be set",
+        (low, high) if low >= high => "the low watermark must be below the high watermark",
+        _ if max == 0 => "balancerd_max_connections must be enabled",
+        (_, high) if high >= usize::cast_from(max) => {
+            "the high watermark must be below balancerd_max_connections"
+        }
+        (low, high) => return Ok(Some(Watermarks { low, high })),
+    };
+    Err(format!(
+        "{reason} (low={low}, high={high}, max_connections={max})"
+    ))
+}
+
+/// One effective watermark as a gauge value, 0 when the watermarks are off.
+fn watermark_metric(configs: &ConfigSet, pick: fn(Watermarks) -> usize) -> u64 {
+    configured_watermarks(configs)
+        .ok()
+        .flatten()
+        .map_or(0, |w| u64::cast_from(pick(w)))
 }
 
 impl ConnectionLimiter {
@@ -651,13 +772,126 @@ impl ConnectionLimiter {
                 move || u64::from(MAX_CONNECTIONS.get(&configs))
             },
         );
+        let watermark_transitions = registry.register(metric!(
+            name: "mz_balancer_connection_watermark_transitions_total",
+            help: "Count of times balancerd left or returned to load balancer rotation because \
+            of the connection watermarks.",
+        ));
+        let accepting = Arc::new(AtomicBool::new(true));
+        let accepting_gauge: ComputedIntGauge = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_accepting",
+                help: "Whether /api/readyz reports ready: 1 in load balancer rotation, 0 out.",
+            ),
+            {
+                let accepting = Arc::clone(&accepting);
+                move || i64::from(accepting.load(Ordering::Relaxed))
+            },
+        );
+        // The metrics catalog is generated from `metric!` literals, so each gauge is spelled out.
+        let high_watermark = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_high_watermark",
+                help: "Connections at which balancerd leaves load balancer rotation, 0 if disabled.",
+            ),
+            {
+                let configs = configs.clone();
+                move || watermark_metric(&configs, |w| w.high)
+            },
+        );
+        let low_watermark = registry.register_computed_gauge(
+            metric!(
+                name: "mz_balancer_connection_low_watermark",
+                help: "Connections below which balancerd returns to load balancer rotation, 0 if \
+                disabled.",
+            ),
+            {
+                let configs = configs.clone();
+                move || watermark_metric(&configs, |w| w.low)
+            },
+        );
         Arc::new(ConnectionLimiter {
             configs,
             active: AtomicU32::new(0),
             limited: AtomicBool::new(false),
+            accepting,
+            watermark_state: Mutex::new(WatermarkState::default()),
             rejected,
+            watermark_transitions,
             _limit: limit,
+            _accepting: accepting_gauge,
+            _high_watermark: high_watermark,
+            _low_watermark: low_watermark,
         })
+    }
+
+    #[cfg(test)]
+    fn accepting(&self) -> bool {
+        self.accepting.load(Ordering::Relaxed)
+    }
+
+    /// Applies the watermark transitions for the current connection count and returns whether
+    /// balancerd is in load balancer rotation.
+    ///
+    /// Runs on every `/api/readyz` request and on a 1s tick, not on connection acquire or release,
+    /// so the connection path stays free of locks and dyncfg reads. Each call depends only on the
+    /// current count, configuration and state, so how often probes poll does not change the
+    /// outcome, only how soon a transition is seen.
+    ///
+    /// There is no minimum time out of rotation. How long `/api/readyz` must fail before a pod
+    /// actually leaves, and how long it must pass before it returns, is up to the health check
+    /// thresholds of whatever reads it.
+    fn evaluate_watermarks(&self) -> bool {
+        let mut state = self.watermark_state.lock().expect("lock poisoned");
+        let watermarks = self.watermarks(&mut state.last_warning);
+        let active = usize::cast_from(self.active.load(Ordering::SeqCst));
+        let accepting = match (watermarks, state.out_of_rotation) {
+            (Some(w), false) if active >= w.high => {
+                warn!(
+                    "leaving load balancer rotation: {active} active connections reached the \
+                    high watermark of {}",
+                    w.high
+                );
+                false
+            }
+            (Some(w), true) if active < w.low => {
+                info!(
+                    "returning to load balancer rotation: {active} active connections, below \
+                    the low watermark of {}",
+                    w.low
+                );
+                true
+            }
+            // Watermarks disabled or invalidated while out of rotation restore readiness at once,
+            // since off must behave as if they had never been set.
+            (None, true) => {
+                info!(
+                    "returning to load balancer rotation: connection watermarks no longer in effect"
+                );
+                true
+            }
+            _ => return !state.out_of_rotation,
+        };
+        state.out_of_rotation = !accepting;
+        self.accepting.store(accepting, Ordering::Relaxed);
+        self.watermark_transitions.inc();
+        accepting
+    }
+
+    fn watermarks(&self, last: &mut Option<String>) -> Option<Watermarks> {
+        match configured_watermarks(&self.configs) {
+            Ok(watermarks) => {
+                *last = None;
+                watermarks
+            }
+            Err(reason) => {
+                if last.as_deref() != Some(&reason) {
+                    warn!("ignoring connection watermarks: {reason}");
+                    *last = Some(reason);
+                }
+                None
+            }
+        }
     }
 
     /// Reserves capacity for one connection, or returns `None` if the limit has been reached, in
@@ -703,14 +937,60 @@ impl Drop for ConnectionGuard {
     }
 }
 
+/// Answers the client with a final message and flushes it.
+///
+/// [`FramedConn::send`] only enqueues into a buffer, so a rejection that is not flushed reaches
+/// the client as a bare socket close rather than the error it was given. Every path that answers
+/// the client and then stops has to flush, because the connection is dropped as soon as it
+/// returns.
+async fn reject<A>(conn: &mut FramedConn<A>, err: ErrorResponse) -> Result<(), io::Error>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+{
+    conn.send(err).await?;
+    conn.flush().await
+}
+
+/// Runs the pre-resolved phase under [`PRE_RESOLVED_TIMEOUT`], counting an overrun.
+///
+/// `fut` must cover TLS negotiation, startup, authentication, and backend resolution.
+/// Proxying must run after it completes, outside the deadline. A zero timeout leaves
+/// `fut` unbounded.
+async fn under_pre_resolved_timeout<F, T, E>(
+    timeout: Duration,
+    metrics: &ServerMetrics,
+    fut: F,
+) -> Result<T, E>
+where
+    F: Future<Output = Result<T, E>>,
+    E: From<io::Error>,
+{
+    if timeout.is_zero() {
+        return fut.await;
+    }
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(result) => result,
+        Err(_) => {
+            metrics.pre_resolved_timeout().inc();
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "timed out before resolving a backend",
+            )
+            .into())
+        }
+    }
+}
+
 pub enum CancellationResolver {
     Directory(PathBuf),
     Static(String),
 }
 
 struct PgwireBalancer {
+    /// Read for [`PRE_RESOLVED_TIMEOUT`] at connection time.
+    configs: ConfigSet,
     tls: Option<ReloadingTlsConfig>,
-    internal_tls: bool,
+    internal_tls: Option<SslConnector>,
     cancellation_resolver: Arc<CancellationResolver>,
     resolver: Arc<BalancerResolver>,
     metrics: ServerMetrics,
@@ -719,50 +999,180 @@ struct PgwireBalancer {
 }
 
 impl PgwireBalancer {
+    /// Negotiates pgwire startup and resolves a backend.
+    ///
+    /// Returns `None` after a client disconnect, a flushed rejection, or a dispatched
+    /// cancellation request.
+    async fn pre_resolve(
+        conn: Connection,
+        tls: Option<ReloadingTlsConfig>,
+        resolver: &BalancerResolver,
+        cancellation_resolver: Arc<CancellationResolver>,
+        conn_uuid: Uuid,
+        metrics: &ServerMetrics,
+    ) -> Result<
+        Option<(
+            FramedConn<Connection>,
+            ResolvedAddr,
+            BTreeMap<String, String>,
+        )>,
+        anyhow::Error,
+    > {
+        let peer_addr = conn.peer_addr();
+        let mut conn = Conn::Unencrypted(conn);
+        loop {
+            let message = decode_startup(&mut conn, MAX_STARTUP_FRAME_SIZE).await?;
+            conn = match message {
+                // Clients sometimes hang up during the startup sequence, e.g.
+                // because they receive an unacceptable response to an
+                // `SslRequest`. This is considered a graceful termination.
+                None => return Ok(None),
+
+                Some(FrontendStartupMessage::Startup {
+                    version,
+                    mut params,
+                }) => {
+                    let mut conn = FramedConn::new(conn);
+                    let rejected = SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION;
+                    let peer_addr = match peer_addr {
+                        Ok(addr) => addr.ip(),
+                        Err(e) => {
+                            error!("Invalid peer_addr {:?}", e);
+                            reject(
+                                &mut conn,
+                                ErrorResponse::fatal(rejected, "invalid peer address"),
+                            )
+                            .await?;
+                            return Ok(None);
+                        }
+                    };
+                    debug!(
+                        %conn_uuid, %peer_addr,
+                        "starting new pgwire connection in balancer",
+                    );
+                    let prev = params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
+                    if prev.is_some() {
+                        reject(
+                            &mut conn,
+                            ErrorResponse::fatal(
+                                rejected,
+                                format!("invalid parameter '{CONN_UUID_KEY}'"),
+                            ),
+                        )
+                        .await?;
+                        return Ok(None);
+                    }
+
+                    let forwarded_for = params.insert(
+                        MZ_FORWARDED_FOR_KEY.to_string(),
+                        peer_addr.to_string().clone(),
+                    );
+                    if let Some(_) = forwarded_for {
+                        reject(
+                            &mut conn,
+                            ErrorResponse::fatal(
+                                rejected,
+                                format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
+                            ),
+                        )
+                        .await?;
+                        return Ok(None);
+                    };
+
+                    let Some(resolved) = Self::resolve_destination(
+                        &mut conn,
+                        version,
+                        &params,
+                        resolver,
+                        tls.map(|tls| tls.mode),
+                        metrics,
+                    )
+                    .await?
+                    else {
+                        return Ok(None);
+                    };
+                    return Ok(Some((conn, resolved, params)));
+                }
+
+                Some(FrontendStartupMessage::CancelRequest {
+                    conn_id,
+                    secret_key,
+                }) => {
+                    spawn(|| "cancel request", async move {
+                        cancel_request(conn_id, secret_key, &cancellation_resolver).await;
+                    });
+                    // Do not wait on cancel requests to return because cancellation is best
+                    // effort.
+                    return Ok(None);
+                }
+
+                Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
+                    (Conn::Unencrypted(mut conn), Some(tls)) => {
+                        conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
+                        let mut ssl_stream = SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
+                        if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                            let _ = ssl_stream.get_mut().shutdown().await;
+                            return Err(e.into());
+                        }
+                        Conn::Ssl(ssl_stream)
+                    }
+                    (mut conn, _) => {
+                        conn.write_all(&[REJECT_ENCRYPTION]).await?;
+                        conn
+                    }
+                },
+
+                Some(FrontendStartupMessage::GssEncRequest) => {
+                    conn.write_all(&[REJECT_ENCRYPTION]).await?;
+                    conn
+                }
+            }
+        }
+    }
+
     #[mz_ore::instrument(level = "debug")]
-    async fn run<'a, A>(
+    /// Resolves a destination for the connection, or answers the client saying why it cannot.
+    ///
+    /// `Ok(None)` means the rejection has been flushed and the connection is finished.
+    async fn resolve_destination<'a, A>(
         conn: &'a mut FramedConn<A>,
         version: i32,
-        params: BTreeMap<String, String>,
+        params: &BTreeMap<String, String>,
         resolver: &BalancerResolver,
         tls_mode: Option<TlsMode>,
-        internal_tls: bool,
         metrics: &ServerMetrics,
-        limiter: &Arc<ConnectionLimiter>,
-    ) -> Result<(), io::Error>
+    ) -> Result<Option<ResolvedAddr>, io::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
         if version != VERSION_3 {
-            return conn
-                .send(ErrorResponse::fatal(
+            reject(
+                conn,
+                ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
                     "server does not support the client's requested protocol version",
-                ))
-                .await;
+                ),
+            )
+            .await?;
+            return Ok(None);
         }
 
         let Some(user) = params.get("user") else {
-            return conn
-                .send(ErrorResponse::fatal(
+            reject(
+                conn,
+                ErrorResponse::fatal(
                     SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
                     "user parameter required",
-                ))
-                .await;
+                ),
+            )
+            .await?;
+            return Ok(None);
         };
 
         if let Err(err) = conn.inner().ensure_tls_compatibility(&tls_mode) {
-            return conn.send(err).await;
+            reject(conn, err).await?;
+            return Ok(None);
         }
-
-        let Some(_conn_guard) = limiter.acquire() else {
-            return conn
-                .send(ErrorResponse::fatal(
-                    SqlState::TOO_MANY_CONNECTIONS,
-                    "balancer is at its connection limit",
-                ))
-                .await;
-        };
 
         let resolved = match resolver.resolve(conn, user, metrics).await {
             Ok(v) => v,
@@ -782,33 +1192,62 @@ impl PgwireBalancer {
                         SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
                     }
                 };
-                return conn
-                    .send(ErrorResponse::fatal(sql_state, err.to_string()))
-                    .await;
+                reject(conn, ErrorResponse::fatal(sql_state, err.to_string())).await?;
+                return Ok(None);
             }
         };
 
+        Ok(Some(resolved))
+    }
+
+    /// Proxies a resolved connection until either side closes.
+    async fn proxy<A>(
+        mut conn: FramedConn<A>,
+        resolved: ResolvedAddr,
+        params: BTreeMap<String, String>,
+        internal_tls: Option<&SslConnector>,
+        metrics: &ServerMetrics,
+    ) -> Result<(), io::Error>
+    where
+        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+    {
         let _active_guard = resolved
             .tenant
             .as_ref()
             .map(|tenant| metrics.tenant_connections(tenant));
-        let mut mz_stream =
-            match Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls)
-                .await
-            {
-                Ok(stream) => stream,
-                Err(e) => {
-                    error!("failed to connect to upstream server: {e}");
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
-                            "upstream server not available",
-                        ))
-                        .await;
-                }
-            };
+        let mut mz_stream = match Self::init_stream(
+            &mut conn,
+            resolved.addr,
+            resolved.password,
+            params,
+            internal_tls,
+        )
+        .await
+        {
+            Ok(stream) => stream,
+            Err(e) => {
+                error!("failed to connect to upstream server: {e}");
+                return reject(
+                    &mut conn,
+                    ErrorResponse::fatal(
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                        "upstream server not available",
+                    ),
+                )
+                .await;
+            }
+        };
 
-        let mut client_counter = CountingConn::new(conn.inner_mut());
+        // Proxying does not frame, so release the framing buffers rather than hold them for the
+        // life of the connection. Bytes the client sent after its last decoded message, e.g. a
+        // query pipelined behind its password, are already buffered and must go upstream first.
+        let (mut client, unread) = conn.into_parts();
+        if !unread.is_empty() {
+            mz_stream.write_all(&unread).await?;
+        }
+        drop(unread);
+
+        let mut client_counter = CountingConn::new(&mut client);
 
         // Now blindly shuffle bytes back and forth until closed.
         // TODO: Limit total memory use.
@@ -832,15 +1271,19 @@ impl PgwireBalancer {
         envd_addr: SocketAddr,
         password: Option<String>,
         params: BTreeMap<String, String>,
-        internal_tls: bool,
-    ) -> Result<Conn<TcpStream>, anyhow::Error>
+        internal_tls: Option<&SslConnector>,
+    ) -> Result<Conn<netio::Stream>, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
-        let mut mz_stream = TcpStream::connect(envd_addr).await?;
+        // NOTE: `netio::Stream::connect` sets `TCP_NODELAY`. Without it, Nagle's algorithm holds
+        // the tail of an extended-protocol batch that arrives in several reads until
+        // environmentd's delayed ACK (at least 40 ms on Linux), because environmentd responds
+        // only at `Sync`.
+        let mut mz_stream = netio::Stream::connect(envd_addr).await?;
         let mut buf = BytesMut::new();
 
-        let mut mz_stream = if internal_tls {
+        let mut mz_stream = if let Some(internal_tls) = internal_tls {
             FrontendStartupMessage::SslRequest.encode(&mut buf)?;
             mz_stream.write_all(&buf).await?;
             buf.clear();
@@ -849,14 +1292,7 @@ impl PgwireBalancer {
                 netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
             if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
                 // do a TLS handshake
-                let mut builder =
-                    SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-                // environmentd doesn't yet have a cert we trust, so for now disable verification.
-                builder.set_verify(SslVerifyMode::NONE);
-                let mut ssl = builder
-                    .build()
-                    .configure()?
-                    .into_ssl(&envd_addr.to_string())?;
+                let mut ssl = internal_tls.configure()?.into_ssl(&envd_addr.to_string())?;
                 ssl.set_connect_state();
                 Conn::Ssl(SslStream::new(ssl, mz_stream)?)
             } else {
@@ -934,126 +1370,70 @@ impl mz_server_core::Server for PgwireBalancer {
         _tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
     ) -> mz_server_core::ConnectionHandler {
         let tls = self.tls.clone();
-        let internal_tls = self.internal_tls;
+        let internal_tls = self.internal_tls.clone();
         let resolver = Arc::clone(&self.resolver);
         let inner_metrics = self.metrics.clone();
         let outer_metrics = self.metrics.clone();
         let limiter = Arc::clone(&self.limiter);
+        let pre_resolved_timeout = PRE_RESOLVED_TIMEOUT.get(&self.configs);
         let cancellation_resolver = Arc::clone(&self.cancellation_resolver);
         let conn_uuid = epoch_to_uuid_v7(&(self.now)());
-        let peer_addr = conn.peer_addr();
         conn.uuid_handle().set(conn_uuid);
         Box::pin(async move {
             // TODO: Try to merge this with pgwire/server.rs to avoid the duplication. May not be
             // worth it.
             let active_guard = outer_metrics.active_connections();
             let result: Result<(), anyhow::Error> = async move {
-                let mut conn = Conn::Unencrypted(conn);
-                loop {
-                    let message = decode_startup(&mut conn, MAX_STARTUP_FRAME_SIZE).await?;
-                    conn = match message {
-                        // Clients sometimes hang up during the startup sequence, e.g.
-                        // because they receive an unacceptable response to an
-                        // `SslRequest`. This is considered a graceful termination.
-                        None => return Ok(()),
+                let Some(_conn_guard) = limiter.acquire() else {
+                    return Ok(());
+                };
+                let pre_resolved = inner_metrics.pre_resolved_connections();
 
-                        Some(FrontendStartupMessage::Startup {
-                            version,
-                            mut params,
-                        }) => {
-                            let mut conn = FramedConn::new(conn);
-                            let rejected =
-                                SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION;
-                            let peer_addr = match peer_addr {
-                                Ok(addr) => addr.ip(),
-                                Err(e) => {
-                                    error!("Invalid peer_addr {:?}", e);
-                                    return Ok(conn
-                                        .send(ErrorResponse::fatal(
-                                            rejected,
-                                            "invalid peer address",
-                                        ))
-                                        .await?);
-                                }
-                            };
-                            debug!(
-                                %conn_uuid, %peer_addr,
-                                "starting new pgwire connection in balancer",
-                            );
-                            let prev =
-                                params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
-                            if prev.is_some() {
-                                return Ok(conn
-                                    .send(ErrorResponse::fatal(
-                                        rejected,
-                                        format!("invalid parameter '{CONN_UUID_KEY}'"),
-                                    ))
-                                    .await?);
-                            }
+                // Boxed so that startup's state, much larger than the proxying state, is freed once
+                // startup completes. Held inline, it would size the connection's task, which lives
+                // as long as the connection.
+                let destination = under_pre_resolved_timeout(
+                    pre_resolved_timeout,
+                    &inner_metrics,
+                    Box::pin(Self::pre_resolve(
+                        conn,
+                        tls,
+                        &resolver,
+                        cancellation_resolver,
+                        conn_uuid,
+                        &inner_metrics,
+                    )),
+                )
+                .await?;
 
-                            let forwarded_for = params.insert(
-                                MZ_FORWARDED_FOR_KEY.to_string(),
-                                peer_addr.to_string().clone(),
-                            );
-                            if let Some(_) = forwarded_for {
-                                return Ok(conn
-                                    .send(ErrorResponse::fatal(
-                                        rejected,
-                                        format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
-                                    ))
-                                    .await?);
-                            };
-
-                            Self::run(
-                                &mut conn,
-                                version,
-                                params,
-                                &resolver,
-                                tls.map(|tls| tls.mode),
-                                internal_tls,
-                                &inner_metrics,
-                                &limiter,
-                            )
-                            .await?;
-                            conn.flush().await?;
-                            return Ok(());
-                        }
-
-                        Some(FrontendStartupMessage::CancelRequest {
-                            conn_id,
-                            secret_key,
-                        }) => {
-                            spawn(|| "cancel request", async move {
-                                cancel_request(conn_id, secret_key, &cancellation_resolver).await;
-                            });
-                            // Do not wait on cancel requests to return because cancellation is best
-                            // effort.
-                            return Ok(());
-                        }
-
-                        Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
-                            (Conn::Unencrypted(mut conn), Some(tls)) => {
-                                conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                                let mut ssl_stream =
-                                    SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
-                                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                                    let _ = ssl_stream.get_mut().shutdown().await;
-                                    return Err(e.into());
-                                }
-                                Conn::Ssl(ssl_stream)
-                            }
-                            (mut conn, _) => {
-                                conn.write_all(&[REJECT_ENCRYPTION]).await?;
-                                conn
-                            }
-                        },
-
-                        Some(FrontendStartupMessage::GssEncRequest) => {
-                            conn.write_all(&[REJECT_ENCRYPTION]).await?;
-                            conn
-                        }
-                    }
+                let Some((conn, resolved, params)) = destination else {
+                    return Ok(());
+                };
+                drop(pre_resolved);
+                // One line per connection ties a client IP to a tenant; the metrics carry the
+                // tenant but not the IP, and flow logs see the IP but not the tenant. Skipped
+                // without a tenant (self-managed). `authenticated` is false when the tenant came
+                // from the client's SNI, which environmentd authenticates only after this point.
+                if let Some(tenant) = &resolved.tenant {
+                    info!(
+                        target: NO_SENTRY_TARGET,
+                        %conn_uuid,
+                        client_addr = params.get(MZ_FORWARDED_FOR_KEY).map_or("", String::as_str),
+                        %tenant,
+                        authenticated = resolved.password.is_some(),
+                        "pgwire connection resolved",
+                    );
                 }
+
+                PgwireBalancer::proxy(
+                    conn,
+                    resolved,
+                    params,
+                    internal_tls.as_ref(),
+                    &inner_metrics,
+                )
+                .await?;
+                Ok(())
             }
             .await;
             drop(active_guard);
@@ -1236,10 +1616,45 @@ struct HttpsBalancer {
     metrics: Arc<ServerMetrics>,
     limiter: Arc<ConnectionLimiter>,
     configs: ConfigSet,
-    internal_tls: bool,
+    internal_tls: Option<SslConnector>,
 }
 
 impl HttpsBalancer {
+    /// Negotiates TLS and resolves a backend using the client's SNI hostname.
+    async fn pre_resolve(
+        conn: Connection,
+        tls_context: Option<ReloadingSslContext>,
+        resolver: &TenantDnsResolver,
+        resolve_template: &str,
+        port: u16,
+    ) -> Result<(Box<dyn ClientStream>, ResolvedAddr, SocketAddr), anyhow::Error> {
+        let peer_addr = conn.peer_addr().context("fetching peer addr")?;
+        let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) = match tls_context
+        {
+            Some(tls_context) => {
+                let mut ssl_stream = SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
+                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                    let _ = ssl_stream.get_mut().shutdown().await;
+                    return Err(e.into());
+                }
+                let servername: Option<String> =
+                    ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
+                        match sn.split_once('.') {
+                            Some((left, _right)) => left,
+                            None => sn,
+                        }
+                        .into()
+                    });
+                debug!("Found sni servername: {servername:?} (https)");
+                (Box::new(ssl_stream), servername)
+            }
+            _ => (Box::new(conn), None),
+        };
+        let resolved =
+            Self::resolve(resolver, resolve_template, port, servername.as_deref()).await?;
+        Ok((client_stream, resolved, peer_addr))
+    }
+
     async fn resolve(
         resolver: &TenantDnsResolver,
         resolve_template: &str,
@@ -1326,52 +1741,39 @@ impl mz_server_core::Server for HttpsBalancer {
         let inner_metrics = Arc::clone(&self.metrics);
         let outer_metrics = Arc::clone(&self.metrics);
         let limiter = Arc::clone(&self.limiter);
-        let peer_addr = conn.peer_addr();
+        let pre_resolved_timeout = PRE_RESOLVED_TIMEOUT.get(&self.configs);
         let inject_proxy_headers = INJECT_PROXY_PROTOCOL_HEADER_HTTP.get(&self.configs);
         Box::pin(async move {
             let active_guard = inner_metrics.active_connections();
             let result: Result<_, anyhow::Error> = Box::pin(async move {
-                let peer_addr = peer_addr.context("fetching peer addr")?;
-                let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
-                    match tls_context {
-                        Some(tls_context) => {
-                            let mut ssl_stream =
-                                SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
-                            if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                                let _ = ssl_stream.get_mut().shutdown().await;
-                                return Err(e.into());
-                            }
-                            let servername: Option<String> =
-                                ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
-                                    match sn.split_once('.') {
-                                        Some((left, _right)) => left,
-                                        None => sn,
-                                    }
-                                    .into()
-                                });
-                            debug!("Found sni servername: {servername:?} (https)");
-                            (Box::new(ssl_stream), servername)
-                        }
-                        _ => (Box::new(conn), None),
-                    };
                 let Some(_conn_guard) = limiter.acquire() else {
-                    send_http_error(
-                        &mut client_stream,
-                        "503 Service Unavailable",
-                        "balancer is at its connection limit",
-                    )
-                    .await;
                     return Ok(());
                 };
+                let pre_resolved = inner_metrics.pre_resolved_connections();
 
-                let resolved =
-                    Self::resolve(&resolver, &resolve_template, port, servername.as_deref())
-                        .await?;
+                let (mut client_stream, resolved, peer_addr) = under_pre_resolved_timeout(
+                    pre_resolved_timeout,
+                    &inner_metrics,
+                    Self::pre_resolve(conn, tls_context, &resolver, &resolve_template, port),
+                )
+                .await?;
+                drop(pre_resolved);
+                // See the matching log line in the pgwire handler. The tenant always comes from
+                // SNI here, before any authentication.
+                if let Some(tenant) = &resolved.tenant {
+                    info!(
+                        target: NO_SENTRY_TARGET,
+                        client_addr = %peer_addr.ip(),
+                        %tenant,
+                        authenticated = false,
+                        "https connection resolved",
+                    );
+                }
                 let inner_active_guard = resolved
                     .tenant
                     .as_ref()
                     .map(|tenant| inner_metrics.tenant_connections(tenant));
-                let mut mz_stream = match TcpStream::connect(resolved.addr).await {
+                let mut mz_stream = match netio::Stream::connect(resolved.addr).await {
                     Ok(stream) => stream,
                     Err(e) => {
                         error!("failed to connect to upstream server: {e}");
@@ -1394,14 +1796,9 @@ impl mz_server_core::Server for HttpsBalancer {
                     mz_stream.write_all(&buf[..len]).await?;
                 }
 
-                let mut mz_stream = if internal_tls {
+                let mut mz_stream = if let Some(internal_tls) = &internal_tls {
                     // do a TLS handshake
-                    let mut builder =
-                        SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-                    // environmentd doesn't yet have a cert we trust, so for now disable verification.
-                    builder.set_verify(SslVerifyMode::NONE);
-                    let mut ssl = builder
-                        .build()
+                    let mut ssl = internal_tls
                         .configure()?
                         .into_ssl(&resolved.addr.to_string())?;
                     ssl.set_connect_state();
@@ -1879,5 +2276,119 @@ mod tests {
         // Zero disables the limit.
         set_max(0);
         assert!(limiter.acquire().is_some());
+    }
+
+    /// balancerd ignores the sync error at startup, so a dyncfg type LaunchDarkly can't carry
+    /// would silently stop every balancerd flag from syncing.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    async fn test_dyncfgs_sync_from_launchdarkly() {
+        mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
+            dyncfgs::all_dyncfgs(ConfigSet::default()),
+            &BUILD_INFO,
+            |_| Ok(()),
+            None,
+            Duration::ZERO,
+            None,
+            |_, _| {},
+        )
+        .await
+        .expect("every balancerd dyncfg converts to a LaunchDarkly flag");
+    }
+
+    #[mz_ore::test]
+    fn test_connection_watermarks() {
+        let configs = dyncfgs::all_dyncfgs(ConfigSet::default());
+        let set = |low: usize, high: usize, max: u32| {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&CONNECTION_LOW_WATERMARK, low);
+            updates.add(&CONNECTION_HIGH_WATERMARK, high);
+            updates.add(&MAX_CONNECTIONS, max);
+            updates.apply(&configs);
+        };
+        let limiter = ConnectionLimiter::new(&MetricsRegistry::new(), configs.clone());
+        let _first = limiter.acquire().expect("under the limit");
+        let second = limiter.acquire().expect("under the limit");
+        let third = limiter.acquire().expect("under the limit");
+
+        // Anything short of both watermarks, ordered, below an enabled hard limit is off.
+        for (low, high, max) in [
+            (0, 0, 5),
+            (1, 0, 5),
+            (0, 3, 5),
+            (3, 3, 5),
+            (4, 3, 5),
+            (1, 5, 5),
+            (1, 3, 0),
+        ] {
+            set(low, high, max);
+            limiter.evaluate_watermarks();
+            assert!(
+                limiter.accepting(),
+                "watermarks low={low} high={high} max={max} must be ignored",
+            );
+        }
+        assert_eq!(limiter.watermark_transitions.get(), 0);
+
+        set(2, 3, 5);
+        limiter.evaluate_watermarks();
+        assert!(!limiter.accepting(), "at the high watermark");
+        assert_eq!(limiter.watermark_transitions.get(), 1);
+
+        drop(third);
+        limiter.evaluate_watermarks();
+        assert!(
+            !limiter.accepting(),
+            "between the watermarks the state is kept"
+        );
+        drop(second);
+        limiter.evaluate_watermarks();
+        assert!(
+            limiter.accepting(),
+            "below the low watermark readiness returns"
+        );
+        assert_eq!(limiter.watermark_transitions.get(), 2);
+
+        // Disabling the watermarks while out of rotation restores readiness.
+        let _fourth = limiter.acquire().expect("under the limit");
+        let _fifth = limiter.acquire().expect("under the limit");
+        limiter.evaluate_watermarks();
+        assert!(!limiter.accepting(), "at the high watermark again");
+        set(0, 0, 5);
+        limiter.evaluate_watermarks();
+        assert!(
+            limiter.accepting(),
+            "disabling the watermarks restores readiness"
+        );
+        assert_eq!(limiter.watermark_transitions.get(), 4);
+    }
+
+    /// A zero timeout disables the deadline, which is what leaves the phase unbounded.
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn test_pre_resolved_timeout_zero_disables() {
+        let metrics = ServerMetrics::new(
+            ServerMetricsConfig::register_into(&MetricsRegistry::new()),
+            "pgwire",
+        );
+
+        // Zero lets the phase run as long as it likes. The paused clock makes the hour free.
+        let slow = async {
+            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+            Ok::<(), io::Error>(())
+        };
+        assert!(
+            under_pre_resolved_timeout(Duration::ZERO, &metrics, slow)
+                .await
+                .is_ok()
+        );
+        assert_eq!(metrics.pre_resolved_timeout().get(), 0);
+
+        // Anything else bounds it, and the overrun is counted.
+        let stalled = std::future::pending::<Result<(), io::Error>>();
+        let err = under_pre_resolved_timeout(Duration::from_secs(30), &metrics, stalled)
+            .await
+            .expect_err("a phase that never finishes must be cut short");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(metrics.pre_resolved_timeout().get(), 1);
     }
 }

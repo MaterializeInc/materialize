@@ -214,7 +214,7 @@ impl Catalog {
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
-        plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        plan: mz_compute_types::dataflows::LirDataflowDescription,
     ) {
         self.state.set_physical_plan(id, plan);
     }
@@ -234,7 +234,7 @@ impl Catalog {
     pub fn try_get_physical_plan(
         &self,
         id: &GlobalId,
-    ) -> Option<&DataflowDescription<mz_compute_types::plan::LirRelationExpr>> {
+    ) -> Option<&mz_compute_types::dataflows::LirDataflowDescription> {
         let entry = self.state.try_get_entry_by_global_id(id)?;
         entry.item().physical_plan().map(AsRef::as_ref)
     }
@@ -1577,7 +1577,7 @@ impl Catalog {
         id: GlobalId,
         local_mir: Option<OptimizedMirRelationExpr>,
         mut global_mir: DataflowDescription<OptimizedMirRelationExpr>,
-        mut physical_plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        mut physical_plan: mz_compute_types::dataflows::LirDataflowDescription,
         dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
         optimizer_features: OptimizerFeatures,
     ) -> BoxFuture<'static, ()> {
@@ -2498,6 +2498,9 @@ impl SessionCatalog for ConnCatalog<'_> {
 }
 
 #[cfg(test)]
+mod try_cast_tests;
+
+#[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
@@ -3056,16 +3059,31 @@ mod tests {
             let conn_catalog = catalog.for_system_session();
 
             for builtin in BUILTINS::iter() {
-                let (schema, name, expected_desc) = match builtin {
-                    Builtin::Table(t) => (&t.schema, &t.name, &t.desc),
-                    Builtin::View(v) => (&v.schema, &v.name, &v.desc),
-                    Builtin::MaterializedView(mv) => (&mv.schema, &mv.name, &mv.desc),
-                    Builtin::Source(s) => (&s.schema, &s.name, &s.desc),
+                let (schema, name, expected_desc, shard_backed) = match builtin {
+                    Builtin::Table(t) => (&t.schema, &t.name, &t.desc, true),
+                    Builtin::View(v) => (&v.schema, &v.name, &v.desc, false),
+                    Builtin::MaterializedView(mv) => (&mv.schema, &mv.name, &mv.desc, true),
+                    Builtin::Source(s) => (&s.schema, &s.name, &s.desc, true),
                     Builtin::Log(_)
                     | Builtin::Type(_)
                     | Builtin::Func(_)
                     | Builtin::Index(_)
                     | Builtin::Connection(_) => continue,
+                };
+                // A shard-backed builtin registers `desc` as its persist shard's
+                // schema, so a type change in `desc` needs a `MigrationStep`. Tables
+                // and sources carry `desc` into the catalog verbatim and cannot fail
+                // here. A materialized view is planned, and its fingerprint is its
+                // SQL, so nothing else detects a `desc` change at upgrade. See the
+                // `Fingerprint` impl for `BuiltinMaterializedView`.
+                let migration_hint = if shard_backed {
+                    format!(
+                        "; {schema}.{name} is backed by a persist shard, so after updating its \
+                         `desc` also add a `MigrationStep` for it to `MIGRATIONS` in \
+                         `src/adapter/src/catalog/open/builtin_schema_migration.rs`"
+                    )
+                } else {
+                    String::new()
                 };
                 let item = conn_catalog
                     .resolve_item(&PartialItemName {
@@ -3077,18 +3095,30 @@ mod tests {
                     .at_version(RelationVersionSelector::Latest);
 
                 let actual_desc = item.relation_desc().expect("invalid item type");
+                assert_eq!(
+                    actual_desc.arity(),
+                    expected_desc.arity(),
+                    "item {schema}.{name} column count did not match its expected column count{migration_hint}"
+                );
                 for (index, ((actual_name, actual_typ), (expected_name, expected_typ))) in
                     actual_desc.iter().zip_eq(expected_desc.iter()).enumerate()
                 {
                     assert_eq!(
                         actual_name, expected_name,
-                        "item {schema}.{name} column {index} name did not match its expected name"
+                        "item {schema}.{name} column {index} name did not match its expected name{migration_hint}"
                     );
                     assert_eq!(
                         actual_typ, expected_typ,
-                        "item {schema}.{name} column {index} ('{actual_name}') type did not match its expected type"
+                        "item {schema}.{name} column {index} ('{actual_name}') type did not match its expected type{migration_hint}"
                     );
                 }
+                // Keys never reach the shard schema, so a key mismatch needs no
+                // migration, only a corrected `desc`.
+                assert_eq!(
+                    actual_desc.typ().keys,
+                    expected_desc.typ().keys,
+                    "item {schema}.{name} keys did not match its expected keys"
+                );
                 assert_eq!(
                     &*actual_desc, expected_desc,
                     "item {schema}.{name} did not match its expected RelationDesc"
@@ -3136,6 +3166,7 @@ mod tests {
                 input: u32,
                 receive: u32,
                 send: u32,
+                len: i16,
             }
 
             struct PgOper {
@@ -3175,7 +3206,7 @@ mod tests {
             let pg_type: BTreeMap<_, _> = query(
                 &client,
                 sql!(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive, typsend::oid as typsend FROM pg_type"
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive, typsend::oid as typsend, typlen FROM pg_type"
                 ),
                 &[],
             )
@@ -3192,6 +3223,7 @@ mod tests {
                         input: row.get("typinput"),
                         receive: row.get("typreceive"),
                         send: row.get("typsend"),
+                        len: row.get("typlen"),
                     };
                     (oid, pg_type)
                 })
@@ -3325,6 +3357,25 @@ mod tests {
                                 "type {} has typreceive OID {} that does not exist in pg_proc",
                                 ty.name,
                                 typreceive_oid,
+                            );
+                        }
+                        let id = conn_catalog
+                            .resolve_type(&PartialItemName {
+                                database: None,
+                                schema: Some(ty.schema.into()),
+                                item: ty.name.to_string(),
+                            })
+                            .expect("unable to resolve type")
+                            .id();
+                        // Types with no scalar type report an unknown typlen.
+                        if let Ok(scalar_type) =
+                            mz_sql::plan::scalar_type_from_catalog(&conn_catalog, id, &[])
+                        {
+                            let typlen = mz_pgrepr::Type::from(&scalar_type).typlen();
+                            assert_eq!(
+                                typlen, pg_ty.len,
+                                "type {} has typlen {} in mz but {} in pg",
+                                ty.name, typlen, pg_ty.len,
                             );
                         }
 

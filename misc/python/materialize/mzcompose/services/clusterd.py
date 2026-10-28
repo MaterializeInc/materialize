@@ -39,6 +39,14 @@ class Clusterd(Service):
         workers: int = 1,
         process_names: list[str] = [],
         mz_service: str = "materialized",
+        # The mzbuild image to run when `image` is unset. The default runs
+        # clusterd from the unified `materialized` binary. `clusterd` runs the
+        # standalone binary that production deploys.
+        mzbuild: str = "materialized",
+        # Matches the CI default of the `enable_unified_cluster` system
+        # parameter, so unorchestrated clusterds run the same topology as
+        # controller-provisioned replicas. Old images ignore the env var.
+        unified_cluster: bool = True,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -57,6 +65,9 @@ class Clusterd(Service):
             f"CLUSTERD_PERSIST_PUBSUB_URL=http://{mz_service}:6879",
             *environment_extra,
         ]
+
+        if unified_cluster:
+            environment += ["CLUSTERD_UNIFIED_CLUSTER=true"]
 
         if not environment_id:
             environment_id = DEFAULT_MZ_ENVIRONMENT_ID
@@ -85,7 +96,7 @@ class Clusterd(Service):
         if image:
             config["image"] = image
         else:
-            config["mzbuild"] = "materialized"
+            config["mzbuild"] = mzbuild
 
         # Override the materialized entrypoint so that `clusterd` is invoked
         # via the command rather than via the entrypoint. This keeps

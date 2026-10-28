@@ -9,8 +9,8 @@
 
 //! Columnar dataflow edge support.
 //!
-//! Defines [`CollectionEdge`], the columnar batch representation that dataflow
-//! edges between Plan nodes carry. Every producer emits this representation.
+//! Defines [`ColCollection`], the columnar collection that dataflow edges between Plan
+//! nodes carry. Every producer emits this representation.
 //!
 //! Within a Plan node, operators may freely materialize `Vec` collections. Only
 //! the collection edge format is constrained. A node that produces a row-based
@@ -21,20 +21,22 @@
 //! introspection.
 
 use columnar::{Borrow, Columnar, Container, Index, Len, Push};
+use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
 use differential_dataflow::{AsCollection, Collection, VecCollection};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row};
 use mz_timely_util::columnar::Column;
-use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, ComputeSpill};
 use mz_timely_util::columnar::columnar_consolidate_exchange;
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
 use mz_timely_util::operator::consolidate_pact;
 use timely::ContainerBuilder;
-use timely::container::CapacityContainerBuilder;
+use timely::container::{CapacityContainerBuilder, NoopBuilder};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{Operator, OutputBuilder};
 use timely::dataflow::{Scope, Stream, StreamVec};
+use timely::order::Product;
+use timely::progress::Antichain;
 
 use crate::render::RenderTimestamp;
 use crate::render::context::{ECB, Session};
@@ -47,14 +49,15 @@ use crate::render::errors::DataflowErrorSer;
 /// container is [`Column<(D, T, R)>`] instead of `Vec<(D, T, R)>`.
 pub type ColumnarCollection<'scope, T, D, R> = Collection<'scope, T, Column<(D, T, R)>>;
 
-/// A dataflow edge between Plan nodes: a columnar collection of `(Row, Diff)` updates.
-pub type CollectionEdge<'scope, T> = ColumnarCollection<'scope, T, Row, Diff>;
+/// A columnar collection of `(Row, Diff)` updates, which is what a dataflow edge between
+/// Plan nodes carries.
+pub type ColCollection<'scope, T> = ColumnarCollection<'scope, T, Row, Diff>;
 
 /// Concatenates a collection of columnar edges.
-pub fn concat_many<'scope, T, I>(scope: Scope<'scope, T>, edges: I) -> CollectionEdge<'scope, T>
+pub fn concat_many<'scope, T, I>(scope: Scope<'scope, T>, edges: I) -> ColCollection<'scope, T>
 where
     T: RenderTimestamp,
-    I: IntoIterator<Item = CollectionEdge<'scope, T>>,
+    I: IntoIterator<Item = ColCollection<'scope, T>>,
 {
     let cols: Vec<_> = edges.into_iter().collect();
     differential_dataflow::collection::concatenate(scope, cols)
@@ -63,14 +66,15 @@ where
 /// Applies `logic` to each record in `edge`, exposing the record as a borrowed
 /// [`DatumVecBorrow`] and giving it ok and err output sessions.
 ///
-/// `max_demand` bounds the number of columns decoded per row. Pass `usize::MAX`
-/// to decode all columns.
+/// `name` is the rendered operator's name. `max_demand` bounds the number of columns decoded
+/// per row. Pass `usize::MAX` to decode all columns.
 ///
 /// This is the canonical entry point for "decoding consumers" (operators that
 /// read [`mz_repr::Datum`]s from each row anyway). It iterates the columnar
 /// batch directly without going through an owned [`Row`].
 pub fn flat_map_datums<'scope, T, DCB, L>(
-    edge: CollectionEdge<'scope, T>,
+    edge: ColCollection<'scope, T>,
+    name: &str,
     max_demand: usize,
     mut logic: L,
 ) -> (
@@ -90,7 +94,7 @@ where
         + 'static,
 {
     let scope = edge.inner.scope();
-    let mut builder = OperatorBuilder::new("CollectionFlatMap".to_string(), scope);
+    let mut builder = OperatorBuilder::new(name.to_string(), scope);
     let (ok_output, ok_stream) = builder.new_output();
     let mut ok_output = OutputBuilder::<_, DCB>::from(ok_output);
     let (err_output, err_stream) = builder.new_output();
@@ -174,6 +178,102 @@ where
     }
 }
 
+/// The timestamp of a scope that carries iteration coordinates.
+pub type RecTimestamp = Product<mz_repr::Timestamp, PointStamp<u64>>;
+
+/// Truncates every time in `column` to `level - 1` iteration coordinates.
+///
+/// A `Typed` input hands its row and diff columns over untouched, because truncation only
+/// rewrites times. A serialized input keeps all three columns in one buffer, so its rows
+/// and diffs are copied in bulk rather than per record.
+fn truncate_times(
+    column: Column<(Row, RecTimestamp, Diff)>,
+    level: usize,
+) -> Column<(Row, RecTimestamp, Diff)> {
+    /// Collects the truncation of every time in `times` into a fresh column.
+    fn truncated<'a, C>(times: C, level: usize) -> <RecTimestamp as Columnar>::Container
+    where
+        C: Len + Index<Ref = columnar::Ref<'a, RecTimestamp>> + 'a,
+    {
+        let mut truncated = <RecTimestamp as Columnar>::Container::default();
+        let mut time = RecTimestamp::default();
+        for reference in times.into_index_iter() {
+            time.copy_from(reference);
+            let mut coordinates = std::mem::take(&mut time.inner).into_inner();
+            coordinates.truncate(level - 1);
+            time.inner = PointStamp::new(coordinates);
+            truncated.push(&time);
+        }
+        truncated
+    }
+
+    match column {
+        Column::Typed((rows, times, diffs)) => {
+            let times = truncated(times.borrow(), level);
+            Column::Typed((rows, times, diffs))
+        }
+        column => {
+            let view = column.borrow();
+            let len = view.len();
+            let mut out = <(Row, RecTimestamp, Diff) as Columnar>::Container::default();
+            let (rows, times, diffs) = &mut out;
+            rows.extend_from_self(view.0, 0..len);
+            *times = truncated(view.1, level);
+            diffs.extend_from_self(view.2, 0..len);
+            Column::Typed(out)
+        }
+    }
+}
+
+/// Leaves a dynamically created scope that has `level` iteration coordinates.
+///
+/// The columnar counterpart of differential's `leave_dynamic`, which it offers only for
+/// `Vec` collections. Keeping the recursive binding's result on the edge is what lets the
+/// feedback loop run without a decode and a re-encode per iteration.
+pub fn columnar_leave_dynamic<'scope>(
+    collection: ColumnarCollection<'scope, RecTimestamp, Row, Diff>,
+    level: usize,
+) -> ColumnarCollection<'scope, RecTimestamp, Row, Diff> {
+    let scope = collection.inner.scope();
+    let mut builder = OperatorBuilder::new("ColumnarLeaveDynamic".to_string(), scope);
+    let (output, stream) = builder.new_output();
+    let mut output =
+        OutputBuilder::<_, NoopBuilder<Column<(Row, RecTimestamp, Diff)>>>::from(output);
+    // The connection summary tells the scope that this operator drops all but `level - 1`
+    // coordinates, so a downstream frontier is not held back by the iteration it leaves.
+    let summary = Product {
+        outer: Default::default(),
+        inner: PointStampSummary {
+            retain: Some(level - 1),
+            actions: Vec::new(),
+        },
+    };
+    let mut input = builder.new_input_connection(
+        collection.inner,
+        Pipeline,
+        [(0, Antichain::from_elem(summary))],
+    );
+
+    builder.build(move |_capability| {
+        move |_frontier| {
+            let mut output = output.activate();
+            input.for_each(|cap, data| {
+                let mut time = cap.time().clone();
+                let mut coordinates = std::mem::take(&mut time.inner).into_inner();
+                coordinates.truncate(level - 1);
+                time.inner = PointStamp::new(coordinates);
+                let cap = cap.delayed(&time, 0);
+                let mut truncated = truncate_times(std::mem::take(data), level);
+                output
+                    .session_with_builder(&cap)
+                    .give_container(&mut truncated);
+            });
+        }
+    });
+
+    stream.as_collection()
+}
+
 /// Negates the diff of every record in a [`ColumnarCollection`].
 pub fn columnar_negate<'scope, T>(
     collection: ColumnarCollection<'scope, T, Row, Diff>,
@@ -183,14 +283,16 @@ where
 {
     collection
         .inner
-        .unary::<CapacityContainerBuilder<Column<(Row, T, Diff)>>, _, _, _>(
+        .unary::<NoopBuilder<Column<(Row, T, Diff)>>, _, _, _>(
             Pipeline,
             "ColumnarNegate",
             |_cap, _info| {
                 move |input, output| {
                     input.for_each(|time, data| {
                         let mut negated = negate_column(std::mem::take(data));
-                        output.session(&time).give_container(&mut negated);
+                        output
+                            .session_with_builder(&time)
+                            .give_container(&mut negated);
                     });
                 }
             },
@@ -200,9 +302,11 @@ where
 
 /// Consolidates a [`ColumnarCollection`] natively, without a row round-trip.
 ///
-/// A [`ColumnChunker`] sorts and consolidates the input columns and a
-/// [`ColumnMergeBatcher`] merges them, both holding their data in [`Column`], so nothing
-/// outside the exchange pact visits a record or materializes an owned [`Row`].
+/// A [`ChunkChunker`] sorts and consolidates the input columns and an
+/// [`AccountedChunkBatcher`] merges them, both holding their data in columnar form, so
+/// nothing outside the exchange pact visits a record or materializes an owned [`Row`].
+/// The batcher's chains are chunks, so the process buffer pool spills them while the
+/// chunk spill gate is set, bounding what a consolidation holds resident.
 ///
 /// Uses [`consolidate_pact`] rather than `mz_arrange_core`: a consolidate emits a
 /// consolidated collection, so building and reading back a maintained trace would be
@@ -221,28 +325,29 @@ where
         columnar_consolidate_exchange::<Row, T, Diff>,
     );
     let consolidated = consolidate_pact::<
-        ColumnChunker<(Row, T, Diff)>,
-        ColumnMergeBatcher<Row, T, Diff>,
+        ChunkChunker<Row, T, Diff, ComputeSpill>,
+        AccountedChunkBatcher<Row, T, Diff, ComputeSpill>,
         _,
         _,
     >(collection.inner, exchange, name);
 
-    // Flatten the sealed chain into one container per chunk, moving containers and
-    // visiting no record.
+    // Flatten the sealed chain into one container per chunk, loading a spilled body
+    // and moving a resident one, visiting no record either way.
     //
     // TODO: This ships a whole sealed snapshot in one activation, an un-fueled burst
     // hazard on large consolidations. `consolidate_named`'s unpack does the same, so a
     // fuel fix has to cover both.
     consolidated
-        .unary::<CapacityContainerBuilder<Column<(Row, T, Diff)>>, _, _, _>(
+        .unary::<NoopBuilder<Column<(Row, T, Diff)>>, _, _, _>(
             Pipeline,
             &format!("Flatten {name}"),
             |_cap, _info| {
                 move |input, output| {
                     input.for_each(|time, data| {
-                        let mut session = output.session(&time);
-                        for mut chunk in data.drain(..).flatten() {
-                            session.give_container(&mut chunk);
+                        let mut session = output.session_with_builder(&time);
+                        for chunk in data.drain(..).flatten() {
+                            let mut column = Column::from(chunk.into_body());
+                            session.give_container(&mut column);
                         }
                     });
                 }
@@ -448,6 +553,7 @@ mod tests {
                 let (mut input, collection) = scope.new_collection();
                 let (oks, _errs) = flat_map_datums::<_, RowBuilder, _>(
                     vec_to_columnar(collection),
+                    "test",
                     1,
                     |datums, t, d, ok_session, _err_session| {
                         ok_session.give((Row::pack(datums.iter()), t, d));
@@ -503,5 +609,55 @@ mod tests {
             })
         });
         assert_eq!(extract_sorted(captured), expected);
+    }
+
+    /// Consolidation over a payload big enough to spill: the chunks the batcher
+    /// commits land in the pool, and flattening loads them back whole.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // the pool's mmap and madvise calls are unsupported under miri
+    fn columnar_consolidate_spills_and_round_trips() {
+        use mz_ore::pool::Pool;
+        use mz_timely_util::columnar::chunk::set_spill_override;
+
+        // Enough bytes for a committed chunk to clear the pool's 64 KiB spill
+        // floor. Every row is distinct, so consolidation cancels nothing and the
+        // whole payload has to survive the round trip through the pool.
+        let rows: Vec<Row> = (0..40_000i64)
+            .map(|i| Row::pack_slice(&[Datum::Int64(i), Datum::String("a repeated string value")]))
+            .collect();
+        let expected = rows.len();
+
+        let pool = Pool::new().expect("pool creation");
+        // The override is per-thread and `execute_directly` runs the worker on
+        // this one, so it covers the dataflow below and nothing else.
+        set_spill_override(Some(pool.clone()));
+        let captured = timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut input, collection) = scope.new_collection();
+                let edge = columnar_consolidate(vec_to_columnar(collection), "Test");
+                let captured = columnar_to_vec(edge).inner.capture();
+                input.advance_to(Timestamp::from(0_u64));
+                for row in rows {
+                    input.update(row, Diff::ONE);
+                }
+                input.advance_to(Timestamp::from(1_u64));
+                input.flush();
+                captured
+            })
+        });
+        set_spill_override(None);
+
+        assert!(
+            pool.stats().inserts > 0,
+            "the payload should have reached the pool"
+        );
+        let updates = extract_sorted(captured);
+        assert_eq!(updates.len(), expected);
+        assert!(
+            updates
+                .iter()
+                .all(|(_, time, diff)| *time == Timestamp::from(0_u64) && *diff == Diff::ONE),
+            "every row survives at its own time and multiplicity"
+        );
     }
 }

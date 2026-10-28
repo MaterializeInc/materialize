@@ -20,7 +20,7 @@ use mz_adapter_types::dyncfgs::{OIDC_GROUP_ROLE_SYNC_ENABLED, OIDC_GROUP_ROLE_SY
 use mz_repr::role_id::RoleId;
 use mz_sql::session::user::MZ_JWT_SYNC_ROLE_ID;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::AdapterError;
 use crate::catalog::{self, Op};
@@ -155,7 +155,8 @@ impl Coordinator {
     ///
     /// Groups that map to reserved role names (`mz_`/`pg_` prefixes) are
     /// filtered out with a warning notice. Groups with no matching catalog
-    /// role produce an informational notice.
+    /// role are skipped silently: IdPs commonly include groups that have no
+    /// corresponding Materialize role, so this is expected.
     pub(crate) async fn sync_jwt_groups(
         &mut self,
         member_id: RoleId,
@@ -194,13 +195,10 @@ impl Coordinator {
                     target_role_ids.insert(role.id);
                 }
                 None => {
-                    info!(
+                    debug!(
                         group = group.as_str(),
                         "OIDC group has no matching Materialize role, skipping"
                     );
-                    notices.push(AdapterNotice::OidcGroupSyncUnmatchedGroup {
-                        group: group.clone(),
-                    });
                 }
             }
         }

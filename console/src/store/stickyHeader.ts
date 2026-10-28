@@ -10,7 +10,7 @@
 import { atom, useAtom } from "jotai";
 import React from "react";
 import { useInView } from "react-intersection-observer";
-import useResizeObserver from "use-resize-observer";
+import { useResizeObserver } from "use-resize-observer";
 
 export const usePageHeadingRef = () => {
   const [, setValue] = useAtom(isPageHeadingVisible);

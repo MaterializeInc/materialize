@@ -255,6 +255,24 @@ class RepositoryDetails:
         # run without the ci-builder.
         return [name]
 
+    def builder(self, args: list[str]) -> list[str]:
+        """Start an invocation of `args` inside the ci-builder for the
+        configured architecture, from the repository root.
+
+        Unlike `build`, this enters the ci-builder on macOS too, so `args` can
+        rely on files that only the ci-builder image provides.
+        """
+        if "MZ_DEV_CI_BUILDER" in os.environ:
+            return args
+        return [
+            "env",
+            f"MZ_DEV_CI_BUILDER_ARCH={self.arch}",
+            "bin/ci-builder",
+            "run",
+            "stable",
+            *args,
+        ]
+
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
         return self.root / "target-xcompile" / xcompile.target(self.arch)
@@ -602,13 +620,17 @@ class Copy(PreImage):
 
     def run(self, prep: Any) -> None:
         super().run(prep)
-        for src in self.inputs():
+        for src in self._source_files():
             dst = self.path / self.destination / src
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(self.rd.root / self.source / src, dst)
 
-    def inputs(self) -> set[str]:
+    def _source_files(self) -> set[str]:
+        """The files to copy, relative to `source`."""
         return set(git.expand_globs(self.rd.root / self.source, self.matching))
+
+    def inputs(self) -> set[str]:
+        return {str(Path(self.source) / src) for src in self._source_files()}
 
 
 class CargoPreImage(PreImage):
@@ -665,6 +687,7 @@ class CargoBuild(CargoPreImage):
         self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
+        self.builder_files = config.pop("builder-files", {})
         features = config.pop("features", [])
         self.features = features if isinstance(features, list) else [features]
 
@@ -732,7 +755,12 @@ class CargoBuild(CargoPreImage):
                 "RANLIB": "llvm-ranlib-22",
                 "CFLAGS": "-flto=thin",
                 "CXXFLAGS": "-flto=thin",
-                "LDFLAGS": "--ld-path=/usr/bin/ld.lld-22 -static-libstdc++",
+                # `-static-libstdc++` is unused when clang links a C program,
+                # and jemalloc's configure runs its `strerror_r` link checks
+                # with `-Werror`. Without `-Wno-unused-command-line-argument`
+                # both checks fail and configure aborts with "cannot determine
+                # return type of strerror_r".
+                "LDFLAGS": "--ld-path=/usr/bin/ld.lld-22 -static-libstdc++ -Wno-unused-command-line-argument",
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
             }
@@ -861,6 +889,14 @@ class CargoBuild(CargoPreImage):
             )
             copy(src_path, Path("examples") / example)
 
+        for src, dst in self.builder_files.items():
+            dst_path = self.path / dst
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            spawn.runv(
+                self.rd.builder(["cp", src, str(dst_path.relative_to(self.rd.root))]),
+                cwd=self.rd.root,
+            )
+
         if self.extract:
             cargo_build_json_output = build_output["cargo"]
 
@@ -889,19 +925,7 @@ class CargoBuild(CargoPreImage):
                 else:
                     package = message["package_id"].split("#")[0].split("/")[-1]
                 for src, dst in self.extract.get(package, {}).items():
-                    # Sources are relative to the build script's `out` dir.
-                    # `$CARGO_TARGET_DIR` instead names the Cargo target root
-                    # (`cargo_target_dir` is the per-target directory below
-                    # it), for artifacts a build script caches outside of
-                    # `out`. Reaching the root with `..` does not work: how
-                    # deep `out` sits below it differs between Cargo versions.
-                    if src.startswith("$CARGO_TARGET_DIR/"):
-                        src_path = target_dir.parent / src.removeprefix(
-                            "$CARGO_TARGET_DIR/"
-                        )
-                    else:
-                        src_path = out_dir / src
-                    spawn.runv(["cp", "-R", src_path, self.path / dst])
+                    spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
 
         self.acquired = True
 

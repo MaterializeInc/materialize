@@ -53,4 +53,4 @@ dev = [
 [tool.ruff]
 line-length = 88
 lint.select = ["I", "UP", "F", "E"]
-lint.extend-select = ["E501"]
+lint.extend-select = ["E501", "RUF100"]

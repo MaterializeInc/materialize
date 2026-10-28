@@ -111,8 +111,10 @@ fn test_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 },
 
                  {
+                    // Incremental compaction disabled: the escape hatch, and the path that
+                    // compacts batches written without run ids.
                     let mut x = ::mz_dyncfg::ConfigUpdates::default();
-                    x.add_dynamic("persist_enable_incremental_compaction", ::mz_dyncfg::ConfigVal::Bool(true));
+                    x.add_dynamic("persist_enable_incremental_compaction", ::mz_dyncfg::ConfigVal::Bool(false));
                     x
                 },
             ];

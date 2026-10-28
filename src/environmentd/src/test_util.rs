@@ -23,7 +23,7 @@ use anyhow::anyhow;
 use futures::Future;
 use futures::future::{BoxFuture, LocalBoxFuture};
 use headers::{Header, HeaderMapExt};
-use http::Uri;
+use http::{HeaderValue, Uri};
 use hyper::http::header::HeaderMap;
 use maplit::btreemap;
 use mz_adapter::TimestampExplanation;
@@ -32,6 +32,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
     CATALOG_SERVER_CLUSTER_DEFAULT_REPLICATION_FACTOR, PROBE_CLUSTER_DEFAULT_REPLICATION_FACTOR,
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
+use mz_adapter_types::dyncfgs::ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE;
 
 use mz_auth::password::Password;
 use mz_catalog::config::ClusterReplicaSizeMap;
@@ -50,7 +51,9 @@ use mz_ore::tracing::{
 };
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::{CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig};
+use mz_persist_client::cfg::{
+    CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig, SHARD_METRICS, ShardMetricsExport,
+};
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_postgres_util::{
     Sql, batch_execute as pg_batch_execute, execute as pg_execute, query_one as pg_query_one, sql,
@@ -135,6 +138,7 @@ pub struct TestHarness {
     deploy_generation: u64,
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
+    cors_allowed_origins: Vec<HeaderValue>,
     metrics_registry: Option<MetricsRegistry>,
     code_version: semver::Version,
     force_builtin_schema_migration: Option<String>,
@@ -232,11 +236,19 @@ impl Default for TestHarness {
             deploy_generation: 0,
             // This and startup_log_filter below are both (?) needed to suppress clusterd messages.
             // If we need those in the future, we might need to change both.
-            system_parameter_defaults: BTreeMap::from([(
-                "log_filter".to_string(),
-                "error".to_string(),
-            )]),
+            system_parameter_defaults: BTreeMap::from([
+                ("log_filter".to_string(), "error".to_string()),
+                (
+                    ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    SHARD_METRICS.name().to_string(),
+                    ShardMetricsExport::Summary.as_str().to_string(),
+                ),
+            ]),
             internal_console_redirect_url: None,
+            cors_allowed_origins: Vec::new(),
             metrics_registry: None,
             orchestrator_tracing_cli_args: TracingCliArgs {
                 startup_log_filter: CloneableEnvFilter::from_str("error").expect("must parse"),
@@ -276,7 +288,7 @@ impl TestHarness {
         self,
         tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
-        let listeners = Listeners::new(&self).await?;
+        let listeners = Listeners::new(&self)?;
         listeners.serve_with_trigger(self, tls_reload_certs).await
     }
 
@@ -648,6 +660,12 @@ impl TestHarness {
         self
     }
 
+    pub fn with_cors_allowed_origin(mut self, origin: &'static str) -> Self {
+        self.cors_allowed_origins
+            .push(HeaderValue::from_static(origin));
+        self
+    }
+
     pub fn with_system_parameter_default(mut self, param: String, value: String) -> Self {
         self.system_parameter_defaults.insert(param, value);
         self
@@ -712,8 +730,8 @@ pub struct Listeners {
 }
 
 impl Listeners {
-    pub async fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
-        let inner = crate::Listeners::bind(config.listeners_config.clone()).await?;
+    pub fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
+        let inner = crate::Listeners::bind(config.listeners_config.clone())?;
         Ok(Listeners { inner })
     }
 
@@ -896,8 +914,8 @@ impl Listeners {
                     now: config.now.clone(),
                     metrics_registry: metrics_registry.clone(),
                     persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
-                    secrets_args: mz_service::secrets::SecretsReaderCliArgs {
-                        secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                    secrets_args: mz_secrets_cli::SecretsReaderCliArgs {
+                        secrets_reader: mz_secrets_cli::SecretsControllerKind::LocalFile,
                         secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
                         secrets_reader_kubernetes_context: None,
                         secrets_reader_aws_prefix: None,
@@ -914,11 +932,12 @@ impl Listeners {
                 frontegg_oauth_issuer_url: None,
                 unsafe_mode: config.unsafe_mode,
                 all_features: false,
+                restarted_in_place: false,
                 metrics_registry: metrics_registry.clone(),
                 now: config.now,
                 environment_id: config.environment_id,
-                cors_allowed_origin: AllowOrigin::list([]),
-                cors_allowed_origin_list: Vec::new(),
+                cors_allowed_origin: AllowOrigin::list(config.cors_allowed_origins.clone()),
+                cors_allowed_origin_list: config.cors_allowed_origins.clone(),
                 cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                 bootstrap_default_cluster_replication_factor: config

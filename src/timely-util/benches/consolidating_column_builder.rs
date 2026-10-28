@@ -21,6 +21,7 @@
 use columnar::Len;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use mz_alloc_default as _;
 use mz_ore::cast::CastFrom;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;

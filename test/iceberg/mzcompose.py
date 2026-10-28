@@ -53,7 +53,7 @@ SERVICES = [
         depends_on=["minio"],
         sanity_restart=False,
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage::sink::iceberg=debug",
+            "log_filter": "info,warn,mz_storage::sink::iceberg=debug,mz_storage_types=debug",
         },
     ),
     Testdrive(),
@@ -126,7 +126,9 @@ def workflow_smoke(c: Composition) -> None:
         "--var=aws-endpoint=minio:9000",
         "catalog.td",
         "nested-records.td",
+        "uuid-column.td",
         "key-validation.td",
+        "duckdb-value-format.td",
     )
 
 
@@ -171,6 +173,25 @@ def workflow_storage_provider(c: Composition) -> None:
     c.run_testdrive_files(
         "storage-provider.td",
     )
+
+
+def workflow_alter_catalog_aws_connection(c: Composition) -> None:
+    """ALTER CONNECTION on the AWS connection an S3 Tables catalog uses must
+    not panic the coordinator while an Iceberg sink depends on the catalog.
+    The change reaches the sink's inlined catalog connection, which the
+    coordinator applies after committing the ALTER. This needs no Iceberg
+    backend, the sink only has to exist."""
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "alter-catalog-aws-connection.td",
+    )
+
+    logs = c.invoke("logs", "materialized", capture=True)
+    assert (
+        "altering export connections after txn must succeed" not in logs.stdout
+    ), "coordinator panicked applying the altered catalog connection to the sink"
 
 
 def workflow_mode_append(c: Composition) -> None:
@@ -244,6 +265,32 @@ def workflow_finite_source(c: Composition) -> None:
         f"--var=s3-access-key={key}",
         "--var=aws-endpoint=minio:9000",
         "finite-source-verify.td",
+    )
+
+
+def workflow_restart_nested_column(c: Composition) -> None:
+    """A sink over a relation with an array column must survive a restart.
+    The REST catalog assigns its own field ids when it creates the table,
+    numbering a struct's direct children before any nested field, while the
+    sink numbers depth-first. On resume the two schemas differ only in ids
+    and the sink must still accept the table (SS-522). A flat relation is
+    sunk alongside as the control: its ids coincide under both schemes."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "restart-nested-column.td",
+    )
+
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "restart-nested-column-verify.td",
     )
 
 
@@ -862,4 +909,57 @@ def workflow_range_noncanonical(c: Composition) -> None:
         f"--var=s3-access-key={key}",
         "--var=aws-endpoint=minio:9000",
         "range-noncanonical.td",
+    )
+
+
+def workflow_legacy_uuid_column(c: Composition) -> None:
+    """A table whose uuid column predates the uuid-as-string mapping must keep
+    working.
+
+    Such a table holds `fixed[16]` where the sink would now create `string`, so
+    a strict schema comparison halts the sink forever. The table is created here
+    through the catalog's REST API, because nothing in this composition can
+    produce one otherwise: the sink only ever creates tables with the current
+    mapping."""
+    key = _setup(c)
+
+    polaris_port = c.port("polaris", 8181)
+    base_url = f"http://localhost:{polaris_port}"
+    access_token = get_polaris_access_token(c)
+
+    # Field ids and nullability have to match what the sink derives from
+    # `CREATE TABLE legacy_uuid_rows (id int, u uuid)`, so that the only
+    # difference left is the uuid column's type.
+    create_table = {
+        "name": "legacy_uuid_table",
+        "schema": {
+            "type": "struct",
+            "schema-id": 0,
+            "fields": [
+                {"id": 1, "name": "id", "required": False, "type": "int"},
+                {"id": 2, "name": "u", "required": False, "type": "fixed[16]"},
+            ],
+        },
+    }
+    req = urllib.request.Request(
+        f"{base_url}/api/catalog/v1/default_catalog"
+        f"/namespaces/default_namespace/tables",
+        data=json.dumps(create_table).encode(),
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    resp = urllib.request.urlopen(req)
+    created = json.loads(resp.read())
+    fields = created["metadata"]["schemas"][0]["fields"]
+    assert (
+        fields[1]["type"] == "fixed[16]"
+    ), f"table was not created with a legacy uuid column: {fields}"
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "legacy-uuid-column.td",
     )

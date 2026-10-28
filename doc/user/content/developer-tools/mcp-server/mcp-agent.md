@@ -40,7 +40,7 @@ environment:
   browser. The agent connects as **your user role** with your existing
   privileges. You can **skip the environment setup** and go to [Method 1:
   OAuth](#method-1-oauth). Available for **Cloud** and for **Self-Managed**
-  using [SSO](/security/self-managed/sso/).
+  using [SSO](/self-managed-deployments/sso/oidc/).
 
 - **Token-based**: You provide Base64-encoded credentials (the MCP token) to the
   client. The agent connects as a dedicated, least-privilege **service account**
@@ -269,7 +269,7 @@ authentication](#method-2-token-based-authentication), as described in
 {{< note >}}
 
 The OAuth method is available for **Cloud** and for **Self-Managed** using
-[SSO](/security/self-managed/sso/).
+[SSO](/self-managed-deployments/sso/oidc/).
 {{< /note >}}
 
 With OAuth, the agent connects as **your user role** with your existing
@@ -328,7 +328,7 @@ Self-Managed deployments using OAuth require SSO, which uses TLS. Your
 identity provider may also need additional configuration for MCP clients, such
 as a pre-registered OAuth client if your IdP does not support anonymous
 dynamic client registration. See [Connecting MCP
-clients](/security/self-managed/sso/#connecting-mcp-clients).
+clients](/self-managed-deployments/sso/oidc/#connecting-mcp-clients).
 
 Get your MCP server URL from the Materialize Console:
 
@@ -378,7 +378,7 @@ In the following, replace `<baseURL>` with the MCP server URL from [Step
    The `--callback-port` value must match the port in the
    `http://localhost:<port>/callback` redirect URI registered on the OIDC
    client. See [Connecting MCP
-   clients](/security/self-managed/sso/#connecting-mcp-clients) for
+   clients](/self-managed-deployments/sso/oidc/#connecting-mcp-clients) for
    the full IdP configuration.
 
 1. Restart Claude Code. On first connection, your browser opens to complete

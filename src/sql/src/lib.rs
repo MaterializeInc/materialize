@@ -144,7 +144,7 @@ pub const DEFAULT_SCHEMA: &str = "public";
 /// The number of concurrent requests we allow at once for webhook sources.
 pub const WEBHOOK_CONCURRENCY_LIMIT: usize = 500;
 
-pub static ORDINALITY_COL_NAME: &str = "ordinality";
+pub use mz_repr::ORDINALITY_COL_NAME;
 
 pub mod ast;
 pub mod catalog;
@@ -154,7 +154,7 @@ pub mod names;
 #[macro_use]
 pub mod normalize;
 pub mod iceberg;
-pub mod optimizer_metrics;
+pub use mz_compute_types::optimizer_metrics;
 pub mod parse;
 pub mod plan;
 pub mod pure;

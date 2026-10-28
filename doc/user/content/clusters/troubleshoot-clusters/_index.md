@@ -14,3 +14,5 @@ If you're seeing unexpected cluster behavior, these guides can help you find
 the cause:
 
 - [Memory spikes](/clusters/troubleshoot-clusters/memory-spike/)
+- [CPU spikes](/clusters/troubleshoot-clusters/cpu-troubleshooting/)
+- [Hydration failures](/clusters/troubleshoot-clusters/hydration-failures/)

@@ -1000,7 +1000,7 @@ The `ACCESS DELEGATION` option asks the catalog to vend credentials:
 | --- | --- |
 | **Value** | `'vended-credentials'`. This is the only accepted value. |
 | **Default** | Unset, meaning Materialize does not request delegation. |
-| **Valid with** | `CATALOG TYPE = 'rest'` using `CREDENTIAL`. Not supported for `CATALOG TYPE = 's3tablesrest'`, which authenticates to storage through an [AWS connection](#aws), or for REST catalogs using `GCP CONNECTION`. |
+| **Valid with** | `CATALOG TYPE = 'rest'`, using either `CREDENTIAL` or `GCP CONNECTION`. Not supported for `CATALOG TYPE = 's3tablesrest'`, which authenticates to storage through an [AWS connection](#aws). |
 
 Exactly one source of storage credentials is used, determined by how the
 connection is configured. There is no fallback between them:
@@ -1009,7 +1009,8 @@ connection is configured. There is no fallback between them:
 | --- | --- |
 | `CATALOG TYPE = 'rest'` with `CREDENTIAL` and `ACCESS DELEGATION` | Only the table-scoped credentials the catalog vends, refreshed as they expire. Any storage credentials the catalog returns in its configuration are ignored. |
 | `CATALOG TYPE = 'rest'` with `CREDENTIAL` and no `ACCESS DELEGATION` | Only the storage credentials the catalog returns in its configuration. |
-| `CATALOG TYPE = 'rest'` with `GCP CONNECTION` | Only the GCP connection's service account. |
+| `CATALOG TYPE = 'rest'` with `GCP CONNECTION` and `ACCESS DELEGATION` | Only the table-scoped credentials the catalog vends, refreshed as they expire. The GCP connection's service account then authenticates the catalog alone. |
+| `CATALOG TYPE = 'rest'` with `GCP CONNECTION` and no `ACCESS DELEGATION` | Only the GCP connection's service account. |
 | `CATALOG TYPE = 's3tablesrest'` | Only the AWS connection's credentials, for both the catalog and its storage. |
 
 Delegation is opt-in rather than always requested, because a catalog that gates

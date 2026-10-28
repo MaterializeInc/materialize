@@ -439,7 +439,7 @@ fn digest_columns(cols: &BTreeMap<String, ColumnType>) -> String {
         hasher.update(u64::try_from(t.position).unwrap_or(u64::MAX).to_le_bytes());
         hasher.update(b"\0");
     }
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Per-external-table digests keyed by `ObjectId.to_string()`.

@@ -11,7 +11,8 @@
 //! into two categories.
 //!
 //! The key-value objects are a one-to-one mapping of the protobuf objects used to save catalog
-//! data durably. They can be converted to and from protobuf via the [`mz_proto::RustType`] trait.
+//! data durably. They can be converted to and from protobuf via the
+//! [`RustType`](crate::durable::objects::serialization::RustType) trait.
 //! These objects should not be exposed anywhere outside the [`crate::durable`] module.
 //!
 //! The other type of objects combine the information from keys and values into a single struct,
@@ -39,7 +40,7 @@ use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -74,7 +75,7 @@ fn any_uuid() -> impl proptest::strategy::Strategy<Value = Uuid> {
 /// convert the types used in [`RustType`] to a more consumable and
 /// condensed type.
 ///
-/// [`RustType`]: mz_proto::RustType
+/// [`RustType`]: crate::durable::objects::serialization::RustType
 pub trait DurableType: Sized {
     type Key;
     type Value;
@@ -444,9 +445,9 @@ pub struct ReconfigurationTarget {
 pub struct BurstState {
     pub burst_size: String,
     pub linger_duration: Duration,
-    /// When the steady-state replicas were first observed hydrated. Absent
-    /// until that observation; the linger countdown runs from this point.
-    pub steady_hydrated_at: Option<mz_repr::Timestamp>,
+    /// Start of the current observed readiness period for the steady set.
+    /// Cleared after a failed readiness check.
+    pub steady_ready_at: Option<mz_repr::Timestamp>,
 }
 
 #[derive(Clone, Debug, Ord, PartialOrd, PartialEq, Eq)]
@@ -640,6 +641,107 @@ impl Item {
     pub fn item_type(&self) -> CatalogItemType {
         item_type(&self.create_sql)
     }
+}
+
+/// The columns of a relation item as planning resolved them. Written with
+/// every change to the item's definition and refreshed at bootstrap, so that
+/// catalog views can report columns without the planner.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ItemColumns {
+    pub id: CatalogItemId,
+    /// In position order: a column's 0-based position, which `mz_columns` and
+    /// column comments refer to, is its index here.
+    pub columns: Vec<ItemColumn>,
+}
+
+impl DurableType for ItemColumns {
+    type Key = ItemColumnsKey;
+    type Value = ItemColumnsValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            ItemColumnsKey { id: self.id },
+            ItemColumnsValue {
+                columns: self.columns,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            columns: value.columns,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ItemColumnsKey { id: self.id }
+    }
+}
+
+/// A column of a relation item. See [`ItemColumns`].
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+#[cfg_attr(test, derive(Arbitrary))]
+pub struct ItemColumn {
+    pub name: ColumnName,
+    pub nullable: bool,
+    pub type_oid: u32,
+    pub type_mod: i32,
+    pub custom_type: Option<CatalogItemId>,
+}
+
+/// The keys of an index item, as planning resolved them. Maintained like
+/// [`ItemColumns`].
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct IndexColumns {
+    pub id: CatalogItemId,
+    /// In key order.
+    pub columns: Vec<IndexColumn>,
+}
+
+impl DurableType for IndexColumns {
+    type Key = IndexColumnsKey;
+    type Value = IndexColumnsValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            IndexColumnsKey { id: self.id },
+            IndexColumnsValue {
+                columns: self.columns,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            columns: value.columns,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        IndexColumnsKey { id: self.id }
+    }
+}
+
+/// A key of an index. See [`IndexColumns`].
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, PartialEq, Eq)]
+#[cfg_attr(test, derive(Arbitrary))]
+pub struct IndexColumn {
+    /// The 0-based position of the relation's column the index is on.
+    /// `None` when the key is an expression rather than a column reference.
+    pub column: Option<usize>,
+    /// Whether the key can evaluate to `NULL`.
+    pub nullable: bool,
+}
+
+/// The planner-resolved metadata the durable catalog records for an item
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ItemMetadata {
+    /// The columns of a relation
+    pub columns: Vec<ItemColumn>,
+    /// The keys of an index
+    pub index_columns: Vec<IndexColumn>,
 }
 
 impl DurableType for Item {
@@ -1336,6 +1438,8 @@ pub struct Snapshot {
     pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
     pub role_auth: BTreeMap<proto::RoleAuthKey, proto::RoleAuthValue>,
     pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
+    pub item_columns: BTreeMap<proto::ItemColumnsKey, proto::ItemColumnsValue>,
+    pub index_columns: BTreeMap<proto::IndexColumnsKey, proto::IndexColumnsValue>,
     pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
     pub network_policies: BTreeMap<proto::NetworkPolicyKey, proto::NetworkPolicyValue>,
@@ -1574,6 +1678,28 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ItemColumnsKey {
+    pub(crate) id: CatalogItemId,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
+pub struct ItemColumnsValue {
+    pub(crate) columns: Vec<ItemColumn>,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct IndexColumnsKey {
+    pub(crate) id: CatalogItemId,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
+pub struct IndexColumnsValue {
+    pub(crate) columns: Vec<IndexColumn>,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 pub struct CommentKey {
     pub(crate) object_id: CommentObjectId,
     pub(crate) sub_component: Option<usize>,
@@ -1727,7 +1853,7 @@ pub struct RoleAuthValue {
 
 #[cfg(test)]
 mod test {
-    use mz_proto::{ProtoType, RustType};
+    use crate::durable::objects::serialization::{ProtoType, RustType};
     use proptest::prelude::*;
 
     use super::{

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import babel from "@rolldown/plugin-babel";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import react from "@vitejs/plugin-react";
 import browserslistToEsbuild from "browserslist-to-esbuild";
@@ -61,6 +62,9 @@ function buildDefinitions() {
       __IMPERSONATION_HOSTNAME__: JSON.stringify(
         process.env.IMPERSONATION_HOSTNAME,
       ),
+      // Production builds (including staging and previews) never accept a
+      // dev-server origin as a post-login redirect.
+      __MARKETING_SITE_DEV_ORIGINS__: JSON.stringify(""),
       __MZ_CONSOLE_IMAGE_TAG__: JSON.stringify(
         process.env.MZ_CONSOLE_IMAGE_TAG,
       ),
@@ -75,6 +79,11 @@ function buildDefinitions() {
     __FORCE_OVERRIDE_STACK__: JSON.stringify(process.env.FORCE_OVERRIDE_STACK),
     __IMPERSONATION_HOSTNAME__: JSON.stringify(
       process.env.IMPERSONATION_HOSTNAME,
+    ),
+    // Comma-separated origins of a local marketing site that `yarn start` may
+    // redirect back to after sign-in. Defaults to its Vite dev server.
+    __MARKETING_SITE_DEV_ORIGINS__: JSON.stringify(
+      process.env.MARKETING_SITE_DEV_ORIGINS ?? "http://localhost:5173",
     ),
     __MZ_CONSOLE_IMAGE_TAG__: JSON.stringify(process.env.MZ_CONSOLE_IMAGE_TAG),
     __SENTRY_ENABLED__: JSON.stringify(process.env.SENTRY_ENABLED || false),
@@ -101,11 +110,10 @@ const plugins = [
     include: "**/*.svg?react",
   }),
   tsconfigPaths(),
-  react({
-    babel: {
-      plugins: ["@emotion"],
-      presets: ["jotai/babel/preset"],
-    },
+  react(),
+  babel({
+    plugins: ["@emotion"],
+    presets: ["jotai/babel/preset"],
   }),
 ];
 

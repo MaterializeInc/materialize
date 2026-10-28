@@ -19,7 +19,6 @@ import itertools
 import json
 import os
 import re
-import shlex
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
@@ -27,14 +26,21 @@ from dataclasses import dataclass
 from functools import partial
 from textwrap import dedent
 from typing import Any, LiteralString, TextIO
+from urllib.parse import parse_qs, urlencode
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pandas as pd
 import psycopg
 from psycopg import InterfaceError, OperationalError
 from psycopg import sql as psycopg_sql
 
-from materialize import MZ_ROOT, buildkite
+from materialize import MZ_ROOT, buildkite, pgbench
+from materialize.cluster_spec_sheet_qps import (
+    QPS_CONCURRENCIES,
+    QpsSweep,
+    validate_qps_result,
+)
 from materialize.mz_env_util import print_environment_id
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
@@ -61,7 +67,11 @@ PRODUCTION_ENVIRONMENT = "production"
 PRODUCTION_USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
 PRODUCTION_APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
 
-STAGING_REGION = "aws/eu-west-1"
+# Must match the region of the CI agents (the AWS `linux-aarch64-small` queue
+# runs in us-east-1). qps sessions are closed-loop, so cross-region RTT caps
+# per-session QPS and the envd_qps_scalability results would measure network
+# latency rather than environmentd.
+STAGING_REGION = "aws/us-east-1"
 STAGING_ENVIRONMENT = "staging"
 
 
@@ -120,11 +130,10 @@ SERVICES = [
         propagate_crashes=True,
         additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
     ),
-    # dbbench service built from our mzbuild Dockerfile (test/dbbench)
     MzComposeService(
-        "dbbench",
+        "qps-pgbench",
         {
-            "mzbuild": "dbbench",
+            "mzbuild": "postgres",
         },
     ),
 ]
@@ -213,15 +222,51 @@ def default_cluster_object_limits_sizes(max_n: int) -> list[int]:
     return sizes
 
 
+# `SET LOCAL` is excluded because it only lasts until the end of the current
+# transaction, which a reconnect discards anyway.
+_SESSION_SET_RE = re.compile(
+    r"SET\s+(?:SESSION\s+)?(?!LOCAL\b)(\w+)\s*(?:=|\s+TO\s+).*",
+    re.IGNORECASE | re.DOTALL,
+)
+_SESSION_RESET_RE = re.compile(r"RESET\s+(\w+)\s*;?", re.IGNORECASE)
+
+
 class ConnectionHandler:
     def __init__(self, new_connection: Callable[[], psycopg.Connection]) -> None:
         self.new_connection = new_connection
         self.connection = self.new_connection()
         self.cursor: psycopg.Cursor | None = None
+        # Session `SET` statements keyed by lowercased variable name, replayed
+        # on every new connection.
+        self.session_sets: dict[str, str] = {}
+
+    def record_session_statement(self, query: str) -> None:
+        """Record `query` if it is a session-level `SET` or `RESET`.
+
+        Must be called only after `query` succeeded outside an explicit
+        transaction. Statements executed directly on a cursor are not recorded.
+        """
+        if m := _SESSION_SET_RE.fullmatch(query):
+            self.session_sets[m.group(1).lower()] = query
+        elif m := _SESSION_RESET_RE.fullmatch(query):
+            name = m.group(1).lower()
+            if name == "all":
+                self.session_sets.clear()
+            else:
+                self.session_sets.pop(name, None)
 
     def __ensure_connection(self):
         if not self.connection or self.connection.closed:
             self.connection = self.new_connection()
+            try:
+                for stmt in self.session_sets.values():
+                    self.connection.execute(stmt.encode())
+            except BaseException:
+                # Close so that the next call reconnects and replays all
+                # statements, instead of reusing a partially configured
+                # session.
+                self.connection.close()
+                raise
 
     def __enter__(self) -> psycopg.Cursor:
         self.__ensure_connection()
@@ -281,6 +326,7 @@ class ScenarioRunner:
         qps: float | None = None,
         healthy: int | None = None,
         failure_mode: str | None = None,
+        qps_details: dict | None = None,
     ) -> None:
         """Write one result row.
 
@@ -305,6 +351,7 @@ class ScenarioRunner:
                 "qps": qps,
                 "healthy": healthy,
                 "failure_mode": failure_mode,
+                **(qps_details or {}),
             }
         )
 
@@ -315,9 +362,19 @@ class ScenarioRunner:
         if "CREATE SECRET" not in query:
             print(f"> {query} {params or ''}")
         for retry in range(retries + 1):
+            in_transaction = False
             try:
                 with self.connection as cur:
+                    in_transaction = (
+                        self.connection.connection.info.transaction_status
+                        != psycopg.pq.TransactionStatus.IDLE
+                    )
                     cur.execute(query.encode(), params)
+                    # A `SET` inside an explicit transaction is undone by
+                    # `ROLLBACK`, and a reconnect reruns the whole transaction
+                    # including the `SET`, so only record it outside one.
+                    if not in_transaction:
+                        self.connection.record_session_statement(query)
                     if fetch:
                         return cur.fetchall()
                     else:
@@ -327,7 +384,12 @@ class ScenarioRunner:
                 OperationalError,
                 psycopg.errors.SystemError,
             ) as e:
-                if retry >= retries:
+                # A retry runs on a fresh connection that lacks the open
+                # transaction's state, such as a declared cursor. Re-raise so
+                # that `ConnectionHandler.retryable` reconnects and reruns the
+                # whole statement sequence. All caught errors derive from
+                # `InterfaceError` or `OperationalError`, which it retries.
+                if retry >= retries or in_transaction:
                     raise
                 print(f"Retryable error (attempt {retry + 1}/{retries}): {e}")
                 time.sleep(5 * (retry + 1))
@@ -382,146 +444,6 @@ class ScenarioRunner:
 
             self.connection.retryable(inner)
 
-    def measure_dbbench(
-        self,
-        category: str,
-        name: str,
-        *,
-        setup: list[str],
-        query: list[str],
-        after: list[str],
-        duration: str,
-        concurrency: int | None = None,
-    ) -> None:
-        """
-        Run dbbench via the 'dbbench' mzcompose service and record its final QPS.
-
-        Parameters somewhat mirror ScenarioRunner.measure for consistency, but are applied to a
-        generated dbbench.ini:
-          - setup:    SQL statements run once before the workload (dbbench [setup])
-          - query:    SQL statements that form the workload (dbbench [loadtest] query=...)
-          - after:    SQL statements run once after the workload (dbbench [teardown])
-          - duration: length of the workload (top-level duration=...)
-          - concurrency: concurrent sessions for the workload.
-
-        We capture and parse dbbench's output (stderr or stdout) to find the last
-        occurrence of a "QPS" value that dbbench reports in its summary, and store that
-        as the 'qps' column in the results CSV. If no QPS is found, the test fails.
-        (We omit time_ms for these rows since wall-clock time is not meaningful here.)
-        """
-
-        # Build a dbbench command that targets the current Materialize instance and
-        # the active cluster 'c' using target-provided flags.
-        flags = self.target.dbbench_connection_flags()
-
-        # Render a minimal INI file for dbbench.
-        def ini_escape(s: str) -> str:
-            return s.replace("\n", " ")
-
-        lines: list[str] = []
-        lines.append(f"duration={duration}")
-        # [setup]
-        if setup:
-            lines.append("")
-            lines.append("[setup]")
-            for q in setup:
-                q = dedent(q).strip()
-                if q:
-                    lines.append(f"query={ini_escape(q)}")
-        # [teardown]
-        if after:
-            lines.append("")
-            lines.append("[teardown]")
-            for q in after:
-                q = dedent(q).strip()
-                if q:
-                    lines.append(f"query={ini_escape(q)}")
-        # [loadtest]
-        lines.append("")
-        lines.append("[loadtest]")
-        for q in query:
-            q = dedent(q).strip()
-            if q:
-                lines.append(f"query={ini_escape(q)}")
-        if concurrency is not None:
-            lines.append(f"concurrency={int(concurrency)}")
-
-        ini_text = "\n".join(lines) + "\n"
-
-        # Construct a shell snippet to write the INI and execute dbbench
-        quoted_flags = " ".join(shlex.quote(x) for x in flags)
-        script = (
-            "set -euo pipefail; "
-            'tmp="$(mktemp -t dbbench.XXXXXX)"; '
-            'cat > "$tmp"; '
-            f'exec dbbench {quoted_flags} -intermediate-stats=false "$tmp"'
-        )
-
-        print(f"--- Running dbbench step '{name}' for {self.envd_cpus} ...")
-        # Execute the command in the 'dbbench' service container and capture output
-        result = self.target.composition.run(
-            "dbbench",
-            "-lc",  # sh arg to make it run `script`
-            script,
-            entrypoint="bash",
-            rm=True,
-            capture_and_print=True,
-            stdin=ini_text,
-        )
-
-        # dbbench writes its final summary to stderr; prefer stderr but also
-        # consider stdout just in case.
-        stderr_out = result.stderr or ""
-        stdout_out = result.stdout or ""
-        combined_out = f"{stderr_out}\n{stdout_out}".strip()
-
-        # Persist full dbbench output to a log file for later inspection
-        logs_dir = os.path.join("test", "cluster-spec-sheet", "dbbench-logs")
-        os.makedirs(logs_dir, exist_ok=True)
-
-        # Build a descriptive, filesystem-safe filename
-        def _slug(x: Any) -> str:
-            return re.sub(r"[^A-Za-z0-9._=-]+", "-", str(x))
-
-        fname = f"{_slug(self.scenario)}_{_slug(self.mode)}_{_slug(self.envd_cpus)}_{_slug(name)}.log"
-        log_path = os.path.join(logs_dir, fname)
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.write(combined_out + ("\n" if not combined_out.endswith("\n") else ""))
-        print(f"dbbench logs saved to {log_path}")
-
-        # Parse QPS from output.
-        # (Alternatively, we could make our fork of dbbench print a more machine-readable output.)
-        # TODO: Later, we'll want to also look at latency (avg and tail-latency), but seems too unstable for now.
-        qps_val: float | None = None
-        try:
-            qps_matches = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*QPS", combined_out)
-            if len(qps_matches) > 1:
-                raise UIError(
-                    f"dbbench: found multiple QPS values in output: {qps_matches}"
-                )
-            if qps_matches:
-                qps_val = float(qps_matches[0])
-        except Exception as e:
-            raise UIError(f"Failed to parse dbbench QPS from output: {e}")
-
-        if qps_val is None:
-            tail = "\n".join(combined_out.splitlines()[-25:])
-            raise UIError("dbbench: failed to find QPS in output. Last lines:\n" + tail)
-        else:
-            print(f"dbbench parsed QPS: {qps_val}")
-
-        # Record a result row: put QPS into the 'qps' column, and omit time_ms (not applicable)
-        self.add_result(
-            category,
-            name,
-            # For QPS measurements, we have only one repetition (i.e., repetition 0). We have `duration` instead of
-            # `repetitions` in QPS benchmarks currently (but maybe it's good to keep `repetition` in the schema in case
-            # we ever want also multiple repetitions for QPS).
-            0,
-            None,
-            qps=qps_val,
-        )
-
     def size_of_dataflow(self, object: str) -> int | None:
         retries = 10
         while retries > 0:
@@ -547,7 +469,8 @@ class ClusterScalingScenario(ABC):
 
     Lifecycle: `setup()` builds load-generator clusters / sources /
     tables, `materialize_views()` lists persist objects to hydrate,
-    `run()` measures, `drop()` cleans up.
+    `run()` measures, `drop()` cleans up before each `setup()`, and
+    `teardown()` runs once after the last scale point.
     """
 
     # Bump this version in the individual test if it changes in a way that
@@ -566,6 +489,9 @@ class ClusterScalingScenario(ABC):
 
     def drop(self) -> list[str]:
         return []
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        pass
 
     def materialize_views(self) -> list[str]:
         """Returns names of the persist objects that setup initializes."""
@@ -1989,6 +1915,13 @@ class AuctionScenario(ClusterScalingScenario):
 
 class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
 
+    VERSION = "3.0.0"
+
+    def __init__(self, options: QpsSweep) -> None:
+        super().__init__(1, None)
+        self.options = options
+        self.warnings: list[str] = []
+
     def name(self) -> str:
         return SCENARIO_QPS_ENVD_STRONG_SCALING
 
@@ -1996,55 +1929,174 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         return []
 
     def run(self, runner: ScenarioRunner) -> None:
-        runner.measure_dbbench(
-            category="peek_qps",
-            name="dbbench_256_conns",
-            setup=[
-                "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
-                "create default index on gen_view",
-                "select * from gen_view",  # Wait for hydration
-            ],
-            query=[
-                "select * from gen_view",
-            ],
-            after=[
-                "drop view gen_view cascade",
-            ],
-            duration="40s",
-            concurrency=256,
-        )
+        size = "50cc" if isinstance(runner.target, CloudTarget) else "scale=1,workers=1"
+        try:
+            # Reuse c and remove the unused setup cluster so the configured
+            # query-cluster count also fits an account with that cluster limit.
+            runner.run_query("DROP CLUSTER IF EXISTS quickstart CASCADE")
+            runner.run_query(
+                f"ALTER CLUSTER c SET (SIZE '{size}', REPLICATION FACTOR 1)"
+            )
+            runner.run_query(
+                "CREATE VIEW qps_gen_view AS SELECT generate_series AS x FROM generate_series(1, 10)"
+            )
+            for i in range(self.options.clusters):
+                cluster = "c" if i == 0 else f"qps_{i}"
+                if i != 0:
+                    runner.run_query(
+                        f"CREATE CLUSTER {cluster} SIZE '{size}', REPLICATION FACTOR 1"
+                    )
+                runner.run_query(
+                    f"CREATE INDEX qps_idx_{i} IN CLUSTER {cluster} ON qps_gen_view (x)"
+                )
+                runner.run_query(f"SET cluster = '{cluster}'")
+                runner.run_query("SELECT * FROM qps_gen_view")
+            runner.run_query("SET cluster = 'c'")
+            # Keep the default-logging series intact, then repeat on the same
+            # clusters with sampling disabled in every benchmark connection.
+            for disable_statement_logging in (False, True):
+                for protocol in self.options.protocols:
+                    for concurrency in self.options.concurrencies:
+                        self.measure(
+                            runner,
+                            size,
+                            concurrency,
+                            protocol,
+                            disable_statement_logging,
+                        )
+        finally:
+            runner.run_query("SET cluster = 'c'")
+            runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
+            for i in range(1, self.options.clusters):
+                runner.run_query(f"DROP CLUSTER IF EXISTS qps_{i} CASCADE")
 
-        runner.measure_dbbench(
-            category="peek_qps",
-            name="dbbench_512_conns",
-            setup=[
-                "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
-                "create default index on gen_view",
-                "select * from gen_view",  # Wait for hydration
-            ],
-            query=[
-                "select * from gen_view",
-            ],
-            after=[
-                "drop view gen_view cascade",
-            ],
-            duration="40s",
-            concurrency=512,
+    def measure(
+        self,
+        runner: ScenarioRunner,
+        size: str,
+        concurrency: int,
+        protocol: str,
+        disable_statement_logging: bool = False,
+    ) -> None:
+        suffix = "_logging_disabled" if disable_statement_logging else ""
+        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters{suffix}"
+        print(
+            f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
         )
-
-        # TODO: Add more scenarios as the QPS/CPS work progresses:
-        # - different connection counts
-        # - distribute queries across more clusters;
-        #   see manual test results with multiple clusters here:
-        #   https://docs.google.com/presentation/d/1bIyTWaRiyEqBXFxoxpHwWSywztSW1jRw_JP3M-Zj_6A/edit?slide=id.g39de8b7440c_0_86#slide=id.g39de8b7440c_0_86
-        # - explicit transactions (which are currently super slow)
-        # - (slow-path queries are kinda expected to be slow, so it's not so important to measure them)
-        # - I think dbbench uses the "Simple Query Protocol" by default. We might want to also measure the
-        #   "Extended Query Protocol" / prepared statements.
-        # - Lookups in a large index, especially on a larger replica.
-        # - Larger result sets.
-        #
-        # We'll also want to measure latency, including tail latency.
+        flags = runner.target.qps_connection_flags().copy()
+        if disable_statement_logging:
+            params_index = flags.index("-params") + 1
+            params = parse_qs(flags[params_index])
+            params["options"] = [
+                " ".join(
+                    [*params.get("options", []), "-c statement_logging_sample_rate=0"]
+                )
+            ]
+            flags[params_index] = urlencode(params, doseq=True)
+        config = self.options.config(flags, concurrency, protocol)
+        result = pgbench.run(config, runner.target.composition)
+        validate_qps_result(result, concurrency, protocol)
+        if (
+            disable_statement_logging
+            and result.get("statement_logging_sample_rates") != [0] * result["clusters"]
+        ):
+            raise ValueError(
+                "Statement logging was not disabled in every benchmark session"
+            )
+        warnings = list(result["driver"]["warnings"])
+        replica_cpu = None
+        replica_samples = 0
+        try:
+            metrics = runner.run_query(
+                """SELECT max(u.cpu_percent), count(u.cpu_percent)
+                   FROM mz_internal.mz_cluster_replica_utilization_history u
+                   JOIN mz_catalog.mz_cluster_replicas r ON u.replica_id = r.id
+                   JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
+                   WHERE (c.name = 'c' OR c.name LIKE 'qps_%%')
+                     AND u.occurred_at >= %(start)s::timestamptz
+                     AND u.occurred_at <= %(end)s::timestamptz""",
+                fetch=True,
+                start=result["started_at"],
+                end=result["finished_at"],
+            )
+            assert metrics is not None
+            replica_cpu, replica_samples = metrics[0]
+        except psycopg.Error:
+            warnings.append("query-replica utilization telemetry unavailable")
+        if replica_samples == 0:
+            warnings.append("no query-replica CPU samples in measurement window")
+        if replica_cpu is not None and replica_cpu >= 80:
+            warnings.append(
+                "query replica reached at least 80% CPU; increase --qps-clusters before attributing the plateau to environmentd"
+            )
+        if isinstance(runner.target, DockerTarget):
+            warnings.append(
+                "Docker query replicas share environmentd's container quota; this is not an isolated adapter benchmark"
+            )
+        result.update(
+            replica_cpu_peak_percent=replica_cpu,
+            replica_cpu_samples=replica_samples,
+            warnings=warnings,
+            envd_cpus=runner.envd_cpus,
+            query_cluster_size=size,
+            query=config["query"],
+            expected_rows=config["expected_rows"],
+        )
+        logs_dir = os.path.join("test", "cluster-spec-sheet", "qps-logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        with open(os.path.join(logs_dir, f"{runner.envd_cpus}_{name}.json"), "w") as f:
+            json.dump(result, f, indent=2)
+        if buildkite.is_in_buildkite():
+            buildkite.upload_artifact(
+                os.path.join(logs_dir, f"{runner.envd_cpus}_{name}.json"),
+                cwd=MZ_ROOT,
+                quiet=True,
+            )
+        print(json.dumps(result))
+        runner.add_result(
+            f"peek_qps{suffix}",
+            name,
+            0,
+            None,
+            qps=result["qps"],
+            qps_details={
+                "concurrency": concurrency,
+                "protocol": protocol,
+                "query_clusters": self.options.clusters,
+                "active_query_clusters": result["clusters"],
+                "cluster_size": size,
+                **{
+                    k: result[k]
+                    for k in (
+                        "mean_latency_ms",
+                        "p50_latency_ms",
+                        "p95_latency_ms",
+                        "p99_latency_ms",
+                        "max_latency_ms",
+                        "replica_cpu_peak_percent",
+                        "replica_cpu_samples",
+                    )
+                },
+                "driver_cpu_percent": result["driver"]["cpu_percent"],
+                "driver_throttled_period_percent": result["driver"][
+                    "throttled_period_percent"
+                ],
+                "driver_peak_thread_cpu_percent": result["driver"][
+                    "peak_thread_cpu_percent"
+                ],
+                "warnings": json.dumps(warnings),
+            },
+        )
+        for warning in warnings:
+            print(f"WARNING: {name} at {runner.envd_cpus} CPUs: {warning}")
+            self.warnings.append(f"- {name}, envd={runner.envd_cpus}: {warning}")
+        if self.warnings and buildkite.is_in_buildkite():
+            buildkite.add_annotation(
+                "warning",
+                "QPS benchmark qualification warnings",
+                "\n".join(self.warnings),
+                context="qps-headroom",
+            )
 
 
 class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
@@ -2118,7 +2170,8 @@ class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
 
 class SourceIngestionScenario(ClusterScalingScenario):
     # 1.1.0: MySQL RDS instance type changed
-    VERSION: str = "1.1.0"
+    # 1.2.0: MySQL table rebuilt with OPTIMIZE TABLE
+    VERSION: str = "1.2.0"
 
     def name(self) -> str:
         return "source_ingestion"
@@ -2139,10 +2192,13 @@ class SourceIngestionScenario(ClusterScalingScenario):
         #   lpad((random()*10000000000)::bigint::text, 10, '0') as customer_phone
         # from generate_series(1, :N) as gs;
         # analyze tbl;
+        # Parameter group: rds.logical_replication = 1, max_slot_wal_keep_size = 20480
 
         # MySQL (RDS)
         # CREATE USER 'materialize'@'%' IDENTIFIED BY '...';
-        # create table tbl (customer_id int, region_id int, customer_name text, customer_email text, customer_phone text);
+        # CREATE DATABASE admin;
+        # USE admin;
+        # create table tbl (customer_id int NOT NULL PRIMARY KEY, region_id int, customer_name text, customer_email text, customer_phone text);
         # INSERT INTO tbl
         # SELECT
         #   n AS customer_id,
@@ -2170,6 +2226,7 @@ class SourceIngestionScenario(ClusterScalingScenario):
         #         UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) h
         # ) nums
         # WHERE n BETWEEN 1 AND 50000000;
+        # OPTIMIZE TABLE tbl;
 
         # Kafka (Confluent)
         # node /usr/local/bin/datagen -f avro -n 50000000 -w 0 -p qa_cluster_spec_sheet -s table.json
@@ -2228,6 +2285,18 @@ class SourceIngestionScenario(ClusterScalingScenario):
             f"CREATE SECRET IF NOT EXISTS csr_password AS '{csr_password}';",
             "CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'https://psrc-e0919.us-east-2.aws.confluent.cloud', USERNAME = SECRET csr_username, PASSWORD = SECRET csr_password);",
         ]
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        # NOTE: Tearing down the region does not drop its sources, so a
+        # Postgres source still present leaks its replication slot, which
+        # retains WAL until the upstream disk fills. `DROP SOURCE` drops the
+        # slot in a background task that retries for up to 60s
+        # (`drop_replication_slots_and_secrets` in the adapter), so wait that
+        # long before the region can go.
+        _best_effort_drop(
+            runner, "DROP SOURCE IF EXISTS pg_source CASCADE", "pg_source"
+        )
+        time.sleep(60)
 
     def run(self, runner: ScenarioRunner) -> None:
         runner.measure(
@@ -2375,6 +2444,22 @@ ENVD_FIELDNAMES: list[str] = [
     "envd_cpus",
     "repetition",
     "qps",
+    "concurrency",
+    "protocol",
+    "query_clusters",
+    "active_query_clusters",
+    "cluster_size",
+    "mean_latency_ms",
+    "p50_latency_ms",
+    "p95_latency_ms",
+    "p99_latency_ms",
+    "max_latency_ms",
+    "replica_cpu_peak_percent",
+    "replica_cpu_samples",
+    "driver_cpu_percent",
+    "driver_throttled_period_percent",
+    "driver_peak_thread_cpu_percent",
+    "warnings",
 ]
 
 
@@ -3150,6 +3235,11 @@ class ClusterObjectLimitsScenario(Scenario):
 class _ClusterSizeSweepBase(Scenario):
     """Common ``scale_points`` for sweeps over `REPLICA_SCALES` cluster sizes."""
 
+    _workload: ClusterScalingScenario
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        self._workload.teardown(runner)
+
     def scale_points(
         self, target: "BenchTarget", max_scale: int
     ) -> Iterable[ScalePoint]:
@@ -3891,6 +3981,41 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         "--scale-tpch", type=float, default=8, help="TPCH scale factor."
     )
     parser.add_argument(
+        "--qps-concurrencies",
+        type=lambda s: [int(x) for x in s.split(",")],
+        default=QPS_CONCURRENCIES,
+    )
+    parser.add_argument(
+        "--qps-protocols",
+        type=lambda s: s.split(","),
+        default=["prepared"],
+        help="prepared (default), simple, or prepared,simple",
+    )
+    parser.add_argument(
+        "--qps-clusters",
+        type=int,
+        default=32,
+        help="Independently routed one-worker query clusters (Cloud size 50cc)",
+    )
+    parser.add_argument(
+        "--qps-duration",
+        type=float,
+        default=20,
+        help="Measurement seconds per concurrency/protocol/CPU point",
+    )
+    parser.add_argument(
+        "--qps-warmup",
+        type=float,
+        default=5,
+        help="Unmeasured warmup seconds per point",
+    )
+    parser.add_argument(
+        "--qps-query-timeout",
+        type=float,
+        default=30,
+        help="Startup and individual-query timeout seconds",
+    )
+    parser.add_argument(
         "--scale-tpch-queries", type=float, default=4, help="TPCH queries scale factor."
     )
     parser.add_argument(
@@ -3946,6 +4071,14 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     )
 
     args = parser.parse_args()
+    QpsSweep(
+        args.qps_concurrencies,
+        args.qps_protocols,
+        args.qps_clusters,
+        args.qps_duration,
+        args.qps_warmup,
+        args.qps_query_timeout,
+    )
 
     scenarios: set[str] = set()
     for s in args.scenarios or ["all"]:
@@ -4088,10 +4221,10 @@ class BenchTarget:
         return None
 
     @abstractmethod
-    def dbbench_connection_flags(self) -> list[str]:
+    def qps_connection_flags(self) -> list[str]:
         """
-        Return dbbench connection flags appropriate for this target, excluding the
-        workload file path. The result should include driver, host, port, username,
+        Return connection flags for the QPS configuration's target adapter.
+        The result should include driver, host, port, username,
         optional password, database, and params (including sslmode and cluster=c).
         """
         ...
@@ -4113,7 +4246,7 @@ class CloudTarget(BenchTarget):
         self.new_app_password: str | None = None
         self.is_staging = is_staging
 
-    def dbbench_connection_flags(self) -> list[str]:
+    def qps_connection_flags(self) -> list[str]:
         assert self.new_app_password is not None
         return [
             "-driver",
@@ -4189,7 +4322,7 @@ class DockerTarget(BenchTarget):
     def __init__(self, composition: Composition) -> None:
         self.composition = composition
 
-    def dbbench_connection_flags(self) -> list[str]:
+    def qps_connection_flags(self) -> list[str]:
         return [
             "-driver",
             "postgres",
@@ -4347,7 +4480,16 @@ SCENARIOS: list[ScenarioSpec] = [
         "QPS envd strong scaling",
         lambda a, t: EnvdCpuSweep(
             SCENARIO_QPS_ENVD_STRONG_SCALING,
-            QpsEnvdStrongScalingScenario(1, t.replica_size_for_scale(1)),
+            QpsEnvdStrongScalingScenario(
+                QpsSweep(
+                    a.qps_concurrencies,
+                    a.qps_protocols,
+                    a.qps_clusters,
+                    a.qps_duration,
+                    a.qps_warmup,
+                    a.qps_query_timeout,
+                )
+            ),
         ),
         groups=("envd_qps_scalability",),
     ),
@@ -4603,16 +4745,24 @@ def analyze_envd_results_file(file: str) -> None:
         sub_q = sub[sub["qps"].notna() & (sub["qps"] > 0)]
         if sub_q.empty:
             raise UIError(f"No QPS data found for {title} in {file}")
-        plot(
-            plot_dir,
-            sub_q,
-            "qps",
-            f"{title} (QPS)",
-            f"{slug}_qps",
-            "QPS",
-            "Normalized QPS",
-            x="envd_cpus",
+        sweep = (
+            sub_q[sub_q["concurrency"].notna()]
+            if "concurrency" in sub_q
+            else pd.DataFrame()
         )
+        if not sweep.empty:
+            plot_qps_sweep(plot_dir, sweep, title, slug)
+        else:
+            plot(
+                plot_dir,
+                sub_q,
+                "qps",
+                f"{title} (QPS)",
+                f"{slug}_qps",
+                "QPS",
+                "Normalized QPS",
+                x="envd_cpus",
+            )
 
 
 def analyze_envd_objects_scalability_results_file(file: str) -> None:
@@ -4777,6 +4927,53 @@ def upload_file(
             )
     else:
         print(f"Saving plots to {file_paths}")
+
+
+def plot_qps_sweep(plot_dir: str, data: pd.DataFrame, title: str, slug: str) -> None:
+    """Plot QPS and latency against concurrency, with one series per CPU allocation."""
+    for protocol, protocol_df in data.groupby("protocol"):
+        for metric, label in [
+            ("qps", "Queries / second"),
+            ("mean_latency_ms", "Mean latency (ms)"),
+            ("p99_latency_ms", "p99 latency (ms)"),
+            ("max_latency_ms", "Maximum latency (ms)"),
+        ]:
+            if metric not in protocol_df or protocol_df[metric].isna().all():
+                continue
+            with mpl.rc_context(rc=mpl.rcParamsDefault):
+                fig, ax = plt.subplots(figsize=(10, 6))
+            for cpus, points in protocol_df.groupby("envd_cpus"):
+                points = points.sort_values("concurrency")
+                ax.plot(
+                    points["concurrency"],
+                    points[metric],
+                    "o-",
+                    label=f"{cpus} CPUs",
+                )
+                single = points[points["concurrency"] == 1]
+                if metric == "qps" and not single.empty:
+                    ax.plot(
+                        points["concurrency"],
+                        points["concurrency"]
+                        * 1000
+                        / single["mean_latency_ms"].iloc[0],
+                        ":",
+                        color=ax.lines[-1].get_color(),
+                        alpha=0.5,
+                        label=f"{cpus} CPUs ideal C / L1",
+                    )
+            ax.set_xscale("log", base=2)
+            ax.set_yscale("log")
+            ax.set_xlabel("Concurrent clients")
+            ax.set_ylabel(label)
+            ax.set_title(f"{title}: {protocol}")
+            ax.grid(True, which="both", color="#dddddd", linewidth=0.5)
+            ax.legend()
+            fig.tight_layout()
+            plot_path = os.path.join(plot_dir, f"{slug}_{protocol}_{metric}.png")
+            fig.savefig(plot_path, dpi=160, facecolor="white")
+            plt.close(fig)
+            upload_file([plot_path], f"{title}: {protocol} {label}")
 
 
 def plot(

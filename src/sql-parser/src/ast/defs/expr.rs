@@ -106,10 +106,12 @@ pub enum Expr<T: AstInfo> {
         expr1: Box<Expr<T>>,
         expr2: Option<Box<Expr<T>>>,
     },
-    /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
+    /// CAST an expression to a different data type, e.g. `CAST(foo AS VARCHAR(123))`
+    /// or `TRY_CAST(foo AS int4)`.
     Cast {
         expr: Box<Expr<T>>,
         data_type: T::DataType,
+        failure_mode: CastFailureMode,
     },
     /// `expr COLLATE collation`
     Collate {
@@ -356,12 +358,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 } else {
                     f.write_str(op);
                     f.write_str(" ");
-                    // A prefix operator binds tighter than `COLLATE` and the
-                    // binary operators but looser than the postfix `::`/`[…]`
-                    // forms, and `- <number>` lexes as a negative literal, so a
-                    // low-precedence or numeric-leftmost operand must be
-                    // parenthesized to keep the prefix operator's scope.
-                    if prefix_operand_needs_parens(expr1.as_ref()) {
+                    if prefix_operand_needs_parens(op, expr1.as_ref()) {
                         f.write_str("(");
                         f.write_node(&expr1);
                         f.write_str(")");
@@ -370,7 +367,11 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     }
                 }
             }
-            Expr::Cast { expr, data_type } => {
+            Expr::Cast {
+                expr,
+                data_type,
+                failure_mode: CastFailureMode::Error,
+            } => {
                 // `::` binds very tightly, so a non-self-delimiting operand must
                 // be parenthesized or the cast re-associates into its spine.
                 // `CAST(-0 AS int4)` (i.e. `Cast(- 0)`) would otherwise print as
@@ -387,6 +388,17 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 }
                 f.write_str("::");
                 f.write_node(data_type);
+            }
+            Expr::Cast {
+                expr,
+                data_type,
+                failure_mode: CastFailureMode::NullFallback,
+            } => {
+                f.write_str("TRY_CAST(");
+                f.write_node(&expr);
+                f.write_str(" AS ");
+                f.write_node(data_type);
+                f.write_str(")");
             }
             Expr::Collate { expr, collation } => {
                 // `COLLATE` binds very tightly (`PostfixCollateAt`), so a
@@ -857,7 +869,11 @@ fn prints_self_delimiting<T: AstInfo>(expr: &Expr<T>) -> bool {
         | Expr::Map(_)
         | Expr::MapSubquery(_)
         | Expr::Case { .. }
-        | Expr::Row { .. } => true,
+        | Expr::Row { .. }
+        | Expr::Cast {
+            failure_mode: CastFailureMode::NullFallback,
+            ..
+        } => true,
         // The postfix `::` / `COLLATE` / `[…]` forms print as `<inner><suffix>`,
         // so they are safe only when their inner operand is.
         Expr::Cast { expr, .. } | Expr::Collate { expr, .. } | Expr::Subscript { expr, .. } => {
@@ -867,21 +883,42 @@ fn prints_self_delimiting<T: AstInfo>(expr: &Expr<T>) -> bool {
     }
 }
 
-/// Whether the operand of a prefix operator (`-`/`+`/`~`) must be parenthesized
-/// to round-trip. A prefix op binds *tighter* than `COLLATE`/`AT TIME ZONE` and
-/// the binary/comparison operators, but *looser* than the postfix `::`/`[…]`
-/// forms — and `- <number>` additionally lexes as a negative literal. So peel
-/// the tight postfixes (`::`/`[…]`); if the chain bottoms out at a numeric
-/// literal the sign would fold into it, and if it bottoms out at anything other
-/// than a self-delimiting non-`COLLATE` primary (a `COLLATE`, a binary op, …) the
-/// prefix op would re-associate — both need parens. (`a + b COLLATE c` reparses
-/// as `a + (b COLLATE c)`; `- x COLLATE c` as `(- x) COLLATE c`.)
-fn prefix_operand_needs_parens<T: AstInfo>(operand: &Expr<T>) -> bool {
+/// Whether the operand of a prefix operator (an `Op` with no second operand)
+/// must be parenthesized so the printed expression reparses to the same tree.
+/// Both printers (`AstDisplay` and `mz-sql-pretty`) must use it, so they agree.
+pub fn prefix_operand_needs_parens<T: AstInfo>(op: &Op, operand: &Expr<T>) -> bool {
+    if unary_prec(op) == prec::PREFIX {
+        bare_prefix_operand_needs_parens(operand)
+    } else {
+        // An `Other`-level prefix (`~`, a namespaced `OPERATOR(...)`) reparses
+        // its operand at `Other`, so the operand re-associates exactly when its
+        // left spine exposes that level or looser, as for the right operand of
+        // a binary operator.
+        left_edge(operand) <= prec::OTHER
+    }
+}
+
+/// Whether the operand of a bare prefix `-`/`+` must be parenthesized to
+/// round-trip. Such a prefix op binds *tighter* than `COLLATE`/`AT TIME ZONE`
+/// and the binary/comparison operators, but *looser* than the postfix
+/// `::`/`[…]` forms, and `- <number>` additionally lexes as a negative literal.
+/// So peel the tight postfixes (`::`/`[…]`). If the chain bottoms out at a
+/// numeric literal, the sign would fold into it, and if it bottoms out at
+/// anything other than a self-delimiting non-`COLLATE` primary (a `COLLATE`, a
+/// binary op, …), the prefix op would re-associate. Both need parens.
+/// (`a + b COLLATE c` reparses as `a + (b COLLATE c)`, and `- x COLLATE c` as
+/// `(- x) COLLATE c`.)
+fn bare_prefix_operand_needs_parens<T: AstInfo>(operand: &Expr<T>) -> bool {
     let mut e = operand;
     let mut saw_postfix = false;
     loop {
         match e {
-            Expr::Cast { expr, .. } | Expr::Subscript { expr, .. } => {
+            Expr::Cast {
+                expr,
+                failure_mode: CastFailureMode::Error,
+                ..
+            }
+            | Expr::Subscript { expr, .. } => {
                 saw_postfix = true;
                 e = expr.as_ref();
             }
@@ -937,8 +974,12 @@ fn write_subscript_receiver<W: fmt::Write, T: AstInfo>(f: &mut AstFormatter<W>, 
         | Expr::MapSubquery(_)
         | Expr::FieldAccess { .. }
         | Expr::WildcardAccess(_)
-        | Expr::Collate { .. } => false,
-        // `Cast`: the type parser swallows a following `[…]` as an array suffix
+        | Expr::Collate { .. }
+        | Expr::Cast {
+            failure_mode: CastFailureMode::NullFallback,
+            ..
+        } => false,
+        // `::` `Cast`: the type parser swallows a following `[…]` as an array suffix
         // (`a::int4[1]` is `a` cast to `int4[]`, not a subscript of `a::int4`).
         // `Subscript`: consecutive `[…]` flatten into one node (`a[1][2]` is a
         // single subscript), so a nested subscript receiver must be parenthesized
@@ -1039,6 +1080,7 @@ impl<T: AstInfo> Expr<T> {
         Expr::Cast {
             expr: Box::new(self),
             data_type,
+            failure_mode: CastFailureMode::Error,
         }
     }
 
@@ -1102,6 +1144,16 @@ impl Op {
             op: op.into(),
         }
     }
+}
+
+/// What a cast does when the value cannot be converted to the target type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum CastFailureMode {
+    /// The cast raises an error, as `CAST(expr AS type)` and `expr::type` do.
+    Error,
+    /// The cast evaluates to `NULL`, as `TRY_CAST(expr AS type)` does. Errors
+    /// raised while evaluating `expr` itself still propagate.
+    NullFallback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1384,6 +1436,7 @@ impl<T: AstInfo> Function<T> {
                 | r#""map""#
                 | r#""normalize""#
                 | r#""nullif""#
+                | r#""operator""#
                 | r#""position""#
                 | r#""row""#
                 | r#""substring""#

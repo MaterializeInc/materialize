@@ -11,7 +11,7 @@ import os
 import random
 import threading
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, TypeVar
 
 from materialize.mzcompose import get_default_system_parameters
@@ -253,12 +253,12 @@ class Test:
 
     def run(self, c: Composition) -> None:
         """Run the Zippy test."""
-        max_time = datetime.now() + self._max_execution_time
+        max_time = datetime.now(UTC) + self._max_execution_time
         executed_count = len(self._actions)
         for i, action in enumerate(self._actions):
             print(action)
             action.run(c, self._state)
-            if datetime.now() > max_time:
+            if datetime.now(UTC) > max_time:
                 print(
                     f"--- Desired execution time of {self._max_execution_time} has been reached."
                 )

@@ -1588,7 +1588,7 @@ class DeleteAction(Action):
             for t in exe.db.tables
             if t != table and (not t.temp or t in exe.temp_objects)
         ]
-        # TODO: Drop the RepeatRow gate once STG-36 is fixed.
+        # TODO: Drop the RepeatRow gate once DB-217 is fixed.
         # DELETE .. USING lowers to a semijoin whose DistinctBy can leave the
         # target table with a net-negative row, and every later reader of that
         # table then surfaces the corruption. Tolerating that class outside
@@ -2931,6 +2931,11 @@ class FlipFlagsAction(Action):
             "16",
         ]
         self.flags_with_values["persist_blob_hedged_get_enabled"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_blob_http_pool"] = ["off", "gcs", "on"]
+        self.flags_with_values["persist_blob_http_pool_max_in_flight_per_client"] = [
+            "1",
+            "100",
+        ]
         self.flags_with_values["persist_blob_hedged_get_delay"] = [
             "'0s'",
             "'10ms'",
@@ -2940,7 +2945,17 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["kafka_sink_emit_sink_id_header"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["compute_mv_sink_shared_batch_max_bytes"] = [
+            # 0 never shares, 64 KiB, 1 MiB, 128 MiB
+            "0",
+            "65536",
+            "1048576",
+            "134217728",
+        ]
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
+        # Applies to replicas provisioned after the flip.
+        self.flags_with_values["enable_unified_cluster"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_batch_structured_key_lower_len"] = [
             "0",
             "1",
@@ -2974,12 +2989,33 @@ class FlipFlagsAction(Action):
             "row_with_validate",
             "arrow",
         ]
+        self.flags_with_values["persist_shard_metrics"] = [
+            "none",
+            "summary",
+            "per_shard",
+            "both",
+        ]
+        # Only has an effect while persist_shard_metrics leaves the per-shard
+        # families out. Shard names are GlobalIds, so "^u1" keeps a subset of
+        # the user collections.
+        self.flags_with_values["persist_per_shard_metrics_enable_regex"] = [
+            "''",
+            "'^u1'",
+            "'.*'",
+        ]
+        self.flags_with_values["persist_shard_info_metric"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_part_decode_batch_rows"] = [
+            "''",
+            "7",
+            "16384",
+        ]
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["persist_enable_incremental_compaction"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_fast_path_order"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_stats_audit_percent"] = [
             "0",
             "1",
@@ -3018,6 +3054,17 @@ class FlipFlagsAction(Action):
             "'1h'",
             "'30d'",
         ]
+        self.flags_with_values["replica_hydration_history_retention_period"] = [
+            "'0s'",
+            "'1min'",
+            "'120d'",
+        ]
+        # "0s" turns committing a ceiling ahead of a pinned frontier off.
+        self.flags_with_values["storage_persist_sink_description_lookahead"] = [
+            "'0s'",
+            "'1s'",
+            "'30s'",
+        ]
         # Keep these generous: a tight timeout would abort the oracle's own
         # queries (they are retried, but it adds noise). "0s" leaves it unset.
         self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
@@ -3050,11 +3097,8 @@ class FlipFlagsAction(Action):
         self.flags_with_values["compute_correction_v2_chunk_size"] = [
             "8192",
             "65536",
-            "1048576",
+            "2097152",
         ]
-        self.flags_with_values["enable_compute_temporal_bucketing"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["enable_compute_error_distinct"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
@@ -3093,11 +3137,11 @@ class FlipFlagsAction(Action):
             "1",
             "100000",
         ]
-        # One permit per worker (the default), a bound that serializes every
+        # Four permits per worker (the default), a bound that serializes every
         # offloaded walk, and one that never queues. A fraction of the process's
         # worker count, floored at one permit, so any tiny fraction serializes.
         self.flags_with_values["compute_index_peek_permit_fraction"] = [
-            "1.0",
+            "4.0",
             "0.0001",
             "1000.0",
         ]
@@ -3117,10 +3161,6 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
-        self.flags_with_values["enable_frontend_peek_sequencing"] = [
-            "true",
-            "false",
-        ]
         self.flags_with_values["enable_frontend_subscribes"] = [
             "true",
             "false",
@@ -3161,10 +3201,10 @@ class FlipFlagsAction(Action):
         self.flags_with_values["column_paged_batcher_swap_pageout"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["column_paged_batcher_spill_worker_count"] = [
-            "0",
-            "2",
-            "4",
+        self.flags_with_values["column_paged_batcher_spill_worker_fraction"] = [
+            "0.0",
+            "0.125",
+            "0.5",
         ]
         self.flags_with_values["column_paged_batcher_eager_backing"] = (
             BOOLEAN_FLAG_VALUES
@@ -3179,6 +3219,9 @@ class FlipFlagsAction(Action):
             "0.02",
         ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_compute_correction_v2_spill"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_upsert_chunked_stash"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["column_chunk_compress_min_depth"] = [
             "0",  # compress every spilled body
@@ -3234,10 +3277,6 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
-            # Read once at environmentd startup, so an ALTER SYSTEM SET only
-            # takes effect after a restart. Flipping it here would be a no-op
-            # for the running process.
-            "enable_adapter_frontend_occ_read_then_write",
             "persist_blob_hedged_get_budget_ratio",
             "persist_blob_hedged_get_max_concurrent",
             "persist_blob_hedged_get_warm_interval",
@@ -3353,6 +3392,9 @@ class FlipFlagsAction(Action):
             "balancerd_sigterm_listen_wait",
             "balancerd_inject_proxy_protocol_header_http",
             "balancerd_max_connections",
+            "balancerd_connection_high_watermark",
+            "balancerd_connection_low_watermark",
+            "balancerd_pre_resolved_timeout",
             "balancerd_log_filter",
             "balancerd_opentelemetry_filter",
             "balancerd_log_filter_defaults",
@@ -3383,6 +3425,7 @@ class FlipFlagsAction(Action):
             "wallclock_lag_history_retention_interval",
             "wallclock_global_lag_histogram_retention_interval",
             "kafka_client_id_enrichment_rules",
+            "kafka_offset_commit_refresh_interval",
             "kafka_poll_max_wait",
             "kafka_default_aws_privatelink_endpoint_identification_algorithm",
             "kafka_buffered_event_resize_threshold_elements",
@@ -3390,6 +3433,7 @@ class FlipFlagsAction(Action):
             "mysql_replication_heartbeat_interval",
             "postgres_fetch_slot_resume_lsn_interval",
             "pg_schema_validation_interval",
+            "pg_source_replication_slot_creation_timeout",
             "storage_enforce_external_addresses",
             "storage_upsert_prevent_snapshot_buffering",
             "storage_rocksdb_use_merge_operator",
@@ -3423,12 +3467,12 @@ class FlipFlagsAction(Action):
             "plan_insights_notice_fast_path_clusters_optimize_duration",
             "enable_expression_cache",
             "enable_password_auth",
-            "persist_fast_path_order",
             "enable_mcp_agent",
             "enable_mcp_agent_query_tool",
             "enable_mcp_agent_read_data_product_tool",
             "enable_mcp_developer",
             "enable_mcp_developer_query_tool",
+            "enable_mcp_protocol_2026_07_28",
             "mcp_max_response_size",
             "mcp_request_timeout",
             "mz_metrics_lgalloc_map_refresh_interval",
@@ -3467,6 +3511,11 @@ class FlipFlagsAction(Action):
             "read_then_write_max_dependencies",
             "enable_hydration_burst",
             "default_hydration_burst_linger",
+            # The graceful cut-over lag gate. Flipping the gate off or the
+            # allowance to an arbitrary value mid-reconfiguration changes when a
+            # cut-over fires, which the workload does not model.
+            "enable_cluster_reconfiguration_lag_gate",
+            "cluster_reconfiguration_allowed_lag",
         ]
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
@@ -4353,11 +4402,8 @@ class AlterOwnerAction(Action):
         for cluster in clusters:
             candidates.append(("CLUSTER", str(cluster)))
         candidates.append(("SECRET", "materialize.public.pgpass"))
-        # NOTE: No CONNECTION target. Changing a connection's owner emits a
-        # Connection(Altered) implication, which re-alters every dependent
-        # sink's export connection. That re-alter can fail with InvalidAlter
-        # and panic the coordinator.
-        # See https://linear.app/materializeinc/issue/SQL-517
+        for conn in AlterConnectionAction.SET_CLAUSES:
+            candidates.append(("CONNECTION", f"materialize.public.{conn}"))
         kind, name = self.rng.choice(candidates)
         with role.lock:
             if role not in exe.db.roles:
@@ -4445,11 +4491,10 @@ class BroadPrivilegesAction(Action):
             targets: list[tuple[str, list[str]]] = [
                 ("SYSTEM", ["CREATEDB", "CREATECLUSTER", "CREATEROLE", "ALL"]),
                 ("SECRET materialize.public.pgpass", ["USAGE", "ALL"]),
-                # NOTE: No CONNECTION target. GRANT/REVOKE on a connection emits
-                # a Connection(Altered) implication, which re-alters every
-                # dependent sink's export connection. That re-alter can fail
-                # with InvalidAlter and panic the coordinator.
-                # See https://linear.app/materializeinc/issue/SQL-517
+                (
+                    f"CONNECTION materialize.public.{self.rng.choice(list(AlterConnectionAction.SET_CLAUSES))}",
+                    ["USAGE", "ALL"],
+                ),
             ]
             if exe.db.schemas:
                 targets.append(
@@ -4621,6 +4666,7 @@ class SetSessionVariableAction(Action):
             "client_min_messages": ["debug1", "info", "notice", "warning", "error"],
             "max_query_result_size": ["100000", "1000000", "1000000000"],
             "emit_timestamp_notice": ["true", "false"],
+            "emit_execution_time_notice": ["true", "false"],
             "emit_trace_id_notice": ["true", "false"],
             # Only UTC is accepted, the rejection of other time zones is
             # deliberate error path coverage.
@@ -4681,6 +4727,19 @@ class DiscardAction(Action):
         return True
 
 
+# A concurrent ALTER SECRET rotation (the workload only rotates a secret to its
+# own value) can transiently expose an empty secret, so validating a connection,
+# with VALIDATE CONNECTION or a validating ALTER CONNECTION, sends an empty
+# password and the upstream system rejects it (secret-rotation atomicity). The
+# same race surfaces with each upstream's own wording.
+# TODO: Remove when https://linear.app/materializeinc/issue/SS-347 is fixed.
+SECRET_ROTATION_VALIDATION_ERRORS = [
+    "empty password returned by client",  # Postgres
+    "Access denied for user",  # MySQL
+    "Login failed for user",  # SQL Server
+]
+
+
 class ValidateConnectionAction(Action):
     # aws_conn is excluded, MinIO's STS support for validation is unclear.
     CONNECTIONS = [
@@ -4693,19 +4752,11 @@ class ValidateConnectionAction(Action):
     ]
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            "timeout: error trying to connect",
-            # A concurrent ALTER SECRET rotation (the workload only rotates a
-            # secret to its own value) can transiently expose an empty secret,
-            # so VALIDATE CONNECTION sends an empty password and the upstream
-            # system rejects it (secret-rotation atomicity). The same race
-            # surfaces with each upstream's own wording.
-            # TODO: Remove when https://linear.app/materializeinc/issue/SS-347
-            # is fixed.
-            "empty password returned by client",  # Postgres
-            "Access denied for user",  # MySQL
-            "Login failed for user",  # SQL Server
-        ] + super().errors_to_ignore(exe)
+        return (
+            ["timeout: error trying to connect"]
+            + SECRET_ROTATION_VALIDATION_ERRORS
+            + super().errors_to_ignore(exe)
+        )
 
     def run(self, exe: Executor) -> bool:
         name = self.rng.choice(self.CONNECTIONS)
@@ -4715,8 +4766,8 @@ class ValidateConnectionAction(Action):
 
 class AlterConnectionAction(Action):
     # The SET clause per connection, setting the option to the value the
-    # connection already has. That still exercises the full reconfiguration
-    # path (restarting dependent sources and sinks) without breaking them.
+    # connection already has. That still restarts dependent sinks without
+    # breaking them. Sources skip an unchanged connection.
     # NOTE: BROKER takes no `=` (it is parsed specially), HOST/URL do.
     SET_CLAUSES = {
         "kafka_conn": "BROKER 'kafka:9092'",
@@ -4727,12 +4778,16 @@ class AlterConnectionAction(Action):
     }
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            "timeout: error trying to connect",
-            # The storage controller can refuse an in-place connection change
-            # depending on the connection's current state or dependents.
-            "cannot be altered in the requested way",
-        ] + super().errors_to_ignore(exe)
+        return (
+            [
+                "timeout: error trying to connect",
+                # The storage controller can refuse an in-place connection change
+                # depending on the connection's current state or dependents.
+                "cannot be altered in the requested way",
+            ]
+            + SECRET_ROTATION_VALIDATION_ERRORS
+            + super().errors_to_ignore(exe)
+        )
 
     def run(self, exe: Executor) -> bool:
         name = self.rng.choice(list(self.SET_CLAUSES.keys()))
@@ -5064,9 +5119,11 @@ class ZeroDowntimeDeployAction(Action):
             self.composition.await_mz_deployment_status(
                 DeploymentStatus.READY_TO_PROMOTE, mz_service, timeout=1800
             )
-            self.composition.promote_mz(mz_service)
-            self.composition.await_mz_deployment_status(
-                DeploymentStatus.IS_LEADER, mz_service
+            self.composition.promote_mz(
+                mz_service,
+                retire_mz_service=(
+                    "materialized2" if mz_service == "materialized" else "materialized"
+                ),
             )
 
         time.sleep(self.rng.uniform(60, 120))
@@ -5865,7 +5922,7 @@ class HttpPostAction(Action):
 
             headers = {
                 header: (
-                    f"{datetime.datetime.now()}"
+                    f"{datetime.datetime.now(datetime.UTC)}"
                     if header == "timestamp"
                     else f'"{Text.random_value(self.rng)}"'.encode()
                 )
@@ -5910,15 +5967,6 @@ class AlterClusterSetAction(Action):
     Resizing or changing the replica count of a cluster hosting indexes, MVs,
     sources, and sinks forces rehydration and replica teardown/spin-up under
     concurrent DDL and DML."""
-
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            # A SET (SIZE) here or a ReconfigureCluster on the same cluster
-            # leaves a reconfiguration record in flight past the statement
-            # that started it. Replication factor is folded in at cut-over,
-            # so changing it meanwhile is refused.
-            "cannot change replication factor while a reconfiguration is in progress",
-        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
@@ -6545,12 +6593,7 @@ ddl_action_list = ActionList(
         (BroadPrivilegesAction, 2),
         (ShowAction, 4),
         (ValidateConnectionAction, 2),
-        # TODO: Reenable once altering a connection that sinks or sources depend
-        # on can no longer panic the coordinator. Re-altering a dependent sink's
-        # export connection after the txn fails with InvalidAlter, which
-        # unwrap_or_terminate turns into a panic.
-        # See https://linear.app/materializeinc/issue/SQL-517
-        # (AlterConnectionAction, 2),
+        (AlterConnectionAction, 2),
         (AlterSecretAction, 2),
         (ReconnectAction, 1),
         (CreateDatabaseAction, 1),

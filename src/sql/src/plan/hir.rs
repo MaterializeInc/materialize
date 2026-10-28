@@ -1309,6 +1309,8 @@ pub enum AggregateFunc {
     MaxTimestampTz,
     MaxInterval,
     MaxTime,
+    MaxArray,
+    MaxList,
     MinNumeric,
     MinInt16,
     MinInt32,
@@ -1326,6 +1328,8 @@ pub enum AggregateFunc {
     MinTimestampTz,
     MinInterval,
     MinTime,
+    MinArray,
+    MinList,
     SumInt16,
     SumInt32,
     SumInt64,
@@ -1335,6 +1339,7 @@ pub enum AggregateFunc {
     SumFloat32,
     SumFloat64,
     SumNumeric,
+    SumInterval,
     Count,
     Any,
     All,
@@ -1408,6 +1413,8 @@ impl AggregateFunc {
             AggregateFunc::MaxTimestampTz => mz_expr::AggregateFunc::MaxTimestampTz,
             AggregateFunc::MaxInterval => mz_expr::AggregateFunc::MaxInterval,
             AggregateFunc::MaxTime => mz_expr::AggregateFunc::MaxTime,
+            AggregateFunc::MaxArray => mz_expr::AggregateFunc::MaxArray,
+            AggregateFunc::MaxList => mz_expr::AggregateFunc::MaxList,
             AggregateFunc::MinNumeric => mz_expr::AggregateFunc::MinNumeric,
             AggregateFunc::MinInt16 => mz_expr::AggregateFunc::MinInt16,
             AggregateFunc::MinInt32 => mz_expr::AggregateFunc::MinInt32,
@@ -1425,6 +1432,8 @@ impl AggregateFunc {
             AggregateFunc::MinTimestampTz => mz_expr::AggregateFunc::MinTimestampTz,
             AggregateFunc::MinInterval => mz_expr::AggregateFunc::MinInterval,
             AggregateFunc::MinTime => mz_expr::AggregateFunc::MinTime,
+            AggregateFunc::MinArray => mz_expr::AggregateFunc::MinArray,
+            AggregateFunc::MinList => mz_expr::AggregateFunc::MinList,
             AggregateFunc::SumInt16 => mz_expr::AggregateFunc::SumInt16,
             AggregateFunc::SumInt32 => mz_expr::AggregateFunc::SumInt32,
             AggregateFunc::SumInt64 => mz_expr::AggregateFunc::SumInt64,
@@ -1434,6 +1443,7 @@ impl AggregateFunc {
             AggregateFunc::SumFloat32 => mz_expr::AggregateFunc::SumFloat32,
             AggregateFunc::SumFloat64 => mz_expr::AggregateFunc::SumFloat64,
             AggregateFunc::SumNumeric => mz_expr::AggregateFunc::SumNumeric,
+            AggregateFunc::SumInterval => mz_expr::AggregateFunc::SumInterval,
             AggregateFunc::Count => mz_expr::AggregateFunc::Count,
             AggregateFunc::Any => mz_expr::AggregateFunc::Any,
             AggregateFunc::All => mz_expr::AggregateFunc::All,
@@ -1494,6 +1504,8 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
             | AggregateFunc::MaxTime
+            | AggregateFunc::MaxArray
+            | AggregateFunc::MaxList
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -1511,6 +1523,8 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
             | AggregateFunc::MinTime
+            | AggregateFunc::MinArray
+            | AggregateFunc::MinList
             | AggregateFunc::SumInt16
             | AggregateFunc::SumInt32
             | AggregateFunc::SumInt64
@@ -1520,6 +1534,7 @@ impl AggregateFunc {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval
             | AggregateFunc::Count
             | AggregateFunc::JsonbAgg { .. }
             | AggregateFunc::JsonbObjectAgg { .. }
@@ -1589,6 +1604,8 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
             | AggregateFunc::MaxTime
+            | AggregateFunc::MaxArray
+            | AggregateFunc::MaxList
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -1606,9 +1623,12 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
             | AggregateFunc::MinTime
+            | AggregateFunc::MinArray
+            | AggregateFunc::MinList
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval
             | AggregateFunc::Dummy => input_type.scalar_type,
             AggregateFunc::FusedWindowAgg { funcs } => {
                 let input_types = input_type.scalar_type.unwrap_record_element_column_type();
@@ -4084,13 +4104,17 @@ impl HirScalarExpr {
     /// Returns None if self is not constant and therefore can't be simplified to a literal, or if
     /// an evaluation error occurs during simplification, or if self contains
     /// - a subquery
-    /// - a column reference to an outer level
+    /// - a column reference
     /// - a parameter
     /// - a window function call
     fn simplify_to_literal(self) -> Option<Row> {
         let mut expr = self
             .lower_uncorrelated(crate::plan::lowering::Config::default())
             .ok()?;
+        // `reduce` is called without column types, so it panics on a column reference.
+        if expr.contains_column() {
+            return None;
+        }
         // Using MIR evaluation with repr types is fine here: the
         // result is an untyped Row, so any intermediate type
         // canonicalization is discarded.
@@ -4119,6 +4143,12 @@ impl HirScalarExpr {
             .map_err(|err| {
                 PlanError::ConstantExpressionSimplificationFailed(err.to_string_with_causes())
             })?;
+        // `reduce` is called without column types, so it panics on a column reference.
+        if expr.contains_column() {
+            return Err(PlanError::ConstantExpressionSimplificationFailed(
+                "Not a constant".to_string(),
+            ));
+        }
         // Using MIR evaluation with repr types is fine here: the
         // result is an untyped Row, so any intermediate type
         // canonicalization is discarded.

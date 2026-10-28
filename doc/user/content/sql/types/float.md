@@ -68,6 +68,33 @@ SELECT 'NaN'::real AS nan
 
 The strings are recognized case insensitively.
 
+### Aggregate precision
+
+To support incremental updates, including retractions, Materialize accumulates
+`sum` over `real` and `double precision` values in a fixed-point
+representation. Aggregates computed from `sum` inherit its behavior: `avg`,
+`stddev`, `stddev_pop`, `stddev_samp`, `variance`, `var_pop`, and `var_samp`.
+Aggregates that do not sum their inputs, such as `min` and `max`, return exact
+input values.
+
+When these aggregates run in a dataflow, for example in an index, a
+materialized view, a subscription, or a `SELECT` query that reads from a source
+or table, each input value is truncated toward zero to a multiple of
+2<sup>-24</sup> (approximately 6E-8) before it is added:
+
+- Values with a magnitude smaller than 2<sup>-24</sup> contribute `0`.
+- Values with fractional parts that are not multiples of 2<sup>-24</sup> lose
+  precision, for example `0.1` contributes `0.09999996423721313`.
+- The result is incorrect if the magnitude of the final sum reaches
+  2<sup>103</sup> (approximately 1E+31).
+
+Queries that Materialize evaluates entirely during planning, such as
+aggregates over constant `VALUES` lists, use floating-point addition and are
+not subject to this truncation.
+
+If your application requires exact sums of fractional values, use
+[`numeric`](../numeric), which is not subject to this truncation.
+
 ### Valid casts
 
 In addition to the casts listed below, `real` and `double precision` values can be cast

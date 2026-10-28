@@ -56,11 +56,13 @@ use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
+use crate::catalog::Catalog;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
+use crate::peek_client::CoordinatorClient;
 use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
-use crate::{AdapterError, ExecuteContextGuard, ExecuteResponse};
+use crate::{AdapterError, ExecuteContextGuard, ExecuteResponse, PeekClient};
 
 /// A peek is a request to read data from a maintained arrangement.
 #[derive(Debug)]
@@ -133,7 +135,7 @@ impl DroppedDependency {
 
 #[derive(Clone, Debug)]
 pub struct PeekDataflowPlan {
-    pub(crate) desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
+    pub(crate) desc: mz_compute_types::dataflows::LirDataflowDescription,
     pub(crate) id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: Vec<usize>,
@@ -142,7 +144,7 @@ pub struct PeekDataflowPlan {
 
 impl PeekDataflowPlan {
     pub fn new(
-        desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
+        desc: mz_compute_types::dataflows::LirDataflowDescription,
         id: GlobalId,
         typ: &SqlRelationType,
     ) -> Self {
@@ -1025,6 +1027,30 @@ impl crate::coord::Coordinator {
         })
     }
 
+    /// Returns a [`PeekClient`] for coordinator-owned queries, which have to
+    /// run off the main loop because the client calls back into it.
+    ///
+    /// The client holds no session [`Client`](crate::Client), so it does not
+    /// keep the coordinator alive.
+    pub(crate) fn background_peek_client(&self, catalog: &Arc<Catalog>) -> PeekClient {
+        let build_version = catalog.state().config().build_info.human_version(None);
+        PeekClient::new(
+            CoordinatorClient::Background {
+                tx: self.internal_cmd_tx.clone(),
+                metrics: self.metrics.clone(),
+            },
+            catalog,
+            Arc::clone(&self.controller.storage_collections),
+            Arc::clone(&self.transient_id_gen),
+            self.optimizer_metrics.clone(),
+            self.persist_client.clone(),
+            self.statement_logging.create_frontend(build_version),
+            Arc::clone(&self.occ_write_semaphore),
+            self.group_commit_tx.clone(),
+            self.controller.read_only(),
+        )
+    }
+
     /// Creates an async stream that processes peek responses and yields rows.
     ///
     /// TODO(peek-seq): Move this out of `coord` once we delete the old peek sequencing.
@@ -1372,7 +1398,7 @@ impl crate::coord::Coordinator {
         if let Some(ws) = watch_set {
             self.install_peek_watch_sets(conn_id.clone(), ws)
                 .map_err(|e| {
-                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e)
+                    AdapterError::concurrent_dependency_drop_from_compute_lookup_error(e)
                 })?;
         }
 
@@ -1426,7 +1452,7 @@ impl crate::coord::Coordinator {
     /// All errors (setup or execution) are sent through tx.
     pub(crate) async fn implement_copy_to(
         &mut self,
-        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        df_desc: mz_compute_types::dataflows::LirDataflowDescription,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
@@ -1445,7 +1471,7 @@ impl crate::coord::Coordinator {
         // for the error case (no ExecuteContextExtra is created here).
         if let Some(ws) = watch_set {
             if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
-                let err = AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e);
+                let err = AdapterError::concurrent_dependency_drop_from_compute_lookup_error(e);
                 send_err(tx, err);
                 return;
             }

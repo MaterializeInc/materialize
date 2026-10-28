@@ -52,6 +52,14 @@ class RedirectHandler(BaseHTTPRequestHandler):
             self.send_header("Location", "http://169.254.169.254/latest/meta-data/")
             self.end_headers()
 
+        elif self.path == "/error-with-body":
+            self.send_response(500)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Length", str(len(CSV_DATA)))
+            self.end_headers()
+            if include_body:
+                self.wfile.write(CSV_DATA)
+
         else:
             self.send_response(404)
             self.end_headers()

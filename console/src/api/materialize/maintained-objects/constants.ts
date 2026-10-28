@@ -20,3 +20,20 @@ export const MAINTAINED_OBJECT_TYPES = [
 ] as const;
 
 export type MaintainedObjectType = (typeof MAINTAINED_OBJECT_TYPES)[number];
+
+/**
+ * Object types the maintained-objects list shows. Adds the collections a
+ * source ingests into: subsources, and tables created with `CREATE TABLE ...
+ * FROM SOURCE`. Each has its own frontier, so it can lag behind its source.
+ */
+export const MAINTAINED_OBJECT_LIST_TYPES = [
+  "source",
+  "subsource",
+  "table",
+  "materialized-view",
+  "index",
+  "sink",
+] as const;
+
+export type MaintainedObjectListType =
+  (typeof MAINTAINED_OBJECT_LIST_TYPES)[number];

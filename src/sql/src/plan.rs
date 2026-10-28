@@ -99,6 +99,9 @@ pub(crate) mod statement;
 pub(crate) mod transform_ast;
 pub(crate) mod transform_hir;
 pub(crate) mod typeconv;
+pub use typeconv::{
+    CastContext, plan_hypothetical_cast_with_failure_mode, valid_cast_base_type_pairs,
+};
 pub(crate) mod with_options;
 
 use crate::plan;
@@ -112,7 +115,7 @@ pub use hir::{
 };
 pub use lowering::Config as HirToMirConfig;
 pub use notice::PlanNotice;
-pub use query::{ExprContext, QueryContext, QueryLifetime};
+pub use query::{ExprContext, QueryContext, QueryLifetime, scalar_type_from_catalog};
 pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{

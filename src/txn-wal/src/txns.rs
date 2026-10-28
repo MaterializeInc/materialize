@@ -975,7 +975,7 @@ mod tests {
     use mz_persist_client::cache::PersistClientCache;
     use mz_persist_client::cfg::RetryParameters;
     use rand::rngs::SmallRng;
-    use rand::{RngCore, SeedableRng};
+    use rand::{Rng, SeedableRng};
     use timely::progress::Antichain;
     use tokio::sync::oneshot;
     use tracing::{Instrument, info, info_span};

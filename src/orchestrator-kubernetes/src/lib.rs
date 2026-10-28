@@ -52,6 +52,8 @@ use mz_orchestrator::{
     ServiceProcessMetrics, ServiceStatus, recommended_k8s_labels, scheduling_config::*,
 };
 use mz_ore::cast::CastInto;
+use mz_ore::error::ErrorExt;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use serde::Deserialize;
@@ -59,12 +61,20 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
 
+use crate::metrics::{FetchStep, OrchestratorMetrics};
+
 pub mod cloud_resource_controller;
+mod metrics;
 pub mod secrets;
 pub mod util;
 
 const FIELD_MANAGER: &str = "environmentd";
 const NODE_FAILURE_THRESHOLD_SECONDS: i64 = 30;
+/// How many attempts of a failed worker command log at warn level before later attempts log at
+/// error level. With the retry backoff starting at 125ms, the first error-level attempt comes
+/// about 4s after the first failure, so a Kubernetes API error that clears on retry, such as a
+/// new service account's RBAC that has not yet propagated, does not reach Sentry.
+const RETRY_WARN_ATTEMPTS: usize = 5;
 
 const POD_TEMPLATE_HASH_ANNOTATION: &str = "environmentd.materialize.cloud/pod-template-hash";
 
@@ -159,6 +169,7 @@ pub struct KubernetesOrchestrator {
     vpc_endpoint_api: Api<VpcEndpoint>,
     namespaces: Mutex<BTreeMap<String, Arc<dyn NamespacedOrchestrator>>>,
     resource_reader: Arc<KubernetesResourceReader>,
+    metrics: OrchestratorMetrics,
 }
 
 impl fmt::Debug for KubernetesOrchestrator {
@@ -171,6 +182,7 @@ impl KubernetesOrchestrator {
     /// Creates a new Kubernetes orchestrator from the provided configuration.
     pub async fn new(
         config: KubernetesOrchestratorConfig,
+        metrics_registry: &MetricsRegistry,
     ) -> Result<KubernetesOrchestrator, anyhow::Error> {
         let (client, kubernetes_namespace) = util::create_client(config.context.clone()).await?;
         let resource_reader =
@@ -183,6 +195,7 @@ impl KubernetesOrchestrator {
             vpc_endpoint_api: Api::default_namespaced(client),
             namespaces: Mutex::new(BTreeMap::new()),
             resource_reader,
+            metrics: OrchestratorMetrics::register_into(metrics_registry),
         })
     }
 }
@@ -201,6 +214,7 @@ impl Orchestrator for KubernetesOrchestrator {
                 command_rx,
                 name_prefix: self.config.name_prefix.clone().unwrap_or_default(),
                 collect_pod_metrics: self.config.collect_pod_metrics,
+                metrics: self.metrics.clone(),
             }
             .spawn(format!("kubernetes-orchestrator-worker:{namespace}"));
 
@@ -261,6 +275,9 @@ enum WorkerCommand {
         namespace: String,
         result_tx: oneshot::Sender<Vec<String>>,
     },
+    Flush {
+        result_tx: oneshot::Sender<()>,
+    },
     FetchServiceMetrics {
         name: String,
         info: ServiceInfo,
@@ -298,6 +315,7 @@ struct OrchestratorWorker {
     command_rx: mpsc::UnboundedReceiver<WorkerCommand>,
     name_prefix: String,
     collect_pod_metrics: bool,
+    metrics: OrchestratorMetrics,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -1235,7 +1253,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let pod_template_json = serde_json::to_string(&pod_template_spec).unwrap();
         let mut hasher = Sha256::new();
         hasher.update(pod_template_json);
-        let pod_template_hash = format!("{:x}", hasher.finalize());
+        let pod_template_hash = hex::encode(hasher.finalize());
         pod_annotations.insert(
             POD_TEMPLATE_HASH_ANNOTATION.to_owned(),
             pod_template_hash.clone(),
@@ -1308,6 +1326,13 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
         let list = result_rx.await.expect("worker task not dropped");
         Ok(list)
+    }
+
+    async fn flush(&self) -> Result<(), anyhow::Error> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::Flush { result_tx });
+        result_rx.await.expect("worker task not dropped");
+        Ok(())
     }
 
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
@@ -1461,12 +1486,29 @@ impl OrchestratorWorker {
             F: Fn() -> U,
             U: Future<Output = Result<R, K8sError>>,
         {
+            let start = Instant::now();
             Retry::default()
                 .clamp_backoff(Duration::from_secs(10))
-                .retry_async(|_| {
-                    f().map_err(
-                        |error| tracing::error!(%cmd_type, "orchestrator call failed: {error}"),
-                    )
+                .retry_async(|state| {
+                    f().map_err(move |error| {
+                        let attempt = state.i + 1;
+                        let elapsed = start.elapsed();
+                        if state.i < RETRY_WARN_ATTEMPTS {
+                            tracing::warn!(
+                                %cmd_type,
+                                attempt,
+                                ?elapsed,
+                                "orchestrator call failed: {error}"
+                            );
+                        } else {
+                            tracing::error!(
+                                %cmd_type,
+                                attempt,
+                                ?elapsed,
+                                "orchestrator call failed: {error}"
+                            );
+                        }
+                    })
                 })
                 .await
                 .expect("always retries on error")
@@ -1484,6 +1526,9 @@ impl OrchestratorWorker {
             } => {
                 let result = retry(|| self.list_services(&namespace), "ListServices").await;
                 let _ = result_tx.send(result);
+            }
+            Flush { result_tx } => {
+                let _ = result_tx.send(());
             }
             FetchServiceMetrics {
                 name,
@@ -1530,18 +1575,28 @@ impl OrchestratorWorker {
 
             let clusterd_usage_fut = get_clusterd_usage(self_, service_name, i);
             let (metrics, clusterd_usage) =
-                match futures::future::join(self_.metrics_api.get(&name), clusterd_usage_fut).await
-                {
-                    (Ok(metrics), Ok(clusterd_usage)) => (metrics, Some(clusterd_usage)),
-                    (Ok(metrics), Err(e)) => {
-                        warn!("Failed to fetch clusterd usage for {name}: {e}");
-                        (metrics, None)
-                    }
-                    (Err(e), _) => {
-                        warn!("Failed to get metrics for {name}: {e}");
-                        return ServiceProcessMetrics::default();
-                    }
-                };
+                futures::future::join(self_.metrics_api.get(&name), clusterd_usage_fut).await;
+            let clusterd_usage = match clusterd_usage {
+                Ok(clusterd_usage) => Some(clusterd_usage),
+                Err(e) => {
+                    self_
+                        .metrics
+                        .record_fetch_error(FetchStep::ClusterdUsage, e.as_ref());
+                    warn!("Failed to fetch clusterd usage for {name}: {e:#}");
+                    None
+                }
+            };
+            let metrics = match metrics {
+                Ok(metrics) => metrics,
+                Err(e) => {
+                    self_.metrics.record_fetch_error(FetchStep::PodMetrics, &e);
+                    warn!(
+                        "Failed to get metrics for {name}: {}",
+                        e.display_with_causes()
+                    );
+                    return ServiceProcessMetrics::default();
+                }
+            };
             let Some(PodMetricsContainer {
                 usage:
                     PodMetricsContainerUsage {
@@ -1551,6 +1606,9 @@ impl OrchestratorWorker {
                 ..
             }) = metrics.containers.get(0)
             else {
+                self_
+                    .metrics
+                    .record_fetch_failure(FetchStep::PodMetrics, "no_containers");
                 warn!("metrics result contained no containers for {name}");
                 return ServiceProcessMetrics::default();
             };

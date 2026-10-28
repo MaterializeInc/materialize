@@ -210,8 +210,6 @@ pub enum AdapterError {
     },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
-    /// The current transaction had the wrong set of write locks.
-    WrongSetOfLocks,
     /// Waiting on a query timed out.
     ///
     /// Note this differs slightly from PG's implementation/semantics.
@@ -323,9 +321,6 @@ pub enum AdapterError {
     /// Attempt to convert a cluster to unmanaged while a hydration burst is in
     /// flight.
     AlterClusterUnmanagedWhileBursting,
-    /// Attempt to change a cluster's replication factor while a graceful
-    /// reconfiguration is in progress.
-    AlterClusterReplicationFactorWhileReconfiguring,
     /// Attempt to change a cluster's schedule while a graceful reconfiguration
     /// is in progress.
     AlterClusterScheduleWhileReconfiguring,
@@ -335,7 +330,7 @@ pub enum AdapterError {
     AuthenticationError(AuthenticationError),
     /// Schema of a replacement is incompatible with the target.
     ReplacementSchemaMismatch(RelationDescDiff),
-    /// Attempt to apply a replacement to a sealed materialized view.
+    /// Attempt to replace a sealed materialized view.
     ReplaceMaterializedViewSealed {
         name: String,
     },
@@ -753,8 +748,9 @@ impl AdapterError {
                 Some(lines.join("\n"))
             }
             AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
-                "The materialized view has already computed its output until the end of time, \
-                 so replacing its definition would have no effect."
+                "The materialized view's contents are final for all future times, so they can \
+                 no longer be changed. See \
+                 https://materialize.com/docs/sql/alter-materialized-view/#troubleshooting"
                     .into(),
             ),
             AdapterError::ImpossibleTimestampConstraints { constraints } => {
@@ -811,11 +807,6 @@ impl AdapterError {
             AdapterError::AlterClusterUnmanagedWhileBursting => Some(
                 "Remove the strategy with ALTER CLUSTER ... RESET (AUTO SCALING STRATEGY), \
                 or wait for the burst to wind down, then convert."
-                    .to_string(),
-            ),
-            AdapterError::AlterClusterReplicationFactorWhileReconfiguring => Some(
-                "Cancel the reconfiguration by altering the cluster back to its current \
-                configuration, or wait for it to settle, then change the replication factor."
                     .to_string(),
             ),
             AdapterError::AlterClusterScheduleWhileReconfiguring => Some(
@@ -919,6 +910,9 @@ impl AdapterError {
             AdapterError::CollectionUnreadable { .. } => Some(
                 "This could be because the collection has recently been dropped.".into()
             ),
+            AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
+                "Create a new materialized view with the new definition instead.".into()
+            ),
             _ => None,
         }
     }
@@ -1013,7 +1007,6 @@ impl AdapterError {
             AdapterError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::ReadWriteUnavailable => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::SingleStatementTransaction => SqlState::INVALID_TRANSACTION_STATE,
-            AdapterError::WrongSetOfLocks => SqlState::LOCK_NOT_AVAILABLE,
             AdapterError::StatementTimeout => SqlState::QUERY_CANCELED,
             AdapterError::Canceled => SqlState::QUERY_CANCELED,
             AdapterError::IdleInTransactionSessionTimeout => {
@@ -1103,9 +1096,6 @@ impl AdapterError {
             AdapterError::AlterClusterResourceExhausted => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileBursting => SqlState::OBJECT_IN_USE,
-            AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
-                SqlState::OBJECT_IN_USE
-            }
             AdapterError::AlterClusterScheduleWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterWaitOnScheduledCluster => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
@@ -1147,6 +1137,7 @@ impl AdapterError {
         }
     }
 
+    /// Maps a lookup error of the session task's compute instance clients.
     pub fn concurrent_dependency_drop_from_collection_lookup_error(
         e: CollectionLookupError,
         compute_instance: ComputeInstanceId,
@@ -1169,7 +1160,8 @@ impl AdapterError {
         }
     }
 
-    pub fn concurrent_dependency_drop_from_watch_set_install_error(
+    /// Maps a collection lookup error of the compute controller.
+    pub fn concurrent_dependency_drop_from_compute_lookup_error(
         e: compute_error::CollectionLookupError,
     ) -> Self {
         match e {
@@ -1409,9 +1401,6 @@ impl fmt::Display for AdapterError {
             AdapterError::ReadWriteUnavailable => {
                 f.write_str("transaction read-write mode must be set before any query")
             }
-            AdapterError::WrongSetOfLocks => {
-                write!(f, "internal error, wrong set of locks acquired")
-            }
             AdapterError::StatementTimeout => {
                 write!(f, "canceling statement due to statement timeout")
             }
@@ -1602,12 +1591,6 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "cannot convert cluster to unmanaged while a hydration burst is in progress"
-                )
-            }
-            AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
-                write!(
-                    f,
-                    "cannot change replication factor while a reconfiguration is in progress"
                 )
             }
             AdapterError::AlterClusterScheduleWhileReconfiguring => {

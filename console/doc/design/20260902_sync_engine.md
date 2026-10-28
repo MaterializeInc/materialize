@@ -69,7 +69,7 @@ count stays the same, and a collection can even be fed from an existing atom
 | `SubscribeManager` | `api/materialize/SubscribeManager.ts` | The SUBSCRIBE protocol: buffers rows per timestamp, folds the upsert stream into the current row set, exposes snapshots via `onChange`/`getSnapshot`. Holds its last snapshot through a resubscribe so the UI does not flash empty. |
 | `WebsocketConnectionManager` | `api/materialize/WebsocketConnectionManager.ts` | Connection lifecycle: subscribes to environment health and the current region on the jotai store, connects when healthy, reconnects with backoff, reconnects when the region's address changes, and tears down a socket left pointing at a departed region. |
 | Subscribe sessions | `api/materialize/subscribeSession.ts` | Composition: one constructor wires the manager, the connection manager, the sink, the region reset, and cache hydration, in one defined order. |
-| Hooks | `api/materialize/useSubscribe.ts` | Lifecycle adapters: a single effect creates the session on mount and destroys it on unmount. |
+| Hooks | `api/materialize/useSubscribe.ts`, `useScopedSubscribeCollection.ts` | Lifecycle adapters: a single effect creates the session on mount and destroys it on unmount. |
 | Collection bridge | `api/materialize/subscribeCollection.ts` | `createSubscribeCollection`: turns manager snapshots into incremental insert/update/delete writes on a TanStack DB collection, owns the scoped localStorage cache, and mirrors status (error, snapshotComplete) into a companion atom. |
 | Cache scope | `store/syncEngineCache.ts` | Derives the cache scope `organizationId\|regionId` as an atom, so hydration can be driven from the store. |
 
@@ -176,11 +176,13 @@ What the engine is not:
   sinks are transport-agnostic, which is the seam a shared upstream
   (cross-tab or cross-client dedup) can plug into without touching surfaces,
   but the engine alone does not provide that.
-- **Not for polled telemetry.** Expensive introspection queries
-  (utilization history, arrangement sizes) are react-query territory, with
-  polling intervals and its persistence tooling. The engine serves
-  catalog-shaped data that a SUBSCRIBE can maintain.
-- **Not for page-scoped, request-driven subscribes.** Those use
+- **Not for polled telemetry.** Introspection data no SUBSCRIBE maintains,
+  such as utilization beyond 24h or on environments that predate the indexed
+  views, is react-query territory, with polling intervals and its persistence
+  tooling. The engine serves data that a SUBSCRIBE can maintain, including
+  per-key page data (see per-key scoped collections below).
+- **Not for one-off, request-driven subscribes.** Subscribes whose rows
+  nothing reads after the component unmounts use
   `useSubscribe`/`useSubscribeManager`, which tie a manager to a component
   and expose state via `useSyncExternalStore`.
 
@@ -194,9 +196,9 @@ queries over the objects collection (fed from the app-wide `allObjects` atom)
 and the namespaces collection (its own subscribe), and renders from cache on
 revisit before the live snapshot lands.
 
-Declare configuration once at module scope. The hooks require a referentially
-stable options object, and a new object identity restarts the session, which
-makes accidental instability visible instead of masked.
+Declare configuration once at module scope, or memoize it. The hooks require
+a referentially stable options object, and a new object identity restarts the
+session, which makes accidental instability visible instead of masked.
 
 Atom-backed data set:
 
@@ -277,6 +279,33 @@ reads, or in a route component for data one surface reads. Note that a route
 component keyed by a path pattern survives param-only navigation, including
 region switches, which is why region handling lives in the session rather
 than in mount/unmount.
+
+## Per-key scoped collections
+
+Page data keyed by an id, such as a cluster's utilization or a replica's
+arrangement sizes, lives in `createScopedSubscribeCollections`: one in-memory
+collection per tenant scope and key, dropped when the scope changes and never
+persisted. `useScopedSubscribeCollection` resolves the scope, picks the key's
+collection and runs the subscribe into it while mounted. The rows outlive the
+component, so a return to the page serves them at once, with `isRefreshing`
+set until the new subscribe's snapshot lands, and a view derived from them,
+such as a chart window, can change without resubscribing.
+
+```ts
+const samplesByCluster = createScopedSubscribeCollections<Sample>({
+  id: "samples",
+  getKey: (sample) => sample.id,
+});
+
+export function useLiveSamples(clusterId: string) {
+  // A new builder restarts the subscribe, so memoize it.
+  const subscribe = React.useMemo(
+    () => buildSubscribeQuery(buildSamplesQuery(clusterId), { upsertKey: "id" }),
+    [clusterId],
+  );
+  return useScopedSubscribeCollection(samplesByCluster, clusterId, subscribe);
+}
+```
 
 ## Testing
 

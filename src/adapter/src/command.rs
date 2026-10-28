@@ -21,7 +21,6 @@ use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
 use mz_expr::RowSetFinishing;
 use mz_ore::collections::CollectionExt;
@@ -297,7 +296,7 @@ pub enum Command {
     },
 
     ExecuteSubscribe {
-        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        df_desc: mz_compute_types::dataflows::LirDataflowDescription,
         dependency_ids: BTreeSet<GlobalId>,
         cluster_id: ComputeInstanceId,
         replica_id: Option<ReplicaId>,
@@ -322,7 +321,7 @@ pub enum Command {
     },
 
     ExecuteCopyTo {
-        df_desc: Box<DataflowDescription<mz_compute_types::plan::LirRelationExpr>>,
+        df_desc: Box<mz_compute_types::dataflows::LirDataflowDescription>,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
@@ -383,7 +382,8 @@ pub enum Command {
         tx: oneshot::Sender<()>,
     },
 
-    /// Generate a timestamp explanation.
+    /// Generate a timestamp explanation, or fail with `ConcurrentDependencyDrop`
+    /// if a collection in `id_bundle` no longer exists.
     /// This is used when `emit_timestamp_notice` is enabled.
     ExplainTimestamp {
         conn_id: ConnectionId,
@@ -391,7 +391,7 @@ pub enum Command {
         cluster_id: ClusterId,
         id_bundle: CollectionIdBundle,
         determination: TimestampDetermination,
-        tx: oneshot::Sender<TimestampExplanation>,
+        tx: oneshot::Sender<Result<TimestampExplanation, AdapterError>>,
     },
 
     /// Statement logging event from frontend peek sequencing.
@@ -597,9 +597,6 @@ pub struct StartupResponse {
     /// Semaphore for limiting concurrent OCC (optimistic concurrency control)
     /// write operations.
     pub occ_write_semaphore: Arc<Semaphore>,
-    /// Whether frontend OCC read-then-write is enabled (determined once at
-    /// process startup).
-    pub frontend_read_then_write_enabled: bool,
     /// Requests a group commit, which is how the frontend asks for the write
     /// timeline to advance without having anything to write.
     pub group_commit_notifier: crate::coord::appends::GroupCommitNotifier,
@@ -738,7 +735,10 @@ pub enum ExecuteResponse {
     /// The temporary objects associated with the session have been discarded.
     DiscardedTemp,
     /// All state associated with the session has been discarded.
-    DiscardedAll,
+    DiscardedAll {
+        /// Session parameters that changed because the session was reset.
+        params: BTreeMap<&'static str, String>,
+    },
     /// The requested object was dropped.
     DroppedObject(ObjectType),
     /// The requested objects were dropped.
@@ -902,7 +902,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
             ExecuteResponseKind::Deleted => Err(()),
             ExecuteResponseKind::DiscardedTemp => Ok(ExecuteResponse::DiscardedTemp),
-            ExecuteResponseKind::DiscardedAll => Ok(ExecuteResponse::DiscardedAll),
+            ExecuteResponseKind::DiscardedAll => Err(()),
             ExecuteResponseKind::DroppedObject => Err(()),
             ExecuteResponseKind::DroppedOwned => Ok(ExecuteResponse::DroppedOwned),
             ExecuteResponseKind::EmptyQuery => Ok(ExecuteResponse::EmptyQuery),
@@ -965,7 +965,7 @@ impl ExecuteResponse {
             DeclaredCursor => Some("DECLARE CURSOR".into()),
             Deleted(n) => Some(format!("DELETE {}", n)),
             DiscardedTemp => Some("DISCARD TEMP".into()),
-            DiscardedAll => Some("DISCARD ALL".into()),
+            DiscardedAll { .. } => Some("DISCARD ALL".into()),
             DroppedObject(o) => Some(format!("DROP {o}")),
             DroppedOwned => Some("DROP OWNED".into()),
             EmptyQuery => None,

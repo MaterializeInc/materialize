@@ -18,11 +18,12 @@ use std::{
 use axum_server::tls_rustls::RustlsConfig;
 use futures::future::{Either, join4, select};
 use http::HeaderValue;
+use k8s_controller::{PrometheusMetrics, ReconcileObserver, events::EventRecorder};
 use k8s_openapi::{
     api::{
         apps::v1::Deployment,
         core::v1::{
-            Affinity, ConfigMap, ResourceRequirements, Service, ServiceAccount, Toleration,
+            Affinity, ConfigMap, Probe, ResourceRequirements, Service, ServiceAccount, Toleration,
         },
         networking::v1::NetworkPolicy,
         rbac::v1::{Role, RoleBinding},
@@ -209,6 +210,22 @@ pub struct Args {
     ephemeral_volume_class: Option<String>,
     #[clap(long)]
     scheduler_name: Option<String>,
+
+    /// Write the Teleport labels and annotations that `teleport-kube-agent`
+    /// discovers on the environmentd Service. Off by default, and off means the
+    /// Service gains no Teleport label and no Teleport annotation.
+    #[clap(
+        long,
+        requires = "teleport_stack_type",
+        requires = "teleport_cluster_name"
+    )]
+    enable_teleport_registration: bool,
+    /// Required when `--enable-teleport-registration` is set.
+    #[clap(long)]
+    teleport_stack_type: Option<String>,
+    /// Required when `--enable-teleport-registration` is set.
+    #[clap(long)]
+    teleport_cluster_name: Option<String>,
     #[clap(long)]
     enable_security_context: bool,
     #[clap(long)]
@@ -235,6 +252,12 @@ pub struct Args {
     environmentd_tolerations: Option<Vec<Toleration>>,
     #[clap(long, value_parser = parse_resources)]
     environmentd_default_resources: Option<ResourceRequirements>,
+    #[clap(long, value_parser = parse_probe)]
+    environmentd_default_readiness_probe: Option<Probe>,
+    #[clap(long, value_parser = parse_probe)]
+    environmentd_default_liveness_probe: Option<Probe>,
+    #[clap(long, value_parser = parse_probe)]
+    environmentd_default_startup_probe: Option<Probe>,
     #[clap(long)]
     environmentd_priority_class_name: Option<String>,
     #[clap(long)]
@@ -325,12 +348,22 @@ pub struct Args {
 
     #[clap(long, default_value = "8080")]
     console_http_port: u16,
+    #[clap(long, default_value = "8081")]
+    console_internal_http_port: u16,
 
     #[clap(long, default_value = "{}")]
     default_certificate_specs: DefaultCertificateSpecs,
 
     #[clap(long, hide = true)]
     disable_license_key_checks: bool,
+
+    /// Root-signed intermediate certificates whose keys may also sign license
+    /// keys. Passed through to environmentd.
+    #[clap(long, value_delimiter = ',')]
+    license_key_intermediate_cert: Vec<String>,
+
+    #[clap(long)]
+    disable_database_network_policies: bool,
 
     #[clap(flatten)]
     tracing: TracingCliArgs,
@@ -349,6 +382,12 @@ fn parse_tolerations(s: &str) -> anyhow::Result<Toleration> {
 
 fn parse_resources(s: &str) -> anyhow::Result<ResourceRequirements> {
     Ok(serde_json::from_str(s)?)
+}
+
+fn parse_probe(s: &str) -> anyhow::Result<Probe> {
+    let probe = serde_json::from_str(s)?;
+    controller::materialize::generation::validate_probe_handlers(&probe)?;
+    Ok(probe)
 }
 
 fn parse_crd_columns(val: &str) -> Result<Vec<CustomResourceColumnDefinition>, serde_json::Error> {
@@ -380,6 +419,17 @@ fn parse_data_rate(s: &str) -> anyhow::Result<usize> {
 #[tokio::main]
 async fn main() {
     mz_ore::panic::install_enhanced_handler();
+
+    // Pin the rustls crypto provider to aws-lc-rs. The kube client and the
+    // conversion webhook's `RustlsConfig` both build their rustls configs via
+    // `builder()`, which resolves the process-default provider. Installing it
+    // explicitly keeps the choice deterministic even in workspace builds where
+    // rustls' `ring` feature is also enabled by another crate (with both
+    // features on, rustls cannot pick a default on its own and would otherwise
+    // panic).
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("installing the aws-lc-rs crypto provider should not fail");
 
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("ORCHESTRATORD_"),
@@ -416,6 +466,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
         .await?;
 
+    mz_alloc::register_metrics_into(&metrics_registry).await;
+
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
     let tls_cert = args.tls_cert;
@@ -425,15 +477,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     // and `webhook_server` is what shutdown uses to drain the server. Both are
     // set only when the conversion webhook server is running.
     let (reload_config, webhook_server) = if args.install_v1_crd {
-        // Pin the rustls crypto provider to aws-lc-rs. `RustlsConfig` builds its
-        // `ServerConfig` via `ServerConfig::builder()`, which resolves the
-        // process-default provider. Installing it explicitly keeps the choice
-        // deterministic even in workspace builds where rustls' `ring` feature is
-        // also enabled by another crate (with both features on, rustls cannot
-        // pick a default on its own and would otherwise panic).
-        rustls::crypto::aws_lc_rs::default_provider()
-            .install_default()
-            .expect("installing the aws-lc-rs crypto provider should not fail");
         let config = RustlsConfig::from_pem_file(&tls_cert, &tls_key)
             .await
             .unwrap();
@@ -635,12 +678,22 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         &leader_election_identity,
     );
 
+    let observer: Arc<dyn ReconcileObserver> = Arc::<PrometheusMetrics>::clone(&metrics.reconcile);
+    let event_recorder = |controller: &str| {
+        Arc::new(EventRecorder::new(
+            client.clone(),
+            controller::event_reporter(controller, leader_election_identity.clone()),
+        ))
+    };
+
     // Each of these is rebuilt every time this replica wins the election, since
     // running a controller consumes it and we rejoin the election after losing
     // the lease.
     let make_materialize_controller = {
         let client = client.clone();
         let metrics = Arc::clone(&metrics);
+        let observer = Arc::clone(&observer);
+        let events = event_recorder(controller::materialize::CONTROLLER_NAME);
         let config = controller::materialize::Config {
             cloud_provider: args.cloud_provider,
             region: args.region,
@@ -670,6 +723,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             environmentd_affinity: args.environmentd_affinity,
             environmentd_tolerations: args.environmentd_tolerations,
             environmentd_default_resources: args.environmentd_default_resources,
+            environmentd_default_readiness_probe: args.environmentd_default_readiness_probe,
+            environmentd_default_liveness_probe: args.environmentd_default_liveness_probe,
+            environmentd_default_startup_probe: args.environmentd_default_startup_probe,
             environmentd_priority_class_name: args.environmentd_priority_class_name,
             clusterd_node_selector: args.clusterd_node_selector,
             clusterd_affinity: args.clusterd_affinity,
@@ -711,8 +767,20 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .environmentd_internal_persist_pubsub_port,
             default_certificate_specs: args.default_certificate_specs.clone(),
             disable_license_key_checks: args.disable_license_key_checks,
+            license_key_intermediate_certs: args.license_key_intermediate_cert,
+            disable_database_network_policies: args.disable_database_network_policies,
             tracing: args.tracing,
             orchestratord_namespace: namespace,
+            teleport: args.enable_teleport_registration.then(|| {
+                controller::materialize::teleport::TeleportConfig {
+                    stack_type: args.teleport_stack_type.expect(
+                        "clap requires --teleport-stack-type with --enable-teleport-registration",
+                    ),
+                    cluster_name: args.teleport_cluster_name.expect(
+                        "clap requires --teleport-cluster-name with --enable-teleport-registration",
+                    ),
+                }
+            }),
         };
         move || {
             k8s_controller::Controller::namespaced_all(
@@ -720,6 +788,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 controller::materialize::Context::new(config.clone(), Arc::clone(&metrics)),
                 watcher::Config::default().timeout(29),
             )
+            .with_name(controller::materialize::CONTROLLER_NAME)
+            .with_observer(Arc::clone(&observer))
+            .with_event_recorder(Arc::clone(&events))
             .with_controller(|controller| {
                 let controller = controller
                     .owns(
@@ -761,6 +832,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
     let make_balancer_controller = {
         let client = client.clone();
+        let observer = Arc::clone(&observer);
+        let events = event_recorder(controller::balancer::CONTROLLER_NAME);
         let config = controller::balancer::Config {
             enable_security_context: args.enable_security_context,
             enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
@@ -783,6 +856,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 controller::balancer::Context::new(config.clone()),
                 watcher::Config::default().timeout(29),
             )
+            .with_name(controller::balancer::CONTROLLER_NAME)
+            .with_observer(Arc::clone(&observer))
+            .with_event_recorder(Arc::clone(&events))
             .with_controller(|controller| {
                 let controller = controller
                     .owns(
@@ -812,6 +888,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
     let make_console_controller = {
         let client = client.clone();
+        let observer = Arc::clone(&observer);
+        let events = event_recorder(controller::console::CONTROLLER_NAME);
         let config = controller::console::Config {
             enable_security_context: args.enable_security_context,
             enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
@@ -825,6 +903,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             network_policies_ingress_cidrs: args.network_policies_ingress_cidrs,
             default_certificate_specs: args.default_certificate_specs,
             console_http_port: args.console_http_port,
+            console_internal_http_port: args.console_internal_http_port,
             balancerd_http_port: args.balancerd_http_port,
         };
         move || {
@@ -833,6 +912,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 controller::console::Context::new(config.clone()),
                 watcher::Config::default().timeout(29),
             )
+            .with_name(controller::console::CONTROLLER_NAME)
+            .with_observer(Arc::clone(&observer))
+            .with_event_recorder(Arc::clone(&events))
             .with_controller(|controller| {
                 let controller = controller
                     .owns(
@@ -1026,6 +1108,60 @@ mod tests {
         assert_eq!(
             args.webhook_service_namespace.as_deref(),
             Some("materialize")
+        );
+    }
+
+    #[mz_ore::test]
+    fn default_probe_args_reject_multiple_handlers() {
+        let args = Args::try_parse_from(
+            REQUIRED_ARGS
+                .iter()
+                .copied()
+                .chain([r#"--environmentd-default-startup-probe={"failureThreshold":360}"#]),
+        )
+        .expect("parses a probe without a handler");
+        assert_eq!(
+            args.environmentd_default_startup_probe
+                .and_then(|probe| probe.failure_threshold),
+            Some(360)
+        );
+
+        assert!(
+            Args::try_parse_from(REQUIRED_ARGS.iter().copied().chain([
+                r#"--environmentd-default-liveness-probe={"exec":{"command":["true"]},"tcpSocket":{"port":6875}}"#,
+            ]))
+            .is_err(),
+            "a probe with two handlers should be rejected"
+        );
+    }
+
+    #[mz_ore::test]
+    fn teleport_label_args_required_with_enable_teleport_registration() {
+        let args = Args::try_parse_from(REQUIRED_ARGS).expect("parses without teleport args");
+        assert!(!args.enable_teleport_registration);
+
+        assert!(
+            Args::try_parse_from(
+                REQUIRED_ARGS
+                    .iter()
+                    .copied()
+                    .chain(["--enable-teleport-registration"])
+            )
+            .is_err(),
+            "--enable-teleport-registration should require the stack type and cluster name"
+        );
+
+        let args = Args::try_parse_from(REQUIRED_ARGS.iter().copied().chain([
+            "--enable-teleport-registration",
+            "--teleport-stack-type=personal",
+            "--teleport-cluster-name=mzcloud-test-us-east-1-0",
+        ]))
+        .expect("parses with the teleport label args");
+        assert!(args.enable_teleport_registration);
+        assert_eq!(args.teleport_stack_type.as_deref(), Some("personal"));
+        assert_eq!(
+            args.teleport_cluster_name.as_deref(),
+            Some("mzcloud-test-us-east-1-0")
         );
     }
 }

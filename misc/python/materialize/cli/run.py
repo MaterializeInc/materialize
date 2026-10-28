@@ -22,7 +22,7 @@ import sys
 import tempfile
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlparse
 
 import psutil
@@ -422,11 +422,12 @@ def main() -> int:
         # generally unexpected and we don't want to inadvertently hide them
         # during local development.)
         while True:
-            last_start_time = datetime.now()
+            last_start_time = datetime.now(UTC)
             proc = subprocess.run(command, env=env)
-            if proc.returncode == 166:
+            # 166: `halt!`, 75: `restart_in_place!`.
+            if proc.returncode in (166, 75):
                 wait = max(
-                    timedelta(seconds=5) - (datetime.now() - last_start_time),
+                    timedelta(seconds=5) - (datetime.now(UTC) - last_start_time),
                     timedelta(seconds=0),
                 )
                 print(f"environmentd halted; will restart in {wait.total_seconds()}s")
@@ -480,15 +481,15 @@ def _cargo_build(
     programs = [*REQUIRED_SERVICES, *extra_programs]
     for program in programs:
         command += ["--bin", program]
-    completed_proc = spawn.runv(
-        command,
-        env=env,
-        cwd=pathlib.Path(
-            os.path.abspath(os.path.join(os.path.realpath(sys.argv[0]), "../.."))
-        ),
+    cwd = pathlib.Path(
+        os.path.abspath(os.path.join(os.path.realpath(sys.argv[0]), "../.."))
     )
+    completed_proc = spawn.runv(command, env=env, cwd=cwd)
 
-    artifacts = [str(_cargo_artifact_path(args, program)) for program in programs]
+    target_dir = _cargo_target_dir(env, cwd)
+    artifacts = [
+        str(_cargo_artifact_path(args, target_dir, program)) for program in programs
+    ]
 
     return (completed_proc.returncode, artifacts)
 
@@ -514,12 +515,23 @@ def _cargo_command(args: argparse.Namespace, *subcommands: str) -> list[str]:
     return command
 
 
-def _cargo_artifact_path(args: argparse.Namespace, program: str) -> pathlib.Path:
+def _cargo_target_dir(env: dict[str, str], cwd: pathlib.Path) -> pathlib.Path:
+    """Returns the directory cargo builds into, honoring `CARGO_TARGET_DIR` and
+    a configured `build.target-dir`."""
+    metadata = spawn.capture(
+        ["cargo", "metadata", "--format-version=1", "--no-deps"], env=env, cwd=cwd
+    )
+    return pathlib.Path(json.loads(metadata)["target_directory"])
+
+
+def _cargo_artifact_path(
+    args: argparse.Namespace, target_dir: pathlib.Path, program: str
+) -> pathlib.Path:
     dir_name = "release" if args.release else "optimized" if args.optimized else "debug"
     if args.sanitizer != "none":
-        artifact_path = MZ_ROOT / "target" / SANITIZER_TARGET / dir_name
+        artifact_path = target_dir / SANITIZER_TARGET / dir_name
     else:
-        artifact_path = MZ_ROOT / "target" / dir_name
+        artifact_path = target_dir / dir_name
 
     return artifact_path / program
 

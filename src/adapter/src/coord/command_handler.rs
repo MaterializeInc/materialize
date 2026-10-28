@@ -22,7 +22,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::SYSTEM_CONN_ID;
@@ -49,6 +48,7 @@ use mz_sql::pure::{
     materialized_view_option_contains_temporal, purify_create_materialized_view_options,
 };
 use mz_sql::rbac;
+use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -66,6 +66,7 @@ use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use crate::client::truncate_sql_for_logging;
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
@@ -80,7 +81,7 @@ use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::{StatementEndedExecutionReason, WatchSetCreation};
-use crate::util::ClientTransmitter;
+use crate::util::{ClientTransmitter, CompletedClientTransmitter};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
@@ -110,11 +111,9 @@ fn role_login_status(role: Option<&Role>) -> RoleLoginStatus {
 }
 
 impl Coordinator {
-    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
-    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    /// Dispatches a command in a size-bounded, heap-allocated future.
     pub(crate) fn handle_command(&mut self, mut cmd: Command) -> LocalBoxFuture<'_, ()> {
-        async move {
+        let future = async move {
             if let Some(session) = cmd.session_mut() {
                 session.apply_external_metadata_updates();
             }
@@ -193,8 +192,7 @@ impl Coordinator {
                 } => {
                     let tx = ClientTransmitter::new(tx, self.internal_cmd_tx.clone());
 
-                    self.handle_execute(portal_name, session, tx, outer_ctx_extra)
-                        .await;
+                    Box::pin(self.handle_execute(portal_name, session, tx, outer_ctx_extra)).await;
                 }
 
                 Command::StartCopyFromStdin {
@@ -662,8 +660,8 @@ impl Coordinator {
                 }
             }
         }
-        .instrument(debug_span!("handle_command"))
-        .boxed_local()
+        .instrument(debug_span!("handle_command"));
+        crate::coord::box_dispatcher(future)
     }
 
     fn handle_role_can_login(
@@ -948,7 +946,6 @@ impl Coordinator {
                     statement_logging_frontend,
                     superuser_attribute,
                     occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
-                    frontend_read_then_write_enabled: self.frontend_read_then_write_enabled,
                     group_commit_notifier: self.group_commit_tx.clone(),
                     read_only: self.controller.read_only(),
                 });
@@ -1264,11 +1261,20 @@ impl Coordinator {
             }
             _ => {}
         }
+        let application_name = ApplicationNameHint::from_str(ctx.session().application_name());
+        if let Some(labels) =
+            metrics::as_of_query_label_values(session_type, application_name, &stmt)
+        {
+            self.metrics.as_of_queries.with_label_values(&labels).inc();
+        }
 
         self.handle_execute_inner(stmt, params, ctx).await
     }
 
-    #[instrument(name = "coord::handle_execute_inner", fields(stmt = stmt.to_ast_string_redacted()))]
+    #[instrument(
+        name = "coord::handle_execute_inner",
+        fields(stmt = truncate_sql_for_logging(stmt.to_ast_string_redacted())),
+    )]
     pub(crate) async fn handle_execute_inner(
         &mut self,
         stmt: Arc<Statement<Raw>>,
@@ -1991,6 +1997,8 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         let mut maybe_ctx = None;
+        // A COMMIT waiting for group commit or for its read to be linearized.
+        let mut maybe_commit_ctx = None;
 
         // Cancel all pending writes for this connection:
         // - At most one session-bound write (`UserWriteResponder::Session`),
@@ -2018,7 +2026,7 @@ impl Coordinator {
                     responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
                     ..
                 } => {
-                    maybe_ctx = Some(ctx);
+                    maybe_commit_ctx = Some(ctx);
                 }
                 PendingWriteTxn::User {
                     responder: UserWriteResponder::Internal { result, .. },
@@ -2030,9 +2038,9 @@ impl Coordinator {
             }
         }
 
-        // Cancel deferred writes.
-        if let Some(write_op) = self.deferred_write_ops.remove(&conn_id) {
-            maybe_ctx = Some(write_op.into_ctx());
+        // Cancel plans waiting for session-startup appends.
+        if let Some(plan) = self.deferred_plans.remove(&conn_id) {
+            maybe_ctx = Some(plan.ctx);
         }
 
         // Cancel deferred statements.
@@ -2051,10 +2059,24 @@ impl Coordinator {
         // Cancel reads waiting on being linearized. There is at most one linearized read per
         // session.
         if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
-            let ctx = pending_read_txn.take_context();
-            maybe_ctx = Some(ctx);
+            maybe_commit_ctx = Some(pending_read_txn.take_context());
         }
 
+        if let Some(ctx) = maybe_commit_ctx {
+            // The COMMIT already cleared the session's transaction status, so the transaction's
+            // `SET LOCAL` and staged variable values are the only transaction state left. Without
+            // ending them here they apply to the session's next transaction.
+            //
+            // NOTE: The error response cannot carry the changed parameters, so a reverted
+            // parameter in the notify set is not announced to the client.
+            let (ctx, result) = CompletedClientTransmitter::new(
+                ctx,
+                Err(AdapterError::Canceled),
+                EndTransactionAction::Rollback,
+            )
+            .finalize();
+            ctx.retire(result);
+        }
         if let Some(ctx) = maybe_ctx {
             ctx.retire(Err(AdapterError::Canceled));
         }
@@ -2081,13 +2103,10 @@ impl Coordinator {
     /// may be sent for it.
     #[mz_ore::instrument(level = "debug")]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
-        // If the session doesn't exist in `active_conns`, then this method will panic later on.
-        // Instead we explicitly panic here while dumping the entire Coord to the logs to help
-        // debug. This panic is very infrequent so we want as much information as possible.
-        // See https://github.com/MaterializeInc/database-issues/issues/5627.
+        // Checked up front so that an unknown connection panics before the cleanup below runs.
         assert!(
             self.active_conns.contains_key(&conn_id),
-            "unknown connection: {conn_id:?}\n\n{self:?}"
+            "unknown connection: {conn_id:?}"
         );
 
         // We do not need to call clear_transaction here because there are no side effects to run
@@ -2271,7 +2290,7 @@ impl Coordinator {
         if let Some(ws) = watch_set {
             if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
                 let _ = tx.send(Err(
-                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e),
+                    AdapterError::concurrent_dependency_drop_from_compute_lookup_error(e),
                 ));
                 return;
             }

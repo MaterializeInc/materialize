@@ -317,6 +317,9 @@ RUN arch_gcloud=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm/" -e "s/amd64/x86_64/
 # Install docs site dependencies. These are towards the end for the same reason
 # as the Python dependencies. These are only supported on x86_64 at the moment.
 # See: https://discourse.gohugo.io/t/how-to-install-hugo-extended-on-linux-arm/28098/4
+#
+# On every Hugo version bump, compare doc/user/layouts/sitemap.xml with the new
+# version's built-in sitemap template, which it copies, and port any changes.
 
 RUN if [ $ARCH_GCC = x86_64 ]; then \
     curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.17.0/htmltest_0.17.0_linux_amd64.tar.gz > htmltest.tar.gz \
@@ -389,12 +392,26 @@ RUN curl -fsSL https://amazon-inspector-sbomgen.s3.amazonaws.com/1.8.2/linux/$AR
     && rm -rf inspector-sbomgen.zip inspector-sbomgen-1.8.2
 
 RUN arch_zizmor=$(echo "$ARCH_GCC" | sed -e "s/amd64/x86_64/") \
-    && curl -fsSL https://github.com/zizmorcore/zizmor/releases/download/v1.18.0/zizmor-$arch_zizmor-unknown-linux-gnu.tar.gz > zizmor.tar.gz \
-    && if [ $arch_zizmor = x86_64 ]; then echo '8e7901319ab7b71c38d6d388a48e02ff65791e5971b2ee6577c9b5c3ab44c65f zizmor.tar.gz' | sha256sum --check; fi \
-    && if [ $arch_zizmor = aarch64 ]; then echo '4cd5d20dc43398ee229d65cd32a68725d396fe2b423030fb6a9971100ce54da5 zizmor.tar.gz' | sha256sum --check; fi \
+    && curl -fsSL https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-$arch_zizmor-unknown-linux-gnu.tar.gz > zizmor.tar.gz \
+    && if [ $arch_zizmor = x86_64 ]; then echo 'e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a zizmor.tar.gz' | sha256sum --check; fi \
+    && if [ $arch_zizmor = aarch64 ]; then echo '7ff1dce33bdd18fd2a4affe63bdd47efcccca97b2cec1c1863ec26e9e2647540 zizmor.tar.gz' | sha256sum --check; fi \
     && tar xvf zizmor.tar.gz \
     && mv zizmor /usr/local/bin \
     && rm zizmor.tar.gz
+
+# Install a pinned libduckdb for libduckdb-sys to link against via
+# `DUCKDB_LIB_DIR`, so builds don't download it. The testdrive image copies it
+# from here (`builder-files` in src/testdrive/ci/mzbuild.yml). The version must
+# match the libduckdb-sys crate (1.MAJOR_MINOR_PATCH.x encodes DuckDB
+# MAJOR.MINOR.PATCH), which bin/lint-versions checks. ldconfig makes it
+# loadable by test binaries, since Cargo only adds library paths inside the
+# target dir to their search path.
+RUN curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.5.6/libduckdb-linux-$ARCH_GO.zip > libduckdb.zip \
+    && if [ $ARCH_GO = amd64 ]; then echo 'b845005f5132a7d8180057c35e14a7626632258782f871a90861b19c1c03841b libduckdb.zip' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'b72ed9f05003f5e9d2015f7ceada6416b377d9dd33169cdde3c9e33897856eee libduckdb.zip' | sha256sum --check; fi \
+    && unzip libduckdb.zip libduckdb.so -d /usr/local/lib \
+    && ldconfig \
+    && rm libduckdb.zip
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
@@ -406,6 +423,7 @@ ENV PATH=/opt/google-cloud-sdk/bin:$PATH
 ENV CARGO_TARGET_DIR=/mnt/build
 ENV CARGO_INCREMENTAL=1
 ENV HELM_PLUGINS=/usr/local/share/helm/plugins
+ENV DUCKDB_LIB_DIR=/usr/local/lib
 
 # Set up for a persistent volume to hold Cargo metadata, so that crate metadata
 # does not need to be refetched on every compilation.

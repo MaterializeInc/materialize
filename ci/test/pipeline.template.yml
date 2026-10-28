@@ -668,6 +668,20 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: lean
+    label: Lean models
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [misc/lean, misc/images/lean]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: lean
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    coverage: skip
+    sanitizer: skip
+    ci_glue_exempt: true
+
   - id: mcp
     label: MCP e2e
     depends_on: build-aarch64
@@ -750,6 +764,24 @@ steps:
         artifact_paths: console/log/**/*
         agents:
           queue: hetzner-aarch64-8cpu-16gb
+        coverage: skip
+        sanitizer: skip
+
+      - id: console-nginx-metrics
+        topics: [kafka, mysql, postgres, sql-server]
+        label: "Console nginx metrics"
+        depends_on: build-aarch64
+        timeout_in_minutes: 15
+        inputs:
+          - console/Dockerfile
+          - console/misc/docker/**
+          - test/console/**
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: console
+              run: nginx-metrics
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
 

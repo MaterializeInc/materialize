@@ -29,7 +29,7 @@ _shtab_scratch_list___output_format_choices=(table csv)
 _shtab_scratch_ls___output_format_choices=(table csv)
 _shtab_scratch_destroy___output_format_choices=(table csv)
 _shtab_scratch_rm___output_format_choices=(table csv)
-_shtab_scratch_completion_pos_0_choices=(bash zsh tcsh fish)
+_shtab_scratch_completion_pos_0_choices=(bash zsh tcsh fish powershell)
 _shtab_scratch_pos_0_choices=(login create list ls ssh sftp destroy rm push completion forward go claude)
 
 _shtab_scratch_login__h_nargs=0
@@ -219,7 +219,12 @@ _shtab_scratch() {
       compgen -W "${current_action_choices[*]}" -- "$completing_word")
   fi
 
+  if [[ ${#COMPREPLY[@]} = 0 ]]; then
+    # native fallback matches are not necessarily filenames (e.g. variables)
+    compopt +o filenames 2>/dev/null || : # bash>=4
+  fi
+
   return 0
 }
 
-complete -F _shtab_scratch scratch
+complete -o bashdefault -F _shtab_scratch scratch

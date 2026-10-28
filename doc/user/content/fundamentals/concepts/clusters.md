@@ -106,8 +106,8 @@ See also [Hydration considerations](#hydration-considerations).
 
 ## Lifecycle of a cluster
 
-A cluster's replicas move through a sequence of stages, provisioning, hydrating,
-catching up, then steady state, before results are fully up to date. See
+A cluster's replicas move through a sequence of stages (provisioning, hydrating,
+catching up, and steady state) before results are fully up to date. See
 [Understand the lifecycle of a
 cluster](/clusters/lifecycle-of-a-cluster/) for the stages and how to monitor
 each one.

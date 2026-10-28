@@ -1,4 +1,5 @@
 ---
+draft: true
 title: mz config
 description: The `mz config` command manages global configuration parameters for `mz`.
 menu:

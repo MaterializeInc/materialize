@@ -68,6 +68,31 @@ ws-text
 {"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
 {"type":"ReadyForQuery","payload":"I"}
 
+# The implicit commit reverts a SET LOCAL, and the restored value is reported with the
+# statement that ends the transaction, also when that statement returns rows.
+
+ws-text
+{"queries": [{"query": "SET LOCAL application_name = 'reverted'"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"reverted"}}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "SET LOCAL application_name = 'reverted'; SELECT 1"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"reverted"}}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
+{"type":"ReadyForQuery","payload":"I"}
+
 ws-text
 {"query": ""}
 ----
@@ -415,6 +440,124 @@ ws-text fixid=true
 {"type":"Notice","payload":{"message":"{\n  \"plans\": {\n    \"raw\": {\n      \"text\": \"Finish limit=1 output=[#0]\\n  Project (#15)\\n    Map ((1 / 0))\\n      Get mz_catalog.mz_sources\\n\\nTarget cluster: mz_catalog_server\\n\",\n      \"json\": {\n        \"Project\": {\n          \"input\": {\n            \"Map\": {\n              \"input\": {\n                \"Get\": {\n                  \"id\": {\n                    \"Global\": {\n                      <ID>\n                    }\n                  },\n                  \"typ\": {\n                    \"column_types\": [\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": false\n                      },\n                      {\n                        \"scalar_type\": \"Oid\",\n                        \"nullable\": false\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": false\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": false\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": false\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": true\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": true\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": true\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": true\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": true\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": true\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": false\n                      },\n                      {\n                        \"scalar_type\": {\n                          \"Array\": \"MzAclItem\"\n                        },\n                        \"nullable\": false\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": true\n                      },\n                      {\n                        \"scalar_type\": \"String\",\n                        \"nullable\": true\n                      }\n                    ],\n                    \"keys\": [\n                      [\n                        0\n                      ],\n                      [\n                        1\n                      ]\n                    ]\n                  }\n                }\n              },\n              \"scalars\": [\n                {\n                  \"CallBinary\": {\n                    \"func\": {\n                      \"DivInt32\": null\n                    },\n                    \"expr1\": {\n                      \"Literal\": [\n                        {\n                          \"data\": [\n                            41,\n                            1\n                          ]\n                        },\n                        {\n                          \"scalar_type\": \"Int32\",\n                          \"nullable\": false\n                        },\n                        null\n                      ]\n                    },\n                    \"expr2\": {\n                      \"Literal\": [\n                        {\n                          \"data\": [\n                            39\n                          ]\n                        },\n                        {\n                          \"scalar_type\": \"Int32\",\n                          \"nullable\": false\n                        },\n                        null\n                      ]\n                    },\n                    \"name\": null\n                  }\n                }\n              ]\n            }\n          },\n          \"outputs\": [\n            15\n          ]\n        }\n      }\n    },\n    \"optimized\": {\n      \"global\": {\n        \"text\": \"<ID>:\\n  Finish limit=1 output=[#0]\\n    ArrangeBy keys=[[#0]]\\n      ReadGlobalFromSameDataflow <ID>\\n\\n<ID>:\\n  Project (#15)\\n    Map (error(\\\"division by zero\\\"))\\n      ReadIndex on=mz_sources mz_sources_ind=[*** full scan ***]\\n\\nTarget cluster: mz_catalog_server\\n\",\n        \"json\": {\n          \"plans\": [\n            {\n              \"id\": \"<ID>\",\n              \"plan\": {\n                \"ArrangeBy\": {\n                  \"input\": {\n                    \"Get\": {\n                      \"id\": {\n                        \"Global\": {\n                          <ID>\n                        }\n                      },\n                      \"typ\": {\n                        \"column_types\": [\n                          {\n                            \"scalar_type\": \"Int32\",\n                            \"nullable\": false\n                          }\n                        ],\n                        \"keys\": []\n                      },\n                      \"access_strategy\": \"SameDataflow\"\n                    }\n                  },\n                  \"keys\": [\n                    [\n                      {\n                        \"Column\": [\n                          0,\n                          null\n                        ]\n                      }\n                    ]\n                  ]\n                }\n              }\n            },\n            {\n              \"id\": \"<ID>\",\n              \"plan\": {\n                \"Project\": {\n                  \"input\": {\n                    \"Map\": {\n                      \"input\": {\n                        \"Get\": {\n                          \"id\": {\n                            \"Global\": {\n                              <ID>\n                            }\n                          },\n                          \"typ\": {\n                            \"column_types\": [\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": false\n                              },\n                              {\n                                \"scalar_type\": \"UInt32\",\n                                \"nullable\": false\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": false\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": false\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": false\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": true\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": true\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": true\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": true\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": true\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": true\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": false\n                              },\n                              {\n                                \"scalar_type\": {\n                                  \"Array\": \"MzAclItem\"\n                                },\n                                \"nullable\": false\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": true\n                              },\n                              {\n                                \"scalar_type\": \"String\",\n                                \"nullable\": true\n                              }\n                            ],\n                            \"keys\": [\n                              [\n                                0\n                              ],\n                              [\n                                1\n                              ]\n                            ]\n                          },\n                          \"access_strategy\": {\n                            \"Index\": [\n                              [\n                                {\n                                  <ID>\n                                },\n                                \"FullScan\"\n                              ]\n                            ]\n                          }\n                        }\n                      },\n                      \"scalars\": [\n                        {\n                          \"Literal\": [\n                            {\n                              \"Err\": \"DivisionByZero\"\n                            },\n                            {\n                              \"scalar_type\": \"Int32\",\n                              \"nullable\": false\n                            }\n                          ]\n                        }\n                      ]\n                    }\n                  },\n                  \"outputs\": [\n                    15\n                  ]\n                }\n              }\n            }\n          ],\n          \"sources\": []\n        }\n      },\n      \"fast_path\": {\n        \"text\": \"Explained Query (fast path):\\n  Finish limit=1 output=[#0]\\n    →Map/Filter/Project\\n      Project: #15\\n      Map: error(\\\"division by zero\\\")\\n        →Indexed mz_catalog.mz_sources (using mz_catalog.mz_sources_ind)\\n\\nTarget cluster: mz_catalog_server\\n\",\n        \"json\": {\n          \"plans\": [\n            {\n              \"id\": \"Explained Query (fast path)\",\n              \"plan\": {\n                \"PeekExisting\": [\n                  {\n                    <ID>\n                  },\n                  {\n                    <ID>\n                  },\n                  null,\n                  {\n                    \"mfp\": {\n                      \"expressions\": [\n                        {\n                          \"Literal\": [\n                            {\n                              \"Err\": \"DivisionByZero\"\n                            },\n                            {\n                              \"scalar_type\": \"Int32\",\n                              \"nullable\": false\n                            }\n                          ]\n                        }\n                      ],\n                      \"predicates\": [],\n                      \"projection\": [\n                        15\n                      ],\n                      \"input_arity\": 15\n                    }\n                  }\n                ]\n              }\n            }\n          ],\n          \"sources\": []\n        }\n      }\n    }\n  },\n  \"insights\": {\n    \"imports\": {\n      \"<ID>\": {\n        \"name\": {\n          \"schema\": \"mz_catalog\",\n          \"item\": \"mz_sources_ind\"\n        },\n        \"type\": \"compute\"\n      }\n    },\n    \"fast_path_clusters\": {},\n    \"fast_path_limit\": null,\n    \"persist_count\": []\n  },\n  \"cluster\": {\n    \"name\": \"mz_catalog_server\",\n    \"id\": {\n      <ID>\n    }\n  },\n  \"redacted_sql\": \"SELECT '<REDACTED>' / '<REDACTED>' FROM [<ID> AS mz_catalog.mz_sources] LIMIT '<REDACTED>'\"\n}","code":"MZ001","severity":"notice"}}
 {"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
 {"type":"Error","payload":{"message":"Evaluation error: division by zero","code":"22012"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Execution time notices (emit_execution_time_notice) precede the CommandComplete of
+# the statement they describe. Plan insights are turned off so that only the timing
+# notices show.
+
+ws-text fixtiming=true
+{"queries": [{"query": "SET emit_plan_insights_notice = off"}, {"query": "SET emit_execution_time_notice = on"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Non-row statements report completed at result readiness, excluding implicit commit,
+# and a write that leaves its rows to that commit reports staged.
+
+ws-text fixtiming=true
+{"queries": [{"query": "CREATE TABLE timing_t (a int)"}, {"query": "INSERT INTO timing_t VALUES (1)"}, {"query": "SELECT a FROM timing_t"}, {"query": "SELECT a FROM timing_t WHERE a < 0"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"CREATE TABLE"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"INSERT 0 1"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SELECT 0"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Inside an explicit transaction, COMMIT includes its commit work.
+
+ws-text fixtiming=true
+{"queries": [{"query": "BEGIN"}, {"query": "INSERT INTO timing_t VALUES (2)"}, {"query": "COMMIT"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"BEGIN"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"INSERT 0 1"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"COMMIT"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text fixtiming=true
+{"queries": [{"query": "SET client_min_messages = warning"}, {"query": "SELECT 1"}, {"query": "SET client_min_messages = notice"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# RETURNING uses the same first-row boundary as SELECT.
+
+ws-text fixtiming=true
+{"queries": [{"query": "INSERT INTO timing_t VALUES (3) RETURNING a"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["3"]}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Each statement in a simple request reports its own result-ready boundary. The statements
+# after the write report staged too, because their transaction still holds it.
+
+ws-text fixtiming=true
+{"query": "INSERT INTO timing_t VALUES (4); SET application_name = 'timing2'; SELECT 1"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"INSERT 0 1"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"timing2"}}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# A failed statement emits no execution time notice.
+ws-text fixtiming=true
+{"query": "SELECT 1 / 0 FROM mz_sources LIMIT 1"}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Error","payload":{"message":"Evaluation error: division by zero","code":"22012"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text fixtiming=true
+{"queries": [{"query": "SET emit_execution_time_notice = off"}, {"query": "SELECT 1"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
 {"type":"ReadyForQuery","payload":"I"}
 
 ws-text rows=2 fixtimestamp=true

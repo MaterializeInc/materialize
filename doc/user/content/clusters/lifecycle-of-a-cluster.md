@@ -282,15 +282,17 @@ The index trails its direct input, the materialized view, and the view trails
 the `bids` source, which is the root input for both.
 
 {{< note >}}
+
 These lags are measured against inputs, not against wallclock time. When a
 whole cluster stalls, the objects on it stall together and this query keeps
 reporting `00:00:00`. Use it to find *which* input a lagging object is waiting
 on, and wallclock lag to decide whether the object is lagging at all.
+
 {{< /note >}}
 
-See [Troubleshooting freshness](/transform-data/freshness-troubleshooting/) to
+See [Troubleshooting freshness](/transform-data/freshness/troubleshoot-freshness/) to
 diagnose a cluster that is not progressing, and [Monitor
-freshness](/transform-data/monitor-freshness/) to track lag over time.
+freshness](/transform-data/freshness/monitor-freshness/) to track lag over time.
 
 ## Offline replicas
 
@@ -328,16 +330,18 @@ Reading the history:
 - A repeating `offline` with reason `oom-killed` is a crash loop: the replica
   is too small for its workload, and each restart triggers a rehydration that
   exhausts memory again. See [Check for OOM crash
-  loops](/transform-data/freshness-troubleshooting/#check-for-oom-crash-loops).
+  loops](/transform-data/freshness/troubleshoot-freshness/#check-for-oom-crash-loops).
 - `reason` is best-effort and is sometimes empty even for an out-of-memory
   kill, so treat repeated restarts as the signal rather than the reason string.
 
 {{< note >}}
+
 Sources on the cluster go through an additional
 [snapshotting](/fundamentals/concepts/snapshotting/) step the first time they
 run, reading the initial state of the upstream system before the stages above
 apply. See [Understand the lifecycle of a
 source](/ingest-data/lifecycle-of-a-source/).
+
 {{< /note >}}
 
 ## Related pages
@@ -345,5 +349,5 @@ source](/ingest-data/lifecycle-of-a-source/).
 - [Clusters](/fundamentals/concepts/clusters/)
 - [Hydration](/fundamentals/concepts/hydration/)
 - [Autoscaling](/clusters/autoscaling/)
-- [Troubleshooting freshness](/transform-data/freshness-troubleshooting/)
+- [Troubleshooting freshness](/transform-data/freshness/troubleshoot-freshness/)
 - [Understand the lifecycle of a source](/ingest-data/lifecycle-of-a-source/)

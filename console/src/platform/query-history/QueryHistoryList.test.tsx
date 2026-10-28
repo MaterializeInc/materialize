@@ -308,6 +308,36 @@ describe("QueryHistoryList", () => {
     expect(screen.queryByText("Cluster 1")).toBeNull();
   });
 
+  it("Should show an error when the duration lower bound exceeds the upper bound", async () => {
+    const user = userEvent.setup();
+
+    await renderComponent(
+      <QueryHistoryList
+        initialFilters={PARSED_DEFAULT_SCHEMA_VALUES}
+        initialColumns={DEFAULT_COLUMNS}
+      />,
+      {
+        initializeState: ({ set }) =>
+          setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
+      },
+    );
+
+    await user.click(await screen.findByLabelText("Filter menu"));
+    await waitFor(() => expect(screen.getByText("Filters")).toBeVisible());
+    await user.click(screen.getByLabelText("Duration (ms)"));
+    await user.type(screen.getByPlaceholderText("10"), "10");
+    await user.type(screen.getByPlaceholderText("1000"), "5");
+    await user.click(screen.getByText("Apply filters"));
+
+    // jsdom never reports the accordion panel as visible, so check that the
+    // message renders instead.
+    expect(
+      await screen.findByText(
+        "The lower bound must be less than or equal to the upper bound.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("Should show an unauthorized state when a user lacks privileges", async () => {
     server.use(
       buildMockPrivilegesQueryHandler({

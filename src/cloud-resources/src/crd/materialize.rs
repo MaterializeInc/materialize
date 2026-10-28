@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use k8s_openapi::{
-    api::core::v1::{EnvVar, ResourceRequirements},
+    api::core::v1::{EnvVar, Probe, ResourceRequirements},
     apimachinery::pkg::{
         api::resource::Quantity,
         apis::meta::v1::{Condition, Time},
@@ -166,12 +166,47 @@ pub mod v1alpha1 {
         pub environmentd_resource_requirements: Option<ResourceRequirements>,
         /// Amount of disk to allocate, if a storage class is provided.
         pub environmentd_scratch_volume_storage_requirement: Option<Quantity>,
+        /// Readiness probe for the environmentd container.
+        ///
+        /// Fields set here are overlaid onto the operator's default probe, so only the fields
+        /// being changed need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
+        /// is set, the default TCP check against environmentd's SQL port is kept.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub environmentd_readiness_probe: Option<Probe>,
+        /// Liveness probe for the environmentd container.
+        ///
+        /// Fields set here are overlaid onto the operator's default probe, so only the fields
+        /// being changed need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
+        /// is set, the default TCP check against environmentd's SQL port is kept.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub environmentd_liveness_probe: Option<Probe>,
+        /// Startup probe for the environmentd container. Liveness and readiness checks are held
+        /// off until it succeeds, so it can allow a long startup without loosening the liveness
+        /// probe.
+        ///
+        /// No startup probe runs unless this field or the operator's default sets one. Fields set
+        /// here are overlaid onto the operator's default probe, so only the fields being changed
+        /// need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`) is set, the
+        /// default TCP check against environmentd's SQL port is used.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub environmentd_startup_probe: Option<Probe>,
         /// Resource requirements for the balancerd pod.
         pub balancerd_resource_requirements: Option<ResourceRequirements>,
+        /// The name of an externally managed ConfigMap in this namespace containing
+        /// balancerd dynamic configuration as a JSON object in `config.json`.
+        /// Changes to its contents are applied at runtime. Changing this reference
+        /// restarts balancerd pods but does not trigger an environmentd rollout.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub balancerd_configmap_name: Option<String>,
         /// Resource requirements for the console pod.
         pub console_resource_requirements: Option<ResourceRequirements>,
         /// Number of balancerd pods to create.
         pub balancerd_replicas: Option<i32>,
+        /// Leave the balancerd Deployment's replica count to an external
+        /// autoscaler, such as a HorizontalPodAutoscaler. `balancerd_replicas`
+        /// then only seeds the count when the Deployment is first created.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub balancerd_externally_scaled: Option<bool>,
         /// Number of console pods to create.
         pub console_replicas: Option<i32>,
 
@@ -858,9 +893,14 @@ pub mod v1alpha1 {
                     environmentd_scratch_volume_storage_requirement: value
                         .spec
                         .environmentd_scratch_volume_storage_requirement,
+                    environmentd_readiness_probe: value.spec.environmentd_readiness_probe,
+                    environmentd_liveness_probe: value.spec.environmentd_liveness_probe,
+                    environmentd_startup_probe: value.spec.environmentd_startup_probe,
                     balancerd_resource_requirements: value.spec.balancerd_resource_requirements,
+                    balancerd_configmap_name: value.spec.balancerd_configmap_name,
                     console_resource_requirements: value.spec.console_resource_requirements,
                     balancerd_replicas: value.spec.balancerd_replicas,
+                    balancerd_externally_scaled: value.spec.balancerd_externally_scaled,
                     console_replicas: value.spec.console_replicas,
                     service_account_name: value.spec.service_account_name,
                     service_account_annotations: value.spec.service_account_annotations,
@@ -963,7 +1003,31 @@ pub mod v1alpha1 {
             with = "double_option",
             skip_serializing_if = "Option::is_none"
         )]
+        pub environmentd_readiness_probe: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_liveness_probe: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_startup_probe: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
         pub balancerd_resource_requirements: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_configmap_name: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -976,6 +1040,12 @@ pub mod v1alpha1 {
             skip_serializing_if = "Option::is_none"
         )]
         pub balancerd_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_externally_scaled: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -1154,15 +1224,15 @@ pub mod v1alpha1 {
     #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct PartialMaterialize {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub api_version: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub kind: Option<serde_json::Value>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub metadata: Option<serde_json::Value>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub spec: Option<PartialMaterializeSpec>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub status: Option<PartialMaterializeStatus>,
         #[serde(flatten)]
         pub extra: serde_json::Map<String, serde_json::Value>,
@@ -1178,9 +1248,14 @@ pub mod v1alpha1 {
                 environmentd_connection_role_arn,
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
+                environmentd_readiness_probe,
+                environmentd_liveness_probe,
+                environmentd_startup_probe,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -1212,9 +1287,14 @@ pub mod v1alpha1 {
                 environmentd_scratch_volume_storage_requirement: present_opt(
                     environmentd_scratch_volume_storage_requirement,
                 ),
+                environmentd_readiness_probe: present_opt(environmentd_readiness_probe),
+                environmentd_liveness_probe: present_opt(environmentd_liveness_probe),
+                environmentd_startup_probe: present_opt(environmentd_startup_probe),
                 balancerd_resource_requirements: present_opt(balancerd_resource_requirements),
+                balancerd_configmap_name: present_opt(balancerd_configmap_name),
                 console_resource_requirements: present_opt(console_resource_requirements),
                 balancerd_replicas: present_opt(balancerd_replicas),
+                balancerd_externally_scaled: present_opt(balancerd_externally_scaled),
                 console_replicas: present_opt(console_replicas),
                 service_account_name: present_opt(service_account_name),
                 service_account_annotations: present_opt(service_account_annotations),
@@ -1297,9 +1377,14 @@ pub mod v1alpha1 {
                 environmentd_connection_role_arn,
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
+                environmentd_readiness_probe,
+                environmentd_liveness_probe,
+                environmentd_startup_probe,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -1328,9 +1413,14 @@ pub mod v1alpha1 {
                 environmentd_connection_role_arn,
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
+                environmentd_readiness_probe,
+                environmentd_liveness_probe,
+                environmentd_startup_probe,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -1451,10 +1541,40 @@ pub mod v1 {
         pub environmentd_resource_requirements: Option<ResourceRequirements>,
         /// Amount of disk to allocate, if a storage class is provided.
         pub environmentd_scratch_volume_storage_requirement: Option<Quantity>,
+        /// Readiness probe for the environmentd container.
+        ///
+        /// Fields set here are overlaid onto the operator's default probe, so only the fields
+        /// being changed need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
+        /// is set, the default TCP check against environmentd's SQL port is kept.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub environmentd_readiness_probe: Option<Probe>,
+        /// Liveness probe for the environmentd container.
+        ///
+        /// Fields set here are overlaid onto the operator's default probe, so only the fields
+        /// being changed need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
+        /// is set, the default TCP check against environmentd's SQL port is kept.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub environmentd_liveness_probe: Option<Probe>,
+        /// Startup probe for the environmentd container. Liveness and readiness checks are held
+        /// off until it succeeds, so it can allow a long startup without loosening the liveness
+        /// probe.
+        ///
+        /// No startup probe runs unless this field or the operator's default sets one. Fields set
+        /// here are overlaid onto the operator's default probe, so only the fields being changed
+        /// need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`) is set, the
+        /// default TCP check against environmentd's SQL port is used.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub environmentd_startup_probe: Option<Probe>,
         /// Resource requirements for the balancerd pod.
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
         pub balancerd_resource_requirements: Option<ResourceRequirements>,
+        /// The name of an externally managed ConfigMap in this namespace containing
+        /// balancerd dynamic configuration as a JSON object in `config.json`.
+        /// Changes to its contents are applied at runtime. Changing this reference
+        /// restarts balancerd pods but does not trigger an environmentd rollout.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub balancerd_configmap_name: Option<String>,
         /// Resource requirements for the console pod.
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
@@ -1463,6 +1583,13 @@ pub mod v1 {
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
         pub balancerd_replicas: Option<i32>,
+        /// Leave the balancerd Deployment's replica count to an external
+        /// autoscaler, such as a HorizontalPodAutoscaler. `balancerd_replicas`
+        /// then only seeds the count when the Deployment is first created.
+        ///
+        /// This field is excluded from the rollout hash and changes will not trigger a rollout.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub balancerd_externally_scaled: Option<bool>,
         /// Number of console pods to create.
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
@@ -1599,9 +1726,14 @@ pub mod v1 {
                     .spec
                     .environmentd_scratch_volume_storage_requirement
                     .clone(),
+                environmentd_readiness_probe: self.spec.environmentd_readiness_probe.clone(),
+                environmentd_liveness_probe: self.spec.environmentd_liveness_probe.clone(),
+                environmentd_startup_probe: self.spec.environmentd_startup_probe.clone(),
                 balancerd_resource_requirements: None,
+                balancerd_configmap_name: None,
                 console_resource_requirements: None,
                 balancerd_replicas: None,
+                balancerd_externally_scaled: None,
                 console_replicas: None,
                 service_account_name: self.spec.service_account_name.clone(),
                 service_account_annotations: self.spec.service_account_annotations.clone(),
@@ -1630,7 +1762,7 @@ pub mod v1 {
             {
                 hasher.update(annotation);
             }
-            format!("{:x}", hasher.finalize())
+            hex::encode(hasher.finalize())
         }
 
         pub fn backend_secret_name(&self) -> String {
@@ -2075,9 +2207,14 @@ pub mod v1 {
                     environmentd_scratch_volume_storage_requirement: value
                         .spec
                         .environmentd_scratch_volume_storage_requirement,
+                    environmentd_readiness_probe: value.spec.environmentd_readiness_probe,
+                    environmentd_liveness_probe: value.spec.environmentd_liveness_probe,
+                    environmentd_startup_probe: value.spec.environmentd_startup_probe,
                     balancerd_resource_requirements: value.spec.balancerd_resource_requirements,
+                    balancerd_configmap_name: value.spec.balancerd_configmap_name,
                     console_resource_requirements: value.spec.console_resource_requirements,
                     balancerd_replicas: value.spec.balancerd_replicas,
+                    balancerd_externally_scaled: value.spec.balancerd_externally_scaled,
                     console_replicas: value.spec.console_replicas,
                     service_account_name: value.spec.service_account_name,
                     service_account_annotations,
@@ -2203,7 +2340,31 @@ pub mod v1 {
             with = "double_option",
             skip_serializing_if = "Option::is_none"
         )]
+        pub environmentd_readiness_probe: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_liveness_probe: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub environmentd_startup_probe: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
         pub balancerd_resource_requirements: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_configmap_name: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -2216,6 +2377,12 @@ pub mod v1 {
             skip_serializing_if = "Option::is_none"
         )]
         pub balancerd_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_externally_scaled: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -2376,15 +2543,15 @@ pub mod v1 {
     #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct PartialMaterialize {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub api_version: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub kind: Option<serde_json::Value>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub metadata: Option<serde_json::Value>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub spec: Option<PartialMaterializeSpec>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "Option::is_none")]
         pub status: Option<PartialMaterializeStatus>,
         #[serde(flatten)]
         pub extra: serde_json::Map<String, serde_json::Value>,
@@ -2399,9 +2566,14 @@ pub mod v1 {
                 environmentd_connection_role_arn,
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
+                environmentd_readiness_probe,
+                environmentd_liveness_probe,
+                environmentd_startup_probe,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -2430,9 +2602,14 @@ pub mod v1 {
                 environmentd_scratch_volume_storage_requirement: present_opt(
                     environmentd_scratch_volume_storage_requirement,
                 ),
+                environmentd_readiness_probe: present_opt(environmentd_readiness_probe),
+                environmentd_liveness_probe: present_opt(environmentd_liveness_probe),
+                environmentd_startup_probe: present_opt(environmentd_startup_probe),
                 balancerd_resource_requirements: present_opt(balancerd_resource_requirements),
+                balancerd_configmap_name: present_opt(balancerd_configmap_name),
                 console_resource_requirements: present_opt(console_resource_requirements),
                 balancerd_replicas: present_opt(balancerd_replicas),
+                balancerd_externally_scaled: present_opt(balancerd_externally_scaled),
                 console_replicas: present_opt(console_replicas),
                 service_account_name: present_opt(service_account_name),
                 service_account_annotations: present_opt(service_account_annotations),
@@ -2512,9 +2689,14 @@ pub mod v1 {
                 environmentd_connection_role_arn,
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
+                environmentd_readiness_probe,
+                environmentd_liveness_probe,
+                environmentd_startup_probe,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -2554,9 +2736,14 @@ pub mod v1 {
                 environmentd_connection_role_arn,
                 environmentd_resource_requirements,
                 environmentd_scratch_volume_storage_requirement,
+                environmentd_readiness_probe,
+                environmentd_liveness_probe,
+                environmentd_startup_probe,
                 balancerd_resource_requirements,
+                balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -2832,6 +3019,171 @@ mod tests {
         );
         assert_ne!(mz.generate_rollout_hash(), hash);
         assert_ne!(Materialize::from(mz.clone()).force_rollout_value(), force);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn balancerd_configmap_reference_preserves_rollout_hash_and_conversion() {
+        let mut mz = super::v1::Materialize {
+            spec: super::v1::MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+        let hash = mz.generate_rollout_hash();
+        // Omitting the new field also preserves hashes calculated by older operators.
+        assert!(
+            serde_json::to_value(&mz.spec)
+                .unwrap()
+                .get("balancerdConfigmapName")
+                .is_none()
+        );
+        mz.spec.balancerd_configmap_name = Some("balancerd-settings".to_owned());
+        assert_eq!(mz.generate_rollout_hash(), hash);
+        let alpha = Materialize::from(mz.clone());
+        assert_eq!(
+            alpha.spec.balancerd_configmap_name,
+            mz.spec.balancerd_configmap_name
+        );
+        assert_eq!(
+            super::v1::Materialize::from(alpha)
+                .spec
+                .balancerd_configmap_name,
+            mz.spec.balancerd_configmap_name,
+        );
+        for value in [
+            serde_json::json!("balancerd-settings"),
+            serde_json::Value::Null,
+        ] {
+            let subset = serde_json::json!({
+                "apiVersion": "materialize.cloud/v1alpha1",
+                "kind": "Materialize",
+                "metadata": {"name": "mz"},
+                "spec": {"balancerdConfigmapName": value},
+            });
+            let v1 = super::convert_v1alpha1_to_v1(subset.clone()).unwrap();
+            assert_eq!(v1["spec"]["balancerdConfigmapName"], value);
+            let roundtrip = super::convert_v1_to_v1alpha1(v1).unwrap();
+            assert_eq!(roundtrip, subset);
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn balancerd_externally_scaled_preserves_rollout_hash_and_conversion() {
+        let mut mz = super::v1::Materialize {
+            spec: super::v1::MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+        let hash = mz.generate_rollout_hash();
+        // Omitting the new field also preserves hashes calculated by older operators.
+        assert!(
+            serde_json::to_value(&mz.spec)
+                .unwrap()
+                .get("balancerdExternallyScaled")
+                .is_none()
+        );
+        mz.spec.balancerd_externally_scaled = Some(true);
+        assert_eq!(mz.generate_rollout_hash(), hash);
+        let alpha = Materialize::from(mz.clone());
+        assert_eq!(alpha.spec.balancerd_externally_scaled, Some(true));
+        assert_eq!(
+            super::v1::Materialize::from(alpha)
+                .spec
+                .balancerd_externally_scaled,
+            Some(true),
+        );
+        for value in [serde_json::json!(true), serde_json::Value::Null] {
+            let subset = serde_json::json!({
+                "apiVersion": "materialize.cloud/v1alpha1",
+                "kind": "Materialize",
+                "metadata": {"name": "mz"},
+                "spec": {"balancerdExternallyScaled": value},
+            });
+            let v1 = super::convert_v1alpha1_to_v1(subset.clone()).unwrap();
+            assert_eq!(v1["spec"]["balancerdExternallyScaled"], value);
+            let roundtrip = super::convert_v1_to_v1alpha1(v1).unwrap();
+            assert_eq!(roundtrip, subset);
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn environmentd_probes_trigger_rollout_and_survive_conversion() {
+        let mut mz = super::v1::Materialize {
+            spec: super::v1::MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+        let hash = mz.generate_rollout_hash();
+        // Omitting unset probes preserves hashes calculated by older operators.
+        let spec = serde_json::to_value(&mz.spec).unwrap();
+        assert!(spec.get("environmentdReadinessProbe").is_none());
+        assert!(spec.get("environmentdLivenessProbe").is_none());
+        assert!(spec.get("environmentdStartupProbe").is_none());
+
+        let probe = k8s_openapi::api::core::v1::Probe {
+            failure_threshold: Some(60),
+            ..Default::default()
+        };
+        mz.spec.environmentd_readiness_probe = Some(probe.clone());
+        let readiness_hash = mz.generate_rollout_hash();
+        assert_ne!(readiness_hash, hash);
+        mz.spec.environmentd_liveness_probe = Some(probe.clone());
+        let liveness_hash = mz.generate_rollout_hash();
+        assert_ne!(liveness_hash, readiness_hash);
+        mz.spec.environmentd_startup_probe = Some(probe);
+        assert_ne!(mz.generate_rollout_hash(), liveness_hash);
+
+        let alpha = Materialize::from(mz.clone());
+        assert_eq!(
+            alpha.spec.environmentd_readiness_probe,
+            mz.spec.environmentd_readiness_probe
+        );
+        assert_eq!(
+            alpha.spec.environmentd_liveness_probe,
+            mz.spec.environmentd_liveness_probe
+        );
+        assert_eq!(
+            alpha.spec.environmentd_startup_probe,
+            mz.spec.environmentd_startup_probe
+        );
+        let v1 = super::v1::Materialize::from(alpha);
+        assert_eq!(
+            v1.spec.environmentd_readiness_probe,
+            mz.spec.environmentd_readiness_probe
+        );
+        assert_eq!(
+            v1.spec.environmentd_liveness_probe,
+            mz.spec.environmentd_liveness_probe
+        );
+        assert_eq!(
+            v1.spec.environmentd_startup_probe,
+            mz.spec.environmentd_startup_probe
+        );
+
+        let subset = serde_json::json!({
+            "apiVersion": "materialize.cloud/v1alpha1",
+            "kind": "Materialize",
+            "metadata": {"name": "mz"},
+            "spec": {
+                "environmentdReadinessProbe": {"periodSeconds": 5},
+                "environmentdLivenessProbe": null,
+                "environmentdStartupProbe": {"failureThreshold": 360},
+            },
+        });
+        let v1 = super::convert_v1alpha1_to_v1(subset.clone()).unwrap();
+        assert_eq!(v1["spec"], subset["spec"]);
+        assert_eq!(super::convert_v1_to_v1alpha1(v1).unwrap(), subset);
     }
 
     #[mz_ore::test]

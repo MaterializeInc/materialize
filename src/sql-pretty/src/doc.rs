@@ -1225,49 +1225,7 @@ impl Pretty {
                         self.doc_expr(expr2).nest(TAB),
                     ])
                 } else {
-                    // See the AstDisplay `Expr::Op` comment (`prefix_operand_needs_parens`):
-                    // a prefix op binds tighter than `COLLATE`/the binary ops but
-                    // looser than the postfix `::`/`[…]`, and `- <number>` folds, so
-                    // peel the tight postfixes and parenthesize when the chain
-                    // bottoms out at a numeric literal or a non-self-delimiting /
-                    // `COLLATE` operand.
-                    let needs_parens = {
-                        let mut e = expr1.as_ref();
-                        let mut saw_postfix = false;
-                        loop {
-                            match e {
-                                Expr::Cast { expr, .. } | Expr::Subscript { expr, .. } => {
-                                    saw_postfix = true;
-                                    e = expr.as_ref();
-                                }
-                                Expr::Value(Value::Number(_)) => break saw_postfix,
-                                // Another prefix operator stacks directly (no
-                                // re-association, no `- <number>` fold) — safe,
-                                // and avoids exploding deep unary chains.
-                                Expr::Op { expr2: None, .. } | Expr::Not { .. } => break false,
-                                Expr::Value(_)
-                                | Expr::Identifier(_)
-                                | Expr::QualifiedWildcard(_)
-                                | Expr::Parameter(_)
-                                | Expr::Function(_)
-                                | Expr::HomogenizingFunction { .. }
-                                | Expr::NullIf { .. }
-                                | Expr::Subquery(_)
-                                | Expr::Exists(_)
-                                | Expr::Nested(_)
-                                | Expr::Array(_)
-                                | Expr::ArraySubquery(_)
-                                | Expr::List(_)
-                                | Expr::ListSubquery(_)
-                                | Expr::Map(_)
-                                | Expr::MapSubquery(_)
-                                | Expr::Case { .. }
-                                | Expr::Row { .. } => break false,
-                                _ => break true,
-                            }
-                        }
-                    };
-                    let operand = if needs_parens {
+                    let operand = if prefix_operand_needs_parens(op, expr1.as_ref()) {
                         bracket("(", self.doc_expr(expr1), ")")
                     } else {
                         self.doc_expr(expr1)
@@ -1296,13 +1254,26 @@ impl Pretty {
                 let doc = intersperse_line_nest(docs);
                 bracket_doc(RcDoc::text("CASE"), doc, RcDoc::text("END"), RcDoc::line())
             }
-            Expr::Cast { expr, data_type } => {
+            Expr::Cast {
+                expr,
+                data_type,
+                failure_mode: CastFailureMode::Error,
+            } => {
                 let doc = self.doc_expr(expr);
                 RcDoc::concat([
                     doc,
                     RcDoc::text(format!("::{}", data_type.to_ast_string_simple())),
                 ])
             }
+            Expr::Cast {
+                expr,
+                data_type,
+                failure_mode: CastFailureMode::NullFallback,
+            } => bracket(
+                "TRY_CAST(",
+                self.doc_expr(expr),
+                format!(" AS {})", data_type.to_ast_string_simple()),
+            ),
             Expr::Nested(ast) => bracket("(", self.doc_expr(ast), ")"),
             Expr::Function(fun) => self.doc_function(fun),
             Expr::Subquery(ast) => bracket("(", self.doc_query(ast), ")"),
@@ -1444,6 +1415,7 @@ impl Pretty {
                         | r#""map""#
                         | r#""normalize""#
                         | r#""nullif""#
+                        | r#""operator""#
                         | r#""position""#
                         | r#""row""#
                         | r#""substring""#

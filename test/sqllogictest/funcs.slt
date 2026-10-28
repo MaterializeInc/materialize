@@ -1788,3 +1788,30 @@ SELECT mz_internal.parse_catalog_item_references('CREATE VIEW "materialize"."pub
 
 query error invalid catalog JSON: failed to parse create_sql
 SELECT mz_internal.parse_catalog_item_references('NOT SQL')
+
+# mz_uptime() folds to the same literal at every occurrence in a transaction. The
+# INTERSECT lowering duplicates its left input and relies on both copies being
+# identical, so differing literals produced negative multiplicities.
+query IR
+SELECT count(*), sum(c1) FROM (
+  (SELECT mz_uptime() AS c0, 1 AS c1 FROM mz_catalog.mz_types)
+  INTERSECT ALL (SELECT INTERVAL '3' MINUTE, 1 FROM mz_catalog.mz_types)
+  INTERSECT ALL (SELECT INTERVAL '4' MINUTE, 1 FROM mz_catalog.mz_types)) x
+----
+0 NULL
+
+query TI
+(SELECT mz_uptime() AS c0, 1 AS c1 FROM mz_catalog.mz_types)
+INTERSECT ALL (SELECT INTERVAL '3' MINUTE AS c0, 1 AS c1 FROM mz_catalog.mz_types)
+INTERSECT     (SELECT INTERVAL '4' MINUTE AS c0, 1 AS c1 FROM mz_catalog.mz_types)
+----
+
+query B
+SELECT mz_uptime() = mz_uptime()
+----
+true
+
+query B
+SELECT mz_uptime() = now() - pg_postmaster_start_time()
+----
+true

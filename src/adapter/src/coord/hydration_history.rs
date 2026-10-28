@@ -33,8 +33,8 @@ use std::time::{Duration, Instant};
 
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::{
-    FRONTEND_READ_THEN_WRITE, HYDRATION_HISTORY_COLLECTION_INTERVAL,
-    HYDRATION_HISTORY_RETENTION_PERIOD,
+    HYDRATION_HISTORY_COLLECTION_INTERVAL, HYDRATION_HISTORY_RETENTION_PERIOD,
+    REPLICA_HYDRATION_HISTORY_RETENTION_PERIOD,
 };
 use mz_catalog::builtin::{
     MZ_CATALOG_SERVER_CLUSTER, MZ_OBJECT_HYDRATION_HISTORY, MZ_REPLICA_HYDRATION_HISTORY,
@@ -55,7 +55,6 @@ use crate::catalog::Catalog;
 use crate::command::ExecuteResponse;
 use crate::coord::{Coordinator, Message};
 use crate::metrics::Metrics;
-use crate::peek_client::CoordinatorClient;
 use crate::session::Session;
 use crate::{AdapterError, PeekClient};
 
@@ -68,8 +67,8 @@ const SCHEDULE_RECHECK_CAP: Duration = Duration::from_secs(5);
 
 /// How often a disabled collector rechecks whether it was enabled.
 ///
-/// This is the cadence of every environment in the default configuration, so it
-/// is much coarser than the enabled one: nothing is waiting on it.
+/// A disabled collector has no pending collection work, so this can be much
+/// coarser than the enabled scheduler's recheck cadence.
 const DISABLED_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Bound on one replica-targeted mutation.
@@ -178,19 +177,14 @@ impl Coordinator {
 
     /// Runs one sweep: collect from the next replica, then apply retention.
     pub(super) fn run_hydration_history_collection(&mut self) {
-        let (collection_interval, retention) = {
+        let collection_interval = {
             let dyncfgs = self.catalog().system_config().dyncfgs();
-            (
-                HYDRATION_HISTORY_COLLECTION_INTERVAL.get(dyncfgs),
-                HYDRATION_HISTORY_RETENTION_PERIOD.get(dyncfgs),
-            )
+            HYDRATION_HISTORY_COLLECTION_INTERVAL.get(dyncfgs)
         };
         // Builtin tables are not writable in read-only mode, and a disabled
         // collector must do no background work at all. Retention is part of the
-        // sweep, so disabling collection also suspends it. That is deliberate:
-        // the table can only be non-empty if collection ran at some point, and
-        // the alternative is an always-on subscribe in the default (disabled)
-        // production configuration.
+        // sweep, so disabling collection also suspends it once any in-flight
+        // sweep finishes. This makes zero a break-glass setting for the subsystem.
         if collection_interval.is_zero() || self.controller.read_only() {
             self.schedule_hydration_history_collection();
             return;
@@ -233,7 +227,7 @@ impl Coordinator {
         if let Some(replica) = replica {
             self.hydration_history_replica_cursor = Some(replica.replica_id);
         }
-        let mut sweep = self.new_sweep(catalog, retention);
+        let mut sweep = self.new_sweep(catalog);
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
         let handle = task::spawn(|| "hydration_history_sweep", async move {
@@ -262,28 +256,16 @@ impl Coordinator {
     }
 
     /// Assembles the sweep context, including the client it writes through.
-    fn new_sweep(&self, catalog: Arc<Catalog>, retention: Duration) -> Sweep {
-        let retention_ms = u64::try_from(retention.as_millis()).unwrap_or(u64::MAX);
-        let build_version = catalog.state().config().build_info.human_version(None);
-        // Background read-then-write always uses the frontend OCC path. This
-        // shared constructor field only controls session fallback, so the flag
-        // does not gate history collection.
-        let client = PeekClient::new(
-            CoordinatorClient::Background {
-                tx: self.internal_cmd_tx.clone(),
-                metrics: self.metrics.clone(),
-            },
-            &catalog,
-            Arc::clone(&self.controller.storage_collections),
-            Arc::clone(&self.transient_id_gen),
-            self.optimizer_metrics.clone(),
-            self.persist_client.clone(),
-            self.statement_logging.create_frontend(build_version),
-            Arc::clone(&self.occ_write_semaphore),
-            FRONTEND_READ_THEN_WRITE.get(self.catalog().system_config().dyncfgs()),
-            self.group_commit_tx.clone(),
-            self.controller.read_only(),
-        );
+    fn new_sweep(&self, catalog: Arc<Catalog>) -> Sweep {
+        let now = self.now();
+        let cutoff = |retention: Duration| {
+            let retention_ms = u64::try_from(retention.as_millis()).unwrap_or(u64::MAX);
+            mz_ore::now::to_datetime(now.saturating_sub(retention_ms)).to_rfc3339()
+        };
+        let dyncfgs = catalog.system_config().dyncfgs();
+        let object_cutoff = cutoff(HYDRATION_HISTORY_RETENTION_PERIOD.get(dyncfgs));
+        let replica_cutoff = cutoff(REPLICA_HYDRATION_HISTORY_RETENTION_PERIOD.get(dyncfgs));
+        let client = self.background_peek_client(&catalog);
         Sweep {
             client,
             object_history_id: catalog.resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
@@ -291,7 +273,8 @@ impl Coordinator {
             catalog,
             metrics: self.metrics.clone(),
             wall_time: self.now_datetime(),
-            cutoff: mz_ore::now::to_datetime(self.now().saturating_sub(retention_ms)).to_rfc3339(),
+            object_cutoff,
+            replica_cutoff,
         }
     }
 }
@@ -512,11 +495,10 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
             ORDER BY e.started_at DESC
             LIMIT 1
         ),
-        -- Process-lifetime resource high-water marks, and how many processes
-        -- have reported them.
+        -- Process-lifetime resource high-water marks for each process.
         resources AS (
             SELECT
-                count(DISTINCT process_id) AS process_count,
+                process_id,
                 max(value) FILTER (
                     WHERE source = 'cgroup' AND metric = 'memory_peak'
                 ) AS peak_memory_bytes,
@@ -529,8 +511,9 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
                     )
                 ) AS peak_disk_bytes
             FROM mz_introspection.mz_cluster_replica_resource_usage
+            GROUP BY process_id
         ),
-        -- The history row to write, held back until every configured process
+        -- The history rows to write, held back until every configured process
         -- has reported resource usage and dropped once the episode has aged
         -- past the retention cutoff.
         candidate AS (
@@ -542,10 +525,11 @@ fn replica_collection_sql(target: ReplicaTarget, cutoff: &str) -> String {
                 e.object_count,
                 r.peak_memory_bytes,
                 r.peak_disk_bytes,
-                'hydrated'::text AS status
+                'hydrated'::text AS status,
+                r.process_id
             FROM episode AS e
             CROSS JOIN resources AS r
-            WHERE r.process_count = {process_count}::uint8
+            WHERE (SELECT count(*) FROM resources) = {process_count}::uint8
               AND e.finished_at >= TIMESTAMPTZ '{cutoff}'
         )
         -- Skip episodes the history already covers: a recorded row finishing
@@ -590,7 +574,7 @@ fn replica_retention_sql(cutoff: &str) -> String {
         "SELECT * FROM (
             SELECT
                 replica_id, cluster_id, started_at, finished_at, object_count,
-                peak_memory_bytes, peak_disk_bytes, status
+                peak_memory_bytes, peak_disk_bytes, status, process_id
             FROM mz_internal.mz_replica_hydration_history
             WHERE finished_at < TIMESTAMPTZ '{cutoff}'
             ORDER BY finished_at
@@ -607,10 +591,12 @@ struct Sweep {
     replica_history_id: CatalogItemId,
     metrics: Metrics,
     wall_time: chrono::DateTime<chrono::Utc>,
-    /// Rows finishing before this have aged out. Both steps apply it, so this
-    /// sweep cannot resurrect an episode its own retention step retracts.
+    /// Rows finishing before their table's cutoff have aged out. Collection and
+    /// retention use the same cutoff for each table, so this sweep cannot
+    /// resurrect an episode its own retention step retracts.
     /// Concurrent sweeps can have different cutoffs, making retention eventual.
-    cutoff: String,
+    object_cutoff: String,
+    replica_cutoff: String,
 }
 
 impl Sweep {
@@ -621,7 +607,7 @@ impl Sweep {
             replica_id,
             ..
         } = target;
-        let sql = object_collection_sql(cluster_id, replica_id, &self.cutoff);
+        let sql = object_collection_sql(cluster_id, replica_id, &self.object_cutoff);
         let _ = self
             .run(
                 "collection",
@@ -633,7 +619,7 @@ impl Sweep {
             )
             .await;
 
-        let sql = replica_collection_sql(target, &self.cutoff);
+        let sql = replica_collection_sql(target, &self.replica_cutoff);
         let _ = self
             .run(
                 "replica_collection",
@@ -648,7 +634,7 @@ impl Sweep {
 
     /// Retracts one bounded batch of aged-out rows.
     async fn retain(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        let sql = object_retention_sql(&self.cutoff);
+        let sql = object_retention_sql(&self.object_cutoff);
         if let Some(deleted) = self
             .run(
                 "retention",
@@ -664,7 +650,7 @@ impl Sweep {
             self.metrics.hydration_history_retention_batch_full.inc();
         }
 
-        let sql = replica_retention_sql(&self.cutoff);
+        let sql = replica_retention_sql(&self.replica_cutoff);
         if let Some(deleted) = self
             .run(
                 "replica_retention",
@@ -995,7 +981,10 @@ mod tests {
             normalized_sql.contains("ORDER BY e.started_at DESC LIMIT 1"),
             "{sql}"
         );
-        assert!(sql.contains("r.process_count = 3::uint8"), "{sql}");
+        assert!(
+            sql.contains("(SELECT count(*) FROM resources) = 3::uint8"),
+            "{sql}"
+        );
         assert!(sql.contains("WHERE t.export_id NOT LIKE 't%'"), "{sql}");
         assert!(!sql.contains("WHERE t.export_id LIKE 'u%'"), "{sql}");
         assert!(!sql.contains("mz_object_global_ids"), "{sql}");

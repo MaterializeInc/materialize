@@ -24,6 +24,10 @@
 //! (`bootstrap_metric_sinks` covers the replicas already present at startup), and
 //! `drop_metric_sinks` drops them before a replica is dropped. This mirrors
 //! [`crate::coord::introspection`], which installs introspection subscribes on the same triggers.
+//!
+//! The `disabled_metric_sinks` system var denies definitions by name, and
+//! `reconcile_metric_sinks` converges the installed set on it, tearing a denied sink down rather
+//! than only gating future installs.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,8 +45,8 @@ use mz_sql::plan::{
     validate_metric_sink_desc, validate_metric_sink_prefix,
 };
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, RoleMetadata};
-use mz_sql::session::vars::ENABLE_METRIC_SINK;
-use tracing::{Span, info};
+use mz_sql::session::vars::{ENABLE_METRIC_SINK, SystemVars};
+use tracing::{Span, info, warn};
 
 use crate::catalog::Catalog;
 use crate::coord::{
@@ -78,11 +82,11 @@ pub(super) struct CuratedMetricSink {
 
 /// The curated metric sinks, installed on every replica.
 ///
-/// Sources take their measurements from the raw `..._raw` logging relations, never from a derived
-/// view that re-aggregates them, like `mz_dataflow_arrangement_sizes`: those churn even on static
-/// data, and a per-dataflow size metric off the derived view measured ~30x the raw form. Cheap
-/// mapping views over the same logs, `mz_dataflow_operator_dataflows` and `mz_compute_exports`,
-/// carry no aggregation and are read freely.
+/// Sources read the raw `..._raw` logging relations, not a derived view that re-aggregates them
+/// (`mz_dataflow_arrangement_sizes`) or a join view over the logs (`mz_dataflow_operator_dataflows`),
+/// for performance: those churn even on static data and their cost scales with the replica's
+/// dataflow-creation rate. A single-relation filter like `mz_compute_exports` carries no aggregation
+/// and is read freely.
 ///
 /// Every family sums across workers, so a series carries no `worker_id`, and a multi-process replica
 /// reports one number per grouping key rather than one per process. The size families emit one series
@@ -96,45 +100,62 @@ const CURATED: &[CuratedMetricSink] = &[
         // global-id label names a `t<N>` that maps to no catalog object and churns on every
         // re-render.
         //
-        // Logs are per operator, so map operator -> dataflow -> export id. `min(export_id)`
-        // collapses a multi-export dataflow to one series (lexicographic, so `min('u10', 'u2')` is
-        // `'u10'`: arbitrary but stable). The group-size hint stops that `min` from rendering the
-        // 8-level hierarchy, which would otherwise show up as tuning advice for the sink's own
-        // dataflow in `mz_expected_group_size_advice`.
+        // Logs are per operator, so map operator -> dataflow -> export id. Take the operator ->
+        // dataflow step off `mz_dataflow_addresses_per_worker` (`address[1]` is the dataflow id),
+        // which avoids the multi-way join behind `mz_dataflow_operator_dataflows`.
         //
-        // Transient exports (subscribes, peeks, metric sinks) and operators with no worker-0
-        // mapping fall through to an `unattributable` sentinel, so their bytes still count without a
-        // churning `t<N>` label growing series without bound.
+        // `min(export_id)` collapses a multi-export dataflow to one series (lexicographic, so
+        // `min('u10', 'u2')` is `'u10'`: arbitrary but stable). The group-size hint stops that `min`
+        // from rendering the 8-level hierarchy, which would otherwise show up as tuning advice for
+        // the sink's own dataflow in `mz_expected_group_size_advice`.
+        //
+        // NOTE: counting an arrangement this sink reads is a feedback loop. Every change to it
+        // changes its logged size, the sink reads that on the next logging tick, and the dataflow
+        // re-runs every tick for the replica's lifetime (SQL-730). `NOT LIKE 't%'` keeps out the
+        // sink's own dataflow and the replica's introspection subscribes. `NOT LIKE 'si%'` keeps
+        // out the logging dataflow: `si<N>` names only the introspection source indexes it
+        // exports, and a plain system index prints `s<N>`. Only that filter excludes it under
+        // `INTROSPECTION DEBUGGING`, which registers the loggers before the logging dataflow is
+        // built, so its own operators get log rows. The cost is that transient dataflows'
+        // arrangements go unreported, so these families sum below what the replica holds.
+        //
+        // `f` joins each raw log separately to reuse its `(operator_id, worker_id)` index
+        // (`LogVariant::index_by`). One union would arrange all three logs' rows afresh.
         source_sql: "
 WITH ex AS (
     SELECT dataflow_id, min(export_id) AS export_id
     FROM mz_introspection.mz_compute_exports
-    WHERE export_id NOT LIKE 't%'
+    WHERE export_id NOT LIKE 't%' AND export_id NOT LIKE 'si%'
     GROUP BY dataflow_id OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
+),
+oe AS (
+    SELECT a.id, a.worker_id, ex.export_id
+    FROM mz_introspection.mz_dataflow_addresses_per_worker a
+    JOIN ex ON ex.dataflow_id = a.address[1]
+),
+f AS (
+    SELECT 'arrangement_size_bytes'::text AS metric_name, oe.export_id
+    FROM mz_introspection.mz_arrangement_heap_size_raw r
+    JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
+    UNION ALL
+    SELECT 'arrangement_records'::text, oe.export_id
+    FROM mz_introspection.mz_arrangement_records_raw r
+    JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
+    UNION ALL
+    SELECT 'arrangement_batches'::text, oe.export_id
+    FROM mz_introspection.mz_arrangement_batches_raw r
+    JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
 )
-SELECT 'arrangement_size_bytes'::text AS metric_name, 'gauge'::text AS metric_type,
-       map_build(LIST[ROW('id', COALESCE(ex.export_id, 'unattributable'))])::map[text=>text] AS labels,
-       count(*)::double precision AS value, 'arrangement heap size in bytes'::text AS help
-FROM mz_introspection.mz_arrangement_heap_size_raw r
-LEFT JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
-LEFT JOIN ex ON ex.dataflow_id = dod.dataflow_id
-GROUP BY COALESCE(ex.export_id, 'unattributable')
-UNION ALL
-SELECT 'arrangement_records'::text AS metric_name, 'gauge'::text AS metric_type,
-       map_build(LIST[ROW('id', COALESCE(ex.export_id, 'unattributable'))])::map[text=>text] AS labels,
-       count(*)::double precision AS value, 'number of records in arrangement heaps'::text AS help
-FROM mz_introspection.mz_arrangement_records_raw r
-LEFT JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
-LEFT JOIN ex ON ex.dataflow_id = dod.dataflow_id
-GROUP BY COALESCE(ex.export_id, 'unattributable')
-UNION ALL
-SELECT 'arrangement_batches'::text AS metric_name, 'gauge'::text AS metric_type,
-       map_build(LIST[ROW('id', COALESCE(ex.export_id, 'unattributable'))])::map[text=>text] AS labels,
-       count(*)::double precision AS value, 'number of batches in arrangements'::text AS help
-FROM mz_introspection.mz_arrangement_batches_raw r
-LEFT JOIN mz_introspection.mz_dataflow_operator_dataflows dod ON r.operator_id = dod.id
-LEFT JOIN ex ON ex.dataflow_id = dod.dataflow_id
-GROUP BY COALESCE(ex.export_id, 'unattributable')",
+SELECT metric_name, 'gauge'::text AS metric_type,
+       map_build(LIST[ROW('id', export_id)])::map[text=>text] AS labels,
+       count(*)::double precision AS value,
+       CASE metric_name
+           WHEN 'arrangement_size_bytes' THEN 'arrangement heap size in bytes'
+           WHEN 'arrangement_records' THEN 'number of records in arrangement heaps'
+           WHEN 'arrangement_batches' THEN 'number of batches in arrangements'
+       END AS help
+FROM f
+GROUP BY metric_name, export_id",
     },
     CuratedMetricSink {
         name: "mz_metric_dataflow_errors",
@@ -208,8 +229,43 @@ impl Coordinator {
         // drop). `coord::introspection` installs subscribes on the same triggers and has the same
         // gap.
         for definition in CURATED {
+            if metric_sink_denied(self.catalog().system_config(), definition.name) {
+                continue;
+            }
             self.install_metric_sink(cluster_id, replica_id, definition)
                 .await;
+        }
+    }
+
+    /// Converges the installed curated sinks on `disabled_metric_sinks`.
+    ///
+    /// Reconciles the whole set rather than the delta.
+    pub(super) async fn reconcile_metric_sinks(&mut self) {
+        for entry in self.catalog().system_config().disabled_metric_sinks() {
+            if !CURATED.iter().any(|d| d.name == entry) {
+                warn!(
+                    name = %entry,
+                    "disabled_metric_sinks entry matches no curated definition"
+                );
+            }
+        }
+
+        let denied: Vec<_> = self
+            .metric_sinks
+            .keys()
+            .copied()
+            .filter(|(_, name)| metric_sink_denied(self.catalog().system_config(), name))
+            .collect();
+        for (replica_id, name) in denied {
+            self.drop_metric_sink(replica_id, name);
+        }
+
+        // Reinstall the full non-denied set on every replica. `install_metric_sink` is
+        // idempotent: it skips a definition already recorded in `metric_sinks`
+        // (`contains_key`, see `install_metric_sink`), so re-running the whole set only
+        // installs the ones a preceding `disabled_metric_sinks` edit un-denied.
+        for (cluster_id, replica_id) in self.all_cluster_replicas() {
+            self.install_metric_sinks(cluster_id, replica_id).await;
         }
     }
 
@@ -440,6 +496,12 @@ impl Coordinator {
             return Ok(StageResult::Response(ExecuteResponse::CreatedMetricSink));
         }
 
+        // `reconcile_metric_sinks` only sees sinks already in `metric_sinks`, so a definition
+        // denied while its install was in flight would ship anyway without this recheck.
+        if metric_sink_denied(self.catalog().system_config(), definition.name) {
+            return Ok(StageResult::Response(ExecuteResponse::CreatedMetricSink));
+        }
+
         // Hold a read on the imports across shipping, so their since cannot advance past the as-of
         // just picked. Compute takes its own holds during `create_dataflow`.
         let read_holds = self.acquire_read_holds(&id_bundle);
@@ -458,16 +520,17 @@ impl Coordinator {
             .metric_sinks
             .insert((replica_id, definition.name), install)
         {
-            // The key is already taken. `curated_names_are_unique` rules out two definitions
-            // colliding, so the reachable cause is `install_metric_sinks` running twice for one
-            // replica. Restore the first install and abandon this one: shipping both would leak the
-            // first's collection (now unreachable to `drop_metric_sinks`) and register a second
-            // collector under the same `sink` label.
+            // The key is already taken. `curated_names_are_unique` rules out a name collision,
+            // so this is the same definition installed twice: reconcile can start a second
+            // install while an earlier one is still in flight. Restore the first and abandon this
+            // one, else we leak the first's collection (unreachable to `drop_metric_sinks`) and
+            // register a second collector under the same `sink` label.
             self.metric_sinks
                 .insert((replica_id, definition.name), previous);
-            soft_panic_or_log!(
-                "metric sink installed twice (name={}, replica_id={replica_id})",
-                definition.name
+            info!(
+                %replica_id,
+                name = definition.name,
+                "abandoning metric sink install, already installed"
             );
             return Ok(StageResult::Response(ExecuteResponse::CreatedMetricSink));
         }
@@ -487,31 +550,52 @@ impl Coordinator {
     /// dataflows down anyway, but the controller's collection state for them is instance-global,
     /// so it has to be released explicitly.
     pub(super) fn drop_metric_sinks(&mut self, replica_id: ReplicaId) {
-        for (name, cluster_id, sink_id) in metric_sinks_on_replica(&self.metric_sinks, replica_id) {
-            info!(%sink_id, %replica_id, name, "dropping metric sink");
-            self.metric_sinks.remove(&(replica_id, name));
-
-            // The entry exists only for a shipped dataflow, so its collection is present and this
-            // drop succeeds. Result ignored: a failure during replica teardown is not worth a panic.
-            let _ = self
-                .controller
-                .compute
-                .drop_collections(cluster_id, vec![sink_id]);
+        for name in metric_sinks_on_replica(&self.metric_sinks, replica_id) {
+            self.drop_metric_sink(replica_id, name);
         }
+    }
+
+    /// Drops one curated metric sink, if it is installed.
+    fn drop_metric_sink(&mut self, replica_id: ReplicaId, name: &'static str) {
+        let Some(install) = self.metric_sinks.remove(&(replica_id, name)) else {
+            return;
+        };
+        let InstalledMetricSink {
+            cluster_id,
+            sink_id,
+        } = install;
+        info!(%sink_id, %replica_id, name, "dropping metric sink");
+
+        // The entry exists only for a shipped dataflow, so its collection is present and this
+        // drop succeeds. Result ignored: a failure during replica teardown is not worth a panic.
+        let _ = self
+            .controller
+            .compute
+            .drop_collections(cluster_id, vec![sink_id]);
     }
 }
 
-/// The registry entries installed on `replica_id`, as `(name, cluster, sink)` in key order.
+/// Whether `disabled_metric_sinks` denies the curated definition called `name`.
+///
+/// An entry naming no definition is never asked about, so a stale or misspelled one is inert.
+fn metric_sink_denied(system_config: &SystemVars, name: &str) -> bool {
+    system_config
+        .disabled_metric_sinks()
+        .iter()
+        .any(|denied| denied == name)
+}
+
+/// The names of the definitions installed on `replica_id`, in key order.
 ///
 /// The map is keyed replica-first, so a replica's installs are one contiguous range.
 fn metric_sinks_on_replica(
     metric_sinks: &BTreeMap<(ReplicaId, &'static str), InstalledMetricSink>,
     replica_id: ReplicaId,
-) -> Vec<(&'static str, ClusterId, GlobalId)> {
+) -> Vec<&'static str> {
     metric_sinks
         .range((replica_id, "")..)
         .take_while(|((id, _), _)| *id == replica_id)
-        .map(|((_, name), install)| (*name, install.cluster_id, install.sink_id))
+        .map(|((_, name), _)| *name)
         .collect()
 }
 
@@ -638,11 +722,12 @@ mod tests {
         METRIC_SINK_CURATED_PREFIX_MARKER, validate_metric_sink_prefix,
         validate_user_metric_sink_prefix,
     };
+    use mz_sql::session::vars::{DISABLED_METRIC_SINKS, SystemVars, Var, VarInput};
 
     use crate::catalog::Catalog;
     use crate::coord::metric_sink::{
         CURATED, CuratedMetricSink, InstalledMetricSink, ensure_reads_only_logs,
-        metric_sinks_on_replica,
+        metric_sink_denied, metric_sinks_on_replica,
     };
 
     /// `drop_metric_sinks` relies on this range scan returning exactly one replica's installs, with
@@ -664,27 +749,49 @@ mod tests {
         sinks.insert((r(4), "a"), install(40));
 
         // A replica with several installs: all of them, in key order, and nothing from r(1)/r(4).
-        assert_eq!(
-            metric_sinks_on_replica(&sinks, r(2)),
-            vec![
-                ("a", cluster, GlobalId::Transient(20)),
-                ("b", cluster, GlobalId::Transient(21)),
-                ("c", cluster, GlobalId::Transient(22)),
-            ]
-        );
+        assert_eq!(metric_sinks_on_replica(&sinks, r(2)), vec!["a", "b", "c"]);
         // First and last replicas in the map: the scan stops at each boundary.
-        assert_eq!(
-            metric_sinks_on_replica(&sinks, r(1)),
-            vec![("a", cluster, GlobalId::Transient(10))]
-        );
-        assert_eq!(
-            metric_sinks_on_replica(&sinks, r(4)),
-            vec![("a", cluster, GlobalId::Transient(40))]
-        );
+        assert_eq!(metric_sinks_on_replica(&sinks, r(1)), vec!["a"]);
+        assert_eq!(metric_sinks_on_replica(&sinks, r(4)), vec!["a"]);
         // A replica with no installs, whether ordered between present ones (the r(3) gap) or past
         // the end, returns nothing rather than the next replica's range.
         assert!(metric_sinks_on_replica(&sinks, r(3)).is_empty());
         assert!(metric_sinks_on_replica(&sinks, r(5)).is_empty());
+    }
+
+    /// The var is a `Vec<Ident>`, so parsing follows the SQL identifier-list rules: surrounding
+    /// whitespace is tolerated, an unquoted name folds to lowercase, and a quoted name keeps its
+    /// case. Matching is otherwise exact (no prefix match).
+    #[mz_ore::test]
+    fn denylist_matches_names_leniently() {
+        let denied = |list: &str, name: &str| {
+            let mut vars = SystemVars::new();
+            vars.set(DISABLED_METRIC_SINKS.name(), VarInput::Flat(list))
+                .expect("valid denylist");
+            metric_sink_denied(&vars, name)
+        };
+
+        assert!(!denied("", "a"));
+        assert!(denied("a", "a"));
+        assert!(denied("a,b", "b"));
+        assert!(denied("  a , b  ", "a"));
+        // An unknown name denies nothing but is carried without error.
+        assert!(!denied("nope", "a"));
+        assert!(denied("nope,a", "a"));
+        // Exact match only: no prefix match.
+        assert!(!denied("a", "ab"));
+        assert!(!denied("ab", "a"));
+        // Unquoted names fold to lowercase; quoting pins the case.
+        assert!(denied("A", "a"));
+        assert!(!denied("\"A\"", "a"));
+
+        // An empty entry between commas is rejected by the identifier parser (unlike the old
+        // naive split, which silently dropped it).
+        let mut vars = SystemVars::new();
+        assert!(
+            vars.set(DISABLED_METRIC_SINKS.name(), VarInput::Flat("a,,b"))
+                .is_err()
+        );
     }
 
     #[mz_ore::test]

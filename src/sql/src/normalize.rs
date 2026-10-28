@@ -17,7 +17,7 @@
 use std::fmt;
 
 use itertools::Itertools;
-use mz_repr::{ColumnName, GlobalId};
+use mz_repr::{ColumnName, GlobalId, RelationVersion};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
@@ -26,7 +26,8 @@ use mz_sql_parser::ast::{
     CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement,
     CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CteBlock, Function,
     FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
-    TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value, ViewDefinition,
+    TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value, Version,
+    ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -46,6 +47,22 @@ pub fn ident_ref(ident: &Ident) -> &str {
 /// Normalizes an identifier that represents a column name.
 pub fn column_name(id: Ident) -> ColumnName {
     ColumnName::from(ident(id))
+}
+
+/// Converts a column name into an identifier.
+pub fn column_name_ident(name: &ColumnName) -> Ident {
+    // Note: ColumnNames are known to be less than the max length of an Ident (I think?).
+    Ident::new_unchecked(name.as_str())
+}
+
+/// Converts a version from the AST into a [`RelationVersion`].
+pub fn relation_version(version: Version) -> RelationVersion {
+    RelationVersion::from_raw(version.into_inner())
+}
+
+/// Converts a [`RelationVersion`] into a version for the AST.
+pub fn ast_version(version: RelationVersion) -> Version {
+    Version::new(version.into_raw())
 }
 
 /// Normalizes an unresolved object name.

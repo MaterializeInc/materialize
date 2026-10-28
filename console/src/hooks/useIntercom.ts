@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import Intercom, { update } from "@intercom/messenger-js-sdk";
+import { Intercom, update } from "@intercom/messenger-js-sdk";
 import { useEffect } from "react";
 
 import { useIntercomJwt } from "~/api/auth";

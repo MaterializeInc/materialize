@@ -40,7 +40,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::task::AbortOnDropHandle;
-use mz_ore::{assert_none, halt, instrument, soft_panic_or_log};
+use mz_ore::{assert_none, halt, instrument, restart_in_place, soft_panic_or_log};
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
@@ -197,6 +197,11 @@ pub struct Controller {
 
     /// Clients for all known storage instances.
     instances: BTreeMap<StorageInstanceId, Instance>,
+    /// Per-replica dyncfg overrides, consulted when a replica connects. The
+    /// overrides for a replica created by DDL are committed in the same
+    /// transaction that creates it, so they are installed before the replica
+    /// connects.
+    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances, and use during purification.
@@ -338,6 +343,11 @@ impl StorageController for Controller {
         &mut self,
         mut overrides: BTreeMap<StorageInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
     ) {
+        self.replica_dyncfg_overrides = overrides
+            .values()
+            .flat_map(|replicas| replicas.iter())
+            .map(|(replica_id, updates)| (*replica_id, updates.clone()))
+            .collect();
         for (id, instance) in self.instances.iter_mut() {
             let instance_overrides = overrides.remove(id).unwrap_or_default();
             instance.update_replica_dyncfg_overrides(instance_overrides);
@@ -620,10 +630,20 @@ impl StorageController for Controller {
             location,
             grpc_client: self.config.parameters.grpc_client.clone(),
         };
-        instance.add_replica(replica_id, config);
+        let dyncfg_override = self
+            .replica_dyncfg_overrides
+            .get(&replica_id)
+            .cloned()
+            .unwrap_or_default();
+        instance.add_replica(replica_id, config, dyncfg_override);
     }
 
     fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId) {
+        // The coordinator only re-pushes the override map when the scoped
+        // configuration itself changes, so a dropped replica's entry would
+        // otherwise be retained until the next such change.
+        self.replica_dyncfg_overrides.remove(&replica_id);
+
         let instance = self
             .instances
             .get_mut(&instance_id)
@@ -1008,13 +1028,22 @@ impl StorageController for Controller {
                 // halting on it would wedge bootstrap forever instead of
                 // resolving on the next attempt.
                 if dependency_since.is_empty() && !write_frontier.is_empty() {
-                    halt!(
+                    let reason = format!(
                         "dependency since frontier is empty while dependent upper \
                         is not empty (dependent id={id}, write_frontier={:?}, dependency_read_holds={:?}), \
                         this indicates concurrent deletion of a collection",
-                        write_frontier,
-                        dependency_read_holds,
+                        write_frontier, dependency_read_holds,
                     );
+                    // A read-only controller can restart without Kubernetes
+                    // crash backoff. If its generation has been promoted
+                    // meanwhile, by a replacement pod or by this process after
+                    // a skipped catch-up, `preflight_0dt` halts the restarted
+                    // process.
+                    if self.read_only {
+                        restart_in_place!("{}", reason);
+                    } else {
+                        halt!("{}", reason);
+                    }
                 }
 
                 // If the dependency is between a remap shard and a source (and
@@ -1679,7 +1708,7 @@ impl StorageController for Controller {
         // If the write frontier of the sink is strictly larger than its read hold, it must have at
         // least written out its snapshot, and we can skip reading it; otherwise assume we may have
         // to replay from the beginning.
-        // TODO(STG-26): unify this with run_export, if possible
+        // TODO(SS-513): unify this with run_export, if possible
         let with_snapshot = new_description.sink.with_snapshot
             && !PartialOrder::less_than(&new_description.sink.as_of, &cur_export.write_frontier);
 
@@ -1687,10 +1716,10 @@ impl StorageController for Controller {
             id,
             description: StorageSinkDesc {
                 from: from_id,
-                from_desc: new_description.sink.from_desc,
-                connection: new_description.sink.connection,
+                from_desc: new_description.sink.from_desc.clone(),
+                connection: new_description.sink.connection.clone(),
                 envelope: new_description.sink.envelope,
-                as_of: new_description.sink.as_of,
+                as_of: new_description.sink.as_of.clone(),
                 version: new_description.sink.version,
                 from_storage_metadata,
                 with_snapshot,
@@ -1709,6 +1738,19 @@ impl StorageController for Controller {
             })?;
 
         instance.send(StorageCommand::RunSink(Box::new(cmd)));
+
+        // alter_export_connections rebuilds the sink from this description and
+        // checks new connections against it with alter_compatible, so it must
+        // describe the sink we just told the cluster to run.
+        let state = self
+            .collections
+            .get_mut(&id)
+            .expect("export known to exist");
+        let DataSource::Sink { desc } = &mut state.data_source else {
+            panic!("export known to exist")
+        };
+        *desc = new_description;
+
         Ok(())
     }
 
@@ -1728,7 +1770,7 @@ impl StorageController for Controller {
             // update that because `ExportState` is not clone, because it holds
             // a `ReadHandle` and cloning that would cause additional work for
             // whoever guarantees those read holds.
-            let (mut new_export_description, as_of): (ExportDescription, _) = {
+            let (current_export_description, as_of): (ExportDescription, _) = {
                 let export = &self.collections[&id];
                 let DataSource::Sink { desc } = &export.data_source else {
                     panic!("export exists")
@@ -1741,12 +1783,15 @@ impl StorageController for Controller {
 
                 (export_description, as_of)
             };
-            let current_sink = new_export_description.sink.clone();
+
+            let mut new_export_description = current_export_description.clone();
 
             new_export_description.sink.connection = connection;
 
             // Ensure compatibility
-            current_sink.alter_compatible(id, &new_export_description.sink)?;
+            current_export_description
+                .sink
+                .alter_compatible(id, &new_export_description.sink)?;
 
             let from_storage_metadata = self
                 .storage_collections
@@ -2684,6 +2729,7 @@ impl StorageController for Controller {
             sink_statistics: _,
             statistics_interval_sender: _,
             instances,
+            replica_dyncfg_overrides: _,
             initialized,
             config,
             persist_location,
@@ -2890,6 +2936,7 @@ where
             sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             statistics_interval_sender,
             instances: BTreeMap::new(),
+            replica_dyncfg_overrides: BTreeMap::new(),
             initialized: false,
             config: StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs()),
             persist_location,

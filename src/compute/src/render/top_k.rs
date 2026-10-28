@@ -24,7 +24,7 @@ use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchValOwn};
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::TEMPORAL_BUCKETING_SUMMARY;
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::top_k::{
@@ -49,7 +49,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
-use crate::render::columnar::{CollectionEdge, flat_map_datums};
+use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
@@ -82,17 +82,9 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         // rather than inferred at the arrangement site. `apply_bucketing_strategy`
         // is a no-op for `Direct`.
         //
-        // Note: a `MonotonicTop1Plan`/`MonotonicTopKPlan` with `must_consolidate =
-        // false` together with `TemporalBucketing` here would mean we install a
-        // bucket operator with no downstream consolidator -- pure overhead. That
-        // combination cannot actually occur: `RelaxMustConsolidate` (which is the
-        // only writer of `must_consolidate = false`) runs only on single-time
-        // dataflows (one-shot peeks / `COPY TO`), and in single-time dataflows
-        // `ExprPrepOneShot` constant-folds `mz_now()` to the dataflow `as_of`
-        // before lowering, so no temporal predicates survive into LIR and
-        // `has_future_updates` is `false` everywhere -- meaning no operator (TopK
-        // included) is ever lowered with `TemporalBucketing`. The assertion below
-        // pins down this invariant.
+        // Note: `must_consolidate = false` comes from `TopKPlan::create_from`, which requires
+        // the MIR `Monotonic` analysis to hold (temporal predicates break it), or from
+        // `RelaxMustConsolidate`, which clears the bucketing strategy along with it.
         if matches!(
             temporal_bucketing_strategy,
             ArrangementStrategy::TemporalBucketing
@@ -104,18 +96,13 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
             };
             soft_assert_or_log!(
                 must_consolidate,
-                "TopK with `TemporalBucketing` should not have `must_consolidate = false`; \
-                 `RelaxMustConsolidate` only runs on single-time dataflows where \
-                 `mz_now()` has been const-folded and no temporal bucketing is set",
+                "TopK with `TemporalBucketing` should not have `must_consolidate = false`",
             );
         }
-        // Temporal bucketing fires only under `ENABLE_COMPUTE_TEMPORAL_BUCKETING`
-        // and the `TemporalBucketing` strategy.
         let ok_input = if matches!(
             temporal_bucketing_strategy,
             ArrangementStrategy::TemporalBucketing
-        ) && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
-        {
+        ) {
             let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                 .get(&self.config_set)
                 .try_into()
@@ -157,28 +144,33 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                         _,
                         CapacityContainerBuilder<Vec<(Row, T, Diff)>>,
                         _,
-                    >(ok_input.clone(), usize::MAX, {
-                        let mut datum_vec = mz_repr::DatumVec::new();
-                        move |row_datums, time, diff, _ok_session, err_session| {
-                            let temp_storage = mz_repr::RowArena::new();
-                            // `eval` unifies the lifetimes of the expression, the
-                            // datums, and the arena. Copying the datums into a local
-                            // vec lets that lifetime shrink to this call.
-                            let mut datums = datum_vec.borrow();
-                            datums.extend(row_datums.iter());
-                            match expr.eval(&datums[..], &temp_storage) {
-                                Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
-                                    err_session.give((EvalError::NegLimit.into(), time, diff));
-                                    1
-                                }
-                                Ok(_) => 0,
-                                Err(e) => {
-                                    err_session.give((e.into(), time, diff));
-                                    1
+                    >(
+                        ok_input.clone(),
+                        "TopKLimitCheck",
+                        usize::MAX,
+                        {
+                            let mut datum_vec = mz_repr::DatumVec::new();
+                            move |row_datums, time, diff, _ok_session, err_session| {
+                                let temp_storage = mz_repr::RowArena::new();
+                                // `eval` unifies the lifetimes of the expression, the
+                                // datums, and the arena. Copying the datums into a local
+                                // vec lets that lifetime shrink to this call.
+                                let mut datums = datum_vec.borrow();
+                                datums.extend(row_datums.iter());
+                                match expr.eval(&datums[..], &temp_storage) {
+                                    Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
+                                        err_session.give((EvalError::NegLimit.into(), time, diff));
+                                        1
+                                    }
+                                    Ok(_) => 0,
+                                    Err(e) => {
+                                        err_session.give((e.into(), time, diff));
+                                        1
+                                    }
                                 }
                             }
-                        }
-                    });
+                        },
+                    );
                     err_collection = err_collection.concat(errors.as_collection());
                 }
             }
@@ -343,7 +335,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
     /// Constructs a TopK dataflow subgraph.
     fn build_topk<'s>(
         &self,
-        collection: CollectionEdge<'s, T>,
+        collection: ColCollection<'s, T>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         offset: usize,
@@ -351,7 +343,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         arity: usize,
         buckets: Vec<u64>,
     ) -> (
-        CollectionEdge<'s, T>,
+        ColCollection<'s, T>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         let pairer = Pairer::new(1);
@@ -531,7 +523,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 
     fn render_top1_monotonic<'s>(
         &self,
-        collection: CollectionEdge<'s, T>,
+        collection: ColCollection<'s, T>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         arity: usize,
@@ -620,7 +612,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
 /// intermediate container, not the decode itself, which needs a columnar batcher to push
 /// borrowed rows into. The key is formed from the borrowed datums.
 fn map_topk_key<'s, T, L>(
-    edge: CollectionEdge<'s, T>,
+    edge: ColCollection<'s, T>,
     name: &str,
     mut key: L,
 ) -> VecCollection<'s, T, (Row, Row), Diff>
@@ -668,7 +660,7 @@ where
 /// monotonic path would remove it, leaving a projection that drops the hash.
 fn topk_result_to_columnar<'s, T>(
     collection: VecCollection<'s, T, (Row, Row), Diff>,
-) -> CollectionEdge<'s, T>
+) -> ColCollection<'s, T>
 where
     T: crate::render::RenderTimestamp,
 {

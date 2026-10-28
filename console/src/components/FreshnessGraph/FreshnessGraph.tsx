@@ -11,7 +11,7 @@ import { Box, HStack, Text, useTheme, VStack } from "@chakra-ui/react";
 import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { localPoint } from "@visx/event";
 import { GridRows } from "@visx/grid";
-import ParentSize from "@visx/responsive/lib/components/ParentSize";
+import { ParentSize } from "@visx/responsive";
 import { scaleLinear, scaleTime } from "@visx/scale";
 import { LinePath } from "@visx/shape";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";

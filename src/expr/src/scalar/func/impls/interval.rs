@@ -19,7 +19,7 @@ use crate::EvalError;
 #[sqlfunc(
     sqlname = "interval_to_text",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToInterval)
+    inverse = super::CastStringToInterval
 )]
 fn cast_interval_to_string(a: Interval) -> String {
     let mut buf = String::new();
@@ -30,7 +30,7 @@ fn cast_interval_to_string(a: Interval) -> String {
 #[sqlfunc(
     sqlname = "interval_to_time",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastTimeToInterval)
+    inverse = super::CastTimeToInterval
 )]
 fn cast_interval_to_time(i: Interval) -> NaiveTime {
     // Modeled after the PostgreSQL implementation:
@@ -64,7 +64,7 @@ fn cast_interval_to_time(i: Interval) -> NaiveTime {
 #[sqlfunc(
     sqlname = "-",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::NegInterval)
+    inverse = super::NegInterval
 )]
 fn neg_interval(i: Interval) -> Result<Interval, EvalError> {
     i.checked_neg()

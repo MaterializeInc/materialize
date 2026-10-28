@@ -103,15 +103,17 @@ impl Coordinator {
     {
         let start = Instant::now();
 
-        let (table_updates, catalog_updates) = self
-            .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
-            .await?;
+        // Keep catalog work out of the inline state of callers such as ordinary
+        // transaction completion and the coordinator's command dispatcher.
+        let (table_updates, catalog_updates) = Box::pin(
+            self.catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops),
+        )
+        .await?;
 
         // We can't run this concurrently with the explicit side effects,
         // because both want to borrow self mutably.
-        let apply_implications_res = self
-            .apply_catalog_implications(ctx.as_deref_mut(), catalog_updates)
-            .await;
+        let apply_implications_res =
+            Box::pin(self.apply_catalog_implications(ctx.as_deref_mut(), catalog_updates)).await;
 
         // We would get into an inconsistent state if we updated the catalog but
         // then failed to apply commands/updates to the controller. Easiest
@@ -196,13 +198,15 @@ impl Coordinator {
 
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
 
-        let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, ops).await?;
+        let (table_updates, catalog_updates) =
+            Box::pin(self.catalog_transact_inner(conn_id, ops)).await?;
 
         let table_updates_wait = self
             .metrics
             .catalog_transact_phase_seconds
             .with_label_values(&["table_updates_wait"]);
-        let apply_catalog_implications_fut = self.apply_catalog_implications(ctx, catalog_updates);
+        let apply_catalog_implications_fut =
+            Box::pin(self.apply_catalog_implications(ctx, catalog_updates));
 
         // Apply catalog implications concurrently with the table updates.
         let (combined_apply_res, ()) = futures::future::join(
@@ -359,18 +363,16 @@ impl Coordinator {
         // initialize the transaction so it starts in sync with the accumulated
         // state. Otherwise (first statement), the fresh durable transaction is
         // already in sync with the real catalog state.
-        let (new_state, new_snapshot) = self
-            .catalog()
-            .transact_incremental_dry_run(
-                &txn_state_clone,
-                ops.clone(),
-                conn,
-                prev_snapshot,
-                oracle_write_ts,
-            )
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
-            .await?;
+        let (new_state, new_snapshot) = Box::pin(self.catalog().transact_incremental_dry_run(
+            &txn_state_clone,
+            ops.clone(),
+            conn,
+            prev_snapshot,
+            oracle_write_ts,
+        ))
+        .wall_time()
+        .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
+        .await?;
 
         // Accumulate ops for eventual COMMIT.
         let result = ctx
@@ -394,7 +396,7 @@ impl Coordinator {
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
     /// called after this function successfully returns on any built
-    /// [`DataflowDesc`](mz_compute_types::dataflows::DataflowDesc).
+    /// [`MirDataflowDescription`](mz_compute_types::dataflows::MirDataflowDescription).
     #[instrument(name = "coord::catalog_transact_inner")]
     pub(crate) async fn catalog_transact_inner(
         &mut self,
@@ -431,6 +433,7 @@ impl Coordinator {
         let mut update_http_config = false;
         let mut update_advance_timelines_interval = false;
         let mut update_optimizer_e2e_latency_warning_threshold = false;
+        let mut reconcile_metric_sinks = false;
 
         for op in &ops {
             match op {
@@ -487,6 +490,7 @@ impl Coordinator {
                     update_advance_timelines_interval |= name == DEFAULT_TIMESTAMP_INTERVAL.name();
                     update_optimizer_e2e_latency_warning_threshold |=
                         name == vars::OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD.name();
+                    reconcile_metric_sinks |= name == vars::DISABLED_METRIC_SINKS.name();
                 }
                 catalog::Op::ResetAllSystemConfiguration => {
                     // Assume they all need to be updated.
@@ -504,6 +508,7 @@ impl Coordinator {
                     update_http_config = true;
                     update_advance_timelines_interval = true;
                     update_optimizer_e2e_latency_warning_threshold = true;
+                    reconcile_metric_sinks = true;
                 }
                 catalog::Op::RenameItem { id, .. } => {
                     let item = self.catalog().get_entry(id);
@@ -702,6 +707,9 @@ impl Coordinator {
                 self.optimizer_metrics
                     .set_e2e_optimization_time_log_threshold(threshold);
             }
+            if reconcile_metric_sinks {
+                self.reconcile_metric_sinks().await;
+            }
         }
         .instrument(info_span!("coord::catalog_transact_with::finalize"))
         .await;
@@ -871,6 +879,10 @@ impl Coordinator {
                 (sink, write_notify, reason)
             })
             .collect();
+
+        if to_retire.is_empty() {
+            return BuiltinTableAppendCompletion::completed();
+        }
 
         // Retire off the coordinator loop. We wait for each `mz_subscriptions` retraction
         // before telling the subscribing client that the sink is gone. The returned notify

@@ -32,4 +32,7 @@ message ProtoPostgresSourceExportStatementDetails {
   // Absent (false) for exports created before the oid cast was widened, which
   // must keep the legacy i32-range cast forever.
   bool cast_oid_full_range = 2;
+  // An upper bound on the upstream WAL position whose schema `table`
+  // describes. Absent for exports created before this field existed.
+  optional uint64 initial_lsn = 3;
 }

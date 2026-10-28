@@ -18,53 +18,21 @@ Use the `mz-debug-ci` skill before the first `bk` or `gh pr checks` command, or 
 
 ## Code navigation
 
-For operation flow tracing, read first:
-
-* `doc/developer/generated/flows.md` — maps operations (query lifecycle, source ingestion, MV creation, sink lifecycle, catalog DDL, timestamp selection, persist read/write, controller architecture) to `crate::module` paths in execution order.
-* `doc/developer/generated/<crate>/_crate.md` — per-crate overview: modules, key types, dependencies.
-* `doc/developer/generated/<crate>/<module>.md` — per-file docs.
-
-> **READ-ONLY: `doc/developer/generated/` is generated, not authored.**
-> The entire `doc/developer/generated/` tree is maintained exclusively by the
-> recurring documentation agent, which runs the `update-docs` skill/command.
-> That agent is the *only* session permitted to create, edit, or delete files
-> under this directory.
->
-> In any other session: **treat `doc/developer/generated/` as read-only.** Use
-> it for navigation and context, but never edit, create, delete, or regenerate
-> files there — not even to "fix" something you noticed, and not as part of an
-> unrelated change. These files carry `source`/`revision` front-matter that the
-> recurring agent manages; hand edits desync that bookkeeping. If a generated
-> doc is wrong or stale, report it in your response rather than editing it, and
-> leave the correction to the `update-docs` agent. Do not stage or commit any
-> path under `doc/developer/generated/` unless you are explicitly running the
-> `update-docs` workflow.
+`console/` is the web Console. It was moved in from the standalone
+`MaterializeInc/console` repository, which is now archived and stale.
 
 ## Dependency management
 
-### Workspace dependencies
+Use the `mz-dependencies` skill before changing dependencies. Never regenerate
+the full Cargo.lock and never run bare `cargo update`.
 
-All third-party versions declared in `[workspace.dependencies]` in root
-`Cargo.toml`. Members use `dep.workspace = true` or
-`dep = { workspace = true, optional = true }`.
+## Merging
 
-* **Add new dep**: add to `[workspace.dependencies]` in root `Cargo.toml` first, then `dep.workspace = true` in member crate.
-* **Never inline version** in member `Cargo.toml` — `bin/lint-cargo` enforces.
-* **Update version**: change once in root `Cargo.toml`.
-* Cargo unifies features workspace-wide, so workspace declaration is union of all features across crates. Members just use `dep.workspace = true`.
-
-### Cargo.lock
-
-Never regenerate full Cargo.lock. When changing deps:
-
-* **Add dep or change features**: run `cargo check` — updates only what changed.
-* **Update specific crate**: `cargo update -p <crate>` (optional `--precise <version>`).
-* **Never bare `cargo update`** — bumps every semver-compatible dep, causes unrelated breakage from transitive changes.
-* **If lock regenerated**, diff before commit (`git diff Cargo.lock | grep '^[+-]version'`) and pin back unintended bumps with `cargo update -p <crate> --precise <old-version>`.
-
-### Licensing
-
-Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].allow`) and `about.toml` (`accepted`). New dep with new license not already allowed: add SPDX identifier to both.
+The repository allows only squash merges. Merge commits and rebase merges are
+disabled in the GitHub settings. Every PR lands on `main` as one commit, with
+the PR title as subject and the PR body as message. Intermediate commits on a
+PR branch never reach `main`, so `git bisect` never visits them. Do not ask
+authors to squash on merge or to keep every intermediate commit green.
 
 ## Guidance
 
@@ -86,19 +54,6 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
 * We value simplicity and clear abstractions. We especially care about
   designing the interfaces or boundaries between components well. This includes
   components, traits, interfaces, modules, and crates.
-* In code comments or inline documentation, we value clearly described
-  contracts and assumptions.
-* In code comments, we don't like "fluff" comments, comments that describe what
-  code does when it is obvious from the code. Good code should be readable. It
-  _is_ okay to call out tricky parts of the code or "nota benes".
-* In code comments and code documentation we value concise but complete
-  comments.
-* In code comments and documentation, don't refer to potential previous states
-  of the code, or things like future PRs, try not to use chronology in there,
-  except when it's needed to explain why a certain thing behaves as it does and
-  we need to record that knowledge. In general comments need to stand on their
-  own and make sense from just looking at them and the code around it, not
-  previous changes.
 * Avoid em-dashes for structuring sentences in any prose: code comments, specs,
   design docs, all of it. Restructure with full stops and commas instead. The
   same goes for semicolons, though one is fine where splitting would mangle the
@@ -129,14 +84,10 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
   matters, or `mz_ore::collections::HashMap` for keyed-only access with no
   iteration. Hash-order iteration is a real nondeterminism source, for example
   an unstable order reaching plan output or persisted state, not a style nit.
-* A new feature flag should default off in production but default ON in the
-  test/CI configuration, so the new code path is exercised by sqllogictest,
-  testdrive, and optimizer goldens before it earns trust. Production safety and
-  test coverage are separate settings. Wire the override through
-  `system_parameter_default`: the `--system-parameter-default=NAME=VALUE` CLI
-  flag (env `SYSTEM_PARAMETER_DEFAULT`) for sqllogictest and environmentd
-  binaries, or `TestHarness::with_system_parameter_default` for Rust
-  integration tests.
+* Choosing whether a new feature flag defaults on or off in production is a
+  product decision. When adding a flag, ask a human which default to use, and
+  use the `mz-feature-flags` skill. When reviewing a PR, do not question the
+  default it chose.
 
 ## Code comments
 
@@ -146,8 +97,9 @@ Spend comments on the non-obvious: concurrency and async hazards (races,
 lease/handle expiry, values that must not be held across an await point),
 ordering constraints ("X must happen before Y, else Z"), invariants whose
 violation panics or corrupts data, restart/recovery semantics, the origin of
-magic constants, and why the obvious alternative was not taken. Idiomatic code
-(match arms, iterator chains, getters, logging) needs none.
+magic constants, and why the alternative a reader would otherwise assume was
+not taken. Idiomatic code (match arms, iterator chains, getters, logging) needs
+none.
 
 A doc comment is the caller's contract: a one-sentence summary, then only the
 invariants and semantics a caller must know. A self-evident public item needs
@@ -175,6 +127,30 @@ imply it. No ASCII section-divider banners (`// ----- helpers -----`); item
 placement carries the structure. Performance claims in comments should state
 a constraint or a measured number, not unverifiable color ("the compiler can
 autovectorize this").
+
+A comment must make sense from the code around it, not from previous changes.
+Don't refer to earlier states of the code or to future PRs, unless the history
+explains why the code behaves as it does and that knowledge needs recording.
+
+Before keeping a sentence, ask whether a maintainer would get something wrong
+without it. If deleting it changes nothing they would do or believe, delete it,
+however true it is. Prefer deleting a sentence to rewording it: shortening the
+words while keeping every fact is not editing.
+
+A comment that asserts a constraint ("X is not possible, because Y") has to be
+checked when it is written, by a compile probe, a test, or a pointer to what
+enforces it. An unchecked constraint outlives its truth. It reads as fact,
+nobody retests it, and later work gets designed around a limit that is no
+longer there. Where the constraint cannot be checked, write what was observed
+instead of what is impossible.
+
+Avoid "X rather than Y" unless Y is what a reader would otherwise assume. Where
+Y is not a live prior it is unconstrained and unfalsifiable, and it rots
+silently, since the code can move to Y with the sentence still reading
+correctly. Where Y is a real trap, assert the failure instead of the contrast
+("blocking on this future deadlocks, because `drop` runs on the worker thread
+that has to poll it"), which gives the claim truth conditions. A failure mode
+that cannot be named means the comment records a preference and not a reason.
 
 The same economy applies to tests: a test whose name and assert messages
 state the property needs no doc comment. Keep test docs for non-obvious

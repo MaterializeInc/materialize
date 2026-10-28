@@ -491,8 +491,20 @@ impl StorageCollectionsImpl {
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
 
         let collections = Arc::new(std::sync::Mutex::new(BTreeMap::default()));
-        let finalizable_shards =
-            Arc::new(ShardIdSet::new(metrics.finalization_outstanding.clone()));
+        let finalizable_shards = Arc::new(ShardIdSet::new(if read_only {
+            // We use this gauge to see when it's taking too long for shards to be finalized.
+            // A read-only environment cannot finalize shards, so it never gets to decrement the gauge.
+            // The gauge stays elevated (triggering an alarm) until after the environment restarts in non-read-only mode.
+            //
+            // To avoid that false trigger, use an unregistered gauge for read-only envs.
+            mz_ore::metrics::UIntGauge::new(
+                "finalizable_shards",
+                "read-only env can't finalize shards. don't publish this gauge.",
+            )
+            .unwrap()
+        } else {
+            metrics.finalization_outstanding.clone()
+        }));
         let finalized_shards =
             Arc::new(ShardIdSet::new(metrics.finalization_pending_commit.clone()));
         let config = Arc::new(Mutex::new(StorageConfiguration::new(

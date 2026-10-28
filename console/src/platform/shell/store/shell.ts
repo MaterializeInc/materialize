@@ -128,9 +128,7 @@ export type HistoryItem = CommandOutput | NoticeOutput | LocalCommandOutput;
 
 // TODO (robinclowers): upstream this change, these types should be exported
 export type SetStateActionWithReset<Value> =
-  | Value
-  | typeof RESET
-  | ((prev: Value) => Value | typeof RESET);
+  Value | typeof RESET | ((prev: Value) => Value | typeof RESET);
 
 export type ResettableAtom<Value> = WritableAtom<
   Value,

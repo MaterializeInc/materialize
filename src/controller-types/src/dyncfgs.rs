@@ -76,6 +76,16 @@ pub const ARRANGEMENT_EXERT_PROPORTIONALITY: Config<u32> = Config::new(
     ParameterScope::Replica,
 );
 
+// Like the `TimelyConfig` configs above, this is baked into the process
+// configuration at provisioning time and reaches a replica only when it is
+// next provisioned.
+pub const ENABLE_UNIFIED_CLUSTER: Config<bool> = Config::new(
+    "enable_unified_cluster",
+    false,
+    "Host storage objects on the compute Timely cluster instead of a separate storage cluster.",
+    ParameterScope::Replica,
+);
+
 pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     "enable_paused_cluster_readhold_downgrade",
     true,
@@ -94,5 +104,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_TIMELY_ZERO_COPY_LGALLOC)
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
+        .add(&ENABLE_UNIFIED_CLUSTER)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
 }

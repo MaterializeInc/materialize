@@ -78,7 +78,7 @@ export const useDrag = ({
   onStart,
   onStop,
 }: {
-  ref: React.RefObject<HTMLElement | null>;
+  ref: React.RefObject<HTMLElement | SVGElement | null>;
   onDrag?: (event: PointerEvent, draggableEvent: DraggableEvent) => void;
   onStart?: (event: PointerEvent) => void;
   onStop?: (event: PointerEvent) => void;
@@ -169,7 +169,7 @@ export const useDrag = ({
   }, []);
 
   React.useEffect(() => {
-    const element = ref.current;
+    const element = ref.current as HTMLElement | null;
     if (element) {
       element.addEventListener("click", handleClick);
       element.addEventListener("pointerdown", handlePointerDown);

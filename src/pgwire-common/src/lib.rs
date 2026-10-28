@@ -14,7 +14,6 @@
 
 mod codec;
 mod conn;
-mod format;
 mod message;
 mod severity;
 
@@ -27,10 +26,10 @@ pub use conn::{
     CONN_UUID_KEY, Conn, ConnectionCounter, ConnectionError, ConnectionHandle,
     MZ_FORWARDED_FOR_KEY, UserMetadata,
 };
-pub use format::Format;
 pub use message::{
     ChannelBinding, ErrorResponse, FrontendMessage, FrontendStartupMessage, GS2Header,
     SASLClientFinalResponse, SASLInitialResponse, VERSION_3, VERSION_CANCEL, VERSION_GSSENC,
     VERSION_SSL, VERSIONS,
 };
+pub use mz_pgrepr_consts::Format;
 pub use severity::Severity;

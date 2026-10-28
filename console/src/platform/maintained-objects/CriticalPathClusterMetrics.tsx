@@ -147,7 +147,7 @@ const ClusterMetricsHeader = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const journeyLinkState = useJourneyLinkState(pageObjectId);
-  const objectLinkTarget = `../${node.parentSourceId ?? node.id}`;
+  const objectLinkTarget = `../${node.id}`;
   return (
     <VStack align="stretch" spacing={1}>
       <Text textStyle="heading-sm" noOfLines={1} title={node.name}>
@@ -326,7 +326,7 @@ export interface ClusterReplicaMetricsProps {
 
 /** Per-replica memory/CPU utilization for one cluster at a point in time,
  * with any replicas dropped inside the window called out. */
-export const ClusterReplicaMetrics = ({
+const ClusterReplicaMetrics = ({
   cluster,
   timestamp,
   bucketSizeMs,

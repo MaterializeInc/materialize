@@ -23,6 +23,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use ::prometheus::IntCounter;
 use ::timely::container::{CapacityContainerBuilder, PushInto};
 use ::timely::dataflow::Stream;
 use ::timely::dataflow::channels::pact::Pipeline;
@@ -70,6 +71,8 @@ where
     /// This means we should be able to perform the same action on timestamp capabilities, and only
     /// flush buffers when this timestamp advances.
     interval_ms: u128,
+    /// Counts the records of published batches.
+    records_total: IntCounter,
     _marker: PhantomData<C>,
 }
 
@@ -78,11 +81,12 @@ where
     P: EventPusher<Timestamp, C>,
 {
     /// Creates a new batch logger.
-    fn new(event_pusher: P, interval_ms: u128) -> Self {
+    fn new(event_pusher: P, interval_ms: u128, records_total: IntCounter) -> Self {
         BatchLogger {
             time_ms: Timestamp::minimum(),
             event_pusher,
             interval_ms,
+            records_total,
             _marker: PhantomData,
         }
     }
@@ -95,6 +99,8 @@ where
 {
     /// Publishes a batch of logged events.
     fn publish_batch(&mut self, data: C) {
+        let records = u64::try_from(data.record_count()).expect("record count is non-negative");
+        self.records_total.inc_by(records);
         self.event_pusher.push(Event::Messages(self.time_ms, data));
     }
 

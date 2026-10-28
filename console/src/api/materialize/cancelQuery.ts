@@ -30,8 +30,7 @@ export function buildCancelQuery(connectionId: string) {
 }
 
 export type CancelQueryParams =
-  | { connectionId: string }
-  | { sessionId: string };
+  { connectionId: string } | { sessionId: string };
 
 export async function cancelQuery({
   params,

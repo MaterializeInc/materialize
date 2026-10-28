@@ -1,5 +1,5 @@
 ---
-source: src/expr-derive-impl/src/lib.rs
+source: src/expr-derive-impl/src/test.rs
 expression: "#[sqlfunc(Replace, sqlname = \"replace\")]\nfn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {\n    Ok(text.replace(from, to))\n}\n"
 ---
 #[derive(
@@ -40,11 +40,9 @@ impl crate::func::variadic::EagerVariadicFunc for Replace {
             || input_types.get(1usize).map_or(false, |t| t.nullable)
             || input_types.get(2usize).map_or(false, |t| t.nullable);
         let inputs_nullable = input_types.iter().any(|it| it.nullable);
-        output
-            .nullable(
-                nullable || non_nullable_input_is_nullable
-                    || (propagates_nulls && inputs_nullable),
-            )
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
+        output.nullable(is_null)
     }
 }
 impl std::fmt::Display for Replace {
@@ -54,6 +52,32 @@ impl std::fmt::Display for Replace {
 }
 impl crate::func::FuncName for Replace {
     const NAME: &'static str = stringify!(replace);
+    #[cfg(feature = "func-registry")]
+    const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
+        decl: "#[sqlfunc(Replace, sqlname = \"replace\",)] fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError>",
+        signature: "fn(&'a str, &'a str, &'a str) -> Result<String, EvalError>",
+        body_fingerprint: 18087132299484514323u64,
+    });
+    #[cfg(feature = "func-registry")]
+    fn sqlfunc_input_types() -> Option<Vec<mz_repr::SqlColumnType>> {
+        use crate::func::registry::{ProbeColumnType as _, ProbeColumnTypeFallback as _};
+        [
+            (&crate::func::registry::ColumnTypeProbe::<
+                &'static str,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                &'static str,
+            >(::std::marker::PhantomData))
+                .column_type(),
+            (&crate::func::registry::ColumnTypeProbe::<
+                &'static str,
+            >(::std::marker::PhantomData))
+                .column_type(),
+        ]
+            .into_iter()
+            .collect()
+    }
 }
 fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
     Ok(text.replace(from, to))

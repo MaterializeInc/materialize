@@ -27,20 +27,20 @@ spec:
     spec:
       containers:
       - name: minio
-        # Pulled from quay.io because MinIO deleted the `minio/minio` repository
-        # from Docker Hub, where an unqualified name resolves. Pinned to the tag
-        # the cloudtest MinIO deployment uses.
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+        # Our own MinIO build (test/minio), because MinIO no longer publishes
+        # images that can be pulled anonymously. It is published under every
+        # Materialize release tag, so the tag names a Materialize release, not
+        # a MinIO version.
+        image: materialize/minio:v26.42.0
+        command: [minio]
         args:
         - server
         - /data
         env:
-        - name: MINIO_ACCESS_KEY
+        - name: MINIO_ROOT_USER
           value: "minio"
-        - name: MINIO_SECRET_KEY
+        - name: MINIO_ROOT_PASSWORD
           value: "minio123"
-        - name: MINIO_BROWSER
-          value: "on"
         ports:
         - containerPort: 9000
         volumeMounts:
@@ -67,37 +67,6 @@ spec:
           initialDelaySeconds: 5
           periodSeconds: 10
           timeoutSeconds: 5
-        lifecycle:
-          postStart:
-            exec:
-              command:
-                - "bash"
-                - "-euc"
-                - |
-                  function setup_buckets() {
-                      while true; do
-                          echo "Waiting for minio to become ready..."
-                          if curl --fail localhost:9000/minio/health/ready; then
-                              echo "Minio is ready"
-                              break
-                          fi
-                          sleep 1
-                      done
-
-                      echo "Creating local alias"
-                      mc alias set local http://localhost:9000 minio minio123
-                      echo $?
-
-                      echo "Creating local/persist bucket"
-                      mc mb -p local/persist
-                      echo $?
-
-                      echo "Creating local/bucket bucket"
-                      mc mb -p local/bucket
-                      echo $?
-                  }
-
-                  setup_buckets 2>&1 > poststart.log
       volumes:
       - name: storage
         emptyDir: {}
@@ -113,3 +82,37 @@ spec:
       targetPort: 9000
   selector:
     app: minio
+---
+# The image has no `mc`, so this Job creates the buckets. It retries until
+# MinIO answers, and `head-bucket` lets a restarted pod skip buckets that
+# already exist.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-setup
+  namespace: materialize
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: awscli
+        image: amazon/aws-cli:2.31.19
+        env:
+        - name: AWS_ACCESS_KEY_ID
+          value: "minio"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "minio123"
+        - name: AWS_DEFAULT_REGION
+          value: "us-east-1"
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          ep=http://minio.materialize.svc.cluster.local:9000
+          for b in persist bucket; do
+            until aws --endpoint-url "$ep" s3api head-bucket --bucket "$b" 2>/dev/null ||
+                  aws --endpoint-url "$ep" s3 mb "s3://$b"; do
+              echo "waiting for minio..."; sleep 3
+            done
+          done

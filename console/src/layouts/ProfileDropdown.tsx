@@ -41,7 +41,7 @@ import {
   type User,
 } from "~/external-library-wrappers/frontegg";
 import { type AuthContextProps } from "~/external-library-wrappers/oidc";
-import { SUPPORT_CHAT_URL } from "~/externalUrls";
+import { SUPPORT_CHAT_URL, SUPPORT_URL } from "~/externalUrls";
 import { AUTH_ROUTES } from "~/fronteggRoutes";
 import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
 import { NAV_HORIZONTAL_SPACING, NAV_HOVER_STYLES } from "~/layouts/constants";
@@ -401,7 +401,7 @@ const OrganizationMenuGroup = ({
       await switchTenant({ tenantId });
       // We want to force a full page reload to clear the query params and reset all in-memory JS state
       // after the tenant switch.
-      // eslint-disable-next-line react-compiler/react-compiler
+      // eslint-disable-next-line react-hooks/immutability
       window.location.href = window.location.href.split("?")[0];
     }
   };
@@ -503,11 +503,11 @@ const CommunityMenuItems = () => {
       </MenuItem>
       <MenuItem
         as={RouterLink}
-        to={docUrls["/docs/support/"]}
+        to={SUPPORT_URL}
         fontWeight="medium"
         target="_blank"
       >
-        Help Center
+        Support
       </MenuItem>
     </VStack>
   );

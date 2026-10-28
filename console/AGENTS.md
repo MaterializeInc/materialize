@@ -29,6 +29,9 @@ yarn typecheck
 yarn lint          # Check for issues
 yarn lint:fix      # Auto-fix issues (run before committing)
 
+# Develop components in isolation (see doc/guide-storybook.md)
+yarn storybook
+
 # Run unit/integration tests
 yarn test
 
@@ -56,20 +59,6 @@ ln -s ../../console/misc/githooks/pre-commit .git/hooks/pre-commit
 
 **Client-only React app** hosted on Vercel, communicating with Materialize Cloud APIs and Materialize database endpoints.
 
-### Key Directory Structure
-
-- `src/api/` - API clients and query builders
-  - `materialize/` - Kysely query builders for Materialize system catalog queries
-  - `schemas/` - Generated TypeScript types from OpenAPI specs
-  - `mocks/` - MSW handlers for testing
-- `src/platform/` - Main application routes and pages organized by feature (clusters, sources, sinks, etc.)
-- `src/components/` - Reusable UI components
-- `src/hooks/` - Custom React hooks
-- `src/store/` - Jotai atoms for global state
-- `src/theme/` - Chakra UI theme customizations
-- `src/test/` - Test utilities and helpers
-- `types/materialize.d.ts` - Generated types from Materialize system catalog (via `yarn gen:types`)
-
 ### Path Aliases
 
 Use `~/` for imports from src: `import { foo } from "~/api/materialize"`
@@ -77,7 +66,7 @@ Use `~/` for imports from src: `import { foo } from "~/api/materialize"`
 ### State Management
 
 - **Jotai** for global state (sparingly used - prefer component state)
-- **React Query** for polled/one-shot server state (`useSql` hooks)
+- **React Query** for polled/one-shot server state (`useQuery` / `useMutation`, see API & Data Fetching)
 - **Sync engine** for live catalog data: SUBSCRIBE-fed sessions reduce into
   jotai atoms and TanStack DB collections (`useLiveQuery` consumers, scoped
   instant-load cache). See `doc/design/20260902_sync_engine.md`. Wiring between
@@ -149,8 +138,8 @@ These are enforced by ESLint to ensure consistent patterns:
 
 - **Keep callback references stable** for hooks that return functions:
   ```tsx
-  // Functions from useSql hooks may be used in dependency arrays
-  const { refetch } = useSqlTyped(query);
+  // Functions from useQuery may be used in dependency arrays
+  const { refetch } = useQuery({ queryKey, queryFn });
   ```
 
 - **Use `useMemo` for expensive computations** or to keep prop references stable for child components
@@ -160,7 +149,7 @@ These are enforced by ESLint to ensure consistent patterns:
   const HeavyComponent = React.lazy(() => import("./HeavyComponent"));
   ```
 
-- **Use `useSqlLazy` for imperative calls** (form submissions, user actions) instead of `useSql`
+- **Use `useMutation` for imperative calls** (form submissions, user actions)
 
 - **Prefer `await` over callbacks** for cleaner async flow in form handlers
 
@@ -198,11 +187,11 @@ export const buildClustersQuery = () => {
 - Use `sql` tagged template for raw SQL to prevent injection
 - Use `$if()` only for optional selects (per Kysely docs)
 
-### useSql Hooks
+### React Query
 
-- `useSql` / `useSqlTyped` - Declarative data fetching with automatic polling/refetch
-- `useSqlLazy` - Imperative calls for form submissions and user actions
-- `useSqlMany` - Multiple queries in a single request
+- Reads use `useQuery` with a key from a feature's query key factory (built on `buildRegionQueryKey`) and a `queryFn` that calls a fetch function from `src/api/materialize/`. See `useMaxReplicasPerCluster` in `src/platform/clusters/queries.ts`.
+- Writes use `useMutation` and invalidate the affected query keys in `onSuccess`. See `useAlterCluster` in the same file.
+- `useSqlTyped`, `useSqlLazy`, `useSqlMany`, and `useSqlManyTyped` are legacy. Do not use them in new code.
 
 ### Error Handling
 

@@ -61,10 +61,11 @@ The release bot sets both `var-namespace` and `var-env` on every link for this r
 Every judgement in this workflow is a before/after comparison, so the upgrade times must be pinned first. Ask Prometheus which version each environment runs over the past 10 days:
 
 ```promql
-count by (mz_version) (group by (namespace, mz_version) (v2_mz_compute_cluster_status{mz_version!~".*-dev.*"}))
+count by (mz_version) (group by (namespace, mz_version)
+    (max_over_time(v2_mz_compute_cluster_status{mz_version!~".*-dev.*"}[6h])))
 ```
 
-Run it as a range query with a 6h step. The `-dev` exclusion drops personal development environments, which run arbitrary old builds and only add noise.
+Run it as a range query with a 6h step. The `-dev` exclusion drops personal development environments, which run arbitrary old builds and only add noise. The `max_over_time` window matches the step for the reason given under *Step 2*, and it also changes how a transition reads: an environment that upgrades mid-bucket is counted under both versions, so the counts in that one bucket sum to more than the fleet. That is the boundary bucket announcing itself, not an error.
 
 Two facts come out of this. The release under test is the highest `vX.Y.0-rc.N` present, and the boundary per stack is the step where the previous version disappears and it appears. Expect two boundaries for the same release, because a later `rc` usually supersedes an earlier one, and both are the new release for sign-off purposes.
 
@@ -83,21 +84,38 @@ The dashboards' `version` variable does not filter panels directly. It narrows t
 Production and staging need different selectors. In production only the canary environments run a release candidate, and they share the plain released version with every customer environment for part of the week, so a version-based filter loses them. Derive their namespaces once and pin them by name:
 
 ```promql
-group by (namespace, mz_context_org_name) (v2_mz_compute_cluster_status{mz_version=~"<new release>.*"})
+group by (namespace, mz_context_org_name)
+    (max_over_time(v2_mz_compute_cluster_status{mz_version=~"<new release>.*"}[<analysis window>]))
 ```
+
+This derivation is a one-shot whose output is pinned for the rest of the run, so there is no step to match and the lookback spans the analysis window instead, which makes the list independent of any single 6h stretch. Widening it cannot pull in a customer environment, because in production only the canaries run an rc version and `<new release>` is an rc version by *Step 1*.
+
+Count the rows before pinning them. This list is the entire production selector for the rest of the run, and a canary region holds one or two environments, so a namespace lost to one missed scrape puts the whole prod sweep on half the fleet with nothing downstream to catch it. Expect one row per canary organization per region.
 
 The canary organizations are `Materialize Production Sandbox` and `Materialize Production Analytics`. Which regions carry which has changed over time, so always derive rather than assume, and note that the bot's links and Prometheus have disagreed on this. Sources and Sinks historically inspected only the sandbox environment.
 
 The canonical canary list lives in `MaterializeInc/release`, in `templates/issue.md`, as the `--environment` arguments to `bin/deploy upgrade production`. The `storage-overview` sign-off panel points instead at `MaterializeInc/cloud/.github/ISSUE_TEMPLATE/03-release.md`, which no longer exists.
 
-In staging every environment runs a release candidate, so a version join both selects the right set and excludes development environments:
+In staging every environment runs a release candidate, so a version join both selects the right set and excludes development environments. The join has to span the sample window rather than the evaluation instant, which is what `max_over_time` is doing here:
 
 ```promql
 sum(rate(<metric>[6h]) * on(namespace) group_left()
-    group by (namespace) (v2_mz_compute_cluster_status{mz_version=~".*-rc[.].*"}))
+    group by (namespace) (max_over_time(v2_mz_compute_cluster_status{mz_version=~".*-rc[.].*"}[6h])))
 ```
 
 Escaping note: write `-rc[.]` rather than `-rc\\.` so the expression survives JSON encoding unchanged.
+
+**Never read `v2_mz_compute_cluster_status` at an instant. Wrap every use of it in `max_over_time` over the window it is being read across.** For the two range queries that is the step; for Step 2's one-shot derivation it is the analysis window. It comes from the promsql exporter, so one missed scrape leaves a namespace with no series at that timestamp, and each of the three places this workflow reads it then fails silently and in the direction of health: the staging join drops every pod of that namespace from the aggregate, Step 2's derivation drops it from the pinned production selector, and Step 1's boundary query reports its version as having disappeared. On the v26.40.0-rc.3 run the staging working-set sum read 161 GB instead of 229 GB and swap read 0 instead of 57 GB at one bucket, because a single customer environment had no status sample at that instant. Widening the lookback closes all three. Dropping the staging join instead is not an option, since development environments run at roughly a quarter of staging clusterd CPU.
+
+### Sweeping the full production fleet
+
+After a production rollout, the release under test is the final version on every customer environment, not an rc on the canaries. The Step 2 derivation then selects every environment on the new version, with three adjustments learned on the v26.43.0 production US sweep in September 2026:
+
+* **Require a minimum number of samples.** Short-lived test environments can pick up the new version for an hour and then disappear. A plain `max_over_time` derivation counted 23 namespaces in us-west-2 where 15 were steadily on the release. Keep namespaces present for most of the after-window.
+* **Exclude environments that did not upgrade**, such as one whose rollout was cancelled, and treat the canaries separately, since they ran rc builds before the boundary.
+* **Compare equal-length windows at equal post-restart age.** The after-window is only as long as the time since each region cut over, often a few hours. Compare it against the same clock window after the previous weekly upgrade and against the same window on each of the prior days. A multi-day `sum(avg_over_time(...))` before-window counts every pod that existed during it: one counted 1847 clusterd pods against about 200 live.
+
+Grafana aligns a one-day step to 00:00 UTC, so a daily series of windows ending at a chosen time needs an `offset`.
 
 ## Step 3: Choose the time window
 
@@ -239,7 +257,7 @@ A reference that names a metric the build no longer exports is worse than no ref
 `doc/user/data/metrics.yml` is the generated catalog of `metric!` invocations in the Rust tree. It is checked in, so it is tagged along with each release, and the working tree's copy describes `main`, which is ahead of whatever you are verifying. Reading that copy during a sign-off answers a question you did not ask. Read the catalog at the two release tags instead and diff them:
 
 ```
-scripts/catalog-diff.sh v26.38.0 v26.39.0-rc.3
+bin/pyactivate .agents/skills/mz-release-signoff/scripts/catalog_diff.py v26.38.0 v26.39.0-rc.3
 ```
 
 That turns "is this empty panel a regression or a rename?" into a lookup. A name in the removed list explains an after-window that went empty, and it is a documentation fix rather than a finding. A name in the added list explains an empty before-window, and comparing across the boundary on it is meaningless.
@@ -252,7 +270,9 @@ The diff survives that blind spot, because both sides share it and a dynamically
 
 When a name resolves in neither the catalog nor Prometheus, the panel that plots it is dead, and the reference should record that rather than the metric. `git log -S<name> --all -- src/` settles which kind of dead it is, and the two kinds read differently in a report. `mz_query_latency` was real, added in #22049 and deleted in #26647 along with the stash, so the `environmentd-health` panel that still plots its `_bucket` family has been empty since that deletion. `mz_persist_columnar_validation_count` and `mz_txn_placeholder_schema_apply` have never appeared in this repository at all, yet both are live arms of the persist dashboard's `should be small` panel, and the working spelling of the first sits beside it on the same panel as `mz_persist_columnar_op_count` with `op="validation"` and `result="invalid"`.
 
-`ci/test/lint-skill-metrics.sh` guards the other direction, so the references cannot rot silently between releases. It resolves every `mz_*` name in this skill against the working tree's catalog, patterns included, and fails on any that neither resolves nor appears in `scripts/metrics-allowlist.txt`. The allowlist is the point: it carries one line per name the catalog does not cover, with the reason, so adding to it is a deliberate act and a genuinely renamed metric still fails. It also fails on an allowlist entry that has started resolving, so the exemptions cannot outlive their reason. A failure is an instruction to update the skill, never to suppress the lint.
+`ci/test/lint-skill-metrics.sh` guards the other direction, so the references cannot rot silently between releases. It resolves every `mz_*` name in this skill against the working tree's catalog, patterns included, and fails on any that neither resolves nor appears in `scripts/metrics-allowlist.txt`. Roster rows that abbreviate a family as `` `mz_foo_bar`, `_baz` `` are expanded against the preceding name, and fenced blocks are extracted before backticks are paired, since pairing across a fence desynchronises every span after it. An abbreviation that resolves against more than one prefix of its base also fails, because the row is then not pinned to one metric: deleting the intended one leaves a shorter cut resolving and the row green while it points at nothing. Spell that member out in full.
+
+Two blind spots bound what a green run proves. A name covered by a glob entry cannot be falsified, since the pattern keeps matching after the metric is gone, which currently affects ten names including the whole `mz_persist_*_bytes` family. A bare `` `_count` ``, `` `_sum` ``, or `` `_bucket` `` is read as prose about a histogram rather than as an abbreviation, because that is what it usually is, so a family member has to be written out in full to be checked. The allowlist is the point: it carries one line per name the catalog does not cover, with the reason, so adding to it is a deliberate act and a genuinely renamed metric still fails. It also fails on an allowlist entry that has started resolving, so the exemptions cannot outlive their reason. A failure is an instruction to update the skill, never to suppress the lint.
 
 ## Traps
 

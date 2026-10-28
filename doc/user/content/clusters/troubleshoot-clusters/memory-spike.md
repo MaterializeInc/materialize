@@ -1,5 +1,5 @@
 ---
-title: "Cluster memory spike troubleshooting"
+title: "Troubleshoot anomalies in memory usage"
 description: "Find what caused a cluster's memory to spike, and how to prevent it recurring."
 menu:
   main:
@@ -18,7 +18,7 @@ prevent it recurring.
 
 For sustained CPU/memory pressure and OOM crash loops on an undersized
 cluster, see [Check cluster
-health](/transform-data/freshness-troubleshooting/#check-cluster-health). This
+health](/transform-data/freshness/troubleshoot-freshness/#check-cluster-health). This
 guide focuses on **spikes**: sudden increases against an otherwise healthy
 baseline.
 
@@ -29,21 +29,21 @@ baseline.
 [`mz_internal.mz_cluster_replica_metrics_history`](/sql/system-catalog/mz_internal/#mz_cluster_replica_metrics_history)
 retains per-replica memory samples across restarts (at least 30 days by
 default), so you can find a past spike even if the replica has since
-recovered or restarted:
+recovered, restarted, or been replaced by a resize:
 
 ```mzsql
 SELECT
     c.name AS cluster_name,
-    r.name AS replica_name,
+    rh.replica_name,
     h.process_id,
     max(h.heap_bytes) AS peak_heap_bytes,
     max(h.heap_limit) AS heap_limit_bytes,
     min(h.occurred_at) FILTER (WHERE h.heap_bytes > 0.9 * h.heap_limit) AS first_above_90pct
 FROM mz_internal.mz_cluster_replica_metrics_history h
-JOIN mz_catalog.mz_cluster_replicas r ON r.id = h.replica_id
-JOIN mz_catalog.mz_clusters c ON c.id = r.cluster_id
+JOIN mz_internal.mz_cluster_replica_history rh ON rh.replica_id = h.replica_id
+JOIN mz_catalog.mz_clusters c ON c.id = rh.cluster_id
 WHERE h.occurred_at > now() - INTERVAL '7 days'
-GROUP BY c.name, r.name, h.process_id
+GROUP BY c.name, rh.replica_name, h.process_id
 HAVING max(h.heap_bytes) > 0.9 * max(h.heap_limit)
 ORDER BY peak_heap_bytes DESC;
 ```
@@ -107,7 +107,7 @@ ORDER BY occurred_at;
 ```
 
 See also [Check for DDL or deploy
-activity](/transform-data/freshness-troubleshooting/#check-for-ddl-or-deploy-activity).
+activity](/transform-data/freshness/troubleshoot-freshness/#check-for-ddl-or-deploy-activity).
 
 **Resolution**: Put new objects on their own cluster and cut over with a
 [blue/green deployment](/developer-tools/dbt/blue-green-deployments/) instead
@@ -185,6 +185,6 @@ to find which arrangement is largest.
 
 - [Hydration](/fundamentals/concepts/hydration/)
 - [Dataflow troubleshooting](/transform-data/dataflow-troubleshooting/)
-- [Freshness troubleshooting](/transform-data/freshness-troubleshooting/)
+- [Freshness troubleshooting](/transform-data/freshness/troubleshoot-freshness/)
 - [Replica resource usage](/observability/replica-resource-usage/)
 - [Operational guidelines](/clusters/operational-guidelines/)

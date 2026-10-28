@@ -126,7 +126,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_columns
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_connections
@@ -154,7 +154,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_index_columns
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_indexes
@@ -289,6 +289,22 @@ mz_aws_privatelink_connection_statuses
 VIEW
 materialize
 mz_internal
+mz_builtin_columns
+VIEW
+materialize
+mz_internal
+mz_builtin_index_columns
+VIEW
+materialize
+mz_internal
+mz_builtin_indexes
+VIEW
+materialize
+mz_internal
+mz_builtin_log_indexes
+VIEW
+materialize
+mz_internal
 mz_builtin_materialized_views
 VIEW
 materialize
@@ -414,7 +430,7 @@ VIEW
 materialize
 mz_internal
 mz_history_retention_strategies
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_hydration_statuses
@@ -446,7 +462,7 @@ VIEW
 materialize
 mz_internal
 mz_materialized_view_refresh_strategies
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_materialized_view_refreshes
@@ -506,7 +522,7 @@ VIEW
 materialize
 mz_internal
 mz_object_global_ids
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_object_graph_edges
@@ -598,7 +614,7 @@ VIEW
 materialize
 mz_internal
 mz_replacements
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_replica_hydration_history
@@ -766,7 +782,7 @@ VIEW
 materialize
 mz_internal
 mz_source_references
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_source_statistics

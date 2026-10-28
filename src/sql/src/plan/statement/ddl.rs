@@ -349,7 +349,7 @@ pub fn plan_create_table(
                     }
                 }
                 ColumnOption::Versioned { action, version } => {
-                    let version = RelationVersion::from(*version);
+                    let version = normalize::relation_version(*version);
                     versioned = true;
 
                     let name = normalize::column_name(c.name.clone());
@@ -1659,6 +1659,7 @@ pub fn plan_create_subsource(
             SourceExportStatementDetails::Postgres {
                 table,
                 cast_oid_full_range,
+                initial_lsn,
             } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
                 column_casts: crate::pure::postgres::generate_column_casts(
                     scx,
@@ -1667,6 +1668,7 @@ pub fn plan_create_subsource(
                     cast_oid_full_range,
                 )?,
                 table,
+                initial_lsn,
             }),
             SourceExportStatementDetails::MySql {
                 table,
@@ -1750,6 +1752,7 @@ generate_extracted_config!(
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeConstraints, Vec::<String>, Default(vec![])),
     (ExcludeAllConstraints, bool, Default(false)),
+    (ExcludeAllNotNullConstraints, bool, Default(false)),
     (PartitionBy, Vec<Ident>),
     (RetainHistory, OptionalDuration),
     (Details, String)
@@ -1783,6 +1786,7 @@ pub fn plan_create_table_from_source(
         exclude_columns,
         exclude_constraints: _,
         exclude_all_constraints: _,
+        exclude_all_not_null_constraints: _,
         retain_history,
         partition_by,
         details,
@@ -1824,6 +1828,7 @@ pub fn plan_create_table_from_source(
         SourceExportStatementDetails::Postgres {
             table,
             cast_oid_full_range,
+            initial_lsn,
         } => SourceExportDetails::Postgres(PostgresSourceExportDetails {
             column_casts: crate::pure::postgres::generate_column_casts(
                 scx,
@@ -1832,6 +1837,7 @@ pub fn plan_create_table_from_source(
                 cast_oid_full_range,
             )?,
             table,
+            initial_lsn,
         }),
         SourceExportStatementDetails::MySql {
             table,
@@ -2827,8 +2833,7 @@ pub fn describe_alter_network_policy(
     Ok(StatementDesc::new(None))
 }
 
-/// Rejects times that `mz_materialized_view_refresh_strategies` could not pack as a
-/// `timestamptz`, whose range is far smaller than `mz_timestamp`'s.
+/// Rejects times that are too large.
 fn check_refresh_time(option: &str, ts: Timestamp) -> Result<(), PlanError> {
     let renderable = i64::try_from(ts)
         .ok()
@@ -3429,7 +3434,11 @@ fn plan_sink(
                 .any(|key_columns| key_columns.iter().all(|column| indices.contains(column)));
 
             if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                if key.not_enforced {
+                // Persisted sinks (pcx is None) are re-planned against the keys
+                // the running optimizer derives, which can be fewer than when
+                // the sink was created. Rejecting the key there fails catalog
+                // boot, so only new statements enforce it.
+                if key.not_enforced || scx.pcx.is_none() {
                     scx.catalog
                         .add_notice(PlanNotice::UpsertSinkKeyNotEnforced {
                             key: key_columns.clone(),
@@ -4479,7 +4488,7 @@ pub fn plan_create_index(
                 .map(|i| {
                     let name = on_desc.get_name(*i);
                     if name_counts.get(name).copied() == Some(1) {
-                        Expr::Identifier(vec![name.clone().into()])
+                        Expr::Identifier(vec![normalize::column_name_ident(name)])
                     } else {
                         Expr::Value(Value::Number((i + 1).to_string()))
                     }
@@ -6744,19 +6753,20 @@ pub fn plan_alter_cluster(
                         ClusterAlterOptionExtracted::try_from(with_options)?;
                     alter_strategy = AlterClusterPlanStrategy::try_from(alter_strategy_extracted)?;
 
-                    // Only a replica config shape change has a hydrate-overlap
-                    // to wait on. Reject a `WAIT` on anything else rather than
-                    // accept a wait that silently has nothing to do.
+                    // WAIT applies to replica shape changes and RF retargets of
+                    // an in-flight reconfiguration. For an RF-only change with
+                    // nothing in flight, WAIT has no effect.
                     if !matches!(alter_strategy, AlterClusterPlanStrategy::None)
                         && size.is_none()
+                        && replication_factor.is_none()
                         && availability_zones.is_none()
                         && introspection_debugging.is_none()
                         && introspection_interval.is_none()
                         && experimental_arrangement_compression.is_none()
                     {
                         sql_bail!(
-                            "WAIT can only be used together with a SIZE, AVAILABILITY ZONES, \
-                            INTROSPECTION, or EXPERIMENTAL ARRANGEMENT COMPRESSION change"
+                            "WAIT can only be used together with a SIZE, REPLICATION FACTOR, \
+                            AVAILABILITY ZONES, INTROSPECTION, or EXPERIMENTAL ARRANGEMENT COMPRESSION change"
                         );
                     }
 

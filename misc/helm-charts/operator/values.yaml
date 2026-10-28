@@ -13,7 +13,7 @@ operator:
     # -- The Docker repository for the operator image
     repository: materialize/orchestratord
     # -- The tag/version of the operator image to be used
-    tag: v26.41.0
+    tag: v26.47.0
     # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
@@ -56,6 +56,14 @@ operator:
     statementLoggingTargetDataRate:
     # Newer versions ignore this setting and always enforce license key checks.
     enableLicenseKeyChecks: false
+    # -- Root-signed intermediate certificates whose keys may also sign
+    # license keys. Requires an operator built from v26.49.0-dev.0 or later.
+    licenseKeyIntermediateCerts: []
+    # -- Whether to allow `CREATE NETWORK POLICY` and `ALTER NETWORK POLICY`
+    # in environmentd. Network policies match on client IP, which self-managed
+    # deployments generally do not preserve (port-forwards and most ingress
+    # setups present a proxy address), so they are disabled by default.
+    enableDatabaseNetworkPolicies: false
     # -- Whether to install the v1 version of the Materialize CRD and the
     # conversion webhook that converts between v1 and v1alpha1. When false,
     # only the v1alpha1 CRD version is installed and no webhook serving
@@ -323,6 +331,30 @@ environmentd:
       # Setting the memory request to slightly less than limit
       # allows the pod to use swap if enabled at the kubelet.
       memory: "4095Mi"
+  # -- Default readiness probe overrides for environmentd, overlaid onto the
+  # built-in TCP check against environmentd's SQL port. Only the fields set here
+  # are changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
+  # replaces the built-in one. The Materialize CR's
+  # `environmentdReadinessProbe` is overlaid on top of this.
+  # @notationType -- k8s/probe
+  # @default -- ``{}``
+  defaultReadinessProbe: {}
+  # -- Default liveness probe overrides for environmentd, overlaid onto the
+  # built-in TCP check against environmentd's SQL port. Only the fields set here
+  # are changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
+  # replaces the built-in one. The Materialize CR's
+  # `environmentdLivenessProbe` is overlaid on top of this.
+  # @notationType -- k8s/probe
+  # @default -- ``{}``
+  defaultLivenessProbe: {}
+  # -- Default startup probe for environmentd. Liveness and readiness checks
+  # are held off until it succeeds. No startup probe runs unless this or the
+  # Materialize CR's `environmentdStartupProbe` sets one. It is overlaid onto
+  # the built-in TCP check against environmentd's SQL port in the same way as
+  # `defaultReadinessProbe`.
+  # @notationType -- k8s/probe
+  # @default -- ``{}``
+  defaultStartupProbe: {}
 
 clusterd:
   # -- Node selector to use for all clusterd pods spawned by the operator
@@ -445,7 +477,9 @@ observability:
 
 telemetry:
   enabled: true
+  # @ignored
   segmentApiKey: hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A
+  # @ignored
   segmentClientSide: true
 
 # Network policies configuration

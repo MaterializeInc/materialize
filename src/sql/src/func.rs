@@ -3726,6 +3726,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Numeric) => AggregateFunc::MaxNumeric => Numeric, oid::FUNC_MAX_NUMERIC_OID;
             params!(Interval) => AggregateFunc::MaxInterval => Interval, 2128;
             params!(Time) => AggregateFunc::MaxTime => Time, 2123;
+            params!(ArrayAny) => AggregateFunc::MaxArray => ArrayAny, 2050;
+            params!(ListAny) => AggregateFunc::MaxList => ListAny, oid::FUNC_MAX_LIST_OID;
         },
         "min" => Aggregate {
             params!(Bool) => AggregateFunc::MinBool => Bool, oid::FUNC_MIN_BOOL_OID;
@@ -3748,6 +3750,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Numeric) => AggregateFunc::MinNumeric => Numeric, oid::FUNC_MIN_NUMERIC_OID;
             params!(Interval) => AggregateFunc::MinInterval => Interval, 2144;
             params!(Time) => AggregateFunc::MinTime => Time, 2139;
+            params!(ArrayAny) => AggregateFunc::MinArray => ArrayAny, 2051;
+            params!(ListAny) => AggregateFunc::MinList => ListAny, oid::FUNC_MIN_LIST_OID;
         },
         "jsonb_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
@@ -3839,18 +3843,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Float32) => AggregateFunc::SumFloat32 => Float32, 2110;
             params!(Float64) => AggregateFunc::SumFloat64 => Float64, 2111;
             params!(Numeric) => AggregateFunc::SumNumeric => Numeric, 2114;
-            params!(Interval) => Operation::unary(|_ecx, _e| {
-                // Explicitly providing this unsupported overload
-                // prevents `sum(NULL)` from choosing the `Float64`
-                // implementation, so that we match PostgreSQL's behavior.
-                // Plus we will one day want to support this overload.
-                //
-                // The message mentions `avg` because `avg(interval)` desugars
-                // to `sum(interval) / count(interval)` before type checking
-                // (see `plan_avg` in `transform_ast.rs`), so this error is all
-                // a user who typed only `avg` gets to see.
-                bail_unsupported!("sum(interval) and avg(interval)");
-            }) => Interval, 2113;
+            params!(Interval) => AggregateFunc::SumInterval => Interval, 2113;
         },
 
         // Scalar window functions.
@@ -4560,6 +4553,16 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 "has_type_privilege(current_user, $1, $2)",
             ) => Bool, 3143;
         },
+        "jq" => Scalar {
+            params!(Jsonb, String) => Operation::binary(|ecx, input, program| {
+                ecx.require_feature_flag(&vars::ENABLE_JQ)?;
+                let Some(program) = program.into_literal_string() else {
+                    sql_bail!("jq requires a string literal as its second argument");
+                };
+                let program = func::JqProgram::new(&program).map_err(|e| sql_err!("jq: {e}"))?;
+                Ok(input.call_unary(UnaryFunc::Jq(func::Jq(program))))
+            }) => Jsonb, oid::FUNC_JQ_OID;
+        },
         "kafka_murmur2" => Scalar {
             params!(String) => UnaryFunc::KafkaMurmur2String(func::KafkaMurmur2String)
                 => Int32, oid::FUNC_KAFKA_MURMUR2_STRING_OID;
@@ -4775,6 +4778,11 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "mz_now" => Scalar {
             params!() => UnmaterializableFunc::MzNow => MzTimestamp, oid::FUNC_MZ_NOW_OID;
+        },
+        "mz_session_role_memberships" => Scalar {
+            params!() => UnmaterializableFunc::MzSessionRoleMemberships
+                => SqlScalarType::Array(Box::new(SqlScalarType::String)),
+                oid::FUNC_MZ_SESSION_ROLE_MEMBERSHIPS_OID;
         },
         "mz_uptime" => Scalar {
             params!() => UnmaterializableFunc::MzUptime => Interval, oid::FUNC_MZ_UPTIME_OID;
@@ -5236,11 +5244,6 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
                     custom_id: None,
                 }, oid::FUNC_MZ_ROLE_OID_MEMBERSHIPS;
         },
-        "mz_session_role_memberships" => Scalar {
-            params!() => UnmaterializableFunc::MzSessionRoleMemberships
-                => SqlScalarType::Array(Box::new(SqlScalarType::String)),
-                oid::FUNC_MZ_SESSION_ROLE_MEMBERSHIPS_OID;
-        },
         // There is no regclass equivalent for databases to look up
         // oids, so we have this helper function instead.
         "mz_database_oid" => Scalar {
@@ -5438,6 +5441,13 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
                     ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_U32_OID_INTERNAL_V1;
+            // `mz_catalog` declares `avg_internal_v1(interval)`, so this
+            // overload has to exist for that signature to plan. Promotion is
+            // the identity for intervals in both versions of this function,
+            // which differ only in what they promote integers to, so
+            // `avg_internal_v1` and `avg` agree over intervals.
+            params!(Interval) => Operation::identity()
+                => Interval, oid::FUNC_MZ_AVG_PROMOTION_INTERVAL_OID_INTERNAL_V1;
         },
         "mz_avg_promotion" => Scalar {
             // Promotes a numeric type to the smallest fractional type that
@@ -5484,6 +5494,11 @@ pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock
                     ecx, CastContext::Explicit, e, &SqlScalarType::Numeric {max_scale: None},
                 )
             }) => Numeric, oid::FUNC_MZ_AVG_PROMOTION_NUMERIC_OID;
+            // `avg(interval)` is `sum(interval) / count(interval)`, and
+            // PostgreSQL's `interval / float8` already produces the fractional
+            // result, so no promotion is needed.
+            params!(Interval) => Operation::identity()
+                => Interval, oid::FUNC_MZ_AVG_PROMOTION_INTERVAL_OID;
         },
         "mz_error_if_null" => Scalar {
             // If the first argument is NULL, returns an EvalError::Internal whose error
@@ -6066,6 +6081,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Lt) => Bool, 631;
             params!(PgLegacyName, PgLegacyName) => BF::from(func::Lt) => Bool, 660;
             params!(Jsonb, Jsonb) => BF::from(func::Lt) => Bool, 3242;
+            params!(ListAny, ListAny) => BF::from(func::Lt) => Bool, oid::FUNC_LIST_LT_OID;
             params!(ArrayAny, ArrayAny) => BF::from(func::Lt) => Bool, 1072;
             params!(RecordAny, RecordAny) => BF::from(func::Lt) => Bool, 2990;
             params!(MzTimestamp, MzTimestamp) => BF::from(func::Lt)
@@ -6096,6 +6112,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Lte) => Bool, 632;
             params!(PgLegacyName, PgLegacyName) => BF::from(func::Lte) => Bool, 661;
             params!(Jsonb, Jsonb) => BF::from(func::Lte) => Bool, 3244;
+            params!(ListAny, ListAny) => BF::from(func::Lte) => Bool, oid::FUNC_LIST_LTE_OID;
             params!(ArrayAny, ArrayAny) => BF::from(func::Lte) => Bool, 1074;
             params!(RecordAny, RecordAny) => BF::from(func::Lte) => Bool, 2992;
             params!(MzTimestamp, MzTimestamp) => BF::from(func::Lte)
@@ -6126,6 +6143,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Gt) => Bool, 633;
             params!(PgLegacyName, PgLegacyName) => BF::from(func::Gt) => Bool, 662;
             params!(Jsonb, Jsonb) => BF::from(func::Gt) => Bool, 3243;
+            params!(ListAny, ListAny) => BF::from(func::Gt) => Bool, oid::FUNC_LIST_GT_OID;
             params!(ArrayAny, ArrayAny) => BF::from(func::Gt) => Bool, 1073;
             params!(RecordAny, RecordAny) => BF::from(func::Gt) => Bool, 2991;
             params!(MzTimestamp, MzTimestamp) => BF::from(func::Gt)
@@ -6156,6 +6174,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Gte) => Bool, 634;
             params!(PgLegacyName, PgLegacyName) => BF::from(func::Gte) => Bool, 663;
             params!(Jsonb, Jsonb) => BF::from(func::Gte) => Bool, 3245;
+            params!(ListAny, ListAny) => BF::from(func::Gte) => Bool, oid::FUNC_LIST_GTE_OID;
             params!(ArrayAny, ArrayAny) => BF::from(func::Gte) => Bool, 1075;
             params!(RecordAny, RecordAny) => BF::from(func::Gte) => Bool, 2993;
             params!(MzTimestamp, MzTimestamp) => BF::from(func::Gte)
@@ -6230,6 +6249,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(PgLegacyChar, PgLegacyChar) => BF::from(func::NotEq) => Bool, 630;
             params!(PgLegacyName, PgLegacyName) => BF::from(func::NotEq) => Bool, 643;
             params!(Jsonb, Jsonb) => BF::from(func::NotEq) => Bool, 3241;
+            params!(ListAny, ListAny) => BF::from(func::NotEq) => Bool, oid::FUNC_LIST_NOT_EQ_OID;
             params!(ArrayAny, ArrayAny) => BF::from(func::NotEq) => Bool, 1071;
             params!(RecordAny, RecordAny) => BF::from(func::NotEq) => Bool, 2989;
             params!(MzTimestamp, MzTimestamp) => BF::from(func::NotEq)

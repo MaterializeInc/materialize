@@ -17,7 +17,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use futures::stream::FuturesOrdered;
 use http::Uri;
@@ -28,6 +27,7 @@ use mz_controller_types::ReplicaId;
 use mz_expr::row::RowCollection;
 use mz_expr::{Eval, MapFilterProject, MirRelationExpr, ResultSpec, RowSetFinishing};
 use mz_ore::cast::CastFrom;
+use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::stats::SnapshotPartStats;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
@@ -36,7 +36,7 @@ use mz_sql::catalog::{CatalogError, SessionCatalog};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, CreateSourcePlanBundle,
-    FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind, RaisePlan, SideEffectingFunc,
+    FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind, RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -58,7 +58,7 @@ use tracing::{Instrument, Level, Span, event, warn};
 use crate::ExecuteContext;
 use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, ExecuteResponse, Response};
-use crate::coord::appends::{DeferredOp, DeferredPlan};
+use crate::coord::appends::DeferredPlan;
 use crate::coord::validity::PlanValidity;
 use crate::coord::{
     Coordinator, DeferredPlanStatement, ExplainPlanContext, Message, PlanStatement, TargetCluster,
@@ -88,17 +88,14 @@ use crate::util::ClientTransmitter;
 // initialized and we need to skip directly to creating role. We have a specific method,
 // `sequence_create_role_for_startup` for this purpose.
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
-// `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
-// - The frontend peek sequencing temporarily reaches into this module for things that are needed
-//   by both the old and new peek sequencing. TODO(peek-seq): We plan to eliminate this with a
-//   big refactoring after the old peek sequencing is removed.
+// `sequence_staged` and `sequence_create_connection_stage_finish`.
+// - The frontend peek sequencing reaches into this module for some shared helpers.
+//   TODO(peek-seq): Move these out of the coordinator.
 
 mod inner;
 
 impl Coordinator {
-    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would
-    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    /// Dispatches a plan in a size-bounded, heap-allocated future.
     pub(crate) fn sequence_plan(
         &mut self,
         mut ctx: ExecuteContext,
@@ -106,7 +103,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
         sql_impl_resolved_ids: ResolvedIds,
     ) -> LocalBoxFuture<'_, ()> {
-        async move {
+        let future = async move {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
@@ -130,15 +127,10 @@ impl Coordinator {
                     ctx,
                     plan,
                     validity,
-                    requires_locks: BTreeSet::default(),
                     resolved_ids,
                     sql_impl_resolved_ids,
                 };
-                // Defer op accepts an optional write lock, but there aren't any writes occurring
-                // here, since the map to `None`.
-                let acquire_future = wait_future.map(|()| None);
-
-                self.defer_op(acquire_future, DeferredOp::Plan(deferred_plan));
+                self.defer_plan(wait_future, deferred_plan);
 
                 // Return early because our op is deferred on waiting for the builtin writes to
                 // complete.
@@ -187,24 +179,11 @@ impl Coordinator {
                 }
             }
 
-            // Look up the authenticated role of the connection targeted by
-            // pg_cancel_backend, which check_plan needs for its RBAC check.
-            // Linear search through active connections is fine because this
-            // happens at most once per statement.
-            let target_conn_role = match &plan {
-                Plan::SideEffectingFunc(SideEffectingFunc::PgCancelBackend {
-                    connection_id: Some(connection_id),
-                }) => self
-                    .active_conns()
-                    .into_iter()
-                    .find(|(conn_id, _)| conn_id.unhandled() == *connection_id)
-                    .map(|(_, conn_meta)| *conn_meta.authenticated_role_id()),
-                _ => None,
-            };
-
+            // The target-connection role only matters for `pg_cancel_backend`,
+            // which the frontend sequences.
             if let Err(e) = rbac::check_plan(
                 &session_catalog,
-                target_conn_role,
+                None,
                 ctx.session(),
                 &plan,
                 target_cluster_id,
@@ -312,9 +291,6 @@ impl Coordinator {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
                     ctx.retire(result);
                 }
-                Plan::CopyTo(plan) => {
-                    self.sequence_copy_to(ctx, plan, target_cluster).await;
-                }
                 Plan::DropObjects(plan) => {
                     let result = self.sequence_drop_objects(&mut ctx, plan).await;
                     ctx.retire(result);
@@ -416,23 +392,11 @@ impl Coordinator {
                     }
                     self.sequence_end_transaction(ctx, action).await;
                 }
-                Plan::Select(plan) => {
-                    let max = Some(ctx.session().vars().max_query_result_size());
-                    self.sequence_peek(ctx, plan, target_cluster, max).await;
-                }
                 Plan::Subscribe(plan) => {
                     self.sequence_subscribe(ctx, plan, target_cluster).await;
                 }
-                Plan::SideEffectingFunc(plan) => {
-                    self.sequence_side_effecting_func(ctx, plan).await;
-                }
                 Plan::ShowCreate(plan) => {
                     ctx.retire(Ok(Self::send_immediate_rows(plan.row)));
-                }
-                Plan::ShowColumns(show_columns_plan) => {
-                    let max = Some(ctx.session().vars().max_query_result_size());
-                    self.sequence_peek(ctx, show_columns_plan.select_plan, target_cluster, max)
-                        .await;
                 }
                 Plan::CopyFrom(plan) => {
                     self.sequence_copy_from(ctx, plan, target_cluster).await;
@@ -441,8 +405,7 @@ impl Coordinator {
                     self.sequence_explain_plan(ctx, plan, target_cluster).await;
                 }
                 Plan::ExplainPushdown(plan) => {
-                    self.sequence_explain_pushdown(ctx, plan, target_cluster)
-                        .await;
+                    self.sequence_explain_pushdown(ctx, plan).await;
                 }
                 Plan::ExplainSinkSchema(plan) => {
                     let result = self.sequence_explain_schema(plan);
@@ -452,11 +415,22 @@ impl Coordinator {
                     self.sequence_explain_timestamp(ctx, plan, target_cluster)
                         .await;
                 }
-                Plan::Insert(plan) => {
-                    self.sequence_insert(ctx, plan).await;
-                }
-                Plan::ReadThenWrite(plan) => {
-                    self.sequence_read_then_write(ctx, plan).await;
+                // `try_frontend_peek` and `try_frontend_read_then_write` take over every statement
+                // that plans to one of these.
+                // TODO(SQL-760): Drop the manual soft panic once internal errors soft-panic
+                // centrally.
+                plan @ (Plan::CopyTo(_)
+                | Plan::Insert(_)
+                | Plan::ReadThenWrite(_)
+                | Plan::Select(_)
+                | Plan::ShowColumns(_)
+                | Plan::SideEffectingFunc(_)) => {
+                    let msg = format!(
+                        "{:?} plan reached the coordinator despite frontend routing",
+                        PlanKind::from(&plan)
+                    );
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg)));
                 }
                 Plan::AlterNoop(plan) => {
                     ctx.retire(Ok(ExecuteResponse::AlteredObject(plan.object_type)));
@@ -568,8 +542,8 @@ impl Coordinator {
                         // must not be reordered to depend on a transaction
                         // commit: the transaction was just cleared above, so
                         // there is no commit left to promote a staged reset.
-                        ctx.session_mut().reset();
-                        Ok(ExecuteResponse::DiscardedAll)
+                        let params = ctx.session_mut().reset();
+                        Ok(ExecuteResponse::DiscardedAll { params })
                     } else {
                         Err(AdapterError::OperationProhibitsTransaction(
                             "DISCARD ALL".into(),
@@ -732,8 +706,8 @@ impl Coordinator {
                 }
             }
         }
-        .instrument(tracing::debug_span!("coord::sequencer::sequence_plan"))
-        .boxed_local()
+        .instrument(tracing::debug_span!("coord::sequencer::sequence_plan"));
+        crate::coord::box_dispatcher(future)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -882,7 +856,11 @@ impl Coordinator {
                     returning: Vec::new(),
                     max_result_size: catalog.system_config().max_result_size(),
                 };
-                Self::send_diffs(session, diffs_plan)
+                let result = Self::send_diffs(session, diffs_plan);
+                // Let schema-fencing tests land an ALTER after packing rows
+                // against this descriptor but before the transaction commits.
+                fail::fail_point!("insert_after_pack_before_commit");
+                result
             }
             None => panic!(
                 "tried using sequence_insert_constant on non-constant MirRelationExpr\n{}",
@@ -1071,9 +1049,6 @@ pub(crate) fn emit_optimizer_notices(
 }
 
 /// Evaluates a COPY TO target URI expression and validates it.
-///
-/// This function is shared between the old peek sequencing (sequence_copy_to)
-/// and the new frontend peek sequencing to avoid code duplication.
 pub fn eval_copy_to_uri(
     to: HirScalarExpr,
     session: &Session,

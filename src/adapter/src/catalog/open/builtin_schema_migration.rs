@@ -37,11 +37,11 @@ use futures::future::BoxFuture;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
     BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_CATALOG_RAW, MZ_CATALOG_RAW_DESCRIPTION,
-    MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION,
-    MZ_OBJECT_HYDRATION_HISTORY, MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION,
-    MZ_REPLICA_HYDRATION_HISTORY, MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
-    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, MZ_COMPUTE_HYDRATION_TIMES_DESCRIPTION,
+    MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION, MZ_OBJECT_HYDRATION_HISTORY,
+    MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION, MZ_REPLICA_HYDRATION_HISTORY,
+    MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
@@ -334,6 +334,15 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_type_pg_metadata",
         ),
+        // `mz_type_pg_metadata` gained a trailing `typlen` column. See the NOTE
+        // above: this version must stay at the workspace's current dev version
+        // until the change ships.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::Table,
+            MZ_INTERNAL_SCHEMA,
+            "mz_type_pg_metadata",
+        ),
         // Converting the connection-detail builtin tables to materialized views
         // changes their catalog fingerprint, so each needs an explicit
         // replacement step.
@@ -471,6 +480,95 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             CatalogItemType::Source,
             MZ_INTERNAL_SCHEMA,
             "mz_cluster_replica_metrics_history",
+        ),
+        MigrationStep::evolution(
+            "26.43.0-dev.0",
+            CatalogItemType::Table,
+            MZ_INTERNAL_SCHEMA,
+            "mz_replica_hydration_history",
+        ),
+        // Converting mz_object_global_ids from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.44.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_object_global_ids",
+        ),
+        // Converting mz_source_references from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.45.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_source_references",
+        ),
+        // Converting mz_replacements from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.46.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_replacements",
+        ),
+        // mz_indexes reads builtin indexes from mz_builtin_indexes
+        // and builtin logs from mz_builtin_log_indexes instead of
+        // inlining them, which changes its SQL fingerprint.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        // mz_sources reads builtin sources from mz_builtin_sources
+        // and builtin logs from mz_builtin_log_indexes
+        // instead of inlining them, which changes its SQL fingerprint.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
+        ),
+        // Converting mz_history_retention_strategies from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_history_retention_strategies",
+        ),
+        // Converting mz_materialized_view_refresh_strategies from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint. We also change columns:
+        // - aligned_at (timestamptz) -> aligned_to_expression (text)
+        // - at (timestamptz)-> at_expression (text)
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_materialized_view_refresh_strategies",
+        ),
+        // Converting mz_columns from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.49.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_columns",
+        ),
+        // Converting mz_index_columns from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.49.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_index_columns",
         ),
     ]
 });
@@ -768,6 +866,7 @@ impl Migration {
             Some("replacement") => (true, self.plan_forced_migration(Mechanism::Replacement)),
             Some(other) => panic!("unknown force migration mechanism: {other}"),
         };
+        let plan = self.drop_shardless(plan);
 
         if self.source_version == self.target_version && !force {
             info!("skipping migration: already at target version");
@@ -873,6 +972,10 @@ impl Migration {
                 &*MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, object,
                 "mz_cluster_replica_frontiers cannot be migrated or else the 0dt caught-up gate loses its live-frontier reference"
             );
+            assert_ne!(
+                &*MZ_COMPUTE_HYDRATION_TIMES_DESCRIPTION, object,
+                "mz_compute_hydration_times cannot be migrated or else the 0dt caught-up gate loses its leader-hydration reference"
+            );
 
             let Some(object_info) = self.system_objects.get(object) else {
                 panic!("migration step for non-existent builtin: {object:?}");
@@ -925,10 +1028,6 @@ impl Migration {
         let objects = self
             .system_objects
             .iter()
-            // Skip objects that don't yet have a shard registered. These are brand-new builtins
-            // added in this version; the leader will allocate their shards during bootstrap, and
-            // there is nothing to evolve or replace.
-            .filter(|(_, info)| info.shard_id.is_some())
             .filter(|(_, info)| participates_in_forced_migration(info.builtin, mechanism))
             .map(|(object, _)| object.clone())
             .collect();
@@ -939,6 +1038,26 @@ impl Migration {
             Mechanism::Replacement => plan.replace = objects,
         }
 
+        plan
+    }
+
+    /// Drop objects that have no shard registered from the plan.
+    ///
+    /// A builtin without a shard does not exist in persist yet: either it was added in the target
+    /// version, or the source version predates it entirely (an upgrade from before the builtin
+    /// was introduced can reach an `Evolution` step registered for a later version). In both
+    /// cases the leader allocates the shard during bootstrap, at the target schema, and there is
+    /// nothing to evolve or replace. Applied to every plan, forced or versioned, so that both
+    /// paths agree; a read-only process that reached `migrate_evolve_one` with such an object
+    /// would otherwise bail out and crash-loop.
+    fn drop_shardless(&self, mut plan: Plan) -> Plan {
+        let has_shard = |object: &SystemObjectDescription| {
+            self.system_objects
+                .get(object)
+                .is_none_or(|info| info.shard_id.is_some())
+        };
+        plan.evolve.retain(has_shard);
+        plan.replace.retain(has_shard);
         plan
     }
 

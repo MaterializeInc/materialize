@@ -54,7 +54,7 @@ hydration time at the cost of a higher peak.
   parameters](/self-managed-deployments/configuration-system-parameters/) for
   other ways to set it.
 
-- On Materialize Cloud, [contact our team](/support/) to have it configured
+- On Materialize Cloud, [contact our team](https://materialize.com/support/) to have it configured
   for your cluster.
 
 ## Reuse arrangements across consumers
@@ -130,7 +130,7 @@ the new version to the side to avoid downtime:
   see [blue/green deployment](/developer-tools/dbt/blue-green-deployments/).
 
 - For a single materialized view, creating and hydrating a [replacement
-  materialized view (public preview) and replacing the existing view in
+  materialized view and replacing the existing view in
   place](/transform-data/updating-materialized-views/replace-materialized-view/)
   may be simpler, but briefly reduces freshness. The replacement materialized
   view can be either on the same or different cluster.
@@ -166,4 +166,4 @@ cost and, on self-managed deployments, the additional capacity required.
 - [Durable subscriptions](/serve-results/durable-subscriptions/)
 - [Snapshotting](/fundamentals/concepts/snapshotting/)
 - [Clusters](/fundamentals/concepts/clusters/)
-- [Troubleshooting](/serve-results/troubleshooting/#hydrating-objects)
+- [Troubleshooting](/serve-results/troubleshooting/unresponsive-queries/#check-for-hydrating-objects)

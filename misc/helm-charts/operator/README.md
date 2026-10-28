@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v26.43.0-dev.0](https://img.shields.io/badge/Version-v26.43.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.43.0-dev.0](https://img.shields.io/badge/AppVersion-v26.43.0--dev.0-informational?style=flat-square)
+![Version: v26.49.0-dev.0](https://img.shields.io/badge/Version-v26.49.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.49.0-dev.0](https://img.shields.io/badge/AppVersion-v26.49.0--dev.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -127,8 +127,11 @@ The following table lists the configurable parameters of the Materialize operato
 | `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``{}`` |
 | `console.tolerations` | Tolerations to use for console pods spawned by the operator | ``{}`` |
 | `environmentd.affinity` | Affinity to use for environmentd pods spawned by the operator | ``{}`` |
+| `environmentd.defaultLivenessProbe` | Default liveness probe overrides for environmentd, overlaid onto the built-in TCP check against environmentd's SQL port. Only the fields set here are changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`) replaces the built-in one. The Materialize CR's `environmentdLivenessProbe` is overlaid on top of this. | ``{}`` |
+| `environmentd.defaultReadinessProbe` | Default readiness probe overrides for environmentd, overlaid onto the built-in TCP check against environmentd's SQL port. Only the fields set here are changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`) replaces the built-in one. The Materialize CR's `environmentdReadinessProbe` is overlaid on top of this. | ``{}`` |
 | `environmentd.defaultResources.limits` | Default resource limits for environmentd's CPU and memory if not set in the Materialize CR | ``{"memory":"4Gi"}`` |
 | `environmentd.defaultResources.requests` | Default resources requested for environmentd's CPU and memory if not set in the Materialize CR | ``{"cpu":"1","memory":"4095Mi"}`` |
+| `environmentd.defaultStartupProbe` | Default startup probe for environmentd. Liveness and readiness checks are held off until it succeeds. No startup probe runs unless this or the Materialize CR's `environmentdStartupProbe` sets one. It is overlaid onto the built-in TCP check against environmentd's SQL port in the same way as `defaultReadinessProbe`. | ``{}`` |
 | `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
 | `environmentd.priorityClassName` | PriorityClass to use for environmentd pods spawned by the operator. The PriorityClass must already exist. Kubernetes rejects a pod that names one it cannot resolve, so a typo here stops these pods being created at all. | ``""`` |
 | `environmentd.tolerations` | Tolerations to use for environmentd pods spawned by the operator | ``{}`` |
@@ -143,9 +146,11 @@ The following table lists the configurable parameters of the Materialize operato
 | `observability.prometheus.scrapeAnnotations.enabled` | Whether to annotate pods with common keys used for prometheus scraping. | ``true`` |
 | `operator.additionalMaterializeCRDColumns` | Additional columns to display when printing the Materialize CRD in table format. | ``{}`` |
 | `operator.affinity` | Affinity to use for the operator pod | ``{}`` |
+| `operator.args.enableDatabaseNetworkPolicies` | Whether to allow `CREATE NETWORK POLICY` and `ALTER NETWORK POLICY` in environmentd. Network policies match on client IP, which self-managed deployments generally do not preserve (port-forwards and most ingress setups present a proxy address), so they are disabled by default. | ``false`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.enableLicenseKeyChecks` |  | ``false`` |
 | `operator.args.installV1CRD` | Whether to install the v1 version of the Materialize CRD and the conversion webhook that converts between v1 and v1alpha1. When false, only the v1alpha1 CRD version is installed and no webhook serving certificate or service is created. | ``false`` |
+| `operator.args.licenseKeyIntermediateCerts` | Root-signed intermediate certificates whose keys may also sign license keys. Requires an operator built from v26.49.0-dev.0 or later. | ``[]`` |
 | `operator.args.startupLogFilter` | Log filtering settings for startup logs | ``"INFO,mz_orchestratord=TRACE"`` |
 | `operator.args.statementLoggingMaxSampleRate` | Caps the fraction of statements recorded in query history, via environmentd's `statement_logging_max_sample_rate`. This is the rate Materialize Cloud runs at. Sampling costs CPU on environmentd, but the volume written is bounded by `statementLoggingTargetDataRate` rather than by this, so lowering this gives up query history completeness without lowering the ceiling on what statement logging stores. Set it to `0` to disable statement logging entirely, or to `null` to inherit environmentd's default. | ``0.99`` |
 | `operator.args.statementLoggingTargetDataRate` | Caps the sustained volume statement logging writes, in bytes per second, via environmentd's `statement_logging_target_data_rate`. This is what actually bounds how fast query history grows, and the recorded history is retained for the lifetime of the environment, so lower it on environments with limited storage. Must be greater than 0. Set it to `null` to inherit environmentd's default of 2071 bytes per second, which is the rate Materialize Cloud runs at. | ``nil`` |
@@ -178,7 +183,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.swap_enabled` | Configure sizes such that the pod QoS class is not Guaranteed, as is required for swap to be enabled. Disk doesn't make much sense with swap, as swap performs better than lgalloc, so it also gets disabled. | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.41.0"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.47.0"`` |
 | `operator.nodeSelector` | Node selector to use for the operator pod | ``{}`` |
 | `operator.podDisruptionBudget.enabled` | Whether to create a PodDisruptionBudget for the operator. Only created when `replicas` is greater than 1, since a budget over a single replica either blocks node drains or protects nothing. | ``true`` |
 | `operator.podDisruptionBudget.maxUnavailable` | Maximum number of operator pods that may be unavailable at once during voluntary disruptions. Expressed as a maximum rather than a minimum so that node drains are never blocked outright, they are only serialized. | ``1`` |
@@ -200,15 +205,13 @@ The following table lists the configurable parameters of the Materialize operato
 | `storage.storageClass.reclaimPolicy` |  | ``"Delete"`` |
 | `storage.storageClass.volumeBindingMode` |  | ``"WaitForFirstConsumer"`` |
 | `telemetry.enabled` |  | ``true`` |
-| `telemetry.segmentApiKey` |  | ``"hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A"`` |
-| `telemetry.segmentClientSide` |  | ``true`` |
 | `tls.defaultCertificateSpecs` |  | ``{}`` |
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example:
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v26.43.0-dev.0 \
+  --set operator.image.tag=v26.49.0-dev.0 \
   materialize/materialize-operator
 ```
 
@@ -243,7 +246,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v26.43.0-dev.0
+  environmentdImageRef: materialize/environmentd:v26.49.0-dev.0
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
@@ -268,6 +271,17 @@ The chart creates a `ClusterRole` and `ClusterRoleBinding` by default. To use an
 ### Observability
 
 To enable observability features, set `observability.enabled=true`. This will create the necessary resources for monitoring the operator. If you want to use Prometheus, also set `observability.prometheus.enabled=true`.
+
+### Balancer dynamic configuration
+
+Create a ConfigMap containing a `config.json` entry in the Materialize
+instance's namespace and set `spec.balancerdConfigmapName` on the Materialize
+resource to its name. For a standalone Balancer resource, use
+`spec.configmapName`. The operator only mounts the referenced ConfigMap.
+You manage its contents and lifecycle.
+
+For setup, runtime updates, and verification, see
+[Configure balancerd dynamic configuration](https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/#configure-balancerd-dynamic-configuration).
 
 ### Network Policies
 

@@ -25,7 +25,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle};
 use mz_ore::url::SensitiveUrl;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig, open_hedge_sibling};
-use mz_persist::hedge::HedgedBlob;
+use mz_persist::hedge::{HedgeSiblingOpener, HedgedBlob};
 use mz_persist::location::{
     BLOB_GET_LIVENESS_KEY, Blob, CONSENSUS_HEAD_LIVENESS_KEY, Consensus, ExternalError, Tasked,
     VersionedData,
@@ -251,8 +251,9 @@ impl PersistClientCache {
                 })
                 .await;
                 // Hedged gets need a second handle on an isolated connection
-                // pool. Built unconditionally (best-effort): the wrapper
-                // reads its enable flag dynamically per call.
+                // pool. Built unconditionally (the wrapper reads its enable
+                // flag dynamically per call) and armed in the background, so
+                // the sibling open never runs under this lock.
                 //
                 // NOTE: HedgedBlob must stay below Tasked in this stack. Its
                 // race relies on dropping the losing future to cancel the
@@ -261,15 +262,20 @@ impl PersistClientCache {
                 // between HedgedBlob and the backend would break the former,
                 // and an aborting layer above would slowly leak budget
                 // tokens via the latter.
-                let sibling = open_hedge_sibling(
-                    x.key(),
-                    Box::new(self.cfg.clone()),
-                    self.metrics.s3_blob.clone(),
-                )
-                .await;
-                let blob = Arc::new(HedgedBlob::new(
+                let sibling_opener: HedgeSiblingOpener = {
+                    let url = x.key().clone();
+                    let cfg = self.cfg.clone();
+                    let metrics = self.metrics.s3_blob.clone();
+                    Box::new(move || {
+                        let (url, cfg, metrics) = (url.clone(), cfg.clone(), metrics.clone());
+                        Box::pin(
+                            async move { open_hedge_sibling(&url, Box::new(cfg), metrics).await },
+                        )
+                    })
+                };
+                let blob = Arc::new(HedgedBlob::new_arming(
                     blob,
-                    sibling,
+                    sibling_opener,
                     Arc::clone(&self.cfg.configs),
                     self.metrics.blob_hedge.clone(),
                 ));

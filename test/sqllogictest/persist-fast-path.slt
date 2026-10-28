@@ -11,6 +11,12 @@ mode cockroach
 
 # Verify that the persist fast path only kicks in when it's expected to do so.
 
+# The ORDER BY and key-lookup cases below depend on this flag.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_fast_path_order = true
+----
+COMPLETE 0
+
 # Generate a table, with multiple batches of data and some partial overlaps
 statement ok
 CREATE TABLE numbers (
@@ -208,6 +214,85 @@ Source materialize.public.numbers
 Target cluster: quickstart
 
 EOF
+
+# The ORDER BY and key-lookup fast paths read rows in the shard's sort order and
+# stop early. That is only correct if the shard order matches SQL order:
+# negative before positive numbers, bytewise text, NULLs last. Each INSERT and
+# DELETE below writes its own batch, so the reads also consolidate across runs,
+# including a retraction of the row that would otherwise sort first. The LIMIT
+# is below the row count, so the early stop decides which rows come back.
+
+statement ok
+CREATE TABLE ordered (a int, b text);
+
+statement ok
+INSERT INTO ordered VALUES (3, 'c'), (NULL, 'n'), (-2, 'x');
+
+statement ok
+INSERT INTO ordered VALUES (1, 'b'), (-10, 'z'), (1, 'B');
+
+statement ok
+INSERT INTO ordered VALUES (2, 'q'), (-2, 'a');
+
+statement ok
+DELETE FROM ordered WHERE a = -10;
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM ordered ORDER BY a, b LIMIT 3;
+----
+Explained Query (fast path):
+  Finish order_by=[#0 asc nulls_last, #1 asc nulls_last] limit=3 output=[#0, #1]
+    PeekPersist materialize.public.ordered
+
+Target cluster: quickstart
+
+EOF
+
+query IT
+SELECT * FROM ordered ORDER BY a, b LIMIT 3;
+----
+-2 a
+-2 x
+1 B
+
+statement ok
+CREATE TABLE events (k int, v text);
+
+statement ok
+CREATE MATERIALIZED VIEW event_counts AS SELECT k, count(*) AS n FROM events GROUP BY k;
+
+statement ok
+INSERT INTO events VALUES (1, 'x'), (5, 'x'), (-5, 'x'), (9, 'x');
+
+statement ok
+INSERT INTO events VALUES (5, 'y');
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM event_counts WHERE k = 5;
+----
+Explained Query (fast path):
+  Filter (#0{k} = 5)
+    PeekPersist materialize.public.event_counts [value=(5)]
+
+Target cluster: quickstart
+
+EOF
+
+# The second INSERT retracted (5, 1) in a later batch.
+query II
+SELECT * FROM event_counts WHERE k = 5;
+----
+5 2
+
+query II
+SELECT * FROM event_counts WHERE k = -5;
+----
+-5 1
+
+# Filters beyond the key still apply.
+query II
+SELECT * FROM event_counts WHERE k = 5 AND n > 2;
+----
 
 # Check that we bound result set size correctly
 

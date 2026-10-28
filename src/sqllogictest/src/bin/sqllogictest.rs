@@ -20,7 +20,9 @@ use std::process::ExitCode;
 
 use chrono::Utc;
 use clap::ArgAction;
-use mz_adapter_types::dyncfgs::ENABLE_BACKGROUND_ALTER_CLUSTER;
+use mz_adapter_types::dyncfgs::{
+    ENABLE_BACKGROUND_ALTER_CLUSTER, ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE,
+};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
@@ -184,6 +186,9 @@ async fn main() -> ExitCode {
     // wins.
     system_parameter_defaults
         .entry(ENABLE_BACKGROUND_ALTER_CLUSTER.name().to_string())
+        .or_insert_with(|| "true".to_string());
+    system_parameter_defaults
+        .entry(ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string())
         .or_insert_with(|| "true".to_string());
 
     let config = RunConfig {

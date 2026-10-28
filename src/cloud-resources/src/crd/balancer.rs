@@ -66,10 +66,17 @@ pub mod v1alpha1 {
     pub struct BalancerSpec {
         /// The balancerd image to run.
         pub balancerd_image_ref: String,
+        /// The name of an externally managed ConfigMap in this namespace containing
+        /// dynamic configuration as a JSON object in `config.json`.
+        pub configmap_name: Option<String>,
         // Resource requirements for the balancerd pod
         pub resource_requirements: Option<ResourceRequirements>,
         // Number of balancerd pods to create
         pub replicas: Option<i32>,
+        /// Leave the balancerd Deployment's replica count to an external
+        /// autoscaler, such as a HorizontalPodAutoscaler. `replicas` then only
+        /// seeds the count when the Deployment is first created.
+        pub externally_scaled: Option<bool>,
         // The configuration for generating an x509 certificate using cert-manager for balancerd
         // to present to incoming connections.
         // The dns_names and issuer_ref fields are required.
@@ -109,7 +116,18 @@ pub mod v1alpha1 {
             self.name_prefixed("balancerd")
         }
 
-        pub fn replicas(&self) -> i32 {
+        /// The replica count to apply, or `None` if replicas are externally scaled.
+        pub fn replicas(&self) -> Option<i32> {
+            if self.spec.externally_scaled.unwrap_or(false) {
+                None
+            } else {
+                Some(self.initial_replicas())
+            }
+        }
+
+        /// The replica count to create the Deployment with. When externally
+        /// scaled, the autoscaler owns the count from then on.
+        pub fn initial_replicas(&self) -> i32 {
             self.spec.replicas.unwrap_or(2)
         }
 

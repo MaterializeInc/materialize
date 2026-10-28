@@ -50,7 +50,7 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
-use mz_service::secrets::SecretsReaderCliArgs;
+use mz_secrets_cli::SecretsReaderCliArgs;
 use mz_storage_client::controller::{
     IntrospectionType, StorageController, StorageMetadata, StorageTxn,
 };

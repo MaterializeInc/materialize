@@ -1,4 +1,5 @@
 ---
+draft: true
 title: mz secret
 description: The `mz secret` command manages users in a region.
 menu:

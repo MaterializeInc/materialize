@@ -1404,14 +1404,14 @@ SELECT name FROM mz_columns WHERE name = 'foobar';
 query TTTT
 SHOW COLUMNS IN mz_columns
 ----
-id       false  text    The␠unique␠ID␠of␠the␠table,␠source,␠or␠view␠containing␠the␠column.
-name     false  text    The␠name␠of␠the␠column.
-position false  uint8   The␠1-indexed␠position␠of␠the␠column␠in␠its␠containing␠table,␠source,␠or␠view.
-nullable false  boolean Can␠the␠column␠contain␠a␠`NULL`␠value?
-type     false  text    The␠data␠type␠of␠the␠column.
-default  true   text    The␠default␠expression␠of␠the␠column.
-type_oid false  oid     The␠OID␠of␠the␠type␠of␠the␠column␠(references␠`mz_types`).
-type_mod false  integer The␠packed␠type␠identifier␠of␠the␠column.
+id  false  text  The␠unique␠ID␠of␠the␠table,␠source,␠or␠view␠containing␠the␠column.
+name  false  text  The␠name␠of␠the␠column.
+position  false  uint8  The␠1-indexed␠position␠of␠the␠column␠in␠its␠containing␠table,␠source,␠or␠view.
+nullable  false  boolean  Can␠the␠column␠contain␠a␠`NULL`␠value?
+type  false  text  The␠data␠type␠of␠the␠column.
+default  true  text  The␠default␠expression␠of␠the␠column,␠or␠`NULL`␠if␠it␠has␠none.
+type_oid  false  oid  The␠OID␠of␠the␠type␠of␠the␠column␠(references␠`mz_types`).
+type_mod  false  integer  The␠packed␠type␠identifier␠of␠the␠column.
 
 statement ok
 COMMIT;
@@ -1547,15 +1547,15 @@ CREATE SCHEMA s2;
 statement ok
 CREATE MATERIALIZED VIEW s2.const_mv AS (SELECT 1);
 
-# TODO(peek-seq): Uncomment this when the new peek sequencing is turned on in CI. See the comment on
-# `in_immediate_multi_stmt_txn`.
-#simple
-#SELECT * FROM s1.t;
-#SELECT * FROM s2.const_mv AS OF 7;
-#----
-#COMPLETE 0
-#1
-#COMPLETE 1
+# The AS OF query is not validated against the timedomain that the first query
+# established. See the comment on `in_immediate_multi_stmt_txn`.
+simple
+SELECT * FROM s1.t;
+SELECT * FROM s2.const_mv AS OF 7;
+----
+COMPLETE 0
+1
+COMPLETE 1
 
 # Cleanup.
 

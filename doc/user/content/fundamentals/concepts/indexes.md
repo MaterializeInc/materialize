@@ -202,6 +202,8 @@ Materialize performs a full index scan if the `WHERE` clause:
   equality condition that specifies a different value type than the index key
   type.
 - Uses `OR` (disjunction) to combine conditions for **different** fields.
+- Specifies a long `IN` list. See [Long `IN`
+  lists](/transform-data/optimization/#long-in-lists).
 
 Full index scans are less efficient than point lookups. The performance of full
 index scans will degrade with data volume; i.e., as you get more data, full

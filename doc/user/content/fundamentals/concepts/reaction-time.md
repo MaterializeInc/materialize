@@ -1,6 +1,6 @@
 ---
 title: Reaction Time, Freshness, and Query Latency
-description: "Learn about indexes in Materialize."
+description: "Learn about freshness, query latency, and reaction time, and how they determine how current and how fast query results are in Materialize."
 menu:
   main:
     parent: concepts
