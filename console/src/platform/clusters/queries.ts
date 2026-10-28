@@ -48,6 +48,7 @@ import {
   ClusterListFilters,
   fetchClusters,
 } from "~/api/materialize/cluster/clusterList";
+import { fetchClusterSourceExports } from "~/api/materialize/cluster/clusterSourceExports";
 import {
   fetchIndexesList,
   ListFilters,
@@ -135,8 +136,11 @@ type ReplicaUtilizationHistoryFilters = {
 
 type ClusterFreshnessParams = {
   lookbackMs: number;
-  /** The objects to report on, already filtered by the caller. */
-  objects: FreshnessObject[];
+  /**
+   * The objects to report on, already filtered by the caller. Undefined holds
+   * the query until the caller knows them.
+   */
+  objects: FreshnessObject[] | undefined;
 };
 
 export const clusterQueryKeys = {
@@ -228,6 +232,19 @@ export const clusterQueryKeys = {
       buildQueryKeyPart("clusterFreshnessSeries", {
         lookbackMs: params.lookbackMs,
         objectIds: [...params.objectIds].sort().join(","),
+      }),
+    ] as const,
+  clusterSourceExports: (params: {
+    clusterId: string;
+    sourceIds: string[];
+    exportsKey: string;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("clusterSourceExports", {
+        clusterId: params.clusterId,
+        sourceIds: [...params.sourceIds].sort().join(","),
+        exportsKey: params.exportsKey,
       }),
     ] as const,
   replicaUtilization: () =>
@@ -1483,19 +1500,90 @@ export function isOnCluster(object: DatabaseObject, clusterId: string) {
   );
 }
 
-/** The objects on a cluster that the freshness views report on. */
-export function useFreshnessObjects(clusterId: string): FreshnessObject[] {
-  return useFreshnessObjectsWhere((object) => isOnCluster(object, clusterId));
+/**
+ * IDs of the subsources and tables that `clusterId`'s sources ingest into.
+ * Undefined until the cluster's sources are known and, if it has any, the
+ * first lookup answers. A failed lookup yields no IDs.
+ */
+export function useClusterSourceExportIds(
+  clusterId: string,
+): Set<string> | undefined {
+  const {
+    data: allObjects,
+    snapshotComplete,
+    isError: isAllObjectsError,
+  } = useAllObjects();
+  // Before the snapshot is in, a source missing from it may not have arrived.
+  const sourcesKnown = snapshotComplete || isAllObjectsError;
+
+  // Refetch exactly when the answer can change: a source joins or leaves the
+  // cluster, or a subsource or table is created or dropped. User IDs come from
+  // the catalog's `USER_ITEM_ALLOC_KEY` counter, which only increases, so
+  // creating or dropping one changes the count or the largest ID.
+  const sourceIds: string[] = [];
+  let count = 0;
+  let maxId = 0;
+  for (const object of allObjects) {
+    if (isSystemId(object.id)) continue;
+    if (object.objectType === "source" && object.clusterId === clusterId) {
+      sourceIds.push(object.id);
+    }
+    if (object.sourceType !== "subsource" && object.objectType !== "table") {
+      continue;
+    }
+    count += 1;
+    maxId = Math.max(maxId, parseInt(object.id.slice(1), 10));
+  }
+
+  const hasSources = sourceIds.length > 0;
+  const { data, isError } = useQuery({
+    queryKey: clusterQueryKeys.clusterSourceExports({
+      clusterId,
+      sourceIds,
+      exportsKey: `${count}:${maxId}`,
+    }),
+    queryFn: async ({ queryKey, signal }) => {
+      const { rows } = await fetchClusterSourceExports({
+        clusterId,
+        queryKey,
+        requestOptions: { signal },
+      });
+      return rows.map((row) => row.exportId);
+    },
+    enabled: sourcesKnown && hasSources,
+    staleTime: Infinity,
+    // Without it, every DDL that changes the key would drop back to undefined
+    // and blank the caller until the new answer arrives.
+    placeholderData: keepPreviousData,
+  });
+
+  if (!sourcesKnown) return undefined;
+  if (!hasSources || isError) return new Set();
+  return data ? new Set(data) : undefined;
+}
+
+/**
+ * The objects a cluster's freshness views report on: the objects on it, plus
+ * the subsources and tables its sources ingest into. Undefined until those
+ * are known, so a caller never reports on a partial list first.
+ */
+export function useFreshnessObjects(
+  clusterId: string,
+): FreshnessObject[] | undefined {
+  const exportIds = useClusterSourceExportIds(clusterId);
+  const objects = useFreshnessObjectsWhere(
+    (object) =>
+      isOnCluster(object, clusterId) || (exportIds?.has(object.id) ?? false),
+  );
+  return exportIds ? objects : undefined;
 }
 
 /**
  * The objects matching `include` that the freshness views report on, from the
  * `useAllObjects` subscribe rather than a query.
  *
- * Subsources and progress collections are excluded to match the rest of the
- * Console, which hides them: each source carries a progress collection and
- * often several subsources, so including them would multiply the line count
- * without adding anything a reader recognises.
+ * Progress collections are excluded: a progress collection is its source's
+ * bookkeeping, and the source already reports its lag.
  */
 export function useFreshnessObjectsWhere(
   include: (object: DatabaseObject) => boolean,
@@ -1510,12 +1598,7 @@ export function useFreshnessObjectsWhere(
   // Only the fields read downstream are in the key. A rename has to invalidate
   // it; a column nothing reads must not.
   const objects = allObjects
-    .filter(
-      (object) =>
-        include(object) &&
-        object.sourceType !== "subsource" &&
-        object.sourceType !== "progress",
-    )
+    .filter((object) => include(object) && object.sourceType !== "progress")
     .map((object): FreshnessObject => ({
       objectId: object.id,
       objectName: object.name,
@@ -1669,7 +1752,7 @@ export function useClusterFreshness({
   lookbackMs,
   objects,
 }: ClusterFreshnessParams) {
-  const objectIds = objects.map((object) => object.objectId);
+  const objectIds = (objects ?? []).map((object) => object.objectId);
 
   // While the page sits open, the series refetches once per bin, which at a
   // 24 hour range is 24 minutes, so it re-reads the whole window at most once
@@ -1699,12 +1782,16 @@ export function useClusterFreshness({
       });
       return rows;
     },
+    enabled: objects !== undefined,
     staleTime: LATEST_READING_INTERVAL_MS,
     refetchInterval: binSizeMs,
   });
 
   const data = useMemo(
-    () => (series.data ? buildFreshnessData(series.data, objects) : undefined),
+    () =>
+      series.data && objects
+        ? buildFreshnessData(series.data, objects)
+        : undefined,
     [series.data, objects],
   );
 
