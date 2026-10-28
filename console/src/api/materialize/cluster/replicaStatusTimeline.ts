@@ -11,6 +11,7 @@ import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
+import { buildIdListQuery } from "~/api/materialize/idList";
 
 export const OOM_REASON = "oom-killed";
 
@@ -121,14 +122,15 @@ export function buildObjectHydrationTimesQuery({
   objectIds: string[];
 }) {
   return queryBuilder
+    .with("ids", () => buildIdListQuery(objectIds))
     .selectFrom("mz_compute_hydration_times")
+    .innerJoin("ids", "ids.id", "object_id")
     .select([
       "replica_id as replicaId",
       "object_id as objectId",
       sql<number | null>`time_ns::float8 / 1000000`.as("hydrationMs"),
     ])
-    .where("replica_id", "in", replicaIds)
-    .where("object_id", "in", objectIds);
+    .where("replica_id", "in", replicaIds);
 }
 
 /** When environmentd last started, by the wall clock. */

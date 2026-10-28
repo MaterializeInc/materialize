@@ -11,6 +11,7 @@ import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
+import { buildIdListQuery } from "~/api/materialize/idList";
 
 // Lag data is recorded on 60s intervals so we set the minimum bucket size to 1 minute
 const MIN_BUCKET_SIZE_MS = 60_000;
@@ -54,13 +55,6 @@ export type LagHistoryParameters = {
  * `mz_objects`, `mz_clusters` and `mz_object_fully_qualified_names` (itself a
  * view over `mz_objects`, `mz_schemas` and `mz_databases`) because the
  * environment-wide and single-object callers do depend on those names.
- *
- * NOTE: the IDs go in as a literal `IN` list because that is the only form
- * that reaches an index lookup on `mz_wallclock_global_lag_recent_history_ind`.
- * Measured on v26.45.0-dev: a literal list plans as `lookup` up to 330 entries
- * and as a full scan from 331, while an `unnest`ed array and an `IN (SELECT
- * ...)` subquery both plan as a differential join at every size. A cluster
- * past 330 objects therefore loses the lookup and reads the whole index.
  */
 export function buildObjectLagHistoryQuery({
   objectIds,
@@ -75,9 +69,11 @@ export function buildObjectLagHistoryQuery({
 
   return (
     queryBuilder
+      .with("ids", () => buildIdListQuery(objectIds))
       .with("readings", (cte) =>
         cte
           .selectFrom("mz_wallclock_global_lag_recent_history")
+          .innerJoin("ids", "ids.id", "object_id")
           .select([
             sql<Date>`date_bin(
               '${bucketSizeMs} MILLISECONDS',
@@ -87,7 +83,6 @@ export function buildObjectLagHistoryQuery({
             "lag",
             "object_id",
           ])
-          .where("object_id", "in", objectIds)
           .where(
             (eb) =>
               sql`${eb.ref("occurred_at")} + INTERVAL '${sql.raw(`${lookbackMs}`)} MILLISECONDS'`,
@@ -118,10 +113,11 @@ export function buildObjectLagHistoryQuery({
  */
 export function buildLatestLagQuery(objectIds: string[]) {
   return queryBuilder
+    .with("ids", () => buildIdListQuery(objectIds))
     .selectFrom("mz_wallclock_global_lag_recent_history")
+    .innerJoin("ids", "ids.id", "object_id")
     .distinctOn("object_id")
     .select(["object_id as objectId", "lag"])
-    .where("object_id", "in", objectIds)
     .where(
       (eb) => sql`${eb.ref("occurred_at")} + INTERVAL '2 MINUTES'`,
       ">=",

@@ -15,6 +15,7 @@ import {
   IPostgresInterval,
   queryBuilder,
 } from "~/api/materialize";
+import { buildIdListQuery } from "~/api/materialize/idList";
 
 export const ALLOWED_OBJECT_TYPES = [
   "index" as const,
@@ -40,34 +41,19 @@ export const buildMaterializationLagQuery = ({
   objectIds,
 }: Required<MaterializationLagParams>) => {
   const query = queryBuilder
+    .with("ids", () => buildIdListQuery(objectIds))
     .with("materializationLag", (qb) =>
       qb
-        .selectFrom(
-          qb
-            .selectFrom("mz_objects")
-            .selectAll()
-            .where("id", "in", objectIds)
-            .as("objects"),
-        )
-        .leftJoin(
-          // Scope to the requested objects. Otherwise this scans hydration for
-          // every object in the environment and only the join discards the rest.
-          qb
-            .selectFrom("mz_hydration_statuses")
-            .selectAll()
-            .where("object_id", "in", objectIds)
-            .as("hs"),
-          "hs.object_id",
-          "objects.id",
-        )
+        .selectFrom("ids")
+        .leftJoin("mz_hydration_statuses as hs", "hs.object_id", "ids.id")
         .leftJoin(
           // Get the latest lag values for each object.
           // We use a temporal filter of 5 minutes because the lag values for all objects are updated every minute.
-          // Scope to the requested objects so the per-object Top-1 reads via the
-          // object_id index instead of computing latest-lag for every object in
-          // the environment and discarding all but these in the join.
+          // Joined to the ids inside the subquery so the per-object Top-1 covers
+          // these objects only, not every object in the environment.
           qb
             .selectFrom("mz_wallclock_global_lag_recent_history")
+            .innerJoin("ids", "ids.id", "object_id")
             .select(["object_id", "lag"])
             .distinctOn(["object_id"])
             .orderBy("object_id")
@@ -77,17 +63,11 @@ export const buildMaterializationLagQuery = ({
               ">=",
               sql<Date>`mz_now()`,
             )
-            .where("object_id", "in", objectIds)
             .as("ml"),
           "ml.object_id",
-          "objects.id",
+          "ids.id",
         )
-        .select([
-          "objects.id as targetObjectId",
-          "objects.type",
-          "hs.hydrated",
-          "ml.lag as lag",
-        ]),
+        .select(["ids.id as targetObjectId", "hs.hydrated", "ml.lag as lag"]),
     )
     .selectFrom("materializationLag")
     .selectAll()
@@ -127,76 +107,6 @@ export async function fetchMaterializationLag(
   if (!objectIds || objectIds.length === 0) return null;
 
   const compiledQuery = buildMaterializationLagQuery({ objectIds }).compile();
-  return executeSqlV2({
-    queries: compiledQuery,
-    queryKey: queryKey,
-    requestOptions,
-  });
-}
-
-/*
-  This query uses buildMaterializationLag to calculate, given a list of objects,
-  if they're outdated or hydrated. It also returns the source type if it's a source.
-
-*/
-export const buildBlockedDependenciesQuery = ({
-  objectIds,
-}: Required<MaterializationLagParams>) => {
-  const materializationLagQuery = buildMaterializationLagQuery({
-    objectIds,
-  });
-
-  return queryBuilder
-    .selectFrom(materializationLagQuery.as("materializationLag"))
-    .leftJoin(
-      "mz_sources as sources",
-      "materializationLag.targetObjectId",
-      "sources.id",
-    )
-    .leftJoin(
-      "mz_indexes as indexes",
-      "indexes.id",
-      "materializationLag.targetObjectId",
-    )
-    .leftJoin(
-      "mz_materialized_views as mvs",
-      "mvs.id",
-      "materializationLag.targetObjectId",
-    )
-    .leftJoin("mz_clusters as clusters", (join) =>
-      join.on((eb) =>
-        eb(
-          "clusters.id",
-          "=",
-          eb.fn.coalesce("indexes.cluster_id", "mvs.cluster_id"),
-        ),
-      ),
-    )
-    .select([
-      "materializationLag.targetObjectId",
-      "materializationLag.isOutdated",
-      "materializationLag.hydrated",
-      "materializationLag.type",
-      "sources.type as sourceType",
-      "clusters.id as clusterId",
-      "clusters.name as clusterName",
-    ]);
-};
-
-type BlockedDependenciesResults = InferResult<
-  ReturnType<typeof buildBlockedDependenciesQuery>
->;
-
-export type BlockedDependencyInfo = BlockedDependenciesResults[0];
-
-export async function fetchBlockedDependencies(
-  { objectIds }: MaterializationLagParams,
-  queryKey: QueryKey,
-  requestOptions?: RequestInit,
-) {
-  if (!objectIds || objectIds.length === 0) return null;
-
-  const compiledQuery = buildBlockedDependenciesQuery({ objectIds }).compile();
   return executeSqlV2({
     queries: compiledQuery,
     queryKey: queryKey,

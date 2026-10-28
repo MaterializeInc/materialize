@@ -93,7 +93,6 @@ export function buildValidMaterializationLagHandler(
   params: MaterializationLagParams,
   results: LagResults = [
     {
-      type: "materialized-view",
       hydrated: true,
       lag: parsePostgresInterval("00:01:33.676"),
       targetObjectId: "u188",

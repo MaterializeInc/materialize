@@ -11,11 +11,11 @@ import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
+import { buildIdListQuery } from "~/api/materialize/idList";
 
 /**
  * When each of the given indexes and materialized views was created, for those
- * created at or after `startDate`. The literal id list makes this a lookup on
- * `mz_object_lifetimes_ind`.
+ * created at or after `startDate`.
  */
 export function buildObjectCreationTimesQuery({
   objectIds,
@@ -26,9 +26,10 @@ export function buildObjectCreationTimesQuery({
 }) {
   return (
     queryBuilder
-      .selectFrom("mz_object_lifetimes")
-      .select(["id", "occurred_at as occurredAt"])
-      .where("id", "in", objectIds)
+      .with("ids", () => buildIdListQuery(objectIds))
+      .selectFrom("mz_object_lifetimes as ol")
+      .innerJoin("ids", "ids.id", "ol.id")
+      .select(["ol.id", "occurred_at as occurredAt"])
       // Clusters, replicas, roles and schemas share the `u<N>` id form, so an id
       // alone can match another kind's creation.
       .where("object_type", "in", ["index", "materialized-view"])
