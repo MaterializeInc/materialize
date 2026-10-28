@@ -4930,7 +4930,7 @@ mz_catalog.mz_columns:
                               →Read l1
       →Differential Join %1:mz_catalog_raw[#1{schema_name}, #2{name}] » %0[#0{schema_name}, #1{relation_name}]
         →Arrange (#0{schema_name}, #1{relation_name})
-          →Constant (1937 rows)
+          →Constant (1972 rows)
         →Arrange (#1{schema_name}, #2{name})
           →Fused with Child Map/Filter/Project
             Project: #6, #4, #3
@@ -5608,7 +5608,7 @@ mz_catalog.mz_sources:
             Project: #4, #0, #5, #1, #2, #6..=#12, #3, #13, #14
             Map: null, null, null, null, null, null, "s1", null, null
         →Arrange (#1{schema_name}, #2{name})
-          →Constant (57 rows)
+          →Constant (59 rows)
         →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
           →Fused with Child Map/Filter/Project
             Project: #4, #3, #5
@@ -5743,7 +5743,7 @@ mz_catalog.mz_views:
           Project: #5, #0, #6, #1, #2, #8, #3, #4, #7
           Map: "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (198 rows)
+        →Constant (201 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5884,7 +5884,7 @@ mz_internal.mz_history_retention_strategies:
           Project: #3, #5
           Map: ("s" || ((#4{data} -> "value") ->> "catalog_id"))
         →Arrange (#2{name}, #0{object_type}, #1{schema_name})
-          →Constant (180 rows)
+          →Constant (182 rows)
         →Arrange (((#0{data} -> "key") ->> "object_name"), ((#0{data} -> "key") ->> "object_type"), ((#0{data} -> "key") ->> "schema_name"))
           →Fused with Child Map/Filter/Project
             Project: #0
@@ -6230,7 +6230,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1088 rows)
+            →Constant (1096 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -8796,7 +8796,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_columns";
 ----
 Explained Query (fast path):
-  →Constant (1937 rows)
+  →Constant (1972 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8846,7 +8846,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_sources";
 ----
 Explained Query (fast path):
-  →Constant (57 rows)
+  →Constant (59 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8866,7 +8866,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_views";
 ----
 Explained Query (fast path):
-  →Constant (198 rows)
+  →Constant (201 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10784,7 +10784,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1088 rows)
+            →Constant (1096 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -14001,6 +14001,51 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_wallclock_freshness_progress";
+----
+Explained Query:
+  →Union
+    →Map/Filter/Project
+      Project: #0, #2, #1
+      Map: null
+        →Consolidating Monotonic GroupAggregate
+          Aggregations: max
+          Key:
+            Project: #1
+          →Read mz_internal.mz_wallclock_global_freshness_histogram_raw
+    →Unarranged Raw Stream
+      →Consolidating Monotonic GroupAggregate
+        Aggregations: max
+        Key:
+          Project: #1, #2
+        →Read mz_internal.mz_wallclock_replica_freshness_histogram_raw
+
+Source mz_internal.mz_wallclock_global_freshness_histogram_raw
+  project=(#1, #2)
+  filter=((#3{measure} = "end_to_end"))
+Source mz_internal.mz_wallclock_replica_freshness_histogram_raw
+  project=(#1..=#3)
+  filter=((#4{measure} = "end_to_end"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_wallclock_global_freshness_histogram";
+----
+Explained Query:
+  →Accumulable GroupAggregate
+    Simple aggregates: count(*)
+    →Stream mz_internal.mz_wallclock_global_freshness_histogram_raw
+
+Source mz_internal.mz_wallclock_global_freshness_histogram_raw
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_wallclock_global_lag";
 ----
 Explained Query:
@@ -14064,6 +14109,20 @@ Explained Query (fast path):
 
 Used Indexes:
   - mz_internal.mz_wallclock_global_lag_recent_history_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_wallclock_replica_freshness_histogram";
+----
+Explained Query:
+  →Accumulable GroupAggregate
+    Simple aggregates: count(*)
+    →Stream mz_internal.mz_wallclock_replica_freshness_histogram_raw
+
+Source mz_internal.mz_wallclock_replica_freshness_histogram_raw
 
 Target cluster: mz_catalog_server
 
