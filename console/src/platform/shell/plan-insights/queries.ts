@@ -124,7 +124,7 @@ export function useBlockedDependencies(
 
 /**
  * Labels each import's lag and hydration with its type and cluster. An import
- * with no `allObjects` row is left out, since the insights can't name it.
+ * with no `allObjects` row is left out, since the insights need its type.
  */
 export function toBlockedDependencies(
   rows: LagResults,

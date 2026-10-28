@@ -11,7 +11,7 @@ import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
-import { buildIdListQuery } from "~/api/materialize/idList";
+import { buildIdListQuery } from "~/api/materialize/expressionBuilders";
 
 // Lag data is recorded on 60s intervals so we set the minimum bucket size to 1 minute
 const MIN_BUCKET_SIZE_MS = 60_000;

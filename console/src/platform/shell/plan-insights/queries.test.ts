@@ -76,48 +76,51 @@ describe("toBlockedDependencies", () => {
   });
 });
 
+const lagHandler = () =>
+  buildSqlQueryHandlerV2({
+    queryKey: planInsightsQueryKeys.blockedDependencies(PARAMS),
+    results: mapKyselyToTabular({
+      rows: [
+        { targetObjectId: "u1", hydrated: false, lag: null, isOutdated: null },
+      ],
+      columns: [
+        buildColumn({ name: "targetObjectId" }),
+        buildColumn({ name: "hydrated", type_oid: MzDataType.bool }),
+        buildColumn({ name: "lag", type_oid: MzDataType.interval }),
+        buildColumn({ name: "isOutdated", type_oid: MzDataType.bool }),
+      ],
+    }),
+  });
+
+/** Renders the hook with `allObjects` still loading and waits for the lag. */
+async function renderBeforeSnapshot() {
+  server.use(lagHandler());
+  const store = createStore();
+  store.set(allObjects, {
+    data: [],
+    error: undefined,
+    snapshotComplete: false,
+  });
+  const ProviderWrapper = await createProviderWrapper({ store });
+  const view = renderHook(() => useBlockedDependencies(PARAMS), {
+    wrapper: ProviderWrapper,
+  });
+  await waitFor(() =>
+    expect(
+      getQueryClient().getQueryState(
+        planInsightsQueryKeys.blockedDependencies(PARAMS),
+      )?.status,
+    ).toBe("success"),
+  );
+  return { ...view, store };
+}
+
 describe("useBlockedDependencies", () => {
   it("keeps loading until allObjects has its snapshot", async () => {
-    server.use(
-      buildSqlQueryHandlerV2({
-        queryKey: planInsightsQueryKeys.blockedDependencies(PARAMS),
-        results: mapKyselyToTabular({
-          rows: [
-            {
-              targetObjectId: "u1",
-              hydrated: false,
-              lag: null,
-              isOutdated: null,
-            },
-          ],
-          columns: [
-            buildColumn({ name: "targetObjectId" }),
-            buildColumn({ name: "hydrated", type_oid: MzDataType.bool }),
-            buildColumn({ name: "lag", type_oid: MzDataType.interval }),
-            buildColumn({ name: "isOutdated", type_oid: MzDataType.bool }),
-          ],
-        }),
-      }),
-    );
-    const store = createStore();
-    store.set(allObjects, {
-      data: [],
-      error: undefined,
-      snapshotComplete: false,
-    });
-    const ProviderWrapper = await createProviderWrapper({ store });
-    const { result } = renderHook(() => useBlockedDependencies(PARAMS), {
-      wrapper: ProviderWrapper,
-    });
+    const { result, store } = await renderBeforeSnapshot();
 
-    // Published without labels, the insight would list an object it can't name.
-    await waitFor(() =>
-      expect(
-        getQueryClient().getQueryState(
-          planInsightsQueryKeys.blockedDependencies(PARAMS),
-        )?.status,
-      ).toBe("success"),
-    );
+    // The notice publishes once loading ends, so published now it would list
+    // the import without a type.
     expect(result.current).toEqual({ data: undefined, isLoading: true });
 
     store.set(allObjects, {
@@ -131,5 +134,19 @@ describe("useBlockedDependencies", () => {
       hydrated: false,
       type: "source",
     });
+  });
+
+  it("stops loading without blocked dependencies when allObjects fails", async () => {
+    const { result, store } = await renderBeforeSnapshot();
+
+    store.set(allObjects, {
+      data: [],
+      error: { code: "XX000", message: "subscribe failed" },
+      snapshotComplete: false,
+    });
+
+    await waitFor(() =>
+      expect(result.current).toEqual({ data: undefined, isLoading: false }),
+    );
   });
 });

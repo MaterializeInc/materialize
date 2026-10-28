@@ -15,7 +15,7 @@ import {
   IPostgresInterval,
   queryBuilder,
 } from "~/api/materialize";
-import { buildIdListQuery } from "~/api/materialize/idList";
+import { buildIdListQuery } from "~/api/materialize/expressionBuilders";
 
 export const ALLOWED_OBJECT_TYPES = [
   "index" as const,

@@ -7,10 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { CATALOG_SERVER_CLUSTER } from "~/api/materialize";
 import {
   executeSqlHttp,
-  getMaterializeClient,
+  explainOnCatalogServer,
   QUICKSTART_CLUSTER,
 } from "~/test/sql/materializeSqlClient";
 import { testdrive } from "~/test/sql/mzcompose";
@@ -138,23 +137,13 @@ describe("buildMaterializationLagQuery", () => {
 });
 
 describe("buildMaterializationLagQuery plan", () => {
-  it("reads the lag index by key, not a full scan, for 400 ids", async () => {
-    const client = await getMaterializeClient();
-    await client.query(`SET cluster = ${CATALOG_SERVER_CLUSTER}`);
-    const { sql, parameters } = buildMaterializationLagQuery({
+  it("reads the lag index by key for 400 ids", async () => {
+    const query = buildMaterializationLagQuery({
       objectIds: Array.from({ length: 400 }, (_, i) => `u${i + 1}`),
-    }).compile();
+    });
 
-    const {
-      rows: [plan],
-    } = await client.query(`EXPLAIN ${sql}`, [...parameters]);
-
-    const explained = String(Object.values(plan)[0]);
-    expect(explained).toContain(
-      "mz_internal.mz_wallclock_global_lag_recent_history_ind",
-    );
-    expect(explained).not.toContain(
-      "mz_wallclock_global_lag_recent_history_ind (*** full scan ***)",
+    expect(await explainOnCatalogServer(query.compile())).toContain(
+      "mz_internal.mz_wallclock_global_lag_recent_history_ind (differential join)",
     );
   });
 });

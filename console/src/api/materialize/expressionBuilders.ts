@@ -286,3 +286,18 @@ export function buildHydrationStatusesTable() {
 export type HydrationStatus = InferResult<
   ReturnType<typeof buildHydrationStatusesTable>
 >[0];
+
+/**
+ * The given ids as a relation `ids(id)`, to join an indexed relation against
+ * in place of `id IN (...)`. Past 330 entries a literal list stops planning as
+ * an index lookup and scans the whole index, testing every id on every row.
+ * Joined to a relation indexed on the id alone, the list reads it by key at any
+ * size (EXPLAIN on v26.48 at 2000 ids).
+ */
+export function buildIdListQuery(ids: string[]) {
+  // A repeated id would repeat its rows, which doubles a caller's GROUP BY counts.
+  const uniqueIds = [...new Set(ids)];
+  return queryBuilder.selectNoFrom(
+    sql<string>`unnest(ARRAY[${sql.join(uniqueIds)}]::text[])`.as("id"),
+  );
+}

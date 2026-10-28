@@ -9,10 +9,10 @@
 
 import PostgresInterval from "postgres-interval";
 
-import { CATALOG_SERVER_CLUSTER, SEARCH_PATH } from "~/api/materialize";
+import { SEARCH_PATH } from "~/api/materialize";
 import {
   executeSqlHttp,
-  getMaterializeClient,
+  explainOnCatalogServer,
   QUICKSTART_CLUSTER,
 } from "~/test/sql/materializeSqlClient";
 import { testdrive } from "~/test/sql/mzcompose";
@@ -73,21 +73,9 @@ describe("lag reads for a known set of objects", () => {
       }),
     ],
     ["the newest reading", buildLatestLagQuery(MANY_IDS)],
-  ])("reads %s by key, not a full scan, for 400 ids", async (_, query) => {
-    const client = await getMaterializeClient();
-    await client.query(`SET cluster = ${CATALOG_SERVER_CLUSTER}`);
-    const { sql, parameters } = query.compile();
-
-    const {
-      rows: [plan],
-    } = await client.query(`EXPLAIN ${sql}`, [...parameters]);
-
-    const explained = String(Object.values(plan)[0]);
-    expect(explained).toContain(
-      "mz_internal.mz_wallclock_global_lag_recent_history_ind",
-    );
-    expect(explained).not.toContain(
-      "mz_wallclock_global_lag_recent_history_ind (*** full scan ***)",
+  ])("reads %s by key for 400 ids", async (_, query) => {
+    expect(await explainOnCatalogServer(query.compile())).toContain(
+      "mz_internal.mz_wallclock_global_lag_recent_history_ind (differential join)",
     );
   });
 });

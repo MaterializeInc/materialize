@@ -11,7 +11,7 @@ import { QueryKey } from "@tanstack/react-query";
 import { sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
-import { buildIdListQuery } from "~/api/materialize/idList";
+import { buildIdListQuery } from "~/api/materialize/expressionBuilders";
 
 export const OOM_REASON = "oom-killed";
 

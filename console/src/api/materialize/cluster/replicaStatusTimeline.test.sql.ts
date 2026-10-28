@@ -7,9 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { CATALOG_SERVER_CLUSTER, SEARCH_PATH } from "~/api/materialize";
+import { SEARCH_PATH } from "~/api/materialize";
 import {
   executeSqlHttp,
+  explainOnCatalogServer,
   getMaterializeClient,
   QUICKSTART_CLUSTER,
 } from "~/test/sql/materializeSqlClient";
@@ -129,42 +130,25 @@ describe("buildEnvironmentStartedAtQuery", () => {
 describe("hydration timeline plans for a large cluster", () => {
   const OBJECT_IDS = Array.from({ length: 400 }, (_, i) => `u${i + 1}`);
 
-  const explain = async (query: {
-    compile: () => { sql: string; parameters: readonly unknown[] };
-  }) => {
-    const client = await getMaterializeClient();
-    await client.query(`SET cluster = ${CATALOG_SERVER_CLUSTER}`);
-    const { sql, parameters } = query.compile();
-    const {
-      rows: [plan],
-    } = await client.query(`EXPLAIN ${sql}`, [...parameters]);
-    return String(Object.values(plan)[0]);
-  };
-
   it("looks up hydration times by replica for 400 objects", async () => {
-    const explained = await explain(
-      buildObjectHydrationTimesQuery({
-        replicaIds: ["u1", "u2"],
-        objectIds: OBJECT_IDS,
-      }),
-    );
+    const query = buildObjectHydrationTimesQuery({
+      replicaIds: ["u1", "u2"],
+      objectIds: OBJECT_IDS,
+    });
 
-    expect(explained).toContain(
+    expect(await explainOnCatalogServer(query.compile())).toContain(
       "mz_internal.mz_compute_hydration_times_ind (lookup)",
     );
   });
 
-  it("reads creation times by key, not a full scan, for 400 objects", async () => {
-    const explained = await explain(
-      buildObjectCreationTimesQuery({
-        objectIds: OBJECT_IDS,
-        startDate: new Date(0).toISOString(),
-      }),
-    );
+  it("reads creation times by key for 400 objects", async () => {
+    const query = buildObjectCreationTimesQuery({
+      objectIds: OBJECT_IDS,
+      startDate: new Date(0).toISOString(),
+    });
 
-    expect(explained).toContain("mz_internal.mz_object_lifetimes_ind");
-    expect(explained).not.toContain(
-      "mz_object_lifetimes_ind (*** full scan ***)",
+    expect(await explainOnCatalogServer(query.compile())).toContain(
+      "mz_internal.mz_object_lifetimes_ind (differential join)",
     );
   });
 });
