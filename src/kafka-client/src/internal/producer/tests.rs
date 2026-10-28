@@ -41,7 +41,7 @@ use crate::util::{Deadline, Timeout};
 
 use super::Config;
 use super::state::{Effects, NewRecord, PartKey, State, TopicStatus, UaMessage, Undelivered};
-use super::txn::{Eos, TxnState};
+use super::txn::{Eos, IdempState, TxnState};
 use super::wire_size;
 
 /// A delivery report, as recorded by [`Recorder`].
@@ -649,6 +649,164 @@ fn topic_missing_from_metadata_becomes_unknown() {
             (0, 1, RDKafkaErrorCode::UnknownTopicOrPartition),
         ]
     );
+}
+
+#[mz_ore::test]
+fn sequence_order_wraps_at_i32_max() {
+    use super::sender::seq_before;
+    assert!(seq_before(0, 1));
+    assert!(!seq_before(1, 0));
+    assert!(!seq_before(5, 5));
+    // Sequences continue at 0 after `i32::MAX`.
+    assert!(seq_before(i32::MAX, 0));
+    assert!(seq_before(i32::MAX - 2, 3));
+    assert!(!seq_before(3, i32::MAX - 2));
+    assert!(!seq_before(0, i32::MAX));
+}
+
+/// The background task does not wake up for retry times that passed, which
+/// belong to work the current state does not allow.
+#[mz_ore::test]
+fn eos_task_ignores_past_retry_times() {
+    let t0 = Instant::now();
+    let at = |ms| t0 + Duration::from_millis(ms);
+    let (mut st, _cfg) = txn_state(t0);
+    st.eos.pid_at = Some(t0);
+    st.eos.register_at = Some(at(100));
+    assert_eq!(st.eos.next_wake(t0), Some(at(100)));
+    assert_eq!(st.eos.next_wake(at(100)), None);
+    st.eos.pid_at = Some(at(200));
+    assert_eq!(st.eos.next_wake(at(100)), Some(at(200)));
+    // A transaction's registration retry ends with the transaction.
+    st.clear_txn_partitions(true);
+    assert_eq!(st.eos.register_at, None);
+}
+
+/// An abort purges batches waiting to be retried only when the producer
+/// waits for the abort to bump its epoch, which restarts sequences.
+/// Otherwise they are kept to keep sequences gapless.
+#[mz_ore::test]
+fn abort_purges_retries_before_epoch_bump() {
+    let t0 = Instant::now();
+    for (idemp_state, purged) in [
+        (IdempState::Assigned, vec![1]),
+        (IdempState::WaitTxnAbort, vec![0, 1]),
+    ] {
+        let (mut st, cfg) = txn_state(t0);
+        let (id, _) = st.topic_id("t", t0);
+        let mut fx = Effects::default();
+        st.apply_topic_metadata(id, Some(&topic_md(None, 1)), Some(1), &cfg, t0, &mut fx);
+        let key = PartKey {
+            topic: id,
+            partition: 0,
+        };
+        // A batch that was sent and awaits a retry, then one never sent.
+        queue_record(&mut st, &cfg, key, 0, t0);
+        st.topics[id].partitions[0].seal();
+        st.topics[id].partitions[0].ready[0].attempts = 1;
+        queue_record(&mut st, &cfg, key, 1, t0);
+        st.eos.idemp_state = idemp_state;
+        let mut fx = Effects::default();
+        st.purge_for_abort(&mut fx);
+        let opaques: Vec<usize> = failed(&fx).into_iter().map(|(_, o, _)| o).collect();
+        assert_eq!(opaques, purged, "{idemp_state:?}");
+    }
+}
+
+#[derive(Clone, Default)]
+struct UnreachableCtx(Ctx, Arc<std::sync::atomic::AtomicBool>);
+
+impl UnreachableCtx {
+    fn set_unreachable(&self, unreachable: bool) {
+        self.1
+            .store(unreachable, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl ClientContext for UnreachableCtx {
+    fn resolve_broker_addr(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<Vec<std::net::SocketAddr>, std::io::Error> {
+        if self.1.load(std::sync::atomic::Ordering::SeqCst) {
+            // Nothing listens there: connections are refused.
+            return Ok(vec![std::net::SocketAddr::from(([127, 0, 0, 1], 1))]);
+        }
+        use std::net::ToSocketAddrs;
+        (host, port).to_socket_addrs().map(|a| a.collect())
+    }
+}
+
+impl ProducerContext for UnreachableCtx {
+    type DeliveryOpaque = usize;
+
+    fn delivery(&self, result: &DeliveryResult<'_>, opaque: usize) {
+        self.0.delivery(result, opaque)
+    }
+}
+
+/// After connecting to a broker failed, its sender goes idle once nothing
+/// waits for the connection anymore, and connects again for new records.
+#[mz_ore::test]
+fn sender_idles_after_connect_failure() {
+    for brokers in test_brokers() {
+        let ctx = UnreachableCtx::default();
+        let rec = Arc::clone(&ctx.0.0);
+        let p = ThreadedProducer::from_config_and_context(
+            &config(
+                &brokers,
+                &[
+                    ("message.timeout.ms", "2000"),
+                    ("reconnect.backoff.max.ms", "200"),
+                ],
+            ),
+            ctx.clone(),
+        )
+        .unwrap();
+        let topic = unique("kc-unreachable");
+        let cluster = cluster_of(&p);
+        create_topic(&cluster, &topic, 1);
+        let _drop = DropTopics::new(&cluster, &[&topic]);
+        let send = |opaque| {
+            p.send(
+                BaseRecord::<(), [u8], usize>::with_opaque_to(&topic, opaque)
+                    .partition(0)
+                    .payload(b"x".as_slice()),
+            )
+            .unwrap()
+        };
+        send(1);
+        p.flush(Duration::from_secs(10)).unwrap();
+        let leader = cluster.metadata().topic(&topic).unwrap().partitions[0].leader;
+
+        ctx.set_unreachable(true);
+        for b in cluster.brokers() {
+            b.close_connection(crate::internal::net::Failure::error(
+                RDKafkaErrorCode::BrokerTransportFailure,
+                "test",
+            ));
+        }
+        send(2);
+        wait_for("record 2 to time out", Duration::from_secs(10), || {
+            rec.reports().iter().any(|r| r.opaque == 2)
+        });
+        let report = rec.reports().into_iter().find(|r| r.opaque == 2).unwrap();
+        assert_eq!(report.error, Some(RDKafkaErrorCode::MessageTimedOut));
+        // Past the connect backoff.
+        std::thread::sleep(Duration::from_millis(500));
+        let wakeups = || p.inner().lock().senders[&leader].wakeups;
+        let before = wakeups();
+        std::thread::sleep(Duration::from_secs(1));
+        let woken = wakeups() - before;
+        assert!(woken < 20, "{woken} sender wakeups in 1s while idle");
+
+        ctx.set_unreachable(false);
+        send(3);
+        p.flush(Duration::from_secs(10)).unwrap();
+        let report = rec.reports().into_iter().find(|r| r.opaque == 3).unwrap();
+        assert_eq!(report.error, None);
+    }
 }
 
 #[mz_ore::test]

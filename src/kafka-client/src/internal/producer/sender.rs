@@ -115,25 +115,27 @@ impl<C: ProducerContext> ProducerInner<C> {
                 conn = None;
             }
             let mut next_wake;
+            let mut wants_conn;
             loop {
                 let slots = if conn.as_ref().is_some_and(|c| c.is_usable()) {
                     self.config.max_in_flight.saturating_sub(in_flight.len())
                 } else {
                     0
                 };
-                let (picked, wants_conn, next) = {
+                let picked;
+                (picked, wants_conn, next_wake) = {
                     let mut st = self.lock();
                     let mut fx = Effects::default();
                     let r = self.pick(&mut st, broker_id, now, slots > 0, &mut fx);
                     self.finish(st, fx);
                     r
                 };
-                next_wake = next;
                 if wants_conn
                     && conn.is_none()
                     && connecting.is_none()
                     && connect_retry_at.is_none_or(|at| at <= now)
                 {
+                    connect_retry_at = None;
                     match self.cluster.broker(broker_id) {
                         Some(broker) => {
                             let deadline = Deadline::new(self.config.socket_timeout);
@@ -153,7 +155,12 @@ impl<C: ProducerContext> ProducerInner<C> {
                 let response = self.send_request(conn, picked).await;
                 in_flight.push_back(response);
             }
-            if let Some(at) = connect_retry_at {
+            // The connect backoff is a reason to wake up only while it runs
+            // and batches wait for the connection. A past instant would make
+            // the task spin.
+            let retry_at = connect_retry_at
+                .filter(|at| wants_conn && conn.is_none() && connecting.is_none() && *at > now);
+            if let Some(at) = retry_at {
                 next_wake = Some(next_wake.map_or(at, |n| n.min(at)));
             }
             let sleep = async {
@@ -208,9 +215,10 @@ impl<C: ProducerContext> ProducerInner<C> {
         fx: &mut Effects<C::DeliveryOpaque>,
     ) -> (Vec<Picked<C::DeliveryOpaque>>, bool, Option<Instant>) {
         let cfg = &self.config;
-        let Some(entry) = st.senders.get(&broker) else {
+        let Some(entry) = st.senders.get_mut(&broker) else {
             return (Vec::new(), false, None);
         };
+        entry.wakeups += 1;
         let parts: Vec<PartKey> = entry.parts.iter().copied().collect();
         let flushing = self.flushing.load(Ordering::SeqCst) > 0;
         let eos_may_send = st.eos.may_send();
@@ -461,6 +469,10 @@ impl<C: ProducerContext> ProducerInner<C> {
             };
             let outcome = self.idempotent_outcome(&mut st, &s, outcome, broker_id, &mut fx);
             let fatal = st.eos.fatal.is_some();
+            // Nothing is sent before the abort bumps the epoch, so the batch
+            // belongs to a transaction that cannot commit. Requeued, it would
+            // stall the abort until it expires.
+            let wait_abort = st.eos.idemp_state == IdempState::WaitTxnAbort;
             touched.push(s.key);
             let count = s.batch.len();
             let sequenced = s.batch.sequenced;
@@ -532,7 +544,11 @@ impl<C: ProducerContext> ProducerInner<C> {
                             .message_timeout
                             .is_some_and(|t| batch.created + t <= now);
                         // After a fatal error nothing is sent anymore.
-                        if fatal || expired || (counts && batch.retries >= self.config.retries) {
+                        if fatal
+                            || wait_abort
+                            || expired
+                            || (counts && batch.retries >= self.config.retries)
+                        {
                             let code = if expired {
                                 RDKafkaErrorCode::MessageTimedOut
                             } else {
@@ -798,9 +814,11 @@ fn encode_one<D>(p: Picked<D>, spares: &mut Vec<Vec<u8>>) -> Sent<D> {
     }
 }
 
-/// Whether sequence `a` comes before `b`, allowing for wraparound.
-fn seq_before(a: i32, b: i32) -> bool {
-    b.wrapping_sub(a) > 0
+/// Whether sequence `a` comes before `b`. Sequences wrap from `i32::MAX` to
+/// 0, so they are compared modulo 2^31, within half of that range.
+pub(super) fn seq_before(a: i32, b: i32) -> bool {
+    let distance = (i64::from(b) - i64::from(a)).rem_euclid(1 << 31);
+    (1..1 << 30).contains(&distance)
 }
 
 /// The outcome of a partition in a produce response.

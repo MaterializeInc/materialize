@@ -688,6 +688,11 @@ impl<C: ProducerContext> StatsSource for ProducerInner<C> {
                     .sum();
             }
         }
+        for (id, sender) in &st.senders {
+            if let Some(b) = stats.brokers.values_mut().find(|b| b.nodeid == *id) {
+                b.wakeups = Some(b.wakeups.unwrap_or(0) + sender.wakeups);
+            }
+        }
     }
 }
 

@@ -246,6 +246,20 @@ impl Eos {
         self.fatal.is_none() && (!self.idempotent || self.idemp_state == IdempState::Assigned)
     }
 
+    /// When the idle background task wakes up next for a retry, if ever.
+    ///
+    /// A retry time in the past belongs to work the current state does not
+    /// allow, e.g. a registration retry of a transaction that was aborted
+    /// meanwhile, and waking up for it would spin. The state change that
+    /// allows the work wakes the task.
+    pub fn next_wake(&self, now: Instant) -> Option<Instant> {
+        [self.pid_at, self.register_at]
+            .into_iter()
+            .flatten()
+            .filter(|at| *at > now)
+            .min()
+    }
+
     fn set_idemp_state(&mut self, state: IdempState) {
         if self.idemp_state != state {
             self.idemp_state = state;
@@ -881,10 +895,10 @@ impl<C: ProducerContext> ProducerInner<C> {
         if let Err(e) = result {
             return self.api_return(false, Err(e));
         }
-        // Purge records never sent, then wait for the rest.
+        // Purge what will not be sent, then wait for the rest.
         let mut fx = Effects::default();
         let mut st = self.lock();
-        st.purge_unsent(&mut fx);
+        st.purge_for_abort(&mut fx);
         self.finish(st, fx);
         if self.wait_flushed(deadline).is_err() {
             let e = RDKafkaError::new(
@@ -972,10 +986,7 @@ impl<C: ProducerContext> ProducerInner<C> {
                 let mut st = self.lock();
                 let mut fx = Effects::default();
                 let work = self.next_eos_work(&mut st, &mut fx);
-                let next = [st.eos.pid_at, st.eos.register_at]
-                    .into_iter()
-                    .flatten()
-                    .min();
+                let next = st.eos.next_wake(Instant::now());
                 self.finish(st, fx);
                 (work, next)
             };
@@ -1388,6 +1399,7 @@ impl<C: ProducerContext> ProducerInner<C> {
         if !registered.is_empty() {
             st.eos.concurrent_backoff = None;
         }
+        let mut unregistered = false;
         for key in &registering {
             // Partitions of a deleted topic are gone; like librdkafka
             // ("Unknown partition ... ignoring"), results for them are
@@ -1404,7 +1416,13 @@ impl<C: ProducerContext> ProducerInner<C> {
                 }
             } else {
                 st.eos.pending.insert(*key);
+                unregistered = true;
             }
+        }
+        if action.is_none() && unregistered {
+            // The response left out partitions without an error. Retry them
+            // after a backoff, not in a loop.
+            action = Some(Action::Retry);
         }
         if reset_coordinator {
             self.cluster

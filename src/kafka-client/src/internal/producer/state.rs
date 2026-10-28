@@ -455,6 +455,9 @@ pub(super) struct SenderEntry {
     pub parts: BTreeSet<PartKey>,
     /// Whether the task was started.
     pub spawned: bool,
+    /// Iterations of the task's loop, librdkafka's broker `wakeups`
+    /// statistic.
+    pub wakeups: u64,
 }
 
 /// Records that will not be delivered, to report after the lock is released.
@@ -609,6 +612,7 @@ impl<D> State<D> {
             notify: Arc::new(Notify::new()),
             parts: BTreeSet::new(),
             spawned: false,
+            wakeups: 0,
         })
     }
 
@@ -889,6 +893,15 @@ impl<D> State<D> {
         self.purge(true, fx);
     }
 
+    /// Purges the records of a transaction being aborted. Batches waiting
+    /// to be retried are kept for gapless sequences, unless the producer
+    /// waits for the abort to bump its epoch, which restarts sequences.
+    /// Until then nothing is sent, so keeping them would stall the abort
+    /// until they expire.
+    pub fn purge_for_abort(&mut self, fx: &mut Effects<D>) {
+        self.purge(self.eos.idemp_state == IdempState::WaitTxnAbort, fx);
+    }
+
     fn purge(&mut self, include_sent: bool, fx: &mut Effects<D>) {
         for topic in &mut self.topics {
             let name = &topic.name;
@@ -952,6 +965,7 @@ impl<D> State<D> {
         }
         self.eos.pending.clear();
         self.eos.registering.clear();
+        self.eos.register_at = None;
     }
 }
 
