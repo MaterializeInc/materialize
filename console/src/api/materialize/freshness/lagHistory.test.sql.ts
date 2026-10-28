@@ -10,7 +10,11 @@
 import { sql } from "kysely";
 import PostgresInterval from "postgres-interval";
 
-import { IPostgresInterval, queryBuilder, SEARCH_PATH } from "~/api/materialize";
+import {
+  IPostgresInterval,
+  queryBuilder,
+  SEARCH_PATH,
+} from "~/api/materialize";
 import {
   executeSqlHttp,
   explainOnCatalogServer,
@@ -78,6 +82,20 @@ describe("lag reads for a known set of objects", () => {
       }),
     ],
     ["the newest reading", buildLatestLagQuery(MANY_IDS)],
+    [
+      "each object's percentiles",
+      buildObjectLagPercentilesQuery({
+        objectIds: MANY_IDS,
+        lookbackMs: 24 * 60 * 60 * 1000,
+      }),
+    ],
+    [
+      "the scope's percentiles",
+      buildScopeLagPercentilesQuery({
+        objectIds: MANY_IDS,
+        lookbackMs: 24 * 60 * 60 * 1000,
+      }),
+    ],
   ])("reads %s by key for 400 ids", async (_, query) => {
     expect(await explainOnCatalogServer(query.compile())).toContain(
       "mz_internal.mz_wallclock_global_lag_recent_history_ind (differential join)",

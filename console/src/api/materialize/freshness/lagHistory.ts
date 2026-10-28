@@ -158,14 +158,14 @@ function maxReadingsPerObject(lookbackMs: number) {
 }
 
 /**
- * Every reading for `objectIds` in the range. The IDs are a literal list for
- * the reason `buildObjectLagHistoryQuery` gives.
+ * Every reading for `objectIds` in the range, read by key through the id list
+ * as `buildObjectLagHistoryQuery` does.
  */
 function lagReadingsSince(objectIds: string[], lookbackMs: number) {
   return queryBuilder
     .selectFrom("mz_wallclock_global_lag_recent_history")
+    .innerJoin(buildIdListQuery(objectIds).as("ids"), "ids.id", "object_id")
     .select(["object_id", "lag"])
-    .where("object_id", "in", objectIds)
     .where(
       (eb) =>
         sql`${eb.ref("occurred_at")} + INTERVAL '${sql.raw(`${lookbackMs}`)} MILLISECONDS'`,
