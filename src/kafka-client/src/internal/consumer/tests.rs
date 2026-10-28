@@ -975,6 +975,90 @@ fn split_queues_and_callbacks() {
     }
 }
 
+/// Materialize's source after every `assign`: it splits a new queue for
+/// every partition, sets the nonempty callback on the new handle, and only
+/// then drops the old handle of the same partition. Dropping the old handle
+/// must neither undo the split nor remove the new handle's callback.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn new_queue_handle_survives_dropping_the_old_one() {
+    for brokers in test_brokers() {
+        let admin = Admin::new(&brokers);
+        let topic_guard = admin.new_topic("mzkc-c-requeue", 2);
+        let topic = topic_guard.name.clone();
+        let (consumer, _) = consumer(&brokers, &[("group.id", "mzkc-test")]);
+        let counter = |c: &Arc<AtomicUsize>| {
+            let c = Arc::clone(c);
+            move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            }
+        };
+        let old_fired = Arc::new(AtomicUsize::new(0));
+        let mut old_q0 = consumer.split_partition_queue(&topic, 0).unwrap();
+        old_q0.set_nonempty_callback(counter(&old_fired));
+        consumer
+            .assign(&tpl(&[(&topic, 0, Offset::Offset(0))]))
+            .unwrap();
+
+        // Add partition 1 with a full re-assign, then re-split as the source
+        // does: new handles first, old handles dropped afterwards.
+        consumer
+            .assign(&tpl(&[
+                (&topic, 0, Offset::Offset(0)),
+                (&topic, 1, Offset::Offset(0)),
+            ]))
+            .unwrap();
+        let new_fired = Arc::new(AtomicUsize::new(0));
+        let mut new_q0 = consumer.split_partition_queue(&topic, 0).unwrap();
+        new_q0.set_nonempty_callback(counter(&new_fired));
+        let mut q1 = consumer.split_partition_queue(&topic, 1).unwrap();
+        q1.set_nonempty_callback(counter(&new_fired));
+        drop(old_q0);
+
+        admin.values(&topic, 0, &["a"]);
+        admin.values(&topic, 1, &["b"]);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while new_fired.load(Ordering::SeqCst) < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "callbacks of the new handles did not fire"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(old_fired.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            queue_until(&new_q0, Duration::from_secs(5), |i| i.len() == 1),
+            vec![Polled::Msg(0, 0, Some("a".into()))]
+        );
+        assert_eq!(
+            queue_until(&q1, Duration::from_secs(5), |i| i.len() == 1),
+            vec![Polled::Msg(1, 0, Some("b".into()))]
+        );
+        // Still split: nothing reaches the main queue.
+        assert!(consumer.poll(Duration::from_millis(500)).is_none());
+
+        // The other order also keeps the newer callback: replacing the
+        // callback of a live handle, then dropping the replaced handle.
+        let newest_fired = Arc::new(AtomicUsize::new(0));
+        let mut newest_q0 = consumer.split_partition_queue(&topic, 0).unwrap();
+        newest_q0.set_nonempty_callback(counter(&newest_fired));
+        drop(new_q0);
+        admin.values(&topic, 0, &["c"]);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while newest_fired.load(Ordering::SeqCst) == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "callback of the newest handle did not fire"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            queue_until(&newest_q0, Duration::from_secs(5), |i| i.len() == 1),
+            vec![Polled::Msg(0, 1, Some("c".into()))]
+        );
+    }
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // network
 fn reassign_restarts_changed_offsets_and_adds_partitions() {
@@ -1126,7 +1210,10 @@ fn read_committed_transactions() {
         c.end(true);
         // A trailing plain record after the markers.
         let p1 = admin.values(&topic, 0, &["p1"]);
-        let end = p1 + 1;
+        // Coordinators write transaction markers after EndTxn returns, so a
+        // marker may follow p1: the end is where the LSO catches up with the
+        // high watermark.
+        let end = wait_for_stable_end(&brokers, &topic);
 
         let (rc, _) = consumer(
             &brokers,
@@ -1510,6 +1597,30 @@ fn subscribe_missing_topic() {
                 .unwrap();
             assert_eq!(m.payload(), Some(&b"hello"[..]));
         });
+    }
+}
+
+/// Waits until partition 0's last stable offset equals its high watermark,
+/// i.e. all transaction markers are written, and returns it.
+fn wait_for_stable_end(brokers: &str, topic: &str) -> i64 {
+    let (rc, _) = consumer(brokers, &[]);
+    let (ru, _) = consumer(brokers, &[("isolation.level", "read_uncommitted")]);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let (_, lso) = rc
+            .fetch_watermarks(topic, 0, Duration::from_secs(10))
+            .unwrap();
+        let (_, hwm) = ru
+            .fetch_watermarks(topic, 0, Duration::from_secs(10))
+            .unwrap();
+        if lso == hwm {
+            return hwm;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "LSO {lso} never reached HWM {hwm}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 

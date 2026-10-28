@@ -103,6 +103,9 @@ pub(super) struct FetchState {
     /// `PartitionMaxBytes` of the next fetch; grows when a single batch does
     /// not fit.
     pub max_bytes: i32,
+    /// Bytes per message in the last fetched record set, or 0 if unknown,
+    /// to convert the queue's message budget into bytes.
+    pub avg_msg_bytes: u64,
     /// The last error reported to the application, for errors reported once.
     pub last_error: Option<RDKafkaErrorCode>,
     /// Log start offset, high watermark and last stable offset from the last
@@ -118,8 +121,6 @@ pub(super) struct PartState {
     pub version: u64,
     pub fetch: FetchState,
     items: VecDeque<Item>,
-    /// The reader holds an unfinished chunk.
-    reader_busy: bool,
     /// The partition is on the main queue's ready list.
     in_main: bool,
     /// Threads waiting in a blocking poll of the split queue.
@@ -140,8 +141,13 @@ pub(super) struct Wake {
 
 impl PartState {
     /// Appends an item and reports whom to notify.
+    ///
+    /// The queue counts as empty when no item waits, even while a reader is
+    /// still serving the records of the previous chunk: like librdkafka,
+    /// whose queue is empty once the last message was taken, this may cause a
+    /// wakeup that finds data already served, but never misses one.
     pub fn push(&mut self, item: Item, split: bool) -> Wake {
-        let edge = self.items.is_empty() && !self.reader_busy;
+        let edge = self.items.is_empty();
         self.items.push_back(item);
         let main = !split && !self.in_main;
         if main {
@@ -224,13 +230,13 @@ impl Partition {
                     resolve_failures: 0,
                     eof_offset: OFFSET_INVALID,
                     max_bytes,
+                    avg_msg_bytes: 0,
                     last_error: None,
                     lo_offset: -1,
                     hi_offset: -1,
                     ls_offset: -1,
                 },
                 items: VecDeque::new(),
-                reader_busy: false,
                 in_main: false,
                 waiters: 0,
             }),
@@ -321,7 +327,6 @@ impl Partition {
         *reader = None;
         state.version += 1;
         state.items.clear();
-        state.reader_busy = false;
         let fetch = &mut state.fetch;
         fetch.offset = OFFSET_INVALID;
         fetch.leader_epoch = -1;
@@ -407,12 +412,8 @@ impl Partition {
             let item = {
                 let mut state = self.lock_state();
                 match state.items.pop_front() {
-                    Some(item) => {
-                        state.reader_busy = matches!(item, Item::Chunk(_));
-                        item
-                    }
+                    Some(item) => item,
                     None => {
-                        state.reader_busy = false;
                         if from_main {
                             state.in_main = false;
                         }

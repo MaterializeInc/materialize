@@ -17,6 +17,11 @@
 //! off share the main queue, so like librdkafka's forwarded queues they are
 //! limited by the main queue's total.
 //!
+//! Each partition's `PartitionMaxBytes` is also capped by what its queue can
+//! still take before reaching those limits (but at least
+//! [`MIN_PARTITION_FETCH_BYTES`]), so that a response does not overshoot
+//! them by up to `fetch.max.bytes`, as librdkafka's can.
+//!
 //! Responses are not decoded: each partition's record set is queued as is,
 //! after reading batch headers to find the next fetch offset. When a
 //! response carries data for several partitions, each record set is copied
@@ -49,11 +54,30 @@ use super::{ConsumerInner, Leader, Partition, leader_of, offset_reset};
 /// single batch does not fit, as in librdkafka.
 const MAX_PARTITION_FETCH_BYTES: i32 = 1 << 30;
 
+/// The smallest queue-budget cap on a partition's fetch size, so that a
+/// nearly full queue does not cause a stream of tiny fetches. Brokers return
+/// at least one whole batch regardless (KIP-74).
+const MIN_PARTITION_FETCH_BYTES: u64 = 1 << 20;
+
+/// The largest `MaxBytes` of a Fetch request, below `fetch.max.bytes`
+/// (default 50 MB).
+///
+/// NOTE: Each response is read into one allocation of its size. Responses of
+/// tens of megabytes, freed at a high rate, made jemalloc retain several
+/// hundred megabytes of freed pages: consuming 5M 220-byte records from 8
+/// partitions with `fetch.message.max.bytes=128MiB` peaked at 370-460 MB RSS
+/// for 140-170 MB allocated, against 230 MB RSS with 8 MiB responses and
+/// unchanged throughput. Brokers still return at least one whole batch per
+/// partition (KIP-74), and one 8 MiB response per round trip sustains over a
+/// gigabyte per second at in-region latencies.
+const MAX_RESPONSE_BYTES: i32 = 8 << 20;
+
 /// One partition in a Fetch request.
 struct Fetching {
     partition: Arc<Partition>,
     version: u64,
     offset: i64,
+    max_bytes: i32,
 }
 
 /// Runs the fetcher for broker `broker_id` until the consumer shuts down.
@@ -103,22 +127,13 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
         for f in &fetching {
             topics.entry(&f.partition.topic).or_default().push(f);
         }
-        let max_bytes: BTreeMap<(&str, i32), i32> = fetching
-            .iter()
-            .map(|f| {
-                (
-                    (&*f.partition.topic, f.partition.id),
-                    f.partition.lock_state().fetch.max_bytes,
-                )
-            })
-            .collect();
         let request = broker.request::<FetchRequest, _>(
             |_version| {
                 FetchRequest::default()
                     .with_replica_id(BrokerId(-1))
                     .with_max_wait_ms(max_wait_ms)
                     .with_min_bytes(consumer.fetch_min_bytes)
-                    .with_max_bytes(consumer.fetch_max_bytes)
+                    .with_max_bytes(consumer.fetch_max_bytes.min(MAX_RESPONSE_BYTES))
                     .with_isolation_level(isolation_level)
                     .with_session_id(0)
                     .with_session_epoch(-1)
@@ -135,9 +150,7 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
                                                 FetchPartition::default()
                                                     .with_partition(f.partition.id)
                                                     .with_fetch_offset(f.offset)
-                                                    .with_partition_max_bytes(
-                                                        max_bytes[&(*topic, f.partition.id)],
-                                                    )
+                                                    .with_partition_max_bytes(f.max_bytes)
                                             })
                                             .collect(),
                                     )
@@ -294,6 +307,18 @@ fn plan(
             wake_at(now + settings.consumer.fetch_queue_backoff);
             continue;
         }
+        let byte_budget = max_bytes - bytes;
+        // Until a fetch has shown the partition's message size, fetch small:
+        // one response may otherwise hold far more messages than
+        // `queued.min.messages`.
+        let msg_budget = match fetch.avg_msg_bytes {
+            0 => MIN_PARTITION_FETCH_BYTES,
+            avg => (max_msgs - msgs).saturating_mul(avg),
+        };
+        let budget = byte_budget.min(msg_budget).max(MIN_PARTITION_FETCH_BYTES);
+        let max_bytes = fetch
+            .max_bytes
+            .min(i32::try_from(budget).unwrap_or(i32::MAX));
         fetch.in_flight = Some(request_id);
         let (version, offset) = (state.version, state.fetch.offset);
         drop(state);
@@ -301,6 +326,7 @@ fn plan(
             partition,
             version,
             offset,
+            max_bytes,
         });
     }
     (fetching, next_wakeup)
@@ -461,6 +487,9 @@ fn handle_records(
         return;
     }
     state.fetch.max_bytes = consumer.fetch_message_max_bytes;
+    if msgs > 0 {
+        state.fetch.avg_msg_bytes = (bytes / msgs).max(1);
+    }
     state.fetch.leader_epoch = leader_epoch;
     state.fetch.offset = next_offset;
     let records = if copy {
