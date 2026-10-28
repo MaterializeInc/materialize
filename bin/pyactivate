@@ -28,6 +28,12 @@ logger = logging.getLogger("bootstrap")
 # in `doc/developer/guide.md`.
 MIN_HEXVERSION = 0x030D0000
 MIN_VERSION = f"{MIN_HEXVERSION >> 24}.{(MIN_HEXVERSION >> 16) & 0xFF}"
+# First unsupported Python. Keep in sync with the version named in
+# `doc/developer/guide.md`. Pinned dependencies lag new releases, so a newer
+# interpreter (e.g. after a Homebrew upgrade) fails deep in dependency resolution
+# instead of here. Raise it once the lock resolves and CI passes on the new version.
+MAX_HEXVERSION = 0x030F0000
+MAX_VERSION = f"{MAX_HEXVERSION >> 24}.{(MAX_HEXVERSION >> 16) & 0xFF}"
 
 
 def main(args: list[str]) -> int:
@@ -35,13 +41,19 @@ def main(args: list[str]) -> int:
     logger.debug("args=%s", args)
 
     # Validate Python version.
-    if sys.hexversion < MIN_HEXVERSION:
-        print(f"fatal: python v{MIN_VERSION}+ required", file=sys.stderr)
+    if not MIN_HEXVERSION <= sys.hexversion < MAX_HEXVERSION:
+        print(
+            f"fatal: python >= v{MIN_VERSION} and < v{MAX_VERSION} required",
+            file=sys.stderr,
+        )
         print(
             " hint: you have v{}.{}.{}".format(
                 sys.version_info.major, sys.version_info.minor, sys.version_info.micro
             ),
             file=sys.stderr,
+        )
+        print(
+            " hint: see the Python section of doc/developer/guide.md", file=sys.stderr
         )
         return 1
 
@@ -80,13 +92,17 @@ def activate_venv(py_dir: Path) -> Path:
     # have dependencies installed into it.
     # The version check in `main` covers the bootstrap interpreter, not this one,
     # and the two need not agree: the virtualenv outlives the interpreter it was
-    # built from. Probe the version here as well, so raising the minimum rebuilds
+    # built from. Probe the version here as well, so changing the bounds rebuilds
     # existing virtualenvs instead of silently reusing one that is too old and
     # failing later on an import the old version does not have.
     try:
         os.stat(stamp_path)
         subprocess.check_call(
-            [python, "-c", f"import sys; sys.exit(sys.hexversion < {MIN_HEXVERSION})"]
+            [
+                python,
+                "-c",
+                f"import sys; sys.exit(not {MIN_HEXVERSION} <= sys.hexversion < {MAX_HEXVERSION})",
+            ]
         )
     except Exception as e:
         print("==> Checking for existing virtualenv", file=sys.stderr)
@@ -94,11 +110,11 @@ def activate_venv(py_dir: Path) -> Path:
             print("no existing virtualenv detected", file=sys.stderr)
         else:
             # Either the interpreter is gone, usually because the system Python
-            # it referred to was upgraded, or it predates the minimum version.
+            # it referred to was upgraded, or it is outside the supported versions.
             # Not important to tell the two apart or to bubble the error up: a
             # problem that survives the rebuild surfaces when we exec later.
             print(
-                f"warning: existing virtualenv is missing python or older than v{MIN_VERSION}; will recreate",
+                f"warning: existing virtualenv is missing python or outside v{MIN_VERSION} to v{MAX_VERSION}; will recreate",
                 file=sys.stderr
             )
             logger.info("python probe error: %s", e)
