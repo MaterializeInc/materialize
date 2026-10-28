@@ -43,6 +43,9 @@ into controllerd from static configuration, including HTTP inventory and retaine
 process adoption. Preserve the shared relay across deployment retirement, with
 only one configured provisioner during overlap. No catalog declaration or election
 protocol. Update the [local recipe](../controllerd.md) as that path becomes usable.
+Add `bin/controllerd --stop` with the design's local environment scope, retaining
+data and declarations. Verify it after controller exit, repeated stop and restart.
+Keep Ctrl-C controller-only. The stop path must not build or initialize anything.
 Fourteen scoped launcher Python tests, Black and Ruff pass. Actual startup/adoption
 through plain `bin/controllerd` remains unverified. Default development builds must
 work for demos, with `--optimized` optional as in `bin/environmentd`.

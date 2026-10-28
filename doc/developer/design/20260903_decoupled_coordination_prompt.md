@@ -32,6 +32,10 @@ inventory, without catalog records or a separate manual startup step. Preserve
 the design's shared-relay lifetime and ownership across deployments. Verify the
 local demo through this entry point and document it, not only the test harness.
 
+Include `bin/controllerd --stop` for idempotent, data-preserving local environment
+shutdown, even after controller exit and without rebuilding. Keep Ctrl-C as
+controller-only shutdown. Follow the design's environment-scoping contract.
+
 Include `GET /api/collections`: pretty JSON with collection ID, name and the
 catalog's committed combined since, not physical Persist since. Support SQL LIKE
 patterns in the `id`/`name` URL filters. Follow the design's read-only inspection

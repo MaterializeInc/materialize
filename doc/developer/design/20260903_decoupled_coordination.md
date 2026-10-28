@@ -867,6 +867,15 @@ pubsub startup step is required by default. Include a
 short recipe for startup, SQL/HTTP access and stopping/restarting without resetting
 state. Exercise the local demo through this entry point, not only a private harness.
 
+Ctrl-C stops only the invoking controller, retaining its children.
+`bin/controllerd --stop` instead stops the selected local environment's controllers
+before its managed adapters, replicas and pubsubd, so they cannot be respawned.
+It works after controller exit, without building or initializing an environment,
+and is safe to repeat. Scope comes from the selected state directory and environment
+identity, never process names alone. Preserve data, metadata and catalog declarations,
+and leave other environments and external services untouched. Demonstrate stopping
+after controller exit and restarting with retained data through `bin/controllerd`.
+
 Build through these slices, preserving working outcomes as the split progresses:
 
 1. **One default adapter.** Establish stable adapter identity and separate

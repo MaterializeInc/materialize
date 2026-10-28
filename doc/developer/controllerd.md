@@ -86,6 +86,19 @@ metadata/blob URLs, pubsub URL and listener/size configuration. Controllerd
 adopts healthy children through the process backend. This is a controller stop,
 not a shutdown of the whole environment. Do not use process-group kills.
 
+Whole-environment shutdown is required for M3 but is not implemented yet:
+
+```sh
+bin/controllerd --stop
+```
+
+Use the same `--controller-data-directory` as startup when overriding the default.
+This stops that environment's controllers first, then its managed adapters,
+replicas and pubsubd. It works after Ctrl-C or controller failure, does not build
+anything, and is safe to repeat. Other environments and external services stay
+running. Data, metadata and catalog declarations are preserved. Start again with
+`bin/controllerd` and the same configuration to resume, without resetting state.
+
 `--reset` is rejected. Do not delete the state directory or reset metadata while
 children are running. An empty adapter inventory is valid after restart. Use
 HTTP POST to create an adapter and resume SQL without reinitializing the catalog.
