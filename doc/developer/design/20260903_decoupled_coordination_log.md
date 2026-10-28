@@ -49,9 +49,9 @@ Next: obtain the latest candidate's matching CI product and run
 `sql-http-adapter-lifecycle-smoke.py`, including self-drop, zero-adapter restart
 and HTTP recovery. This private script is syntax-checked, not executed. Extend it
 with SQL status/endpoint assertions, and separately exercise the public launcher.
-Implement the newly specified `GET /api/collections` from designer commit
-`88674314`: filtered catalog-known Persist collections and observed shard since,
-without holds or maintenance. That endpoint is not implemented yet. Replica policy,
+Implement `GET /api/collections` from the current design: filtered catalog-known
+Persist collections and their committed combined catalog since, not physical
+shard since. That endpoint is not implemented yet. Replica policy,
 interrupted initialization, deployment coexistence and backend acceptance remain
 open. No M3 completion or new-product runtime claim is justified.
 

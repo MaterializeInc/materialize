@@ -535,15 +535,18 @@ SQL proxy or a direct process-command path.
 
 `GET /api/collections` lists catalog-known Persist-backed collections as
 pretty-printed JSON, including system collections. Each entry has its catalog
-collection `id`, qualified `name` where available, and the backing shard's observed
-`since` frontier. Preserve unnamed entries with a null name. Report the frontier
-as an array, or null when unavailable, not the catalog's compaction permission.
-This is an observation, not a read hold or an atomic snapshot across shards.
+collection `id`, qualified `name` where available, and the combined collection
+`since`: the catalog's committed compaction frontier constrained by read, recovery
+and retention requirements. This is the frontier used to advance Persist, not the
+physical shard frontier, which can lag. Preserve unnamed entries with a null name.
+Report the frontier as an array, or null when the catalog frontier is unavailable,
+without substituting Persist's since.
+
 Optional `id` and `name` URL parameters use case-sensitive SQL LIKE patterns:
 `%` matches any sequence, `_` one character, and backslash escapes literals.
-Both filters must match when supplied together. Apply filters before observing
-shards. The endpoint works without a serving adapter and adds no protection,
-compaction or background-maintenance responsibilities to controllerd. Include
+Both filters must match when supplied together. The endpoint works without a
+serving adapter and adds no protection, compaction or background-maintenance
+responsibilities to controllerd. Include
 browser and curl examples with correct URL encoding in the local startup recipe.
 
 The HTTP listener accepts requests without in-process authentication or caller
