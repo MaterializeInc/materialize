@@ -58,12 +58,26 @@ The environmentd relay/HTTP tests compile but have not executed. The image
 metadata validates through `bin/mzimage describe pubsubd`; no image build or actual
 plain-launcher demo has run.
 
-Two relay/lifecycle gaps remain before acceptance. Process adoption currently
-compares scale and retains a live PID, so changing an image does not upgrade a
-healthy retained relay. Implement and verify that path without losing endpoint
-assignments or restarting unchanged children. Whole-environment `bin/controllerd
---stop` also remains unimplemented. Preserve the single configured relay
-provisioner during overlap and keep external services outside teardown.
+Whole-environment `bin/controllerd --stop` is implemented without building or
+initializing. It stops controllers selected by environment identity and state
+location before reading managed-child PID/start-time records. It preserves data
+and backend records, skips stale identities, and leaves external/other-environment
+processes alone. Startup records and reuses the backend location across shell
+TMPDIR changes. After review fixes, partial initialization needs no startup and
+unusable PID records do not prevent stopping valid identities. Incomplete identity
+verification is reported after safe shutdown work. All 22 launcher tests pass,
+including real disposable-process ordering/isolation cases, plus Black and Ruff.
+Actual product stop/restart with retained SQL data remains unverified.
+
+Process relay upgrades remain open. Oracle recommends per-process launch digests,
+following Kubernetes pod-template hashes, with PID/start-qualified sidecars and
+unchanged two-line PID files. Generic reconciliation would also restart adapters
+and replicas when their executable or launch arguments change, including some
+startup settings sampled from dyncfgs. Ask Aljoscha whether to accept that broader
+behavior or restrict changed-launch replacement to pubsub. Do not implement that
+behavior choice before agreement. Preserve unchanged-child adoption and assigned
+endpoints. Keep the single configured relay provisioner during overlap and external
+services outside teardown.
 See private `managed-pubsub-integration.md` for source pointers.
 
 Scratch SSO remains expired. User must run `bin/scratch login`. Authorized cleanup

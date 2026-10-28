@@ -204,6 +204,11 @@ def main() -> int:
         help="Separate local controller state (never use environmentd's mzdata)",
     )
     parser.add_argument(
+        "--stop",
+        action="store_true",
+        help="Stop the selected controller environment without building or resetting it",
+    )
+    parser.add_argument(
         "--pubsub-url",
         help="Use an externally managed pubsub relay instead of provisioning one",
     )
@@ -217,6 +222,12 @@ def main() -> int:
         raise UIError(
             "controllerd does not support --reset; preserve its metadata and children"
         )
+    if args.stop:
+        if args.program != "controllerd" or args.build_only:
+            raise UIError(
+                "--stop requires controllerd and cannot be combined with --build-only"
+            )
+        return _stop_controller_environment(args.controller_data_directory)
     # Controller state and metadata must not implicitly reuse environmentd's.
     default_postgres = (
         "postgres://root@localhost:26257/materialize_controllerd"
@@ -323,7 +334,7 @@ def main() -> int:
             if not args.release and not args.optimized:
                 env["RUST_MIN_STACK"] = RUST_MIN_STACK
         elif args.program == "controllerd":
-            command += _controller_args(args, binaries_dir) + args.args
+            command += _controller_args(args, binaries_dir, env) + args.args
             if not args.release and not args.optimized:
                 env["RUST_MIN_STACK"] = RUST_MIN_STACK
         elif args.program == "sqllogictest":
@@ -502,7 +513,9 @@ def _schema_url(url: str, schema: str) -> str:
     return urlunparse(parsed._replace(query=urlencode(query)))
 
 
-def _controller_args(args: argparse.Namespace, binaries: pathlib.Path) -> list[str]:
+def _controller_args(
+    args: argparse.Namespace, binaries: pathlib.Path, env: dict[str, str]
+) -> list[str]:
     data = args.controller_data_directory.resolve()
     if data == MZDATA.resolve():
         raise UIError("controllerd requires state separate from environmentd's mzdata")
@@ -544,6 +557,7 @@ def _controller_args(args: argparse.Namespace, binaries: pathlib.Path) -> list[s
         scratch = data / "scratch"
         scratch.mkdir(exist_ok=True)
         command = _environment_args(args, data, scratch, proxy_addr="127.0.0.1")
+        _record_controller_metadata_directory(data, env)
         for schema in ["consensus", "tsoracle", "storage"]:
             _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
     command += [
@@ -559,6 +573,173 @@ def _controller_args(args: argparse.Namespace, binaries: pathlib.Path) -> list[s
             f"--persist-pubsub-url={args.pubsub_url}",
         ]
     return command
+
+
+def _controller_environment_id(data: pathlib.Path) -> str:
+    environment_id = (data / "environment-id").read_text().strip()
+    if (
+        not environment_id
+        or any(c in environment_id for c in "/\\\n\r")
+        or environment_id in (".", "..")
+    ):
+        raise UIError("invalid controller environment identity")
+    return environment_id
+
+
+def _controller_metadata_directory(
+    data: pathlib.Path, environment_id: str
+) -> pathlib.Path:
+    record = data / "process-metadata-directory"
+    try:
+        directory = pathlib.Path(record.read_text().strip())
+    except FileNotFoundError:
+        raise UIError(
+            "missing process metadata location; restart once with the original configuration before --stop"
+        )
+    if (
+        not directory.is_absolute()
+        or directory.resolve().name != f"environmentd-{environment_id}"
+    ):
+        raise UIError(
+            "process metadata location does not match the selected environment"
+        )
+    return directory.resolve()
+
+
+def _record_controller_metadata_directory(
+    data: pathlib.Path, env: dict[str, str]
+) -> None:
+    environment_id = _controller_environment_id(data)
+    record = data / "process-metadata-directory"
+    if record.exists():
+        directory = _controller_metadata_directory(data, environment_id)
+    else:
+        # Pin the backend location so --stop and later starts do not depend on
+        # the invoking shell retaining its original TMPDIR.
+        temp = pathlib.Path(env.get("TMPDIR", tempfile.gettempdir())).resolve()
+        directory = temp / f"environmentd-{environment_id}"
+        with tempfile.NamedTemporaryFile(mode="w", dir=data, delete=False) as out:
+            out.write(str(directory) + "\n")
+            temporary = pathlib.Path(out.name)
+        temporary.replace(record)
+    env["TMPDIR"] = str(directory.parent)
+
+
+def _command_option(command: list[str], name: str) -> str | None:
+    for i, arg in enumerate(command):
+        if arg.startswith(name + "="):
+            return arg[len(name) + 1 :]
+        if arg == name and i + 1 < len(command):
+            return command[i + 1]
+    return None
+
+
+def _terminate_controller_processes(processes: list[psutil.Process]) -> None:
+    # psutil retains creation times and checks identity again before signaling.
+    for process in processes:
+        try:
+            process.terminate()
+        except psutil.NoSuchProcess:
+            pass
+    _, alive = psutil.wait_procs(processes, timeout=10)
+    for process in alive:
+        try:
+            process.kill()
+        except psutil.NoSuchProcess:
+            pass
+    _, alive = psutil.wait_procs(alive, timeout=10)
+    if alive:
+        raise UIError("some environment processes did not stop")
+
+
+def _stop_controller_environment(directory: pathlib.Path) -> int:
+    data = directory.resolve()
+    if data == MZDATA.resolve():
+        raise UIError("controllerd requires state separate from environmentd's mzdata")
+    if not (data / "environment-id").exists():
+        print("No initialized controller environment to stop")
+        return 0
+    environment_id = _controller_environment_id(data)
+    # A first launch can be interrupted before publishing its location. No
+    # process has been launched yet in that case. Also recognize the original
+    # backend location for older launchers without writing new state.
+    location_recorded = (data / "process-metadata-directory").exists()
+    if location_recorded:
+        directories = {_controller_metadata_directory(data, environment_id)}
+    else:
+        temp = pathlib.Path(os.environ.get("TMPDIR", tempfile.gettempdir())).resolve()
+        directories = {temp / f"environmentd-{environment_id}"}
+    errors = []
+    controllers = []
+    for process in psutil.process_iter():
+        try:
+            command = process.cmdline()
+            if not command or pathlib.Path(command[0]).name != "controllerd":
+                continue
+            if _command_option(command, "--environment-id") != environment_id:
+                continue
+            secrets = _command_option(
+                command, "--orchestrator-process-secrets-directory"
+            )
+            if secrets is None or pathlib.Path(secrets).resolve() != data / "secrets":
+                continue
+            if process.uids().real != os.getuid():
+                raise UIError("selected controller belongs to another user")
+            controllers.append(process)
+            if not location_recorded:
+                try:
+                    temp = pathlib.Path(
+                        process.environ().get("TMPDIR", tempfile.gettempdir())
+                    ).resolve()
+                    directories.add(temp / f"environmentd-{environment_id}")
+                except psutil.AccessDenied:
+                    errors.append("controller metadata location could not be read")
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    _terminate_controller_processes(controllers)
+
+    # Read child identities only after controllers are gone. Preserve PID and
+    # port-assignment records for restart, and never scan by executable name.
+    children: dict[int, psutil.Process] = {}
+    for metadata in directories:
+        for pid_file in metadata.glob("*/*.pid"):
+            if pid_file.is_symlink() or pid_file.parent.is_symlink():
+                errors.append(f"unexpected symlink in process metadata: {pid_file}")
+                continue
+            try:
+                pid, start = map(int, pid_file.read_text().split())
+            except FileNotFoundError:
+                continue
+            except (ValueError, OSError):
+                errors.append(f"invalid process identity record: {pid_file}")
+                continue
+            if pid <= 0 or start <= 0:
+                errors.append(f"invalid process identity record: {pid_file}")
+                continue
+            try:
+                process = psutil.Process(pid)
+                # The process backend records integer seconds since the Unix epoch.
+                if int(process.create_time()) != start:
+                    continue
+                if process.uids().real != os.getuid():
+                    errors.append(f"managed process {pid} belongs to another user")
+                    continue
+                children[process.pid] = process
+                # Profiling wrappers can have child processes of their own.
+                for child in process.children(recursive=True):
+                    children[child.pid] = child
+            except psutil.NoSuchProcess:
+                continue
+            except (psutil.AccessDenied, OverflowError):
+                errors.append(f"cannot inspect process identity record: {pid_file}")
+    _terminate_controller_processes(list(children.values()))
+    if errors:
+        raise UIError(
+            "Stopped verified processes, but could not verify all records: "
+            + "; ".join(errors)
+        )
+    print(f"Stopped local environment {environment_id}; data and declarations retained")
+    return 0
 
 
 def _run_controller(command: list[str], env: dict[str, str]) -> int:
