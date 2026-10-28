@@ -36,10 +36,6 @@ We ran our tests on Materialize Cloud. We created a new Kafka upsert source, fro
 
 This change has been rolled out to all Materialize Cloud environments and applies to all existing and new clusters. It will be enabled by default in Materialize Self-Managed in the coming weeks.
 
-### Native Google Cloud Storage for persist {#v26.48-native-gcs-for-persist}
-
-Self-managed deployments on Google Cloud can now point persist at a `gcs://<bucket>/<prefix>` URL, which reaches the bucket through a native Google Cloud Storage client authenticated with Google's default credentials. Previously a GCS deployment had to reach the same bucket through the S3-compatible API with static HMAC keys, so credentials can now be managed the way the rest of a GCP deployment manages them. Blob restore copies back the newest noncurrent generation and so requires a versioned bucket, which is the default in the self-managed Terraform modules; soft delete is not yet supported.
-
 ### Kafka sink headers are generally available {#v26.48-kafka-sink-headers-ga}
 
 The `HEADERS` option for Kafka sinks and the `materialize-sink-id` header, both previously in private preview, are now generally available. `HEADERS` adds the entries of a `map[text => text]` or `map[text => bytea]` column as headers on every message the sink produces. Every Kafka sink now also attaches a `materialize-sink-id` header carrying the sink's ID, so downstream consumers can correlate a data topic with its progress topic without querying Materialize. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
@@ -47,6 +43,7 @@ The `HEADERS` option for Kafka sinks and the `materialize-sink-id` header, both 
 To see how a downstream loader can use the `materialize-sink-id` header to expose only fully committed timestamps, see [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/).
 
 ### Improvements {#v26.48-improvements}
+- **New cluster details page on Self-Managed**: The [redesigned cluster details page](#v26.47-cluster-details-page) is now available on Materialize Self-Managed. To try it, open a cluster and select **Show the new cluster details page** in the breadcrumb bar.
 - **No Kubernetes restart backoff during zero-downtime upgrade catch-up**: A read-only `environmentd` that reboots to pick up DDL changes while it catches up now restarts inside its container instead of exiting it, so Kubernetes no longer applies crash-restart backoff to the repeated reboots a zero-downtime upgrade can need.
 - **`EXCLUDE ALL NOT NULL CONSTRAINTS` for MySQL source tables**: `CREATE TABLE ... FROM SOURCE` now accepts `EXCLUDE ALL NOT NULL CONSTRAINTS` against MySQL sources, which ignores the upstream `NOT NULL` constraints and makes the corresponding Materialize columns nullable, matching the PostgreSQL behavior added in v26.47.0; columns of a retained primary key stay `NOT NULL`, and a source type without support now rejects the option instead of silently ignoring it.
 - **Bounded replication slot creation for PostgreSQL sources**: Creating a PostgreSQL source's replication slot is now bounded by a one-minute timeout, applied as the upstream session's `lock_timeout` and configurable, so an upstream transaction holding the slot creation open surfaces an error the source can resume from rather than blocking it indefinitely; the timeout has no effect when the upstream is a physical standby.
@@ -58,7 +55,8 @@ To see how a downstream loader can use the `materialize-sink-id` header to expos
 - **External autoscaling for the connection balancer**: The `Materialize` resource gains a `balancerdExternallyScaled` field, and `Balancer` an `externallyScaled` field, that stop the Kubernetes operator from reasserting the balancerd Deployment's replica count on every reconcile, so a HorizontalPodAutoscaler can own it; `balancerdReplicas` then only seeds the count when the Deployment is first created.
 
 ### Guides {#v26.48-guides}
-- [Transactional downstream updates using Kafka](/export-data/patterns/transactional-downstream-updates-kafka/)
+- [Fine tune for sub-second freshness](/transform-data/freshness/subsecond-freshness/)
+- [Troubleshooting Iceberg sinks](/export-data/iceberg-troubleshooting/)
 
 ### Bug Fixes {#v26.48-bug-fixes}
 - Fixed a PostgreSQL source's replica growing until it was killed for running out of memory when upstream schema validation kept failing while the replication stream was silent; the validator retried without pausing and filled an unbounded error queue that is drained only on a keepalive, and it now reports each failure once.
