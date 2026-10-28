@@ -175,10 +175,12 @@ pub const KAFKA_RETRY_BACKOFF_MAX: Config<Duration> = Config::new(
 );
 
 /// Sets reconnect.backoff.ms in librdkafka for sources and sinks.
+/// We default to 500ms instead of 100ms because librdkafka re-bootstraps when all brokers are
+/// down, which resets the reconnect backoff and retries every reconnect.backoff.ms / 2.
 /// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
 pub const KAFKA_RECONNECT_BACKOFF: Config<Duration> = Config::new(
     "kafka_reconnect_backoff",
-    Duration::from_millis(100),
+    Duration::from_millis(500),
     "Sets reconnect.backoff.ms in librdkafka for sources and sinks.",
     ParameterScope::Replica,
 );
