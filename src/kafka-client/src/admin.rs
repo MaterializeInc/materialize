@@ -14,6 +14,7 @@
 //! work with any executor.
 
 use std::collections::BTreeMap;
+use std::ffi::CString;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -21,8 +22,11 @@ use crate::client::{Client, ClientContext, DefaultClientContext};
 use crate::config::{
     ClientConfig, ClientKind, ClientSettings, FromClientConfig, FromClientConfigAndContext,
 };
-use crate::error::{KafkaResult, RDKafkaErrorCode};
-use crate::internal::admin::AdminInner;
+use crate::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
+use crate::internal::admin::{
+    AdminInner, AlterSpec, NewPartitionsSpec, NewTopicSpec, OpOptions, RESOURCE_BROKER,
+    RESOURCE_GROUP, RESOURCE_TOPIC, ResourceKey,
+};
 use crate::topic_partition_list::TopicPartitionList;
 use crate::util::Timeout;
 
@@ -38,8 +42,8 @@ pub struct AdminClient<C: ClientContext + 'static> {
 impl<C: ClientContext> AdminClient<C> {
     /// Creates the admin engine on top of a client.
     pub(crate) fn from_client(client: Client<C>) -> KafkaResult<AdminClient<C>> {
-        let _ = client;
-        todo!("admin: create the admin engine")
+        let inner = Arc::new(AdminInner::new(Arc::clone(client.cluster())));
+        Ok(AdminClient { client, inner })
     }
 
     /// The admin engine.
@@ -60,8 +64,12 @@ impl<C: ClientContext> AdminClient<C> {
     where
         I: IntoIterator<Item = &'a NewTopic<'a>>,
     {
-        let _ = (topics, opts);
-        async move { todo!("admin: CreateTopics") }
+        let started = topics
+            .into_iter()
+            .map(NewTopic::to_spec)
+            .collect::<KafkaResult<Vec<_>>>()
+            .and_then(|topics| Ok(self.inner.create_topics(self.op_options(opts)?, topics)));
+        async move { started?.await }
     }
 
     /// Deletes the named topics.
@@ -74,8 +82,15 @@ impl<C: ClientContext> AdminClient<C> {
         topic_names: &[&str],
         opts: &AdminOptions,
     ) -> impl Future<Output = KafkaResult<Vec<TopicResult>>> + Send + use<C> {
-        let _ = (topic_names, opts);
-        async move { todo!("admin: DeleteTopics") }
+        let started = topic_names
+            .iter()
+            .map(|name| {
+                check_nul(name)?;
+                Ok(name.to_string())
+            })
+            .collect::<KafkaResult<Vec<_>>>()
+            .and_then(|names| Ok(self.inner.delete_topics(self.op_options(opts)?, names)));
+        async move { started?.await }
     }
 
     /// Adds additional partitions to existing topics according to the provided
@@ -93,8 +108,16 @@ impl<C: ClientContext> AdminClient<C> {
     where
         I: IntoIterator<Item = &'a NewPartitions<'a>>,
     {
-        let _ = (partitions, opts);
-        async move { todo!("admin: CreatePartitions") }
+        let started = partitions
+            .into_iter()
+            .map(NewPartitions::to_spec)
+            .collect::<KafkaResult<Vec<_>>>()
+            .and_then(|partitions| {
+                Ok(self
+                    .inner
+                    .create_partitions(self.op_options(opts)?, partitions))
+            });
+        async move { started?.await }
     }
 
     /// Deletes records from a topic.
@@ -116,8 +139,10 @@ impl<C: ClientContext> AdminClient<C> {
         offsets: &TopicPartitionList,
         opts: &AdminOptions,
     ) -> impl Future<Output = KafkaResult<TopicPartitionList>> + Send + use<C> {
-        let _ = (offsets, opts);
-        async move { todo!("admin: DeleteRecords") }
+        let started = self
+            .op_options(opts)
+            .map(|opts| self.inner.delete_records(opts, offsets.clone()));
+        async move { started?.await }
     }
 
     /// Retrieves the configuration parameters for the specified resources.
@@ -133,8 +158,16 @@ impl<C: ClientContext> AdminClient<C> {
     where
         I: IntoIterator<Item = &'a ResourceSpecifier<'a>>,
     {
-        let _ = (configs, opts);
-        async move { todo!("admin: DescribeConfigs") }
+        let started = configs
+            .into_iter()
+            .map(ResourceSpecifier::to_key)
+            .collect::<KafkaResult<Vec<_>>>()
+            .and_then(|resources| {
+                Ok(self
+                    .inner
+                    .describe_configs(self.op_options(opts)?, resources))
+            });
+        async move { started?.await }
     }
 
     /// Sets configuration parameters for the specified resources.
@@ -153,14 +186,47 @@ impl<C: ClientContext> AdminClient<C> {
     where
         I: IntoIterator<Item = &'a AlterConfig<'a>>,
     {
-        let _ = (configs, opts);
-        async move { todo!("admin: AlterConfigs") }
+        let started = configs
+            .into_iter()
+            .map(AlterConfig::to_spec)
+            .collect::<KafkaResult<Vec<_>>>()
+            .and_then(|resources| Ok(self.inner.alter_configs(self.op_options(opts)?, resources)));
+        async move { started?.await }
     }
 
     /// Returns the client underlying this admin client.
     pub fn inner(&self) -> &Client<C> {
         &self.client
     }
+
+    fn op_options(&self, opts: &AdminOptions) -> KafkaResult<OpOptions> {
+        OpOptions::new(opts, self.inner.settings())
+    }
+}
+
+/// Fails like rust-rdkafka's `CString::new` for strings passed to librdkafka.
+fn check_nul(s: &str) -> KafkaResult<()> {
+    CString::new(s).map(drop).map_err(KafkaError::Nul)
+}
+
+/// `RD_KAFKAP_PARTITIONS_MAX`.
+const PARTITIONS_MAX: i32 = 100_000;
+/// `RD_KAFKAP_BROKERS_MAX`.
+const BROKERS_MAX: i32 = 10_000;
+
+/// Validates a replica assignment like `rd_kafka_*_set_replica_assignment`.
+fn assignment_spec(assignment: PartitionAssignment<'_>) -> KafkaResult<Vec<Vec<i32>>> {
+    assignment
+        .iter()
+        .map(|brokers| {
+            if brokers.len() > usize::try_from(BROKERS_MAX).expect("positive") {
+                return Err(KafkaError::AdminOpCreation(format!(
+                    "Too many brokers specified (RD_KAFKAP_BROKERS_MAX={BROKERS_MAX})"
+                )));
+            }
+            Ok(brokers.to_vec())
+        })
+        .collect()
 }
 
 impl FromClientConfig for AdminClient<DefaultClientContext> {
@@ -205,11 +271,17 @@ impl AdminOptions {
     /// CreateTopics to complete the creation of topics on the controller before
     /// returning a result to the application.
     ///
-    /// If unset (the default), the API calls will return immediately after
-    /// triggering the operation.
+    /// Defaults to the `socket.timeout.ms` configuration parameter, as in
+    /// librdkafka. rust-rdkafka documents that unset means not waiting, which
+    /// is not what librdkafka does.
     ///
-    /// Only the CreateTopics, DeleteTopics, and CreatePartitions API calls
-    /// respect this option.
+    /// NOTE: Zero, and [`Timeout::Never`] which librdkafka sends as `-1`, ask
+    /// the broker not to wait. As in librdkafka, a `REQUEST_TIMED_OUT` answer
+    /// then counts as success. KRaft-based Kafka answers that without
+    /// creating the topic.
+    ///
+    /// Only the CreateTopics, DeleteTopics, CreatePartitions and DeleteRecords
+    /// API calls respect this option.
     pub fn operation_timeout<T: Into<Timeout>>(mut self, timeout: Option<T>) -> Self {
         self.operation_timeout = timeout.map(Into::into);
         self
@@ -287,6 +359,52 @@ impl<'a> NewTopic<'a> {
         self.config.push((key, value));
         self
     }
+
+    /// Validates the topic like rust-rdkafka and `rd_kafka_NewTopic_new`.
+    fn to_spec(&self) -> KafkaResult<NewTopicSpec> {
+        check_nul(self.name)?;
+        let (replication_factor, assignments) = match self.replication {
+            TopicReplication::Fixed(n) => (n, vec![]),
+            TopicReplication::Variable(assignment) => {
+                if i32::try_from(assignment.len()).ok() != Some(self.num_partitions) {
+                    return Err(KafkaError::AdminOpCreation(format!(
+                        "replication configuration for topic '{}' assigns {} partition(s), \
+                         which does not match the specified number of partitions ({})",
+                        self.name,
+                        assignment.len(),
+                        self.num_partitions,
+                    )));
+                }
+                (-1, assignment_spec(assignment)?)
+            }
+        };
+        if self.num_partitions < -1 || self.num_partitions > PARTITIONS_MAX {
+            return Err(KafkaError::AdminOpCreation(format!(
+                "num_partitions out of expected range 1..{PARTITIONS_MAX} or -1 for broker default"
+            )));
+        }
+        if replication_factor < -1 || replication_factor > BROKERS_MAX {
+            return Err(KafkaError::AdminOpCreation(format!(
+                "replication_factor out of expected range -1..{BROKERS_MAX}"
+            )));
+        }
+        let configs = self
+            .config
+            .iter()
+            .map(|(k, v)| {
+                check_nul(k)?;
+                check_nul(v)?;
+                Ok((k.to_string(), v.to_string()))
+            })
+            .collect::<KafkaResult<_>>()?;
+        Ok(NewTopicSpec {
+            name: self.name.to_string(),
+            num_partitions: self.num_partitions,
+            replication_factor,
+            assignments,
+            configs,
+        })
+    }
 }
 
 /// An assignment of partitions to replicas.
@@ -333,6 +451,35 @@ impl<'a> NewPartitions<'a> {
         self.assignment = Some(assignment);
         self
     }
+
+    /// Validates like rust-rdkafka and `rd_kafka_NewPartitions_new`.
+    fn to_spec(&self) -> KafkaResult<NewPartitionsSpec> {
+        check_nul(self.topic_name)?;
+        if let Some(assignment) = self.assignment {
+            if assignment.len() > self.new_partition_count {
+                return Err(KafkaError::AdminOpCreation(format!(
+                    "partition assignment for topic '{}' assigns {} partition(s), \
+                     which is more than the requested total number of partitions ({})",
+                    self.topic_name,
+                    assignment.len(),
+                    self.new_partition_count,
+                )));
+            }
+        }
+        let total = match i32::try_from(self.new_partition_count) {
+            Ok(n) if (1..=PARTITIONS_MAX).contains(&n) => n,
+            _ => {
+                return Err(KafkaError::AdminOpCreation(format!(
+                    "new_total_cnt out of expected range 1..{PARTITIONS_MAX}"
+                )));
+            }
+        };
+        Ok(NewPartitionsSpec {
+            topic: self.topic_name.to_string(),
+            total,
+            assignments: self.assignment.map(assignment_spec).transpose()?,
+        })
+    }
 }
 
 /// The result of an individual DescribeConfig operation.
@@ -347,6 +494,21 @@ pub enum ResourceSpecifier<'a> {
     Group(&'a str),
     /// A broker resource, identified by its ID.
     Broker(i32),
+}
+
+impl ResourceSpecifier<'_> {
+    fn to_key(&self) -> KafkaResult<ResourceKey> {
+        let (resource_type, name) = match *self {
+            ResourceSpecifier::Topic(name) => (RESOURCE_TOPIC, name.to_string()),
+            ResourceSpecifier::Group(name) => (RESOURCE_GROUP, name.to_string()),
+            ResourceSpecifier::Broker(id) => (RESOURCE_BROKER, id.to_string()),
+        };
+        check_nul(&name)?;
+        Ok(ResourceKey {
+            resource_type,
+            name,
+        })
+    }
 }
 
 /// A `ResourceSpecifier` that owns its data.
@@ -446,6 +608,20 @@ impl<'a> AlterConfig<'a> {
     pub fn set(mut self, key: &'a str, value: &'a str) -> AlterConfig<'a> {
         self.entries.insert(key, value);
         self
+    }
+
+    fn to_spec(&self) -> KafkaResult<AlterSpec> {
+        let resource = self.specifier.to_key()?;
+        let entries = self
+            .entries
+            .iter()
+            .map(|(k, v)| {
+                check_nul(k)?;
+                check_nul(v)?;
+                Ok((k.to_string(), v.to_string()))
+            })
+            .collect::<KafkaResult<_>>()?;
+        Ok(AlterSpec { resource, entries })
     }
 }
 
