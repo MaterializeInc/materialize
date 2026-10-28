@@ -69,6 +69,11 @@ until they exit, rather than replaced from an unverified configuration.
 The default adapter size `1` declares one CPU and 4 GiB memory. Override the map
 with `--adapter-sizes '{"1":{"cpu_limit":2,"memory_limit":"8 GiB"}}'`.
 
+On hosts booted with systemd, the process backend uses user scopes with
+`MemoryMax` and `CPUQuota`, requiring a usable user manager. Otherwise it launches
+processes directly without enforcing these allocations. Inventory reports declared
+resources, not measured limits or usage.
+
 ## SQL and HTTP
 
 ```sh

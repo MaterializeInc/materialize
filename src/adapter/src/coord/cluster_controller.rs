@@ -684,15 +684,17 @@ impl Coordinator {
 
         let mut checks = Vec::new();
         for replica_id in replicas {
-            // Skip replicas that are not online. We wait for a replica to be
-            // online even when it has no objects that need hydration on it
-            // (e.g. a single-replica source).
-            let status = self
-                .cluster_replica_statuses
-                .try_get_cluster_replica_statuses(cluster_id, replica_id)
-                .map(ClusterReplicaStatuses::cluster_replica_status);
-            if !matches!(status, Some(ClusterStatus::Online)) {
-                continue;
+            // Native readiness below requires a deployment-local QueryReady
+            // connection, even with no expected exports. Its adapter does not
+            // receive backend process events from the separate provisioner.
+            if !self.controller.replica_owned_compute() {
+                let status = self
+                    .cluster_replica_statuses
+                    .try_get_cluster_replica_statuses(cluster_id, replica_id)
+                    .map(ClusterReplicaStatuses::cluster_replica_status);
+                if !matches!(status, Some(ClusterStatus::Online)) {
+                    continue;
+                }
             }
             let exclude: BTreeSet<mz_repr::GlobalId> = pinned_mvs
                 .iter()

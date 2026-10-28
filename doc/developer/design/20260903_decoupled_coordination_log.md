@@ -65,16 +65,47 @@ only its adapter, and retained replica PIDs and maintained data. Evidence and
 cleanup success are preserved in `public-launcher-pkill-888e822f.tgz`, run
 `launcher-7d1c815c44d4461f89c5afd7fdae504f`. The local report remains unexplained.
 
-Next: repair the replica-observation bridge. The ON REFRESH witness failed twice.
-The first run hit the cache assertion. The exact repeat created a scheduled replica
-and installed its MV, but SQL replica statuses remained empty. Evidence:
-`policy-failure-888e822f.tgz` and `policy-repeat-888e822f.tgz` (last run
-`launcher-deee7f176eaf455691145bd93bfbc80d`). Both cleaned up successfully.
-Controllerd records replica backend events only in HTTP inventory. Adapterd's
-`Controller::events_stream` returns pending when process ownership is disabled,
-so policy's local status map never receives Online. Do not weaken readiness tests.
-The local next-version witness additionally verifies dropped adapter processes
-have exited before asserting survivor-only policy. It has not run.
+The replica-observation repair passes unit and targeted runtime verification.
+Native policy and catch-up use existing deployment-local QueryReady observations,
+not the permanently-empty legacy backend status map. Controllerd publishes original
+process transitions directly to the existing deployment-qualified Persist status
+history. No new catalog record or observation transport, and no retention or
+policy moves into controllerd. Independent review found initial-watch transition
+loss. Desired inventory is now bound before polling watches. A compiler task-result
+error reproduced and was fixed. Library checking and strict all-target Clippy pass, including task138 after
+the final test-fixture correction.
+
+The focused status test passes with names constructed through the real service
+formatter. Its original fixture failure reproduced before correction. The broader
+controller suite exposed a preexisting error-message expectation bug: collection
+filter failures were compared with invalid-adapter-ID errors. That also reproduced
+and was corrected without changing production validation. All14 controller unit
+tests, strict all-target Clippy and the default public build pass at candidate
+`d61d9c6b`. Evidence: `replica-status-verification-d61d9c6b.tgz`.
+
+Two public-launcher policy witnesses passed on `d61d9c6b`, both with successful
+cleanup. They cover concurrent ON REFRESH creation, resize, maintained reads,
+retirement and new transitions with each tested survivor after the other process
+exits. The extended run also completes a non-forced native warm resize while
+writes and maintained reads continue, exercising QueryReady-based readiness.
+Evidence: `public-policy-d61d9c6b.tgz`, run
+`launcher-f47b4c0eb5174e8290f56c25ad9a9bdc`, and
+`public-policy-warm-d61d9c6b.tgz`, run
+`launcher-807cd1f038924be79bef151bc18e92a4`.
+The worker has about57GiB free after unused cross-target incremental cache cleanup.
+Built products, source, evidence and the active cache were preserved.
+
+The original ON REFRESH witness failed twice. First: cache assertion. Exact
+repeat: scheduled replica and MV start, but SQL status stays empty. Evidence:
+`policy-failure-888e822f.tgz` and `policy-repeat-888e822f.tgz`, last run
+`launcher-deee7f176eaf455691145bd93bfbc80d`. Both cleaned up successfully.
+The passing witnesses above include dropped-process exit checks. They do not
+resolve the separate intermittent transaction-cache assertion.
+
+Replica resource metrics and backend-status session notices/Segment events are
+also absent in split mode. This repair does not silently exclude them from M3.
+Metrics belong with controller backend observations. Changing notices to query
+connection semantics requires an explicit UX decision.
 
 Deployment coexistence requires implementation, not just acceptance. Controller
 startup has only fresh/active-restart paths. Pending admission and promotion APIs
@@ -148,9 +179,9 @@ public Docker Hub visibility gate for `materialize/pubsubd`; a registry owner
 must resolve it without bypassing the gate. Its pinned-base merge-skew job also
 failed. Cargo/downstream integration did not run. Broad CI is not green.
 
-Worker `i-0788036f0778687f1` is now pinned at `519dbdc3`, with default debug binaries
-and about17GiB free after building. Scratch access works. Last expiry check showed
-five hours remaining. Task129 completed successfully. Check for live work before syncing source. Exact older CI product:
+Worker `i-0788036f0778687f1` is now pinned at `d61d9c6b`, with default debug binaries
+and about57GiB free after cache cleanup. Scratch access works. Last expiry check showed
+five hours remaining. Task145 completed successfully. No runtime/build work remains active. Check again before syncing. Exact older CI product:
 `materialize/materialized:mzbuild-FJXSGTKPCPESYSV4SG3CJ3LIKLBPF5GP`, digest
 `sha256:6d4cb1d4f5065426e5c80fe7a813a663620cc123b9222baafd7bbebf7eca7f51`,
 extracted at `/home/ubuntu/m3-evidence/ci141217-product`. It supplies the distinct

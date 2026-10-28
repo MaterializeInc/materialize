@@ -16,6 +16,7 @@ pub mod provisioning;
 pub mod pubsub;
 mod runtime;
 mod startup;
+mod status;
 
 pub use runtime::run;
 pub use startup::open_catalog;

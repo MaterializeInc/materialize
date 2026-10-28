@@ -636,14 +636,23 @@ impl Coordinator {
         cluster
             .replicas()
             .map(|replica| {
-                let online = self
-                    .cluster_replica_statuses
-                    .try_get_cluster_replica_statuses(cluster_id, replica.replica_id)
-                    .is_some_and(|processes| {
-                        !processes.is_empty()
-                            && ClusterReplicaStatuses::cluster_replica_status(processes)
-                                == ClusterStatus::Online
-                    });
+                // Native adapters observe their own QueryReady connections,
+                // not the separate provisioner's backend process events.
+                let online = if self.controller.replica_owned_compute() {
+                    self.query_client.as_ref().is_some_and(|client| {
+                        !client
+                            .replica_clients(cluster_id, Some(replica.replica_id))
+                            .is_empty()
+                    })
+                } else {
+                    self.cluster_replica_statuses
+                        .try_get_cluster_replica_statuses(cluster_id, replica.replica_id)
+                        .is_some_and(|processes| {
+                            !processes.is_empty()
+                                && ClusterReplicaStatuses::cluster_replica_status(processes)
+                                    == ClusterStatus::Online
+                        })
+                };
                 let logging = has_hydration_log && replica.config.compute.logging.enabled();
                 let target = if !online {
                     ReplicaTarget::NotOnline

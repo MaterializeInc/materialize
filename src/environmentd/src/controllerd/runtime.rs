@@ -45,6 +45,26 @@ pub async fn run(
     );
     let listener = tokio::net::TcpListener::bind(http_listen_addr).await?;
     let mut catalog = super::open_catalog(&config, &adapter_sizes).await?;
+    let persist = config
+        .catalog_config
+        .persist_clients
+        .open(config.controller.persist_location.clone())
+        .await?;
+    let mut replica_history =
+        super::status::ReplicaHistory::new(&catalog, persist, config.controller.deploy_generation)?;
+    // Bind retained services before polling their initial watch events. Keeping
+    // only the latest event until the first tick would lose intervening failures.
+    replica_history.set_desired(
+        super::desired_replicas(&catalog, config.controller.deploy_generation)
+            .into_iter()
+            .map(|replica| {
+                (
+                    replica.service,
+                    u64::from(replica.resources.allocation.scale.get()),
+                )
+            })
+            .collect(),
+    );
     let adapters = config.controller.orchestrator.namespace("adapter");
     let replicas = config.controller.orchestrator.namespace("cluster");
     let mut adapter_events = adapters.watch_services();
@@ -63,6 +83,9 @@ pub async fn run(
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            _ = &mut replica_history.task => {
+                anyhow::bail!("replica status publisher stopped");
+            }
             result = &mut server => {
                 result?;
                 anyhow::bail!("controller HTTP server stopped");
@@ -71,7 +94,10 @@ pub async fn run(
                 observations.complete_probe(result, &adapter_launch);
             }
             Some(event) = adapter_events.next() => observations.record(event),
-            Some(event) = replica_events.next() => observations.record(event),
+            Some(event) = replica_events.next() => {
+                if let Ok(event) = &event { replica_history.record(event); }
+                observations.record(event);
+            },
             Some(event) = pubsub_events.next() => {
                 if let Some(relay) = &mut pubsub { relay.record(event); }
             },
@@ -119,6 +145,13 @@ pub async fn run(
                 let desired: BTreeSet<_> = observations.adapters.keys()
                     .chain(observations.replicas.keys()).cloned().collect();
                 observations.retain(&desired);
+                replica_history.set_desired(observations.replicas.iter().map(|(service, replica)| {
+                    (service.clone(), u64::from(replica.resources.allocation.scale.get()))
+                }).collect());
+                // Initial watch events can precede the first inventory reconciliation.
+                for event in observations.process_events() {
+                    replica_history.record(event);
+                }
                 observations.seed_readiness(&catalog);
                 observations.start_probes(&adapter_launch);
                 match observations.publish(&mut catalog, &adapter_launch, &adapter_sizes).await {

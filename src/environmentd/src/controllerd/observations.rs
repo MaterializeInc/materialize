@@ -121,6 +121,10 @@ impl Observations {
             .collect()
     }
 
+    pub(super) fn process_events(&self) -> impl Iterator<Item = &ServiceEvent> {
+        self.processes.values()
+    }
+
     pub(super) fn adapters(
         &self,
         catalog: &Catalog,
