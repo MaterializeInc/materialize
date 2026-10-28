@@ -1781,7 +1781,7 @@ impl KafkaConnection {
         // With `none` the client keeps its brokers and the backoff set above, but once every
         // broker it learned has gone away it never resolves the bootstrap servers again. Kafka
         // sources recover by rebuilding their consumers, see
-        // `kafka_source_consumer_rebuild_timeout`, and sinks restart on producer errors.
+        // `kafka_metadata_failure_timeout`, and sinks restart on producer errors.
         options.insert("metadata.recovery.strategy".into(), "none".into());
 
         let mut config = mz_kafka_util::client::create_new_client_config(

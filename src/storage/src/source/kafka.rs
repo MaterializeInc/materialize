@@ -1880,7 +1880,7 @@ enum MetadataUpdate {
     /// Definite errors cannot be recovered from. They poison the source until the end of time.
     DefiniteError(SourceError),
     /// The metadata consumer was rebuilt after its fetches failed for
-    /// `kafka_source_consumer_rebuild_timeout`. Readers rebuild their consumers too.
+    /// `kafka_metadata_failure_timeout`. Readers rebuild their consumers too.
     RebuildConsumer,
 }
 
@@ -2065,7 +2065,7 @@ fn render_metadata_fetcher<'scope>(
                 }
                 MetadataUpdate::TransientError(_) => {
                     let since = *failing_since.get_or_insert_with(Instant::now);
-                    let timeout = mz_storage_types::dyncfgs::KAFKA_SOURCE_CONSUMER_REBUILD_TIMEOUT
+                    let timeout = mz_storage_types::dyncfgs::KAFKA_METADATA_FAILURE_TIMEOUT
                         .get(config.config.config_set());
                     since.elapsed() >= timeout
                 }

@@ -3489,7 +3489,7 @@ class FlipFlagsAction(Action):
             "kafka_retry_backoff_max",
             "kafka_reconnect_backoff",
             "kafka_reconnect_backoff_max",
-            "kafka_source_consumer_rebuild_timeout",
+            "kafka_metadata_failure_timeout",
             "kafka_sink_message_max_bytes",
             "kafka_sink_batch_size",
             "kafka_sink_batch_num_messages",

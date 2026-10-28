@@ -339,11 +339,11 @@ def materialized_log_count(c: Composition, needle: str) -> int:
 
 
 def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> None:
-    """Kafka sources behind an SSH tunnel back off while the broker is down,
-    rebuild their consumers once it has been down for
-    kafka_source_consumer_rebuild_timeout, and recover after it restarts.
-    Every reconnect and every rebuild resolves the broker through the
-    tunnel-rewriting resolver."""
+    """Kafka sources and sinks behind an SSH tunnel back off while the broker
+    is down, sources rebuild their consumers and sinks restart once it has been
+    down for kafka_metadata_failure_timeout, and both recover after it
+    restarts. Every reconnect and every rebuild resolves the broker through
+    the tunnel-rewriting resolver."""
     c.down()
     with c.override(SshBastionHost(max_startups="2")):
         broker = "redpanda" if redpanda else "kafka"
@@ -372,14 +372,18 @@ def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> Non
         # Rebuild consumers after ten seconds without metadata instead of the
         # five-minute default, so the outage below exercises it.
         c.sql(
-            "ALTER SYSTEM SET kafka_source_consumer_rebuild_timeout = '10s'",
+            "ALTER SYSTEM SET kafka_metadata_failure_timeout = '10s'",
             user="mz_system",
             port=6877,
         )
 
         c.run_testdrive_files("--no-reset", "kafka-source.td")
+        c.run_testdrive_files("--no-reset", "kafka-restart-broker-sink.td")
         c.kill(broker)
         c.run_testdrive_files("--no-reset", "kafka-source-after-broker-failure.td")
+        c.run_testdrive_files(
+            "--no-reset", "kafka-restart-broker-sink-after-failure.td"
+        )
 
         # The bastion accepts each tunnelled connection and closes it when it
         # cannot reach the broker, so every reconnect attempt reaches the
@@ -408,6 +412,51 @@ def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> Non
 
         c.up(*[d for d in dependencies if d != "materialized"])
         c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
+        c.run_testdrive_files(
+            "--no-reset", "kafka-restart-broker-sink-after-restart.td"
+        )
+
+
+def kafka_advertising(alias: str) -> Kafka:
+    """A broker that clients learn as `alias` rather than as `kafka`, the name
+    they bootstrap from. Replacing it with one advertising another alias makes
+    every learned broker disappear while the bootstrap name keeps resolving."""
+    kafka = Kafka(advertised_listeners=[f"PLAINTEXT://{alias}:9092"])
+    kafka.config["networks"] = {"default": {"aliases": [alias]}}
+    return kafka
+
+
+def workflow_kafka_switchover(c: Composition) -> None:
+    """A Kafka source behind an SSH tunnel recovers after the cluster behind
+    its bootstrap name is replaced by one whose broker advertises a different
+    name. With metadata.recovery.strategy=none librdkafka never resolves the
+    bootstrap name again by itself, so only the consumer rebuild after
+    kafka_metadata_failure_timeout brings the source back."""
+    c.down()
+    bastion = SshBastionHost(max_startups="2")
+    with c.override(bastion, kafka_advertising("kafka-old")):
+        c.up("materialized", "ssh-bastion-host", "kafka")
+        c.run_testdrive_files("setup.td")
+        public_key = c.sql_query("""
+            select public_key_1 from mz_ssh_tunnel_connections ssh \
+            join mz_connections c on c.id = ssh.id
+            where c.name = 'thancred';
+            """)[0][0]
+        c.exec(
+            "ssh-bastion-host",
+            "bash",
+            "-c",
+            f"echo '{public_key}' > /etc/authorized_keys/mz && chmod 644 /etc/authorized_keys/mz",
+        )
+        c.run_testdrive_files("--no-reset", "kafka-switchover.td")
+        c.kill("kafka")
+
+    with c.override(bastion, kafka_advertising("kafka-new")):
+        # The service's configuration changed, so `up` replaces the container:
+        # a fresh broker at the same bootstrap name, while `kafka-old` no
+        # longer resolves.
+        c.up("kafka")
+        c.run_testdrive_files("--no-reset", "kafka-switchover-after.td")
 
 
 def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
@@ -795,6 +844,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         (workflow_pg, (), True),
         # (workflow_kafka_restart_replica, (), True),  # TODO: Reenable when https://linear.app/materializeinc/issue/SS-287 is fixed
         (workflow_kafka_restart_broker, (False,), True),
+        (workflow_kafka_switchover, (), True),
         (workflow_kafka_sink, (), True),
         (workflow_sql_server, (), True),
         (workflow_mysql, (), True),

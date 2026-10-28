@@ -194,14 +194,15 @@ pub const KAFKA_RECONNECT_BACKOFF_MAX: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
-/// How long a Kafka source's metadata fetches may fail in a row before the source rebuilds its
-/// consumers. librdkafka runs with `metadata.recovery.strategy=none`, so a consumer whose learned
-/// brokers have all gone away never resolves the bootstrap servers again. New consumers bootstrap
-/// from them afresh.
-pub const KAFKA_SOURCE_CONSUMER_REBUILD_TIMEOUT: Config<Duration> = Config::new(
-    "kafka_source_consumer_rebuild_timeout",
+/// How long a Kafka source's or sink's metadata fetches may fail in a row before the source
+/// rebuilds its consumers or the sink restarts. librdkafka runs with
+/// `metadata.recovery.strategy=none`, so a client whose learned brokers have all gone away never
+/// resolves the bootstrap servers again. A new client bootstraps from them afresh.
+pub const KAFKA_METADATA_FAILURE_TIMEOUT: Config<Duration> = Config::new(
+    "kafka_metadata_failure_timeout",
     Duration::from_secs(300),
-    "How long a Kafka source's metadata fetches may fail in a row before it rebuilds its consumers.",
+    "How long a Kafka source's or sink's metadata fetches may fail in a row before the source \
+    rebuilds its consumers or the sink restarts.",
     ParameterScope::Replica,
 );
 
@@ -621,7 +622,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_RETRY_BACKOFF_MAX)
         .add(&KAFKA_RECONNECT_BACKOFF)
         .add(&KAFKA_RECONNECT_BACKOFF_MAX)
-        .add(&KAFKA_SOURCE_CONSUMER_REBUILD_TIMEOUT)
+        .add(&KAFKA_METADATA_FAILURE_TIMEOUT)
         .add(&KAFKA_SINK_MESSAGE_MAX_BYTES)
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)

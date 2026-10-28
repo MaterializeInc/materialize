@@ -305,7 +305,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     hydration_history_retention_period
     kafka_buffered_event_resize_threshold_elements
     kafka_default_aws_privatelink_endpoint_identification_algorithm
-    kafka_source_consumer_rebuild_timeout
+    kafka_metadata_failure_timeout
     kafka_offset_commit_refresh_interval
     kafka_poll_max_wait
     kafka_reconnect_backoff
