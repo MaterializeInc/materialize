@@ -79,7 +79,8 @@ ORDER BY r.name;
 ```
 
 `status` is `online` or `offline`. `reason` is `NULL` while a replica is
-online, and otherwise reports `initializing` or `oom-killed`.
+online, and for an offline replica carries the reason when one is available,
+such as `oom-killed`. An offline replica can also report a `NULL` reason.
 
 A [resize](/sql/alter-cluster/#resizing) passes through this stage without
 downtime: Materialize provisions replicas at the target size and hydrates them
@@ -97,7 +98,7 @@ if you alert on it. Queries routed to the cluster fail immediately:
 
 ```none
 ERROR:  CLUSTER "lifecycle_demo" has no replicas available to service request
-HINT:  Use ALTER CLUSTER to adjust the replication factor of the cluster.
+HINT:  Use ALTER CLUSTER to adjust the replication factor of the cluster. Example:`ALTER CLUSTER <cluster-name> SET (REPLICATION FACTOR 1)`
 ```
 
 A query run from a *different* cluster against an object maintained by this one
@@ -113,9 +114,11 @@ WHERE replication_factor = 0;
 ```
 
 Scaling a cluster to zero between scheduled runs saves compute, but it is not
-free: its objects hold back compaction of their inputs, so the cluster faces
-more work, and a higher memory peak, when it comes back. Prefer dropping and
-recreating such clusters over parking them at zero for long stretches.
+free: materialized views and sinks on the cluster keep holding back compaction
+of their inputs, so the cluster faces more work, and a higher memory peak, when
+it comes back. See [Troubleshoot hydration
+failures](/clusters/troubleshoot-clusters/hydration-failures/) for which objects
+pin their inputs.
 
 ## Hydrating
 
