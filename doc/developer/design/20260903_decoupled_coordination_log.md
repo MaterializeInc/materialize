@@ -21,8 +21,12 @@ old/new-version, prewarming, promotion, client switching and retirement outcomes
 ## Resume here
 
 Published head is `969056d5`. CI141151 is terminal, with no remaining queued or
-executing jobs. CI141217 now checks that head and is running. Its x86_64 product
-job is `01a1820c-1f44-4f4e-b53f-8ec54d183cac`. Preserve this verification when
+executing jobs. CI141217 checks that head. Its x86_64 product job
+`01a1820c-1f44-4f4e-b53f-8ec54d183cac` built and pushed images, then failed the
+public-registry gate: `materialize/pubsubd` is not public on Docker Hub. The exact
+read-only visibility probe still returns false. A registry owner must make the
+repository public. Do not bypass the check or change shared permissions without
+approval. Other CI jobs remain in flight. Preserve their verification when
 publishing further fixes. The draft PR summary now reflects the implemented
 launcher, lifecycle and collection endpoint, with runtime acceptance still open.
 
@@ -61,8 +65,9 @@ tests pass, including generated resource ownership and address parity. All 15
 launcher tests, Black, Ruff, Rust formatting and whitespace checks pass. Review
 found a metrics port-name mismatch, fixed to `internal-http` and compile-checked.
 The environmentd relay/HTTP tests compile but have not executed. The image
-metadata validates through `bin/mzimage describe pubsubd`; no image build or actual
-plain-launcher demo has run.
+metadata validates through `bin/mzimage describe pubsubd`. CI141217 built the
+standalone image, but its Docker Hub repository fails the public-visibility gate.
+No actual plain-launcher demo has run.
 
 Whole-environment `bin/controllerd --stop` is implemented without building or
 initializing. It stops controllers selected by environment identity and state
