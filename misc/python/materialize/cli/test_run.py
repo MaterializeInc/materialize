@@ -132,16 +132,19 @@ def test_controller_build_only_needs_no_services(launcher, monkeypatch):
         mock.assert_not_called()
 
 
-def test_controller_refuses_existing_metadata(launcher):
+def test_controller_refuses_existing_metadata(launcher, tmp_path):
     launcher[
         2
     ].return_value.__enter__.return_value.cursor.return_value.__enter__.return_value.fetchone.return_value = (
         "consensus",
     )
-    with pytest.raises(UIError, match="existing environments cannot be converted"):
+    with pytest.raises(
+        UIError, match="metadata database already contains Materialize schemas"
+    ):
         run.main()
     launcher[3].assert_not_called()
     launcher[5].assert_not_called()
+    assert not (tmp_path / "mzdata-controllerd").exists()
 
 
 def test_controller_refuses_environmentd_state(launcher, monkeypatch, tmp_path):

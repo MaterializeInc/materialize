@@ -550,8 +550,11 @@ def _controller_args(
                 )
                 if cur.fetchone() is not None:
                     raise UIError(
-                        "fresh controllerd state requires unused metadata; "
-                        "existing environments cannot be converted"
+                        "controller state directory has no environment-id, but the "
+                        "metadata database already contains Materialize schemas",
+                        hint="Reuse the original --controller-data-directory, or choose "
+                        "an unused --postgres database and a new state directory. "
+                        "Deleting local state does not reset the metadata database.",
                     )
         data.mkdir(parents=True, exist_ok=True)
         scratch = data / "scratch"

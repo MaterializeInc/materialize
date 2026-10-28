@@ -26,6 +26,12 @@ Keep custom state directories private and outside the checkout. Override it with
 separate metadata database and blob location for each environment. Do not reuse
 another environment's state or run two controllers for the same local deployment.
 
+Deleting this directory does not reset the metadata database. If the directory was
+deleted, do not recreate only its environment ID: the default blob data and secrets
+were also stored there. Start a separate environment with an unused database and
+state directory instead. If the original directory still exists, select it with
+`--controller-data-directory` to resume that environment.
+
 Start the environment:
 
 ```sh
