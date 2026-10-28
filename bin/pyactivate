@@ -42,7 +42,7 @@ def main(args: list[str]) -> int:
     # Validate Python version.
     if not MIN_HEXVERSION <= sys.hexversion < MAX_HEXVERSION:
         print(
-            f"fatal: python v{MIN_VERSION}+ and older than v{MAX_VERSION} required",
+            f"fatal: python >= v{MIN_VERSION} and < v{MAX_VERSION} required",
             file=sys.stderr,
         )
         print(
