@@ -61,14 +61,20 @@ WHERE types.id IS NULL
 
 # --- Builtins -----------------------------------------------------------------
 
-# Currently we hardcode NULL for the default of all builtin relations. If this ever
-# changes but we forget to update `mz_builtin_columns`, this assertion catches the regression.
-query T
-SELECT DISTINCT columns.default
+# A builtin table's columns carry the string NULL default of every table column
+# without one, and no other builtin relation has defaults.
+query TT
+SELECT objects.type, coalesce(columns.default, '<null>')
 FROM mz_catalog.mz_columns columns
+JOIN mz_catalog.mz_objects objects ON objects.id = columns.id
 WHERE columns.id LIKE 's%'
+GROUP BY 1, 2
+ORDER BY 1, 2
 ----
-NULL
+materialized-view  <null>
+source  <null>
+table  NULL
+view  <null>
 
 # `mz_cluster_replica_sizes`'s column information as well as each column's type.
 # `type` is the pretty-printed version of the type while `type_name` is the name stored in
