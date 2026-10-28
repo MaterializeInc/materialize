@@ -1584,7 +1584,11 @@ impl<C: ProducerContext> ProducerInner<C> {
 
         match (action, err) {
             (Some(Action::Fatal), Some(code)) => {
-                st.set_fatal(code, code.err2str(), &mut fx);
+                st.set_fatal(
+                    code,
+                    format!("Failed to end transaction: {}", code.err2str()),
+                    &mut fx,
+                );
             }
             (Some(Action::Permanent), Some(code)) => {
                 if require_bump && !commit {
@@ -1604,7 +1608,12 @@ impl<C: ProducerContext> ProducerInner<C> {
                 if st.eos.txn_state == TxnState::AbortingTransaction {
                     st.eos.set_txn_state(TxnState::BeginAbort);
                 }
-                st.set_abortable(code, require_bump, code.err2str(), &mut fx);
+                st.set_abortable(
+                    code,
+                    require_bump,
+                    format!("Failed to end transaction: {}", code.err2str()),
+                    &mut fx,
+                );
             }
             (Some(Action::Retry), _) if may_retry => {
                 self.finish(st, fx);

@@ -625,6 +625,8 @@ impl<D> State<D> {
                         >= cfg.metadata_propagation_max
                 {
                     topic.status = TopicStatus::NotExists;
+                    // Like librdkafka, queued records fail with the
+                    // metadata's error; later sends with `__UNKNOWN_TOPIC`.
                     let name = Arc::clone(&topic.name);
                     for m in topic.ua.drain(..) {
                         let partition = m.partition.unwrap_or(-1);
@@ -632,7 +634,7 @@ impl<D> State<D> {
                             &name,
                             partition,
                             Undelivered::Ua(m),
-                            RDKafkaErrorCode::UnknownTopic,
+                            RDKafkaErrorCode::UnknownTopicOrPartition,
                         );
                     }
                 } else {

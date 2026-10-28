@@ -1027,7 +1027,10 @@ fn unknown_partition_and_topic() {
         p.flush(Duration::from_secs(30)).unwrap();
         let reports = rec.reports();
         let missing_report = reports.iter().find(|r| r.opaque == 2).unwrap();
-        assert_eq!(missing_report.error, Some(RDKafkaErrorCode::UnknownTopic));
+        assert_eq!(
+            missing_report.error,
+            Some(RDKafkaErrorCode::UnknownTopicOrPartition)
+        );
         // Now known not to exist: rejected synchronously.
         let err = p
             .send(
@@ -1167,4 +1170,122 @@ fn statistics_report_producer_fields() {
         assert_eq!(eos.txn_state, "Ready");
         assert!(stats.brokers.values().any(|b| b.tx > 0));
     }
+}
+
+/// Restarts a broker container while an idempotent producer and a
+/// transactional producer stream records. Ignored: it restarts shared
+/// containers. Run with `MZ_KAFKA_CLIENT_TEST_RESTART='<brokers>=<container>'`.
+#[mz_ore::test]
+#[ignore]
+fn broker_restart_mid_produce() {
+    let Ok(spec) = std::env::var("MZ_KAFKA_CLIENT_TEST_RESTART") else {
+        return;
+    };
+    let (brokers, container) = spec.split_once('=').expect("<brokers>=<container>");
+    let (p, rec) = producer(
+        brokers,
+        &[("enable.idempotence", "true"), ("compression.type", "lz4")],
+    );
+    let txn_id = unique("kc-restart-txn");
+    let (t, _) = producer(
+        brokers,
+        &[
+            ("transactional.id", &txn_id),
+            ("transaction.timeout.ms", "60000"),
+        ],
+    );
+    let topic = unique("kc-restart");
+    let txn_topic = unique("kc-restart-txn-data");
+    let cluster = cluster_of(&p);
+    create_topic(&cluster, &topic, 2);
+    create_topic(&cluster, &txn_topic, 2);
+    let _drop = DropTopics::new(&cluster, &[&topic, &txn_topic]);
+    t.init_transactions(Duration::from_secs(30)).unwrap();
+
+    let container = container.to_string();
+    let restarter = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(2));
+        let status = std::process::Command::new("docker")
+            .args(["restart", "-t", "1", &container])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    });
+    let n = 40_000;
+    let mut committed = Vec::new();
+    let mut txn_errors = Vec::new();
+    let start = Instant::now();
+    for i in 0..n {
+        let v = format!("{i}");
+        p.send(
+            BaseRecord::<(), [u8], usize>::with_opaque_to(&topic, i)
+                .partition(i32::try_from(i % 2).unwrap())
+                .payload(v.as_bytes()),
+        )
+        .unwrap();
+        if i % 1000 == 999 {
+            // A transaction of 100 records, aborted on an abortable error
+            // like the sink does.
+            let first = i - 99;
+            let r = t.begin_transaction().and_then(|()| {
+                for j in first..=i {
+                    let v = format!("{j}");
+                    t.send(
+                        BaseRecord::<(), [u8], usize>::with_opaque_to(&txn_topic, j)
+                            .partition(i32::try_from(j % 2).unwrap())
+                            .payload(v.as_bytes()),
+                    )
+                    .map_err(|(e, _)| e)?;
+                }
+                t.commit_transaction(Duration::from_secs(60))
+            });
+            match r {
+                Ok(()) => committed.extend(first..=i),
+                Err(KafkaError::Transaction(e)) if e.txn_requires_abort() => {
+                    txn_errors.push(e.to_string());
+                    t.abort_transaction(Duration::from_secs(60)).unwrap();
+                }
+                Err(e) => panic!("unexpected transaction error {e:?}"),
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    p.flush(Duration::from_secs(120)).unwrap();
+    restarter.join().unwrap();
+    eprintln!(
+        "produced {n} in {:?}, {} transactions committed, aborted: {txn_errors:?}",
+        start.elapsed(),
+        committed.len() / 100
+    );
+    // Every record was delivered exactly once, in order.
+    let reports = rec.reports();
+    assert_eq!(reports.len(), n);
+    assert!(reports.iter().all(|r| r.error.is_none()), "{reports:?}");
+    for partition in 0..2 {
+        let values: Vec<usize> = fetch_all(&cluster, &topic, partition, false)
+            .into_iter()
+            .map(|f| {
+                std::str::from_utf8(&f.value.unwrap())
+                    .unwrap()
+                    .parse()
+                    .unwrap()
+            })
+            .collect();
+        let expected: Vec<usize> = (0..n)
+            .filter(|i| i % 2 == usize::try_from(partition).unwrap())
+            .collect();
+        assert_eq!(values, expected);
+    }
+    // Committed transactions are visible exactly once, aborted ones not.
+    let mut visible: Vec<usize> = (0..2)
+        .flat_map(|partition| fetch_all(&cluster, &txn_topic, partition, true))
+        .map(|f| {
+            std::str::from_utf8(&f.value.unwrap())
+                .unwrap()
+                .parse()
+                .unwrap()
+        })
+        .collect();
+    visible.sort();
+    assert_eq!(visible, committed);
 }
