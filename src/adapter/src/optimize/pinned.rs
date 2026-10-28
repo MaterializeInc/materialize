@@ -145,13 +145,13 @@ mod tests {
         pinned
     }
 
-    /// Runs the materialized view optimizer pipeline over the catalog item.
     /// The internal view id an optimizer is handed, as a fresh process would
     /// allocate it.
     fn internal_view_id() -> GlobalId {
         TransientIdGen::new().allocate_id().1
     }
 
+    /// Runs the materialized view optimizer pipeline over the catalog item.
     fn optimize_materialized_view(
         catalog: &Arc<Catalog>,
         mv: &MaterializedView,
