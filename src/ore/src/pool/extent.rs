@@ -198,12 +198,7 @@ pub(crate) struct Extent {
 #[derive(Debug)]
 enum Home {
     /// A slot in the pool's extent arena.
-    Arena {
-        arena: Arc<ExtentArena>,
-        class: usize,
-        slot: u32,
-        ptr: *mut u8,
-    },
+    Arena(ArenaSlot),
     /// Global-allocator fallback for an exhausted class. Never paged out:
     /// `MADV_PAGEOUT` over allocator-owned pages leaves swap-entry PTEs on
     /// freed ranges for the allocator to recycle into unrelated
@@ -216,10 +211,7 @@ enum Home {
     /// extent in place for the demoter's commit to drop, which also keeps
     /// the file slot from being reused mid-write.
     Demoting {
-        arena: Arc<ExtentArena>,
-        class: usize,
-        slot: u32,
-        ptr: *mut u8,
+        arena: ArenaSlot,
         file_slot: FileSlot,
     },
     /// File mode: the bytes live only in `slot` of `store`. Terminal until
@@ -236,11 +228,38 @@ impl Home {
     /// The in-memory copy of the stored bytes, `None` for a file home.
     fn ptr(&self) -> Option<*mut u8> {
         match self {
-            Home::Arena { ptr, .. } | Home::Heap { ptr, .. } | Home::Demoting { ptr, .. } => {
-                Some(*ptr)
-            }
+            Home::Arena(arena) | Home::Demoting { arena, .. } => Some(arena.ptr),
+            Home::Heap { ptr, .. } => Some(*ptr),
             Home::File { .. } => None,
         }
+    }
+}
+
+/// An extent's slot in the pool's extent arena.
+#[derive(Debug, Clone)]
+struct ArenaSlot {
+    arena: Arc<ExtentArena>,
+    class: usize,
+    slot: u32,
+    ptr: *mut u8,
+}
+
+impl ArenaSlot {
+    /// Returns the slot to its region with its pages discarded.
+    /// Discarding the pages also drops any copy on the swap device
+    /// (`MADV_DONTNEED` frees an anonymous range's swap entries), so the slot
+    /// returns to the free list with no dead compressed data left to fault back
+    /// in.
+    ///
+    /// # Safety
+    ///
+    /// The caller owned the slot, and no reference into it exists.
+    unsafe fn free(&self, alloc_size: usize) {
+        // SAFETY: per the function contract.
+        unsafe {
+            region::dontneed(self.ptr, alloc_size);
+        }
+        self.arena.regions[self.class].free(self.slot, false);
     }
 }
 
@@ -381,12 +400,12 @@ impl Extent {
 
             let (home, alloc_size) = match arena.alloc(comp_len) {
                 Some((class, slot)) => (
-                    Home::Arena {
+                    Home::Arena(ArenaSlot {
                         arena: Arc::clone(arena),
                         class,
                         slot,
                         ptr: arena.regions[class].slot_ptr(slot),
-                    },
+                    }),
                     arena.classes[class],
                 ),
                 None => {
@@ -454,7 +473,7 @@ impl Extent {
     /// resident until its demotion commits, and a `File` extent never is.
     pub(crate) fn is_resident(&self) -> bool {
         match self.home {
-            Home::Arena { .. } | Home::Heap { .. } => self.resident,
+            Home::Arena(_) | Home::Heap { .. } => self.resident,
             Home::Demoting { .. } => true,
             Home::File { .. } => false,
         }
@@ -464,7 +483,7 @@ impl Extent {
     /// retry-capped: the state RSS-target enforcement acts on, and the one
     /// in which freeing the extent avoids a device write.
     pub(crate) fn is_reclaimable_arena(&self) -> bool {
-        matches!(self.home, Home::Arena { .. }) && self.is_resident() && !self.pageout_capped()
+        matches!(self.home, Home::Arena(_)) && self.is_resident() && !self.pageout_capped()
     }
 
     /// Whether a demoter currently owns the extent.
@@ -476,7 +495,7 @@ impl Extent {
     pub(crate) fn file_bytes(&self) -> Option<usize> {
         match &self.home {
             Home::File { store, slot } => Some(store.class_size(slot.class)),
-            Home::Arena { .. } | Home::Heap { .. } | Home::Demoting { .. } => None,
+            Home::Arena(_) | Home::Heap { .. } | Home::Demoting { .. } => None,
         }
     }
 
@@ -489,7 +508,7 @@ impl Extent {
                 comp_len: self.comp_len,
                 crc: self.crc,
             }),
-            Home::Arena { .. } | Home::Heap { .. } | Home::Demoting { .. } => None,
+            Home::Arena(_) | Home::Heap { .. } | Home::Demoting { .. } => None,
         }
     }
 
@@ -509,28 +528,17 @@ impl Extent {
     /// Moves an `Arena` extent to `Demoting` toward `file_slot` and returns
     /// what the demoter's unlocked write needs. Panics for any other home.
     pub(crate) fn begin_demotion(&mut self, file_slot: FileSlot) -> DemotionSource {
-        let Home::Arena {
-            arena,
-            class,
-            slot,
-            ptr,
-        } = &self.home
-        else {
+        let Home::Arena(arena) = &self.home else {
             panic!("only arena extents demote");
         };
+        let arena = arena.clone();
         let source = DemotionSource {
-            ptr: ptr.cast_const(),
+            ptr: arena.ptr.cast_const(),
             comp_len: self.comp_len,
             alloc_size: self.alloc_size,
             file_slot,
         };
-        self.home = Home::Demoting {
-            arena: Arc::clone(arena),
-            class: *class,
-            slot: *slot,
-            ptr: *ptr,
-            file_slot,
-        };
+        self.home = Home::Demoting { arena, file_slot };
         source
     }
 
@@ -539,49 +547,30 @@ impl Extent {
     /// pages discarded. Panics unless the extent is `Demoting`. The caller
     /// holds the chunk's state lock, so no reader borrows the arena slot.
     pub(crate) fn commit_demotion(&mut self, store: Arc<FileStore>, crc: u32) {
-        let Home::Demoting {
-            arena,
-            class,
-            slot,
-            ptr,
-            file_slot,
-        } = &self.home
-        else {
+        let Home::Demoting { arena, file_slot } = &self.home else {
             panic!("only demoting extents commit");
         };
-        let (arena, class, slot, ptr) = (Arc::clone(arena), *class, *slot, *ptr);
+        let (arena, file_slot) = (arena.clone(), *file_slot);
         self.home = Home::File {
             store,
-            slot: *file_slot,
+            slot: file_slot,
         };
         self.crc = crc;
         self.read_since_demotion = false;
         // SAFETY: the extent owned the slot until the home change above, and
         // readers borrow it only under the chunk lock the caller holds.
-        unsafe { free_arena_slot(&arena, class, slot, ptr, self.alloc_size) };
+        unsafe { arena.free(self.alloc_size) };
     }
 
     /// Returns a `Demoting` extent to its `Arena` home and hands back the
     /// file slot the demotion reserved, for the caller to return to the
     /// store. Panics unless the extent is `Demoting`.
     pub(crate) fn abort_demotion(&mut self) -> FileSlot {
-        let Home::Demoting {
-            arena,
-            class,
-            slot,
-            ptr,
-            file_slot,
-        } = &self.home
-        else {
+        let Home::Demoting { arena, file_slot } = &self.home else {
             panic!("only demoting extents abort");
         };
         let file_slot = *file_slot;
-        self.home = Home::Arena {
-            arena: Arc::clone(arena),
-            class: *class,
-            slot: *slot,
-            ptr: *ptr,
-        };
+        self.home = Home::Arena(arena.clone());
         file_slot
     }
 
@@ -593,7 +582,7 @@ impl Extent {
     pub(crate) fn pageout_capped(&self) -> bool {
         match self.home {
             Home::Heap { .. } => true,
-            Home::Arena { .. } => self.incomplete_passes >= PAGEOUT_RETRY_CAP,
+            Home::Arena(_) => self.incomplete_passes >= PAGEOUT_RETRY_CAP,
             // File mode demotes instead of advising pages out.
             Home::Demoting { .. } | Home::File { .. } => false,
         }
@@ -634,7 +623,7 @@ impl Extent {
     /// can claim.
     pub(crate) fn prefetch(&self) {
         match self.home {
-            Home::Arena { ptr, .. } | Home::Heap { ptr, .. } => {
+            Home::Arena(ArenaSlot { ptr, .. }) | Home::Heap { ptr, .. } => {
                 region::willneed(ptr, self.alloc_size)
             }
             Home::Demoting { .. } | Home::File { .. } => {}
@@ -666,22 +655,23 @@ impl Extent {
         offset: usize,
         dst: &mut [u8],
     ) {
-        if let Some(location) = self.file_location() {
-            location.read_range_into(codec, body_len, offset, dst);
-            return;
+        match self.file_location() {
+            Some(location) => location.read_range_into(codec, body_len, offset, dst),
+            None => {
+                self.resident = true;
+                // The decode faults every page back in, so prior incomplete
+                // pageout passes no longer describe the mapping and the retry
+                // budget starts over.
+                self.incomplete_passes = 0;
+                self.prefetch();
+                // SAFETY: the extent exclusively owns its in-memory copy, and
+                // the first `comp_len` bytes were initialized by `write`. A
+                // `Demoting` extent's arena bytes are immutable while the
+                // demoter writes them out, so this read may overlap that write.
+                let buf = unsafe { std::slice::from_raw_parts(self.ptr(), self.comp_len) };
+                decode_range(buf, codec, body_len, offset, dst);
+            }
         }
-        self.resident = true;
-        // The decode faults every page back in, so prior incomplete
-        // pageout passes no longer describe the mapping and the retry
-        // budget starts over.
-        self.incomplete_passes = 0;
-        self.prefetch();
-        // SAFETY: the extent exclusively owns its in-memory copy, and the
-        // first `comp_len` bytes were initialized by `write`. A `Demoting`
-        // extent's arena bytes are immutable while the demoter writes them
-        // out, so this read may overlap that write.
-        let buf = unsafe { std::slice::from_raw_parts(self.ptr(), self.comp_len) };
-        decode_range(buf, codec, body_len, offset, dst);
     }
 }
 
@@ -750,29 +740,6 @@ fn decode_range(
     });
 }
 
-/// Returns an arena slot to its region with its pages discarded.
-/// Discarding the pages also drops any copy on the swap device
-/// (`MADV_DONTNEED` frees an anonymous range's swap entries), so the slot
-/// returns to the free list with no dead compressed data left to fault back
-/// in.
-///
-/// # Safety
-///
-/// The caller owned the slot, and no reference into it exists.
-unsafe fn free_arena_slot(
-    arena: &ExtentArena,
-    class: usize,
-    slot: u32,
-    ptr: *mut u8,
-    alloc_size: usize,
-) {
-    // SAFETY: per the function contract.
-    unsafe {
-        region::dontneed(ptr, alloc_size);
-    }
-    arena.regions[class].free(slot, false);
-}
-
 /// The heap layout of a fallback extent for a compressed payload of
 /// `comp_len` bytes.
 fn heap_layout(comp_len: usize) -> Layout {
@@ -782,15 +749,10 @@ fn heap_layout(comp_len: usize) -> Layout {
 impl Drop for Extent {
     fn drop(&mut self) {
         match &self.home {
-            Home::Arena {
-                arena,
-                class,
-                slot,
-                ptr,
-            } => {
+            Home::Arena(arena) => {
                 // SAFETY: the extent exclusively owns the slot and is being
                 // dropped, so no reference into it exists.
-                unsafe { free_arena_slot(arena, *class, *slot, *ptr, self.alloc_size) };
+                unsafe { arena.free(self.alloc_size) };
             }
             Home::Heap { ptr, layout } => {
                 // SAFETY: `ptr` was returned by `alloc` with exactly this
