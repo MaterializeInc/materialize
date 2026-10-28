@@ -16,42 +16,48 @@ deployment/backend acceptance remain open. Broad CI is not green.
 
 ## Resume here
 
-SQL/HTTP lifecycle is implemented locally, not yet runtime-verified. SQL supports
-CREATE/DROP/RENAME ADAPTER with mandatory superuser checks even when optional RBAC
-is disabled. Both paths use validated catalog operations and stable identities.
-HTTP exposes `/api/adapters` and `/api/inventory`, without authentication, on
-`127.0.0.1:6882` by default. Catalog conflicts get bounded refresh/retry before 409.
-Responses exclude launch arguments and credentials. Provisioning stays in
-controllerd and policy stays in adapters.
+Lifecycle core (`c5838f31`), local launcher (`4515a0df`) and deployment-qualified
+observations (`6bb0bfe4`) are implemented. SQL CREATE/DROP/RENAME require superuser
+with optional RBAC disabled. HTTP adapter management uses the same validated
+catalog operations, without in-process authentication, on port 6882 by default.
+Both independent reviews approved authority, fencing and ownership boundaries.
 
-Independent lifecycle review approved the catalog/authority/fencing boundaries.
-Its conflict handling and silent replica-error findings are fixed. Catalog listing
-uses normal PUBLIC metadata privileges, unknown IDs return 404 and duplicate names
-409. The claimed HTTP task error loss was rejected: the ore task handle returns
-its inner result, so `result?` already propagates the I/O error.
+`AdapterRuntime` stores change-only observations by adapter and generation.
+Declaration drop and generation retirement clean up its rows. It does not
+invalidate planning or publish builtin-table rows. SQL exposes named endpoints,
+backend status and separately observed readiness. Readiness uses existing
+unauthenticated health routes, with target/revision checks on late responses.
+Kubernetes time-only events do not invalidate readiness. The branch-owned v96
+schema and fixture were updated in place, with matching hashes verified.
 
-Strict adapter/environmentd/sqllogictest all-target Clippy passes after review fixes.
-Parser tests pass (76 passed, one ignored). Catalog lifecycle and builtin descriptor
-tests also pass after the listing-grant correction.
-Catalog enumeration fixtures and an RBAC-disabled SQL denial regression are added,
-not yet executed. HTTP transport unit tests compile but remain unexecuted.
+Strict combined all-target Clippy passes for adapter, environmentd, sqllogictest
+and catalog-debug after review fixes. Parser tests pass (76 passed, one ignored).
+Catalog lifecycle, runtime authority/roundtrip/planning, promotion, multi-subscriber
+and upgrade checks pass. New builtin descriptor validation passes. The removal of
+unused transaction helpers was subsequently compile-checked. HTTP and observation
+unit tests compile but have not executed. Updated SLT/testdrive catalog listings
+and the RBAC-disabled denial regression also await execution.
 
-`bin/controllerd --optimized` and [its recipe](../controllerd.md) now reuse the
-existing launcher, with separate state/metadata defaults, independently managed
-external pubsub and signal forwarding only to controllerd. Fourteen scoped Python
-tests, Black and Ruff pass. Real startup/adoption through this entry point remains
-to verify. Scratch SSO is expired; user has been asked to run `bin/scratch login`.
-Do not substitute another worker or a broad build on the small editing VM.
+The [local launcher recipe](../controllerd.md) connects to independently managed
+pubsub and preserves children across controller termination. Fourteen scoped Python
+tests, Black and Ruff pass. Actual startup/adoption through `bin/controllerd
+--optimized` remains unverified. Scratch SSO is still expired. User must run
+`bin/scratch login`. Only 5.6 GiB is free on the editing VM, so do not start product
+builds or another broad codegen run here. Do not replace the approved worker.
 
-Next: run the reviewed SQL/HTTP lifecycle witness on new matching binaries, including
-self-drop, zero-adapter restart and HTTP recovery. The syntax-checked private script
-is `sql-http-adapter-lifecycle-smoke.py`; it has not run. Also exercise the public
-launcher. Finish deployment-qualified SQL endpoint/status publication: review
-recommended a change-only AdapterRuntime catalog record, using the existing fenced
-handle and raw-catalog projections. Current schema is branch-owned v96, extend it
-in place with its snapshot/hash updates rather than adding a migration. Keep
-process status separate from SQL readiness. Existing `/api/readyz` reports adapter
-client availability. Status publication has not been implemented.
+Next: obtain the latest candidate's matching CI product and run
+`sql-http-adapter-lifecycle-smoke.py`, including self-drop, zero-adapter restart
+and HTTP recovery. This private script is syntax-checked, not executed. Extend it
+with SQL status/endpoint assertions, and separately exercise the public launcher.
+Implement the newly specified `GET /api/collections` from designer commit
+`88674314`: filtered catalog-known Persist collections and observed shard since,
+without holds or maintenance. That endpoint is not implemented yet. Replica policy,
+interrupted initialization, deployment coexistence and backend acceptance remain
+open. No M3 completion or new-product runtime claim is justified.
+
+Evidence: `runtime-review-resolution.md`, `runtime-reviewed-clippy.log`,
+`runtime-builtin-tests.log`, `lifecycle-review-resolution.md` and the earlier
+lifecycle/catalog/parser check logs under the private evidence directory.
 
 The catch-up repair is published as `d6f662f7` in CI141032. It applies and enacts
 one transaction at a time against its matching projection, invalidating snapshots
@@ -73,10 +79,11 @@ Policy task enablement is separate from process ownership in `bc10afcb`. Keep
 policy deployment-local and catalog-validated across adapters, without a leader.
 With zero adapters, policy may pause while controllerd maintains committed processes.
 
-Published head: `d6f662f7`, CI141032. Preserve in-flight verification before another
-push. CI140970 reached terminal failure before this publication. Its Cargo and
-Clippy jobs passed. Earlier parallel SLT and upgrade failures remain unclosed.
-The focused SLT2 runs in `slt2/` did not establish the failure as a baseline flake.
+CI141032 is terminal failed, with no executing or queued jobs. Its product supplied
+the prior two-adapter witness, not the lifecycle/status candidate. Inspect the latest
+bookmark and CI before another publication. Preserve executing verification. Earlier
+parallel SLT and upgrade failures remain unclosed. The focused SLT2 runs in `slt2/`
+did not establish the failure as a baseline flake.
 
 ## Boundaries and remaining risks
 
