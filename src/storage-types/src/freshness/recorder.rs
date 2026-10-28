@@ -16,7 +16,7 @@ use timely::progress::Antichain;
 
 use super::ResolvedTree;
 use super::histogram::{BucketScheme, add_span};
-use super::period::PeriodBook;
+use super::period::{ClosedPeriod, PeriodBook};
 
 /// Parameters of one observation. They may change between observations.
 #[derive(Debug, Clone, Copy)]
@@ -41,9 +41,9 @@ pub struct PeriodRow {
 
 /// The histogram of one period together with the scheme it was opened with.
 #[derive(Debug)]
-struct PeriodHistogram {
-    scheme: BucketScheme,
-    counts: BTreeMap<i32, u64>,
+pub(super) struct PeriodHistogram {
+    pub scheme: BucketScheme,
+    pub counts: BTreeMap<i32, u64>,
 }
 
 /// Records the latency of every virtual arrival of one object, once, into period histograms.
@@ -103,30 +103,35 @@ impl FreshnessRecorder {
                 )
             }
         };
-        closed
-            .into_iter()
-            .flat_map(|p| {
-                let buckets_per_octave = p.state.scheme.per_octave();
-                p.state
-                    .counts
-                    .into_iter()
-                    .map(move |(bucket, count)| PeriodRow {
-                        period_start_ms: p.start_ms,
-                        period_end_ms: p.end_ms,
-                        buckets_per_octave,
-                        bucket,
-                        count,
-                    })
-            })
-            .collect()
+        rows(closed)
     }
+}
+
+/// The rows of closed periods, adjacent per period and sorted by bucket.
+pub(super) fn rows(closed: Vec<ClosedPeriod<PeriodHistogram>>) -> Vec<PeriodRow> {
+    closed
+        .into_iter()
+        .flat_map(|p| {
+            let buckets_per_octave = p.state.scheme.per_octave();
+            p.state
+                .counts
+                .into_iter()
+                .map(move |(bucket, count)| PeriodRow {
+                    period_start_ms: p.start_ms,
+                    period_end_ms: p.end_ms,
+                    buckets_per_octave,
+                    bucket,
+                    count,
+                })
+        })
+        .collect()
 }
 
 /// Adds the arrivals in `(from, to]` to `counts`, where the ends may fall inside a window.
 ///
 /// The arrivals of a window carry the latency of the window start, wherever the window is cut.
 /// `advance_ms` must be at least `to`.
-fn add_part(
+pub(super) fn add_part(
     tree: &ResolvedTree,
     scheme: &BucketScheme,
     interval_ms: u64,

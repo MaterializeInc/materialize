@@ -16,6 +16,7 @@ use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use proptest::prelude::*;
 
 use super::histogram::{BucketScheme, add_span};
+use super::local::{FrontierLog, LocalDelayRecorder};
 use super::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use super::*;
 use timely::progress::Antichain;
@@ -987,4 +988,216 @@ fn period_length_change_keeps_arrivals_in_their_period() {
     // which shares its start, takes the rest.
     assert_eq!(per_period[&(0, 10_000)], 5_000);
     assert_eq!(per_period[&(0, 60_000)], 50_000);
+}
+
+fn ts(t: u64) -> Timestamp {
+    Timestamp::from(t)
+}
+
+fn bucket_counts(rows: &[PeriodRow]) -> BTreeMap<i32, u64> {
+    let mut counts = BTreeMap::new();
+    for row in rows {
+        *counts.entry(row.bucket).or_default() += row.count;
+    }
+    counts
+}
+
+#[mz_ore::test]
+fn frontier_log_passed_at() {
+    let mut log = FrontierLog::default();
+    assert_eq!(log.passed_at(ts(0)), None);
+    log.record(ts(1001), 1010);
+    log.record(ts(2001), 2020);
+    // A regressing or repeated frontier is ignored.
+    log.record(ts(2001), 2500);
+    log.record(ts(1500), 2600);
+    // The earliest observation strictly above the timestamp.
+    assert_eq!(log.passed_at(ts(0)), Some(1010));
+    assert_eq!(log.passed_at(ts(1000)), Some(1010));
+    assert_eq!(log.passed_at(ts(1001)), Some(2020));
+    assert_eq!(log.passed_at(ts(2000)), Some(2020));
+    assert_eq!(log.passed_at(ts(2001)), None);
+    // Pruned entries answer nothing, and the rest stay correct.
+    log.prune_through(ts(1000));
+    assert_eq!(log.passed_at(ts(1000)), None);
+    assert_eq!(log.passed_at(ts(1001)), Some(2020));
+    log.prune_through(ts(5000));
+    assert_eq!(log.passed_at(ts(2000)), None);
+    assert_eq!(log.passed_at(ts(6000)), None);
+}
+
+#[mz_ore::test]
+fn local_chain_attributes_hops() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let (mut log_a, mut log_b) = (FrontierLog::default(), FrontierLog::default());
+    let mut local_a = LocalDelayRecorder::new(0);
+    let mut local_b = LocalDelayRecorder::new(0);
+    let mut local_c = LocalDelayRecorder::new(0);
+    let mut end_to_end_c = FreshnessRecorder::new(0);
+    let (mut rows_a, mut rows_b, mut rows_c, mut rows_e2e) = (vec![], vec![], vec![], vec![]);
+    for w in (1000..=200_000u64).step_by(1000) {
+        // A is a 1 s source, B shows each tick 3 s later, and C shows it as B does.
+        log_a.record(ts(w + 1), w + 1);
+        rows_a.extend(local_a.observe(&tree, &at(w + 1), w + 1, &[], &cfg));
+        log_b.record(ts(w + 1), w + 3001);
+        rows_b.extend(local_b.observe(&tree, &at(w + 1), w + 3001, &[&log_a], &cfg));
+        rows_c.extend(local_c.observe(&tree, &at(w + 1), w + 3001, &[&log_b], &cfg));
+        rows_e2e.extend(end_to_end_c.observe(&tree, &at(w + 1), w + 3001, &cfg));
+    }
+    let empty = Antichain::new();
+    rows_a.extend(local_a.observe(&tree, &empty, 300_000, &[], &cfg));
+    rows_b.extend(local_b.observe(&tree, &empty, 300_000, &[&log_a], &cfg));
+    rows_c.extend(local_c.observe(&tree, &empty, 300_000, &[&log_b], &cfg));
+    rows_e2e.extend(end_to_end_c.observe(&tree, &empty, 300_000, &cfg));
+
+    let s = scheme(4);
+    // A window of 1 s ending at w becomes visible at w + 1, so the oldest arrival waited 1001 ms.
+    assert_eq!(
+        bucket_counts(&rows_a),
+        BTreeMap::from([(s.bucket(1001), 200_000)])
+    );
+    assert_eq!(
+        bucket_counts(&rows_b),
+        BTreeMap::from([(s.bucket(3000), 200_000)])
+    );
+    // C adds nothing on top of B, which is the bucket of 1 ms.
+    assert_eq!(
+        bucket_counts(&rows_c),
+        BTreeMap::from([(s.bucket(1), 200_000)])
+    );
+    // End to end includes the hops of B and C.
+    assert_eq!(
+        bucket_counts(&rows_e2e),
+        BTreeMap::from([(s.bucket(4001), 200_000)])
+    );
+}
+
+#[mz_ore::test]
+fn local_join_uses_slowest_input() {
+    let tree = ResolvedTree::Min(vec![aligned(7000), aligned(11000)]);
+    let cfg = config(4);
+    for swap in [false, true] {
+        let (mut fast, mut slow) = (FrontierLog::default(), FrontierLog::default());
+        fast.record(ts(11_001), 7100);
+        slow.record(ts(11_001), 7500);
+        let inputs = if swap { [&slow, &fast] } else { [&fast, &slow] };
+        let mut recorder = LocalDelayRecorder::new(0);
+        let mut rows = recorder.observe(&tree, &at(11_001), 8000, &inputs, &cfg);
+        rows.extend(recorder.observe(&tree, &Antichain::new(), 8000, &inputs, &cfg));
+        // The first window ends at 7000 and carries the timestamp 11000, so both logs apply
+        // and the slow one, observed at 7500, decides.
+        assert_eq!(
+            bucket_counts(&rows),
+            BTreeMap::from([(scheme(4).bucket(500), 7000)])
+        );
+    }
+}
+
+#[mz_ore::test]
+fn local_missing_input_entry_understates() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut observed = FrontierLog::default();
+    observed.record(ts(1001), 1100);
+    observed.record(ts(2001), 2200);
+    let missing = FrontierLog::default();
+    let mut pruned = FrontierLog::default();
+    pruned.record(ts(1001), 1100);
+    pruned.record(ts(2001), 2200);
+    pruned.prune_through(ts(1000));
+    let s = scheme(4);
+    let run = |log: &FrontierLog| {
+        let mut recorder = LocalDelayRecorder::new(0);
+        let mut rows = Vec::new();
+        for (frontier, now) in [(1001, 1500), (2001, 2500)] {
+            rows.extend(recorder.observe(&tree, &at(frontier), now, &[log], &cfg));
+        }
+        rows.extend(recorder.observe(&tree, &Antichain::new(), 3000, &[log], &cfg));
+        bucket_counts(&rows)
+    };
+    // With entries the delays are 400 ms and 300 ms.
+    assert_eq!(
+        run(&observed),
+        BTreeMap::from([(s.bucket(400), 1000), (s.bucket(300), 1000)])
+    );
+    // Without any, the input counts as ready at the object's previous advance, which is the
+    // start time 0 and then 1500.
+    assert_eq!(
+        run(&missing),
+        BTreeMap::from([(s.bucket(1500), 1000), (s.bucket(1000), 1000)])
+    );
+    // The pruned log answers the second window and not the first.
+    assert_eq!(
+        run(&pruned),
+        BTreeMap::from([(s.bucket(1500), 1000), (s.bucket(300), 1000)])
+    );
+}
+
+#[mz_ore::test]
+fn local_negative_delay_clamps() {
+    let tree = aligned(1000);
+    let cfg = config(4);
+    let mut log = FrontierLog::default();
+    log.record(ts(1001), 5000);
+    let mut recorder = LocalDelayRecorder::new(0);
+    let mut rows = recorder.observe(&tree, &at(1001), 1500, &[&log], &cfg);
+    rows.extend(recorder.observe(&tree, &Antichain::new(), 1500, &[&log], &cfg));
+    assert_eq!(
+        bucket_counts(&rows),
+        BTreeMap::from([(scheme(4).bucket(1), 1000)])
+    );
+}
+
+fn arb_local_tree() -> impl Strategy<Value = ResolvedTree> {
+    prop_oneof![
+        Just(aligned(1000)),
+        Just(ResolvedTree::Min(vec![aligned(7000), aligned(11000)])),
+        Just(ResolvedTree::Leaf(Ticker::Continuous)),
+        Just(ResolvedTree::Min(vec![unaligned(300), aligned(1000)])),
+    ]
+}
+
+fn arb_log() -> impl Strategy<Value = FrontierLog> {
+    proptest::collection::vec((1u64..30_000, 0u64..40_000), 0..12).prop_map(|steps| {
+        let (mut frontier, mut observed) = (0, 0);
+        let mut log = FrontierLog::default();
+        for (df, dt) in steps {
+            frontier += df;
+            observed += dt;
+            log.record(ts(frontier), observed);
+        }
+        log
+    })
+}
+
+#[mz_ore::test]
+fn local_counts_match_end_to_end() {
+    let strategy = (
+        arb_local_tree(),
+        proptest::collection::vec((1u64..30_000, 0u64..40_000), 1..10),
+        proptest::collection::vec(arb_log(), 0..3),
+        prop_oneof![Just(1u64), Just(3u64)],
+    );
+    proptest!(ProptestConfig::with_cases(64), |((tree, steps, logs, interval_ms) in strategy)| {
+        let cfg = RecorderConfig { interval_ms, period_ms: 10_000, ..config(4) };
+        let inputs: Vec<&FrontierLog> = logs.iter().collect();
+        let mut end_to_end = FreshnessRecorder::new(0);
+        let mut local = LocalDelayRecorder::new(0);
+        let (mut rows_e2e, mut rows_local) = (vec![], vec![]);
+        let (mut frontier, mut now) = (1, 0);
+        for (df, dt) in steps {
+            frontier += df;
+            now += dt;
+            rows_e2e.extend(end_to_end.observe(&tree, &at(frontier), now, &cfg));
+            rows_local.extend(local.observe(&tree, &at(frontier), now, &inputs, &cfg));
+        }
+        rows_e2e.extend(end_to_end.observe(&tree, &Antichain::new(), now, &cfg));
+        rows_local.extend(local.observe(&tree, &Antichain::new(), now, &inputs, &cfg));
+        prop_assert_eq!(period_totals(&rows_local), period_totals(&rows_e2e));
+        if inputs.is_empty() {
+            // Without inputs, local delay is the end-to-end latency.
+            prop_assert_eq!(rows_local, rows_e2e);
+        }
+    });
 }
