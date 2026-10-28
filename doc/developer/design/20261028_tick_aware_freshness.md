@@ -48,18 +48,20 @@ A source with timestamp interval i assigns an arrival at t the timestamp ceil(t,
 A downstream object follows the `TimeDependence` tree of its dataflow: leaves are wall clock, inner nodes take the minimum of their inputs and round up to a refresh schedule.
 An arrival at t is visible in an object once every leaf's timestamp for it is below the object's frontier.
 This is the joint-arrival model: an arrival is a moment of the whole world, consistent with how S and D are defined below.
+It is pessimistic for a record that only lands in one input, which becomes visible once the other inputs reach that record's timestamp, not the joint one.
 
 Leaves carry a ticker that describes their grid:
 
 * Sources: aligned to the epoch at the ingestion's `TIMESTAMP INTERVAL`, looked up live so `ALTER SOURCE` takes effect without rebuilding downstream dependence. The probe ticker in `src/storage/src/source/probe.rs` rounds probe times down to interval multiples, and the upper after a tick at T is T + 1.
 * Compute introspection collections: aligned to the introspection interval.
-* Tables, webhooks and storage-managed collections: a 1s tick. Tables can tick irregularly, up to 1 kHz when inserts bump them, and their freshness otherwise depends on the txn-wal tick. Modeling them as an epoch-aligned 1s grid is an accepted quirk.
+* Tables, webhooks and storage-managed collections: an unaligned 1s tick. Tables can tick irregularly, up to 1 kHz when inserts bump them, and their freshness otherwise depends on the txn-wal tick. Recording treats them as an epoch-aligned 1s grid for window boundaries, an accepted quirk, while D uses the unaligned bound so it never underestimates.
 * Anything else: continuous wall clock.
 
 Today a leaf of `TimeDependence` has no identity, and `merge` collapses all wall-clock inputs into one leaf, so a 7s x 11s join loses both intervals.
-Implementer's call, made in this document: extend the type with a ticker per leaf and change `merge` to keep distinct leaves, as the spike did.
-`apply`, as-of selection and dataflow expiration must behave exactly as before, which a property test against the old `merge` checks.
-Load generators get a ticker for freshness only, and dataflow expiration of their dependents stays as it is today.
+`TimeDependence` is part of `DataflowDescription`, which is sent to clusterd and drives dataflow expiration there (`determine_dataflow_expiration` in `src/compute/src/compute_state.rs`).
+Extending it would change the compute protocol and freeze intervals at dataflow creation, which conflicts with the live lookup above.
+So the serialized type stays unchanged, and the controllers keep a separate freshness tree per collection that names its leaves by `GlobalId` and resolves their tickers when evaluated.
+Dataflow expiration, as-of selection and load-generator behavior stay exactly as they are today.
 Objects without a time dependence (constants, non-epoch timelines) keep today's reported value and get no histogram rows.
 
 ### D, the assignment bound
@@ -72,7 +74,7 @@ The proof for joins is in the appendix, and `misc/lean/Mz/Freshness.lean` checks
 
 D depends only on the tree and its current intervals, not on time, so it is computed once per object and recomputed when an interval changes.
 For plain joins of aligned leaves the closed form applies.
-Trees with refresh schedules or an unaligned leaf need a search over the points where the expected frontier changes.
+Trees with refresh schedules or an unaligned leaf need a search over the points where the expected frontier changes, or a conservative bound: an unaligned leaf of interval u joined with an aligned leaf of interval i contributes i + u, without the gcd term.
 The spike's search missed peaks for aligned-by-unaligned joins (it read 6999 ms for a 7s source joined with a table, against 7979 ms) and capped the search at a week, which underestimated `REFRESH EVERY '30 days'`.
 D must never be lower than the true bound, so the search has to be exact or conservative, and tested against a brute-force oracle.
 
@@ -85,8 +87,10 @@ S is a lower bound on latency, never a latency value, so it never enters the his
 
 ## Reporting
 
-The per-minute lag history reports, per object and replica, the maximum over the recording interval of max(D, S), in milliseconds.
+Three consumers read the same per-sample lag today (`refresh_wallclock_lag` in `src/compute-client/src/controller/instance.rs`): the per-minute lag history, the existing global histogram in power-of-two seconds, and the Prometheus wallclock lag metric.
+Under the reporting flag, the per-minute history and the Prometheus metric report max(D, S) in milliseconds, the maximum over the recording interval for the history.
 This replaces the 1s ceiling in `WallclockLagFn`.
+The existing global histogram keeps its samples and buckets, since the new histogram replaces it.
 For a 1 Hz source the value stays about 1s, so existing consumers see the same numbers.
 Objects whose freshness today reads too low change: a REFRESH EVERY 1 minute view reads about 60s instead of 0s, and a 7s x 11s join about 17s instead of 11s.
 Unreadable collections stay Undefined.
@@ -95,7 +99,8 @@ Unreadable collections stay Undefined.
 
 ### What a histogram row counts
 
-The recorder assumes a virtual arrival process with one arrival per virtual arrival interval, 1 ms by default.
+The recorder assumes a virtual arrival process with one arrival at every multiple of the virtual arrival interval, 1 ms by default.
+A window counts the virtual arrivals it contains, so counts are integers for any interval and windows that tile a span count every arrival exactly once.
 The real data rate is unknown to the controller and irrelevant to freshness, and the virtual process makes counts comparable across objects regardless of tick rate.
 A latency becomes known exactly when the write frontier advances past an arrival, so values are written only then and never guessed.
 During a stall, the latency of the stalled arrivals falls over the stall (the first arrivals wait longest), and the histogram records that shape once the object recovers.
@@ -104,6 +109,10 @@ At each write frontier advance from F to F', arrivals in (last_reflected(F), las
 The recorder splits that span into assignment windows, the common refinement of all leaves' grids.
 Arrivals in one window get identical timestamps from every leaf and cannot be told apart, so each takes the window's worst case: advance time minus window start.
 This is the 1/f rule generalized, and it is why healthy objects never read below their assignment bound.
+
+Per-advance work must not depend on the length of the span, because a 1000 ms x 1001 ms join stalled for a day covers about 86 million windows.
+Window boundaries are the union of the leaves' grids, so the arrival time whose worst-case latency lands in a bucket $(\ell, h]$ is $\beta(A - \ell) - \beta(A - h)$, clamped to the span, where $A$ is the advance time and $\beta(z) = \min_k \lceil z \rceil_{i_k}$ is the next boundary at or after $z$.
+This needs one evaluation per touched bucket and leaf.
 
 ```mermaid
 flowchart LR
@@ -120,7 +129,10 @@ Each arrival is charged to the period, one minute by default, in which it arrive
 A period is emitted only once last_reflected of the object's frontier has passed the period's end, so every emitted row is final and never corrected.
 Windows that straddle a period boundary are split, and both parts carry the same latency.
 Open periods stay in memory until they close, which bounds memory by the longest stall plus D.
-Completeness of an object is the maximum emitted period end, and a companion relation stores it so the Console does not need to derive it.
+Completeness of an object is the maximum emitted period end, derived from the histogram itself.
+A separate progress relation would be written in a different append than the histogram rows, so a crash between the two would either double count or lose a period.
+A period missing below the maximum is a hole, which the Console can see.
+Arrivals after the maximum are not yet recorded, and each of them is at least now - t late, so a percentile over a window that includes an ongoing stall has to count that uncovered time as at least as slow as its age.
 
 ### Buckets
 
@@ -136,9 +148,10 @@ Implementer's call: follow the pattern of `mz_wallclock_global_lag_histogram_raw
 
 * A global histogram, written from the global write frontier: `period_start`, `period_end`, `object_id`, `buckets_per_octave`, `bucket`, `labels`, and `count` in the view.
 * A per-replica histogram with the same columns plus `replica_id`, as a diagnostic.
-* A progress relation with `object_id`, nullable `replica_id` (null for global) and `covered_until`, the largest emitted period end. It holds one row per object and replica, updated by retraction and insertion.
+* A progress view with `object_id`, nullable `replica_id` (null for global) and `covered_until`, the largest emitted period end, computed from the histograms. If the view is expensive for the Console, it can become a maintained index.
 
 Histograms are retained for a configurable interval, 30 days by default like the existing relations, and truncated on `period_start` by the existing metrics-history truncation.
+That truncation runs only when the collection's write task starts (`partially_truncate_metrics_history` in `src/storage-controller/src/collection_mgmt.rs`), so between restarts the relation grows past the retention interval, as the existing relations do.
 As today, exactly one controller writes the global rows of an object: the compute controller for compute collections including materialized views, the storage controller for storage-owned collections.
 
 The recorder hooks every `Frontiers` response, not the 1s maintenance tick, and the advance time is when the controller observes the response.
@@ -154,19 +167,19 @@ A rollup would cap the cost of long windows and is the first optimization if the
 ## Correctness requirements found by the spike and its validation
 
 * Keep a high-water mark of recorded arrivals per collection (and per replica id for the diagnostic), and start every span at max(high-water mark, last_reflected(F)). Without it, ALTER of an interval recomputes last_reflected of the old frontier on the new grid and re-covers arrivals, and a reconnecting replica, whose frontier regresses, re-covers up to its as-of.
-* A replica that is removed with open periods loses them. The progress relation makes the gap visible.
-* On environmentd restart, seed the high-water mark from the durable progress relation and drop the in-memory open periods, which the next advance re-covers. Arrivals during the outage are counted when the frontier is next observed, so a restart reads like a stall, which matches what queries saw. If seeding is impossible for an object, start from its current frontier and record the hole, which requires the progress relation to describe covered spans instead of one maximum.
+* A replica that is removed with open periods loses them, which leaves a hole in its diagnostic histogram.
+* On environmentd restart, seed the high-water mark from the maximum emitted period end and drop the in-memory open periods, which the next advance re-covers. Arrivals during the outage are counted when the frontier is next observed, so a restart reads like a stall, which matches what queries saw. Arrivals of the open period before the crash were already visible, but are counted the same way, so each restart adds up to one period of inflated latency. If seeding is impossible for an object, start from its current frontier, which leaves a hole.
+* A new object starts recording at its creation time: arrivals before creation are not counted, and arrivals during hydration count with their real latency. A new replica's diagnostic starts at the replica's creation time.
+* An empty frontier means the object is complete forever. The recorder emits the open periods up to the last arrival and stops. A dropped object discards its open periods.
 * Sources assign timestamps by the clusterd clock, while the controller observes advances by the environmentd clock. When they disagree, an advance can appear to land before its window ends. Clamp the latency to at least the window's length.
-* Per-advance work must not grow with stall length beyond one hyperperiod. Runs of equal windows (a 100 ms source stalled for a day covers 864,000 windows) are summed in closed form.
 * Carry the live tick interval through `StorageCollections`. The spike used a process-global map.
-* Giving load generators a time dependence also enables dataflow expiration for their dependents. Check that this is intended before enabling it.
 
 ## Configuration
 
 Two feature flags gate the work separately, both on in CI and off in production:
 
 * One switches the reported value from the 1s ceiling to max(D, S) in milliseconds.
-* One enables recording the histograms and the progress relation.
+* One enables recording the histograms.
 
 The reporting flag changes numbers that people and alerts already consume.
 REFRESH EVERY 1 minute views move from about 0s to about 60s and slow joins rise by seconds, although nothing got worse.
