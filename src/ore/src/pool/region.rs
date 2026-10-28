@@ -154,12 +154,6 @@ impl SlotAllocator {
         crate::soft_assert_no_log!(slot < self.high_water);
         self.free_warm.push_front(slot);
     }
-
-    /// Test hook: the number of allocated slots not on a free list.
-    #[cfg(all(test, target_os = "linux"))]
-    pub(crate) fn in_use(&self) -> usize {
-        usize::cast_from(self.high_water) - self.free_warm.len() - self.free_cold.len()
-    }
 }
 
 // SAFETY: `base` points at an anonymous mapping owned exclusively by this
@@ -272,15 +266,6 @@ impl Region {
             .free(slot, warm);
     }
 
-    /// Test hook: the number of slots currently allocated.
-    #[cfg(all(test, target_os = "linux"))]
-    pub(crate) fn slots_in_use(&self) -> usize {
-        self.slots
-            .lock()
-            .expect("region allocator poisoned")
-            .in_use()
-    }
-
     /// Moves warm free slots to the cold list, releasing their physical
     /// pages, until at least `want_bytes` have been cooled or no warm slot
     /// remains. Returns the bytes cooled. The caller owns the warm-bytes
@@ -303,22 +288,6 @@ impl Region {
             cooled += self.class_size;
         }
         cooled
-    }
-
-    /// Test hook: overwrites every free slot with `0xDE` so stale contents
-    /// cannot masquerade as correct data when a slot is reused.
-    #[cfg(test)]
-    pub(crate) fn poison_free_slots(&self) {
-        let slots = self.slots.lock().expect("region allocator poisoned");
-        for &slot in slots.free_warm.iter().chain(slots.free_cold.iter()) {
-            let offset = usize::cast_from(slot) * self.class_size;
-            // SAFETY: the slot is on a free list and the allocator mutex is
-            // held, so no chunk owns it and no allocation can race; the write
-            // stays within the region's mapping.
-            unsafe {
-                std::ptr::write_bytes(self.base.add(offset), 0xDE, self.class_size);
-            }
-        }
     }
 
     /// The base address of a slot, fixed while its owning chunk is resident.
@@ -898,6 +867,9 @@ mod proofs {
         }
     }
 }
+
+#[cfg(test)]
+mod testing;
 
 #[cfg(test)]
 mod tests {

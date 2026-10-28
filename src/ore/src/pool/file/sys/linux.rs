@@ -146,9 +146,9 @@ pub(in crate::pool::file) fn open_anonymous(
 /// The injected failure of the next `O_TMPFILE` open, if any.
 fn tmpfile_fault() -> Option<io::Error> {
     #[cfg(test)]
-    if let Some(result) =
-        crate::pool::file::fault::inject(crate::pool::file::fault::Op::OpenTmpfile)
-    {
+    if let Some(result) = crate::pool::file::testing::fault::inject(
+        crate::pool::file::testing::fault::Op::OpenTmpfile,
+    ) {
         return Some(result.expect_err("an OpenTmpfile fault carries an errno"));
     }
     None
@@ -157,7 +157,8 @@ fn tmpfile_fault() -> Option<io::Error> {
 /// Allocates blocks for `[offset, offset + len)`.
 pub(in crate::pool::file) fn fallocate(file: &File, offset: u64, len: usize) -> io::Result<()> {
     #[cfg(test)]
-    if let Some(result) = crate::pool::file::fault::inject(crate::pool::file::fault::Op::Fallocate)
+    if let Some(result) =
+        crate::pool::file::testing::fault::inject(crate::pool::file::testing::fault::Op::Fallocate)
     {
         return result.map(|_| ());
     }
@@ -168,7 +169,9 @@ pub(in crate::pool::file) fn fallocate(file: &File, offset: u64, len: usize) -> 
 /// size.
 pub(in crate::pool::file) fn punch_hole(file: &File, offset: u64, len: usize) -> io::Result<()> {
     #[cfg(test)]
-    if let Some(result) = crate::pool::file::fault::inject(crate::pool::file::fault::Op::Punch) {
+    if let Some(result) =
+        crate::pool::file::testing::fault::inject(crate::pool::file::testing::fault::Op::Punch)
+    {
         return result.map(|_| ());
     }
     fallocate_mode(
@@ -198,7 +201,9 @@ fn fallocate_mode(file: &File, mode: libc::c_int, offset: u64, len: usize) -> io
 /// One `pwrite` of `buf` at `offset`.
 pub(in crate::pool::file) fn pwrite(file: &File, buf: &[u8], offset: u64) -> io::Result<usize> {
     #[cfg(test)]
-    if let Some(result) = crate::pool::file::fault::inject(crate::pool::file::fault::Op::Write) {
+    if let Some(result) =
+        crate::pool::file::testing::fault::inject(crate::pool::file::testing::fault::Op::Write)
+    {
         return result;
     }
     file.write_at(buf, offset)
@@ -207,7 +212,9 @@ pub(in crate::pool::file) fn pwrite(file: &File, buf: &[u8], offset: u64) -> io:
 /// One `pread` into `buf` at `offset`.
 pub(in crate::pool::file) fn pread(file: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
     #[cfg(test)]
-    if let Some(result) = crate::pool::file::fault::inject(crate::pool::file::fault::Op::Read) {
+    if let Some(result) =
+        crate::pool::file::testing::fault::inject(crate::pool::file::testing::fault::Op::Read)
+    {
         return result;
     }
     file.read_at(buf, offset)

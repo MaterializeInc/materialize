@@ -21,13 +21,14 @@ use std::rc::Rc;
 use itertools::Itertools;
 
 use super::*;
-use crate::pool::extent::TEST_CODEC;
+use crate::pool::extent::testing::TEST_CODEC;
+use crate::pool::testing::{DEMOTION_HOOK, ENFORCE_BUDGET_HOOK, demotion_probes};
 
 /// Words that fill a 64 KiB class exactly.
 const SMALL: usize = (64 << 10) / 8;
 
 fn file_pool(budget: usize, capacity: u64) -> (tempfile::TempDir, Pool) {
-    let dir = crate::pool::file::disk_tempdir();
+    let dir = crate::pool::file::testing::disk_tempdir();
     let pool = Pool::with_backend_and_class_capacity(
         ExtentBackend::File {
             dir: dir.path().to_owned(),
@@ -497,7 +498,7 @@ fn write_error_keeps_extent_readable() {
     let (_dir, pool) = file_pool(256 << 20, 64 << 20);
     let orig = payload(SMALL, 13);
     let handle = insert(&pool, &orig);
-    file::fault::fail_next(file::fault::Op::Write, libc::EIO);
+    file::testing::fault::fail_next(file::testing::fault::Op::Write, libc::EIO);
     pool.evict(&handle);
     assert!(handle.file_slot().is_none(), "the demotion aborted");
     assert!(is_arena(&handle), "the extent stays in the arena");
@@ -560,7 +561,7 @@ fn short_read_panics() {
     let handle = insert(&pool, &payload(SMALL, 15));
     pool.evict(&handle);
     assert!(handle.file_slot().is_some(), "demoted");
-    file::fault::fail_next(file::fault::Op::Read, 0);
+    file::testing::fault::fail_next(file::testing::fault::Op::Read, 0);
     read(&handle);
 }
 
@@ -709,7 +710,7 @@ fn write_error_with_read_in_flight_keeps_extent_in_arena() {
         assert_eq!(read(&in_hook), expected);
         assert_eq!(in_hook.residency(), Residency::Evicted);
     });
-    file::fault::fail_next(file::fault::Op::Write, libc::EIO);
+    file::testing::fault::fail_next(file::testing::fault::Op::Write, libc::EIO);
     pool.evict(&handle);
     assert!(handle.file_slot().is_none(), "the demotion aborted");
     assert!(is_arena(&handle), "the extent returned to the arena");
@@ -902,7 +903,7 @@ fn write_enospc_refuses_without_disabling_writes() {
     let (_dir, pool) = file_pool(256 << 20, 64 << 20);
     let orig = payload(SMALL, 24);
     let handle = insert(&pool, &orig);
-    file::fault::fail_next(file::fault::Op::Write, libc::ENOSPC);
+    file::testing::fault::fail_next(file::testing::fault::Op::Write, libc::ENOSPC);
     pool.evict(&handle);
     assert!(handle.file_slot().is_none(), "the demotion aborted");
     assert!(is_arena(&handle), "the extent stays in the arena");
@@ -937,7 +938,7 @@ fn free_during_enospc_write_returns_the_file_slot_once() {
     let handle = insert(&pool, &payload(SMALL, 25));
     let probe = Arc::clone(&handle.meta);
     arm_demotion_hook(move || drop(handle));
-    file::fault::fail_next(file::fault::Op::Write, libc::ENOSPC);
+    file::testing::fault::fail_next(file::testing::fault::Op::Write, libc::ENOSPC);
     {
         let mut state = probe.state();
         probe.pool.evict_locked(&probe, &mut state);
