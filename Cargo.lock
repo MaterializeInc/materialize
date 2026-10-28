@@ -9330,6 +9330,7 @@ dependencies = [
  "tokio-postgres",
  "tokio-rustls",
  "tracing",
+ "x509-cert",
 ]
 
 [[package]]
