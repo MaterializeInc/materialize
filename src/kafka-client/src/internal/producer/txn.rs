@@ -1234,7 +1234,8 @@ impl<C: ProducerContext> ProducerInner<C> {
                 .coordinator(CoordinatorKind::Transaction, &transactional_id, deadline)
                 .await
                 .map_err(|e| e.code())?;
-            broker_name = broker.name();
+            // librdkafka sends through its logical coordinator broker handle.
+            broker_name = format!("TxnCoordinator/{}", broker.id());
             sent = true;
             let response = broker
                 .request::<AddPartitionsToTxnRequest, _>(
@@ -1388,8 +1389,13 @@ impl<C: ProducerContext> ProducerInner<C> {
             st.eos.concurrent_backoff = None;
         }
         for key in &registering {
+            // Partitions of a deleted topic are gone; like librdkafka
+            // ("Unknown partition ... ignoring"), results for them are
+            // ignored.
+            let Some(p) = st.topics[key.topic].partition_mut(key.partition) else {
+                continue;
+            };
             if registered.contains(key) {
-                let p = st.partition_mut(*key);
                 if p.txn == PartTxn::Pending {
                     p.txn = PartTxn::InTxn;
                     if p.leader >= 0 {
@@ -1403,6 +1409,13 @@ impl<C: ProducerContext> ProducerInner<C> {
         if reset_coordinator {
             self.cluster
                 .invalidate_coordinator(CoordinatorKind::Transaction, &transactional_id);
+        }
+        if err.is_some() {
+            // E.g. a deleted topic: Kafka answers UNKNOWN_TOPIC_OR_PARTITION,
+            // Redpanda NOT_COORDINATOR. librdkafka refreshes the known
+            // topics when it then loses the coordinator; fresh metadata is
+            // what eventually removes the topic's partitions.
+            fx.refresh_metadata = true;
         }
         let code = err.map(normalize);
         match (action, code) {

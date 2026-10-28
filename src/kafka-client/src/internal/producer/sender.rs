@@ -64,6 +64,7 @@ struct Picked<D> {
     base_seq: i32,
     /// A buffer to compress into.
     scratch: Option<Vec<u8>>,
+    incarnation: u64,
 }
 
 /// A batch in a request awaiting its response.
@@ -72,6 +73,7 @@ pub(super) struct Sent<D> {
     topic: Arc<str>,
     batch: Batch<D>,
     base_seq: i32,
+    incarnation: u64,
 }
 
 type Response<D> = (Vec<Sent<D>>, Result<Option<ProduceResponse>, NetError>);
@@ -315,6 +317,7 @@ impl<C: ProducerContext> ProducerInner<C> {
                 ident,
                 base_seq,
                 scratch,
+                incarnation: p.incarnation,
             });
         }
         st.in_flight += u32::try_from(picked.len()).expect("few batches");
@@ -464,13 +467,33 @@ impl<C: ProducerContext> ProducerInner<C> {
             // The reaction of the producer as a whole, once the partition is
             // updated.
             let failed = {
-                let Some(p) = st.topics[s.key.topic].partition_mut(s.key.partition) else {
-                    fx.fail(
-                        &s.topic,
-                        s.key.partition,
-                        Undelivered::Batch(s.batch),
-                        RDKafkaErrorCode::UnknownPartition,
-                    );
+                let Some(p) =
+                    st.topics[s.key.topic].partition_since(s.key.partition, s.incarnation)
+                else {
+                    // The partition was removed while the batch was in
+                    // flight, e.g. its topic was deleted. There is nowhere to
+                    // retry to.
+                    match outcome {
+                        Outcome::Delivered {
+                            base_offset,
+                            log_append_time,
+                        } => delivered.push((
+                            Arc::clone(&s.topic),
+                            s.key.partition,
+                            s.batch,
+                            base_offset,
+                            log_append_time,
+                        )),
+                        Outcome::Retry { .. } => fx.fail(
+                            &s.topic,
+                            s.key.partition,
+                            Undelivered::Batch(s.batch),
+                            RDKafkaErrorCode::UnknownPartition,
+                        ),
+                        Outcome::Failed(code) => {
+                            fx.fail(&s.topic, s.key.partition, Undelivered::Batch(s.batch), code)
+                        }
+                    }
                     continue;
                 };
                 p.in_flight = p.in_flight.saturating_sub(1);
@@ -613,7 +636,7 @@ impl<C: ProducerContext> ProducerInner<C> {
         let transactional = st.eos.transactional;
         let pid = st.eos.pid;
         let count = s.batch.len();
-        let Some(p) = st.topics[s.key.topic].partition(s.key.partition) else {
+        let Some(p) = st.topics[s.key.topic].partition_since(s.key.partition, s.incarnation) else {
             return outcome;
         };
         let next_ack_seq = p.next_ack_seq;
@@ -749,6 +772,7 @@ fn encode_one<D>(p: Picked<D>, spares: &mut Vec<Vec<u8>>) -> Sent<D> {
         ident,
         base_seq,
         scratch,
+        incarnation,
     } = p;
     batch.data = match batch.data {
         BatchData::Open(builder) => match builder.build_reusing(ident, base_seq, scratch) {
@@ -770,6 +794,7 @@ fn encode_one<D>(p: Picked<D>, spares: &mut Vec<Vec<u8>>) -> Sent<D> {
         topic,
         batch,
         base_seq,
+        incarnation,
     }
 }
 

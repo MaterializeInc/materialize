@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::settings::{CompressionCodec, PartitionerKind};
+use crate::config::settings::{ClientSettings, CompressionCodec, PartitionerKind};
 use crate::error::{KafkaError, KafkaResult};
 use crate::internal::cluster::{Cluster, MetadataSnapshot, StatsSource};
 use crate::internal::compression::Compression;
@@ -138,13 +138,48 @@ impl<C: ProducerContext> ProducerInner<C> {
     /// Creates the producer engine on a client's cluster and starts its
     /// background tasks.
     pub(crate) fn new(cluster: Arc<Cluster>, context: Arc<C>) -> Arc<ProducerInner<C>> {
-        let settings = Arc::clone(cluster.settings());
+        let config = Config::from_settings(cluster.settings());
+        let now = Instant::now();
+        let eos = Eos::new(config.idempotent, config.transactional_id.is_some(), now);
+        let shutdown = cluster.shutdown_token().child_token();
+        let inner = Arc::new_cyclic(|weak| ProducerInner {
+            cluster: Arc::clone(&cluster),
+            context,
+            config,
+            state: Mutex::new(State::new(eos)),
+            cond: Condvar::new(),
+            msg_cnt: AtomicU64::new(0),
+            msg_bytes: AtomicU64::new(0),
+            txmsgs: AtomicU64::new(0),
+            txmsg_bytes: AtomicU64::new(0),
+            flushing: AtomicUsize::new(0),
+            fatal: AtomicBool::new(false),
+            shutdown,
+            eos_notify: Notify::new(),
+            weak: Weak::clone(weak),
+        });
+        let source: Arc<dyn StatsSource> = Arc::<ProducerInner<C>>::clone(&inner);
+        cluster.register_stats_source(Arc::downgrade(&source));
+        runtime::spawn(
+            "kafka-producer-metadata",
+            Arc::clone(&inner).metadata_task(),
+        );
+        if inner.config.idempotent {
+            runtime::spawn("kafka-producer-eos", Arc::clone(&inner).eos_task());
+        }
+        inner
+    }
+}
+
+impl Config {
+    /// The producer settings of a client.
+    pub(super) fn from_settings(settings: &ClientSettings) -> Config {
         let ps = &settings.producer;
         let message_max_bytes = usize::try_from(settings.message_max_bytes).expect("positive");
         let max_in_flight = usize::try_from(settings.max_in_flight)
             .expect("positive")
             .max(1);
-        let config = Config {
+        Config {
             transactional_id: ps.transactional_id.clone(),
             idempotent: ps.enable_idempotence,
             acks: ps.acks,
@@ -188,38 +223,11 @@ impl<C: ProducerContext> ProducerInner<C> {
             transaction_timeout: ps.transaction_timeout,
             delivery_report_only_error: ps.delivery_report_only_error,
             metadata_propagation_max: settings.metadata_propagation_max,
-        };
-        let now = Instant::now();
-        let eos = Eos::new(config.idempotent, config.transactional_id.is_some(), now);
-        let shutdown = cluster.shutdown_token().child_token();
-        let inner = Arc::new_cyclic(|weak| ProducerInner {
-            cluster: Arc::clone(&cluster),
-            context,
-            config,
-            state: Mutex::new(State::new(eos)),
-            cond: Condvar::new(),
-            msg_cnt: AtomicU64::new(0),
-            msg_bytes: AtomicU64::new(0),
-            txmsgs: AtomicU64::new(0),
-            txmsg_bytes: AtomicU64::new(0),
-            flushing: AtomicUsize::new(0),
-            fatal: AtomicBool::new(false),
-            shutdown,
-            eos_notify: Notify::new(),
-            weak: Weak::clone(weak),
-        });
-        let source: Arc<dyn StatsSource> = Arc::<ProducerInner<C>>::clone(&inner);
-        cluster.register_stats_source(Arc::downgrade(&source));
-        runtime::spawn(
-            "kafka-producer-metadata",
-            Arc::clone(&inner).metadata_task(),
-        );
-        if inner.config.idempotent {
-            runtime::spawn("kafka-producer-eos", Arc::clone(&inner).eos_task());
         }
-        inner
     }
+}
 
+impl<C: ProducerContext> ProducerInner<C> {
     fn lock(&self) -> MutexGuard<'_, State<C::DeliveryOpaque>> {
         self.state.lock().expect("lock poisoned")
     }

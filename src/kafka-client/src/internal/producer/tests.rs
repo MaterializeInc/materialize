@@ -24,9 +24,10 @@ use kafka_protocol::messages::{BrokerId, FetchRequest, TopicName};
 use kafka_protocol::protocol::StrBytes;
 
 use crate::client::ClientContext;
+use crate::config::settings::{ClientKind, ClientSettings};
 use crate::config::{ClientConfig, FromClientConfig, FromClientConfigAndContext, RDKafkaLogLevel};
 use crate::error::KafkaError;
-use crate::internal::cluster::Cluster;
+use crate::internal::cluster::{Cluster, PartitionMetadata, TopicMetadata};
 use crate::internal::net::RequestOptions;
 use crate::internal::records::{ControlRecordKind, parse_batches};
 use crate::internal::runtime;
@@ -38,7 +39,9 @@ use crate::producer::{
 use crate::types::RDKafkaErrorCode;
 use crate::util::{Deadline, Timeout};
 
-use super::txn::TxnState;
+use super::Config;
+use super::state::{Effects, NewRecord, PartKey, State, TopicStatus, UaMessage, Undelivered};
+use super::txn::{Eos, TxnState};
 use super::wire_size;
 
 /// A delivery report, as recorded by [`Recorder`].
@@ -446,6 +449,206 @@ fn txn_state_transitions() {
     assert_eq!(Ready.transition(AbortableError), None);
     assert_eq!(Ready.transition(FatalError), Some(true));
     assert_eq!(AbortNotAcked.name(), "AbortedNotAcked");
+}
+
+/// A transactional producer's state and config with a 1s
+/// `topic.metadata.propagation.max.ms`.
+fn txn_state(now: Instant) -> (State<usize>, Config) {
+    let settings = ClientSettings::from_config(
+        &config(
+            "127.0.0.1:1",
+            &[
+                ("transactional.id", "t"),
+                ("topic.metadata.propagation.max.ms", "1000"),
+            ],
+        ),
+        ClientKind::Producer,
+    )
+    .unwrap();
+    (
+        State::new(Eos::new(true, true, now)),
+        Config::from_settings(&settings),
+    )
+}
+
+/// Metadata for a topic whose partitions are led by broker 1.
+fn topic_md(error: Option<RDKafkaErrorCode>, partitions: i32) -> TopicMetadata {
+    TopicMetadata {
+        name: "t".into(),
+        error,
+        partitions: (0..partitions)
+            .map(|id| PartitionMetadata {
+                id,
+                leader: 1,
+                leader_epoch: -1,
+                replicas: vec![1],
+                isr: vec![1],
+                error: None,
+            })
+            .collect(),
+        is_internal: false,
+        updated_at: Instant::now(),
+    }
+}
+
+fn queue_record(st: &mut State<usize>, cfg: &Config, key: PartKey, opaque: usize, now: Instant) {
+    let record = NewRecord {
+        timestamp: 0,
+        key: None,
+        value: Some(b"x"),
+        headers: &[],
+        wire_size: wire_size(None, Some(b"x"), None),
+        payload_len: 1,
+        kv_len: 1,
+    };
+    let state = &mut *st;
+    state.topics[key.topic]
+        .partition_mut(key.partition)
+        .unwrap()
+        .append(&record, opaque, cfg, &mut state.buffers, now);
+    st.added_to_partition(key, true, &mut Effects::default());
+}
+
+/// The opaques and errors of failed deliveries, sorted.
+fn failed(fx: &Effects<usize>) -> Vec<(i32, usize, RDKafkaErrorCode)> {
+    let mut failed = Vec::new();
+    for f in &fx.failures {
+        match &f.records {
+            Undelivered::Batch(b) => {
+                failed.extend(b.opaques.iter().map(|o| (f.partition, *o, f.error)))
+            }
+            Undelivered::Ua(m) => failed.push((f.partition, m.opaque, f.error)),
+        }
+    }
+    failed.sort_by_key(|(partition, opaque, _)| (*partition, *opaque));
+    failed
+}
+
+/// Like librdkafka's `rd_kafka_topic_set_notexists`, metadata saying that a
+/// known topic is gone is believed once `topic.metadata.propagation.max.ms`
+/// passed since the topic's status last changed. Its partitions then go away
+/// with their queued records and transaction registrations, and metadata
+/// saying it exists again is held back by the same window.
+#[mz_ore::test]
+fn deleted_topic_partitions_go_away() {
+    let t0 = Instant::now();
+    let at = |ms| t0 + Duration::from_millis(ms);
+    let (mut st, cfg) = txn_state(t0);
+    let (id, _) = st.topic_id("t", t0);
+    let mut fx = Effects::default();
+    st.apply_topic_metadata(id, Some(&topic_md(None, 2)), Some(1), &cfg, t0, &mut fx);
+    assert_eq!(st.topics[id].status, TopicStatus::Exists);
+    let keys = [0, 1].map(|partition| PartKey {
+        topic: id,
+        partition,
+    });
+    for (opaque, key) in keys.iter().enumerate() {
+        queue_record(&mut st, &cfg, *key, opaque, t0);
+    }
+    st.topics[id].partitions[0].seal();
+    // Partition 1's AddPartitionsToTxn is outstanding.
+    assert!(st.eos.pending.remove(&keys[1]));
+    st.eos.registering.push(keys[1]);
+    let old_incarnation = st.topics[id].partitions[0].incarnation;
+
+    let gone = topic_md(Some(RDKafkaErrorCode::UnknownTopicOrPartition), 0);
+    let mut fx = Effects::default();
+    st.apply_topic_metadata(id, Some(&gone), Some(2), &cfg, at(500), &mut fx);
+    assert_eq!(st.topics[id].status, TopicStatus::Exists);
+    assert_eq!(st.topics[id].partitions.len(), 2);
+    assert!(fx.failures.is_empty());
+
+    // The maintenance tick re-applies the metadata once the window passed.
+    let mut fx = Effects::default();
+    st.apply_topic_metadata(id, Some(&gone), None, &cfg, at(1000), &mut fx);
+    assert_eq!(st.topics[id].status, TopicStatus::NotExists);
+    assert!(st.topics[id].partitions.is_empty());
+    assert_eq!(
+        failed(&fx),
+        vec![
+            (0, 0, RDKafkaErrorCode::UnknownPartition),
+            (1, 1, RDKafkaErrorCode::UnknownPartition),
+        ]
+    );
+    assert!(st.eos.pending.is_empty());
+    assert!(st.eos.registering.is_empty());
+    assert!(st.senders[&1].parts.is_empty());
+
+    // A broker that has not learned about the deletion yet.
+    let mut fx = Effects::default();
+    st.apply_topic_metadata(
+        id,
+        Some(&topic_md(None, 2)),
+        Some(3),
+        &cfg,
+        at(1500),
+        &mut fx,
+    );
+    assert_eq!(st.topics[id].status, TopicStatus::NotExists);
+    assert!(st.topics[id].partitions.is_empty());
+
+    // Recreated: new partitions, which responses for the old ones do not
+    // match.
+    st.apply_topic_metadata(id, Some(&topic_md(None, 2)), None, &cfg, at(2000), &mut fx);
+    assert_eq!(st.topics[id].status, TopicStatus::Exists);
+    assert_eq!(st.topics[id].partitions.len(), 2);
+    assert!(st.topics[id].partition_since(0, old_incarnation).is_none());
+    assert_eq!(st.senders[&1].parts.len(), 2);
+}
+
+/// A topic missing from an all-topics metadata response, as after the
+/// application's `fetch_metadata(None)` following a deletion, becomes unknown
+/// on the next maintenance tick, which restarts the propagation window. New
+/// records then wait in the UA queue and fail with the metadata's error once
+/// the topic is known to be gone.
+#[mz_ore::test]
+fn topic_missing_from_metadata_becomes_unknown() {
+    let t0 = Instant::now();
+    let at = |ms| t0 + Duration::from_millis(ms);
+    let (mut st, cfg) = txn_state(t0);
+    let (id, _) = st.topic_id("t", t0);
+    let mut fx = Effects::default();
+    st.apply_topic_metadata(id, Some(&topic_md(None, 1)), Some(1), &cfg, t0, &mut fx);
+    let key = PartKey {
+        topic: id,
+        partition: 0,
+    };
+    queue_record(&mut st, &cfg, key, 0, t0);
+
+    let mut fx = Effects::default();
+    st.apply_topic_metadata(id, None, Some(2), &cfg, at(4500), &mut fx);
+    assert_eq!(st.topics[id].status, TopicStatus::Exists);
+    st.apply_topic_metadata(id, None, None, &cfg, at(5000), &mut fx);
+    assert_eq!(st.topics[id].status, TopicStatus::Unknown);
+    assert!(fx.refresh_metadata);
+    st.topics[id].ua.push_back(UaMessage {
+        key: None,
+        payload: Some(b"x".to_vec()),
+        headers: None,
+        timestamp: 0,
+        partition: Some(0),
+        opaque: 1,
+        enqueued: at(5000),
+    });
+
+    // Within the window restarted by the change to unknown.
+    let gone = topic_md(Some(RDKafkaErrorCode::UnknownTopicOrPartition), 0);
+    let mut fx = Effects::default();
+    st.apply_topic_metadata(id, Some(&gone), Some(3), &cfg, at(5500), &mut fx);
+    assert_eq!(st.topics[id].status, TopicStatus::Unknown);
+    assert!(fx.refresh_metadata);
+    assert!(fx.failures.is_empty());
+
+    let mut fx = Effects::default();
+    st.apply_topic_metadata(id, Some(&gone), None, &cfg, at(6000), &mut fx);
+    assert_eq!(st.topics[id].status, TopicStatus::NotExists);
+    assert_eq!(
+        failed(&fx),
+        vec![
+            (0, 0, RDKafkaErrorCode::UnknownPartition),
+            (0, 1, RDKafkaErrorCode::UnknownTopicOrPartition),
+        ]
+    );
 }
 
 #[mz_ore::test]
@@ -1380,4 +1583,83 @@ fn broker_restart_mid_produce() {
         .collect();
     visible.sort();
     assert_eq!(visible, committed);
+}
+
+/// A transaction producing to a topic deleted after an earlier transaction
+/// fails with an abortable error within `topic.metadata.propagation.max.ms`
+/// of the deletion becoming visible, instead of retrying until
+/// `message.timeout.ms`. Mirrors the Kafka sink: no topic auto-creation,
+/// explicit partitions, metadata learned and refreshed with
+/// `fetch_metadata(None)`, a long transaction timeout.
+#[mz_ore::test]
+fn deleted_topic_fails_transaction() {
+    for brokers in test_brokers() {
+        let txn_id = unique("kc-deleted");
+        let (p, rec) = producer(
+            &brokers,
+            &[
+                ("allow.auto.create.topics", "false"),
+                ("transactional.id", &txn_id),
+                ("transaction.timeout.ms", "600000"),
+                ("topic.metadata.propagation.max.ms", "2000"),
+            ],
+        );
+        // Named like the sink's topics: the progress topic sorts first.
+        let progress = unique("kc-deleted-a-progress");
+        let topic = unique("kc-deleted-b-data");
+        let cluster = cluster_of(&p);
+        create_topic(&cluster, &progress, 1);
+        create_topic(&cluster, &topic, 1);
+        let _drop = DropTopics::new(&cluster, &[&progress]);
+        p.client()
+            .fetch_metadata(None, Duration::from_secs(10))
+            .unwrap();
+        p.init_transactions(Duration::from_secs(30)).unwrap();
+        sink_transaction(&p, &topic, &progress, 0, 1, 1);
+        p.commit_transaction(Duration::from_secs(30)).unwrap();
+
+        drop(DropTopics::new(&cluster, &[&topic]));
+        let start = Instant::now();
+        sink_transaction(&p, &topic, &progress, 1, 1, 1);
+        // Like the sink's partition count task.
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let refresher = {
+            let p = p.clone();
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                    let _ = p.client().fetch_metadata(None, Duration::from_secs(10));
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            })
+        };
+        let res = p.commit_transaction(Duration::from_secs(60));
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        refresher.join().unwrap();
+        let err = res.unwrap_err();
+        let KafkaError::Transaction(e) = &err else {
+            panic!("{err:?}")
+        };
+        assert!(e.txn_requires_abort(), "{e:?}");
+        let elapsed = start.elapsed();
+        assert!(elapsed < Duration::from_secs(40), "{elapsed:?}");
+        p.abort_transaction(Duration::from_secs(30)).unwrap();
+        let report = rec.reports().into_iter().find(|r| r.opaque == 1).unwrap();
+        assert!(report.error.is_some(), "{report:?}");
+
+        // The producer stays usable for the remaining topics.
+        p.begin_transaction().unwrap();
+        p.send(
+            BaseRecord::with_opaque_to(&progress, 2)
+                .payload(b"after".as_slice())
+                .key(b"mz-sink-u1".as_slice()),
+        )
+        .unwrap();
+        p.commit_transaction(Duration::from_secs(30)).unwrap();
+        let values: Vec<_> = fetch_all(&cluster, &progress, 0, true)
+            .into_iter()
+            .map(|f| f.value.unwrap())
+            .collect();
+        assert_eq!(values.last(), Some(&Bytes::from_static(b"after")));
+    }
 }

@@ -17,6 +17,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::sync::Notify;
@@ -135,6 +136,9 @@ pub(super) enum PartTxn {
 pub(super) struct PartitionState<D> {
     /// The leader's broker id, -1 if unknown.
     pub leader: i32,
+    /// Distinguishes this partition from a removed one with the same index,
+    /// for responses that arrive after the removal.
+    pub incarnation: u64,
     pub open: Option<Batch<D>>,
     /// Sealed batches in order: retries first, then batches never sent.
     pub ready: VecDeque<Batch<D>>,
@@ -169,6 +173,7 @@ impl<D> PartitionState<D> {
     fn new(leader: i32) -> PartitionState<D> {
         PartitionState {
             leader,
+            incarnation: NEXT_INCARNATION.fetch_add(1, Ordering::Relaxed),
             open: None,
             ready: VecDeque::new(),
             in_flight: 0,
@@ -277,8 +282,6 @@ impl<D> PartitionState<D> {
         let open = match &mut self.open {
             Some(open) => open,
             None => {
-                // Start at the size of the previous batch so that a steady
-                // stream rarely grows the buffer.
                 // Start a quarter above the size of the previous batch, so
                 // that a steady stream does not grow the buffer. A batch
                 // exceeds `max_batch_bytes` by at most one record.
@@ -319,6 +322,9 @@ impl<D> PartitionState<D> {
 
 /// The smallest initial capacity of a batch buffer.
 const MIN_BATCH_CAPACITY: usize = 1024;
+
+/// The source of [`PartitionState::incarnation`].
+static NEXT_INCARNATION: AtomicU64 = AtomicU64::new(0);
 
 /// Buffers of batches that were sent or compressed, for new batches to
 /// reuse. Batches are large, short-lived allocations; recycling them saves
@@ -401,14 +407,24 @@ pub(super) struct TopicState<D> {
     pub partitions: Vec<PartitionState<D>>,
     pub ua: VecDeque<UaMessage<D>>,
     pub sticky: StickyPartition,
-    /// When the producer first used the topic, which starts
-    /// `topic.metadata.propagation.max.ms`.
-    pub first_used: Instant,
+    /// When `status` last changed (initially when the producer first used
+    /// the topic). Like librdkafka, metadata saying that the topic does not
+    /// exist, or exists again, is only believed
+    /// `topic.metadata.propagation.max.ms` after that, since brokers learn
+    /// about topic creation and deletion at different times.
+    pub status_since: Instant,
     /// The version of the metadata snapshot last applied.
     pub md_version: u64,
 }
 
 impl<D> TopicState<D> {
+    fn set_status(&mut self, status: TopicStatus, now: Instant) {
+        if self.status != status {
+            self.status = status;
+            self.status_since = now;
+        }
+    }
+
     pub fn partition(&self, partition: i32) -> Option<&PartitionState<D>> {
         usize::try_from(partition)
             .ok()
@@ -419,6 +435,16 @@ impl<D> TopicState<D> {
         usize::try_from(partition)
             .ok()
             .and_then(|p| self.partitions.get_mut(p))
+    }
+
+    /// The partition a batch was taken from, unless it was removed since.
+    pub fn partition_since(
+        &mut self,
+        partition: i32,
+        incarnation: u64,
+    ) -> Option<&mut PartitionState<D>> {
+        self.partition_mut(partition)
+            .filter(|p| p.incarnation == incarnation)
     }
 }
 
@@ -563,7 +589,7 @@ impl<D> State<D> {
             partitions: Vec::new(),
             ua: VecDeque::new(),
             sticky: StickyPartition::default(),
-            first_used: now,
+            status_since: now,
             md_version: 0,
         });
         self.topic_ids.insert(name, id);
@@ -594,7 +620,8 @@ impl<D> State<D> {
     /// Updates the partition count and leaders, moves partitions between
     /// senders, re-routes UA records once the topic exists, and fails UA
     /// records of topics that turn out not to exist or have a permanent
-    /// error. Partitions whose leader changed wait for their in-flight
+    /// error. Topics that turn out not to exist lose their partitions.
+    /// Partitions whose leader changed wait for their in-flight
     /// batches before sending to the new leader.
     pub fn apply_topic_metadata(
         &mut self,
@@ -613,14 +640,31 @@ impl<D> State<D> {
             topic.md_version = version;
         }
         let Some(md) = md else {
+            // An all-topics response without the topic, e.g. the sink's
+            // `fetch_metadata(None)` after the topic was deleted. Like
+            // librdkafka's once-a-second topic scan, the maintenance tick
+            // then finds no metadata and the topic becomes unknown, which
+            // restarts the propagation window. It is refreshed until
+            // metadata says what happened to it.
+            if topic.status == TopicStatus::Exists && version.is_none() {
+                topic.set_status(TopicStatus::Unknown, now);
+            }
             if topic.status == TopicStatus::Unknown {
                 fx.refresh_metadata = true;
             }
             return;
         };
+        let propagated =
+            now.saturating_duration_since(topic.status_since) >= cfg.metadata_propagation_max;
         match md.error {
+            None if topic.status == TopicStatus::NotExists && !propagated => {
+                // Like librdkafka's `rd_kafka_topic_set_exists`: a broker may
+                // not know about the deletion yet. NOTE: librdkafka accepts a
+                // recreated topic, one with a new topic id, right away. The
+                // metadata here has no topic ids, so that waits too.
+            }
             None => {
-                topic.status = TopicStatus::Exists;
+                topic.set_status(TopicStatus::Exists, now);
                 let count = md.partitions.len();
                 let mut leader_changes = Vec::new();
                 for (index, pm) in md.partitions.iter().enumerate() {
@@ -647,27 +691,10 @@ impl<D> State<D> {
                         }
                     }
                 }
-                if topic.partitions.len() > count {
-                    // Partition counts only grow unless the topic was
-                    // recreated. Records for partitions that are gone cannot
-                    // be delivered.
-                    let name = Arc::clone(&topic.name);
-                    for (index, mut p) in topic.partitions.drain(count..).enumerate() {
-                        let partition =
-                            i32::try_from(count + index).expect("partition count fits i32");
-                        p.seal();
-                        for batch in p.ready.drain(..) {
-                            fx.fail(
-                                &name,
-                                partition,
-                                Undelivered::Batch(batch),
-                                RDKafkaErrorCode::UnknownPartition,
-                            );
-                        }
-                        if p.leader >= 0 {
-                            leader_changes.push((partition, p.leader, -1));
-                        }
-                    }
+                // Partition counts only grow unless the topic was recreated.
+                let shrunk = topic.partitions.len() > count;
+                if shrunk {
+                    self.remove_partitions(id, count, fx);
                 }
                 for (partition, old, new) in leader_changes {
                     let key = PartKey {
@@ -696,30 +723,39 @@ impl<D> State<D> {
                 self.route_ua(id, cfg, now, fx);
             }
             Some(RDKafkaErrorCode::UnknownTopicOrPartition) => {
-                let known_before = topic.status == TopicStatus::Exists;
-                if known_before
-                    || now.saturating_duration_since(topic.first_used)
-                        >= cfg.metadata_propagation_max
-                {
-                    topic.status = TopicStatus::NotExists;
-                    // Like librdkafka, queued records fail with the
-                    // metadata's error; later sends with `__UNKNOWN_TOPIC`.
-                    let name = Arc::clone(&topic.name);
-                    for m in topic.ua.drain(..) {
-                        let partition = m.partition.unwrap_or(-1);
-                        fx.fail(
-                            &name,
-                            partition,
-                            Undelivered::Ua(m),
-                            RDKafkaErrorCode::UnknownTopicOrPartition,
-                        );
-                    }
-                } else {
-                    fx.refresh_metadata = true;
+                if topic.status == TopicStatus::NotExists {
+                    return;
                 }
+                if !propagated {
+                    // librdkafka's `rd_kafka_topic_set_notexists`: a broker
+                    // may not know about the topic yet, or a deletion may
+                    // not have reached the others. The maintenance tick
+                    // re-applies this metadata.
+                    if topic.status == TopicStatus::Unknown {
+                        fx.refresh_metadata = true;
+                    }
+                    return;
+                }
+                topic.set_status(TopicStatus::NotExists, now);
+                topic.sticky = StickyPartition::default();
+                // Like librdkafka, records waiting for metadata fail with the
+                // metadata's error, those queued in partitions with
+                // `__UNKNOWN_PARTITION` (`rd_kafka_topic_partition_cnt_update`
+                // to 0), and later sends with `__UNKNOWN_TOPIC`.
+                let name = Arc::clone(&topic.name);
+                for m in topic.ua.drain(..) {
+                    let partition = m.partition.unwrap_or(-1);
+                    fx.fail(
+                        &name,
+                        partition,
+                        Undelivered::Ua(m),
+                        RDKafkaErrorCode::UnknownTopicOrPartition,
+                    );
+                }
+                self.remove_partitions(id, 0, fx);
             }
             Some(code) if is_permanent_topic_error(code) => {
-                topic.status = TopicStatus::Error(code);
+                topic.set_status(TopicStatus::Error(code), now);
                 let name = Arc::clone(&topic.name);
                 for m in topic.ua.drain(..) {
                     let partition = m.partition.unwrap_or(-1);
@@ -731,6 +767,38 @@ impl<D> State<D> {
                 // being created.
                 fx.refresh_metadata = true;
             }
+        }
+    }
+
+    /// Removes the partitions `from..` of a topic, like librdkafka's
+    /// `rd_kafka_topic_partition_cnt_update`: their queued records fail with
+    /// `__UNKNOWN_PARTITION`, their transaction registrations are dropped and
+    /// their senders forget them. Batches in flight are reported when
+    /// answered, without being retried.
+    fn remove_partitions(&mut self, id: TopicId, from: usize, fx: &mut Effects<D>) {
+        let topic = &mut self.topics[id];
+        let name = Arc::clone(&topic.name);
+        let removed: Vec<_> = topic.partitions.drain(from..).collect();
+        for (offset, mut p) in removed.into_iter().enumerate() {
+            let partition = i32::try_from(from + offset).expect("partition count fits i32");
+            let key = PartKey {
+                topic: id,
+                partition,
+            };
+            p.seal();
+            for batch in p.ready.drain(..) {
+                fx.fail(
+                    &name,
+                    partition,
+                    Undelivered::Batch(batch),
+                    RDKafkaErrorCode::UnknownPartition,
+                );
+            }
+            if let Some(s) = self.senders.get_mut(&p.leader) {
+                s.parts.remove(&key);
+            }
+            self.eos.pending.remove(&key);
+            self.eos.registering.retain(|k| *k != key);
         }
     }
 
