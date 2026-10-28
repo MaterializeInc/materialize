@@ -234,31 +234,39 @@ mod tests {
     async fn rejects_invalid_input_without_dispatch() {
         let (sender, mut receiver) = mpsc::channel(1);
         let app = router(sender);
-        for (method, uri, body) in [
-            ("POST", "/api/adapters", "{"),
-            ("POST", "/api/adapters", r#"{"name":"x"}"#),
-            ("POST", "/api/adapters", r#"{"name":1,"size":"s"}"#),
+        let invalid_json = "expected JSON with string fields name and size";
+        let invalid_query = "expected optional id and name query parameters";
+        for (method, uri, body, message) in [
+            ("POST", "/api/adapters", "{", invalid_json),
+            ("POST", "/api/adapters", r#"{"name":"x"}"#, invalid_json),
+            (
+                "POST",
+                "/api/adapters",
+                r#"{"name":1,"size":"s"}"#,
+                invalid_json,
+            ),
             (
                 "POST",
                 "/api/adapters",
                 r#"{"name":"x","size":"s","extra":true}"#,
+                invalid_json,
             ),
-            ("DELETE", "/api/adapters/u1", ""),
-            ("DELETE", "/api/adapters/%FF", ""),
-            ("GET", "/api/collections?id=bad%5C", ""),
-            ("GET", "/api/collections?unknown=pattern", ""),
-            ("GET", "/api/collections?id=a&id=b", ""),
+            ("DELETE", "/api/adapters/u1", "", "invalid adapter ID"),
+            ("DELETE", "/api/adapters/%FF", "", "invalid adapter ID"),
+            (
+                "GET",
+                "/api/collections?id=bad%5C",
+                "",
+                "unterminated escape sequence in LIKE",
+            ),
+            ("GET", "/api/collections?unknown=pattern", "", invalid_query),
+            ("GET", "/api/collections?id=a&id=b", "", invalid_query),
         ] {
             let response = app
                 .clone()
                 .oneshot(request(method, uri, body))
                 .await
                 .unwrap();
-            let message = if method == "POST" {
-                "expected JSON with string fields name and size"
-            } else {
-                "invalid adapter ID"
-            };
             assert_json(response, StatusCode::BAD_REQUEST, json!({"error": message})).await;
             assert!(matches!(
                 receiver.try_recv(),
