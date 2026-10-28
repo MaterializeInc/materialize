@@ -24,6 +24,10 @@ export const UI_PREVIEWS = {
     ldFlag: "cluster-details-page-cns-173",
     label: "Cluster details redesign",
   },
+  modernConsole: {
+    ldFlag: "modern-console-worksheet",
+    label: "Modern console",
+  },
 } as const satisfies Record<string, { ldFlag: string; label: string }>;
 
 export type UiPreviewKey = keyof typeof UI_PREVIEWS;

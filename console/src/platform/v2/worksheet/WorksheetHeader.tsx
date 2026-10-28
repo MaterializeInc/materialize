@@ -19,6 +19,7 @@ import {
 } from "~/api/materialize";
 import { getSchemaNameFromSearchPath } from "~/api/materialize/useSchemas";
 import { SchemaOption } from "~/components/SchemaSelect";
+import { UiPreviewToggle } from "~/components/UiPreviewToggle";
 import BreadcrumbPicker from "~/components-v2/BreadcrumbPicker";
 import { useAllClusters } from "~/store-v2/allClusters";
 import { useAllSchemas } from "~/store-v2/allSchemas";
@@ -189,6 +190,11 @@ const WorksheetHeader = ({ onRunCommand }: WorksheetHeaderProps) => {
         searchPlaceholder="Search schemas…"
       />
       <Spacer />
+      <UiPreviewToggle
+        previewKey="modernConsole"
+        label="Try the new SQL worksheet"
+        optOutLabel="Switch to classic console"
+      />
       <Button
         flexShrink={0}
         variant="secondary"

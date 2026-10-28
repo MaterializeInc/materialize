@@ -27,6 +27,7 @@ import { AppInitializer } from "~/components/AppInitializer";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import { getIsFronteggRoute } from "~/fronteggRoutes";
 import { useFlags } from "~/hooks/useFlags";
+import { useUiPreview } from "~/hooks/useUiPreview";
 import { BaseLayout } from "~/layouts/BaseLayout";
 import { ShellLayout } from "~/layouts/ShellLayout";
 import ClusterRoutes from "~/platform/clusters/ClusterRoutes";
@@ -48,6 +49,7 @@ import {
 import ShellRoutes from "~/platform/shell/ShellRoutes";
 import { ShellWebsocketProvider } from "~/platform/shell/ShellWebsocketProvider";
 import SourceRoutes from "~/platform/sources/SourceRoutes";
+import { AuthenticatedRoutes as ModernAuthenticatedRoutes } from "~/platform/v2/AuthenticatedRoutes";
 import { SentryRoutes } from "~/sentry";
 import { regionIdToSlug, useRegionSlugToId } from "~/store/cloudRegions";
 import {
@@ -112,9 +114,14 @@ const EnvironmentNotReadyRoutesWrapper = () => {
 };
 
 export const AuthenticatedRoutes = () => {
+  const { isEnabled: modernConsoleEnabled } = useUiPreview("modernConsole");
   const flags = useFlags();
   const isLicenseKeysEnabled = flags["license-keys-3833"];
   const isRbacEnabled = flags["rbac-ui-9904"];
+
+  if (modernConsoleEnabled) {
+    return <ModernAuthenticatedRoutes />;
+  }
 
   return (
     <>
