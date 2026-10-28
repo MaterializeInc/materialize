@@ -1496,27 +1496,31 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_REDACTED: LazyLock<BuiltinView> = Lazy
         .with_column("result_size", SqlScalarType::Int64.nullable(true))
         .with_column("rows_returned", SqlScalarType::Int64.nullable(true))
         .with_column("execution_strategy", SqlScalarType::String.nullable(true))
+        .with_column("throttled_count", SqlScalarType::UInt64.nullable(true))
         .finish(),
     column_comments: BTreeMap::new(),
     sql: "
 SELECT id, prepared_statement_id, sample_rate, cluster_id, application_name,
 cluster_name, database_name, search_path, transaction_isolation, execution_timestamp, transaction_id,
 transient_index_id, mz_version, began_at, finished_at, finished_status,
-result_size, rows_returned, execution_strategy
+result_size, rows_returned, execution_strategy, throttled_count
 FROM mz_internal.mz_statement_execution_history",
     access: vec![SUPPORT_SELECT, ANALYTICS_SELECT, MONITOR_REDACTED_SELECT, MONITOR_SELECT],
     ontology: None,
 }
 });
 
-pub static MZ_PREPARED_STATEMENT_HISTORY: LazyLock<BuiltinSource> =
-    LazyLock::new(|| BuiltinSource {
+pub static MZ_PREPARED_STATEMENT_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| {
+    BuiltinSource {
         name: "mz_prepared_statement_history",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::SOURCE_MZ_PREPARED_STATEMENT_HISTORY_OID,
         data_source: IntrospectionType::PreparedStatementHistory.into(),
         desc: MZ_PREPARED_STATEMENT_HISTORY_DESC.clone(),
-        column_comments: BTreeMap::new(),
+        column_comments: BTreeMap::from_iter([(
+            "throttled_count",
+            "Always `NULL`. Throttled executions are counted in `mz_internal.mz_statement_execution_history.throttled_count`.",
+        )]),
         is_retained_metrics_object: false,
         access: vec![
             SUPPORT_SELECT,
@@ -1525,7 +1529,8 @@ pub static MZ_PREPARED_STATEMENT_HISTORY: LazyLock<BuiltinSource> =
             MONITOR_SELECT,
         ],
         ontology: None,
-    });
+    }
+});
 
 pub static MZ_SQL_TEXT: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
     name: "mz_sql_text",
@@ -1700,7 +1705,8 @@ SELECT mseh.id AS execution_id, sample_rate, cluster_id, application_name, clust
 transaction_isolation, execution_timestamp, transient_index_id, params, mz_version, began_at, finished_at, finished_status,
 error_message, result_size, rows_returned, execution_strategy, transaction_id,
 mpsh.id AS prepared_statement_id, sql_hash, mpsh.name AS prepared_statement_name,
-mpsh.session_id, prepared_at, statement_type, throttled_count,
+mpsh.session_id, prepared_at, statement_type,
+COALESCE(mseh.throttled_count, 0::uint8) AS throttled_count,
 connected_at, initial_application_name, authenticated_user
 FROM mz_internal.mz_statement_execution_history mseh,
      mz_internal.mz_prepared_statement_history mpsh,

@@ -355,15 +355,7 @@ impl Coordinator {
                     kind: *kind,
                 };
 
-                // `mz_prepared_statement_history`
-                let mut mpsh_row = Row::default();
-                let mut mpsh_packer = mpsh_row.packer();
-                pack_statement_prepared_update(&record, &mut mpsh_packer);
-                let throttled_count = self
-                    .statement_logging
-                    .throttling_state
-                    .get_throttled_count();
-                mpsh_packer.push(Datum::UInt64(CastFrom::cast_from(throttled_count)));
+                let mpsh_row = pack_statement_prepared_update(&record);
 
                 let sql_row = Row::pack([
                     Datum::TimestampTz(
@@ -524,6 +516,7 @@ impl Coordinator {
             result_size.into(),
             rows_returned.into(),
             execution_strategy.into(),
+            Datum::UInt64(began_record.throttled_count),
         ]);
         row
     }
@@ -696,10 +689,17 @@ impl Coordinator {
             .build_info
             .human_version(None);
         let kind = session.qcell_ro(logging).kind();
+        // Taken before the throttling check because the row it is logged in feeds the check's
+        // cost. Handed back below if the check fails.
+        let throttled_count = self
+            .statement_logging
+            .throttling_state
+            .take_throttled_count();
         let record = create_began_execution_record(
             execution_uuid,
             ps_uuid,
             sample_rate,
+            throttled_count,
             params,
             session,
             began_at,
@@ -736,20 +736,11 @@ impl Coordinator {
             maybe_ps_sql_text,
             maybe_sh_event.as_ref().map(|(row, _)| row),
         ]) {
-            // Increment throttled_count in shared state
+            // The taken count, plus this execution.
             self.statement_logging
                 .throttling_state
-                .increment_throttled_count();
+                .add_throttled_count(throttled_count + 1);
             return None;
-        }
-        // When we successfully log the first instance of a prepared statement
-        // (i.e., it is not throttled), we also capture the number of previously
-        // throttled statement executions in the builtin prepared statement history table above,
-        // and then reset the throttled count for future tracking.
-        else if let PreparedStatementLoggingInfo::StillToLog { .. } = session.qcell_ro(logging) {
-            self.statement_logging
-                .throttling_state
-                .reset_throttled_count();
         }
 
         self.record_prepared_statement_as_logged(ps_uuid, session, logging);

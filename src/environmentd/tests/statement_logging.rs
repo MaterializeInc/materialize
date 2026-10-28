@@ -565,7 +565,7 @@ fn run_throttling_test(use_prepared_statement: bool) {
                 .query(
                     "SELECT
     sql,
-    throttled_count
+    mseh.throttled_count
 FROM mz_internal.mz_statement_execution_history mseh
 JOIN mz_internal.mz_prepared_statement_history mpsh
 ON mseh.prepared_statement_id = mpsh.id
