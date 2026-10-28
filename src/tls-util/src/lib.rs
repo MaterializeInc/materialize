@@ -71,7 +71,7 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Tls
         },
         SslMode::VerifyCa => (SslVerifyMode::PEER, false),
         SslMode::VerifyFull => (SslVerifyMode::PEER, true),
-        _ => panic!("unexpected sslmode {:?}", config.get_ssl_mode()),
+        mode => bail_generic!(format!("unexpected sslmode {mode:?}")),
     };
 
     // Configure peer verification
@@ -126,7 +126,7 @@ pub fn make_tls_rustls(config: &tokio_postgres::Config) -> Result<MakeRustlsConn
         SslMode::Require => (config.get_ssl_root_cert().is_some(), false),
         SslMode::VerifyCa => (true, false),
         SslMode::VerifyFull => (true, true),
-        _ => panic!("unexpected sslmode {:?}", config.get_ssl_mode()),
+        mode => bail_generic!(format!("unexpected sslmode {mode:?}")),
     };
 
     let verifier: Arc<dyn ServerCertVerifier> = if verify_peer {
@@ -563,11 +563,12 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                // A failed handshake drops the connection, which the client
-                // observes as a read error in `assert_server_ok`.
-                if let Ok(mut tls) = acceptor.accept(stream.unwrap()) {
-                    tls.write_all(b"ok").unwrap();
+            // Server-side errors are ignored so one bad connection can't kill
+            // the server thread. The client observes any failure as a missing
+            // "ok" in `assert_server_ok`.
+            for stream in listener.incoming().flatten() {
+                if let Ok(mut tls) = acceptor.accept(stream) {
+                    let _ = tls.write_all(b"ok");
                     let _ = tls.shutdown();
                 }
             }
