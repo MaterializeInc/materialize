@@ -20,79 +20,56 @@ use super::histogram::BucketScheme;
 use super::period::PeriodBook;
 use super::recorder::{PeriodHistogram, PeriodRow, RecorderConfig, add_part, rows};
 
-/// Observation times of a collection's write frontier advances, kept while a consumer may still
-/// need them.
+/// Observation times of a collection's visibility advances, kept while a consumer may still need
+/// them.
+///
+/// Visibility is measured in arrival time, the collection's own `last_reflected`, so a refresh
+/// collection is visible when its data is, not when its frontier passes.
 #[derive(Debug, Default)]
-pub struct FrontierLog {
-    /// `(frontier, observed_ms)`, ascending in both.
+pub struct VisibilityLog {
+    /// `(reflected, observed_ms)`, ascending in both.
     entries: Vec<(u64, u64)>,
-    /// Timestamps below this are no longer answerable because their entries were pruned.
+    /// Arrivals at or below this are no longer answerable because their entries were pruned.
     floor: u64,
 }
 
-impl FrontierLog {
-    /// Records that the frontier was observed at `frontier` at `observed_ms`. A frontier that
-    /// does not exceed the last recorded one is ignored.
-    pub fn record(&mut self, frontier: Timestamp, observed_ms: u64) {
-        let frontier = u64::from(frontier);
-        if self.entries.last().is_none_or(|(f, _)| frontier > *f) {
-            self.entries.push((frontier, observed_ms));
+impl VisibilityLog {
+    /// Records that arrivals up to `reflected` were visible at `observed_ms`. A `reflected`
+    /// that does not exceed the last recorded one is ignored.
+    pub fn record(&mut self, reflected: u64, observed_ms: u64) {
+        if self.entries.last().is_none_or(|(r, _)| reflected > *r) {
+            self.entries.push((reflected, observed_ms));
         }
     }
 
-    /// The earliest observation time at which the frontier exceeded `ts`, if observed.
-    pub fn passed_at(&self, ts: Timestamp) -> Option<u64> {
-        self.segment(u64::from(ts)).0
+    /// The earliest observation time at which arrival time `arrival` was visible, if known.
+    pub fn visible_at(&self, arrival: u64) -> Option<u64> {
+        self.segment(arrival).0
     }
 
-    /// Drops what is only needed to answer timestamps at or below `ts`.
-    pub fn prune_through(&mut self, ts: Timestamp) {
-        // An entry with frontier `f` answers timestamps below `f`, so it is dead once `f - 1`
-        // is at most `ts`.
-        let limit = u64::from(ts).saturating_add(1);
-        let dead = self.entries.partition_point(|(f, _)| *f <= limit);
+    /// Drops what is only needed to answer arrivals at or below `arrival`.
+    pub fn prune_through(&mut self, arrival: u64) {
+        // An entry with `reflected = r` answers the arrivals above its predecessor up to `r`,
+        // so it is dead once `r` is at most `arrival`.
+        let dead = self.entries.partition_point(|(r, _)| *r <= arrival);
         if dead > 0 {
             self.floor = self.floor.max(self.entries[dead - 1].0);
         }
         self.entries.drain(..dead);
     }
 
-    /// The observation time `passed_at(ts)` returns, and the exclusive upper bound of the
-    /// timestamps that share this answer, `None` if unbounded.
-    fn segment(&self, ts: u64) -> (Option<u64>, Option<u64>) {
-        if ts < self.floor {
+    /// The observation time `visible_at(arrival)` returns, and the inclusive upper bound of the
+    /// arrivals that share this answer, `None` if unbounded.
+    fn segment(&self, arrival: u64) -> (Option<u64>, Option<u64>) {
+        if arrival <= self.floor {
             return (None, Some(self.floor));
         }
-        let idx = self.entries.partition_point(|(f, _)| *f <= ts);
+        let idx = self.entries.partition_point(|(r, _)| *r < arrival);
         match self.entries.get(idx) {
-            Some((f, observed)) => (Some(*observed), Some(*f)),
+            Some((r, observed)) => (Some(*observed), Some(*r)),
             None => (None, None),
         }
     }
-}
-
-/// The output timestamp of the arrivals of the window ending at `end`, the maximum over leaves
-/// of the leaf timestamp. All arrivals of a window share every leaf's timestamp.
-fn output_timestamp(tree: &ResolvedTree, end: u64) -> u64 {
-    let mut ts = end;
-    tree.for_each_ticker(&mut |t| {
-        if let Some(i) = t.grid_ms() {
-            ts = ts.max(end.div_ceil(i).saturating_mul(i));
-        }
-    });
-    ts
-}
-
-/// The largest window end whose output timestamp is below `exclusive`.
-fn last_window_end_below(tree: &ResolvedTree, exclusive: u64) -> u64 {
-    let bound = exclusive.saturating_sub(1);
-    let mut end = bound;
-    tree.for_each_ticker(&mut |t| {
-        if let Some(i) = t.grid_ms() {
-            end = end.min(bound - bound % i);
-        }
-    });
-    end
 }
 
 /// Records the local delay of every virtual arrival of one object, once, into period histograms.
@@ -103,10 +80,6 @@ fn last_window_end_below(tree: &ResolvedTree, exclusive: u64) -> u64 {
 #[derive(Debug)]
 pub struct LocalDelayRecorder {
     book: PeriodBook<PeriodHistogram>,
-    /// The latest arrival time recorded so far.
-    reflected_ms: u64,
-    /// The time of the advance that reached `reflected_ms`, or the start time.
-    advanced_ms: u64,
 }
 
 impl LocalDelayRecorder {
@@ -114,24 +87,23 @@ impl LocalDelayRecorder {
     pub fn new(start_ms: u64) -> Self {
         LocalDelayRecorder {
             book: PeriodBook::new(start_ms),
-            reflected_ms: start_ms,
-            advanced_ms: start_ms,
         }
     }
 
     /// Records an advance of the object to `frontier` at `now_ms`, given its direct inputs'
     /// logs, and returns the rows of periods that closed.
     ///
-    /// With no inputs the local delay is the end-to-end latency. An input whose log does not
-    /// cover an arrival's output timestamp, because it was pruned or the advance was never
-    /// observed, counts as ready at the object's previous advance, which understates the delay.
+    /// An arrival window is ready when every input's log shows its end as visible. With no inputs
+    /// the local delay is the end-to-end latency. An input whose log cannot answer, because it
+    /// was pruned or the advance was never observed, counts as ready at `now_ms`, which
+    /// understates the delay and never overstates it.
     /// Rows have the order and finality of `FreshnessRecorder::observe`.
     pub fn observe(
         &mut self,
         tree: &ResolvedTree,
         frontier: &Antichain<Timestamp>,
         now_ms: u64,
-        inputs: &[&FrontierLog],
+        inputs: &[&VisibilityLog],
         config: &RecorderConfig,
     ) -> Vec<PeriodRow> {
         let closed = match frontier.as_option() {
@@ -141,8 +113,7 @@ impl LocalDelayRecorder {
                     return Vec::new();
                 };
                 let advance_ms = now_ms.max(last_reflected);
-                let fallback_ms = self.advanced_ms;
-                let closed = self.book.advance(
+                self.book.advance(
                     last_reflected,
                     config.period_ms,
                     || PeriodHistogram {
@@ -166,18 +137,13 @@ impl LocalDelayRecorder {
                                 &period.scheme,
                                 config.interval_ms,
                                 (from, to),
-                                (advance_ms, fallback_ms),
+                                advance_ms,
                                 inputs,
                                 &mut period.counts,
                             );
                         }
                     },
-                );
-                if last_reflected > self.reflected_ms {
-                    self.reflected_ms = last_reflected;
-                    self.advanced_ms = now_ms;
-                }
-                closed
+                )
             }
         };
         rows(closed)
@@ -193,8 +159,8 @@ fn add_local_part(
     scheme: &BucketScheme,
     interval_ms: u64,
     (from, to): (u64, u64),
-    (now_ms, fallback_ms): (u64, u64),
-    inputs: &[&FrontierLog],
+    now_ms: u64,
+    inputs: &[&VisibilityLog],
     counts: &mut BTreeMap<i32, u64>,
 ) {
     if interval_ms == 0 {
@@ -203,18 +169,17 @@ fn add_local_part(
     let mut pos = from;
     while pos < to {
         // The window of the first arrival after `pos`. A `to` inside a window does not change
-        // the window's output timestamp.
+        // the window's end.
         let window_end = tree.next_boundary(pos + 1);
-        let ts = output_timestamp(tree, window_end);
         let mut ready_ms = 0;
         let mut group_end = to;
         for log in inputs {
-            let (observed, exclusive) = log.segment(ts);
-            ready_ms = ready_ms.max(observed.unwrap_or(fallback_ms));
+            let (observed, last) = log.segment(window_end);
+            ready_ms = ready_ms.max(observed.unwrap_or(now_ms));
             // The group ends where this input's answer changes. The bound is at least
-            // `window_end` because `ts` is below `exclusive` and grows with the window end.
-            if let Some(exclusive) = exclusive {
-                group_end = group_end.min(last_window_end_below(tree, exclusive));
+            // `window_end` because the entry answers it.
+            if let Some(last) = last {
+                group_end = group_end.min(last);
             }
         }
         let n = group_end / interval_ms - pos / interval_ms;

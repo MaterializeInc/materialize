@@ -16,7 +16,7 @@ use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use proptest::prelude::*;
 
 use super::histogram::{BucketScheme, add_span};
-use super::local::{FrontierLog, LocalDelayRecorder};
+use super::local::{LocalDelayRecorder, VisibilityLog};
 use super::recorder::{FreshnessRecorder, PeriodRow, RecorderConfig};
 use super::*;
 use timely::progress::Antichain;
@@ -990,10 +990,6 @@ fn period_length_change_keeps_arrivals_in_their_period() {
     assert_eq!(per_period[&(0, 60_000)], 50_000);
 }
 
-fn ts(t: u64) -> Timestamp {
-    Timestamp::from(t)
-}
-
 fn bucket_counts(rows: &[PeriodRow]) -> BTreeMap<i32, u64> {
     let mut counts = BTreeMap::new();
     for row in rows {
@@ -1003,34 +999,34 @@ fn bucket_counts(rows: &[PeriodRow]) -> BTreeMap<i32, u64> {
 }
 
 #[mz_ore::test]
-fn frontier_log_passed_at() {
-    let mut log = FrontierLog::default();
-    assert_eq!(log.passed_at(ts(0)), None);
-    log.record(ts(1001), 1010);
-    log.record(ts(2001), 2020);
-    // A regressing or repeated frontier is ignored.
-    log.record(ts(2001), 2500);
-    log.record(ts(1500), 2600);
-    // The earliest observation strictly above the timestamp.
-    assert_eq!(log.passed_at(ts(0)), Some(1010));
-    assert_eq!(log.passed_at(ts(1000)), Some(1010));
-    assert_eq!(log.passed_at(ts(1001)), Some(2020));
-    assert_eq!(log.passed_at(ts(2000)), Some(2020));
-    assert_eq!(log.passed_at(ts(2001)), None);
+fn visibility_log_visible_at() {
+    let mut log = VisibilityLog::default();
+    assert_eq!(log.visible_at(1), None);
+    log.record(1000, 1010);
+    log.record(2000, 2020);
+    // A regressing or repeated value is ignored.
+    log.record(2000, 2500);
+    log.record(1500, 2600);
+    // The earliest observation with `reflected >= arrival`.
+    assert_eq!(log.visible_at(1), Some(1010));
+    assert_eq!(log.visible_at(1000), Some(1010));
+    assert_eq!(log.visible_at(1001), Some(2020));
+    assert_eq!(log.visible_at(2000), Some(2020));
+    assert_eq!(log.visible_at(2001), None);
     // Pruned entries answer nothing, and the rest stay correct.
-    log.prune_through(ts(1000));
-    assert_eq!(log.passed_at(ts(1000)), None);
-    assert_eq!(log.passed_at(ts(1001)), Some(2020));
-    log.prune_through(ts(5000));
-    assert_eq!(log.passed_at(ts(2000)), None);
-    assert_eq!(log.passed_at(ts(6000)), None);
+    log.prune_through(1000);
+    assert_eq!(log.visible_at(1000), None);
+    assert_eq!(log.visible_at(1001), Some(2020));
+    log.prune_through(5000);
+    assert_eq!(log.visible_at(2000), None);
+    assert_eq!(log.visible_at(6000), None);
 }
 
 #[mz_ore::test]
 fn local_chain_attributes_hops() {
     let tree = aligned(1000);
     let cfg = config(4);
-    let (mut log_a, mut log_b) = (FrontierLog::default(), FrontierLog::default());
+    let (mut log_a, mut log_b) = (VisibilityLog::default(), VisibilityLog::default());
     let mut local_a = LocalDelayRecorder::new(0);
     let mut local_b = LocalDelayRecorder::new(0);
     let mut local_c = LocalDelayRecorder::new(0);
@@ -1038,9 +1034,9 @@ fn local_chain_attributes_hops() {
     let (mut rows_a, mut rows_b, mut rows_c, mut rows_e2e) = (vec![], vec![], vec![], vec![]);
     for w in (1000..=200_000u64).step_by(1000) {
         // A is a 1 s source, B shows each tick 3 s later, and C shows it as B does.
-        log_a.record(ts(w + 1), w + 1);
+        log_a.record(w, w + 1);
         rows_a.extend(local_a.observe(&tree, &at(w + 1), w + 1, &[], &cfg));
-        log_b.record(ts(w + 1), w + 3001);
+        log_b.record(w, w + 3001);
         rows_b.extend(local_b.observe(&tree, &at(w + 1), w + 3001, &[&log_a], &cfg));
         rows_c.extend(local_c.observe(&tree, &at(w + 1), w + 3001, &[&log_b], &cfg));
         rows_e2e.extend(end_to_end_c.observe(&tree, &at(w + 1), w + 3001, &cfg));
@@ -1078,15 +1074,14 @@ fn local_join_uses_slowest_input() {
     let tree = ResolvedTree::Min(vec![aligned(7000), aligned(11000)]);
     let cfg = config(4);
     for swap in [false, true] {
-        let (mut fast, mut slow) = (FrontierLog::default(), FrontierLog::default());
-        fast.record(ts(11_001), 7100);
-        slow.record(ts(11_001), 7500);
+        let (mut fast, mut slow) = (VisibilityLog::default(), VisibilityLog::default());
+        fast.record(7000, 7100);
+        slow.record(7000, 7500);
         let inputs = if swap { [&slow, &fast] } else { [&fast, &slow] };
         let mut recorder = LocalDelayRecorder::new(0);
         let mut rows = recorder.observe(&tree, &at(11_001), 8000, &inputs, &cfg);
         rows.extend(recorder.observe(&tree, &Antichain::new(), 8000, &inputs, &cfg));
-        // The first window ends at 7000 and carries the timestamp 11000, so both logs apply
-        // and the slow one, observed at 7500, decides.
+        // The slow input, observed at 7500, decides.
         assert_eq!(
             bucket_counts(&rows),
             BTreeMap::from([(scheme(4).bucket(500), 7000)])
@@ -1098,16 +1093,16 @@ fn local_join_uses_slowest_input() {
 fn local_missing_input_entry_understates() {
     let tree = aligned(1000);
     let cfg = config(4);
-    let mut observed = FrontierLog::default();
-    observed.record(ts(1001), 1100);
-    observed.record(ts(2001), 2200);
-    let missing = FrontierLog::default();
-    let mut pruned = FrontierLog::default();
-    pruned.record(ts(1001), 1100);
-    pruned.record(ts(2001), 2200);
-    pruned.prune_through(ts(1000));
+    let mut observed = VisibilityLog::default();
+    observed.record(1000, 1100);
+    observed.record(2000, 2200);
+    let missing = VisibilityLog::default();
+    let mut pruned = VisibilityLog::default();
+    pruned.record(1000, 1100);
+    pruned.record(2000, 2200);
+    pruned.prune_through(1000);
     let s = scheme(4);
-    let run = |log: &FrontierLog| {
+    let run = |log: &VisibilityLog| {
         let mut recorder = LocalDelayRecorder::new(0);
         let mut rows = Vec::new();
         for (frontier, now) in [(1001, 1500), (2001, 2500)] {
@@ -1121,16 +1116,12 @@ fn local_missing_input_entry_understates() {
         run(&observed),
         BTreeMap::from([(s.bucket(400), 1000), (s.bucket(300), 1000)])
     );
-    // Without any, the input counts as ready at the object's previous advance, which is the
-    // start time 0 and then 1500.
-    assert_eq!(
-        run(&missing),
-        BTreeMap::from([(s.bucket(1500), 1000), (s.bucket(1000), 1000)])
-    );
+    // Without any, the input counts as ready when the object advanced, a delay of 0.
+    assert_eq!(run(&missing), BTreeMap::from([(s.bucket(1), 2000)]));
     // The pruned log answers the second window and not the first.
     assert_eq!(
         run(&pruned),
-        BTreeMap::from([(s.bucket(1500), 1000), (s.bucket(300), 1000)])
+        BTreeMap::from([(s.bucket(1), 1000), (s.bucket(300), 1000)])
     );
 }
 
@@ -1138,8 +1129,8 @@ fn local_missing_input_entry_understates() {
 fn local_negative_delay_clamps() {
     let tree = aligned(1000);
     let cfg = config(4);
-    let mut log = FrontierLog::default();
-    log.record(ts(1001), 5000);
+    let mut log = VisibilityLog::default();
+    log.record(1000, 5000);
     let mut recorder = LocalDelayRecorder::new(0);
     let mut rows = recorder.observe(&tree, &at(1001), 1500, &[&log], &cfg);
     rows.extend(recorder.observe(&tree, &Antichain::new(), 1500, &[&log], &cfg));
@@ -1149,23 +1140,86 @@ fn local_negative_delay_clamps() {
     );
 }
 
-fn arb_local_tree() -> impl Strategy<Value = ResolvedTree> {
-    prop_oneof![
-        Just(aligned(1000)),
-        Just(ResolvedTree::Min(vec![aligned(7000), aligned(11000)])),
-        Just(ResolvedTree::Leaf(Ticker::Continuous)),
-        Just(ResolvedTree::Min(vec![unaligned(300), aligned(1000)])),
-    ]
+/// A 1 s source feeds `refreshed`, a REFRESH EVERY 10 s object that shows each refresh 2 s after
+/// it is due. A plain object `plain` reads `refreshed` and advances with it. Returns the local
+/// rows of `refreshed` and of `plain`.
+fn refresh_chain() -> (Vec<PeriodRow>, Vec<PeriodRow>) {
+    let tree = refresh(every(10_000), aligned(1000));
+    let cfg = config(4);
+    let mut log_a = VisibilityLog::default();
+    let mut log_refreshed = VisibilityLog::default();
+    let mut local_refreshed = LocalDelayRecorder::new(0);
+    let mut local_plain = LocalDelayRecorder::new(0);
+    let (mut rows_refreshed, mut rows_plain) = (vec![], vec![]);
+    let mut next_a = 1000;
+    for k in 1..=20u64 {
+        let refresh_ts = 10_000 * k;
+        let now = refresh_ts + 2000;
+        // The source ticks every second up to the refresh and a bit beyond.
+        while next_a <= now {
+            log_a.record(next_a, next_a + 1);
+            next_a += 1000;
+        }
+        let frontier = at(refresh_ts + 1);
+        assert_eq!(
+            tree.last_reflected(Timestamp::from(refresh_ts + 1)),
+            Some(refresh_ts)
+        );
+        rows_refreshed.extend(local_refreshed.observe(&tree, &frontier, now, &[&log_a], &cfg));
+        log_refreshed.record(refresh_ts, now);
+        rows_plain.extend(local_plain.observe(&tree, &frontier, now, &[&log_refreshed], &cfg));
+    }
+    let empty = Antichain::new();
+    rows_refreshed.extend(local_refreshed.observe(&tree, &empty, 300_000, &[&log_a], &cfg));
+    rows_plain.extend(local_plain.observe(&tree, &empty, 300_000, &[&log_refreshed], &cfg));
+    (rows_refreshed, rows_plain)
 }
 
-fn arb_log() -> impl Strategy<Value = FrontierLog> {
+#[mz_ore::test]
+fn local_refresh_object_carries_wait() {
+    // The object is the refresh view over a plain input. An arrival ending at w is visible in
+    // the input at w + 1 and in the object at the refresh time + 2 s, so the wait lands on it.
+    let (rows, _) = refresh_chain();
+    let s = scheme(4);
+    assert_eq!(bucket_counts(&rows).values().sum::<u64>(), 200_000);
+    let (lowest, highest) = (
+        *bucket_counts(&rows).keys().next().unwrap(),
+        *bucket_counts(&rows).keys().last().unwrap(),
+    );
+    // The newest window of a refresh waits 1999 ms, the oldest 10 s + 999 ms.
+    assert_eq!(lowest, s.bucket(1999));
+    assert_eq!(highest, s.bucket(10_999));
+}
+
+#[mz_ore::test]
+fn local_refresh_input_does_not_leak_wait() {
+    // A plain object over the refresh view sees the data when the view shows it, so it adds 0.
+    let (_, rows) = refresh_chain();
+    assert_eq!(
+        bucket_counts(&rows),
+        BTreeMap::from([(scheme(4).bucket(1), 200_000)])
+    );
+}
+
+fn arb_local_tree() -> impl Strategy<Value = ResolvedTree> {
+    proptest::sample::select(vec![
+        aligned(1000),
+        ResolvedTree::Min(vec![aligned(7000), aligned(11000)]),
+        ResolvedTree::Leaf(Ticker::Continuous),
+        ResolvedTree::Min(vec![unaligned(300), aligned(1000)]),
+        refresh(every(5000), aligned(1000)),
+        ResolvedTree::Min(vec![refresh(every(7000), aligned(1000)), aligned(3000)]),
+    ])
+}
+
+fn arb_log() -> impl Strategy<Value = VisibilityLog> {
     proptest::collection::vec((1u64..30_000, 0u64..40_000), 0..12).prop_map(|steps| {
-        let (mut frontier, mut observed) = (0, 0);
-        let mut log = FrontierLog::default();
-        for (df, dt) in steps {
-            frontier += df;
+        let (mut reflected, mut observed) = (0, 0);
+        let mut log = VisibilityLog::default();
+        for (dr, dt) in steps {
+            reflected += dr;
             observed += dt;
-            log.record(ts(frontier), observed);
+            log.record(reflected, observed);
         }
         log
     })
@@ -1177,11 +1231,11 @@ fn local_counts_match_end_to_end() {
         arb_local_tree(),
         proptest::collection::vec((1u64..30_000, 0u64..40_000), 1..10),
         proptest::collection::vec(arb_log(), 0..3),
-        prop_oneof![Just(1u64), Just(3u64)],
+        proptest::sample::select(vec![1u64, 3]),
     );
     proptest!(ProptestConfig::with_cases(64), |((tree, steps, logs, interval_ms) in strategy)| {
         let cfg = RecorderConfig { interval_ms, period_ms: 10_000, ..config(4) };
-        let inputs: Vec<&FrontierLog> = logs.iter().collect();
+        let inputs: Vec<&VisibilityLog> = logs.iter().collect();
         let mut end_to_end = FreshnessRecorder::new(0);
         let mut local = LocalDelayRecorder::new(0);
         let (mut rows_e2e, mut rows_local) = (vec![], vec![]);
