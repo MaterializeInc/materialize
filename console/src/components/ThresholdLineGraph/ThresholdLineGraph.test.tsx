@@ -76,6 +76,26 @@ function linePaths(container: HTMLElement) {
 }
 
 describe("ThresholdLineGraph", () => {
+  it("labels the time axis with a clock time and a date", async () => {
+    const { container } = await renderGraph({});
+
+    const ticks = [
+      ...container.querySelectorAll(".visx-axis-bottom .visx-axis-tick"),
+    ];
+    expect(ticks.length).toBeGreaterThan(0);
+    for (const tick of ticks) {
+      const lines = [...tick.querySelectorAll("text")].map(
+        (text) => text.textContent,
+      );
+      // 24-hour time with the zone, then the date, as the connector graphs
+      // label theirs.
+      expect(lines).toEqual([
+        expect.stringMatching(/^\d{2}:\d{2} \S+$/),
+        expect.stringMatching(/^[A-Z][a-z]{2}\. \d{2}, \d{4}$/),
+      ]);
+    }
+  });
+
   it("draws a line per series, emphasizing only the breaching ones", async () => {
     const { container } = await renderGraph({ threshold: 2 });
 

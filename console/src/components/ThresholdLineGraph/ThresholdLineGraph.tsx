@@ -18,24 +18,23 @@ import { Line, LinePath } from "@visx/shape";
 import { max } from "d3";
 import React from "react";
 
+import { MultilineXTick } from "~/components/graphComponents";
 import { useDrag } from "~/hooks/useDrag";
 import { MaterializeTheme } from "~/theme";
-import {
-  buildXYGraphLayoutProps,
-  niceTicks,
-  relativeTimeTickFormat,
-} from "~/utils/graph";
+import { DATE_FORMAT, formatDate } from "~/utils/dateFormat";
+import { buildXYGraphLayoutProps, niceTicks } from "~/utils/graph";
 
 import {
   assignLineColors,
   isBreaching,
   quantizeThreshold,
+  timeAxisTicks,
 } from "./thresholdLineGraphHelpers";
 import { ThresholdLineSeries } from "./types";
 
-const MARGIN = { top: 20, right: 8, bottom: 36, left: 52 };
+// The bottom fits two-line x-axis labels: the time, then the date.
+const MARGIN = { top: 20, right: 8, bottom: 44, left: 52 };
 const DEFAULT_HEIGHT_PX = 240;
-const X_TICK_COUNT = 4;
 const Y_TICK_COUNT = 4;
 
 /** Axis top when there is nothing to scale to. */
@@ -141,11 +140,6 @@ const ThresholdLineGraphInner = <Datum,>(
   const domainTop = yTicks[yTicks.length - 1];
   const maxThreshold = props.maxThreshold ?? domainTop;
 
-  const xTicks = React.useMemo(
-    () => [...niceTicks(props.startTime, props.endTime, X_TICK_COUNT)],
-    [props.startTime, props.endTime],
-  );
-
   const {
     xScaleRange,
     yScaleRange,
@@ -172,6 +166,8 @@ const ThresholdLineGraphInner = <Datum,>(
       }),
     [props.startTime, props.endTime, xScaleRange],
   );
+
+  const xTicks = React.useMemo(() => timeAxisTicks(xScale), [xScale]);
 
   const yScale = React.useMemo(
     () =>
@@ -301,12 +297,11 @@ const ThresholdLineGraphInner = <Datum,>(
         strokeWidth={2}
         tickStroke={colors.border.primary}
         tickValues={xTicks}
+        tickComponent={MultilineXTick}
+        // Matches the connector graphs: 24-hour local time and zone over the
+        // date, so a 24 hour range that crosses midnight stays unambiguous.
         tickFormat={(value) =>
-          relativeTimeTickFormat(
-            Number(value),
-            new Date(props.startTime),
-            new Date(props.endTime),
-          )
+          `${formatDate(Number(value), "HH:mm z")}\n${formatDate(Number(value), DATE_FORMAT)}`
         }
         tickLabelProps={() => ({
           dy: 4,
