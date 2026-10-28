@@ -798,11 +798,21 @@ impl SourceStatistics {
         cur.prom.offset_known.set(value);
     }
 
-    /// Set the `offset_committed` stat to the given value.
+    /// Set the `offset_committed` stat to the given value, raising `offset_known`
+    /// to at least the same value.
     pub fn set_offset_committed(&self, value: u64) {
         let mut cur = self.stats.borrow_mut();
         cur.stats.offset_committed = Some(Some(value));
         cur.prom.offset_committed.set(value);
+        // A committed offset exists upstream by definition. Bindings minted from
+        // the data frontier can commit past the last upstream probe, which is
+        // what refreshes `offset_known`, so the invariant `known >= committed`
+        // is enforced here rather than left to probe timing.
+        let known = cur.stats.offset_known.flatten().unwrap_or(0);
+        if known < value {
+            cur.stats.offset_known = Some(Some(value));
+            cur.prom.offset_known.set(value);
+        }
     }
 
     /// Set the `snapshot_records_known` stat to the given value.

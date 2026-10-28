@@ -135,8 +135,14 @@ $ kafka-ingest topic=avro-data format=avro schema=${schema} timestamp=2
 1
 2
 
+# The sink only reports the stall once its 60s transaction timeout against the
+# broken broker expires, so the check needs a longer window than that.
+$ set-sql-timeout duration=120s
+
 > SELECT count(status) > 0 FROM mz_internal.mz_sink_status_history JOIN mz_sinks ON sink_id = id WHERE name = 'snk_backup' AND status = 'stalled';
 true
+
+$ set-sql-timeout duration=60s
 
 > ALTER CONNECTION kafka_backup SET (BROKER 'kafka:9092');
 

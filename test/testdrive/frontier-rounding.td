@@ -21,6 +21,11 @@
 # The rounding is currently not working correctly for tables, compute
 # introspection sources, storage-managed collections. See database-issues#9030.
 
+# Event-driven bindings land on the minimum binding interval grid rather than
+# on seconds, so this test pins the plain tick.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET storage_event_driven_bindings = false
+
 $ kafka-create-topic topic=topic partitions=1
 
 > CREATE CONNECTION kafka_conn
@@ -62,3 +67,6 @@ true
 #   JOIN mz_sources ON id = object_id
 #   WHERE object_id LIKE 's%'
 # true
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET storage_event_driven_bindings
