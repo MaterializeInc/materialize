@@ -23,6 +23,20 @@ Evidence is preserved off-worker in `public-launcher-888e822f.tgz`, including
 `launcher-5adaafebc6e8413bac8b3763148bf52c/results.json` and the executed witness.
 This does not cover the later default-reset helper.
 
+The extended relay-outage witness also passed on `888e822f`. After stopping the
+controller and terminating its relay, new inserts/deletes and maintained MV reads
+completed through durable fallback while the relay remained absent. Restart
+restored the relay endpoint without replacing SQL children. Evidence and cleanup
+success: `public-relay-outage-888e822f.tgz`, run
+`launcher-57029096f3b14e86b539be0732d8cd83`.
+
+Worker synced cleanly to `519dbdc3` after those tests. The default build passed.
+Task129 is testing actual `--reset`, including deleted state with retained children,
+using a default database and directory that the witness alone created. Preflight
+verified both absent. Existing PostgreSQL18.4 on26257 accepted the default root
+connection. The test must not reset any preexisting database or directory.
+Inspect `/tmp/m3-default-reset.log` and collect evidence before further worker use.
+
 The two-adapter SQL/HTTP lifecycle witness on the same debug revision failed
 once, then passed unchanged. The failed run reached adapter replacement before
 both adapters panicked at `src/txn-wal/src/txn_cache.rs:595`: a retained write was
@@ -132,9 +146,9 @@ public Docker Hub visibility gate for `materialize/pubsubd`; a registry owner
 must resolve it without bypassing the gate. Its pinned-base merge-skew job also
 failed. Cargo/downstream integration did not run. Broad CI is not green.
 
-Worker `i-0788036f0778687f1` is pinned at `888e822f`, with default debug binaries
+Worker `i-0788036f0778687f1` is now pinned at `519dbdc3`, with default debug binaries
 and about17GiB free after building. Scratch access works. Last expiry check showed
-five hours remaining. Task120 completed successfully. Check for new work before syncing source. Exact older CI product:
+five hours remaining. Task129 is active. Check for live work before syncing source. Exact older CI product:
 `materialize/materialized:mzbuild-FJXSGTKPCPESYSV4SG3CJ3LIKLBPF5GP`, digest
 `sha256:6d4cb1d4f5065426e5c80fe7a813a663620cc123b9222baafd7bbebf7eca7f51`,
 extracted at `/home/ubuntu/m3-evidence/ci141217-product`. It supplies the distinct
