@@ -76,6 +76,19 @@ function linePaths(container: HTMLElement) {
 }
 
 describe("ThresholdLineGraph", () => {
+  it("leaves room above the highest reading", async () => {
+    // The data peaks at 5, a round number the axis would otherwise end on,
+    // drawing that line along the graph's top border.
+    const { container } = await renderGraph({});
+
+    const top = Math.max(
+      ...[...container.querySelectorAll(".visx-axis-left .visx-axis-tick")].map(
+        (tick) => parseFloat(tick.textContent ?? ""),
+      ),
+    );
+    expect(top).toBeGreaterThanOrEqual(5 * 1.1);
+  });
+
   it("labels the time axis with a clock time and a date", async () => {
     const { container } = await renderGraph({});
 
@@ -150,11 +163,12 @@ describe("ThresholdLineGraph", () => {
     expect(slider).toHaveAttribute("aria-valuemin", "0");
   });
 
-  it("tops the y axis at a round value covering the tallest plotted value", async () => {
+  it("tops the y axis at a round value above the tallest plotted value", async () => {
     await renderGraph({ threshold: 2 });
 
-    // The tallest series is a flat 5, and the slider's ceiling is the axis top.
-    expect(screen.getByRole("slider")).toHaveAttribute("aria-valuemax", "5");
+    // The tallest series is a flat 5, padded to 5.5 and rounded up to 6. The
+    // slider's ceiling is the axis top.
+    expect(screen.getByRole("slider")).toHaveAttribute("aria-valuemax", "6");
   });
 
   it("does not move the y axis when the threshold changes", async () => {

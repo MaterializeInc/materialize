@@ -36,6 +36,8 @@ import { ThresholdLineSeries } from "./types";
 const MARGIN = { top: 20, right: 8, bottom: 44, left: 52 };
 const DEFAULT_HEIGHT_PX = 240;
 const Y_TICK_COUNT = 4;
+/** The least room above the highest reading, as a multiple of it. */
+const Y_HEADROOM = 1.1;
 
 /** Axis top when there is nothing to scale to. */
 const FALLBACK_DOMAIN_TOP = 1;
@@ -130,9 +132,11 @@ const ThresholdLineGraphInner = <Datum,>(
   const yTicks = React.useMemo(() => {
     const drawnMax =
       max(data, (d) => max(lines, (line) => line.yAccessor(d) ?? 0)) ?? 0;
+    // Padded before rounding: a peak already on a round value would otherwise
+    // become the axis top and draw along the graph's top border.
     return niceTicks(
       0,
-      drawnMax > 0 ? drawnMax : FALLBACK_DOMAIN_TOP,
+      drawnMax > 0 ? drawnMax * Y_HEADROOM : FALLBACK_DOMAIN_TOP,
       Y_TICK_COUNT,
     );
   }, [data, lines]);
