@@ -38,10 +38,15 @@ unused transaction helpers was subsequently compile-checked. HTTP and observatio
 unit tests compile but have not executed. Updated SLT/testdrive catalog listings
 and the RBAC-disabled denial regression also await execution.
 
-The [local launcher recipe](../controllerd.md) connects to independently managed
-pubsub and preserves children across controller termination. Fourteen scoped Python
-tests, Black and Ruff pass. Actual startup/adoption through `bin/controllerd
---optimized` remains unverified. Scratch SSO is still expired. User must run
+The launcher currently requires an external relay. Wire default pubsub provisioning
+into controllerd from static configuration, including HTTP inventory and retained
+process adoption. Preserve the shared relay across deployment retirement, with
+only one configured provisioner during overlap. No catalog declaration or election
+protocol. Update the [local recipe](../controllerd.md) as that path becomes usable.
+Fourteen scoped launcher Python tests, Black and Ruff pass. Actual startup/adoption
+through plain `bin/controllerd` remains unverified. Default development builds must
+work for demos, with `--optimized` optional as in `bin/environmentd`.
+Scratch SSO is still expired. User must run
 `bin/scratch login`. Only 5.6 GiB is free on the editing VM, so do not start product
 builds or another broad codegen run here. Do not replace the approved worker.
 

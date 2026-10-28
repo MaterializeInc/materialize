@@ -24,9 +24,13 @@ adapter and separate pubsub. Continue through independent adapters, SQL/HTTP-man
 lifecycle and deployment/backend integration, not just the binary extraction.
 The handoff identifies the current slice, concrete gaps and next useful check.
 
-M3 includes `bin/controllerd --optimized` and a short local startup recipe, using
-the existing developer launcher machinery. Verify the local demo through that
-user-facing entry point, not only the test harness.
+M3's local entry point is plain `bin/controllerd`, using the existing developer
+launcher. The default development build must work for demos. `--optimized` is
+optional, with the same behavior as `bin/environmentd`. Controllerd provisions
+statically configured pubsubd through the existing backend and includes it in
+inventory, without catalog records or a separate manual startup step. Preserve
+the design's shared-relay lifetime and ownership across deployments. Verify the
+local demo through this entry point and document it, not only the test harness.
 
 Include `GET /api/collections`: pretty JSON with collection ID, name and the
 catalog's committed combined since, not physical Persist since. Support SQL LIKE

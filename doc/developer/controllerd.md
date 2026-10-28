@@ -1,9 +1,15 @@
 # Local controllerd
 
-`bin/controllerd --optimized` builds controllerd, adapterd, clusterd and pubsubd
-through the developer launcher. It connects to an independently running pubsubd.
+`bin/controllerd` builds controllerd, adapterd, clusterd and pubsubd through the
+developer launcher. `--optimized` is optional, with the same behavior as
+`bin/environmentd`. Local demos use the default development build.
 The launcher does not create SQL objects or adapter declarations. Controllerd
 initializes the default adapter only for a fresh catalog.
+
+M3 requires controllerd to provision pubsubd from static configuration and include
+it in the HTTP inventory, so ordinary startup needs no separate pubsub command.
+That integration is not implemented yet. The external-relay setup below is
+currently required.
 
 ## Prerequisites and startup
 
@@ -25,8 +31,8 @@ another environment's state or run two controllers for the same local deployment
 Build once, then start pubsub in a separate terminal:
 
 ```sh
-bin/controllerd --optimized --build-only
-target/optimized/pubsubd --listen-addr=127.0.0.1:6879 \
+bin/controllerd --build-only
+target/debug/pubsubd --listen-addr=127.0.0.1:6879 \
   --internal-http-listen-addr=127.0.0.1:6881
 ```
 
@@ -37,7 +43,7 @@ ports are occupied, choose free ports rather than killing other services.
 In another terminal:
 
 ```sh
-bin/controllerd --optimized
+bin/controllerd
 ```
 
 For an existing, environment-scoped external relay, pass
@@ -75,7 +81,7 @@ curl -fsS -X DELETE http://127.0.0.1:6882/api/adapters/aN
 
 Press Ctrl-C in the **controller launcher terminal**, leaving pubsub running.
 The launcher signals only controllerd, not its children. Run the same
-`bin/controllerd --optimized` command again with the same state directory,
+`bin/controllerd` command again with the same state directory,
 metadata/blob URLs, pubsub URL and listener/size configuration. Controllerd
 adopts healthy children through the process backend. This is a controller stop,
 not a shutdown of the whole environment. Do not use process-group kills.

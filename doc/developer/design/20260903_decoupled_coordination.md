@@ -520,7 +520,8 @@ cancellation routing and distributed connection quotas are outside M3.
 Controllerd exposes pretty-printed JSON over HTTP for inspection and visualization:
 its desired adapterd and clusterd inventory used by reconciliation, including
 processes not yet running, their identities, deployments, resources, endpoints
-and observed status. This is a view of desired state, not a second authority or a
+and observed status. Include the environment-scoped pubsubd provisioned from
+static configuration. This is a view of desired state, not a second authority or a
 dump of credential-bearing launch arguments. Keep desired-state calculation
 separate from enactment. A passive exporter consumed by a Kubernetes controller
 is future work, not required for M3.
@@ -619,10 +620,20 @@ exactly-once task execution nor a general background-job or leader-election syst
 
 ### Persist pubsub
 
-An environment-scoped pubsubd serves all adapters and replicas across deployments,
-at an endpoint managed by the external launcher/operator. It outlives individual
-deployments. Reuse the existing relay and remote clients, with one shared fanout
+An environment-scoped pubsubd serves all adapters and replicas across deployments.
+Controllerd provisions it through the existing backend from static launch
+configuration, without a catalog declaration, and includes it in its HTTP
+inventory. Reuse the existing relay and remote clients, with one shared fanout
 service rather than unrelated servers that split subscribers.
+
+When deployment controllers coexist, static configuration selects one relay
+provisioner and the others connect to the same endpoint. The relay survives
+controller restart, zero adapters and deployment retirement. The external launcher
+coordinates transfer of provisioning ownership using retained-service adoption,
+not competing supervisors or a new election protocol. Relay configuration is
+environment-scoped, independent of each deployment's binary version.
+An explicit externally managed relay remains supported and is not adopted or
+stopped by controllerd.
 
 Pubsub is a best-effort accelerator for durably committed Persist diffs, not a
 durable authority. Loss and reconnect use the existing durable fallback. Outages
@@ -632,8 +643,9 @@ serving on relay availability.
 The relay envelope must interoperate across the supported coexistence versions.
 Payload encoding remains governed by the catalog's
 [Persist-format policy](#version-compatibility), not the relay's binary version.
-The launcher can upgrade pubsubd ahead of new SQL children while serving existing
-clients. Verify supported old/new clients against the relay across that rollout.
+The configured provisioner can upgrade pubsubd ahead of new SQL children while
+existing clients reconnect. Verify supported old/new clients against the relay
+across that rollout.
 Neither a separate catalog-compatibility system nor pubsub HA machinery is
 required for M3.
 
@@ -844,11 +856,14 @@ Preserve cross-adapter catalog freshness, write ordering and independent client
 protection. Responses, cancellation, query-local dataflows and disconnect cleanup
 remain isolated. No serving adapter owns shared process management.
 
-Provide `bin/controllerd --optimized` as the local development entry point.
+Provide `bin/controllerd` as the local development entry point. The default
+development build must support local demos. `--optimized` remains optional, with
+the same behavior as `bin/environmentd`.
 With documented metadata-store prerequisites in place, it builds the required
-binaries, configures the local environment, starts or connects to external pubsub,
-and launches controllerd. Controllerd provisions the catalog-declared adapters
-and replicas, including the default adapter on fresh initialization. Include a
+binaries, configures the local environment and launches controllerd. Controllerd
+provisions pubsubd from static configuration and adapters and replicas from the
+catalog, including the default adapter on fresh initialization. No separate
+pubsub startup step is required by default. Include a
 short recipe for startup, SQL/HTTP access and stopping/restarting without resetting
 state. Exercise the local demo through this entry point, not only a private harness.
 
