@@ -1957,6 +1957,64 @@ async fn test_timestamp_notice_after_concurrent_index_drop() {
         .expect("environmentd is still up");
 }
 
+// An EXPLAIN TIMESTAMP whose dependency is dropped after its timestamp was determined fails with a
+// "was dropped" error, instead of aborting environmentd.
+//
+// The EXPLAIN parks at the `explain_timestamp_before_dispatch` failpoint, after it determined its
+// timestamp and before the coordinator looks up the index's frontiers. The failpoint is
+// process-global, so the test relies on running in its own process, as nextest runs it.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_explain_timestamp_after_concurrent_index_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    for stmt in ["CREATE TABLE t (a int)", "CREATE DEFAULT INDEX t_idx ON t"] {
+        ddl_client.batch_execute(stmt).await.unwrap();
+    }
+    let explainer = server.connect().await.unwrap();
+
+    // Arm only once setup is done, so it's the EXPLAIN below that parks.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback("explain_timestamp_before_dispatch", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            // This runs on a worker of the runtime that also has to run the `DROP INDEX` below.
+            // `block_in_place` hands this worker's queue to another thread before parking.
+            tokio::task::block_in_place(|| {
+                parked.wait();
+                resume.wait();
+            });
+        }
+    })
+    .unwrap();
+
+    let explain = task::spawn(|| "explainer", async move {
+        explainer
+            .query("EXPLAIN TIMESTAMP FOR SELECT * FROM t", &[])
+            .await
+    });
+    task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
+
+    ddl_client.batch_execute("DROP INDEX t_idx").await.unwrap();
+
+    // Disarm before handing the EXPLAIN back, so that no later statement parks.
+    fail::remove("explain_timestamp_before_dispatch");
+    task::spawn_blocking(|| "resume", move || resume.wait()).await;
+
+    let err = explain
+        .await
+        .expect_err("EXPLAIN TIMESTAMP must fail on the dropped index")
+        .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability() {
