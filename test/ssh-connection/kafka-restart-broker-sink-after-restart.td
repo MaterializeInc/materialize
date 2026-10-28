@@ -7,13 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# The restarted sink resumes once the broker is back.
+# The restarted sink resumes once the broker is back. The verification
+# continues from where the one in kafka-restart-broker-sink.td stopped.
 $ set-sql-timeout duration=120s
 
 > INSERT INTO restart_sink_input VALUES ('two')
 
 $ kafka-verify-data format=json sink=materialize.public.restart_sink sort-messages=true
-{"before": null, "after": {"text": "one"}}
 {"before": null, "after": {"text": "two"}}
 
 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'restart_sink'
