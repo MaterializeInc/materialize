@@ -30,12 +30,14 @@ restored the relay endpoint without replacing SQL children. Evidence and cleanup
 success: `public-relay-outage-888e822f.tgz`, run
 `launcher-57029096f3b14e86b539be0732d8cd83`.
 
-Worker synced cleanly to `519dbdc3` after those tests. The default build passed.
-Task129 is testing actual `--reset`, including deleted state with retained children,
-using a default database and directory that the witness alone created. Preflight
-verified both absent. Existing PostgreSQL18.4 on26257 accepted the default root
-connection. The test must not reset any preexisting database or directory.
-Inspect `/tmp/m3-default-reset.log` and collect evidence before further worker use.
+Default-reset runtime acceptance passed at `519dbdc3` after a clean sync and
+successful default build. The witness verified ordinary reset with retained
+children, then deleted its own state directory and verified process recovery,
+metadata reset and fresh SQL again. Cleanup succeeded, and independent read-only
+checks confirmed its default database and directory were removed. No preexisting
+database or directory was reset. The metadata server was PostgreSQL18.4, not
+CockroachDB. Evidence: `default-reset-519dbdc3.tgz`, run
+`launcher-642c6649b2454a0084ede6523bdbe58c`.
 
 The two-adapter SQL/HTTP lifecycle witness on the same debug revision failed
 once, then passed unchanged. The failed run reached adapter replacement before
@@ -129,8 +131,8 @@ default local database/state/blob targets. It stops recoverable associated
 processes before dropping the three metadata schemas and local directory, rejects
 live foreign-worktree database users, and preserves files on SQL failure.
 Independent review findings are resolved. All29 launcher tests, Black and Ruff
-pass, including real disposable process checks. SQL reset itself has not been
-exercised end-to-end against the default database. No user database was reset.
+pass, including real disposable process checks. The real default-path reset and deleted-state recovery passed as described above.
+No user database was reset.
 
 The catch-up repair (`d6f662f7`) applies/enacts each transaction against its
 matching projection. Review, strict Clippy, multi-subscriber regression and the
@@ -148,7 +150,7 @@ failed. Cargo/downstream integration did not run. Broad CI is not green.
 
 Worker `i-0788036f0778687f1` is now pinned at `519dbdc3`, with default debug binaries
 and about17GiB free after building. Scratch access works. Last expiry check showed
-five hours remaining. Task129 is active. Check for live work before syncing source. Exact older CI product:
+five hours remaining. Task129 completed successfully. Check for live work before syncing source. Exact older CI product:
 `materialize/materialized:mzbuild-FJXSGTKPCPESYSV4SG3CJ3LIKLBPF5GP`, digest
 `sha256:6d4cb1d4f5065426e5c80fe7a813a663620cc123b9222baafd7bbebf7eca7f51`,
 extracted at `/home/ubuntu/m3-evidence/ci141217-product`. It supplies the distinct
