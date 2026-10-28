@@ -152,12 +152,6 @@ impl ExtentArena {
         self.fallbacks.load(Ordering::Relaxed)
     }
 
-    /// Test hook: the number of slots currently allocated across classes.
-    #[cfg(all(test, target_os = "linux"))]
-    pub(crate) fn slots_in_use(&self) -> usize {
-        self.regions.iter().map(Region::slots_in_use).sum()
-    }
-
     /// Allocates a slot fitting a compressed payload of `comp_len` bytes,
     /// or `None` when the class is exhausted (the caller degrades to the
     /// heap).
@@ -327,42 +321,6 @@ pub(crate) enum Scratch {
 // is sound.
 unsafe impl Send for Extent {}
 
-/// lz4 codec for the pool's own tests, mirroring the production codec that
-/// lives with the chunk implementation: a little-endian `u32` body-length
-/// prefix followed by one lz4 block.
-#[cfg(test)]
-#[derive(Debug)]
-pub(crate) struct TestLz4Codec;
-
-#[cfg(test)]
-pub(crate) static TEST_CODEC: TestLz4Codec = TestLz4Codec;
-
-#[cfg(test)]
-impl ExtentCodec for TestLz4Codec {
-    fn encode(&self, body: &[u8], out: &mut Vec<u8>) {
-        let max_out = lz4_flex::block::get_maximum_output_size(body.len());
-        out.resize(4 + max_out, 0);
-        let len = u32::try_from(body.len()).expect("chunk payloads fit u32");
-        out[..4].copy_from_slice(&len.to_le_bytes());
-        let compressed = lz4_flex::block::compress_into(body, &mut out[4..])
-            .expect("output sized to the maximum");
-        out.truncate(4 + compressed);
-    }
-
-    fn decode(&self, stored: &[u8], body: &mut [u8]) {
-        let prefix: [u8; 4] = stored[..4].try_into().expect("prefix length");
-        let len = usize::try_from(u32::from_le_bytes(prefix)).expect("length fits usize");
-        assert_eq!(
-            len,
-            body.len(),
-            "destination must match the encoded body length"
-        );
-        let written = lz4_flex::block::decompress_into(&stored[4..], body)
-            .expect("stored bytes hold a valid lz4 block");
-        assert_eq!(written, body.len(), "decoded length mismatch");
-    }
-}
-
 impl Extent {
     /// Encodes `data` through `codec` into a fresh extent, preferring an
     /// arena slot and degrading to the heap when the payload's class is
@@ -510,13 +468,6 @@ impl Extent {
             }),
             Home::Arena(_) | Home::Heap { .. } | Home::Demoting { .. } => None,
         }
-    }
-
-    /// The store and slot of a `File` extent, `None` otherwise.
-    #[cfg(all(test, target_os = "linux"))]
-    pub(crate) fn file_slot(&self) -> Option<(Arc<FileStore>, FileSlot)> {
-        self.file_location()
-            .map(|location| (location.store, location.slot))
     }
 
     /// Records a read of the extent's file, returning whether it was already
@@ -815,7 +766,11 @@ mod proofs {
 }
 
 #[cfg(test)]
+pub(crate) mod testing;
+
+#[cfg(test)]
 mod tests {
+    use super::testing::TEST_CODEC;
     use super::*;
 
     /// A small arena for extent tests. Under Miri the region backing is real
