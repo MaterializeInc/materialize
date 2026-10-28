@@ -99,12 +99,15 @@ export function describeExecutionTime(executionTime: ExecutionTime): {
   return { label: capitalizeSentence(label, false), description: help };
 }
 
-export function formatExecutionTime(executionTime: ExecutionTime): string {
+/** The execution time's duration alone, without what it covers. */
+export function formatExecutionDuration(executionTime: ExecutionTime): string {
   // `formatCommandDuration` shows one decimal of a millisecond, which would
   // print a server time of tens of microseconds as "0.0ms".
-  const duration =
-    executionTime.durationMs < 0.1
-      ? "<0.1ms"
-      : formatCommandDuration(executionTime.durationMs);
-  return `${duration} ${KINDS[executionTime.kind].label}`;
+  return executionTime.durationMs < 0.1
+    ? "<0.1ms"
+    : formatCommandDuration(executionTime.durationMs);
+}
+
+export function formatExecutionTime(executionTime: ExecutionTime): string {
+  return `${formatExecutionDuration(executionTime)} ${KINDS[executionTime.kind].label}`;
 }

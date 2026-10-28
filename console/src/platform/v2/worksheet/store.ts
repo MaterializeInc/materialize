@@ -12,6 +12,7 @@ import { atomWithStorage } from "jotai/utils";
 import { useCallback } from "react";
 
 import type { Column } from "~/api/materialize-v2/types";
+import type { ExecutionTime } from "~/platform/shell/executionTime";
 
 import {
   LOCAL_STORAGE_CONTENT_KEY,
@@ -81,6 +82,8 @@ export interface QueryResult {
   /** The server's command complete tag (e.g. "SELECT 42"). */
   commandComplete: string;
   durationMs: number;
+  /** Server-side execution time, on environments that report it. */
+  executionTime?: ExecutionTime;
   /** How to render this result. When omitted, the results panel renders as a table. */
   displayMode?: "table" | "sql" | "text";
   /** The parser statement kind that produced this result (e.g. "show_create_materialized_view"). */
@@ -125,6 +128,10 @@ export const worksheetExecuteAtom = atom<
 export interface InlineResult {
   kind: "success" | "error";
   message: string;
+  /** Round trip from the browser, see `QueryResult.durationMs`. */
+  durationMs?: number;
+  /** Server-side execution time, on environments that report it. */
+  executionTime?: ExecutionTime;
   /** SQL text the result came from, used to detect that the statement at this
    *  offset has changed (in which case the decoration is stale and skipped). */
   sql: string;
