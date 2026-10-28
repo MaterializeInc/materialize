@@ -960,6 +960,20 @@ metrics:
     scheduled a retry.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_compute_mv_sink_write_part_bytes_total
+  help: The total size of the parts MV sink batch writes handed to the write task.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_mv_sink_write_wait_seconds_total
+  help: >-
+    The total time MV sink batch writes waited for the write task to accept their
+    parts.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_compute_peek_duration_seconds_bucket
   help: A histogram of peek durations since restart.
   labels:
