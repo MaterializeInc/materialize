@@ -218,6 +218,20 @@ impl BatchBuilder {
         self.record_count == 0
     }
 
+    /// Decodes the records appended so far, with offsets from 0. Copies the
+    /// encoded records once.
+    pub(crate) fn records(&self) -> RecordIter {
+        RecordIter(RecordIterInner::V2(V2Records {
+            buf: Bytes::copy_from_slice(&self.buf[BATCH_HEADER_LEN..]),
+            pos: 0,
+            remaining: usize::try_from(self.record_count).expect("non-negative count"),
+            base_offset: 0,
+            base_timestamp: self.first_timestamp,
+            log_append_time: false,
+            max_timestamp: self.max_timestamp,
+        }))
+    }
+
     /// Finishes the batch: compresses the records and fills in the header.
     ///
     /// The base offset is 0 and the partition leader epoch -1, which brokers

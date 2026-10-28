@@ -126,7 +126,7 @@ where
     C: ProducerContext + 'static,
 {
     client: Arc<Client<C>>,
-    inner: Arc<ProducerInner>,
+    inner: Arc<ProducerInner<C>>,
 }
 
 impl<C: ProducerContext + 'static> Clone for ThreadedProducer<C> {
@@ -164,12 +164,15 @@ where
 {
     /// Creates the producer engine on top of a client.
     pub(crate) fn from_client(client: Client<C>) -> KafkaResult<ThreadedProducer<C>> {
-        let _ = client;
-        todo!("producer: create the producer engine")
+        let inner = ProducerInner::new(Arc::clone(client.cluster()), Arc::clone(client.context()));
+        Ok(ThreadedProducer {
+            client: Arc::new(client),
+            inner,
+        })
     }
 
     /// The producer engine.
-    pub(crate) fn inner(&self) -> &Arc<ProducerInner> {
+    pub(crate) fn inner(&self) -> &Arc<ProducerInner<C>> {
         &self.inner
     }
 
@@ -186,8 +189,10 @@ where
     ///
     /// Never blocks. Fails with `MessageProduction(QueueFull)` when the queue
     /// limits are reached, `MessageProduction(MessageSizeTooLarge)` for
-    /// records over `message.max.bytes`, and `MessageProduction(UnknownPartition)`
-    /// for an explicit partition the topic does not have.
+    /// records over `message.max.bytes`, `MessageProduction(UnknownPartition)`
+    /// for an explicit partition the topic does not have,
+    /// `MessageProduction(State)` outside a transaction of a transactional
+    /// producer, and `MessageProduction(Fatal)` after a fatal error.
     pub fn send<'a, K, P>(
         &self,
         record: BaseRecord<'a, K, P, C::DeliveryOpaque>,
@@ -196,8 +201,7 @@ where
         K: ToBytes + ?Sized,
         P: ToBytes + ?Sized,
     {
-        let _ = record;
-        todo!("producer: enqueue the record")
+        self.inner.send(record)
     }
 }
 
@@ -210,30 +214,26 @@ where
     }
 
     fn in_flight_count(&self) -> i32 {
-        todo!("producer: queued plus in-flight messages")
+        self.inner.in_flight_count()
     }
 
     fn flush<T: Into<Timeout>>(&self, timeout: T) -> KafkaResult<()> {
-        let _ = timeout.into();
-        todo!("producer: wait for outstanding deliveries")
+        self.inner.flush(timeout.into())
     }
 
     fn init_transactions<T: Into<Timeout>>(&self, timeout: T) -> KafkaResult<()> {
-        let _ = timeout.into();
-        todo!("producer: InitProducerId")
+        self.inner.init_transactions(timeout.into())
     }
 
     fn begin_transaction(&self) -> KafkaResult<()> {
-        todo!("producer: begin a transaction")
+        self.inner.begin_transaction()
     }
 
     fn commit_transaction<T: Into<Timeout>>(&self, timeout: T) -> KafkaResult<()> {
-        let _ = timeout.into();
-        todo!("producer: flush, then EndTxn(commit)")
+        self.inner.commit_transaction(timeout.into())
     }
 
     fn abort_transaction<T: Into<Timeout>>(&self, timeout: T) -> KafkaResult<()> {
-        let _ = timeout.into();
-        todo!("producer: purge, then EndTxn(abort)")
+        self.inner.abort_transaction(timeout.into())
     }
 }

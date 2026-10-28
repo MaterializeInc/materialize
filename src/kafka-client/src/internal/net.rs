@@ -562,12 +562,64 @@ impl Connection {
         self.send::<R, F>(build, opts, false).await.map(|_| ())
     }
 
+    /// Queues a request for writing and returns a future of its response.
+    ///
+    /// Unlike concurrent [`Connection::request`] calls, whose requests may be
+    /// written in any order, requests queued by consecutive calls are written
+    /// in the order of the calls. The request is sent whether or not the
+    /// returned future is polled.
+    pub(crate) async fn queue_request<R, F>(
+        &self,
+        build: F,
+        opts: &RequestOptions,
+    ) -> Result<impl Future<Output = Result<R::Response, NetError>> + Send + 'static, NetError>
+    where
+        R: Request,
+        F: FnOnce(i16) -> R,
+    {
+        let (version, reply) = self.enqueue::<R, F>(build, opts, true).await?;
+        Ok(async move {
+            let frame = Self::reply(reply, true).await?.expect("response expected");
+            protocol::decode_response::<R>(frame, version)
+                .map_err(|e| NetError::new(RDKafkaErrorCode::BadMessage, e))
+        })
+    }
+
     async fn send<R, F>(
         &self,
         build: F,
         opts: &RequestOptions,
         expects_response: bool,
     ) -> Result<(i16, Option<Bytes>), NetError>
+    where
+        R: Request,
+        F: FnOnce(i16) -> R,
+    {
+        let (version, reply) = self.enqueue::<R, F>(build, opts, expects_response).await?;
+        Ok((version, Self::reply(reply, expects_response).await?))
+    }
+
+    /// Waits for the reply of a queued request.
+    async fn reply(
+        reply: oneshot::Receiver<Result<Bytes, NetError>>,
+        expects_response: bool,
+    ) -> Result<Option<Bytes>, NetError> {
+        match reply.await {
+            Ok(Ok(frame)) if expects_response => Ok(Some(frame)),
+            Ok(Ok(_)) => Ok(None),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(NetError::transport("Connection closed")),
+        }
+    }
+
+    /// Queues a request for writing once an in-flight slot is free. Returns
+    /// the negotiated version and the receiver of the reply.
+    async fn enqueue<R, F>(
+        &self,
+        build: F,
+        opts: &RequestOptions,
+        expects_response: bool,
+    ) -> Result<(i16, oneshot::Receiver<Result<Bytes, NetError>>), NetError>
     where
         R: Request,
         F: FnOnce(i16) -> R,
@@ -654,12 +706,7 @@ impl Connection {
                 ));
             }
         }
-        match reply_rx.await {
-            Ok(Ok(frame)) if expects_response => Ok((version, Some(frame))),
-            Ok(Ok(_)) => Ok((version, None)),
-            Ok(Err(e)) => Err(e),
-            Err(_) => Err(NetError::transport("Connection closed")),
-        }
+        Ok((version, reply_rx))
     }
 }
 

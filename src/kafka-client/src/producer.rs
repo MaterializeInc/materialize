@@ -42,6 +42,17 @@ pub trait ProducerContext: ClientContext {
     /// method once the message has been delivered, or failed to.
     type DeliveryOpaque: IntoOpaque;
 
+    /// Whether the messages of successful delivery reports carry their key,
+    /// payload, headers and create time.
+    ///
+    /// NOTE: rust-rdkafka always provides them. This producer keeps queued
+    /// records only in their encoded batch and recovers these fields by
+    /// decoding (and decompressing) it, so by default successful reports
+    /// carry only the topic, partition and offset, and the timestamp only for
+    /// topics with `LogAppendTime`. Failed reports always carry the full
+    /// message.
+    const DELIVERY_REPORT_CONTENTS: bool = false;
+
     /// This method will be called once the message has been delivered (or
     /// failed to). The `DeliveryOpaque` will be the one provided by the user
     /// when calling send.
