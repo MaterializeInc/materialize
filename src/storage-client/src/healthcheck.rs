@@ -190,6 +190,43 @@ pub static WALLCLOCK_LAG_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(||
         .finish()
 });
 
+/// The shared columns of the freshness histograms. The update diff is the count.
+fn wallclock_freshness_histogram_columns() -> mz_repr::RelationDescBuilder {
+    RelationDesc::builder()
+        .with_column(
+            "period_start",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "period_end",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+}
+
+fn wallclock_freshness_histogram_bucket_columns(
+    builder: mz_repr::RelationDescBuilder,
+) -> mz_repr::RelationDescBuilder {
+    builder
+        .with_column("measure", SqlScalarType::String.nullable(false))
+        .with_column("buckets_per_octave", SqlScalarType::UInt32.nullable(false))
+        .with_column("bucket", SqlScalarType::Int32.nullable(false))
+        .with_column("labels", SqlScalarType::Jsonb.nullable(false))
+}
+
+pub static WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
+    wallclock_freshness_histogram_bucket_columns(wallclock_freshness_histogram_columns()).finish()
+});
+
+pub static REPLICA_WALLCLOCK_FRESHNESS_HISTOGRAM_RAW_DESC: LazyLock<RelationDesc> =
+    LazyLock::new(|| {
+        wallclock_freshness_histogram_bucket_columns(
+            wallclock_freshness_histogram_columns()
+                .with_column("replica_id", SqlScalarType::String.nullable(false)),
+        )
+        .finish()
+    });
+
 pub static WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
         .with_column(
