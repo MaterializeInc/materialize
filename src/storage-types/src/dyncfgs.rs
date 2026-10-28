@@ -175,10 +175,12 @@ pub const KAFKA_RETRY_BACKOFF_MAX: Config<Duration> = Config::new(
 );
 
 /// Sets reconnect.backoff.ms in librdkafka for sources and sinks.
+/// We default to 500ms instead of 100ms because librdkafka re-bootstraps when all brokers are
+/// down, which resets the reconnect backoff and retries every reconnect.backoff.ms / 2.
 /// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
 pub const KAFKA_RECONNECT_BACKOFF: Config<Duration> = Config::new(
     "kafka_reconnect_backoff",
-    Duration::from_millis(100),
+    Duration::from_millis(500),
     "Sets reconnect.backoff.ms in librdkafka for sources and sinks.",
     ParameterScope::Replica,
 );
@@ -191,16 +193,6 @@ pub const KAFKA_RECONNECT_BACKOFF_MAX: Config<Duration> = Config::new(
     "kafka_reconnect_backoff_max",
     Duration::from_secs(30),
     "Sets reconnect.backoff.max.ms in librdkafka for sources and sinks.",
-    ParameterScope::Replica,
-);
-
-/// Sets metadata.recovery.rebootstrap.trigger.ms in librdkafka for sources and sinks.
-/// Defaults to the librdkafka default of 5 minutes.
-/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
-pub const KAFKA_METADATA_RECOVERY_REBOOTSTRAP_TRIGGER: Config<Duration> = Config::new(
-    "kafka_metadata_recovery_rebootstrap_trigger",
-    Duration::from_secs(300),
-    "Sets metadata.recovery.rebootstrap.trigger.ms in librdkafka for sources and sinks.",
     ParameterScope::Replica,
 );
 
@@ -620,7 +612,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_RETRY_BACKOFF_MAX)
         .add(&KAFKA_RECONNECT_BACKOFF)
         .add(&KAFKA_RECONNECT_BACKOFF_MAX)
-        .add(&KAFKA_METADATA_RECOVERY_REBOOTSTRAP_TRIGGER)
         .add(&KAFKA_SINK_MESSAGE_MAX_BYTES)
         .add(&KAFKA_SINK_BATCH_SIZE)
         .add(&KAFKA_SINK_BATCH_NUM_MESSAGES)

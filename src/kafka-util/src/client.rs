@@ -227,9 +227,7 @@ impl FromStr for MzKafkaError {
             .is_match(s)
             .unwrap_or_default()
         {
-            // librdkafka only emits this message with `__ALL_BROKERS_DOWN`, and
-            // the counts need not agree: a re-bootstrap resets the broker
-            // table before the error is reported, which yields "0/2".
+            // The counts can differ ("0/2"): a re-bootstrap resets the broker table first.
             Ok(Self::AllBrokersDown)
         } else if s.contains("Unknown topic or partition") || s.contains("Unknown partition") {
             Ok(Self::UnknownTopicOrPartition)

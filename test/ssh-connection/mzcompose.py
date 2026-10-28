@@ -332,10 +332,7 @@ def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> No
 
 
 def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> None:
-    """Kafka sources behind an SSH tunnel recover after the broker itself
-    restarts. Losing every broker makes librdkafka re-bootstrap, which drops
-    its broker list and resolves each bootstrap address again through the
-    tunnel-rewriting resolver."""
+    """Kafka sources behind an SSH tunnel recover after the broker restarts."""
     c.down()
     with c.override(SshBastionHost(max_startups="2")):
         broker = "redpanda" if redpanda else "kafka"
@@ -356,17 +353,7 @@ def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> Non
             "ssh-bastion-host",
             "bash",
             "-c",
-            # sshd rejects a world-writable key file, and the exec shell's
-            # umask is not guaranteed, so set the mode explicitly.
-            f"echo '{public_key}' > /etc/authorized_keys/mz && chmod 644 /etc/authorized_keys/mz",
-        )
-
-        # Re-bootstrap after one second without metadata instead of the
-        # five-minute librdkafka default, so the outage below exercises it.
-        c.sql(
-            "ALTER SYSTEM SET kafka_metadata_recovery_rebootstrap_trigger = '1s'",
-            user="mz_system",
-            port=6877,
+            f"echo '{public_key}' > /etc/authorized_keys/mz",
         )
 
         c.run_testdrive_files("--no-reset", "kafka-source.td")

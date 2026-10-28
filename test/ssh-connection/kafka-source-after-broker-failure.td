@@ -7,8 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# With the broker gone but the SSH tunnel still up, every source stalls with a
-# Kafka error rather than an SSH error.
+# The broker is down but the SSH tunnel is up, so sources stall with a non-SSH error.
 $ set-sql-timeout duration=120s
 
 > SELECT status FROM mz_internal.mz_source_statuses st
