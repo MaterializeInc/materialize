@@ -20,6 +20,12 @@ old/new-version, prewarming, promotion, client switching and retirement outcomes
 
 ## Resume here
 
+Published head is `969056d5`. CI141151 is terminal, with no remaining queued or
+executing jobs. CI141217 now checks that head and is running. Its x86_64 product
+job is `01a1820c-1f44-4f4e-b53f-8ec54d183cac`. Preserve this verification when
+publishing further fixes. The draft PR summary now reflects the implemented
+launcher, lifecycle and collection endpoint, with runtime acceptance still open.
+
 Lifecycle core (`c5838f31`), local launcher (`4515a0df`) and deployment-qualified
 observations (`6bb0bfe4`) are implemented. SQL CREATE/DROP/RENAME require superuser
 with optional RBAC disabled. HTTP adapter management uses the same validated
@@ -91,7 +97,7 @@ Next: obtain the latest candidate's matching CI product and run
 and HTTP recovery. The private script now also checks SQL named endpoints,
 backend status/readiness, dropped-observation cleanup, LIKE collection filters and
 collection inspection after a zero-adapter restart. It is syntax-checked, not
-executed, and requires a product containing the pending collection endpoint.
+executed, and requires the new matching product containing the collection endpoint.
 Separately exercise the public launcher and its managed pubsub path.
 `GET /api/collections` is committed as `7c6e3651` with LIKE filters,
 qualified names, unnamed entries and committed `collection_compaction_bounds`.
@@ -102,7 +108,7 @@ and whitespace checks pass. Strict environmentd all-target Clippy passes for the
 final catalog-frontier implementation. Its HTTP and filter tests compile but have
 not executed. The lifecycle witness needs a matching product.
 
-CI141151 on published `9062a348` built both architectures. Rust tests stopped at
+CI141151 on prior head `9062a348` built both architectures. Rust tests stopped at
 compilation: the catalog debug/open test formatters omitted `adapter_runtimes`,
 and a new runtime test used a forbidden Option unwrap. The exact scoped command
 `cargo clippy -p mz-catalog --all-targets -j 2 -- -D warnings` reproduced all three
