@@ -1585,6 +1585,7 @@ mod tests {
                 assert!(command_rx.try_recv().is_err());
                 assert!(orchestrator.services.lock().unwrap().is_empty());
                 let config = ServiceConfig {
+                    inherit_kubernetes_owner_references: true,
                     app_name: "discovery-test".into(),
                     image: "unused".into(),
                     init_container_image: None,

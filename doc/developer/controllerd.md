@@ -5,10 +5,9 @@ the developer launcher. Local demos use the default development build. The
 launcher does not create SQL objects or adapter declarations. Controllerd
 initializes the default adapter only for a fresh catalog.
 
-M3 requires controllerd to provision pubsubd from static configuration and include
-it in the HTTP inventory, so ordinary startup needs no separate pubsub command.
-That integration is not implemented yet. The external-relay setup below is
-currently required.
+Controllerd provisions an environment-scoped pubsubd from static configuration and
+includes it in `/api/inventory`. Ordinary startup needs no separate pubsub command.
+The relay is shared by adapters and replicas and survives controller termination.
 
 ## Prerequisites and startup
 
@@ -27,28 +26,32 @@ Keep custom state directories private and outside the checkout. Override it with
 separate metadata database and blob location for each environment. Do not reuse
 another environment's state or run two controllers for the same local deployment.
 
-Build once, then start pubsub in a separate terminal:
-
-```sh
-bin/controllerd --build-only
-target/debug/pubsubd --listen-addr=127.0.0.1:6879 \
-  --internal-http-listen-addr=127.0.0.1:6881
-```
-
-The HTTP override avoids pubsubd's default port colliding with controllerd's
-HTTP port. Leave this terminal running across controller restarts. If these
-ports are occupied, choose free ports rather than killing other services.
-
-In another terminal:
+Start the environment:
 
 ```sh
 bin/controllerd
 ```
 
+Use `--optimized` for an optimized build, or `--build-only` to build without
+starting services. The process backend tries the configured relay ports and falls
+back to available ports. The controller uses the assigned endpoint for its own
+Persist client and every managed adapter and replica. Inspect `/api/inventory`
+for the relay's assigned endpoints and observed process status.
+
 For an existing, environment-scoped external relay, pass
-`--pubsub-url http://HOST:PORT` instead. The launcher checks TCP reachability,
-not gRPC readiness or service identity. It never starts, stops or replaces this
-service. Pubsub must remain available to the retained adapters and replicas.
+`--pubsub-url http://HOST:PORT`. The launcher does not probe, adopt, start or stop
+that service. Relay unavailability does not gate SQL startup: Persist clients use
+the durable fallback. Keep a single provisioner during deployment overlap. Other
+controllers connect using the provisioner's discovered relay URL. Transfer
+provisioning ownership only after stopping the previous provisioner, using the
+same environment identity and backend namespace/prefix for retained adoption.
+The relay executable/image and resource configuration must stay environment-scoped,
+independent of the deployment release. Kubernetes deployments use an image with
+pubsubd as its entry point, such as the repository's `pubsubd` image definition.
+
+The managed relay defaults to one CPU and 512 MiB memory. Raw controller options
+`--pubsub-cpu-limit`, `--pubsub-memory-limit`, `--pubsub-http-port` and
+`--pubsubd-image` configure it. Forward these through the launcher after `--`.
 The default adapter size `1` declares one CPU and 4 GiB memory. Override the map
 with `--adapter-sizes '{"1":{"cpu_limit":2,"memory_limit":"8 GiB"}}'`.
 
@@ -78,7 +81,7 @@ curl -fsS -X DELETE http://127.0.0.1:6882/api/adapters/aN
 
 ## Stop and restart without reset
 
-Press Ctrl-C in the **controller launcher terminal**, leaving pubsub running.
+Press Ctrl-C in the **controller launcher terminal**. Managed pubsub keeps running.
 The launcher signals only controllerd, not its children. Run the same
 `bin/controllerd` command again with the same state directory,
 metadata/blob URLs, pubsub URL and listener/size configuration. Controllerd

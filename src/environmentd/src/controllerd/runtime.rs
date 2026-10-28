@@ -30,6 +30,7 @@ pub async fn run(
     adapter_sizes: BTreeMap<String, AdapterAllocation>,
     adapter_plan_build: String,
     http_listen_addr: SocketAddr,
+    mut pubsub: Option<super::pubsub::ManagedPubsub>,
 ) -> anyhow::Result<()> {
     let build: semver::Version = adapter_plan_build.parse()?;
     anyhow::ensure!(
@@ -48,6 +49,10 @@ pub async fn run(
     let replicas = config.controller.orchestrator.namespace("cluster");
     let mut adapter_events = adapters.watch_services();
     let mut replica_events = replicas.watch_services();
+    let mut pubsub_events = pubsub
+        .as_ref()
+        .map(|relay| relay.watch())
+        .unwrap_or_else(|| Box::pin(futures::stream::pending()));
     let (sender, mut commands) = tokio::sync::mpsc::channel::<Command>(32);
     tracing::info!(address = %listener.local_addr()?, "controller HTTP listening without authentication");
     let mut server =
@@ -67,6 +72,9 @@ pub async fn run(
             }
             Some(event) = adapter_events.next() => observations.record(event),
             Some(event) = replica_events.next() => observations.record(event),
+            Some(event) = pubsub_events.next() => {
+                if let Some(relay) = &mut pubsub { relay.record(event); }
+            },
             Some(command) = commands.recv() => {
                 // Finish submitted catalog writes even if the HTTP caller disconnects.
                 let result = administer(
@@ -74,12 +82,14 @@ pub async fn run(
                     &adapter_launch,
                     &adapter_sizes,
                     &observations,
+                    pubsub.as_ref(),
                     command.action,
                 ).await;
                 let _ = command.response.send(result);
             }
             _ = interval.tick() => {
                 catalog.sync_to_current_updates().await?;
+                if let Some(relay) = &mut pubsub { relay.reconcile(); }
                 catalog.system_config().dyncfg_updates().apply(&config.system_dyncfgs);
                 let mut follower = catalog.replica_config();
                 // Development sibling binaries can have distinct executable build IDs.
@@ -135,6 +145,7 @@ async fn administer(
     launch: &AdapterProvisioningConfig,
     sizes: &BTreeMap<String, AdapterAllocation>,
     observations: &Observations,
+    pubsub: Option<&super::pubsub::ManagedPubsub>,
     action: Action,
 ) -> Result<Value, ApiError> {
     // A failed catalog CAS has committed nothing. Refresh and rebind the request,
@@ -151,6 +162,7 @@ async fn administer(
             Action::Inventory => {
                 return Ok(json!({
                     "generation": launch.generation,
+                    "pubsub": pubsub.map(|relay| relay.inventory()),
                     "adapters": observations.adapters(catalog, launch, sizes),
                     "replicas": observations.replicas(catalog, launch.generation),
                 }));

@@ -17,7 +17,6 @@ import pathlib
 import shlex
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -206,8 +205,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--pubsub-url",
-        default="http://127.0.0.1:6879",
-        help="Existing external pubsub service for controllerd",
+        help="Use an externally managed pubsub relay instead of provisioning one",
     )
     parser.add_argument(
         "--adapter-sizes",
@@ -521,17 +519,14 @@ def _controller_args(args: argparse.Namespace, binaries: pathlib.Path) -> list[s
     if len(builds) != 1 or not builds[0]:
         raise UIError("adapterd --version did not report one written-plan-build")
 
-    pubsub = urlparse(args.pubsub_url)
-    if pubsub.scheme not in ("http", "https") or not pubsub.hostname or not pubsub.port:
-        raise UIError("--pubsub-url requires an http(s) URL with an explicit port")
-    try:
-        with socket.create_connection((pubsub.hostname, pubsub.port), timeout=5):
-            pass
-    except OSError as e:
-        raise UIError(
-            f"external pubsub is unreachable: {e}",
-            hint="Start pubsubd separately. See doc/developer/controllerd.md.",
-        )
+    if args.pubsub_url is not None:
+        pubsub = urlparse(args.pubsub_url)
+        if (
+            pubsub.scheme not in ("http", "https")
+            or not pubsub.hostname
+            or not pubsub.port
+        ):
+            raise UIError("--pubsub-url requires an http(s) URL with an explicit port")
 
     with _connect_sql(args.postgres) as dbconn:
         if not (data / "environment-id").exists():
@@ -555,9 +550,14 @@ def _controller_args(args: argparse.Namespace, binaries: pathlib.Path) -> list[s
         f"--adapterd-image={binaries / 'adapterd'}",
         f"--adapter-plan-build={builds[0]}",
         f"--adapter-sizes={args.adapter_sizes}",
-        "--persist-pubsub-external",
-        f"--persist-pubsub-url={args.pubsub_url}",
     ]
+    if args.pubsub_url is None:
+        command.append(f"--pubsubd-image={binaries / 'pubsubd'}")
+    else:
+        command += [
+            "--persist-pubsub-external",
+            f"--persist-pubsub-url={args.pubsub_url}",
+        ]
     return command
 
 

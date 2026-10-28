@@ -9,6 +9,7 @@
 
 import argparse
 import signal
+import socket as socket_module
 from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlparse
 
@@ -44,7 +45,7 @@ def launcher(monkeypatch, tmp_path):
     sql = MagicMock()
     monkeypatch.setattr(run, "_run_sql", sql)
     socket = MagicMock()
-    monkeypatch.setattr(run.socket, "create_connection", socket)
+    monkeypatch.setattr(socket_module, "create_connection", socket)
     launch = MagicMock(return_value=0)
     monkeypatch.setattr(run, "_run_controller", launch)
     monkeypatch.setattr(
@@ -61,7 +62,11 @@ def launcher(monkeypatch, tmp_path):
     return build, version, connect, sql, socket, launch
 
 
-def test_controller_launch_and_restart(launcher, tmp_path):
+@pytest.mark.parametrize("optimized", [False, True])
+def test_controller_launch_and_restart(launcher, tmp_path, monkeypatch, optimized):
+    monkeypatch.setattr(
+        run.sys, "argv", ["run", "controllerd"] + (["--optimized"] if optimized else [])
+    )
     build, version, connect, sql, socket, launch = launcher
     assert run.main() == 0
     build.assert_called_once()
@@ -70,17 +75,20 @@ def test_controller_launch_and_restart(launcher, tmp_path):
         "pubsubd",
         "controllerd",
     ]
-    assert build.call_args.args[0].optimized
+    assert build.call_args.args[0].optimized == optimized
     connect.assert_called_once_with(
         "postgres://root@localhost:26257/materialize_controllerd"
     )
     version.assert_called_once_with(
         [str(tmp_path / "mzbuild/bin/adapterd"), "--version"], text=True
     )
-    socket.assert_called_once_with(("127.0.0.1", 6879), timeout=5)
+    socket.assert_not_called()
     command = launch.call_args.args[0]
     assert command[0] == str(tmp_path / "mzbuild/bin/controllerd")
-    assert "--persist-pubsub-external" in command
+    assert "--persist-pubsub-external" not in command
+    assert f"--pubsubd-image={tmp_path}/mzbuild/bin/pubsubd" in command
+    if not optimized:
+        assert launch.call_args.args[1]["RUST_MIN_STACK"] == run.RUST_MIN_STACK
     assert "--adapter-plan-build=1.2.3+build" in command
     assert f"--adapterd-image={tmp_path}/mzbuild/bin/adapterd" in command
     assert (
@@ -156,12 +164,17 @@ def test_controller_requires_reported_plan_build(launcher, version):
     launcher[2].assert_not_called()
 
 
-def test_controller_pubsub_failure_is_actionable(launcher):
+def test_controller_external_pubsub_does_not_gate_startup(launcher, monkeypatch):
+    monkeypatch.setattr(
+        run.sys, "argv", ["run", "controllerd", "--pubsub-url", "http://localhost:7889"]
+    )
     launcher[4].side_effect = ConnectionRefusedError("refused")
-    with pytest.raises(UIError, match="external pubsub is unreachable"):
-        run.main()
-    launcher[2].assert_not_called()
-    launcher[5].assert_not_called()
+    assert run.main() == 0
+    launcher[4].assert_not_called()
+    command = launcher[5].call_args.args[0]
+    assert "--persist-pubsub-external" in command
+    assert "--persist-pubsub-url=http://localhost:7889" in command
+    assert not any(arg.startswith("--pubsubd-image=") for arg in command)
 
 
 def test_controller_overrides(launcher, monkeypatch):

@@ -255,6 +255,7 @@ async fn explicit_drop_kills_orphan_without_a_supervisor() {
 
 fn service_config() -> ServiceConfig {
     ServiceConfig {
+        inherit_kubernetes_owner_references: true,
         app_name: "lifetime-test".into(),
         image: "sh".into(),
         init_container_image: None,

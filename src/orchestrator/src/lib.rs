@@ -217,6 +217,11 @@ pub struct LabelSelector {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct ServiceConfig {
+    /// Whether Kubernetes Services and StatefulSets inherit the orchestrator pod's
+    /// owner references, so they are deleted along with its owner.
+    ///
+    /// Kubernetes-specific. Other orchestrator backends ignore this setting.
+    pub inherit_kubernetes_owner_references: bool,
     /// Static application name (usually present in labels)
     pub app_name: String,
     /// An opaque identifier for the executable or container image to run.

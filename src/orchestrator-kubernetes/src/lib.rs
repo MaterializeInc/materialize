@@ -279,11 +279,27 @@ enum WorkerCommand {
 /// A description of a service to be created by an [`OrchestratorWorker`].
 #[derive(Debug, Clone)]
 struct ServiceDescription {
+    inherit_kubernetes_owner_references: bool,
     name: String,
     scale: NonZero<u16>,
     service: K8sService,
     stateful_set: StatefulSet,
     pod_template_hash: String,
+}
+
+impl ServiceDescription {
+    fn inherit_owner_references(&mut self, owner_references: &[OwnerReference]) {
+        // Retained services must survive deletion of the orchestrator pod's owner.
+        // Leave any independently supplied ownership intact.
+        if self.inherit_kubernetes_owner_references {
+            for metadata in [&mut self.service.metadata, &mut self.stateful_set.metadata] {
+                metadata
+                    .owner_references
+                    .get_or_insert(vec![])
+                    .extend(owner_references.iter().cloned());
+            }
+        }
+    }
 }
 
 /// A task executing blocking work for a [`NamespacedKubernetesOrchestrator`] in the background.
@@ -590,6 +606,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         &self,
         id: &str,
         ServiceConfig {
+            inherit_kubernetes_owner_references,
             app_name,
             image,
             init_container_image,
@@ -1295,6 +1312,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
 
         self.send_command(WorkerCommand::EnsureService {
             desc: ServiceDescription {
+                inherit_kubernetes_owner_references,
                 name,
                 scale,
                 service,
@@ -1704,21 +1722,7 @@ impl OrchestratorWorker {
     }
 
     async fn ensure_service(&self, mut desc: ServiceDescription) -> Result<(), K8sError> {
-        // We inject our own pod's owner references into the Kubernetes objects
-        // created for the service so that if the
-        // Deployment/StatefulSet/whatever that owns the pod running the
-        // orchestrator gets deleted, so do all services spawned by this
-        // orchestrator.
-        desc.service
-            .metadata
-            .owner_references
-            .get_or_insert(vec![])
-            .extend(self.owner_references.iter().cloned());
-        desc.stateful_set
-            .metadata
-            .owner_references
-            .get_or_insert(vec![])
-            .extend(self.owner_references.iter().cloned());
+        desc.inherit_owner_references(&self.owner_references);
 
         let ss_spec = desc.stateful_set.spec.as_ref().unwrap();
         let pod_metadata = ss_spec.template.metadata.as_ref().unwrap();
@@ -1865,6 +1869,56 @@ fn topology_spread_min_domains(
 mod tests {
     use super::*;
 
+    #[mz_ore::test]
+    fn preserves_independent_owner_references() {
+        let independent_owner = OwnerReference {
+            api_version: "v1".into(),
+            kind: "ConfigMap".into(),
+            name: "independent-owner".into(),
+            uid: "independent-uid".into(),
+            controller: Some(false),
+            ..Default::default()
+        };
+        let controller_owner = OwnerReference {
+            api_version: "apps/v1".into(),
+            kind: "Deployment".into(),
+            name: "controller".into(),
+            uid: "controller-uid".into(),
+            controller: Some(true),
+            ..Default::default()
+        };
+        for inherit in [false, true] {
+            let metadata = ObjectMeta {
+                owner_references: Some(vec![independent_owner.clone()]),
+                ..Default::default()
+            };
+            let mut desc = ServiceDescription {
+                inherit_kubernetes_owner_references: inherit,
+                name: "test".into(),
+                scale: NonZero::new(1).unwrap(),
+                service: K8sService {
+                    metadata: metadata.clone(),
+                    ..Default::default()
+                },
+                stateful_set: StatefulSet {
+                    metadata,
+                    ..Default::default()
+                },
+                pod_template_hash: String::new(),
+            };
+            desc.inherit_owner_references(std::slice::from_ref(&controller_owner));
+            let mut expected = vec![independent_owner.clone()];
+            if inherit {
+                expected.push(controller_owner.clone());
+            }
+            assert_eq!(
+                desc.service.metadata.owner_references,
+                Some(expected.clone())
+            );
+            assert_eq!(desc.stateful_set.metadata.owner_references, Some(expected));
+        }
+    }
+
     #[mz_ore::test(tokio::test)]
     async fn service_addresses_parity() {
         // Construct a client without contacting Kubernetes. Lifecycle commands
@@ -1902,9 +1956,10 @@ mod tests {
                 _worker: mz_ore::task::spawn(|| "discovery-test", std::future::pending())
                     .abort_on_drop(),
             };
-            for (scale, requires_tcp) in [1, 3, 12]
+            for (scale, requires_tcp, inherit_kubernetes_owner_references) in [1, 3, 12]
                 .into_iter()
                 .flat_map(|scale| [false, true].map(|tcp| (scale, tcp)))
+                .flat_map(|(scale, tcp)| [false, true].map(|inherit| (scale, tcp, inherit)))
             {
                 let scale = NonZero::new(scale).unwrap();
                 let id = "u1-replica-1";
@@ -1921,6 +1976,7 @@ mod tests {
                     infos_before
                 );
                 let config = ServiceConfig {
+                    inherit_kubernetes_owner_references,
                     app_name: "discovery-test".into(),
                     image: "materialize/clusterd:discovery-test".into(),
                     init_container_image: None,
@@ -1941,9 +1997,22 @@ mod tests {
                 };
                 let service = orchestrator.ensure_service(id, config).unwrap();
                 assert_eq!(addresses, service.addresses(&port.name));
-                let WorkerCommand::EnsureService { desc } = command_rx.try_recv().unwrap() else {
+                let WorkerCommand::EnsureService { mut desc } = command_rx.try_recv().unwrap()
+                else {
                     panic!("expected lifecycle provisioning command");
                 };
+                let owner = OwnerReference {
+                    api_version: "apps/v1".into(),
+                    kind: "Deployment".into(),
+                    name: "controller".into(),
+                    uid: "controller-uid".into(),
+                    controller: Some(true),
+                    ..Default::default()
+                };
+                desc.inherit_owner_references(std::slice::from_ref(&owner));
+                let expected = inherit_kubernetes_owner_references.then(|| vec![owner]);
+                assert_eq!(desc.service.metadata.owner_references, expected);
+                assert_eq!(desc.stateful_set.metadata.owner_references, expected);
                 assert_eq!(addresses.len(), usize::from(scale.get()));
                 let name = desc.stateful_set.metadata.name.unwrap();
                 let subdomain = desc.stateful_set.spec.unwrap().service_name.unwrap();

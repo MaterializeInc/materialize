@@ -353,6 +353,22 @@ pub struct Args {
     /// Adapter executable or image provisioned by controllerd.
     #[clap(long, env = "ADAPTERD_IMAGE", default_value = "adapterd")]
     adapterd_image: String,
+    /// Environment-scoped relay executable/image, independent of deployment images.
+    #[clap(
+        long,
+        env = "PUBSUBD_IMAGE",
+        default_value_if("orchestrator", "process", Some("pubsubd"))
+    )]
+    pubsubd_image: Option<String>,
+    /// CPU allocation for a controller-managed relay.
+    #[clap(long, env = "PUBSUB_CPU_LIMIT", default_value = "1", value_parser = parse_pubsub_cpu_limit)]
+    pubsub_cpu_limit: mz_orchestrator::CpuLimit,
+    /// Memory allocation for a controller-managed relay.
+    #[clap(long, env = "PUBSUB_MEMORY_LIMIT", default_value = "512 MiB", value_parser = parse_pubsub_memory_limit)]
+    pubsub_memory_limit: mz_orchestrator::MemoryLimit,
+    /// Preferred internal HTTP port for a controller-managed relay.
+    #[clap(long, env = "PUBSUB_HTTP_PORT", default_value = "6881")]
+    pubsub_http_port: u16,
     /// JSON map from adapter size names to CPU and memory allocations.
     #[clap(long, env = "ADAPTER_SIZES")]
     adapter_sizes: Option<String>,
@@ -740,6 +756,11 @@ fn controller_child_args(matches: &clap::ArgMatches) -> anyhow::Result<Vec<Strin
                 | "listeners-config-path"
                 | "listeners-config-json"
                 | "persist-pubsub-external"
+                | "persist-pubsub-url"
+                | "pubsubd-image"
+                | "pubsub-cpu-limit"
+                | "pubsub-memory-limit"
+                | "pubsub-http-port"
         ) {
             continue;
         }
@@ -843,6 +864,16 @@ mod controller_cli_tests {
     }
 }
 
+fn parse_pubsub_cpu_limit(value: &str) -> Result<mz_orchestrator::CpuLimit, serde_json::Error> {
+    serde_json::from_str(value)
+}
+
+fn parse_pubsub_memory_limit(
+    value: &str,
+) -> Result<mz_orchestrator::MemoryLimit, serde_json::Error> {
+    serde_json::from_value(serde_json::Value::String(value.to_owned()))
+}
+
 fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(), anyhow::Error> {
     let is_controller = controller_child_args.is_some();
     let service_name = if is_controller {
@@ -853,8 +884,8 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
         "environmentd"
     };
     anyhow::ensure!(
-        !is_controller || (args.adapter_id.is_none() && args.persist_pubsub_external),
-        "controllerd requires external pubsub and cannot join as an adapter"
+        !is_controller || args.adapter_id.is_none(),
+        "controllerd cannot join as an adapter"
     );
     anyhow::ensure!(
         args.adapter_id.is_none() || args.persist_pubsub_external,
@@ -1158,6 +1189,30 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
         }
     };
     drop(entered);
+    // A relay is an environment resource, not part of this deployment's inventory.
+    // Explicit external mode never adopts or provisions it.
+    let managed_pubsub = if is_controller && !args.persist_pubsub_external {
+        let _guard = runtime.enter();
+        let relay = crate::controllerd::pubsub::ManagedPubsub::new(
+            orchestrator.namespace("persist-pubsub"),
+            crate::controllerd::pubsub::PubsubConfig {
+                image: args
+                    .pubsubd_image
+                    .clone()
+                    .context("managed pubsub requires --pubsubd-image")?,
+                grpc_port_hint: args.internal_persist_pubsub_listen_addr.port(),
+                http_port_hint: args.pubsub_http_port,
+                cpu_limit: args.pubsub_cpu_limit,
+                memory_limit: args.pubsub_memory_limit,
+            },
+        )?;
+        args.persist_pubsub_url = relay.url().to_owned();
+        Some(relay)
+    } else {
+        None
+    };
+    // Even a controller-managed relay is out of process.
+    args.persist_pubsub_external |= is_controller;
     let cloud_resource_reader = cloud_resource_controller.as_ref().map(|c| c.reader());
     let secrets_reader = secrets_controller.reader();
     let now = SYSTEM_TIME.clone();
@@ -1420,7 +1475,11 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
             now,
             force_builtin_schema_migration,
         };
-        if let Some(child_args) = controller_child_args {
+        if let Some(mut child_args) = controller_child_args {
+            child_args.push(format!(
+                "--persist-pubsub-url={}",
+                config.controller.persist_pubsub_url
+            ));
             anyhow::ensure!(
                 args.adapter_sizes.is_some(),
                 "controllerd requires --adapter-sizes"
@@ -1441,6 +1500,7 @@ fn run(mut args: Args, controller_child_args: Option<Vec<String>>) -> Result<(),
                 adapter_sizes,
                 plan_build,
                 args.controller_http_listen_addr,
+                managed_pubsub,
             )
             .await?;
             return Ok(None);

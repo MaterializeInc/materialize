@@ -13,6 +13,7 @@ mod collections;
 mod http;
 mod observations;
 pub mod provisioning;
+pub mod pubsub;
 mod runtime;
 mod startup;
 
