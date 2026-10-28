@@ -87,7 +87,7 @@ confluent-kafka==2.6.1; python_version < "3.13"
 confluent-kafka[schema-registry]==2.13.2; python_version >= "3.13"
 fastavro==1.13.1
 websocket-client==1.9.2
-pyarrow-stubs==20.0.0.20251215
+pyarrow-stubs==20.0.0.20260819
 pyarrow==26.0.0
 minio==7.2.15
 zstandard==0.25.0
