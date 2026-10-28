@@ -23,9 +23,9 @@ use kafka_protocol::messages::{BrokerId, ListOffsetsRequest, TopicName};
 use kafka_protocol::protocol::StrBytes;
 use tracing::{debug, error, info, warn};
 
-use crate::config::settings::IsolationLevel;
+use crate::config::settings::{IsolationLevel, SaslMechanism};
 use crate::config::{ClientSettings, RDKafkaLogLevel};
-use crate::error::{KafkaError, KafkaResult};
+use crate::error::{KafkaError, KafkaResult, RDKafkaError};
 use crate::internal::cluster::{self, Cluster, MetadataTopics};
 use crate::internal::hooks::{Hooks, Logger};
 use crate::internal::net::RequestOptions;
@@ -172,6 +172,15 @@ impl<C: ClientContext + 'static> Client<C> {
         } else {
             None
         };
+        // rust-rdkafka enables librdkafka's SASL callback queue only with
+        // `ENABLE_REFRESH_OAUTH_TOKEN`, and fails creation of an OAUTHBEARER
+        // client without it.
+        if settings.sasl.mechanism == Some(SaslMechanism::OAuthBearer) && !hooks.oauth_enabled() {
+            return Err(KafkaError::OAuthConfig(RDKafkaError::new(
+                RDKafkaErrorCode::NotConfigured,
+                "No SASL mechanism using callbacks is configured",
+            )));
+        }
         let logger = Logger::new(Arc::clone(&hooks), &settings);
         let cluster = Cluster::new(Arc::new(settings), hooks, logger, tls);
         Ok(Client { context, cluster })

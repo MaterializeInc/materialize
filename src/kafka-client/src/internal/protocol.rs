@@ -63,6 +63,15 @@ fn supported_index(key: ApiKey) -> Option<usize> {
     SUPPORTED.iter().position(|(k, ..)| *k == key)
 }
 
+/// librdkafka's name of an API (`rd_kafka_ApiKey2str`), as used in log lines
+/// (`Timed out MetadataRequest in flight`) and statistics.
+pub(crate) fn api_name(key: ApiKey) -> String {
+    match key {
+        ApiKey::ApiVersions => "ApiVersion".to_string(),
+        key => format!("{key:?}"),
+    }
+}
+
 /// The wire value of `key`, if this client uses the API.
 pub(crate) fn api_key_value(key: ApiKey) -> Option<i16> {
     supported_index(key).map(|i| SUPPORTED[i].1)

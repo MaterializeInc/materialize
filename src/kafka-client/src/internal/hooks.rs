@@ -146,9 +146,11 @@ impl Logger {
     }
 
     /// Logs `settings.warnings` with facility `CONFWARN`.
+    /// librdkafka logs them from the application thread, with the
+    /// `[thrd:app]: ` prefix.
     pub(crate) fn log_conf_warnings(&self, settings: &ClientSettings) {
         for (level, warning) in &settings.warnings {
-            self.log(*level, "CONFWARN", warning);
+            self.log_fmt(*level, "CONFWARN", format_args!("[thrd:app]: {warning}"));
         }
     }
 

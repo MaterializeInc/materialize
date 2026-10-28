@@ -31,12 +31,16 @@
 //!
 //! # All brokers down
 //!
-//! As in librdkafka, a broker counts as down from its first failure until it
-//! is up again. When every broker counts as down, the error callback receives
-//! `AllBrokersDown` with `N/N brokers are down`, the down accounting resets
-//! and bootstrap brokers become eligible again (librdkafka's re-bootstrap).
-//! Bootstrap brokers stop being used and counted once brokers are learned
-//! from metadata.
+//! As in librdkafka, a broker counts as down from its first failure until any
+//! broker is up again. When every broker counts as down, the error callback
+//! receives `AllBrokersDown` with `N/N brokers are down`, once per such
+//! transition, and bootstrap brokers become eligible again (librdkafka's
+//! re-bootstrap). Bootstrap brokers stop being used and counted once brokers
+//! are learned from metadata.
+//!
+//! NOTE: librdkafka 2.12.1 did not emit `AllBrokersDown` in any scenario
+//! tried (unreachable bootstrap brokers, a learned broker going down), even
+//! though its code intends to. Materialize only parses the text.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
@@ -64,6 +68,8 @@ use crate::internal::runtime;
 use crate::types::RDKafkaErrorCode;
 use crate::util::Deadline;
 
+#[cfg(test)]
+mod auth_tests;
 mod bootstrap;
 mod broker;
 mod metadata;
@@ -441,13 +447,13 @@ impl Cluster {
         }
     }
 
-    /// librdkafka's re-bootstrap: bootstrap brokers become eligible again and
-    /// the down accounting restarts.
+    /// librdkafka's re-bootstrap: bootstrap brokers become eligible again.
+    ///
+    /// NOTE: Unlike librdkafka, the down accounting is not reset here, so that
+    /// the error is reported once per transition to "all down" rather than
+    /// after every failed reconnect of a single broker.
     fn rebootstrap(&self) {
         let registry = self.registry.lock().expect("lock poisoned");
-        for b in registry.all() {
-            b.down_reported().store(false, Ordering::Release);
-        }
         for b in &registry.bootstrap {
             b.unretire();
         }
@@ -546,8 +552,14 @@ impl Cluster {
         deadline: Deadline,
     ) -> Result<(Arc<Broker>, MetadataResponse), NetError> {
         let allow_auto_create = self.ctx.settings.allow_auto_create_topics;
+        let mut retries = 0;
+        let mut last_error = None;
         loop {
-            let broker = self.any_broker(deadline).await?;
+            // A retry that finds no broker fails with the request's error.
+            let broker = match self.any_broker(deadline).await {
+                Ok(broker) => broker,
+                Err(e) => return Err(last_error.unwrap_or(e)),
+            };
             let request = broker.request::<MetadataRequest, _>(
                 |version| {
                     let mut req = MetadataRequest::default();
@@ -584,6 +596,22 @@ impl Cluster {
                 Ok(response) => return Ok((broker, response)),
                 // The broker was removed meanwhile: try another one.
                 Err(e) if e.code() == RDKafkaErrorCode::DestroyBroker => continue,
+                // Like librdkafka's request retries (2 for non-produce
+                // requests), retry transport failures and timeouts on a
+                // broker that is up.
+                Err(e)
+                    if retries < 2
+                        && matches!(
+                            e.code(),
+                            RDKafkaErrorCode::BrokerTransportFailure
+                                | RDKafkaErrorCode::TimedOutQueue
+                                | RDKafkaErrorCode::OperationTimedOut
+                        ) =>
+                {
+                    retries += 1;
+                    last_error = Some(e);
+                    continue;
+                }
                 Err(e) => return Err(e),
             }
         }

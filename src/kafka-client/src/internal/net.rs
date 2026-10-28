@@ -36,6 +36,7 @@ use tokio_util::codec::FramedRead;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::RDKafkaLogLevel;
+use crate::internal::hooks::Logger;
 use crate::internal::protocol::{self, ApiVersions};
 use crate::internal::runtime;
 use crate::statistics::Window;
@@ -355,7 +356,7 @@ impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> Io for T {}
 pub(crate) type BoxedIo = Box<dyn Io>;
 
 /// Settings a connection needs after setup.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct ConnectionParams {
     pub client_id: Arc<str>,
     pub socket_timeout: Duration,
@@ -366,6 +367,9 @@ pub(crate) struct ConnectionParams {
     pub log_connection_close: bool,
     /// Whether the stream is TLS, which changes the text of a peer close.
     pub tls: bool,
+    /// For OpenSSL error texts and the `SSL` log lines that precede them.
+    pub logger: Logger,
+    pub broker_name: Arc<str>,
 }
 
 /// How a connection ended, for the owner's failure log.
@@ -411,6 +415,9 @@ struct Shared {
     last_recv_us: AtomicU64,
     /// Requests submitted and not yet answered (in the channel or in flight).
     outstanding: AtomicUsize,
+    /// Wakes the reader to recompute its next timeout when a request is
+    /// added.
+    wake: tokio::sync::Notify,
 }
 
 struct SharedState {
@@ -466,6 +473,7 @@ impl Connection {
             last_send_us: AtomicU64::new(0),
             last_recv_us: AtomicU64::new(0),
             outstanding: AtomicUsize::new(0),
+            wake: tokio::sync::Notify::new(),
         });
         let (tx, rx) = mpsc::unbounded_channel();
         let (read, write) = tokio::io::split(io);
@@ -620,6 +628,9 @@ impl Connection {
                 },
             );
             self.shared.outstanding.fetch_add(1, Ordering::AcqRel);
+            // `notify_one` stores a permit if the reader is not waiting, so
+            // the wakeup is not lost.
+            self.shared.wake.notify_one();
             let c = &self.shared.counters;
             c.outbuf_cnt.fetch_add(1, Ordering::Relaxed);
             c.outbuf_msg_cnt
@@ -781,7 +792,16 @@ async fn write_loop(
             shared.counters.txerrs.fetch_add(1, Ordering::Relaxed);
             shared.close(Failure::error(
                 RDKafkaErrorCode::BrokerTransportFailure,
-                format!("Send failed: {}", connect::strerror(&e)),
+                format!(
+                    "Send failed: {}",
+                    connect::send_error_text(
+                        &e,
+                        shared
+                            .params
+                            .tls
+                            .then_some((&shared.params.logger, shared.params.broker_name.as_ref()))
+                    )
+                ),
             ));
             break;
         }
@@ -828,6 +848,7 @@ async fn read_loop(
                 check_timeouts(&shared);
                 continue;
             }
+            _ = shared.wake.notified() => continue,
         };
         match next {
             Some(Ok(frame)) => {
@@ -911,11 +932,13 @@ async fn read_loop(
 
 /// The failure for a read error on an established connection.
 fn read_error_failure(shared: &Shared, e: &std::io::Error) -> Failure {
-    let message = if shared.params.tls && e.kind() == std::io::ErrorKind::UnexpectedEof {
-        "Disconnected: SSL connection closed by peer".to_string()
-    } else {
-        connect::read_error_text(e)
-    };
+    let params = &shared.params;
+    let message = connect::read_error_text(
+        e,
+        params
+            .tls
+            .then_some((&params.logger, params.broker_name.as_ref())),
+    );
     if message.starts_with("Disconnected") {
         let mut failure = Failure::error(RDKafkaErrorCode::BrokerTransportFailure, message);
         failure.level = shared.disconnect_level();
@@ -1008,9 +1031,24 @@ fn check_timeouts(shared: &Shared) {
         .counters
         .req_timeouts
         .fetch_add(u64::cast_from(timed_out.len()), Ordering::Relaxed);
+    let mut logged = 0;
     for mut p in timed_out {
         shared.finish(&p);
-        tracing::trace!(target: "librdkafka", "{:?} request timed out", p.api_key);
+        // librdkafka logs the first 5 timed out in-flight requests.
+        if let Some(sent_at) = p.sent_at.filter(|_| logged < 5) {
+            let name = &shared.params.broker_name;
+            shared.params.logger.log_fmt(
+                RDKafkaLogLevel::Notice,
+                "REQTMOUT",
+                format_args!(
+                    "[thrd:{name}]: {name}: Timed out {}Request in flight (after {}ms, \
+                     timeout #{logged})",
+                    protocol::api_name(p.api_key),
+                    now.saturating_duration_since(sent_at).as_millis()
+                ),
+            );
+            logged += 1;
+        }
         let err = if p.sent_at.is_some() {
             NetError::timed_out()
         } else {

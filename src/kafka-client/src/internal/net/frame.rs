@@ -44,6 +44,9 @@ impl FrameCodec {
     }
 }
 
+/// The length prefix and the correlation id.
+const RESPONSE_HEADER_SIZE: usize = FRAME_LEN_SIZE + 4;
+
 /// Validates a declared frame size like librdkafka: at least the correlation
 /// id, at most `receive.message.max.bytes`.
 fn check_size(size: i32, max_size: usize) -> Result<usize, FrameError> {
@@ -58,7 +61,11 @@ impl Decoder for FrameCodec {
     type Error = FrameError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Bytes>, FrameError> {
-        if src.len() < FRAME_LEN_SIZE {
+        // Like librdkafka, validate the size only once the whole response
+        // header (size and correlation id) has arrived. A peer that sends
+        // fewer bytes and closes (e.g. a TLS alert to a plaintext client) is
+        // a disconnect, not an invalid size.
+        if src.len() < RESPONSE_HEADER_SIZE {
             return Ok(None);
         }
         let size = i32::from_be_bytes(src[..FRAME_LEN_SIZE].try_into().expect("4 bytes"));
@@ -87,11 +94,13 @@ pub(crate) async fn read_frame<S: AsyncRead + Unpin>(
     io: &mut S,
     max_size: usize,
 ) -> Result<Bytes, FrameError> {
-    let mut len = [0u8; FRAME_LEN_SIZE];
-    io.read_exact(&mut len).await?;
+    let mut header = [0u8; RESPONSE_HEADER_SIZE];
+    io.read_exact(&mut header).await?;
+    let len: [u8; FRAME_LEN_SIZE] = header[..FRAME_LEN_SIZE].try_into().expect("4 bytes");
     let size = check_size(i32::from_be_bytes(len), max_size)?;
     let mut buf = vec![0u8; size];
-    io.read_exact(&mut buf).await?;
+    buf[..4].copy_from_slice(&header[FRAME_LEN_SIZE..]);
+    io.read_exact(&mut buf[4..]).await?;
     Ok(Bytes::from(buf))
 }
 
@@ -134,11 +143,18 @@ mod tests {
             &[1, 2, 3, 4, 5]
         );
         assert_eq!(&buf[..], &[0, 0]);
-        let mut big = BytesMut::from(&[0u8, 0, 0, 11][..]);
+        let mut big = BytesMut::from(&[0u8, 0, 0, 11, 0, 0, 0, 0][..]);
         assert!(matches!(codec.decode(&mut big), Err(FrameError::Size(11))));
-        let mut neg = BytesMut::from(&[0xffu8, 0xff, 0xff, 0xff][..]);
+        let mut neg = BytesMut::from(&[0xffu8, 0xff, 0xff, 0xff, 0, 0, 0, 0][..]);
         assert!(matches!(codec.decode(&mut neg), Err(FrameError::Size(-1))));
-        let mut small = BytesMut::from(&[0u8, 0, 0, 3][..]);
+        let mut small = BytesMut::from(&[0u8, 0, 0, 3, 0, 0, 0, 0][..]);
         assert!(matches!(codec.decode(&mut small), Err(FrameError::Size(3))));
+        // A TLS alert record (7 bytes) followed by EOF is a disconnect.
+        let mut alert = BytesMut::from(&[0x15u8, 3, 3, 0, 2, 2, 70][..]);
+        assert!(codec.decode(&mut alert).unwrap().is_none());
+        assert!(matches!(
+            codec.decode_eof(&mut alert),
+            Err(FrameError::Io(e)) if e.kind() == io::ErrorKind::UnexpectedEof
+        ));
     }
 }

@@ -19,6 +19,7 @@
 //! the resolve hook returned.
 
 use std::fmt::Write;
+use std::io;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -26,7 +27,9 @@ use std::sync::Arc;
 use openssl::error::ErrorStack;
 use openssl::pkcs12::Pkcs12;
 use openssl::pkey::{PKey, Private};
-use openssl::ssl::{Ssl, SslContext, SslContextBuilder, SslMethod, SslOptions, SslVerifyMode};
+use openssl::ssl::{
+    Ssl, SslContext, SslContextBuilder, SslFiletype, SslMethod, SslOptions, SslVerifyMode,
+};
 use openssl::x509::{X509, X509VerifyResult};
 use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
@@ -159,8 +162,21 @@ impl TlsConfig {
 
 /// Formats one OpenSSL error like `ERR_error_string_n` plus librdkafka's
 /// data suffix: `error:0A000086:SSL routines::certificate verify failed`.
-fn format_openssl_error(e: &openssl::error::Error) -> String {
-    let mut s = format!("error:{:08X}:", e.code());
+///
+/// With `debug` (the client's log level is debug), librdkafka prefixes the
+/// OpenSSL source location: `ssl/statem/statem_clnt.c:2125:func error:...`.
+fn format_openssl_error(e: &openssl::error::Error, debug: bool) -> String {
+    let mut s = String::new();
+    if debug {
+        let _ = write!(
+            s,
+            "{}:{}:{} ",
+            e.file(),
+            e.line(),
+            e.function().unwrap_or_default()
+        );
+    }
+    let _ = write!(s, "error:{:08X}:", e.code());
     match e.library() {
         Some(lib) => s.push_str(lib),
         None => {
@@ -190,18 +206,23 @@ fn openssl_error_text(stack: &ErrorStack, logger: &Logger, prefix: Option<&str>)
     let Some((last, earlier)) = errors.split_last() else {
         return "kafka: No further error information available".to_string();
     };
+    let debug = logger.enabled(RDKafkaLogLevel::Debug);
     for e in earlier {
-        let text = format_openssl_error(e);
+        let text = format_openssl_error(e, debug);
         match prefix {
             Some(p) => logger.log_fmt(
                 RDKafkaLogLevel::Error,
                 "SSL",
-                format_args!("{p}: kafka: {text}"),
+                format_args!("[thrd:{p}]: {p}: kafka: {text}"),
             ),
-            None => logger.log_fmt(RDKafkaLogLevel::Error, "SSL", format_args!("kafka: {text}")),
+            None => logger.log_fmt(
+                RDKafkaLogLevel::Error,
+                "SSL",
+                format_args!("[thrd:app]: kafka: {text}"),
+            ),
         }
     }
-    format_openssl_error(last)
+    format_openssl_error(last, debug)
 }
 
 fn ssl_failure(
@@ -222,33 +243,7 @@ fn ssl_failure(
 
 /// The failure for a failed handshake, with librdkafka's hints.
 fn handshake_failure(e: &openssl::ssl::Error, logger: &Logger, broker_name: &str) -> Failure {
-    let errstr = match e.ssl_error() {
-        Some(stack) if !stack.errors().is_empty() => {
-            openssl_error_text(stack, logger, Some(broker_name))
-        }
-        _ => match e.code() {
-            openssl::ssl::ErrorCode::ZERO_RETURN => {
-                "Disconnected: SSL connection closed by peer".to_string()
-            }
-            openssl::ssl::ErrorCode::SYSCALL => match e.io_error() {
-                None => "Disconnected: connection closed by peer".to_string(),
-                Some(io) if io.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    "Disconnected: connection closed by peer".to_string()
-                }
-                Some(io) if io.kind() == std::io::ErrorKind::ConnectionReset => {
-                    "Disconnected: connection reset by peer".to_string()
-                }
-                Some(io) => format!("SSL transport error: {}", super::connect::strerror(io)),
-            },
-            _ => match e.io_error() {
-                Some(io) if io.kind() == std::io::ErrorKind::ConnectionReset => {
-                    "Disconnected: connection reset by peer".to_string()
-                }
-                Some(io) => format!("SSL transport error: {}", super::connect::strerror(io)),
-                None => "kafka: No further error information available".to_string(),
-            },
-        },
-    };
+    let errstr = ssl_error_text(e, logger, broker_name);
     let mut code = RDKafkaErrorCode::SSL;
     let extra = if errstr.contains("unexpected message") {
         ": client SSL authentication might be required (see ssl.key.location and \
@@ -267,6 +262,48 @@ fn handshake_failure(e: &openssl::ssl::Error, logger: &Logger, broker_name: &str
         ""
     };
     Failure::error(code, format!("SSL handshake failed: {errstr}{extra}"))
+}
+
+/// The librdkafka text of an I/O error of a TLS stream, if it carries an
+/// OpenSSL error.
+pub(crate) fn io_error_text(e: &io::Error, logger: &Logger, broker_name: &str) -> Option<String> {
+    let ssl = e.get_ref()?.downcast_ref::<openssl::ssl::Error>()?;
+    Some(ssl_error_text(ssl, logger, broker_name))
+}
+
+/// librdkafka's `rd_kafka_transport_ssl_io_update` texts for a failed TLS
+/// operation.
+fn ssl_error_text(e: &openssl::ssl::Error, logger: &Logger, broker_name: &str) -> String {
+    match e.ssl_error() {
+        Some(stack) if !stack.errors().is_empty() => {
+            openssl_error_text(stack, logger, Some(broker_name))
+        }
+        _ => match e.code() {
+            openssl::ssl::ErrorCode::ZERO_RETURN => {
+                "Disconnected: SSL connection closed by peer".to_string()
+            }
+            // With SSL_OP_IGNORE_UNEXPECTED_EOF, librdkafka sees a peer close
+            // as SSL_ERROR_ZERO_RETURN; tokio-openssl's BIO reports it as a
+            // syscall error without errno.
+            openssl::ssl::ErrorCode::SYSCALL => match e.io_error() {
+                None => "Disconnected: SSL connection closed by peer".to_string(),
+                Some(io) if io.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    "Disconnected: SSL connection closed by peer".to_string()
+                }
+                Some(io) if io.kind() == std::io::ErrorKind::ConnectionReset => {
+                    "Disconnected: connection reset by peer".to_string()
+                }
+                Some(io) => format!("SSL transport error: {}", super::connect::strerror(io)),
+            },
+            _ => match e.io_error() {
+                Some(io) if io.kind() == std::io::ErrorKind::ConnectionReset => {
+                    "Disconnected: connection reset by peer".to_string()
+                }
+                Some(io) => format!("SSL transport error: {}", super::connect::strerror(io)),
+                None => "kafka: No further error information available".to_string(),
+            },
+        },
+    }
 }
 
 /// A creation error: `context` followed by the OpenSSL error text.
@@ -343,6 +380,13 @@ fn cert_pem_blocks(pem: &str) -> Vec<&str> {
     blocks
 }
 
+/// Reports whether `block`, a subslice of `pem`, is followed only by
+/// whitespace.
+fn is_last_block(pem: &str, block: &str) -> bool {
+    let start = block.as_ptr().addr() - pem.as_ptr().addr();
+    pem[start + block.len()..].trim().is_empty()
+}
+
 fn set_certs(b: &mut SslContextBuilder, ssl: &SslSettings, logger: &Logger) -> Result<(), String> {
     let mut ca_probe = true;
     if let Some(location) = ssl.ca_location.as_deref().filter(|l| *l != "probe") {
@@ -369,15 +413,22 @@ fn set_certs(b: &mut SslContextBuilder, ssl: &SslSettings, logger: &Logger) -> R
             ));
         }
         for (i, block) in blocks.iter().enumerate() {
-            let cert = X509::from_pem(block.as_bytes()).map_err(|e| {
-                creation_error(
-                    &format!(
-                        "failed to read certificate #{i} from ssl.ca.pem: not in PEM format?: "
-                    ),
-                    &e,
-                    logger,
-                )
-            })?;
+            let cert = match X509::from_pem(block.as_bytes()) {
+                Ok(cert) => cert,
+                // librdkafka reads certificates until one fails, then
+                // requires the input to be exhausted: a malformed last block
+                // after at least one good one ends the list without error.
+                Err(_) if i > 0 && is_last_block(pem, block) => break,
+                Err(e) => {
+                    return Err(creation_error(
+                        &format!(
+                            "failed to read certificate #{i} from ssl.ca.pem: not in PEM format?: "
+                        ),
+                        &e,
+                        logger,
+                    ));
+                }
+            };
             b.cert_store_mut().add_cert(cert).map_err(|e| {
                 creation_error(
                     &format!("failed to add ssl.ca.pem certificate #{i} to CA cert store: "),
@@ -446,14 +497,23 @@ fn set_certs(b: &mut SslContextBuilder, ssl: &SslSettings, logger: &Logger) -> R
     }
     let password = ssl.key_password.as_deref();
     if let Some(location) = &ssl.key_location {
-        let key = std::fs::read(location)
-            .map_err(|e| format!("ssl.key.location failed: {e}"))
-            .and_then(|pem| {
-                read_private_key(&pem, password)
-                    .map_err(|e| creation_error("ssl.key.location failed: ", &e, logger))
-            })?;
-        b.set_private_key(&key)
-            .map_err(|e| creation_error("ssl.key.location failed: ", &e, logger))?;
+        match password {
+            // Let OpenSSL read the file, for its error texts.
+            None => b
+                .set_private_key_file(location, SslFiletype::PEM)
+                .map_err(|e| creation_error("ssl.key.location failed: ", &e, logger))?,
+            // The crate offers no context password callback: decrypt here.
+            Some(_) => {
+                let key = std::fs::read(location)
+                    .map_err(|e| format!("ssl.key.location failed: {e}"))
+                    .and_then(|pem| {
+                        read_private_key(&pem, password)
+                            .map_err(|e| creation_error("ssl.key.location failed: ", &e, logger))
+                    })?;
+                b.set_private_key(&key)
+                    .map_err(|e| creation_error("ssl.key.location failed: ", &e, logger))?;
+            }
+        }
         check_pkey = true;
     }
     if let Some(pem) = &ssl.key_pem {
@@ -520,5 +580,138 @@ mod tests {
         assert!(cert_pem_blocks("no pem here").is_empty());
         let unterminated = cert_pem_blocks("-----BEGIN CERTIFICATE-----\nAAA");
         assert_eq!(unterminated.len(), 1);
+    }
+
+    /// A self-signed certificate and its key, PEM encoded.
+    pub(crate) fn self_signed(cn: &str) -> (String, String) {
+        use openssl::asn1::Asn1Time;
+        use openssl::bn::BigNum;
+        use openssl::ec::{EcGroup, EcKey};
+        use openssl::hash::MessageDigest;
+        use openssl::nid::Nid;
+        use openssl::x509::X509NameBuilder;
+
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+        let mut name = X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", cn).unwrap();
+        let name = name.build();
+        let mut b = X509::builder().unwrap();
+        b.set_version(2).unwrap();
+        b.set_serial_number(&BigNum::from_u32(1).unwrap().to_asn1_integer().unwrap())
+            .unwrap();
+        b.set_subject_name(&name).unwrap();
+        b.set_issuer_name(&name).unwrap();
+        b.set_pubkey(&key).unwrap();
+        b.set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        b.set_not_after(&Asn1Time::days_from_now(1).unwrap())
+            .unwrap();
+        b.sign(&key, MessageDigest::sha256()).unwrap();
+        let cert = String::from_utf8(b.build().to_pem().unwrap()).unwrap();
+        let key = String::from_utf8(key.private_key_to_pem_pkcs8().unwrap()).unwrap();
+        (cert, key)
+    }
+
+    fn create(pairs: &[(&str, &str)]) -> Result<(), String> {
+        use crate::client::DefaultClientContext;
+        use crate::config::ClientConfig;
+        use crate::config::settings::{ClientKind, ClientSettings};
+        use crate::internal::hooks::Hooks;
+
+        let mut config = ClientConfig::new();
+        config.set("security.protocol", "ssl");
+        for (k, v) in pairs {
+            config.set(*k, *v);
+        }
+        let settings = ClientSettings::from_config(&config, ClientKind::Consumer).unwrap();
+        let hooks: Arc<dyn Hooks> = Arc::new(DefaultClientContext);
+        let logger = Logger::for_creation(hooks, &settings);
+        let result = TlsConfig::new(&settings.ssl, &logger).map(|_| ());
+        assert!(
+            ErrorStack::get().errors().is_empty(),
+            "OpenSSL error queue not empty"
+        );
+        result
+    }
+
+    /// The client creation texts of librdkafka 2.12.1 (recorded with the
+    /// differential harness), which Materialize's tests match on.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // OpenSSL
+    fn creation_errors_match_librdkafka() {
+        let (cert, key) = self_signed("kafka");
+        let (_, other_key) = self_signed("other");
+        assert_eq!(
+            create(&[("ssl.ca.pem", "garbage")]),
+            Err(
+                "failed to read certificate #0 from ssl.ca.pem: not in PEM format?: \
+                 error:0480006C:PEM routines::no start line: Expecting: CERTIFICATE"
+                    .into()
+            )
+        );
+        // A malformed last certificate after a good one is ignored, as in
+        // librdkafka.
+        let ca = format!("{cert}-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n");
+        assert_eq!(create(&[("ssl.ca.pem", &ca)]), Ok(()));
+        let two = format!("{cert}{cert}");
+        assert_eq!(create(&[("ssl.ca.pem", &two)]), Ok(()));
+        // ... but not a malformed one followed by more.
+        let ca =
+            format!("{cert}-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n{cert}");
+        assert!(
+            create(&[("ssl.ca.pem", &ca)])
+                .unwrap_err()
+                .starts_with("failed to read certificate #1 from ssl.ca.pem: not in PEM format?: ")
+        );
+        assert_eq!(
+            create(&[("ssl.certificate.pem", &cert), ("ssl.key.pem", "garbage")]),
+            Err(
+                "ssl.key.pem failed: not in PEM format?: error:1E08010C:DECODER \
+                 routines::unsupported: No supported data to decode. Input type: PEM"
+                    .into()
+            )
+        );
+        assert_eq!(
+            create(&[("ssl.certificate.pem", "garbage"), ("ssl.key.pem", &key)]),
+            Err(
+                "ssl.certificate.pem failed: not in PEM format?: error:0480006C:PEM \
+                 routines::no start line: Expecting: CERTIFICATE"
+                    .into()
+            )
+        );
+        assert_eq!(
+            create(&[("ssl.certificate.pem", &cert), ("ssl.key.pem", &other_key)]),
+            Err(
+                "ssl.key.pem failed: error:05800074:x509 certificate routines::key values mismatch"
+                    .into()
+            )
+        );
+        assert_eq!(
+            create(&[("ssl.key.pem", &key)]),
+            Err(
+                "Private key check failed: error:0A0000B1:SSL routines::no certificate assigned"
+                    .into()
+            )
+        );
+        assert_eq!(
+            create(&[("ssl.certificate.pem", &cert), ("ssl.key.pem", &key)]),
+            Ok(())
+        );
+        assert_eq!(create(&[]), Ok(()));
+        let err = create(&[("ssl.ca.location", "/nonexistent/ca.crt")]).unwrap_err();
+        assert_eq!(
+            err,
+            "ssl.ca.location failed: error:05880020:x509 certificate routines::BIO lib"
+        );
+        let err = create(&[
+            ("ssl.certificate.pem", &cert),
+            ("ssl.key.location", "/nonexistent/key"),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "ssl.key.location failed: error:0A080002:SSL routines::system lib"
+        );
     }
 }

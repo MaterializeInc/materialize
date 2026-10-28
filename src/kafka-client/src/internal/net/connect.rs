@@ -75,8 +75,26 @@ pub(crate) fn strerror(e: &io::Error) -> String {
     }
 }
 
-/// The text librdkafka's transport layer uses for a failed read.
-pub(crate) fn read_error_text(e: &io::Error) -> String {
+/// The text librdkafka's transport layer uses for a failed send. For TLS
+/// streams, `tls` has the logger and broker name for OpenSSL error texts.
+pub(crate) fn send_error_text(e: &io::Error, tls: Option<(&Logger, &str)>) -> String {
+    tls.and_then(|(logger, broker_name)| super::tls::io_error_text(e, logger, broker_name))
+        .unwrap_or_else(|| strerror(e))
+}
+
+/// The text librdkafka's transport layer uses for a failed read. For TLS
+/// streams, `tls` has the logger and broker name for OpenSSL error texts.
+pub(crate) fn read_error_text(e: &io::Error, tls: Option<(&Logger, &str)>) -> String {
+    if let Some((logger, broker_name)) = tls {
+        if let Some(text) = super::tls::io_error_text(e, logger, broker_name) {
+            return text;
+        }
+        // librdkafka sets SSL_OP_IGNORE_UNEXPECTED_EOF, which turns a peer
+        // close into SSL_ERROR_ZERO_RETURN.
+        if e.kind() == io::ErrorKind::UnexpectedEof {
+            return "Disconnected: SSL connection closed by peer".to_string();
+        }
+    }
     match e.kind() {
         io::ErrorKind::UnexpectedEof => {
             "Disconnected: connection closed by peer: receive 0 after POLLIN".to_string()
@@ -167,14 +185,18 @@ pub(crate) async fn establish(
                 });
             }
         };
-    let params = connection_params(settings);
+    let params = connection_params(settings, ctx.logger.clone(), target.name);
     Ok(Connection::start(
         io, versions, params, counters, reauth_at, on_close,
     ))
 }
 
 /// The connection parameters derived from the client settings.
-pub(crate) fn connection_params(settings: &ClientSettings) -> ConnectionParams {
+pub(crate) fn connection_params(
+    settings: &ClientSettings,
+    logger: Logger,
+    broker_name: &str,
+) -> ConnectionParams {
     let max_idle = settings.connections_max_idle.map(|idle| {
         // librdkafka subtracts up to 2 s of jitter per broker so that
         // connections do not all close at once.
@@ -194,6 +216,8 @@ pub(crate) fn connection_params(settings: &ClientSettings) -> ConnectionParams {
         max_idle,
         log_connection_close: settings.log_connection_close,
         tls: settings.security_protocol.uses_tls(),
+        logger,
+        broker_name: Arc::from(broker_name),
     }
 }
 
@@ -206,6 +230,8 @@ struct SetupIo<'a> {
     counters: &'a BrokerCounters,
     log_connection_close: bool,
     tls: bool,
+    logger: &'a Logger,
+    broker_name: &'a str,
 }
 
 impl SetupIo<'_> {
@@ -223,11 +249,7 @@ impl SetupIo<'_> {
                 ),
             ),
             FrameError::Io(e) => {
-                let text = if self.tls && e.kind() == io::ErrorKind::UnexpectedEof {
-                    "Disconnected: SSL connection closed by peer".to_string()
-                } else {
-                    read_error_text(&e)
-                };
+                let text = read_error_text(&e, self.tls.then_some((self.logger, self.broker_name)));
                 if text.starts_with("Disconnected") {
                     Failure {
                         level: if self.log_connection_close {
@@ -254,7 +276,10 @@ impl SetupIo<'_> {
             self.counters.txerrs.fetch_add(1, Ordering::Relaxed);
             Failure::error(
                 RDKafkaErrorCode::BrokerTransportFailure,
-                format!("Send failed: {}", strerror(&e)),
+                format!(
+                    "Send failed: {}",
+                    send_error_text(&e, self.tls.then_some((self.logger, self.broker_name)))
+                ),
             )
         })?;
         self.counters.tx.fetch_add(1, Ordering::Relaxed);
@@ -325,6 +350,8 @@ async fn setup(
         counters,
         log_connection_close: settings.log_connection_close,
         tls: settings.security_protocol.uses_tls(),
+        logger: &ctx.logger,
+        broker_name: target.name,
     };
 
     state.set(BrokerState::ApiVersionQuery);
@@ -333,7 +360,29 @@ async fn setup(
             .await
         {
             Ok(result) => result?,
-            Err(_) => return Err(api_versions_failure(RDKafkaErrorCode::OperationTimedOut)),
+            Err(_) => {
+                let name = target.name;
+                let logger = &ctx.logger;
+                logger.log_fmt(
+                    RDKafkaLogLevel::Notice,
+                    "REQTMOUT",
+                    format_args!(
+                        "[thrd:{name}]: {name}: Timed out ApiVersionRequest in flight (after \
+                         {}ms, timeout #0)",
+                        settings.api_version_request_timeout.as_millis()
+                    ),
+                );
+                logger.log_fmt(
+                    RDKafkaLogLevel::Warning,
+                    "REQTMOUT",
+                    format_args!(
+                        "[thrd:{name}]: {name}: Timed out 1 in-flight, 0 retry-queued, \
+                         0 out-queue, 0 partially-sent requests"
+                    ),
+                );
+                counters.req_timeouts.fetch_add(1, Ordering::Relaxed);
+                return Err(api_versions_failure(RDKafkaErrorCode::OperationTimedOut));
+            }
         };
 
     let mut reauth_at = None;
