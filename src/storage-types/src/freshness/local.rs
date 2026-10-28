@@ -179,7 +179,10 @@ fn add_local_part(
             // The group ends where this input's answer changes. The bound is at least
             // `window_end` because the entry answers it.
             if let Some(last) = last {
-                group_end = group_end.min(last);
+                // Snapped down to this object's window boundary, because the window that
+                // contains `last` ends after it and is answered by a later entry. Snapping up
+                // would give that window this entry's earlier ready time and overstate its delay.
+                group_end = group_end.min(tree.prev_boundary(last));
             }
         }
         let n = group_end / interval_ms - pos / interval_ms;

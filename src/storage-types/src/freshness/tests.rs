@@ -1126,6 +1126,25 @@ fn local_missing_input_entry_understates() {
 }
 
 #[mz_ore::test]
+fn local_input_entry_inside_window_is_not_split() {
+    // The object has windows ending at 7000, 14000 and 21000. The input's entry at 15000 falls
+    // inside the last one, which is only visible in the input with the entry at 21000.
+    let tree = aligned(7000);
+    let mut log = VisibilityLog::default();
+    log.record(15_000, 21_100);
+    log.record(21_000, 21_500);
+    let mut recorder = LocalDelayRecorder::new(0);
+    let mut rows = recorder.observe(&tree, &at(21_001), 22_000, &[&log], &config(4));
+    rows.extend(recorder.observe(&tree, &Antichain::new(), 22_000, &[&log], &config(4)));
+    let s = scheme(4);
+    // The first two windows are ready at 21100, the last at 21500.
+    assert_eq!(
+        bucket_counts(&rows),
+        BTreeMap::from([(s.bucket(900), 14_000), (s.bucket(500), 7_000)])
+    );
+}
+
+#[mz_ore::test]
 fn local_negative_delay_clamps() {
     let tree = aligned(1000);
     let cfg = config(4);
