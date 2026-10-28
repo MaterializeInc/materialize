@@ -55,11 +55,20 @@ updates:
         - "prost*"
         - "tonic*"
         - "console-subscriber"
-    # duckdb depends on arrow, and libduckdb-sys moves in lockstep with duckdb.
+    # The middle number of the duckdb and libduckdb-sys version encodes the
+    # DuckDB release, and bin/lint-versions requires ci/builder/Dockerfile to
+    # install that same libduckdb. Dependabot cannot edit the Dockerfile, so a
+    # DuckDB release arrives red here until the Dockerfile change (download
+    # URL and checksums) is pushed to the group branch. A separate group keeps
+    # that from blocking arrow. Patch releases of the crates pass on their own.
+    duckdb:
+      applies-to: version-updates
+      update-types: [minor, patch]
+      patterns: ["duckdb", "libduckdb-sys"]
     arrow:
       applies-to: version-updates
       update-types: [minor, patch]
-      patterns: ["arrow*", "parquet", "iceberg*", "duckdb", "libduckdb-sys"]
+      patterns: ["arrow*", "parquet", "iceberg*"]
     simple1:
       applies-to: version-updates
       update-types: [minor, patch]
