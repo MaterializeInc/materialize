@@ -26,13 +26,13 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ### Improved hydration times and memory efficiency for upsert sources {#v26.48-upsert-hydration}
 
-Upsert sources that spill to disk now hydrate up to 1.9x faster, with up to 66% lower peak memory and disk usage.
+Upsert sources that spill to disk now hydrate up to 48% faster, with up to 66% lower peak memory and disk usage.
 
 ![Hydration time and peak memory plus disk usage for an upsert source, old versus new: hydration time drops from 206.1 minutes to 107.9–113.3 minutes, and peak memory plus disk usage drops from 542 GiB to 183–208 GiB](/images/releases/v2648_upsert_hydration.png)
 
-In our tests, hydration time dropped from 206 minutes to between 108 and 113 minutes, and peak memory and disk usage dropped from 542 GiB to between 183 and 208 GiB.
+For our tests, we created a new Kafka upsert source, from scratch, on an M.1-1.5xlarge cluster, which has a total heap capacity of 637 GiB. The topic is a single partition of about 1.5B messages and roughly 100 GB, holding 956M distinct keys, with records around 100 bytes. We measured hydration times as how long it took from `CREATE SOURCE` until every key is indexed, and the source is keeping up with the topic. We ran the test four times, and observed that hydration times dropped from 206 minutes to between 108 and 113 minutes. Peak memory and disk usage dropped from 542 GiB to between 183 and 208 GiB.
 
-Materialize now uses its own buffer pool to keep hot data in memory and serve sequential work from disk. Previously, this was left to the operating system's swap. See our [blog post](https://materialize.com/blog/materialize-out-of-core/) for details on how it works.
+Materialize now uses its own buffer pool to keep hot data in memory and serve sequential work from disk. Previously, this was left to the operating system's swap. In addition, we now apply LZ4 compression to in-progress data while building an upsert source. See our [blog post](https://materialize.com/blog/materialize-out-of-core/) for details on how it works.
 
 This change has been rolled out to all Materialize Cloud environments and applies to all existing and new clusters. It will be enabled by default in Materialize Self-Managed in the coming weeks.
 
