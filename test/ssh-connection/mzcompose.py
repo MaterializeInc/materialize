@@ -340,10 +340,10 @@ def materialized_log_count(c: Composition, needle: str) -> int:
 
 def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> None:
     """Kafka sources and sinks behind an SSH tunnel back off while the broker
-    is down, sources rebuild their consumers and sinks restart once it has been
-    down for kafka_metadata_failure_timeout, and both recover after it
-    restarts. Every reconnect and every rebuild resolves the broker through
-    the tunnel-rewriting resolver."""
+    is down, sources rebuild their consumers once it has been down for
+    kafka_metadata_failure_timeout, and both recover after it restarts. Every
+    reconnect and every rebuild resolves the broker through the
+    tunnel-rewriting resolver."""
     c.down()
     with c.override(SshBastionHost(max_startups="2")):
         broker = "redpanda" if redpanda else "kafka"
@@ -381,9 +381,6 @@ def workflow_kafka_restart_broker(c: Composition, redpanda: bool = False) -> Non
         c.run_testdrive_files("--no-reset", "kafka-restart-broker-sink.td")
         c.kill(broker)
         c.run_testdrive_files("--no-reset", "kafka-source-after-broker-failure.td")
-        c.run_testdrive_files(
-            "--no-reset", "kafka-restart-broker-sink-after-failure.td"
-        )
 
         # The bastion accepts each tunnelled connection and closes it when it
         # cannot reach the broker, so every reconnect attempt reaches the
@@ -452,9 +449,11 @@ def workflow_kafka_switchover(c: Composition) -> None:
         c.kill("kafka")
 
     with c.override(bastion, kafka_advertising("kafka-new")):
-        # The service's configuration changed, so `up` replaces the container:
-        # a fresh broker at the same bootstrap name, while `kafka-old` no
-        # longer resolves.
+        # Recreating the container alone keeps the image's anonymous data
+        # volume, and with it the old broker's topics, so remove it first: the
+        # replacement must be a fresh broker at the same bootstrap name, while
+        # `kafka-old` no longer resolves.
+        c.rm("kafka", destroy_volumes=True)
         c.up("kafka")
         c.run_testdrive_files("--no-reset", "kafka-switchover-after.td")
 

@@ -78,7 +78,7 @@ use std::future::Future;
 use std::rc::Rc;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::kafka::KafkaSinkMetrics;
@@ -89,7 +89,6 @@ use anyhow::{Context, anyhow, bail};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use maplit::btreemap;
-use mz_dyncfg::ConfigSet;
 use mz_expr::{Eval, MirScalarExpr};
 use mz_interchange::avro::{AvroEncoder, AvroSchemaId};
 use mz_interchange::encode::Encode;
@@ -116,9 +115,9 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::{
-    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, KAFKA_METADATA_FAILURE_TIMEOUT,
-    KAFKA_SINK_BATCH_NUM_MESSAGES, KAFKA_SINK_BATCH_SIZE, KAFKA_SINK_EMIT_SINK_ID_HEADER,
-    KAFKA_SINK_MESSAGE_MAX_BYTES, SINK_ENSURE_TOPIC_CONFIG, SINK_PROGRESS_SEARCH,
+    KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, KAFKA_SINK_BATCH_NUM_MESSAGES,
+    KAFKA_SINK_BATCH_SIZE, KAFKA_SINK_EMIT_SINK_ID_HEADER, KAFKA_SINK_MESSAGE_MAX_BYTES,
+    SINK_ENSURE_TOPIC_CONFIG, SINK_PROGRESS_SEARCH,
 };
 use mz_storage_types::errors::{ContextCreationError, ContextCreationErrorExt, DataflowError};
 use mz_storage_types::sinks::{
@@ -256,9 +255,8 @@ struct TransactionalProducer {
     sink_id_header: Option<String>,
     /// The number of partitions in the target topic.
     partition_count: Arc<AtomicU64>,
-    /// Refreshes the partition count. Resolves with an error once the metadata fetches have
-    /// failed for `kafka_metadata_failure_timeout` in a row, see `metadata_failure`.
-    partition_count_task: AbortOnDropHandle<anyhow::Error>,
+    /// A task to periodically refresh the partition count.
+    _partition_count_task: AbortOnDropHandle<()>,
     /// The underlying Kafka producer.
     producer: ThreadedProducer<TunnelingClientContext<MzClientContext>>,
     /// A handle to the metrics associated with this sink.
@@ -387,7 +385,6 @@ impl TransactionalProducer {
                 connection.topic.clone(),
                 connection.topic_metadata_refresh_interval,
                 Arc::clone(&update_partition_count),
-                Arc::clone(storage_configuration.config_set()),
             ),
         );
 
@@ -398,7 +395,7 @@ impl TransactionalProducer {
             task_name,
             data_topic: connection.topic.clone(),
             partition_count,
-            partition_count_task: partition_count_task.abort_on_drop(),
+            _partition_count_task: partition_count_task.abort_on_drop(),
             progress_topic: connection
                 .progress_topic(&storage_configuration.connection_context)
                 .into_owned(),
@@ -480,13 +477,6 @@ impl TransactionalProducer {
         task::spawn_blocking(|| &self.task_name, move || f(producer))
             .await
             .check_ssh_status(self.producer.context())
-    }
-
-    /// Resolves once the metadata fetches have failed for `kafka_metadata_failure_timeout` in a
-    /// row. The producer then never resolves the bootstrap servers again, so the caller returns
-    /// the error to restart the sink with a new producer.
-    async fn metadata_failure(&mut self) -> anyhow::Error {
-        (&mut self.partition_count_task).await
     }
 
     async fn begin_transaction(&self) -> Result<(), ContextCreationError> {
@@ -785,17 +775,7 @@ fn sink_collection<'scope>(
             // Kafka doesn't have a heartbeating mechanism to keep a transaction open indefinitely.
             // This flag tracks whether we have started the transaction.
             let mut transaction_begun = false;
-            loop {
-                let event = tokio::select! {
-                    event = input.next() => match event {
-                        Some(event) => event,
-                        None => break,
-                    },
-                    // With `metadata.recovery.strategy=none` the producer never resolves the
-                    // bootstrap servers again, so a restart with a new producer is the only way
-                    // back once every broker it learned has gone away.
-                    error = producer.metadata_failure() => return Err(error.into()),
-                };
+            while let Some(event) = input.next().await {
                 match event {
                     Event::Data(_cap, batch) => {
                         for (message, time, diff) in batch {
@@ -1412,31 +1392,18 @@ async fn fetch_partition_count_loop<F>(
     topic_name: String,
     interval: Duration,
     update_partition_count: Arc<F>,
-    config_set: Arc<ConfigSet>,
-) -> anyhow::Error
-where
+) where
     F: Fn(u64),
 {
     let mut interval = time::interval(interval);
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    // Start of the current run of consecutive failures.
-    let mut failing_since: Option<Instant> = None;
     loop {
         interval.tick().await;
         match fetch_partition_count(&producer, sink_id, &topic_name).await {
-            Ok(pc) => {
-                failing_since = None;
-                update_partition_count(pc)
-            }
+            Ok(pc) => update_partition_count(pc),
             Err(e) => {
                 warn!(%sink_id, "failed updating partition count: {e}");
-                let since = *failing_since.get_or_insert_with(Instant::now);
-                if since.elapsed() >= KAFKA_METADATA_FAILURE_TIMEOUT.get(&config_set) {
-                    return e.context(format!(
-                        "kafka metadata fetches have failed for {}s",
-                        since.elapsed().as_secs()
-                    ));
-                }
+                continue;
             }
         };
     }

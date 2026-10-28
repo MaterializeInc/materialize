@@ -7,8 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# A sink through the tunnel, to check that it restarts once the broker has
-# been unreachable for kafka_metadata_failure_timeout.
+# A sink through the tunnel, to check that it recovers after the broker
+# restarts.
 
 > CREATE TABLE restart_sink_input (text TEXT)
 > INSERT INTO restart_sink_input VALUES ('one')
