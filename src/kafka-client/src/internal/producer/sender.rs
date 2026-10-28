@@ -103,12 +103,18 @@ impl<C: ProducerContext> ProducerInner<C> {
         let mut connect_retry_at: Option<Instant> = None;
         loop {
             let now = Instant::now();
-            if conn.as_ref().is_some_and(|c| c.is_closed()) {
+            // A connection superseded by a newer one (SASL re-authentication)
+            // is left once its in-flight requests complete, so that requests
+            // are not reordered across connections.
+            if conn
+                .as_ref()
+                .is_some_and(|c| c.is_closed() || (c.is_superseded() && in_flight.is_empty()))
+            {
                 conn = None;
             }
             let mut next_wake;
             loop {
-                let slots = if conn.is_some() {
+                let slots = if conn.as_ref().is_some_and(|c| c.is_usable()) {
                     self.config.max_in_flight.saturating_sub(in_flight.len())
                 } else {
                     0

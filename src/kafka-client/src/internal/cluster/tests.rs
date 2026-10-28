@@ -748,6 +748,170 @@ fn bad_responses() {
     assert_eq!(err, KafkaError::MetadataFetch(RDKafkaErrorCode::BadMessage));
 }
 
+/// Forwards to `upstream`, delaying every chunk by `delay` in each direction.
+fn delay_proxy(upstream: std::net::SocketAddr, delay: Duration) -> std::net::SocketAddr {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for client in listener.incoming() {
+            let Ok(client) = client else { return };
+            let server = std::net::TcpStream::connect(upstream).unwrap();
+            for (mut from, mut to) in [
+                (client.try_clone().unwrap(), server.try_clone().unwrap()),
+                (server, client),
+            ] {
+                std::thread::spawn(move || {
+                    let mut buf = vec![0u8; 1 << 16];
+                    loop {
+                        let n = match from.read(&mut buf) {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => n,
+                        };
+                        std::thread::sleep(delay);
+                        if to.write_all(&buf[..n]).is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        }
+    });
+    addr
+}
+
+/// Resolves every broker to one address.
+struct Redirect(std::net::SocketAddr);
+
+impl ClientContext for Redirect {
+    fn resolve_broker_addr(
+        &self,
+        _host: &str,
+        _port: u16,
+    ) -> std::io::Result<Vec<std::net::SocketAddr>> {
+        Ok(vec![self.0])
+    }
+}
+
+/// The periodic refresh and responses that arrive after the caller's
+/// deadline update the metadata cache (a zero-deadline refresh used to drop
+/// every response that was not instantly ready).
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn metadata_refresh_with_latency() {
+    use std::net::ToSocketAddrs;
+    for brokers in test_brokers() {
+        let upstream = brokers.to_socket_addrs().unwrap().next().unwrap();
+        let proxy = delay_proxy(upstream, Duration::from_millis(1));
+        let mut config = ClientConfig::new();
+        config.set("bootstrap.servers", &brokers);
+        config.set("topic.metadata.refresh.interval.ms", "200");
+        let settings = ClientSettings::from_config(&config, ClientKind::Consumer).unwrap();
+        let client = Client::new(settings, Redirect(proxy)).unwrap();
+        let cluster = Arc::clone(client.cluster());
+        let (before, after, late) = runtime::block_on(async move {
+            let topics = ["mzkc-periodic".to_string()];
+            cluster
+                .refresh_metadata(&topics, Deadline::new(Duration::from_secs(10)))
+                .await
+                .unwrap();
+            cluster
+                .any_broker(Deadline::new(Duration::from_secs(10)))
+                .await
+                .unwrap();
+            let before = cluster.metadata().version;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let after = cluster.metadata().version;
+            // A zero deadline gives up on the response, which still updates
+            // the cache when it arrives.
+            let v0 = cluster.metadata().version;
+            let _ = cluster
+                .fetch_metadata(MetadataTopics::None, Deadline::new(Duration::ZERO))
+                .await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            (before, after, cluster.metadata().version > v0)
+        });
+        // About ten refreshes in 2 s; allow for slow machines.
+        assert!(after >= before + 3, "{before} -> {after}");
+        assert!(late);
+    }
+}
+
+/// A broker whose resolve hook hangs is bounded by the connection setup
+/// timeout and does not keep other brokers from being tried.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn slow_resolve_hook() {
+    struct SlowHook {
+        recorder: Arc<Recorder>,
+    }
+
+    impl ClientContext for SlowHook {
+        fn log(&self, level: RDKafkaLogLevel, fac: &str, log_message: &str) {
+            Recorder::log(&self.recorder, level, fac, log_message)
+        }
+
+        fn resolve_broker_addr(
+            &self,
+            host: &str,
+            port: u16,
+        ) -> std::io::Result<Vec<std::net::SocketAddr>> {
+            use std::net::ToSocketAddrs;
+            if host == "slow" {
+                std::thread::sleep(Duration::from_secs(3));
+                return Err(std::io::Error::other("too late"));
+            }
+            (host, port).to_socket_addrs().map(|a| a.collect())
+        }
+    }
+
+    let new_client = |bootstrap: &str| {
+        let mut config = ClientConfig::new();
+        config
+            .set("bootstrap.servers", bootstrap)
+            .set("socket.connection.setup.timeout.ms", "1000")
+            .set_log_level(RDKafkaLogLevel::Info);
+        let settings = ClientSettings::from_config(&config, ClientKind::Consumer).unwrap();
+        let recorder = Arc::new(Recorder::default());
+        let client = Client::new(
+            settings,
+            SlowHook {
+                recorder: Arc::clone(&recorder),
+            },
+        )
+        .unwrap();
+        (client, recorder)
+    };
+
+    let (client, recorder) = new_client("slow:1");
+    let start = Instant::now();
+    assert!(
+        client
+            .fetch_metadata(None, Duration::from_millis(1500))
+            .is_err()
+    );
+    let lines = recorder.fail_lines();
+    assert!(
+        lines.first().is_some_and(|l| l
+            .contains("slow:1/bootstrap: Connection setup timed out in state CONNECT (after 10")),
+        "{lines:#?}"
+    );
+    assert!(start.elapsed() < Duration::from_secs(3));
+
+    for brokers in test_brokers() {
+        let (client, _recorder) = new_client(&format!("slow:1,{brokers}"));
+        let start = Instant::now();
+        client
+            .fetch_metadata(None, Duration::from_secs(10))
+            .unwrap();
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+}
+
 /// Prints log lines and error callbacks like the librdkafka differential
 /// harness does.
 struct PrintCtx {

@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use kafka_protocol::messages::{MetadataRequest, MetadataResponse};
 use kafka_protocol::protocol::Request;
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::RDKafkaLogLevel;
 use crate::config::settings::DebugContext;
@@ -35,6 +36,45 @@ use super::bootstrap::{self, Backoff};
 
 fn as_any<T: Any>(t: &T) -> &dyn Any {
     t
+}
+
+/// Renews the SASL session of the connection of `generation` before it
+/// expires (KIP-368), by connecting anew at `at` (90% of the session
+/// lifetime), whether or not anyone sends requests through
+/// [`Broker::connection`]. Retries every second while the connection is
+/// still current, open and the attempt failed.
+async fn reauth_timer(
+    broker: Weak<Broker>,
+    generation: u64,
+    mut at: Instant,
+    closed: CancellationToken,
+    shutdown: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            _ = closed.cancelled() => return,
+            _ = shutdown.cancelled() => return,
+            _ = tokio::time::sleep_until(at.into()) => {}
+        }
+        let mut attempt = {
+            let Some(broker) = broker.upgrade() else {
+                return;
+            };
+            if broker.slot.lock().expect("lock poisoned").generation != generation {
+                return;
+            }
+            let rx = broker.attempt.subscribe();
+            let epoch = broker.start_attempt();
+            (rx, epoch)
+        };
+        let (rx, epoch) = &mut attempt;
+        tokio::select! {
+            _ = closed.cancelled() => return,
+            _ = shutdown.cancelled() => return,
+            _ = rx.wait_for(|s| !s.running && s.epoch >= *epoch) => {}
+        }
+        at = Instant::now() + Duration::from_secs(1);
+    }
 }
 
 /// Where a broker came from, as in librdkafka's statistics (`source`).
@@ -473,15 +513,27 @@ impl Broker {
         };
         match result {
             Ok(conn) => {
+                let reauth_at = conn.reauth_at();
+                let closed = conn.closed_token();
                 let old = {
                     let mut slot = self.slot.lock().expect("lock poisoned");
                     slot.generation = generation;
                     slot.conn.replace(Arc::new(conn))
                 };
-                // A replaced connection closes once its in-flight requests
-                // complete and their handles drop.
+                // Holders of the replaced connection (e.g. a producer's
+                // sender) move to the new one; the old one closes once its
+                // in-flight requests complete and the last handle drops.
+                if let Some(old) = &old {
+                    old.supersede();
+                }
                 drop(old);
                 self.set_state(BrokerState::Up, false);
+                if let Some(at) = reauth_at {
+                    runtime::spawn(
+                        "kafka-broker-reauth",
+                        reauth_timer(Arc::downgrade(self), generation, at, closed, shutdown),
+                    );
+                }
                 Ok(())
             }
             Err(failure) => {

@@ -22,6 +22,19 @@
 //! transaction protocol version 2 requests (Produce 12, AddPartitionsToTxn 4,
 //! AddOffsetsToTxn 4, TxnOffsetCommit 5, EndTxn 5, InitProducerId 5), whose
 //! semantics this client does not implement.
+//!
+//! NOTE: kafka-protocol 0.18 preallocates arrays (`Vec::with_capacity`) and
+//! byte fields (`vec![0; n]`) from the counts and lengths it reads, before
+//! checking them against the input. A response of a few bytes from a broker,
+//! or anything answering at a broker address (ApiVersions is decoded before
+//! authentication), can declare a count of `i32::MAX` and so request an
+//! allocation of hundreds of gigabytes; if the allocator refuses it, the
+//! process aborts. Frames are bounded by `receive.message.max.bytes`, but the
+//! declared count, not the frame size, drives the allocation, and there is no
+//! hook to validate counts short of re-implementing the decoders. The fix
+//! belongs in kafka-protocol (cap preallocation by the remaining input); until
+//! it is released this is a residual risk of connecting to untrusted
+//! endpoints.
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use kafka_protocol::messages::{ApiKey, RequestHeader, ResponseHeader};

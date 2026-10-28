@@ -58,7 +58,9 @@ use crate::util::{Deadline, Timeout};
 ///   is never polled never receives them; producers deliver them promptly
 ///   from I/O tasks, as rust-rdkafka's polling thread would; admin clients
 ///   never deliver them. Errors of a consumer that is not polled are kept up
-///   to a bound, and only its latest statistics.
+///   to a bound, and only its latest statistics. A producer's callbacks may
+///   still run shortly after its last handle is dropped, since dropping does
+///   not wait for the I/O tasks to stop.
 /// * [`resolve_broker_addr`](Self::resolve_broker_addr) and
 ///   [`generate_oauth_token`](Self::generate_oauth_token) are called on a
 ///   blocking thread, where they may block, including with

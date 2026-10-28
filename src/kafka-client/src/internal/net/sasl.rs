@@ -141,18 +141,47 @@ impl ScramHash {
     }
 
     /// `Hi()` of RFC 5802: PBKDF2 with HMAC and one output block.
+    ///
+    /// Takes about a microsecond per iteration; callers bound `iterations`
+    /// and run this on a blocking thread.
     fn hi(self, password: &[u8], salt: &[u8], iterations: u32) -> Vec<u8> {
-        let mut u = self.hmac(password, &[salt, &1u32.to_be_bytes()]);
-        let mut out = u.clone();
-        for _ in 1..iterations {
-            u = self.hmac(password, &[&u]);
-            for (i, x) in u.iter().enumerate() {
-                out[i] ^= x;
-            }
+        match self {
+            ScramHash::Sha256 => hi_with::<Sha256>(password, salt, iterations),
+            ScramHash::Sha512 => hi_with::<Sha512>(password, salt, iterations),
         }
-        out
     }
 }
+
+fn hi_with<D>(password: &[u8], salt: &[u8], iterations: u32) -> Vec<u8>
+where
+    D: hmac::EagerHash,
+    Hmac<D>: KeyInit + Mac + Clone,
+{
+    // Key the HMAC once; every iteration starts from a copy of that state.
+    let keyed = Hmac::<D>::new_from_slice(password).expect("any key length");
+    let mut mac = keyed.clone();
+    mac.update(salt);
+    mac.update(&1u32.to_be_bytes());
+    let mut u = mac.finalize().into_bytes().to_vec();
+    let mut out = u.clone();
+    for _ in 1..iterations {
+        let mut mac = keyed.clone();
+        mac.update(&u);
+        u.copy_from_slice(&mac.finalize().into_bytes());
+        for (i, x) in u.iter().enumerate() {
+            out[i] ^= x;
+        }
+    }
+    out
+}
+
+/// librdkafka's limit on the SCRAM iteration count a broker may request. A
+/// larger count would keep a thread busy for minutes.
+pub(crate) const MAX_SCRAM_ITERATIONS: u32 = 1_000_000;
+
+/// The longest wait before refreshing an OAUTHBEARER token, so that tokens
+/// with absurd lifetimes do not overflow timers: about 24 days.
+const MAX_REFRESH_DELAY_MS: u64 = 1 << 31;
 
 enum ScramState {
     ClientFirst,
@@ -227,7 +256,7 @@ impl Scram {
                     })?
                     .parse::<u32>()
                     .ok()
-                    .filter(|i| *i > 0)
+                    .filter(|i| (1..=MAX_SCRAM_ITERATIONS).contains(i))
                     .ok_or_else(|| {
                         "Invalid value (not integer or too large) for Iteration count in \
                          server-first-message"
@@ -401,7 +430,10 @@ impl OAuthTokens {
                 });
                 let wait = match result {
                     Ok(t) => {
+                        // `lifetime_ms > now_ms >= 0`, so this cannot
+                        // overflow; refresh at 80% of the remaining time.
                         let remaining = u64::try_from(t.lifetime_ms - now_ms).unwrap_or(0);
+                        let refresh_in = (remaining / 10 * 8).min(MAX_REFRESH_DELAY_MS);
                         tokens.state.send_modify(|s| {
                             s.token = Some(TokenValue {
                                 value: t.token,
@@ -410,7 +442,7 @@ impl OAuthTokens {
                             });
                             s.attempted = true;
                         });
-                        Duration::from_millis(remaining * 8 / 10)
+                        Duration::from_millis(refresh_in)
                     }
                     Err(e) => {
                         let changed = tokens.state.borrow().error.as_deref() != Some(e.as_str());
@@ -526,10 +558,35 @@ mod tests {
                 0xc2, 0x0d, 0xac, 0xbc
             ]
         );
+        // RFC 7914 section 11, c = 80000: the first block of the output.
+        let out = ScramHash::Sha256.hi(b"Password", b"NaCl", 80000);
+        assert_eq!(
+            out,
+            [
+                0x4d, 0xdc, 0xd8, 0xf6, 0x0b, 0x98, 0xbe, 0x21, 0x83, 0x0c, 0xee, 0x5e, 0xf2, 0x27,
+                0x01, 0xf9, 0x64, 0x1a, 0x44, 0x18, 0xd0, 0x4c, 0x04, 0x14, 0xae, 0xff, 0x08, 0x87,
+                0x6b, 0x34, 0xab, 0x56
+            ]
+        );
     }
 
     #[mz_ore::test]
     fn scram_errors() {
+        // Iteration counts above librdkafka's limit are rejected before any
+        // hashing (an `i=u32::MAX` would take an hour).
+        for i in ["1000001", "2000000", "4294967295", "0", "x"] {
+            let mut scram = Scram::new(ScramHash::Sha512, "u", "p", "abc");
+            scram.step(None).unwrap();
+            let start = std::time::Instant::now();
+            assert_eq!(
+                scram
+                    .step(Some(format!("r=abcd,s=AAAA,i={i}").as_bytes()))
+                    .unwrap_err(),
+                "Invalid value (not integer or too large) for Iteration count in \
+                 server-first-message"
+            );
+            assert!(start.elapsed() < std::time::Duration::from_millis(100));
+        }
         let mut scram = Scram::new(ScramHash::Sha512, "u", "p", "abc");
         scram.step(None).unwrap();
         assert_eq!(

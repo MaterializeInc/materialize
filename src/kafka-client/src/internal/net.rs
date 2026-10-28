@@ -21,7 +21,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::atomic::{AtomicI32, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -370,6 +370,8 @@ pub(crate) struct ConnectionParams {
     /// For OpenSSL error texts and the `SSL` log lines that precede them.
     pub logger: Logger,
     pub broker_name: Arc<str>,
+    /// The client's shutdown token, which closes the connection.
+    pub shutdown: CancellationToken,
 }
 
 /// How a connection ended, for the owner's failure log.
@@ -418,6 +420,13 @@ struct Shared {
     /// Wakes the reader to recompute its next timeout when a request is
     /// added.
     wake: tokio::sync::Notify,
+    /// Set when a newer connection replaced this one.
+    superseded: AtomicBool,
+    /// Set when the last handle was dropped: close once nothing is
+    /// outstanding.
+    released: AtomicBool,
+    /// The client's shutdown token: closes the connection.
+    shutdown: CancellationToken,
 }
 
 struct SharedState {
@@ -460,7 +469,7 @@ impl Connection {
         let max_in_flight = params.max_in_flight.clamp(1, Semaphore::MAX_PERMITS);
         let receive_max = params.receive_message_max_bytes;
         let shared = Arc::new(Shared {
-            params,
+            params: params.clone(),
             counters,
             next_correlation_id: AtomicI32::new(1),
             state: Mutex::new(SharedState {
@@ -474,6 +483,9 @@ impl Connection {
             last_recv_us: AtomicU64::new(0),
             outstanding: AtomicUsize::new(0),
             wake: tokio::sync::Notify::new(),
+            superseded: AtomicBool::new(false),
+            released: AtomicBool::new(false),
+            shutdown: params.shutdown.clone(),
         });
         let (tx, rx) = mpsc::unbounded_channel();
         let (read, write) = tokio::io::split(io);
@@ -516,6 +528,36 @@ impl Connection {
     /// should go to a new connection.
     pub(crate) fn needs_reauth(&self) -> bool {
         self.reauth_at.is_some_and(|at| Instant::now() >= at)
+    }
+
+    /// When the SASL session must be renewed (KIP-368), if it expires.
+    pub(crate) fn reauth_at(&self) -> Option<Instant> {
+        self.reauth_at
+    }
+
+    /// Marks the connection as replaced by a newer one, e.g. with a fresh
+    /// SASL session. Requests already sent complete normally.
+    pub(crate) fn supersede(&self) {
+        self.shared.superseded.store(true, Ordering::Release);
+    }
+
+    /// Reports whether a newer connection replaced this one. Holders of a
+    /// superseded connection should send no new requests on it and switch
+    /// to [`Broker::connection`](crate::internal::cluster::Broker::connection)
+    /// once their in-flight requests completed.
+    pub(crate) fn is_superseded(&self) -> bool {
+        self.shared.superseded.load(Ordering::Acquire)
+    }
+
+    /// Reports whether new requests should be sent on this connection: it is
+    /// open and not superseded.
+    pub(crate) fn is_usable(&self) -> bool {
+        !self.is_closed() && !self.is_superseded()
+    }
+
+    /// A token cancelled when the connection closes.
+    pub(crate) fn closed_token(&self) -> CancellationToken {
+        self.shared.closed.clone()
     }
 
     /// The number of submitted requests not yet completed.
@@ -711,14 +753,12 @@ impl Connection {
 }
 
 impl Drop for Connection {
+    /// Closes the connection once the requests already submitted have
+    /// completed (or timed out), so that dropping the last handle, e.g. of a
+    /// connection superseded for re-authentication, loses no responses.
     fn drop(&mut self) {
-        let mut failure = Failure::error(
-            RDKafkaErrorCode::BrokerTransportFailure,
-            "Connection closed by client",
-        );
-        failure.level = RDKafkaLogLevel::Debug;
-        failure.planned = true;
-        self.shared.close(failure);
+        self.shared.released.store(true, Ordering::Release);
+        self.shared.close_if_released();
     }
 }
 
@@ -771,9 +811,22 @@ impl Shared {
         }
     }
 
+    /// Closes a connection whose last handle was dropped once no request is
+    /// outstanding.
+    fn close_if_released(&self) {
+        if self.released.load(Ordering::SeqCst) && self.outstanding.load(Ordering::SeqCst) == 0 {
+            self.close(Failure {
+                level: RDKafkaLogLevel::Debug,
+                code: RDKafkaErrorCode::BrokerTransportFailure,
+                message: "Connection closed by client".into(),
+                planned: true,
+            });
+        }
+    }
+
     /// Updates counters for a pending request that leaves the connection.
     fn finish(&self, p: &Pending) {
-        self.outstanding.fetch_sub(1, Ordering::AcqRel);
+        self.outstanding.fetch_sub(1, Ordering::SeqCst);
         let c = &self.counters;
         if p.sent_at.is_some() {
             c.waitresp_cnt.fetch_sub(1, Ordering::Relaxed);
@@ -784,6 +837,9 @@ impl Shared {
             c.outbuf_msg_cnt
                 .fetch_sub(msg_i64(p.msg_cnt), Ordering::Relaxed);
         }
+        // The pending entry is already out of the map, so closing here does
+        // not fail it.
+        self.close_if_released();
     }
 
     /// The log level of a peer disconnect, like librdkafka's
@@ -826,7 +882,13 @@ async fn write_loop(
             _ = shared.closed.cancelled() => break,
             out = rx.recv() => match out {
                 Some(out) => out,
-                None => break,
+                // The last handle was dropped: keep the write half open
+                // until the outstanding requests completed and the
+                // connection closes, since a broker closes on EOF.
+                None => {
+                    shared.closed.cancelled().await;
+                    break;
+                }
             },
         };
         let len = out.frame.len();
@@ -890,6 +952,15 @@ async fn read_loop(
         let next = tokio::select! {
             biased;
             _ = shared.closed.cancelled() => return,
+            _ = shared.shutdown.cancelled() => {
+                shared.close(Failure {
+                    level: RDKafkaLogLevel::Debug,
+                    code: RDKafkaErrorCode::BrokerDestroy,
+                    message: "Broker handle is terminating".into(),
+                    planned: true,
+                });
+                return;
+            }
             next = frames.next() => next,
             _ = sleep_until_opt(wake_at) => {
                 check_timeouts(&shared);

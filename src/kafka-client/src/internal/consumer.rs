@@ -315,12 +315,19 @@ impl ConsumerInner {
             }
             // Checked under the main lock, which the event queue's wakeup
             // takes before notifying, so that no wakeup is lost.
+            let mut remaining = deadline.remaining_duration();
             if events.has_pending() {
                 drop(main);
-                events.serve();
-                continue;
+                if events.serve() {
+                    continue;
+                }
+                // Another thread is delivering events (or a callback up
+                // this stack polls): check again shortly rather than spin.
+                main = self.lock_main();
+                remaining = Some(remaining.map_or(Duration::from_millis(10), |r| {
+                    r.min(Duration::from_millis(10))
+                }));
             }
-            let remaining = deadline.remaining_duration();
             if remaining.is_some_and(|r| r.is_zero()) {
                 return None;
             }

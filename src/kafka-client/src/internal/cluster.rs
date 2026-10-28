@@ -196,6 +196,7 @@ impl Cluster {
             logger,
             tls,
             oauth,
+            shutdown: shutdown.clone(),
         };
         let kind = match settings.kind {
             ClientKind::Consumer => "consumer",
@@ -406,10 +407,16 @@ impl Cluster {
             .min(Duration::from_secs(1))
             .max(Duration::from_millis(11));
         let brokers = self.brokers();
-        if brokers
-            .iter()
-            .any(|b| b.state().is_up() || b.is_connecting())
-        {
+        if brokers.iter().any(|b| b.state().is_up()) {
+            return interval;
+        }
+        // Brokers that are already connecting, possibly stuck in a slow
+        // resolve hook or waiting out their backoff, do not keep the others
+        // from being tried, as with librdkafka's choice among brokers in
+        // state INIT.
+        let brokers: Vec<Arc<Broker>> =
+            brokers.into_iter().filter(|b| !b.is_connecting()).collect();
+        if brokers.is_empty() {
             return interval;
         }
         {
@@ -563,46 +570,74 @@ impl Cluster {
     ///
     /// Fails with `BrokerTransportFailure` if no broker came up and
     /// `OperationTimedOut` if the response did not arrive in time. The
-    /// response updates the cache. Returns the broker that answered.
+    /// response updates the cache, also if it arrives after the deadline.
+    /// Returns the broker that answered.
     pub(crate) async fn fetch_metadata(
         &self,
         topics: MetadataTopics<'_>,
         deadline: Deadline,
     ) -> Result<(Arc<Broker>, MetadataResponse), NetError> {
+        self.fetch_metadata_with(topics, deadline, deadline).await
+    }
+
+    /// Like [`Cluster::fetch_metadata`], waiting up to `broker_deadline` for a
+    /// broker that is up and up to `deadline` for the response.
+    async fn fetch_metadata_with(
+        &self,
+        topics: MetadataTopics<'_>,
+        broker_deadline: Deadline,
+        deadline: Deadline,
+    ) -> Result<(Arc<Broker>, MetadataResponse), NetError> {
         let allow_auto_create = self.ctx.settings.allow_auto_create_topics;
+        let names: Option<Vec<String>> = match topics {
+            MetadataTopics::All => None,
+            MetadataTopics::None => Some(vec![]),
+            MetadataTopics::Some(names) => Some(names.to_vec()),
+        };
         let mut retries = 0;
         let mut last_error = None;
         loop {
             // A retry that finds no broker fails with the request's error.
-            let broker = match self.any_broker(deadline).await {
+            let broker = match self.any_broker(broker_deadline.min(deadline)).await {
                 Ok(broker) => broker,
                 Err(e) => return Err(last_error.unwrap_or(e)),
             };
-            let request = broker.request::<MetadataRequest, _>(
-                |version| {
-                    let mut req = MetadataRequest::default();
-                    req.topics = match topics {
-                        MetadataTopics::All if version == 0 => Some(vec![]),
-                        MetadataTopics::All => None,
-                        MetadataTopics::None => Some(vec![]),
-                        MetadataTopics::Some(names) => Some(
-                            names
-                                .iter()
-                                .map(|n| {
-                                    MetadataRequestTopic::default().with_name(Some(TopicName(
-                                        StrBytes::from_string(n.clone()),
-                                    )))
-                                })
-                                .collect(),
-                        ),
-                    };
-                    if version >= 4 {
-                        req.allow_auto_topic_creation = allow_auto_create;
-                    }
-                    req
-                },
-                RequestOptions::default(),
-            );
+            let names = names.clone();
+            let request = {
+                let broker = Arc::clone(&broker);
+                async move {
+                    broker
+                        .request::<MetadataRequest, _>(
+                            |version| {
+                                let mut req = MetadataRequest::default();
+                                req.topics = match names {
+                                    None if version == 0 => Some(vec![]),
+                                    None => None,
+                                    Some(names) => Some(
+                                        names
+                                            .into_iter()
+                                            .map(|n| {
+                                                MetadataRequestTopic::default().with_name(Some(
+                                                    TopicName(StrBytes::from_string(n)),
+                                                ))
+                                            })
+                                            .collect(),
+                                    ),
+                                };
+                                if version >= 4 {
+                                    req.allow_auto_topic_creation = allow_auto_create;
+                                }
+                                req
+                            },
+                            RequestOptions::default(),
+                        )
+                        .await
+                }
+            };
+            // The request runs as its own task, bounded by
+            // `socket.timeout.ms`, so that its response updates the cache
+            // even when this caller stops waiting for it.
+            let request = runtime::spawn("kafka-metadata-request", request);
             let result = match deadline.instant() {
                 Some(at) => match tokio::time::timeout_at(at.into(), request).await {
                     Ok(r) => r,
@@ -927,25 +962,35 @@ async fn refresh_loop(cluster: Weak<Cluster>, shutdown: CancellationToken) {
         let Some(c) = cluster.upgrade() else { return };
         let topics = c.known_topics();
         // Periodic refreshes only use a broker that is already up, as
-        // librdkafka's; on-demand ones may wait for a connection.
-        let deadline = Deadline::new(if is_periodic {
-            Duration::ZERO
+        // librdkafka's; on-demand ones may wait for a connection. Both wait
+        // `socket.timeout.ms` for the response.
+        let deadline = Deadline::new(c.ctx.settings.socket_timeout);
+        let broker_deadline = if is_periodic {
+            Deadline::new(Duration::ZERO)
         } else {
-            c.ctx.settings.socket_timeout
-        });
-        if topics.is_empty() {
-            // Without known topics, refresh the broker list at most every
-            // 10 s.
-            if is_periodic
-                && last_broker_refresh.map_or(true, |t| t.elapsed() >= Duration::from_secs(10))
-            {
-                last_broker_refresh = Some(Instant::now());
-                let _ = c.fetch_metadata(MetadataTopics::None, deadline).await;
+            deadline
+        };
+        let refresh = async {
+            if topics.is_empty() {
+                // Without known topics, refresh the broker list at most
+                // every 10 s.
+                if is_periodic
+                    && last_broker_refresh.map_or(true, |t| t.elapsed() >= Duration::from_secs(10))
+                {
+                    last_broker_refresh = Some(Instant::now());
+                    let _ = c
+                        .fetch_metadata_with(MetadataTopics::None, broker_deadline, deadline)
+                        .await;
+                }
+            } else {
+                let _ = c
+                    .fetch_metadata_with(MetadataTopics::Some(&topics), broker_deadline, deadline)
+                    .await;
             }
-        } else {
-            let _ = c
-                .fetch_metadata(MetadataTopics::Some(&topics), deadline)
-                .await;
+        };
+        tokio::select! {
+            _ = shutdown.cancelled() => return,
+            () = refresh => {}
         }
         drop(c);
         if !is_periodic {

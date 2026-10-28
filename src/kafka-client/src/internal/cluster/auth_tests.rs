@@ -423,6 +423,99 @@ fn oauthbearer_tokens() {
     );
 }
 
+/// A producer context recording failure logs and delivery results.
+#[derive(Clone, Default)]
+struct ProducerCtx {
+    fails: Arc<Mutex<Vec<String>>>,
+    delivered: Arc<Mutex<(u64, Vec<String>)>>,
+}
+
+impl ClientContext for ProducerCtx {
+    fn log(&self, level: RDKafkaLogLevel, fac: &str, log_message: &str) {
+        if fac == "FAIL" && level != RDKafkaLogLevel::Debug {
+            self.fails.lock().unwrap().push(log_message.to_string());
+        }
+    }
+
+    fn resolve_broker_addr(&self, host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+        let host = if host == "kafka" { "127.0.0.1" } else { host };
+        (host, port).to_socket_addrs().map(|a| a.collect())
+    }
+}
+
+impl crate::producer::ProducerContext for ProducerCtx {
+    type DeliveryOpaque = ();
+
+    fn delivery(&self, result: &crate::message::DeliveryResult<'_>, _: ()) {
+        let mut delivered = self.delivered.lock().unwrap();
+        match result {
+            Ok(_) => delivered.0 += 1,
+            Err((e, _)) => delivered.1.push(e.to_string()),
+        }
+    }
+}
+
+/// A producer keeps producing across SASL session renewals: its sender moves
+/// to the re-authenticated connection instead of being disconnected by the
+/// broker when the session expires.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn producer_sasl_reauthentication() {
+    use crate::producer::{BaseRecord, Producer, ThreadedProducer};
+    let Some(_) = secrets() else { return };
+    let sasl = [
+        ("bootstrap.servers", "kafka:39095"),
+        ("security.protocol", "sasl_plaintext"),
+        ("sasl.mechanisms", "PLAIN"),
+        ("sasl.username", "materialize"),
+        ("sasl.password", "sekurity"),
+    ];
+    let topic = format!(
+        "mzkc-reauth-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    );
+    {
+        let (admin, _ctx) = client(&sasl).unwrap();
+        super::tests::create_topic(admin.cluster(), &topic, 1);
+    }
+    let mut config = ClientConfig::new();
+    config.set_log_level(RDKafkaLogLevel::Info);
+    for (k, v) in sasl {
+        config.set(k, v);
+    }
+    config.set("linger.ms", "0");
+    let ctx = ProducerCtx::default();
+    let producer: ThreadedProducer<ProducerCtx> = config.create_with_context(ctx.clone()).unwrap();
+    let start = Instant::now();
+    let mut sent = 0;
+    // Sessions last 10 s: this spans two renewals.
+    while start.elapsed() < Duration::from_secs(25) {
+        producer
+            .send(BaseRecord::<(), _, ()>::to(&topic).payload("x"))
+            .map_err(|(e, _)| e)
+            .unwrap();
+        sent += 1;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    producer.flush(Duration::from_secs(30)).unwrap();
+    let (ok, errors) = ctx.delivered.lock().unwrap().clone();
+    assert!(errors.is_empty(), "{errors:#?}");
+    assert_eq!(ok, sent);
+    let fails = ctx.fails.lock().unwrap().clone();
+    assert!(fails.is_empty(), "{fails:#?}");
+    let connects: i64 = producer
+        .client()
+        .cluster()
+        .brokers()
+        .iter()
+        .map(|b| b.counters().connects.load(Ordering::Relaxed))
+        .sum();
+    assert!(connects >= 3, "{connects}");
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // network
 fn sasl_reauthentication() {

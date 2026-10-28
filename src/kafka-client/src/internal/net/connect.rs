@@ -27,11 +27,13 @@ use kafka_protocol::messages::{
 use kafka_protocol::protocol::{Request, StrBytes};
 use mz_ore::cast::CastFrom;
 use tokio::net::{TcpSocket, TcpStream};
+use tokio_util::sync::CancellationToken;
 
 use crate::config::RDKafkaLogLevel;
 use crate::config::settings::{ClientSettings, SaslMechanism};
 use crate::internal::hooks::{self, Hooks, Logger};
 use crate::internal::protocol::{self, ApiVersions};
+use crate::internal::runtime;
 use crate::types::RDKafkaErrorCode;
 
 use super::frame::{self, FrameError};
@@ -50,6 +52,8 @@ pub(crate) struct ConnectContext {
     pub logger: Logger,
     pub tls: Option<TlsConfig>,
     pub oauth: Option<Arc<OAuthTokens>>,
+    /// The client's shutdown token; closes all connections.
+    pub shutdown: CancellationToken,
 }
 
 /// The broker to connect to.
@@ -136,8 +140,9 @@ pub(crate) fn sockaddr_str(addr: &SocketAddr) -> String {
 /// Calls the resolve hook (on a blocking thread) on every attempt and
 /// connects to the `cursor`-th address it returns, advancing the cursor, so
 /// successive attempts rotate through the addresses. `state` follows the
-/// setup steps for failure messages. Everything after resolution is bounded
-/// by `socket.connection.setup.timeout.ms`.
+/// setup steps for failure messages. Everything, the resolve hook included,
+/// is bounded by `socket.connection.setup.timeout.ms`; a hook that does not
+/// return in time keeps its blocking thread until it does.
 pub(crate) async fn establish(
     ctx: &ConnectContext,
     target: &Target<'_>,
@@ -148,31 +153,10 @@ pub(crate) async fn establish(
 ) -> Result<Connection, Failure> {
     let settings = &ctx.settings;
     state.set(BrokerState::Connect);
-    let addrs = hooks::resolve_broker_addr(&ctx.hooks, target.host.to_string(), target.port)
-        .await
-        .map_err(|e| {
-            Failure::error(
-                RDKafkaErrorCode::Resolve,
-                format!(
-                    "Failed to resolve '{}:{}': {}",
-                    target.host,
-                    target.port,
-                    gai_text(&e)
-                ),
-            )
-        })?;
-    if addrs.is_empty() {
-        return Err(Failure::error(
-            RDKafkaErrorCode::Resolve,
-            format!(
-                "Failed to resolve '{}:{}': {}",
-                target.host, target.port, "Non-recoverable failure in name resolution"
-            ),
-        ));
-    }
-    let addr = addrs[cursor.fetch_add(1, Ordering::Relaxed) % addrs.len()];
-
-    let setup = setup(ctx, target, addr, state, &counters);
+    let setup = async {
+        let addr = resolve(ctx, target, cursor).await?;
+        setup(ctx, target, addr, state, &counters).await
+    };
     let (io, versions, reauth_at) =
         match tokio::time::timeout(settings.socket_connection_setup_timeout, setup).await {
             Ok(result) => result?,
@@ -185,10 +169,39 @@ pub(crate) async fn establish(
                 });
             }
         };
-    let params = connection_params(settings, ctx.logger.clone(), target.name);
+    let params = connection_params(
+        settings,
+        ctx.logger.clone(),
+        target.name,
+        ctx.shutdown.clone(),
+    );
     Ok(Connection::start(
         io, versions, params, counters, reauth_at, on_close,
     ))
+}
+
+/// Calls the resolve hook and picks the `cursor`-th address.
+async fn resolve(
+    ctx: &ConnectContext,
+    target: &Target<'_>,
+    cursor: &AtomicUsize,
+) -> Result<SocketAddr, Failure> {
+    let fail = |text: &str| {
+        Failure::error(
+            RDKafkaErrorCode::Resolve,
+            format!(
+                "Failed to resolve '{}:{}': {text}",
+                target.host, target.port
+            ),
+        )
+    };
+    let addrs = hooks::resolve_broker_addr(&ctx.hooks, target.host.to_string(), target.port)
+        .await
+        .map_err(|e| fail(gai_text(&e)))?;
+    if addrs.is_empty() {
+        return Err(fail("Non-recoverable failure in name resolution"));
+    }
+    Ok(addrs[cursor.fetch_add(1, Ordering::Relaxed) % addrs.len()])
 }
 
 /// The connection parameters derived from the client settings.
@@ -196,6 +209,7 @@ pub(crate) fn connection_params(
     settings: &ClientSettings,
     logger: Logger,
     broker_name: &str,
+    shutdown: CancellationToken,
 ) -> ConnectionParams {
     let max_idle = settings.connections_max_idle.map(|idle| {
         // librdkafka subtracts up to 2 s of jitter per broker so that
@@ -218,6 +232,7 @@ pub(crate) fn connection_params(
         tls: settings.security_protocol.uses_tls(),
         logger,
         broker_name: Arc::from(broker_name),
+        shutdown,
     }
 }
 
@@ -558,7 +573,16 @@ async fn authenticate(
     let mut server: Option<Bytes> = None;
     let mut session_lifetime_ms = 0;
     loop {
-        let msg = match exchange.step(server.as_deref()).map_err(auth_err)? {
+        // A SCRAM step hashes the password up to a million times (about a
+        // second): keep it off the I/O threads.
+        let input = server.take();
+        let (back, step) = runtime::run_blocking(move || {
+            let step = exchange.step(input.as_deref());
+            (exchange, step)
+        })
+        .await;
+        exchange = back;
+        let msg = match step.map_err(auth_err)? {
             Step::Send(msg) => msg,
             Step::Done => break,
         };

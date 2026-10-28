@@ -1062,6 +1062,13 @@ fn fmt_g(v: f64) -> String {
     if v == 0.0 {
         return "0".to_string();
     }
+    // `strtod` overflows to infinity, e.g. for "1e999".
+    if v.is_nan() {
+        return "nan".to_string();
+    }
+    if v.is_infinite() {
+        return if v > 0.0 { "inf" } else { "-inf" }.to_string();
+    }
     let sci = format!("{v:.5e}");
     let (mantissa, exp) = sci.split_once('e').expect("formatted with exponent");
     let exp: i32 = exp.parse().expect("valid exponent");
@@ -2063,6 +2070,12 @@ mod tests {
             "Client config error: Configuration property \"queue.buffering.max.ms\" value \
              1e+06 is outside allowed range 0..900000\n linger.ms 1000000"
         );
+        // strtod overflows to infinity; formatting it must not panic.
+        assert_eq!(
+            err(c, &[("queue.buffering.max.ms", "1e999")]),
+            "Client config error: Configuration property \"queue.buffering.max.ms\" value \
+             inf is outside allowed range 0..900000\n queue.buffering.max.ms 1e999"
+        );
         assert_eq!(
             err(c, &[("debug", "all,bogus")]),
             "Client config error: Invalid value \"bogus\" for configuration property \"debug\" \
@@ -2422,6 +2435,9 @@ mod tests {
         assert_eq!(fmt_g(0.0001), "0.0001");
         assert_eq!(fmt_g(0.00001), "1e-05");
         assert_eq!(fmt_g(123_456_789.0), "1.23457e+08");
+        assert_eq!(fmt_g(f64::INFINITY), "inf");
+        assert_eq!(fmt_g(f64::NEG_INFINITY), "-inf");
+        assert_eq!(fmt_g(f64::NAN), "nan");
     }
 
     #[mz_ore::test]

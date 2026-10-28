@@ -144,11 +144,23 @@ impl EventQueue {
     /// Delivers the queued events to the hooks, in order, on the calling
     /// thread, like `rd_kafka_poll(rk, 0)`. No lock of the queue is held
     /// while a callback runs.
-    pub(crate) fn serve(&self) {
+    ///
+    /// Returns false, delivering nothing, if another call is delivering
+    /// events (on another thread, or further up this thread's stack when a
+    /// callback polls the consumer); that call also delivers the events
+    /// queued now, and wakes the consumer if more are queued afterwards.
+    pub(crate) fn serve(&self) -> bool {
         if !self.has_pending() {
-            return;
+            return true;
         }
-        let _serving = self.serving.lock().expect("lock poisoned");
+        // Whoever holds `serving` delivers everything queued, including
+        // events pushed meanwhile. Not waiting for it keeps a callback that
+        // polls the consumer (and so re-enters here) from deadlocking.
+        let _serving = match self.serving.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::WouldBlock) => return false,
+            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
+        };
         loop {
             let event = {
                 let mut queue = self.queue.lock().expect("lock poisoned");
@@ -159,7 +171,7 @@ impl EventQueue {
             match event {
                 Some(Event::Error(error, reason)) => self.hooks.error(error, &reason),
                 Some(Event::Stats(statistics)) => self.hooks.stats(statistics),
-                None => return,
+                None => return true,
             }
         }
     }
@@ -262,5 +274,41 @@ mod tests {
         let delivered = events(&recorder);
         assert_eq!(delivered.len(), MAX_QUEUED_ERRORS);
         assert!(delivered[0].ends_with(": 5"));
+    }
+
+    /// A callback that polls (serves) the same queue again.
+    struct Reentrant {
+        queue: std::sync::OnceLock<std::sync::Weak<EventQueue>>,
+        seen: Mutex<Vec<String>>,
+    }
+
+    impl ClientContext for Arc<Reentrant> {
+        fn error(&self, _error: KafkaError, reason: &str) {
+            self.seen.lock().unwrap().push(reason.to_string());
+            if let Some(queue) = self.queue.get().and_then(|q| q.upgrade()) {
+                // Re-entering does not deadlock; the outer call delivers
+                // what is still queued.
+                let pending = queue.has_pending();
+                assert_eq!(queue.serve(), !pending);
+            }
+        }
+    }
+
+    #[mz_ore::test]
+    fn reentrant_serve_does_not_deadlock() {
+        let ctx = Arc::new(Reentrant {
+            queue: std::sync::OnceLock::new(),
+            seen: Mutex::new(Vec::new()),
+        });
+        let hooks: Arc<dyn Hooks> = Arc::new(Arc::clone(&ctx));
+        let q = Arc::new(EventQueue::new(hooks, ClientKind::Consumer));
+        ctx.queue.set(Arc::downgrade(&q)).unwrap();
+        for n in 0..3 {
+            let (e, reason) = error(n);
+            q.error(e, &reason);
+        }
+        assert!(q.serve());
+        assert_eq!(*ctx.seen.lock().unwrap(), ["0", "1", "2"]);
+        assert!(!q.has_pending());
     }
 }
