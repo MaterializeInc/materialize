@@ -211,6 +211,17 @@ plain `DROP INDEX` is a fallback branch reached when a model name collides with
 an existing index. It fails with the in-use error if another object reads from
 that index.
 
+The Terraform provider up to v0.11.10 replaces an index by running
+`DROP INDEX ... RESTRICT` first, so replacing a `materialize_index` that a
+materialized view reads fails with the in-use error on every apply, and
+`terraform destroy` fails intermittently because the provider drops the view
+and the index in parallel.
+[terraform-provider-materialize#952](https://github.com/MaterializeInc/terraform-provider-materialize/pull/952)
+and [#953](https://github.com/MaterializeInc/terraform-provider-materialize/pull/953)
+fix the provider. Until users upgrade, adding
+`lifecycle { replace_triggered_by = [materialize_index.<name>.id] }` to the
+materialized view is the workaround.
+
 The Console's drop dialog issues `DROP INDEX ... CASCADE`. Since `CASCADE` still
 means `RESTRICT` on an index, dropping an in-use index from the Console fails
 with the in-use error, which the dialog shows, and the Console needs no change.
