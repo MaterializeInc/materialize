@@ -25,13 +25,16 @@ use kafka_protocol::messages::{
 use kafka_protocol::protocol::StrBytes;
 
 use crate::config::settings::IsolationLevel;
+use crate::error::KafkaError;
 use crate::internal::cluster::{Broker, Cluster, CoordinatorKind};
 use crate::internal::net::{NetError, RequestOptions};
 use crate::internal::protocol;
 use crate::types::RDKafkaErrorCode;
 use crate::util::Deadline;
 
-use super::partition::{FetchPhase, OFFSET_BEGINNING, OFFSET_END, OFFSET_STORED, OFFSET_TAIL_BASE};
+use super::partition::{
+    FetchPhase, Item, OFFSET_BEGINNING, OFFSET_END, OFFSET_STORED, OFFSET_TAIL_BASE,
+};
 use super::{ConsumerInner, Partition, offset_reset};
 
 /// How many times a request that failed with a retriable error is retried.
@@ -98,6 +101,15 @@ async fn backoff(cluster: &Cluster, attempt: u32, deadline: Deadline) -> Result<
     }
 }
 
+/// A failed group coordinator request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CoordinatorError {
+    pub code: RDKafkaErrorCode,
+    /// The last attempt failed to look up the coordinator, so it sent no
+    /// request.
+    pub lookup: bool,
+}
+
 /// Runs `request` against the group coordinator, retrying coordinator and
 /// transport errors until the deadline. `request` returns the response's
 /// top-level error, if any, alongside its result.
@@ -106,18 +118,22 @@ async fn with_coordinator<T, F, Fut>(
     group_id: &str,
     deadline: Deadline,
     mut request: F,
-) -> Result<T, RDKafkaErrorCode>
+) -> Result<T, CoordinatorError>
 where
     F: FnMut(Arc<Broker>) -> Fut,
     Fut: std::future::Future<Output = Result<(Option<RDKafkaErrorCode>, T), NetError>>,
 {
     let mut attempt = 0;
     loop {
+        let mut lookup = false;
         let code = match cluster
             .coordinator(CoordinatorKind::Group, group_id, deadline)
             .await
         {
-            Err(e) => e.code(),
+            Err(e) => {
+                lookup = true;
+                e.code()
+            }
             Ok(broker) => {
                 let response = request(broker);
                 let result = match deadline.instant() {
@@ -133,17 +149,18 @@ where
                 }
             }
         };
+        let error = CoordinatorError { code, lookup };
         match code {
-            RDKafkaErrorCode::BrokerDestroy => return Err(code),
+            RDKafkaErrorCode::BrokerDestroy => return Err(error),
             code if is_coordinator_error(code) => {
                 cluster.invalidate_coordinator(CoordinatorKind::Group, group_id);
             }
             RDKafkaErrorCode::CoordinatorLoadInProgress
             | RDKafkaErrorCode::UnstableOffsetCommit => {}
-            code => return Err(code),
+            _ => return Err(error),
         }
         if backoff(cluster, attempt, deadline).await.is_err() {
-            return Err(code);
+            return Err(error);
         }
         attempt += 1;
     }
@@ -152,8 +169,9 @@ where
 /// Commits offsets for `group_id`. Returns the per-entry errors, or an error
 /// for the whole request.
 ///
-/// Coordinator and transport errors are retried until the deadline; with no
-/// deadline, as librdkafka's synchronous commit, until the client shuts down.
+/// Coordinator and transport errors are retried until the deadline, then
+/// reported as `WaitingForCoordinator`, like librdkafka's commit that waited
+/// for a coordinator in vain.
 pub(super) async fn commit(
     cluster: &Cluster,
     group_id: &str,
@@ -222,7 +240,14 @@ pub(super) async fn commit(
             Ok((coordinator_error, response))
         }
     })
-    .await?;
+    .await
+    .map_err(|e| {
+        if is_coordinator_error(e.code) || e.code == RDKafkaErrorCode::CoordinatorLoadInProgress {
+            RDKafkaErrorCode::WaitingForCoordinator
+        } else {
+            e.code
+        }
+    })?;
     let mut errors: BTreeMap<(&str, i32), RDKafkaErrorCode> = BTreeMap::new();
     for topic in &response.topics {
         for p in &topic.partitions {
@@ -254,7 +279,7 @@ pub(super) async fn fetch_committed(
     items: &[(String, i32)],
     require_stable: bool,
     deadline: Deadline,
-) -> Result<Vec<Result<(i64, String), RDKafkaErrorCode>>, RDKafkaErrorCode> {
+) -> Result<Vec<Result<(i64, String), RDKafkaErrorCode>>, CoordinatorError> {
     let mut by_topic: BTreeMap<&str, Vec<i32>> = BTreeMap::new();
     for (topic, partition) in items {
         by_topic.entry(topic).or_default().push(*partition);
@@ -354,6 +379,66 @@ fn list_offsets_retriable(code: RDKafkaErrorCode) -> bool {
             | RDKafkaErrorCode::DestroyBroker
             | RDKafkaErrorCode::RequestTimedOut
     )
+}
+
+/// Whether `code` came from a response rather than from this client: local
+/// codes are -100 and below.
+fn from_response(code: RDKafkaErrorCode) -> bool {
+    code.to_i32() > -100
+}
+
+/// Whether a failed ListOffsets lookup is reported to the application, like
+/// librdkafka reports the errors it neither retries nor refreshes metadata
+/// for. A partition without a known leader waits for one silently.
+///
+/// NOTE: Unlike librdkafka, `UNKNOWN_TOPIC_OR_PARTITION` is not reported
+/// here: a leader answers so for a topic it does not know yet right after
+/// the topic was created, and topics that do not exist are reported from the
+/// metadata.
+fn reported_list_offsets_error(e: &OffsetError) -> bool {
+    !e.leader_lookup
+        && from_response(e.code)
+        && !list_offsets_retriable(e.code)
+        && !matches!(
+            e.code,
+            RDKafkaErrorCode::ReplicaNotAvailable
+                | RDKafkaErrorCode::KafkaStorageError
+                | RDKafkaErrorCode::OffsetNotAvailable
+                | RDKafkaErrorCode::UnknownTopicOrPartition
+        )
+}
+
+/// Whether a failed OffsetFetch is reported to the application. Coordinator
+/// changes and pending transactional commits are retried silently.
+/// Coordinator lookup failures are reported by the consumer's coordinator
+/// query instead, see `query_coordinator`.
+fn reported_offset_fetch_error(e: CoordinatorError) -> bool {
+    !e.lookup && reported_offset_fetch_code(e.code)
+}
+
+/// Whether an OffsetFetch error code in a response is reported. Topics that
+/// do not exist are reported from the metadata.
+fn reported_offset_fetch_code(code: RDKafkaErrorCode) -> bool {
+    from_response(code)
+        && !is_coordinator_error(code)
+        && !matches!(
+            code,
+            RDKafkaErrorCode::CoordinatorLoadInProgress
+                | RDKafkaErrorCode::UnstableOffsetCommit
+                | RDKafkaErrorCode::UnknownTopicOrPartition
+        )
+}
+
+/// How [`finish`] reports a lookup error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Report {
+    /// Not at all.
+    Silent,
+    /// On the partition's queue, like librdkafka's ListOffsets errors.
+    Partition,
+    /// By the caller, on the main queue, like librdkafka's OffsetFetch
+    /// errors.
+    Main,
 }
 
 /// Why a ListOffsets lookup failed for one partition.
@@ -521,6 +606,12 @@ async fn list_offsets_at(
 /// scheduling, target): committed offsets for `STORED`, with
 /// `auto.offset.reset` when there is none, and ListOffsets for the rest.
 /// Partitions that failed back off and are retried by the manager.
+///
+/// Errors that retrying is not expected to fix are reported as consumer
+/// errors, once per partition until a different error or a success. Unlike
+/// librdkafka, which stops such a partition until it is assigned again
+/// (OffsetFetch) or applies `auto.offset.reset` (ListOffsets), the lookup is
+/// retried, so the partition recovers once the cause is fixed.
 pub(super) async fn resolve(inner: Arc<ConsumerInner>, batch: Vec<(Arc<Partition>, u64, i64)>) {
     let cluster = Arc::clone(&inner.cluster);
     let settings = Arc::clone(inner.settings());
@@ -543,13 +634,22 @@ pub(super) async fn resolve(inner: Arc<ConsumerInner>, batch: Vec<(Arc<Partition
             deadline,
         )
         .await;
+        // A request-level error is reported once for the whole batch.
+        let mut report_request_error = false;
         for (i, (partition, version, target)) in stored.into_iter().enumerate() {
-            match results.as_ref().map(|r| r[i].clone()).map_err(|c| *c) {
+            match results.as_ref().map(|r| r[i].clone()).map_err(|e| *e) {
                 Ok(Ok((offset, _))) if offset >= 0 => {
                     partition
                         .committed
                         .store(offset, std::sync::atomic::Ordering::Release);
-                    finish(&inner, &partition, version, target, Ok(offset));
+                    finish(
+                        &inner,
+                        &partition,
+                        version,
+                        target,
+                        Ok(offset),
+                        Report::Silent,
+                    );
                 }
                 Ok(Ok(_)) => {
                     // No committed offset: apply auto.offset.reset.
@@ -577,9 +677,30 @@ pub(super) async fn resolve(inner: Arc<ConsumerInner>, batch: Vec<(Arc<Partition
                         partition.notify(&inner, wake);
                     }
                 }
-                Ok(Err(code)) | Err(code) => {
-                    finish(&inner, &partition, version, target, Err(code));
+                Ok(Err(code)) => {
+                    let report = if reported_offset_fetch_code(code) {
+                        Report::Main
+                    } else {
+                        Report::Silent
+                    };
+                    if finish(&inner, &partition, version, target, Err(code), report) {
+                        inner.push_event(KafkaError::MessageConsumption(code));
+                    }
                 }
+                Err(e) => {
+                    let report = if reported_offset_fetch_error(e) {
+                        Report::Main
+                    } else {
+                        Report::Silent
+                    };
+                    report_request_error |=
+                        finish(&inner, &partition, version, target, Err(e.code), report);
+                }
+            }
+        }
+        if let Err(e) = results {
+            if report_request_error {
+                inner.push_event(KafkaError::MessageConsumption(e.code));
             }
         }
     }
@@ -602,6 +723,10 @@ pub(super) async fn resolve(inner: Arc<ConsumerInner>, batch: Vec<(Arc<Partition
         let mut results = results.into_iter();
         for (partition, version, target) in logical {
             let result = results.next().expect("one result per item");
+            let report = match &result {
+                Err(e) if reported_list_offsets_error(e) => Report::Partition,
+                _ => Report::Silent,
+            };
             let result = result.map_err(|e| e.code).map(|offset| {
                 if target <= OFFSET_TAIL_BASE {
                     // Like librdkafka, a tail beyond the start reads from 0.
@@ -611,35 +736,51 @@ pub(super) async fn resolve(inner: Arc<ConsumerInner>, batch: Vec<(Arc<Partition
                     offset
                 }
             });
-            finish(&inner, &partition, version, target, result);
+            finish(&inner, &partition, version, target, result, report);
         }
     }
     inner.wake();
 }
 
 /// Applies a resolved start offset, unless the partition was restarted
-/// meanwhile.
+/// meanwhile. Returns whether the caller must report the error, for
+/// [`Report::Main`].
 fn finish(
     inner: &ConsumerInner,
-    partition: &Partition,
+    partition: &Arc<Partition>,
     version: u64,
     target: i64,
     result: Result<i64, RDKafkaErrorCode>,
-) {
+    report: Report,
+) -> bool {
     let mut state = partition.lock_state();
     if state.version != version || state.fetch.phase != FetchPhase::Resolve(target) {
-        return;
+        return false;
     }
-    let fetch = &mut state.fetch;
-    fetch.resolving = false;
+    state.fetch.resolving = false;
     match result {
         Ok(offset) => {
+            let fetch = &mut state.fetch;
             fetch.phase = FetchPhase::Active;
             fetch.offset = offset;
             fetch.resolve_failures = 0;
             fetch.backoff_until = None;
+            fetch.last_error = None;
+            false
         }
         Err(code) => {
+            let new_error = report != Report::Silent && state.fetch.last_error != Some(code);
+            let mut wake = None;
+            if new_error {
+                state.fetch.last_error = Some(code);
+                if report == Report::Partition {
+                    wake = Some(state.push(
+                        Item::Error(KafkaError::MessageConsumption(code)),
+                        partition.is_split(),
+                    ));
+                }
+            }
+            let fetch = &mut state.fetch;
             let settings = inner.settings();
             let factor = 1u32 << fetch.resolve_failures.min(10);
             let delay = (settings.retry_backoff * factor)
@@ -657,6 +798,11 @@ fn finish(
                     code.err2str()
                 ),
             );
+            drop(state);
+            if let Some(wake) = wake {
+                partition.notify(inner, wake);
+            }
+            new_error && report == Report::Main
         }
     }
 }

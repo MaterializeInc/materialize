@@ -211,6 +211,8 @@ pub trait Message {
 #[derive(Debug, Clone)]
 struct HeaderSpan {
     key: Range<usize>,
+    /// The key with invalid UTF-8 sequences replaced, if it is not UTF-8.
+    lossy_key: Option<Box<str>>,
     value: Option<Range<usize>>,
 }
 
@@ -232,10 +234,8 @@ pub struct BorrowedHeaders {
 pub(crate) enum HeaderDecodeError {
     /// The section ended in the middle of a header.
     Truncated,
-    /// A count or length is negative (other than a null value) or too large.
+    /// A count or key length is negative or too large.
     InvalidLength,
-    /// A header key is not valid UTF-8.
-    InvalidKey,
     /// Bytes remain after the last header.
     TrailingBytes,
 }
@@ -329,8 +329,11 @@ impl Headers for BorrowedHeaders {
 
     fn try_get(&self, idx: usize) -> Option<Header<'_, &[u8]>> {
         let span = self.spans().get(idx)?;
-        let key = str::from_utf8(&self.raw[span.key.clone()])
-            .expect("header keys are validated as UTF-8 on construction");
+        let key = match &span.lossy_key {
+            Some(key) => key,
+            None => str::from_utf8(&self.raw[span.key.clone()])
+                .expect("keys that are not UTF-8 have a lossy copy"),
+        };
         Some(Header {
             key,
             value: span.value.clone().map(|range| &self.raw[range]),
@@ -345,6 +348,10 @@ impl fmt::Debug for BorrowedHeaders {
 }
 
 /// Validates `count` encoded header entries, calling `f` for every header.
+///
+/// Like the Java client, this treats any negative value length as a null
+/// value and replaces invalid UTF-8 in keys, instead of failing the whole
+/// header section.
 fn walk_entries(
     raw: &[u8],
     count: usize,
@@ -355,18 +362,20 @@ fn walk_entries(
         let key_len = read_varint(raw, &mut pos)?;
         let key_len = usize::try_from(key_len).map_err(|_| HeaderDecodeError::InvalidLength)?;
         let key = take(raw, &mut pos, key_len)?;
-        if str::from_utf8(&raw[key.clone()]).is_err() {
-            return Err(HeaderDecodeError::InvalidKey);
-        }
-        let value_len = read_varint(raw, &mut pos)?;
-        let value = if value_len == -1 {
-            None
-        } else {
-            let value_len =
-                usize::try_from(value_len).map_err(|_| HeaderDecodeError::InvalidLength)?;
-            Some(take(raw, &mut pos, value_len)?)
+        let lossy_key = match str::from_utf8(&raw[key.clone()]) {
+            Ok(_) => None,
+            Err(_) => Some(String::from_utf8_lossy(&raw[key.clone()]).into()),
         };
-        f(HeaderSpan { key, value });
+        let value_len = read_varint(raw, &mut pos)?;
+        let value = match usize::try_from(value_len) {
+            Ok(value_len) => Some(take(raw, &mut pos, value_len)?),
+            Err(_) => None,
+        };
+        f(HeaderSpan {
+            key,
+            lossy_key,
+            value,
+        });
     }
     if pos != raw.len() {
         return Err(HeaderDecodeError::TrailingBytes);
@@ -864,10 +873,10 @@ mod tests {
             BorrowedHeaders::from_record_bytes(Bytes::from_static(&[2, 4, b'a'])).err(),
             Some(HeaderDecodeError::Truncated)
         );
-        // One header with an invalid UTF-8 key and a null value.
+        // A negative key length.
         assert_eq!(
-            BorrowedHeaders::from_record_bytes(Bytes::from_static(&[2, 2, 0xff, 1])).err(),
-            Some(HeaderDecodeError::InvalidKey)
+            BorrowedHeaders::from_record_bytes(Bytes::from_static(&[2, 1, 1])).err(),
+            Some(HeaderDecodeError::InvalidLength)
         );
         // Trailing garbage.
         assert_eq!(
@@ -885,6 +894,39 @@ mod tests {
                 value: None
             }
         );
+    }
+
+    /// One bad header must not lose the others, see `walk_entries`.
+    #[mz_ore::test]
+    fn borrowed_headers_lenient() {
+        // Header 0: key 0xff 'a' with a null value (length -1). Header 1:
+        // key "k" with value length -2. Header 2: key "v" with value "x".
+        let h = BorrowedHeaders::from_record_bytes(Bytes::from_static(&[
+            6, 4, 0xff, b'a', 1, 2, b'k', 3, 2, b'v', 2, b'x',
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(h.count(), 3);
+        let want = [
+            Header {
+                key: "\u{fffd}a",
+                value: None,
+            },
+            Header {
+                key: "k",
+                value: None,
+            },
+            Header {
+                key: "v",
+                value: Some(&b"x"[..]),
+            },
+        ];
+        for (i, want) in want.iter().enumerate() {
+            assert_eq!(&h.get(i), want);
+        }
+        let detached = h.detach();
+        assert_eq!(detached.get(0).key, "\u{fffd}a");
+        assert_eq!(detached.get(2).value, Some(&b"x"[..]));
     }
 
     #[mz_ore::test]

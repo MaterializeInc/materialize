@@ -68,6 +68,17 @@ pub(super) enum Item {
     Notice(RDKafkaErrorCode, String),
 }
 
+/// What serving a queue produced.
+#[derive(Debug)]
+pub(super) enum Served {
+    /// A message or error for `poll` to return.
+    Message(KafkaResult<BorrowedMessage<'static>>),
+    /// A notice for `ClientContext::error`. The caller delivers it after
+    /// releasing the queue's locks, so that the callback can use the
+    /// consumer.
+    Notice(RDKafkaErrorCode, String),
+}
+
 /// How the start offset of a fetch is determined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FetchPhase {
@@ -388,11 +399,7 @@ impl Partition {
     ///
     /// `from_main` is set when serving the main queue, which stops serving a
     /// partition once it is split off.
-    pub(super) fn poll_once(
-        &self,
-        inner: &ConsumerInner,
-        from_main: bool,
-    ) -> Option<KafkaResult<BorrowedMessage<'static>>> {
+    pub(super) fn poll_once(&self, inner: &ConsumerInner, from_main: bool) -> Option<Served> {
         let mut reader = self.reader.lock().expect("lock poisoned");
         loop {
             if from_main && self.is_split() {
@@ -404,8 +411,8 @@ impl Partition {
                 let step = cursor.next(&mut progress);
                 self.apply(inner, &progress);
                 match step {
-                    Step::Record(record) => return Some(Ok(self.message(record))),
-                    Step::Error(e) => return Some(Err(e)),
+                    Step::Record(record) => return Some(Served::Message(Ok(self.message(record)))),
+                    Step::Error(e) => return Some(Served::Message(Err(e))),
                     Step::Done => *reader = None,
                 }
             }
@@ -429,11 +436,9 @@ impl Partition {
                         inner.settings().consumer.check_crcs,
                     ));
                 }
-                Item::Error(e) => return Some(Err(e)),
-                Item::Eof => return Some(Err(KafkaError::PartitionEOF(self.id))),
-                Item::Notice(code, reason) => {
-                    inner.hooks().error(KafkaError::Global(code), &reason);
-                }
+                Item::Error(e) => return Some(Served::Message(Err(e))),
+                Item::Eof => return Some(Served::Message(Err(KafkaError::PartitionEOF(self.id)))),
+                Item::Notice(code, reason) => return Some(Served::Notice(code, reason)),
             }
         }
     }
@@ -446,8 +451,13 @@ impl Partition {
         deadline: Deadline,
     ) -> Option<KafkaResult<BorrowedMessage<'static>>> {
         loop {
-            if let Some(result) = self.poll_once(inner, false) {
-                return Some(result);
+            match self.poll_once(inner, false) {
+                Some(Served::Message(result)) => return Some(result),
+                Some(Served::Notice(code, reason)) => {
+                    inner.hooks().error(KafkaError::Global(code), &reason);
+                    continue;
+                }
+                None => {}
             }
             let mut state = self.lock_state();
             if !state.items.is_empty() {

@@ -322,7 +322,7 @@ async fn run(
                     }
                     next_heartbeat = now + consumer.heartbeat_interval;
                     if poll_overdue(&inner) {
-                        let exceeded = inner.last_poll().elapsed().saturating_sub(consumer.max_poll_interval);
+                        let exceeded = inner.since_poll().saturating_sub(consumer.max_poll_interval);
                         inner.log(
                             RDKafkaLogLevel::Warning,
                             "MAXPOLL",
@@ -398,10 +398,9 @@ fn is_coordinator_error(code: RDKafkaErrorCode) -> bool {
     )
 }
 
-/// The application has not polled the main queue for
-/// `max.poll.interval.ms`.
+/// The application has not polled for `max.poll.interval.ms`.
 fn poll_overdue(inner: &ConsumerInner) -> bool {
-    inner.last_poll().elapsed() > inner.settings().consumer.max_poll_interval
+    inner.since_poll() > inner.settings().consumer.max_poll_interval
 }
 
 /// Refreshes the metadata of the subscribed topics, falling back to the

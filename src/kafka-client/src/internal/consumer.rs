@@ -62,7 +62,7 @@ use crate::types::RDKafkaErrorCode;
 use crate::util::{Deadline, Timeout};
 
 pub(crate) use self::partition::Partition;
-use self::partition::{FetchPhase, Item, OFFSET_BEGINNING, OFFSET_END, OFFSET_INVALID};
+use self::partition::{FetchPhase, Item, OFFSET_BEGINNING, OFFSET_END, OFFSET_INVALID, Served};
 use self::partition::{OFFSET_STORED, OFFSET_TAIL_BASE};
 
 /// A partition in the current assignment.
@@ -112,8 +112,10 @@ pub(crate) struct ConsumerInner {
     wake: watch::Sender<u64>,
     /// A fetcher skipped a partition because its queue was full.
     throttled: AtomicBool,
-    /// When the application last polled the main queue.
+    /// When the application last returned from a poll.
     last_poll: Mutex<Instant>,
+    /// Polls that may block, which count as polling until they return.
+    blocking_polls: AtomicUsize,
     next_request_id: AtomicU64,
     next_queue_id: AtomicU64,
     shutdown: CancellationToken,
@@ -153,6 +155,7 @@ impl ConsumerInner {
             wake,
             throttled: AtomicBool::new(false),
             last_poll: Mutex::new(Instant::now()),
+            blocking_polls: AtomicUsize::new(0),
             next_request_id: AtomicU64::new(1),
             next_queue_id: AtomicU64::new(1),
             shutdown,
@@ -303,11 +306,16 @@ impl ConsumerInner {
                 RDKafkaErrorCode::UnknownGroup,
             )));
         }
-        *self.last_poll.lock().expect("lock poisoned") = Instant::now();
+        let _poll = self.app_poll(timeout);
         let deadline = Deadline::new(timeout);
         loop {
-            if let Some(result) = self.poll_main_once() {
-                return Some(result);
+            match self.poll_main_once() {
+                Some(Served::Message(result)) => return Some(result),
+                Some(Served::Notice(code, reason)) => {
+                    self.hooks.error(KafkaError::Global(code), &reason);
+                    continue;
+                }
+                None => {}
             }
             let mut main = self.lock_main();
             if !main.ready.is_empty() || !main.events.is_empty() {
@@ -340,19 +348,19 @@ impl ConsumerInner {
         }
     }
 
-    fn poll_main_once(&self) -> Option<KafkaResult<BorrowedMessage<'static>>> {
+    fn poll_main_once(&self) -> Option<Served> {
         let mut current = self.main_current.lock().expect("lock poisoned");
         loop {
             if self.main_events.load(Ordering::Acquire) > 0 {
                 let mut main = self.lock_main();
                 if let Some(e) = main.events.pop_front() {
                     self.main_events.store(main.events.len(), Ordering::Release);
-                    return Some(Err(e));
+                    return Some(Served::Message(Err(e)));
                 }
             }
             if let Some(partition) = current.as_ref() {
-                if let Some(result) = partition.poll_once(self, true) {
-                    return Some(result);
+                if let Some(served) = partition.poll_once(self, true) {
+                    return Some(served);
                 }
                 *current = None;
             }
@@ -613,6 +621,11 @@ impl ConsumerInner {
         let hooks = Arc::clone(&self.hooks);
         let group_id = self.group_id.clone().expect("checked by callers");
         let member = self.member_identity();
+        // librdkafka waits up to `session.timeout.ms` for a coordinator, then
+        // the request takes up to `socket.timeout.ms`.
+        let deadline = Deadline::new(
+            self.settings().consumer.session_timeout + self.settings().socket_timeout,
+        );
         let partitions: Vec<Option<Arc<Partition>>> = {
             let state = self.lock_state();
             entries
@@ -627,8 +640,7 @@ impl ConsumerInner {
                 .collect()
         };
         async move {
-            let result =
-                offsets::commit(&cluster, &group_id, &member, &entries, Deadline::never()).await;
+            let result = offsets::commit(&cluster, &group_id, &member, &entries, deadline).await;
             let mut tpl = TopicPartitionList::with_capacity(entries.len());
             let mut first_error = None;
             match &result {
@@ -708,7 +720,7 @@ impl ConsumerInner {
         let results = runtime::block_on(async move {
             offsets::fetch_committed(&cluster, &group_id, &items, require_stable, deadline).await
         })
-        .map_err(KafkaError::MetadataFetch)?;
+        .map_err(|e| KafkaError::MetadataFetch(e.code))?;
         for (i, result) in results.into_iter().enumerate() {
             match result {
                 Ok((offset, metadata)) => {
@@ -867,9 +879,44 @@ impl ConsumerInner {
             .log_fmt(level, fac, format_args!("[thrd:main]: {args}"));
     }
 
-    /// When the application last polled the main queue.
-    fn last_poll(&self) -> Instant {
-        *self.last_poll.lock().expect("lock poisoned")
+    /// Marks an application poll of a queue, for `max.poll.interval.ms`,
+    /// until the returned guard drops.
+    fn app_poll(&self, timeout: Timeout) -> AppPoll<'_> {
+        let blocking = timeout != Timeout::After(Duration::ZERO);
+        if blocking {
+            self.blocking_polls.fetch_add(1, Ordering::SeqCst);
+        }
+        AppPoll {
+            inner: self,
+            blocking,
+        }
+    }
+
+    /// How long the application has not polled, for `max.poll.interval.ms`.
+    /// Zero while a poll that may block is waiting, like librdkafka's
+    /// `rd_kafka_app_poll_start`.
+    fn since_poll(&self) -> Duration {
+        if self.blocking_polls.load(Ordering::SeqCst) > 0 {
+            return Duration::ZERO;
+        }
+        self.last_poll.lock().expect("lock poisoned").elapsed()
+    }
+}
+
+/// An application poll in progress, see [`ConsumerInner::app_poll`].
+struct AppPoll<'a> {
+    inner: &'a ConsumerInner,
+    blocking: bool,
+}
+
+impl Drop for AppPoll<'_> {
+    fn drop(&mut self) {
+        // Before the blocking count drops, so that `since_poll` never reads
+        // the time from before a blocking poll that just returned.
+        *self.inner.last_poll.lock().expect("lock poisoned") = Instant::now();
+        if self.blocking {
+            self.inner.blocking_polls.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -879,6 +926,8 @@ impl PartitionQueueInner {
         inner: &ConsumerInner,
         timeout: Timeout,
     ) -> Option<KafkaResult<BorrowedMessage<'static>>> {
+        // Like librdkafka, polling a partition's queue counts as polling.
+        let _poll = inner.app_poll(timeout);
         self.partition.poll(inner, Deadline::new(timeout))
     }
 

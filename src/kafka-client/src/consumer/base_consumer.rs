@@ -16,7 +16,7 @@ use crate::config::{
     ClientConfig, ClientKind, ClientSettings, FromClientConfig, FromClientConfigAndContext,
 };
 use crate::consumer::{CommitMode, Consumer, ConsumerContext, DefaultConsumerContext};
-use crate::error::KafkaResult;
+use crate::error::{KafkaError, KafkaResult, RDKafkaErrorCode};
 use crate::internal::consumer::{ConsumerInner, PartitionQueueInner};
 use crate::internal::hooks::ConsumerHooks;
 use crate::message::BorrowedMessage;
@@ -145,8 +145,11 @@ where
     }
 
     fn store_offset_from_message(&self, message: &BorrowedMessage<'_>) -> KafkaResult<()> {
+        let Some(offset) = message.offset().checked_add(1) else {
+            return Err(KafkaError::StoreOffset(RDKafkaErrorCode::InvalidArgument));
+        };
         self.inner
-            .store_offset(message.topic(), message.partition(), message.offset() + 1)
+            .store_offset(message.topic(), message.partition(), offset)
     }
 
     fn assignment(&self) -> KafkaResult<TopicPartitionList> {

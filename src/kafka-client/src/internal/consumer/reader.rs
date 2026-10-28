@@ -136,7 +136,16 @@ impl Cursor {
                         if record.offset < self.next_offset {
                             continue;
                         }
-                        self.next_offset = record.offset + 1;
+                        let Some(next) = record.offset.checked_add(1) else {
+                            // A record at the largest offset is malformed.
+                            let batch = self.batch.take().expect("checked");
+                            progress.bytes += batch.size;
+                            progress.msgs += batch.msgs;
+                            return Step::Error(KafkaError::MessageConsumption(
+                                RDKafkaErrorCode::BadMessage,
+                            ));
+                        };
+                        self.next_offset = next;
                         progress.position = Some(self.next_offset);
                         return Step::Record(record);
                     }
@@ -162,6 +171,11 @@ impl Cursor {
                 Some(Ok(fetched)) => fetched,
             };
             let header = fetched.header();
+            // The fetcher neither accounts for nor fetches past an entry
+            // ending at the largest offset, see `fetcher::handle_records`.
+            if header.last_offset == i64::MAX {
+                return Step::Error(KafkaError::MessageConsumption(RDKafkaErrorCode::BadMessage));
+            }
             let size = u64::try_from(header.size).expect("usize fits u64");
             let msgs = accounted_messages(header);
             if header.last_offset < self.next_offset {
@@ -223,7 +237,8 @@ impl Cursor {
     /// Moves the position past `last_offset`, if that is ahead.
     fn skip_to(&mut self, last_offset: i64, progress: &mut Progress) {
         if last_offset >= self.next_offset {
-            self.next_offset = last_offset + 1;
+            // Entries ending at the largest offset never get here.
+            self.next_offset = last_offset.saturating_add(1);
             progress.position = Some(self.next_offset);
         }
     }
@@ -238,7 +253,7 @@ impl Cursor {
 }
 
 /// The consumer error for an undecodable batch, as librdkafka reports it.
-fn codec_error(e: &CodecError) -> KafkaError {
+pub(super) fn codec_error(e: &CodecError) -> KafkaError {
     let code = match e {
         CodecError::UnsupportedCompression(_)
         | CodecError::Decompress { .. }

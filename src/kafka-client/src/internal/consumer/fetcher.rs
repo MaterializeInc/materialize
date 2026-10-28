@@ -22,6 +22,11 @@
 //! [`MIN_PARTITION_FETCH_BYTES`]), so that a response does not overshoot
 //! them by up to `fetch.max.bytes`, as librdkafka's can.
 //!
+//! Like the Java client (KIP-74), a request lists the partitions that got data
+//! in the previous responses last, so that a partition with a large backlog,
+//! which can fill whole responses, does not starve the others: brokers fill
+//! a response in request order.
+//!
 //! Responses are not decoded: each partition's record set is queued as is,
 //! after reading batch headers to find the next fetch offset. When a
 //! response carries data for several partitions, each record set is copied
@@ -41,13 +46,14 @@ use kafka_protocol::protocol::StrBytes;
 use crate::config::settings::{DebugContext, IsolationLevel};
 use crate::error::KafkaError;
 use crate::internal::cluster::MetadataSnapshot;
+use crate::internal::compression::CodecError;
 use crate::internal::net::RequestOptions;
 use crate::internal::protocol;
 use crate::internal::records;
 use crate::types::RDKafkaErrorCode;
 
 use super::partition::{FetchPhase, Item, Wake};
-use super::reader::{Chunk, accounted_messages};
+use super::reader::{Chunk, accounted_messages, codec_error};
 use super::{ConsumerInner, Leader, Partition, leader_of, offset_reset};
 
 /// The largest `PartitionMaxBytes` a partition's fetch size grows to when a
@@ -94,6 +100,10 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
     };
     let max_wait_ms = i32::try_from(consumer.fetch_wait_max.as_millis()).unwrap_or(i32::MAX);
     let mut broker_backoff_until: Option<Instant> = None;
+    // For each partition, when it last got data (a count of responses), to
+    // order requests; see the module documentation.
+    let mut got_data: BTreeMap<(Arc<str>, i32), u64> = BTreeMap::new();
+    let mut responses: u64 = 0;
     loop {
         wake_rx.borrow_and_update();
         let md = Arc::clone(&md_rx.borrow_and_update());
@@ -106,7 +116,7 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
         }
         broker_backoff_until = None;
         let request_id = inner.request_id();
-        let (fetching, next_wakeup) = plan(&inner, broker_id, &md, request_id, now);
+        let (mut fetching, next_wakeup) = plan(&inner, broker_id, &md, request_id, now);
         if fetching.is_empty() {
             if !wait(&shutdown, &mut wake_rx, &mut md_rx, next_wakeup).await {
                 return;
@@ -116,16 +126,29 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
         let Some(broker) = inner.cluster.broker(broker_id) else {
             // The broker left the metadata; its partitions move to another
             // fetcher once the metadata names their new leader.
-            release(&fetching, request_id);
+            release(&inner, &fetching, request_id);
+            // Not woken by its own release.
+            wake_rx.borrow_and_update();
             if !wait(&shutdown, &mut wake_rx, &mut md_rx, None).await {
                 return;
             }
             continue;
         };
 
-        let mut topics: BTreeMap<&str, Vec<&Fetching>> = BTreeMap::new();
+        // Partitions that got data least recently first. Topics come in the
+        // order of their first partition.
+        fetching.sort_by_key(|f| {
+            got_data
+                .get(&(Arc::clone(&f.partition.topic), f.partition.id))
+                .copied()
+                .unwrap_or(0)
+        });
+        let mut topics: Vec<(&str, Vec<&Fetching>)> = Vec::new();
         for f in &fetching {
-            topics.entry(&f.partition.topic).or_default().push(f);
+            match topics.iter_mut().find(|(t, _)| *t == &*f.partition.topic) {
+                Some((_, parts)) => parts.push(f),
+                None => topics.push((&f.partition.topic, vec![f])),
+            }
         }
         let request = broker.request::<FetchRequest, _>(
             |_version| {
@@ -183,12 +206,12 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
         };
         let response = match result {
             None => {
-                release(&fetching, request_id);
+                release(&inner, &fetching, request_id);
                 continue;
             }
             Some(Ok(response)) => response,
             Some(Err(e)) => {
-                release(&fetching, request_id);
+                release(&inner, &fetching, request_id);
                 if e.code() == RDKafkaErrorCode::BrokerDestroy {
                     return;
                 }
@@ -210,7 +233,7 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
             }
         };
         if let Some(code) = protocol::broker_error(response.error_code) {
-            release(&fetching, request_id);
+            release(&inner, &fetching, request_id);
             inner.logger().debug(
                 DebugContext::Fetch,
                 "FETCHERR",
@@ -232,7 +255,7 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
             .filter(|p| p.records.as_ref().is_some_and(|r| !r.is_empty()))
             .count();
         let copy = with_data > 1;
-        let mut handled = 0;
+        responses += 1;
         for topic in response.responses {
             for data in topic.partitions {
                 let Some(f) = fetching.iter().find(|f| {
@@ -241,13 +264,32 @@ pub(super) async fn run(inner: Arc<ConsumerInner>, broker_id: i32) {
                 }) else {
                     continue;
                 };
-                handled += 1;
+                if data.records.as_ref().is_some_and(|r| !r.is_empty()) {
+                    got_data.insert((Arc::clone(&f.partition.topic), f.partition.id), responses);
+                }
                 handle_partition(&inner, broker_id, request_id, f, data, copy);
             }
         }
-        if handled < fetching.len() {
-            // Partitions the broker did not answer for.
-            release(&fetching, request_id);
+        // Partitions the broker did not answer for. `release` only clears
+        // this request's marks, so this is a no-op for answered ones.
+        release(&inner, &fetching, request_id);
+        // Partitions that moved to another leader while this request was in
+        // flight can now be fetched there.
+        let md = md_rx.borrow();
+        if fetching
+            .iter()
+            .any(|f| !matches!(leader_of(&md, &f.partition), Leader::Broker(id) if id == broker_id))
+        {
+            inner.wake();
+        }
+        drop(md);
+        // Forget partitions this fetcher no longer fetches.
+        if got_data.len() > 2 * fetching.len().max(64) {
+            got_data.retain(|(topic, id), _| {
+                fetching
+                    .iter()
+                    .any(|f| f.partition.id == *id && f.partition.topic == *topic)
+            });
         }
     }
 }
@@ -333,13 +375,19 @@ fn plan(
 }
 
 /// Clears the in-flight marks of a request that got no answer for these
-/// partitions.
-fn release(fetching: &[Fetching], request_id: u64) {
+/// partitions, and wakes the fetchers if there were any: a partition that
+/// moved to another leader meanwhile can only be fetched there now.
+fn release(inner: &ConsumerInner, fetching: &[Fetching], request_id: u64) {
+    let mut released = false;
     for f in fetching {
         let mut state = f.partition.lock_state();
         if state.fetch.in_flight == Some(request_id) {
             state.fetch.in_flight = None;
+            released = true;
         }
+    }
+    if released {
+        inner.wake();
     }
 }
 
@@ -440,7 +488,7 @@ fn handle_partition(
 }
 
 /// Queues a partition's record set and advances its fetch offset.
-fn handle_records(
+pub(super) fn handle_records(
     inner: &ConsumerInner,
     partition: &Arc<Partition>,
     state: &mut super::partition::PartState,
@@ -457,17 +505,40 @@ fn handle_records(
     let mut msgs = 0u64;
     let mut next_offset = fetch_offset;
     let mut leader_epoch = state.fetch.leader_epoch;
+    let mut undecodable = None;
     for batch in &mut batches {
-        // Undecodable entries are reported by the reader.
-        let Ok(batch) = batch else { continue };
+        // Undecodable entries among decodable ones are reported by the
+        // reader.
+        let batch = match batch {
+            Ok(batch) => batch,
+            Err(e) => {
+                undecodable.get_or_insert(e);
+                continue;
+            }
+        };
         let header = batch.header();
+        // An entry ending at the largest offset leaves nothing to fetch
+        // after it.
+        let Some(after) = header.last_offset.checked_add(1) else {
+            undecodable.get_or_insert_with(|| CodecError::malformed("last offset out of range"));
+            continue;
+        };
         complete += 1;
         bytes += u64::try_from(header.size).expect("usize fits u64");
         msgs += accounted_messages(header);
-        next_offset = next_offset.max(header.last_offset + 1);
+        next_offset = next_offset.max(after);
         leader_epoch = header.partition_leader_epoch;
     }
     if complete == 0 {
+        if let Some(e) = undecodable {
+            // Nothing in this record set can be decoded, so the fetch
+            // offset cannot move past it: report it, like librdkafka, and
+            // retry after `fetch.error.backoff.ms` instead of refetching it
+            // right away.
+            wakes.push(state.push(Item::Error(codec_error(&e)), partition.is_split()));
+            state.fetch.backoff_until = Some(Instant::now() + consumer.fetch_error_backoff);
+            return;
+        }
         if batches.truncated_bytes() > 0 {
             // A single batch is larger than the partition fetch size: grow
             // it, like librdkafka, up to a limit.

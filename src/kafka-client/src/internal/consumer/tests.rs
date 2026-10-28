@@ -18,10 +18,11 @@
 #![allow(clippy::disallowed_methods)]
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use bytes::Bytes;
 use futures::StreamExt;
 use kafka_protocol::messages::add_partitions_to_txn_request::AddPartitionsToTxnTopic;
 use kafka_protocol::messages::create_partitions_request::CreatePartitionsTopic;
@@ -50,6 +51,8 @@ use crate::message::{Headers, Message, Timestamp};
 use crate::topic_partition_list::{Offset, TopicPartitionList};
 use crate::types::RDKafkaErrorCode;
 use crate::util::Deadline;
+
+use super::fetcher;
 
 /// The bootstrap server lists to test against, if configured.
 fn test_brokers() -> Vec<String> {
@@ -692,7 +695,7 @@ fn msgs(items: &[Polled]) -> Vec<i64> {
 ///
 /// Runs when `MZ_KAFKA_CLIENT_TEST_AUTH_SECRETS` is set, against the broker
 /// of `test/kafka-auth` (see `internal/cluster/auth_tests.rs`), whose
-/// `materialize_lockdown` user has no ACLs.
+/// `materialize_lockdown` user may not use groups outside the prefix `lockdown`.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // network
 fn group_authorization_failed() {
@@ -750,6 +753,50 @@ fn group_authorization_failed() {
     assert_eq!(
         poll_for(&consumer, Duration::from_secs(2)),
         Vec::<String>::new()
+    );
+}
+
+/// A failed committed offset lookup that retrying is not expected to fix is
+/// reported as a consumer error, once, while the lookup is retried. Here the
+/// principal may use its group but not the topic.
+///
+/// Runs when `MZ_KAFKA_CLIENT_TEST_AUTH_SECRETS` is set, like
+/// [`group_authorization_failed`]. The broker of `test/kafka-auth` lets
+/// `materialize_lockdown` use groups prefixed `lockdown`, but not the topic.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn offset_fetch_authorization_failed() {
+    if std::env::var("MZ_KAFKA_CLIENT_TEST_AUTH_SECRETS").is_err() {
+        return;
+    }
+    let group = unique("lockdown-mzkc");
+    let (consumer, _) = consumer(
+        "kafka:39095",
+        &[
+            ("security.protocol", "SASL_PLAINTEXT"),
+            ("sasl.mechanisms", "PLAIN"),
+            ("sasl.username", "materialize_lockdown"),
+            ("sasl.password", "sekurity"),
+            ("group.id", &group),
+        ],
+    );
+    consumer
+        .assign(&tpl(&[("mzkc-auth-topic", 0, Offset::Stored)]))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut got = Vec::new();
+    while Instant::now() < deadline {
+        if let Some(r) = consumer.poll(Duration::from_millis(100)) {
+            got.push(describe(r));
+        }
+    }
+    assert_eq!(
+        got,
+        vec![Polled::Err(
+            "Message consumption error: TopicAuthorizationFailed (Broker: Topic authorization \
+             failed)"
+                .into()
+        )]
     );
 }
 
@@ -1871,4 +1918,309 @@ fn backpressure() {
         assert!(q.poll(Duration::ZERO).is_none());
         assert_eq!(partition.queued(), (0, 0));
     }
+}
+
+/// A partition with a large backlog does not starve the other partitions led
+/// by the same broker: brokers fill a Fetch response in request order, so
+/// requests list the partitions that got data last.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn fetch_rotation() {
+    for brokers in test_brokers() {
+        let admin = Admin::new(&brokers);
+        let topic_guard = admin.new_topic("mzkc-c-rotation", 2);
+        let topic = topic_guard.name.clone();
+        // A backlog of 100 batches of about 1 KB in partition 0, then one
+        // record in partition 1 that does not fit in what a response that is
+        // full of partition 0 leaves.
+        let value = "x".repeat(1000);
+        for _ in 0..100 {
+            admin.values(&topic, 0, &[&value]);
+        }
+        admin.values(&topic, 1, &[&"y".repeat(5000)]);
+        let (consumer, _) = consumer(
+            &brokers,
+            &[
+                ("group.id", "mzkc-test"),
+                ("message.max.bytes", "1000"),
+                ("fetch.max.bytes", "10000"),
+                ("fetch.message.max.bytes", "10000"),
+            ],
+        );
+        // Partition 0 is split but never polled: how much of it is queued
+        // when partition 1's record arrives tells how many responses that
+        // took.
+        let _q0 = consumer.split_partition_queue(&topic, 0).unwrap();
+        let mut q1 = consumer.split_partition_queue(&topic, 1).unwrap();
+        let p0 = Arc::clone(&consumer.inner().lock_state().partitions[&topic][&0]);
+        let p0_queued = Arc::new(AtomicU64::new(u64::MAX));
+        let seen = Arc::clone(&p0_queued);
+        q1.set_nonempty_callback(move || {
+            let _ =
+                seen.compare_exchange(u64::MAX, p0.queued().1, Ordering::SeqCst, Ordering::SeqCst);
+        });
+        consumer
+            .assign(&tpl(&[
+                (&topic, 0, Offset::Beginning),
+                (&topic, 1, Offset::Beginning),
+            ]))
+            .unwrap();
+        assert_eq!(
+            msgs(&queue_until(&q1, Duration::from_secs(10), |i| i.len() == 1)),
+            vec![0]
+        );
+        // The callback runs after waking the poller.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while p0_queued.load(Ordering::SeqCst) == u64::MAX {
+            assert!(Instant::now() < deadline, "callback did not fire");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let queued = p0_queued.load(Ordering::SeqCst);
+        assert!(
+            queued < 50,
+            "partition 0 had {queued} of 100 messages queued"
+        );
+    }
+}
+
+/// A record set that cannot be decoded at all is reported as a consumer
+/// error, and the partition backs off instead of refetching it at once. An
+/// entry ending at the largest offset is malformed: it neither wraps the
+/// fetch offset nor the position.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn undecodable_record_sets() {
+    let topic = "mzkc-c-undecodable";
+    let (consumer, _) = consumer(
+        "127.0.0.1:1",
+        &[("group.id", "mzkc-test"), ("fetch.error.backoff.ms", "300")],
+    );
+    consumer
+        .assign(&tpl(&[(topic, 0, Offset::Offset(5))]))
+        .unwrap();
+    let inner = consumer.inner();
+    let partition = Arc::clone(&inner.lock_state().partitions[topic][&0]);
+    // Hands `records` to the fetcher as if fetched at the fetch offset, and
+    // returns the next fetch offset and the backoff.
+    let fetched = |records: Vec<u8>| {
+        let mut wakes = Vec::new();
+        let mut state = partition.lock_state();
+        state.fetch.backoff_until = None;
+        fetcher::handle_records(
+            inner,
+            &partition,
+            &mut state,
+            Bytes::from(records),
+            Vec::new(),
+            false,
+            &mut wakes,
+        );
+        let result = (state.fetch.offset, state.fetch.backoff_until);
+        drop(state);
+        for wake in wakes {
+            partition.notify(inner, wake);
+        }
+        result
+    };
+    let batch = |base_offset: i64, values: &[&str]| {
+        let mut builder = BatchBuilder::new(Compression::None, None, false);
+        for v in values {
+            builder.append(now_ms(), None, Some(v.as_bytes()), &[]);
+        }
+        let mut bytes = builder
+            .build(ProducerIdentity::NONE, -1)
+            .unwrap()
+            .bytes()
+            .to_vec();
+        // The CRC does not cover the base offset.
+        bytes[..8].copy_from_slice(&base_offset.to_be_bytes());
+        bytes
+    };
+    let bad_message =
+        Polled::Err("Message consumption error: BadMessage (Local: Bad message format)".into());
+
+    // Base offset 5, length 5, leader epoch 0, magic 3.
+    let mut unknown_magic = Vec::new();
+    unknown_magic.extend_from_slice(&5i64.to_be_bytes());
+    unknown_magic.extend_from_slice(&5i32.to_be_bytes());
+    unknown_magic.extend_from_slice(&0i32.to_be_bytes());
+    unknown_magic.push(3);
+    let before = Instant::now();
+    let (offset, backoff) = fetched(unknown_magic);
+    assert_eq!(offset, 5);
+    assert!(backoff.is_some_and(|at| at >= before + Duration::from_millis(300)));
+    let got = poll_until(&consumer, Duration::from_secs(5), |i| !i.is_empty());
+    assert_eq!(got, vec![bad_message.clone()]);
+
+    let mut records = batch(5, &["a", "b"]);
+    records.extend(batch(i64::MAX, &["c"]));
+    let (offset, backoff) = fetched(records);
+    assert_eq!((offset, backoff), (7, None));
+    let got = poll_until(&consumer, Duration::from_secs(5), |i| i.len() == 3);
+    assert_eq!(
+        got,
+        vec![
+            Polled::Msg(0, 5, Some("a".into())),
+            Polled::Msg(0, 6, Some("b".into())),
+            bad_message.clone(),
+        ]
+    );
+    assert_eq!(position(&consumer, topic, 0), Offset::Offset(7));
+
+    let (offset, backoff) = fetched(batch(i64::MAX, &["c"]));
+    assert_eq!(offset, 7);
+    assert!(backoff.is_some());
+    let got = poll_until(&consumer, Duration::from_secs(5), |i| !i.is_empty());
+    assert_eq!(got, vec![bad_message]);
+    assert_eq!(position(&consumer, topic, 0), Offset::Offset(7));
+}
+
+/// A commit that finds no coordinator fails after `session.timeout.ms`, plus
+/// `socket.timeout.ms` for the request, like librdkafka's, instead of
+/// waiting for the cluster indefinitely.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn commit_without_coordinator_times_out() {
+    let (consumer, recorder) = consumer(
+        "127.0.0.1:1",
+        &[
+            ("group.id", "mzkc-test"),
+            ("session.timeout.ms", "1000"),
+            ("socket.timeout.ms", "1000"),
+        ],
+    );
+    let offsets = tpl(&[("mzkc-c-commit", 0, Offset::Offset(1))]);
+    let start = Instant::now();
+    let result = consumer.commit(&offsets, CommitMode::Sync);
+    let elapsed = start.elapsed();
+    let want = Err(KafkaError::ConsumerCommit(
+        RDKafkaErrorCode::WaitingForCoordinator,
+    ));
+    assert_eq!(result, want);
+    assert!(
+        elapsed >= Duration::from_millis(1500) && elapsed < Duration::from_secs(10),
+        "{elapsed:?}"
+    );
+    assert_eq!(*recorder.commits.lock().unwrap(), vec![want]);
+}
+
+/// A poll that may block counts as polling while it waits, like librdkafka's,
+/// so that it does not exceed `max.poll.interval.ms`. That includes polls of
+/// a partition's queue.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn blocking_poll_counts_as_polling() {
+    let (consumer, _) = consumer("127.0.0.1:1", &[("group.id", "mzkc-test")]);
+    let inner = Arc::clone(consumer.inner());
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(inner.since_poll() >= Duration::from_millis(200));
+    let c = Arc::clone(&consumer);
+    let poller = std::thread::spawn(move || {
+        let _ = c.poll(Duration::from_millis(1000));
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(inner.since_poll(), Duration::ZERO);
+    poller.join().unwrap();
+    assert!(inner.since_poll() < Duration::from_millis(500));
+
+    consumer
+        .assign(&tpl(&[("mzkc-c-maxpoll", 0, Offset::Offset(0))]))
+        .unwrap();
+    let q = consumer.split_partition_queue("mzkc-c-maxpoll", 0).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(inner.since_poll() >= Duration::from_millis(200));
+    let poller = std::thread::spawn(move || {
+        let _ = q.poll(Duration::from_millis(1000));
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(inner.since_poll(), Duration::ZERO);
+    poller.join().unwrap();
+    assert!(inner.since_poll() < Duration::from_millis(500));
+}
+
+/// A context whose error callback uses the consumer, as applications may.
+#[derive(Default)]
+struct Reentrant {
+    consumer: OnceLock<Weak<BaseConsumer<Arc<Reentrant>>>>,
+    queue: OnceLock<Weak<PartitionQueue<Arc<Reentrant>>>>,
+    reasons: Mutex<Vec<String>>,
+}
+
+impl ClientContext for Arc<Reentrant> {
+    fn error(&self, _error: KafkaError, reason: &str) {
+        self.reasons.lock().unwrap().push(reason.to_string());
+        if let Some(consumer) = self.consumer.get().and_then(Weak::upgrade) {
+            let _ = consumer.poll(Duration::ZERO);
+            consumer.assignment().unwrap();
+        }
+        if let Some(queue) = self.queue.get().and_then(Weak::upgrade) {
+            let _ = queue.poll(Duration::ZERO);
+        }
+    }
+}
+
+impl ConsumerContext for Arc<Reentrant> {}
+
+/// The error callback for a notice in a partition's queue runs with no lock
+/// of the consumer held, so it may poll and inspect the consumer.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // network
+fn error_callback_may_use_the_consumer() {
+    let topic = "mzkc-c-reentrant";
+    let ctx = Arc::new(Reentrant::default());
+    let consumer = Arc::new(
+        BaseConsumer::from_config_and_context(
+            &config("127.0.0.1:1", &[("group.id", "mzkc-test")]),
+            Arc::clone(&ctx),
+        )
+        .unwrap(),
+    );
+    ctx.consumer.set(Arc::downgrade(&consumer)).unwrap();
+    consumer
+        .assign(&tpl(&[
+            (topic, 0, Offset::Offset(0)),
+            (topic, 1, Offset::Offset(0)),
+        ]))
+        .unwrap();
+    let q1 = Arc::new(consumer.split_partition_queue(topic, 1).unwrap());
+    ctx.queue.set(Arc::downgrade(&q1)).unwrap();
+    let notice = |id: i32, reason: &str| {
+        let inner = consumer.inner();
+        let partition = Arc::clone(&inner.lock_state().partitions[topic][&id]);
+        let mut state = partition.lock_state();
+        let wake = state
+            .push_notice(
+                RDKafkaErrorCode::UnknownPartition,
+                reason.to_string(),
+                partition.is_split(),
+            )
+            .unwrap();
+        drop(state);
+        partition.notify(inner, wake);
+    };
+    let delivered = |reason: &str| ctx.reasons.lock().unwrap().iter().any(|r| r == reason);
+    // Runs `f` on another thread, failing if it does not return in time.
+    let within = |f: Box<dyn FnOnce() + Send>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            f();
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("poll deadlocked");
+    };
+
+    notice(0, "main");
+    let c = Arc::clone(&consumer);
+    within(Box::new(move || {
+        let _ = c.poll(Duration::from_millis(500));
+    }));
+    assert!(delivered("main"));
+
+    notice(1, "split");
+    let q = Arc::clone(&q1);
+    within(Box::new(move || {
+        let _ = q.poll(Duration::from_millis(500));
+    }));
+    assert!(delivered("split"));
 }
