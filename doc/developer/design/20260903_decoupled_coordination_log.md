@@ -26,8 +26,10 @@ executing jobs. CI141217 checks that head. Its x86_64 product job
 public-registry gate: `materialize/pubsubd` is not public on Docker Hub. The exact
 read-only visibility probe still returns false. A registry owner must make the
 repository public. Do not bypass the check or change shared permissions without
-approval. Other CI jobs remain in flight. Preserve their verification when
-publishing further fixes. The draft PR summary now reflects the implemented
+approval. CI141217 is now terminal: 20 jobs passed, including both Clippies,
+lint/rustfmt and Console E2E/staging. Its other failure is merge skew against the
+pinned upstream base. Cargo tests and downstream integration did not execute
+because the product job failed. No verification remains running. The draft PR summary now reflects the implemented
 launcher, lifecycle and collection endpoint, with runtime acceptance still open.
 
 Lifecycle core (`c5838f31`), local launcher (`4515a0df`) and deployment-qualified
