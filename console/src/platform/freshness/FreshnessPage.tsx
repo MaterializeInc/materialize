@@ -529,23 +529,21 @@ const FreshnessPage = () => {
                 </option>
               ))}
             </Select>
-            <Box minWidth="52">
-              {scope === "cluster" ? (
-                <SearchableSelect<SchemaOption, false>
-                  {...pickerProps}
-                  options={options}
-                  value={selected ?? null}
-                  onChange={(option) => option && setClusterId(option.id)}
-                />
-              ) : (
-                <SchemaSelect
-                  {...pickerProps}
-                  schemas={options}
-                  value={selected ?? null}
-                  onChange={(option) => option && setSchemaId(option.id)}
-                />
-              )}
-            </Box>
+            {scope === "cluster" ? (
+              <SearchableSelect<SchemaOption, false>
+                {...pickerProps}
+                options={options}
+                value={selected ?? null}
+                onChange={(option) => option && setClusterId(option.id)}
+              />
+            ) : (
+              <SchemaSelect
+                {...pickerProps}
+                schemas={options}
+                value={selected ?? null}
+                onChange={(option) => option && setSchemaId(option.id)}
+              />
+            )}
             <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
               over the last
             </Text>
